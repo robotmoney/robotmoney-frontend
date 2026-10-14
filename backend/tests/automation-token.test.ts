@@ -359,6 +359,7 @@ const PUBLIC_ADMIN = new Set(["admin.isClaimed", "admin.webauthnAuthOptions", "a
 // Member-bearer routes (a swarm_member_keys token, or a judge's).
 const MEMBER = new Set([
   "swarm.submit",
+  "swarm.submitDryRun",
   "swarm.memos",
   "swarm.memberProfile",
   "swarm.verifyToken",
@@ -369,7 +370,7 @@ const MEMBER = new Set([
 ]);
 // Public reads and the unauthenticated onboarding doors.
 const PUBLIC = new Set([
-  "health", "version", "apiVersion",
+  "health", "version", "apiVersion", "status.maintenance",
   "projects.list", "projects.detail",
   "swarm.members", "swarm.waitlist", "swarm.member", "swarm.memberTakes", "swarm.memberJudgements",
   "swarm.memberAvatar", "swarm.subject", "swarm.subjectSnapshots", "swarm.sessions", "swarm.session",
@@ -431,7 +432,7 @@ beforeAll(async () => {
   scheduler = await provisionSchedulerToken();
   analytics = await provisionAnalyticsToken();
   operator = await provisionOperatorToken();
-  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1", RM_ENV: "ephemeral" } });
+  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1" } });
 });
 afterAll(() => api?.stop());
 
@@ -575,7 +576,7 @@ test("118 RED CONTROL: with the scheduler's token admitted to the admin routes a
     "} else if (!(await isPrivileged(req))) {",
     '} else if (!(await isPrivileged(req) || await hasAutomationRight(req, "read_subjects"))) {',
   );
-  const broken = await bootApi({ env: { RM_ENV: "ephemeral" }, preload });
+  const broken = await bootApi({ preload });
   try {
     const leaks = await substitutions(broken, scheduler, ["admin"]);
     expect(leaks.length).toBeGreaterThan(0);

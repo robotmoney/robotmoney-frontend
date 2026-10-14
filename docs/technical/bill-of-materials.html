@@ -806,8 +806,9 @@ footer {
   <h3>Swarm Admin API</h3>
   <p>Privileged lifecycle operations. Location: <span class="file-path">backend/src/api/routes/swarm-admin.ts</span>.
     31 paths under <code>/api/swarm/admin/</code>; the 6 below are a slice.</p>
-  <p class="note"><strong>Requires:</strong> the <code>X-Admin-Token</code> header matching <code>ADMIN_TOKEN</code>.
-    With no token configured these are open only when <code>RM_ALLOW_INSECURE=1</code> or <code>RM_ENV=ephemeral</code>.</p>
+  <p class="note"><strong>Requires:</strong> the <code>X-Admin-Token</code> header holding the operator's admin
+    service token (a row in the automation-token store). There is no insecure mode and no environment class
+    that opens these (issue #973).</p>
   <table>
     <thead>
       <tr>
@@ -976,7 +977,7 @@ footer {
 
   <h3>Admin API</h3>
   <p>Job queue and audit trails. Location: <span class="file-path">backend/src/api/routes/admin.ts</span></p>
-  <p class="note"><strong>Requires:</strong> ADMIN_TOKEN or RM_ALLOW_INSECURE=1</p>
+  <p class="note"><strong>Requires:</strong> the operator's admin service token; no insecure mode exists (issue #973).</p>
   <table>
     <thead>
       <tr>
@@ -2068,19 +2069,14 @@ footer {
         <td><code>ADMIN_TOKEN</code></td>
         <td>Sent as the <code>X-Admin-Token</code> header. Guards /api/swarm/admin/*, /api/admin/*, member onboarding
           and /register.</td>
-        <td>If set, required in <em>every</em> env. If unset, those routes are locked unless
-          <code>RM_ALLOW_INSECURE=1</code> or <code>RM_ENV=ephemeral</code>.</td>
+        <td>Retired: the admin service token is a row in the automation-token store, and the routes are
+          locked without it in every stack (issue #973).</td>
       </tr>
       <tr>
         <td><code>ANALYTICS_TOKEN</code></td>
         <td>Bearer for /api/analytics/* and POST /api/swarm/regime (analytics-provider role)</td>
         <td>Same fail-closed rule. The producer refuses to boot in smoke/prod without it, and never accepts
           <code>ADMIN_TOKEN</code> or a member bearer as a substitute.</td>
-      </tr>
-      <tr>
-        <td><code>RM_ALLOW_INSECURE</code></td>
-        <td>Opt in to privileged routes with no token — local throwaway smoke stacks only, never a reachable box</td>
-        <td>No (implied by <code>RM_ENV=ephemeral</code>)</td>
       </tr>
       <tr>
         <td><code>SWARM_PUBLIC_BASE_URL</code></td>
@@ -2256,9 +2252,8 @@ footer {
   </ol>
 
   <div class="note">
-    <strong>Note:</strong> <code>RM_ENV=smoke</code> allows the unauthenticated paths only when
-    <code>RM_ALLOW_INSECURE=1</code> is also set; <code>RM_ENV=ephemeral</code> implies it. Anything else — including
-    an unset <code>RM_ENV</code>, which means prod — requires the real tokens for every privileged endpoint.
+    <strong>Note:</strong> every privileged endpoint requires its real credential in every stack. The api reads no
+    <code>RM_ENV</code> and no insecure flag (issue #973).
   </div>
 </section>
 

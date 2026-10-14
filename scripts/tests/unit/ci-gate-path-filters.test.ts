@@ -25,7 +25,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
 const E2E_WORKFLOWS = ["e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -113,7 +113,7 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   // break), onboarding takes only the swarm and api code, and a frontend file
   // runs e2e-web alone.
   const CASES: Array<[string, string[]]> = [
-    ["backend/src/api/routes.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/api/routes.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
     // Issue #602: a compose file must ALSO select integration.yml. That job
     // owns scripts/tests/integration/smoke-compose-config.test.ts, the only
     // suite that renders `docker compose config` and asserts what the api
@@ -126,17 +126,17 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     // Backend internals the boot does not import: the domains that take the
     // whole backend (lifecycle, swarm, web), never onboarding unless it is
     // swarm or api code.
-    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
-    ["backend/src/analytics/x.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
-    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
-    ["backend/src/swarm/apply.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["backend/src/swarm/x.ts", ["backend.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/analytics/extract/geckoterminal.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "integration.yml"]],
+    ["backend/src/analytics/x.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "integration.yml"]],
+    ["backend/src/chain/token-prices.ts", ["backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "integration.yml"]],
+    ["backend/src/swarm/apply.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
+    ["backend/src/swarm/x.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
     // Backend files the boot itself imports or runs select every domain.
-    ["backend/src/db/target-lock.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["backend/migrations/0001_backends.sql", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["backend/scripts/smoke-prepare.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["backend/src/db/target-lock.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
+    ["backend/migrations/0001_backends.sql", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
+    ["backend/scripts/smoke-prepare.ts", ["backend.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
     // The backend image copies contract/ and the checks import it.
-    ["contract/src/index.ts", ["contract.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["contract/src/index.ts", ["contract.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml", "integration.yml"]],
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
     // the backend re-exports it and copies it into its image. The domains that
     // take the whole backend take it too.
@@ -153,18 +153,18 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["scripts/stack/naming.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     [".github/actions/e2e-setup/action.yml", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     ["test-fixtures/smoke/empty-roster.credentials.json", ["e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["scripts/lib/swarm/inference.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
-    ["scripts/agent/member-agent.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/swarm/inference.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/member-agent/Dockerfile", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/rmpc-fetch.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/lib/onboarding-eval.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/agent/member-agent.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     ["package.json", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     ["bun.lock", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
     // Each domain's own entry points and its own workflow file.
     ["scripts/system-scheduler.ts", ["integration.yml", "e2e-lifecycle.yml"]],
     ["scripts/starter-swarm-agent.ts", ["integration.yml", "e2e-swarm.yml"]],
     ["scripts/verify-live.ts", ["integration.yml", "e2e-swarm.yml"]],
-    ["evals/onboarding/isolated.ts", ["integration.yml", "onboarding-eval-rails.yml", "e2e-onboarding.yml"]],
+    ["evals/onboarding/isolated.ts", ["integration.yml", "e2e-onboarding.yml"]],
     [".github/workflows/e2e-web.yml", ["integration.yml", "e2e-web.yml"]],
     [".github/workflows/e2e-swarm.yml", ["integration.yml", "e2e-swarm.yml"]],
     [".github/workflows/unit.yml", ["integration.yml"]],
@@ -193,6 +193,13 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["goldens/api-goldens.json", ["web-client.yml", "e2e-web.yml"]],
     // The skill the onboarding member agent reads.
     ["frontend/public/skills/swarm-onboarding/SKILL.md", ["web-client.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    // Issue #1040: the api image the integration job builds takes its inputs
+    // from backend/ and contract/, so each file that image copies selects it.
+    ["backend/Dockerfile", ["backend.yml", "integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["contract/package.json", ["contract.yml", "integration.yml", "web-client.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["scripts/stack/stack.ts", ["integration.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"]],
+    ["docker-compose.smoke.yml", ["backend.yml", "integration.yml"]],
+    ["scripts/tests/integration/onboarding-eval-infra.test.ts", ["integration.yml"]],
     ["docs/x.md", []],
     ["docs/architecture.md", []],
     ["brand-assets/logo.svg", []],
@@ -204,6 +211,12 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
       expect(classify(path).sort()).toEqual([...expected].sort());
     });
   }
+
+  test("integration.yml's live filter lists backend/** and contract/** (the api image inputs, issue #1040)", () => {
+    const patterns = Object.values(extractFilters("integration.yml")).flat();
+    expect(patterns).toContain("backend/**");
+    expect(patterns).toContain("contract/**");
+  });
 
   test("the fixture table is not vacuous — every PATH_GATED_WORKFLOWS file is triggered by at least one case, and at least one case triggers none", () => {
     for (const file of PATH_GATED_WORKFLOWS) {

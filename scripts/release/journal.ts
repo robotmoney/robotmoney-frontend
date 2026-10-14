@@ -18,11 +18,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export type StepStatus = "ok" | "failed" | "running" | "skipped";
+/** `accepted`: a failed step the owner recorded an acceptance of (`--accept`); the run continues past it. */
+export type StepStatus = "ok" | "failed" | "running" | "skipped" | "accepted";
 
-/** A step is done when it passed, or when its template skips this policy (`onlyFor`). */
+/** A step is done when it passed, when its template skips this policy (`onlyFor`), or when the owner accepted its failure. */
 export function stepDone(status: StepStatus | undefined): boolean {
-  return status === "ok" || status === "skipped";
+  return status === "ok" || status === "skipped" || status === "accepted";
 }
 
 export interface ReceiptRecord {
@@ -46,6 +47,8 @@ export interface StepRecord {
   skipped?: string;
   /** A baseline gate's failures accepted by the owner's triage file (R2.5). */
   triage?: { file: string; sha256: string; used: { check: string; fragment: string; reason: string }[] };
+  /** The owner's recorded acceptance of this step's failure (`--accept`): why, the issue, and when. */
+  accepted?: { reason: string; issue: number; at: string };
 }
 
 export interface RunJournal {
@@ -54,6 +57,8 @@ export interface RunJournal {
   readonly rmEnv: "stage" | "prod";
   readonly release: string;
   readonly commit: string;
+  /** The rc tag the go named (a production run, D64); the commit is its resolution. */
+  readonly tag?: string;
   readonly stepListHash: string;
   readonly stepIds: readonly string[];
   readonly goSha256: string;
@@ -66,7 +71,7 @@ export interface RunJournal {
   stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
-  /** R6.1's start to R6.9's end, once both passed: the window the legacy stack was down. */
+  /** R6.1's start to R6.9's end, once both passed: the window the running stack was down. */
   downtimeSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };
@@ -111,6 +116,9 @@ export function checkStageJournal(
     const notOk = expected.stepIds.filter((id) => !stepDone(journal.steps[id]?.status));
     out.push(`SP.8: the stage run did not pass (${status}; not ok: ${notOk.join(", ")})`);
   }
+  // An owner's acceptance lets a run continue; it is not a pass. Production runs only what stage passed.
+  const accepted = expected.stepIds.filter((id) => journal.steps[id]?.status === "accepted");
+  if (accepted.length > 0) out.push(`SP.8: the stage run accepted a failure rather than passing: ${accepted.join(", ")}`);
   return out;
 }
 
@@ -182,4 +190,30 @@ export function resumeCommand(opts: { target: string; go: string; runTs: string;
   const parts = ["bun", "run", "release:run", "--target", opts.target, "--go", opts.go, "--run", opts.runTs, "--from", opts.stepId];
   if (opts.stageJournal) parts.push("--stage-journal", opts.stageJournal);
   return parts.join(" ");
+}
+
+/** The command that records the owner's acceptance of a failed step, so the run continues past it. */
+export function acceptCommand(opts: { target: string; runTs: string; stepId: string }): string {
+  return ["bun", "run", "release:run", "--target", opts.target, "--run", opts.runTs, "--accept", opts.stepId, "--reason", '"<why>"', "--issue", "<n>"].join(" ");
+}
+
+/**
+ * PURE. Record the owner's acceptance of one failed step. Returns the refusal,
+ * or undefined once the journal is updated in place.
+ */
+export function acceptStep(
+  journal: RunJournal, stepId: string, decision: { reason: string; issue: number; at: string },
+  steps: { ids: readonly string[]; irreversible: (id: string) => boolean },
+): string | undefined {
+  if (!steps.ids.includes(stepId)) return `--accept ${stepId}: no such step (steps: ${steps.ids.join(", ")})`;
+  if (journal.status === "running") return `run ${journal.runTs} still reads running; abandon it first (--abandon) if it is dead`;
+  const rec = journal.steps[stepId];
+  if (rec === undefined) return `${stepId} has not run in run ${journal.runTs}; only a failed step can be accepted`;
+  if (rec.status !== "failed") return `${stepId} is ${rec.status}, not failed; only a failed step can be accepted`;
+  if (steps.irreversible(stepId)) return `${stepId} is irreversible; a failure there is the recovery matrix's (runbook section 8), not an acceptance`;
+  rec.status = "accepted";
+  rec.accepted = { ...decision };
+  journal.status = runStatus(journal, steps.ids);
+  journal.updatedAt = decision.at;
+  return undefined;
 }

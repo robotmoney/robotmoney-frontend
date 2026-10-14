@@ -103,6 +103,30 @@
         }
       }
     },
+    "/api/status/maintenance": {
+      "get": {
+        "operationId": "getMaintenanceStatus",
+        "summary": "Whether a maintenance window is scheduled or under way",
+        "description": "Returns `state` (`none`, `scheduled` or `active`), `startsAt` and `expectedEnd` as ISO-8601 instants, and a short `message`; the times and message are null when `state` is `none`. During a window the site stays up and shows the expected end. Needs no credential.\n\nResponse size: under 300 B.\n\nResponse type: `MaintenanceStatus` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "x-contract-type": "MaintenanceStatus",
+        "responses": {
+          "200": {
+            "description": "Whether a maintenance window is scheduled or under way",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "MaintenanceStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/vault-economics": {
       "get": {
         "operationId": "getVaultEconomics",

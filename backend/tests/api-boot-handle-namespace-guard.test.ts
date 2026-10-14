@@ -6,19 +6,22 @@
 //
 // WHAT MAKES THIS THE PRODUCTION PATH. docker-compose.yml's api service runs
 // `command: ["bun", "run", "src/api/index.ts"]`, and that is the current
-// bring-up command. So this file spawns THAT file, as a real process,
-// against a real database, and grades the process: a violating database must
-// produce a non-zero exit with both members named and NO port bound, and every
-// other database shape must still boot and serve.
+// bring-up command. So this file spawns THAT file, as a real process, as
+// `rm_app`, against a real database, and grades the process: a violating
+// database must produce a non-zero exit with both members named and NO port
+// bound, and a clean database must boot and serve.
 //
-// Booting is graded as strictly as refusing, and MORE of the file is about
-// booting than about refusing — a fail-closed guard on the entrypoint is an
-// availability risk if it is wrong, and this process serves the static frontend
-// too, so a guard that hangs or refuses wrongly is a total site outage. The
-// shapes that must still serve: empty, pre-0030 (a swarm_members with no
-// `handle` column), unreachable, a swarm_members held under ACCESS EXCLUSIVE
-// (the BLOCKING database, which is not the same failure as a rejecting one),
-// and a violating database under the documented override.
+// WHAT CHANGED WITH ISSUE #973. The entrypoint used to serve past its startup
+// preflight under `RM_ENV=ephemeral`, and this file used to grade "every other
+// database shape must still boot and serve" through that exception. There is
+// no exception any more: the §7.2 preflight (container-startup-preflight.test.ts)
+// refuses an empty, unreachable, mid-migration or unmanifested database in
+// every process. What these two guards owe such a database is unchanged and is
+// still graded here: they CONCLUDE, within their budgets, loudly, and never
+// hang or refuse wrongly — the guard's verdict is in the log before the
+// preflight's refusal, and the process exits rather than spinning. The shapes
+// that serve are graded through /health on a snapshot-bootstrapped database,
+// the one a stack boots on.
 //
 // WHAT THIS FILE CANNOT PROVE. It spawns the entrypoint directly, so it grades
 // the CODE's handling of RM_ALLOW_HANDLE_NAMESPACE_VIOLATION and
@@ -28,18 +31,13 @@
 // bypasses that entirely. That half is asserted against real `docker compose
 // config` output in scripts/tests/integration/smoke-compose-config.test.ts.
 //
-// The databases are throwaways created on the suite's ephemeral Postgres
-// (tests/preload.ts, which throws rather than skips when Docker is absent):
-// the shared suite database can hold neither a forbidden pair nor a pre-0030
-// schema. Migrations are applied file-by-file rather than through migrate() so
-// nothing seeds — same pattern as swarm-member-handle-namespace-migration.test.ts.
-import { afterAll, expect, test } from "bun:test";
-import net from "node:net";
-import { readdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+// The databases are throwaway copies of a snapshot-bootstrapped template on the
+// suite's ephemeral Postgres (tests/preload.ts, which throws rather than skips
+// when Docker is absent): the shared suite database can hold a forbidden pair
+// no more than production can.
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import postgres from "postgres";
-import { config } from "../src/config.ts";
+import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import {
   checkHandleNamespace,
   handleNamespaceConflicts,
@@ -49,62 +47,43 @@ import {
   parseGuardBudgetMs,
   type NamespaceDb,
 } from "../src/db/handle-namespace.ts";
-import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
+import { STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS } from "../src/db/preflight.ts";
+import { harnessConnection, ROLE_PASSWORD } from "./support/cluster.ts";
+import {
+  BACKEND_DIR,
+  copyDatabase,
+  createSnapshotTemplate,
+  databaseUrl,
+  dropDatabases,
+  freePort,
+  portIsBound,
+} from "./support/startup-preflight.ts";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const backendDir = join(here, "..");
-const migrationsDir = join(backendDir, "migrations");
+let template = "";
+const created: string[] = [];
 
-// Each throwaway database is a history database: created by the cluster admin
-// (CREATE DATABASE only), provisioned by the provider's bootstrap login, which
-// is not a superuser.
-const created = new Map<string, HistoryDatabase>();
+beforeAll(async () => {
+  template = await createSnapshotTemplate("apiboot");
+}, 120_000);
 
-function urlFor(dbName: string): string {
-  return created.get(dbName)!.urlFor();
+afterAll(async () => {
+  await dropDatabases([...created, template].filter(Boolean));
+});
+
+/** A fresh copy of the snapshot template: schema, seed, ledger, manifest and identity, as a stack boots on. */
+async function freshCopy(label: string): Promise<string> {
+  const name = await copyDatabase(template, `apiboot_${label}`);
+  created.push(name);
+  return name;
 }
 
-async function createThrowawayDb(label: string): Promise<string> {
-  const history = await createHistoryDatabase(`apiboot_${label}`, { max: 1 });
-  created.set(history.name, history);
-  return history.name;
+/** The credential a stack hands the api. */
+function appUrl(dbName: string): string {
+  return databaseUrl(dbName, { name: "rm_app", password: ROLE_PASSWORD() });
 }
 
-async function applyAllMigrations(dbName: string): Promise<void> {
-  const history = created.get(dbName)!;
-  const files = await history.files();
-  expect(files.length).toBeGreaterThan(0);
-  await history.db`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
-  for (const file of files) {
-    await history.apply([file]);
-    await history.db`INSERT INTO schema_migrations (name) VALUES (${file})`;
-  }
-}
-
-function freePort(): Promise<number> {
-  return new Promise((res, rej) => {
-    const s = net.createServer();
-    s.on("error", rej);
-    s.listen(0, () => {
-      const p = (s.address() as net.AddressInfo).port;
-      s.close(() => res(p));
-    });
-  });
-}
-
-/** True only if something is accepting TCP connections on the port. */
-function portIsBound(port: number): Promise<boolean> {
-  return new Promise((res) => {
-    const s = net.connect({ host: "127.0.0.1", port });
-    const done = (bound: boolean) => {
-      s.destroy();
-      res(bound);
-    };
-    s.once("connect", () => done(true));
-    s.once("error", () => done(false));
-    setTimeout(() => done(false), 1000);
-  });
-}
+/** An unreachable database: nothing listens on port 1. */
+const UNREACHABLE = "postgres://rm_app:unused@127.0.0.1:1/unused";
 
 interface Booted {
   proc: ReturnType<typeof Bun.spawn>;
@@ -118,7 +97,7 @@ function spawnApi(
   extraEnv: Record<string, string> = {},
 ): ReturnType<typeof Bun.spawn> {
   return Bun.spawn(["bun", "run", "src/api/index.ts"], {
-    cwd: backendDir,
+    cwd: BACKEND_DIR,
     env: { ...process.env, DATABASE_URL: dbUrl, API_PORT: String(port), ...extraEnv },
     stdout: capture ? "pipe" : "ignore",
     stderr: "pipe",
@@ -153,35 +132,56 @@ async function bootAndServe(
   }
 }
 
-afterAll(async () => {
-  for (const history of created.values()) await history.drop();
-});
+/** Boot the api against a database the §7.2 preflight refuses, and return what
+ *  it logged before exiting. The guards' verdicts are in there, ahead of the
+ *  preflight's refusal; the process exited and bound nothing. */
+async function bootAndRefuse(
+  dbUrl: string,
+  extraEnv: Record<string, string> = {},
+): Promise<{ stderr: string; stdout: string; elapsedMs: number }> {
+  const port = await freePort();
+  const startedAt = Date.now();
+  const proc = spawnApi(dbUrl, port, true, extraEnv);
+  const exitCode = await proc.exited;
+  const elapsedMs = Date.now() - startedAt;
+  const stderr = await new Response(proc.stderr as ReadableStream).text();
+  const stdout = await new Response(proc.stdout as ReadableStream).text();
+  expect(exitCode).toBe(1);
+  expect(await portIsBound(port)).toBe(false);
+  expect(stdout).not.toContain("api listening");
+  expect(`${stdout}\n${stderr}`).toContain("startup_preflight: refused check");
+  return { stderr, stdout, elapsedMs };
+}
+
+/** Place the forbidden pair the way a restore does: trigger off, two rows, trigger back ENABLE ALWAYS. */
+async function restoreViolation(db: postgres.Sql<{}>, holder: string, shadowed: string): Promise<void> {
+  // The restore shape, forced: 0031's trigger is ENABLE ALWAYS, so even
+  // `session_replication_role = replica` cannot place the pair — a real
+  // pg_restore gets in only because its COPY precedes CREATE TRIGGER. This is
+  // a throwaway database, but the trigger is still restored with ENABLE ALWAYS
+  // (never a plain ENABLE, which downgrades 'A' to 'O').
+  await db`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  await db`INSERT INTO swarm_members (id, status, name, handle)
+           VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
+  await db`INSERT INTO swarm_members (id, status, name, handle)
+           VALUES (${holder}, 'active', 'Holder', ${shadowed})`;
+  await db`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+}
 
 // ── AC1: the production boot path refuses a violating database ──────────────
 
 test(
-  "a migrated database holding a restored violation: `bun run src/api/index.ts` exits non-zero, names both members, and binds no port",
+  "a database holding a restored violation: `bun run src/api/index.ts` exits non-zero, names both members, and binds no port",
   async () => {
-    const dbName = await createThrowawayDb("violating");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    const dbName = await freshCopy("violating");
+    const db = harnessConnection(dbName);
     const holder = "boot-holder";
     const shadowed = "boot-shadowed";
     try {
-      await applyAllMigrations(dbName);
-      // The restore shape, forced: 0031's trigger is ENABLE ALWAYS, so even
-      // `session_replication_role = replica` cannot place the pair — a real
-      // pg_restore gets in only because its COPY precedes CREATE TRIGGER. This
-      // is a throwaway database, but the trigger is still restored with
-      // ENABLE ALWAYS (never a plain ENABLE, which downgrades 'A' to 'O').
-      await db`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
-      await db`INSERT INTO swarm_members (id, status, name, handle)
-               VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
-      await db`INSERT INTO swarm_members (id, status, name, handle)
-               VALUES (${holder}, 'active', 'Holder', ${shadowed})`;
-      await db`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+      await restoreViolation(db, holder, shadowed);
 
       const port = await freePort();
-      const proc = spawnApi(urlFor(dbName), port, true);
+      const proc = spawnApi(appUrl(dbName), port, true);
       const exitCode = await proc.exited;
       const stderr = await new Response(proc.stderr as ReadableStream).text();
 
@@ -198,8 +198,10 @@ test(
       expect(stderr).toContain(`WHERE id = '${holder}';`);
       expect(stderr).not.toContain(`WHERE id = '${shadowed}';`);
       // Refused BEFORE Bun.serve: nothing was ever bound, so no request was
-      // ever answered from this database.
+      // ever answered from this database. And refused by THIS guard, ahead of
+      // the preflight: the preflight never ran.
       expect(await portIsBound(port)).toBe(false);
+      expect(stderr).not.toContain("startup_preflight:");
 
       // NEGATIVE control for that instruction. The runbook used to say the
       // repair was `UPDATE swarm_members SET handle = …` "on one of the two
@@ -216,53 +218,58 @@ test(
       // refuses everything.
       await db`UPDATE swarm_members SET handle = ${`${holder}-h`} WHERE id = ${holder}`;
       expect(await handleNamespaceConflicts(db)).toHaveLength(0);
-      const ok = await bootAndServe(urlFor(dbName));
+      const ok = await bootAndServe(appUrl(dbName));
+      expect((await (await fetch(`http://127.0.0.1:${ok.port}/health`)).json()).handle_namespace).toBe("clean");
       ok.proc.kill();
       await ok.proc.exited;
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
   },
   180_000,
 );
 
-// ── The shapes that must still boot (a wrong fail-closed guard is an outage) ─
+// ── The shapes the guard must CONCLUDE on (a wrong or hanging guard is an outage) ─
+//
+// Each of these is refused by the §7.2 preflight, which runs after both guards
+// (issue #973: no process serves past it). What is graded is that the guard
+// reached its own verdict first, said so, never said REFUSING, and that the
+// process exited instead of hanging in front of Bun.serve.
 
 test(
-  "an EMPTY database — no tables at all — still boots and serves",
+  "an EMPTY database — no tables at all — is not a namespace violation: the guard concludes, and only the preflight refuses",
   async () => {
-    const dbName = await createThrowawayDb("empty");
-    const booted = await bootAndServe(urlFor(dbName));
-    booted.proc.kill();
-    await booted.proc.exited;
+    const dbName = await freshCopy("empty");
+    const admin = postgres(databaseUrl(dbName), { max: 1, onnotice: () => {} });
+    try {
+      await admin.unsafe("DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO rm_owner, rm_app");
+    } finally {
+      await admin.end({ timeout: 5 });
+    }
+    const { stderr } = await bootAndRefuse(appUrl(dbName));
+    expect(stderr).not.toContain("REFUSING");
+    expect(stderr).toContain("startup_preflight: refused check");
   },
   120_000,
 );
 
 test(
-  "a database the api cannot reach AT ALL still boots — loudly UNCHECKED, never refused",
+  "a database the api cannot reach AT ALL: the guard concludes loudly UNCHECKED, never REFUSING, and the preflight refuses check 1",
   async () => {
     // The honest limit of this guard, asserted rather than described: an
-    // unreachable database is not a namespace violation, and turning a slow or
-    // down Postgres into an api crash-loop would be a worse outage than the one
-    // being guarded against. The api has always started in this state and
-    // answered /health with db:"down". What it must NOT do is stay silent about
-    // having skipped the check.
-    const booted = await bootAndServe("postgres://unused:unused@127.0.0.1:1/unused");
-    const res = await fetch(`http://127.0.0.1:${booted.port}/health`);
-    expect((await res.json()).db).toBe("down");
-    booted.proc.kill();
-    await booted.proc.exited;
-    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    // unreachable database is not a namespace violation. What the guard must
+    // NOT do is stay silent about having skipped the check, or hang.
+    const { stderr } = await bootAndRefuse(UNREACHABLE);
     expect(stderr).toContain("handle/id namespace guard could NOT run");
     expect(stderr).toContain("UNCHECKED");
     expect(stderr).not.toContain("REFUSING");
+    expect(stderr).toContain("startup_preflight: refused check 1");
   },
   120_000,
 );
 
 test(
-  "a MALFORMED PG_NAMESPACE_GUARD_TIMEOUT_MS ('8s') does not disable the bound: the api still boots, and says it ignored the value",
+  "a MALFORMED PG_NAMESPACE_GUARD_TIMEOUT_MS ('8s') does not disable the bound: the guard still concludes, and says it ignored the value",
   async () => {
     // The knob that bounds the guard must not be the way to unbound it. With
     // `Number("8s")` → NaN, every deadline comparison in checkHandleNamespace is
@@ -275,18 +282,7 @@ test(
     //
     // "8s" over a random string on purpose: a duration suffix is the plausible
     // typo, not a nonsense word.
-    const booted = await bootAndServe("postgres://unused:unused@127.0.0.1:1/unused", {
-      PG_NAMESPACE_GUARD_TIMEOUT_MS: "8s",
-    });
-    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
-    expect(health.status).toBe(200);
-    // The guard still ran and still concluded — on the fallback budget, not on
-    // a nonexistent one.
-    expect((await health.json()).handle_namespace).toBe("unchecked");
-
-    booted.proc.kill();
-    await booted.proc.exited;
-    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    const { stderr } = await bootAndRefuse(UNREACHABLE, { PG_NAMESPACE_GUARD_TIMEOUT_MS: "8s" });
     // Degrading to the default is only safe if it is LOUD: an operator who set
     // a budget and silently did not get it is worse off than one who is told.
     expect(stderr).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
@@ -300,7 +296,7 @@ test(
 );
 
 test(
-  "an OVER-CEILING PG_NAMESPACE_GUARD_TIMEOUT_MS ('3000000000') does not disable the bound either: the api boots on the default and says why",
+  "an OVER-CEILING PG_NAMESPACE_GUARD_TIMEOUT_MS ('3000000000') does not disable the bound either: the guard concludes on the default and says why",
   async () => {
     // The second way this knob can un-bound the guard, and the one that does NOT
     // look like a typo: 3000000000 IS a positive finite number of milliseconds,
@@ -312,29 +308,19 @@ test(
     // against an unreachable database before the ceiling existed: NO port bound
     // after 35s and not one [api] line — the identical never-binds, never-logs
     // outage as the "8s" case above.
-    const startedAt = Date.now();
-    const booted = await bootAndServe("postgres://unused:unused@127.0.0.1:1/unused", {
-      PG_NAMESPACE_GUARD_TIMEOUT_MS: "3000000000",
-    });
-    const elapsed = Date.now() - startedAt;
-    const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
-    expect(health.status).toBe(200);
-    expect((await health.json()).handle_namespace).toBe("unchecked");
-    // Bounded by THE DEFAULT, not merely by bootAndServe's own 60s deadline: the
+    const { stderr, elapsedMs } = await bootAndRefuse(UNREACHABLE, { PG_NAMESPACE_GUARD_TIMEOUT_MS: "3000000000" });
+    // Bounded by THE DEFAULT, not merely by this test's own deadline: the
     // rejected value must fall back to 8000ms, not to some other large budget.
-    // The allowance is process spawn + bun startup + the poll interval.
-    expect(elapsed).toBeLessThan(NAMESPACE_GUARD_DEFAULT_BUDGET_MS + 7_000);
-
-    booted.proc.kill();
-    await booted.proc.exited;
-    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    // The allowance is process spawn + bun startup + the preflight's own
+    // (instant, connection-refused) check 1.
+    expect(elapsedMs).toBeLessThan(NAMESPACE_GUARD_DEFAULT_BUDGET_MS + 7_000);
     expect(stderr).toContain("PG_NAMESPACE_GUARD_TIMEOUT_MS");
     expect(stderr).toContain("IGNORING");
     expect(stderr).toContain(`${NAMESPACE_GUARD_MAX_BUDGET_MS}ms a timer can hold`);
     expect(stderr).toContain(`${NAMESPACE_GUARD_DEFAULT_BUDGET_MS}ms`);
     expect(stderr).toContain("handle/id namespace guard could NOT run");
     // The specific symptom of the unbounded version, asserted absent rather than
-    // inferred from the port having been bound.
+    // inferred from the process having exited.
     expect(stderr).not.toContain("TimeoutOverflowWarning");
   },
   120_000,
@@ -422,7 +408,7 @@ test("checkHandleNamespace cannot spin on a non-positive or NaN budget", async (
 // ── The guard must be BOUNDED, not merely retried (OPS-610-001) ─────────────
 
 test(
-  "a database whose swarm_members is held under ACCESS EXCLUSIVE: the api still serves, loudly UNCHECKED, within the guard's budget",
+  "a database whose swarm_members is held under ACCESS EXCLUSIVE: both guards conclude UNCHECKED within their budgets, and the process exits instead of hanging",
   async () => {
     // The failure this exists to prevent is the worst one this PR could cause.
     // A blocking database is NOT a rejecting database: the guard's readiness
@@ -432,20 +418,19 @@ test(
     // `await assertHandleNamespaceClean()` would then never resolve, Bun.serve
     // would never be reached, no port would be bound and NOTHING would be
     // logged; `restart: unless-stopped` does not restart a process that hangs
-    // instead of exiting, and this process serves the static frontend too. The
-    // lock below is an ordinary deploy-window event (a migration replay, a
-    // REINDEX, a VACUUM FULL, an ALTER queued behind an idle transaction).
-    const dbName = await createThrowawayDb("locked");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
-    const locker = postgres(urlFor(dbName), { max: 1, onnotice: () => {} });
+    // instead of exiting. The lock below is an ordinary deploy-window event (a
+    // migration replay, a REINDEX, a VACUUM FULL, an ALTER queued behind an
+    // idle transaction). The §7.2 preflight that follows is bounded too
+    // (STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS) and refuses the blocked database,
+    // so the whole boot is a bounded, logged exit — never a hang.
+    const dbName = await freshCopy("locked");
+    const locker = harnessConnection(dbName);
     let releaseLock!: () => void;
     const released = new Promise<void>((r) => (releaseLock = r));
     let lockHeld = false;
     let lockSettled = false;
     let lockTxn: Promise<unknown> | undefined;
     try {
-      await applyAllMigrations(dbName);
-
       let lockTaken!: () => void;
       const taken = new Promise<void>((r) => (lockTaken = r));
       lockTxn = locker.begin(async (tx) => {
@@ -460,55 +445,36 @@ test(
       );
       await taken;
 
-      const startedAt = Date.now();
-      const booted = await bootAndServe(urlFor(dbName));
-      const elapsed = Date.now() - startedAt;
+      const { stderr, stdout, elapsedMs } = await bootAndRefuse(appUrl(dbName));
 
-      // The lock was taken AND was still held when /health answered — without
+      // The lock was taken AND was still held when the process exited — without
       // the second assertion this test would also pass on a lock that quietly
       // went away, which is the one way it could be green for the wrong reason.
       expect(lockHeld).toBe(true);
       expect(lockSettled).toBe(false);
-      // Bounded — and bounded by THE BUDGET, not by a round number that happens
-      // to be larger. A hard-coded 30s here catches only the unbounded
-      // regression; a silent loosening of the budget to 25s would stay green
-      // while every claim about "8s" quietly stopped being true. Asserting
-      // against the constant makes the assertion track the claim. The allowance
-      // is process spawn + bun startup + the poll interval, not slack in the
-      // bound itself.
-      const allowance = NAMESPACE_GUARD_BUDGET_MS + 7_000;
+      // Bounded — and bounded by THE BUDGETS, not by a round number that happens
+      // to be larger. Asserting against the constants makes the assertion track
+      // the claim. The allowance is process spawn + bun startup.
       expect(NAMESPACE_GUARD_BUDGET_MS).toBe(8_000); // the documented default
-      expect(elapsed).toBeLessThan(allowance);
+      expect(elapsedMs).toBeLessThan(NAMESPACE_GUARD_BUDGET_MS + STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS + 7_000);
 
-      // …and the outcome is DETECTABLE, not merely logged: /health still
-      // answers 200 (failing it on a slow database would trade this outage for
-      // a restart loop) but says which of the two boots this was.
-      const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
-      expect(health.status).toBe(200);
-      const body = await health.json();
-      expect(body.handle_namespace).toBe("unchecked");
-      // The SECOND boot guard (issue #684) sits behind this one against the
-      // same locked table, and it must reach the same conclusion for the same
-      // reason. It nearly did not: its probe is a `DELETE ... WHERE false`,
-      // which blocks on an ACCESS EXCLUSIVE lock and comes back as
-      // `57014 canceling statement due to statement timeout` — and a first
-      // version treated any error as evidence, classified that as "the guard is
-      // gone" and REFUSED THE BOOT. A lock on one table would have taken the
-      // whole site down. Silence is "unchecked", never "disarmed".
-      expect(body.append_only_guard).toBe("unchecked");
-
-      booted.proc.kill();
-      await booted.proc.exited;
-      const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+      // …and both guards' outcomes are in the log. The SECOND boot guard (issue
+      // #684) sits behind this one against the same locked table, and it must
+      // reach the same conclusion for the same reason. It nearly did not: its
+      // probe is a `DELETE ... WHERE false`, which blocks on an ACCESS EXCLUSIVE
+      // lock and comes back as `57014 canceling statement due to statement
+      // timeout` — and a first version treated any error as evidence,
+      // classified that as "the guard is gone" and REFUSED THE BOOT. Silence is
+      // "unchecked", never "disarmed".
       expect(stderr).toContain("handle/id namespace guard could NOT run");
       expect(stderr).toContain("append-only guard check could NOT run");
       expect(stderr).toContain("UNCHECKED");
       expect(stderr).not.toContain("REFUSING");
+      expect(`${stdout}\n${stderr}`).toContain("startup_preflight: refused check");
     } finally {
       releaseLock();
       await lockTxn?.catch(() => {});
-      await locker.end();
-      await db.end();
+      await locker.end({ timeout: 5 });
     }
   },
   180_000,
@@ -523,67 +489,33 @@ test(
     // session against production — needs a documented way out, or the guard
     // itself becomes the outage when it is the thing standing between an
     // operator and a running site. It must never be quiet about it.
-    const dbName = await createThrowawayDb("override");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    const dbName = await freshCopy("override");
+    const db = harnessConnection(dbName);
     const holder = "ovr-holder";
     const shadowed = "ovr-shadowed";
     try {
-      await applyAllMigrations(dbName);
-      await db`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
-      await db`INSERT INTO swarm_members (id, status, name, handle)
-               VALUES (${shadowed}, 'active', 'Shadowed', ${`${shadowed}-h`})`;
-      await db`INSERT INTO swarm_members (id, status, name, handle)
-               VALUES (${holder}, 'active', 'Holder', ${shadowed})`;
-      await db`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
-
-      const port = await freePort();
-      const proc = Bun.spawn(["bun", "run", "src/api/index.ts"], {
-        cwd: backendDir,
-        env: {
-          ...process.env,
-          DATABASE_URL: urlFor(dbName),
-          API_PORT: String(port),
-          RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1",
-        },
-        stdout: "ignore",
-        stderr: "pipe",
-      });
-      const deadline = Date.now() + 60_000;
-      for (;;) {
-        if (proc.exitCode !== null) {
-          const err = await new Response(proc.stderr as ReadableStream).text();
-          throw new Error(`the override did not let the api serve (exit ${proc.exitCode}):\n${err}`);
-        }
-        try {
-          const res = await fetch(`http://127.0.0.1:${port}/health`);
-          if (res.ok) {
-            // Machine-readable for the whole life of the process — an override
-            // left on by accident must not look like a healthy boot.
-            expect((await res.json()).handle_namespace).toBe("overridden");
-            break;
-          }
-        } catch {
-          /* not listening yet */
-        }
-        if (Date.now() > deadline) throw new Error(`api never served /health on :${port}`);
-        await new Promise((r) => setTimeout(r, 200));
-      }
-      proc.kill();
-      await proc.exited;
-      const stderr = await new Response(proc.stderr as ReadableStream).text();
-      expect(stderr).toContain("OVERRIDE");
-      expect(stderr).toContain("RM_ALLOW_HANDLE_NAMESPACE_VIOLATION");
-      // The pair is still named: under an override this log is the only record
-      // of what is being served wrong.
-      expect(stderr).toContain(holder);
-      expect(stderr).toContain(shadowed);
-      // …and the guard did NOT also claim to be disarmed: on a violating
-      // database the override is being USED, which is a different state from
-      // the one the next test covers.
-      expect(stderr).not.toContain("DISARMED");
+      await restoreViolation(db, holder, shadowed);
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
+
+    const booted = await bootAndServe(appUrl(dbName), { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" });
+    // Machine-readable for the whole life of the process — an override left on
+    // by accident must not look like a healthy boot.
+    expect((await (await fetch(`http://127.0.0.1:${booted.port}/health`)).json()).handle_namespace).toBe("overridden");
+    booted.proc.kill();
+    await booted.proc.exited;
+    const stderr = await new Response(booted.proc.stderr as ReadableStream).text();
+    expect(stderr).toContain("OVERRIDE");
+    expect(stderr).toContain("RM_ALLOW_HANDLE_NAMESPACE_VIOLATION");
+    // The pair is still named: under an override this log is the only record
+    // of what is being served wrong.
+    expect(stderr).toContain(holder);
+    expect(stderr).toContain(shadowed);
+    // …and the guard did NOT also claim to be disarmed: on a violating
+    // database the override is being USED, which is a different state from
+    // the one the next test covers.
+    expect(stderr).not.toContain("DISARMED");
   },
   180_000,
 );
@@ -598,17 +530,16 @@ test(
     // wrong right now) and nothing anywhere says the guard will not stop the
     // NEXT bad restore. An operator must be able to tell a safe system from a
     // disarmed one.
-    const dbName = await createThrowawayDb("armedclean");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    const dbName = await freshCopy("armedclean");
+    const db = harnessConnection(dbName);
     try {
-      await applyAllMigrations(dbName);
       await db`INSERT INTO swarm_members (id, status, name, handle)
                VALUES ('armed-a', 'active', 'A', 'armed-a-h')`;
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
 
-    const booted = await bootAndServe(urlFor(dbName), {
+    const booted = await bootAndServe(appUrl(dbName), {
       RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1",
     });
     const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
@@ -635,20 +566,19 @@ test(
     // The control for the case above: if that line printed on every boot it
     // would be ignored on the one boot it matters. Same database shape, one
     // variable different.
-    const dbName = await createThrowawayDb("unarmedclean");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    const dbName = await freshCopy("unarmedclean");
+    const db = harnessConnection(dbName);
     try {
-      await applyAllMigrations(dbName);
       await db`INSERT INTO swarm_members (id, status, name, handle)
                VALUES ('unarmed-a', 'active', 'A', 'unarmed-a-h')`;
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
 
     // Explicitly blank rather than merely absent: spawnApi inherits the
     // caller's environment, and a developer who exported the override in their
     // shell must not silently turn this control into a copy of the case above.
-    const booted = await bootAndServe(urlFor(dbName), {
+    const booted = await bootAndServe(appUrl(dbName), {
       RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "",
     });
     const health = await fetch(`http://127.0.0.1:${booted.port}/health`);
@@ -663,23 +593,23 @@ test(
 );
 
 test(
-  "a PRE-0030 database — swarm_members exists but has no `handle` column — still boots and serves",
+  "a PRE-0030 database — swarm_members exists but has no `handle` column — is not a violation: the guard concludes, and only the preflight refuses",
   async () => {
-    const dbName = await createThrowawayDb("pre0030");
-    const db = postgres(urlFor(dbName), { max: 1, onnotice: () => {} });
+    const dbName = await freshCopy("pre0030");
+    const db = harnessConnection(dbName);
     try {
       // The exact intermediate the guard's to_regclass + column probe exists
       // for: the table is there, the column the predicate reads is not. This is
       // a database mid-way through its migrations, which is a migration's
-      // business and not an integrity violation.
-      await db`CREATE TABLE swarm_members (id text PRIMARY KEY, status text NOT NULL, name text NOT NULL)`;
-      await db`INSERT INTO swarm_members (id, status, name) VALUES ('pre0030', 'active', 'Pre 0030')`;
+      // business (and, since issue #973, the preflight's refusal) and not an
+      // integrity violation.
+      await db.unsafe("ALTER TABLE swarm_members DROP COLUMN handle CASCADE");
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
-    const booted = await bootAndServe(urlFor(dbName));
-    booted.proc.kill();
-    await booted.proc.exited;
+    const { stderr } = await bootAndRefuse(appUrl(dbName));
+    expect(stderr).not.toContain("REFUSING");
+    expect(stderr).toContain("startup_preflight: refused check");
   },
   120_000,
 );
@@ -688,7 +618,7 @@ test(
 //
 // Same entrypoint, same production path, and it is graded the same way: a
 // database that records migration 0032 as applied and no longer honours it must
-// not be served, and everything else must still boot.
+// not be served, and a clean one must still boot.
 //
 // The disarmed database is built the way an owner would actually build it — one
 // `CREATE OR REPLACE FUNCTION` — precisely because that is the state a trigger
@@ -700,17 +630,15 @@ CREATE OR REPLACE FUNCTION rm_append_only_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$ BEGIN IF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$;`;
 
 test(
-  "a database whose append-only guard has been disarmed: the api exits non-zero and binds no port",
+  "a database whose append-only guard function has been disarmed: the api exits non-zero and binds no port, and no override serves it",
   async () => {
-    const dbName = await createThrowawayDb("disarmed");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    const dbName = await freshCopy("disarmed");
+    const db = harnessConnection(dbName);
     try {
-      await applyAllMigrations(dbName);
-
       // Control FIRST: the same database, untouched, boots and serves and says
       // so at /health. Without this, the refusal below is also satisfied by an
       // api that refuses every database.
-      const armed = await bootAndServe(urlFor(dbName));
+      const armed = await bootAndServe(appUrl(dbName));
       const armedHealth = await (await fetch(`http://127.0.0.1:${armed.port}/health`)).json();
       expect(armedHealth.append_only_guard).toBe("armed");
       armed.proc.kill();
@@ -720,63 +648,58 @@ test(
       // The catalog is untouched — this is the whole point of the fixture.
       const [{ n }] = (await db`
         SELECT count(*)::int AS n FROM pg_trigger
-        WHERE NOT tgisinternal AND tgname LIKE '%\_append\_only%' AND tgenabled = 'A'
+        WHERE NOT tgisinternal AND tgname LIKE '%\\_append\\_only%' AND tgenabled = 'A'
       `) as unknown as { n: number }[];
       expect(n, "every trigger is still installed and still ENABLE ALWAYS").toBeGreaterThan(0);
 
-      const port = await freePort();
-      const proc = spawnApi(urlFor(dbName), port, true);
-      const exitCode = await proc.exited;
-      const stderr = await new Response(proc.stderr as ReadableStream).text();
+      // The OWNER sees the disarmed function for what it is: a DELETE is accepted.
+      expect((await checkAppendOnlyGuard(db)).status).toBe("disarmed");
 
-      expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("REFUSING the boot: the append-only guard");
-      expect(stderr).toContain("a DELETE was ACCEPTED");
-      expect(stderr).toContain("will NOT start");
-      expect(await portIsBound(port)).toBe(false);
-
-      // The documented escape hatch serves anyway, loudly, and says so at
-      // /health for the whole life of the process — an override left set must
-      // not be indistinguishable from a healthy boot.
-      const overridden = await bootAndServe(urlFor(dbName), { RM_ALLOW_UNARMED_APPEND_ONLY_GUARD: "1" });
-      const health = await (await fetch(`http://127.0.0.1:${overridden.port}/health`)).json();
-      expect(health.status).toBe("ok");
-      expect(health.append_only_guard).toBe("disarmed");
-      overridden.proc.kill();
-      await overridden.proc.exited;
-      expect(await new Response(overridden.proc.stderr as ReadableStream).text()).toContain("OVERRIDE");
+      // The api, as rm_app, cannot: every DELETE it probes is refused by the
+      // executor at 42501 before any trigger runs (D55 (6)), which the guard
+      // counts as protected (assertAppendOnlyGuardArmed, note 5). On a stack
+      // the drifted function is caught by the §7.2 preflight instead — check 3
+      // compares every function against the installed manifest — and that
+      // refusal, unlike the guard's, has no override: the api exits non-zero,
+      // binds no port, and names the function, with and without
+      // RM_ALLOW_UNARMED_APPEND_ONLY_GUARD=1.
+      for (const extraEnv of [{}, { RM_ALLOW_UNARMED_APPEND_ONLY_GUARD: "1" }] as Record<string, string>[]) {
+        const { stderr, stdout } = await bootAndRefuse(appUrl(dbName), extraEnv);
+        expect(`${stdout}\n${stderr}`).toContain("startup_preflight: refused check 3: function public.rm_append_only_guard() differs from the installed manifest");
+        expect(stderr).not.toContain("OVERRIDE");
+      }
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
   },
   120_000,
 );
 
 test(
-  "a database that predates migration 0032 boots normally — 'not applied' is not 'disarmed'",
+  "a database that predates migration 0032 is 'not applied', never 'disarmed': the guard says so, and only the preflight refuses",
   async () => {
-    // An ordinary first boot, and the distinction that lets the guard above
-    // afford to fail closed. `docker compose up -d` starts this process against
-    // whatever database exists; refusing one that simply has not been migrated
-    // yet would make the guard an outage on every fresh deployment.
-    const dbName = await createThrowawayDb("pre0032");
-    const db = postgres(urlFor(dbName), { max: 2, onnotice: () => {} });
+    // The distinction that lets the guard above afford to fail closed: a
+    // database that simply has not been migrated yet is not a disarmed one.
+    // Since issue #973 the §7.2 preflight refuses such a database on its own
+    // terms (its ledger is behind this image's), so what is graded here is the
+    // guard's verdict — "not recorded", nothing wrong — and that it never
+    // REFUSED the boot itself.
+    const dbName = await freshCopy("pre0032");
+    const db = harnessConnection(dbName);
     try {
-      await applyAllMigrations(dbName);
       // Roll the ledger back to before 0032 and remove what it installed — the
       // shape of a database whose migrate() has not run yet.
       await db.unsafe(`ALTER TABLE schema_migrations DISABLE TRIGGER USER`);
       await db`DELETE FROM schema_migrations WHERE name = '0032_append_only_history.sql'`;
       await db.unsafe(`DROP FUNCTION rm_append_only_guard() CASCADE`);
-
-      const booted = await bootAndServe(urlFor(dbName));
-      const health = await (await fetch(`http://127.0.0.1:${booted.port}/health`)).json();
-      expect(health.append_only_guard).toBe("not_applied");
-      booted.proc.kill();
-      await booted.proc.exited;
     } finally {
-      await db.end();
+      await db.end({ timeout: 5 });
     }
+    const { stderr, stdout } = await bootAndRefuse(appUrl(dbName));
+    expect(stdout).toContain("append-only guard: 0032_append_only_history.sql is not recorded in schema_migrations");
+    expect(stderr).not.toContain("REFUSING");
+    expect(stderr).not.toContain("DISARMED");
+    expect(`${stdout}\n${stderr}`).toContain("startup_preflight: refused check");
   },
   120_000,
 );

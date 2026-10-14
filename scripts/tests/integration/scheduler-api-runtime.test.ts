@@ -11,10 +11,11 @@
 // Three real processes, wired exactly as a stack wires them, with nothing in
 // between:
 //
-//   * Postgres — a throwaway container of the repo's pinned image, migrated
-//     and seeded by the backend's own `migrate()` and `seed()`.
-//   * The API — `bun run src/api/index.ts`, the backend image's own CMD, with
-//     the database URL in ITS environment only.
+//   * Postgres — a throwaway container of the repo's pinned image, provisioned
+//     the way `bun smoke --local blank` provisions one: roles by the superuser,
+//     the snapshot bootstrapped and seeded by `rm_owner`.
+//   * The API — `bun run src/api/index.ts`, the backend image's own CMD, as
+//     `rm_app`, with the database URL in ITS environment only.
 //   * `system-scheduler` — `bun scripts/system-scheduler.ts`, the scheduler
 //     image's own entrypoint, holding one credential: an automation token file.
 //     Its environment carries no database URL at all (§7).
@@ -93,6 +94,16 @@ let scheduler: ReturnType<typeof Bun.spawn> | null = null;
 const logs: string[] = [];
 
 /** The minimal environment a child needs, and NOTHING inherited — no stray DATABASE_URL. */
+/** One password for the four taxonomy roles of this throwaway cluster. The api
+ *  boots as `rm_app`, the tools run as `rm_owner`; never the container's superuser. */
+const APP_PASSWORD = "rm_role_it_runtime";
+function roleDatabaseUrl(role: string): string {
+  const url = new URL(databaseUrl);
+  url.username = role;
+  url.password = APP_PASSWORD;
+  return url.toString();
+}
+
 function baseEnv(): Record<string, string> {
   return { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: process.env.HOME ?? "/tmp" };
 }
@@ -134,7 +145,7 @@ function pipe(proc: ReturnType<typeof Bun.spawn>, tag: string): void {
 async function runBackend(code: string): Promise<string> {
   const proc = Bun.spawn(["bun", "-e", code], {
     cwd: BACKEND,
-    env: { ...baseEnv(), DATABASE_URL: databaseUrl, RM_ENV: "ephemeral" },
+    env: { ...baseEnv(), DATABASE_URL: databaseUrl },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -290,11 +301,36 @@ beforeAll(async () => {
   ]);
   if (up.exitCode !== 0) throw new Error(`postgres container failed to start: ${up.stderr.toString()}`);
 
-  // The backend's own migrate() retries until the server accepts connections.
+  // Provisioned the way `bun smoke --local blank` and backend/tests/preload.ts
+  // provision a database (issue #973: the api boots as a stack boots it, as
+  // `rm_app`, through the real startup preflight, so the database must be the
+  // one a stack has): the superuser creates the roles, hands the database to
+  // rm_owner and installs pgcrypto; rm_owner bootstraps the snapshot (ledger,
+  // grants, manifest, identity) and seeds. Retries until the server accepts
+  // connections.
   await runBackend(`
-    const { migrate } = await import("./src/db/migrate.ts");
+    const postgres = (await import("postgres")).default;
+    const { localSuperuserSql } = await import("../scripts/lib/smoke-database.ts");
+    const { bootstrapBlankDatabase, loadSnapshot } = await import("./src/db/schema-snapshot.ts");
     const { seed } = await import("./src/db/seed.ts");
-    await migrate(); await seed(); process.exit(0);`);
+    const superUrl = process.env.DATABASE_URL;
+    const start = Date.now();
+    let superuser;
+    for (;;) {
+      try { superuser = postgres(superUrl, { max: 1, onnotice: () => {} }); await superuser\`SELECT 1\`; break; }
+      catch (err) { if (Date.now() - start > 30_000) throw err; await Bun.sleep(250); }
+    }
+    const passwords = { rm_owner: ${JSON.stringify(APP_PASSWORD)}, rm_app: ${JSON.stringify(APP_PASSWORD)}, rm_worker: ${JSON.stringify(APP_PASSWORD)}, rm_readonly: ${JSON.stringify(APP_PASSWORD)} };
+    await superuser.unsafe(localSuperuserSql(passwords, "robotmoney"));
+    await superuser.unsafe("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    await superuser.end();
+    const owner = postgres(${JSON.stringify('__OWNER_URL__')}, { max: 1, onnotice: () => {} });
+    await bootstrapBlankDatabase(owner, await loadSnapshot());
+    await seed(owner);
+    await owner.end();
+    process.exit(0);`.replace("__OWNER_URL__", roleDatabaseUrl("rm_owner")));
+  // Everything after this runs as the owner, as the operator tools do.
+  databaseUrl = roleDatabaseUrl("rm_owner");
   await provision();
   operatorToken = readFileSync(tokenFiles.operator, "utf8").trim();
   const second = await runBackend(`
@@ -305,7 +341,7 @@ beforeAll(async () => {
 
   api = Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: BACKEND,
-    env: { ...baseEnv(), DATABASE_URL: databaseUrl, API_PORT: String(apiPort), RM_ENV: "ephemeral" },
+    env: { ...baseEnv(), DATABASE_URL: roleDatabaseUrl("rm_app"), API_PORT: String(apiPort) },
     stdout: "pipe",
     stderr: "pipe",
   });

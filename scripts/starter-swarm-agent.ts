@@ -73,8 +73,8 @@ export interface StarterOptions extends StarterCredentials {
   backendUrl: string;
   authorTake?: AuthorTake;
   /**
-   * Take part in the collecting epoch of THIS subject. Omitted, the newest
-   * collecting session on the stack is used. The e2e exercise names its own
+   * Take part in the collecting epoch of THIS subject. Omitted, every
+   * collecting session on the stack (GET open-sessions) gets one take. The e2e exercise names its own
    * subject, because the newest session may belong to another run's roster.
    */
   subjectId?: string;
@@ -245,11 +245,28 @@ export async function collectingSessionFor(backendUrl: string, subjectId: string
   return (body.sessions ?? []).find((s) => s.state === "collecting" && s.subjectId === subjectId) ?? null;
 }
 
-async function runRest(options: StarterOptions): Promise<StarterResult> {
-  const session = options.subjectId
-    ? await collectingSessionFor(options.backendUrl, options.subjectId)
-    : await restJson<StarterSession | null>(options.backendUrl, ROUTES.swarm.openSession, "discover open session");
-  if (!session) throw new Error("no swarm session is currently collecting");
+/**
+ * Every collecting session, soonest close first, from the public open-sessions
+ * list. Not `open-session`: that route names only the newest session, and the
+ * four subjects collect at once (post-mortem 2026-10-09, findings 4 and 5).
+ */
+export async function collectingSessions(backendUrl: string): Promise<StarterSession[]> {
+  const body = await restJson<{ sessions?: StarterSession[] }>(
+    backendUrl,
+    ROUTES.swarm.openSessions,
+    "discover open sessions",
+  );
+  return body.sessions ?? [];
+}
+
+const NO_SESSION_COLLECTING = "no swarm session is currently collecting";
+
+/** One session's result in a run over every collecting session. */
+export type StarterSessionOutcome =
+  | { sessionId: string; date: string; subjectId: string; ok: true; result: StarterResult }
+  | { sessionId: string; date: string; subjectId: string; ok: false; error: string };
+
+async function submitToSession(options: StarterOptions, session: StarterSession): Promise<StarterResult> {
   // Read the brief of THIS session by its id, not by (date, subject).
   // Since migration 0022 a subject may convene several times a day, and the
   // date/subject form deliberately resolves to the LATEST session of that day
@@ -326,12 +343,51 @@ async function runRest(options: StarterOptions): Promise<StarterResult> {
   return { transport: "rest", draft, canonical, signature, take: verifiedTake(readback, options.memberId) };
 }
 
+function normalizedOptions(options: StarterOptions): StarterOptions {
+  return { ...options, backendUrl: normalizedBaseUrl(options.backendUrl, "BACKEND_URL") };
+}
+
+/**
+ * Submit one take to EVERY collecting session, in the order open-sessions
+ * returns them. A refusal on one session is recorded for that session and the
+ * loop continues. Rejects only when no session is collecting.
+ */
+export async function runStarterSwarmAgentOverOpenSessions(options: StarterOptions): Promise<StarterSessionOutcome[]> {
+  const normalized = normalizedOptions(options);
+  const sessions = await collectingSessions(normalized.backendUrl);
+  if (sessions.length === 0) throw new Error(NO_SESSION_COLLECTING);
+  const outcomes: StarterSessionOutcome[] = [];
+  for (const session of sessions) {
+    const where = { sessionId: String(session.id), date: session.date, subjectId: session.subjectId };
+    try {
+      outcomes.push({ ...where, ok: true, result: await submitToSession(normalized, session) });
+    } catch (error) {
+      outcomes.push({ ...where, ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * With `subjectId`: one take to that subject's collecting session. Without it:
+ * one take to every collecting session (see runStarterSwarmAgentOverOpenSessions),
+ * returning the first result, and rejecting if any session failed.
+ */
 export async function runStarterSwarmAgent(options: StarterOptions): Promise<StarterResult> {
-  const normalized: StarterOptions = {
-    ...options,
-    backendUrl: normalizedBaseUrl(options.backendUrl, "BACKEND_URL"),
-  };
-  return runRest(normalized);
+  const normalized = normalizedOptions(options);
+  if (normalized.subjectId) {
+    const session = await collectingSessionFor(normalized.backendUrl, normalized.subjectId);
+    if (!session) throw new Error(NO_SESSION_COLLECTING);
+    return submitToSession(normalized, session);
+  }
+  const outcomes = await runStarterSwarmAgentOverOpenSessions(normalized);
+  const failed = outcomes.filter((o) => !o.ok);
+  if (failed.length > 0) {
+    throw new Error(
+      failed.map((o) => `session ${o.sessionId} (${o.date}/${o.subjectId}): ${o.ok ? "" : o.error}`).join("; "),
+    );
+  }
+  return (outcomes[0] as Extract<StarterSessionOutcome, { ok: true }>).result;
 }
 
 async function importPrivateKey(rawJwk: string): Promise<CryptoKey> {
@@ -471,16 +527,22 @@ async function main(): Promise<void> {
     };
   }
 
-  const result = await runStarterSwarmAgent({
-    ...credentials,
-    transport,
-    backendUrl,
-    ...(subject ? { subjectId: subject.id } : {}),
-  });
-  console.log(
-    `starter swarm agent (${result.transport}) submitted take ${result.take.id} ` +
-      `for ${result.draft.date}/${result.draft.subjectId}: verified=true`,
-  );
+  const printResult = (result: StarterResult) =>
+    console.log(
+      `starter swarm agent (${result.transport}) submitted take ${result.take.id} ` +
+        `for ${result.draft.date}/${result.draft.subjectId}: verified=true`,
+    );
+  if (subject) {
+    printResult(await runStarterSwarmAgent({ ...credentials, transport, backendUrl, subjectId: subject.id }));
+    return;
+  }
+  // No subject: one take to every collecting session, one line per session.
+  const outcomes = await runStarterSwarmAgentOverOpenSessions({ ...credentials, transport, backendUrl });
+  for (const outcome of outcomes) {
+    if (outcome.ok) printResult(outcome.result);
+    else console.error(`starter swarm agent failed for session ${outcome.sessionId} (${outcome.date}/${outcome.subjectId}): ${outcome.error}`);
+  }
+  if (outcomes.some((o) => !o.ok)) process.exit(1);
 }
 
 if (import.meta.main) {

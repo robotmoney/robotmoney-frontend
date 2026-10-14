@@ -69,7 +69,7 @@ beforeAll(async () => {
   if (!opened.ok) throw new Error(`openEpoch failed: ${JSON.stringify(opened)}`);
   runningSession = opened.sessionId;
 
-  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1", RM_ENV: "ephemeral" } });
+  api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1" } });
 });
 afterAll(() => api?.stop());
 
@@ -169,7 +169,7 @@ test("RED CONTROL: with `isPrivileged(req) ||` restored on the epochs guard, the
     'if (!(await hasAutomationRight(req, "lifecycle_transitions"))) return FORBIDDEN;',
     'if (!(await isPrivileged(req) || await hasAutomationRight(req, "lifecycle_transitions"))) return FORBIDDEN;',
   );
-  const broken = await bootApi({ env: { RM_ENV: "ephemeral" }, preload });
+  const broken = await bootApi({ preload });
   try {
     const idle = await activeSubject("lc_red");
     idleSubject = idle;

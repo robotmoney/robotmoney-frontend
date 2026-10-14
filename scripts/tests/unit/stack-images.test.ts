@@ -119,7 +119,7 @@ function recordingRuntime(opts: { inspectOk?: boolean } = {}): { runtime: StackR
     },
     async run(a) {
       argv.push(a);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
     async probe() {
       return { ok: true, detail: "ok" };

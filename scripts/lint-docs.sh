@@ -21,6 +21,9 @@
 #      smoke-production-spec.md §3. docs/archive/ is history and is not scanned.
 #      scripts/tests/unit/docs-no-rm-migrator.test.ts holds the same rule and
 #      its red controls.
+#   7. docs/decisions.md records D66 (production data changes only through a
+#      migration, owner 2026-10-09), and no current doc says a subject's
+#      scheduling columns change "only through the admin API" (issue 1312).
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -69,6 +72,21 @@ for f in "${ic_docs[@]}"; do
   fi
 done
 
+# 4b. Every in-document anchor link in docs/decisions.md resolves: `(#x)` must
+#     name an `<a id="x">` anchor or a heading whose slug is `x`. An amendment
+#     that links to a decision or another amendment fails loudly when the anchor
+#     it names is missing (issue 1272).
+decisions_doc="docs/decisions.md"
+if [ -f "$decisions_doc" ]; then
+  anchors="$(grep -o '<a id="[^"]*"></a>' "$decisions_doc" | sed 's/<a id="\([^"]*\)"><\/a>/\1/')"
+  headings="$(grep -E '^#{1,6} ' "$decisions_doc" | sed -E 's/^#+ //' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g')"
+  for ref in $(grep -o '](#[^)]*)' "$decisions_doc" | sed 's/](#\(.*\))/\1/' | sort -u); do
+    if ! printf '%s\n' "$anchors" | grep -qx "$ref" && ! printf '%s\n' "$headings" | grep -q "^$ref"; then
+      err "$decisions_doc links to #$ref, which no anchor or heading provides"
+    fi
+  done
+fi
+
 # 5. `rm_migrator` appears only in D46/D47 history and smoke-production-spec §3.
 #    The allowed ranges are found by anchor and heading, not by line number, so
 #    an edit above them does not move the goalposts. A missing anchor or heading
@@ -106,10 +124,31 @@ fi
 #    docs-only copy of the tree, where the tool is absent.
 if command -v bun >/dev/null 2>&1 && [ -f scripts/release/steps-table.ts ] && [ -f docs/runbooks/release-run.md ]; then
   bun scripts/release/steps-table.ts --check docs/runbooks/release-run.md >/dev/null || err "docs/runbooks/release-run.md: stale step table (bun scripts/release/steps-table.ts --write docs/runbooks/release-run.md)"
-  for f in docs/runbooks/release-run.md; do
+  for f in docs/runbooks/release-run.md docs/runbooks/v0-6-1-rollout.md docs/runbooks/v0-6-2-rollout.md; do
+    [ -f "$f" ] || { err "$f is missing (issue 1261: the delta runbooks)"; continue; }
     bun scripts/release/steps-table.ts --check-ids "$f" >/dev/null || err "$f names a step that is not in scripts/release/steps.ts"
   done
 fi
+
+# 7. The 2026-10-09 rule "production data changes only through a migration" is
+#    a recorded decision (D66, issue 1312), and no current doc still says a
+#    subject's scheduling columns change "only through the admin API": that
+#    phrasing predates the rule and was contradicted by migrations 0117 and
+#    0121. docs/archive/ and docs/post-mortems/ are history and are not
+#    scanned. scripts/tests/unit/docs-migration-rule-decision.test.ts holds the
+#    same rule and its red controls.
+if ! grep -qE '^## D66 — Production data changes only through a migration \(owner, 2026-10-09\)' docs/decisions.md 2>/dev/null; then
+  err "docs/decisions.md lacks the D66 entry recording the 2026-10-09 migration rule (issue 1312)"
+fi
+#    The phrase is matched across a line wrap: each file is read with
+#    newlines folded to spaces before the grep, so "only through the admin\n
+#    API" is caught too.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if tr '\n' ' ' <"$f" | grep -q -i -E 'only (through|via|by) the +\*{0,2}admin +API'; then
+    err "$f says scheduling columns change only through the admin API; on a deployed stack they change by migration (D66, issue 1312)"
+  fi
+done <<<"$(git ls-files -- 'docs/*.md' 'docs/**/*.md' ':!docs/archive' ':!docs/post-mortems' 2>/dev/null || true)"
 
 if [ "$fail" -ne 0 ]; then
   exit 1

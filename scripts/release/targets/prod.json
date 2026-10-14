@@ -1,5 +1,5 @@
 {
-  "$comment": "Production target for bun run release:run (D61). No release commit here: the go file's commit: line names it, and SP.8 refuses a commit the stage run did not pass at. Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and R1.2 refuses a value that differs from what the host resolves.",
+  "$comment": "Production target for bun run release:run (D61). It names where production lives and nothing of what runs there: no release commit (the go file's line names it, and SP.8 refuses a commit the stage run did not pass at), no previous commit, no running stack (the host's smoke state names it; R6.1 stops it with bun run smoke:down). Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and R1.2 refuses a value that differs from what the host resolves.",
   "release": "v0.6.1",
   "rmEnv": "prod",
   "host": "rm-frontend-prod-1",
@@ -11,15 +11,6 @@
     "host": "rm-frontend-stage-2",
     "home": "/home/stage-server",
     "checkout": "/home/stage-server/rm-capture"
-  },
-  "legacy": {
-    "checkout": "/root/rm-060",
-    "commit": "e96d4598678346260282e37ffd5a10df286186ba",
-    "tmuxSession": "driver",
-    "composeProject": "rm_smoke_stack_d8f827cd30",
-    "composeFiles": [],
-    "startedBy": "bun run smoke --static-port --instance rm_prod from /root/rm-060 (the v0.6.0 cutover, 2026-10-08)",
-    "version": "v0.6.0"
   },
   "confirmTarget": "private-dbaas-db-8115298-do-user-39489996-0.g.db.ondigitalocean.com:25060/defaultdb",
   "bootEnv": {}

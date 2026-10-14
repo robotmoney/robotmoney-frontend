@@ -1,0 +1,315 @@
+{
+  "kind": "preflight",
+  "target": "stage",
+  "rmEnv": "stage",
+  "release": "v0.6.1",
+  "commit": "da3ef54c62033f4a62b81463f0e01d644c473099",
+  "stepListHash": "1177675c57f27024434a764abaf054a943a6b0e31975ea21ee8c59a9d09d5497",
+  "goSha256": null,
+  "runTs": "20261013T000436Z",
+  "at": "2026-10-13T00:17:54.328Z",
+  "exit": 2,
+  "checks": [
+    {
+      "id": "P.target",
+      "status": "green",
+      "detail": "confirmTarget 172.17.0.1:25060/defaultdb"
+    },
+    {
+      "id": "P.go",
+      "status": "pending",
+      "detail": "no --go: the run needs the owner's go file (D61 rule 1)"
+    },
+    {
+      "id": "P.recovery",
+      "status": "pending",
+      "detail": "named by the go: the signed recovery matrix (SC.1)"
+    },
+    {
+      "id": "P.commit",
+      "status": "green",
+      "detail": "da3ef54c62033f4a62b81463f0e01d644c473099 (the control checkout's HEAD; the go must name it)"
+    },
+    {
+      "id": "P.origin",
+      "status": "red",
+      "detail": "da3ef54c62033f4a62b81463f0e01d644c473099 is on origin/feat/1272-refactor-release-runner-holds-no-past-upgrade-fa, not on origin/releases-0.6.x; D64: stage and production run a commit on the release branch, never a PR head or a QA branch"
+    },
+    {
+      "id": "P.ci",
+      "status": "red",
+      "detail": "no e2e check run; no backend check run; no integration check run; no web-client check run; changes is queued; repo-guards is queued; docs-lint is queued; unit is queued; drift is queued"
+    },
+    {
+      "id": "P.busy",
+      "status": "green",
+      "detail": "no stage run in flight under /drive2/home/lucas/.local/state/robotmoney-release/stage"
+    },
+    {
+      "id": "P.live.target",
+      "status": "green",
+      "detail": "no running container on rm-frontend-stage-2 was started from /home/stage-server/rm-stage-target"
+    },
+    {
+      "id": "P.live.capture",
+      "status": "green",
+      "detail": "no running container on rm-frontend-stage-2 was started from /home/stage-server/rm-capture"
+    },
+    {
+      "id": "R1.1",
+      "status": "green",
+      "detail": "2 s"
+    },
+    {
+      "id": "R1.2",
+      "status": "green",
+      "detail": "6 s"
+    },
+    {
+      "id": "R1.3",
+      "status": "green",
+      "detail": "2 s"
+    },
+    {
+      "id": "R2.3",
+      "status": "green",
+      "detail": "10 s"
+    },
+    {
+      "id": "R2.5",
+      "status": "green",
+      "detail": "10 s, findings covered by the triage /drive2/home/lucas/tmp/claude-1003/-drive2-home-lucas-robotmoney-robotmoney-frontend/7a292cf6-2590-4cbd-9053-e8d896cf5326/scratchpad/triage-stage-1272.txt"
+    },
+    {
+      "id": "R1.4",
+      "status": "green",
+      "detail": "3 s"
+    },
+    {
+      "id": "R1.5",
+      "status": "green",
+      "detail": "6 s"
+    },
+    {
+      "id": "R1.6",
+      "status": "green",
+      "detail": "2 s"
+    },
+    {
+      "id": "R2.1",
+      "status": "green",
+      "detail": "513 s"
+    },
+    {
+      "id": "R2.2",
+      "status": "green",
+      "detail": "7 s"
+    },
+    {
+      "id": "R2.4r",
+      "status": "green",
+      "detail": "230 s"
+    }
+  ],
+  "steps": {
+    "R1.1": {
+      "id": "R1.1",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:04:42.364Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:04:44.764Z",
+      "durationMs": 2400
+    },
+    "R1.2": {
+      "id": "R1.2",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:04:44.764Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261013T000436Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R1.2/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:04:50.605Z",
+      "durationMs": 5841
+    },
+    "R1.3": {
+      "id": "R1.3",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:04:50.605Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:04:52.918Z",
+      "durationMs": 2313
+    },
+    "R2.3": {
+      "id": "R2.3",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:04:52.918Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261013T000436Z/baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.3/receipts/baseline.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261013T000436Z/baseline-would-clear.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.3/receipts/baseline-would-clear.txt"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261013T000436Z/baseline-ledger.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.3/receipts/baseline-ledger.txt"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:05:02.720Z",
+      "durationMs": 9802
+    },
+    "R2.5": {
+      "id": "R2.5",
+      "status": "ok",
+      "exit": 1,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:05:02.720Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261013T000436Z/prod-gate-baseline.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.5/receipts/prod-gate-baseline.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261013T000436Z/prod-gate-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.5/receipts/prod-gate-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:05:13.107Z",
+      "durationMs": 10387,
+      "triage": {
+        "file": "/drive2/home/lucas/tmp/claude-1003/-drive2-home-lucas-robotmoney-robotmoney-frontend/7a292cf6-2590-4cbd-9053-e8d896cf5326/scratchpad/triage-stage-1272.txt",
+        "sha256": "c4bfe9b5812b58a5dd86a9f8427f776e55d085d2ad20a598098f5d1482dadc0c",
+        "used": [
+          {
+            "check": "jobs",
+            "fragment": "projects.refresh_wallets",
+            "reason": "the first wallet refresh after the boot was reaped on lock expiry on stage-2's slower RPC path; the job re-enqueues on its cron; stage-only"
+          },
+          {
+            "check": "jobs",
+            "fragment": "dead job(s) in the window",
+            "reason": "the count line of the one reaped refresh_wallets job above; stage-only"
+          },
+          {
+            "check": "sessions",
+            "fragment": "stuck in 'collecting'",
+            "reason": "sessions open in the production dump at capture time; the stage stack booted minutes ago and their windows close on production's 24 h epochs; stage-only"
+          },
+          {
+            "check": "sessions",
+            "fragment": "session(s) in or open during the window",
+            "reason": "the count line of the two collecting sessions above; stage-only"
+          },
+          {
+            "check": "inventory",
+            "fragment": "totalAssets() failed",
+            "reason": "the live vault extractor hits stage-2's public RPC rate limit; the job keeps last-persisted rows; stage-only"
+          }
+        ]
+      }
+    },
+    "R1.4": {
+      "id": "R1.4",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:05:13.108Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:05:15.615Z",
+      "durationMs": 2507
+    },
+    "R1.5": {
+      "id": "R1.5",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:05:15.615Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261013T000436Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R1.5/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:05:21.820Z",
+      "durationMs": 6205
+    },
+    "R1.6": {
+      "id": "R1.6",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:05:21.820Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:05:24.090Z",
+      "durationMs": 2270
+    },
+    "R2.1": {
+      "id": "R2.1",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:05:24.090Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261013T000436Z/manifest.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.1/receipts/manifest.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:13:56.838Z",
+      "durationMs": 512748
+    },
+    "R2.2": {
+      "id": "R2.2",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:13:56.838Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261013T000436Z/SHA256SUMS",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.2/receipts/SHA256SUMS"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:14:04.326Z",
+      "durationMs": 7488
+    },
+    "R2.4r": {
+      "id": "R2.4r",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-13T00:14:04.327Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261013T000436Z/restore-proof.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/preflight-20261013T000436Z/R2.4r/receipts/restore-proof.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-13T00:17:54.328Z",
+      "durationMs": 230001
+    }
+  }
+}

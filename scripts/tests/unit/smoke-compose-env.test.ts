@@ -12,8 +12,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { refuseAllowInsecureOnProd, shadowingStackEnvWarnings, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
-import { ALLOW_INSECURE_FLAG, DEMO_FLAGS } from "../../lib/smoke-db-mode.ts";
+import { shadowingStackEnvWarnings, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
+import { DEMO_FLAGS } from "../../lib/smoke-db-mode.ts";
 import { buildSmokeLifecycleComposeEnv } from "../../lib/smoke-lifecycle-env.ts";
 import { refuseCheckoutEnvFile } from "../../smoke.ts";
 import {
@@ -62,7 +62,6 @@ describe("smokePassthroughEnv", () => {
         roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney", worker: "postgres://rm_worker:w@postgres:5432/robotmoney" },
       },
       environment: { class: "local", hash: "0123456789" },
-      rmEnv: "stage",
       extraComposeEnv: smokePassthroughEnv({ WORKER_DATABASE_URL: "postgres://rm_worker:shell@elsewhere:5432/x" }),
     };
     const env = buildComposeEnv(cfg);
@@ -75,7 +74,7 @@ describe("smokePassthroughEnv", () => {
     expect(legacy.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
   });
 
-  test("§4.4: allow-insecure is explicit only, and refused on prod (criterion 46's weakening-flag half)", () => {
+  test("§4.4 (issue #973): no insecure mode exists — no flag, no StackConfig field, no RM_ALLOW_INSECURE in the compose env", () => {
     const cfg: StackConfig = {
       repoRoot: "/repo",
       project: "rm_smoke_stack_insecure",
@@ -83,31 +82,26 @@ describe("smokePassthroughEnv", () => {
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       environment: { class: "local", hash: "0123456789" },
-      rmEnv: "prod",
     };
-    // No flag: no allow-insecure on any policy. Secure by default.
-    expect(stackAllowInsecureFor("prod", false)).toBe(false);
-    expect(stackAllowInsecureFor("stage", false)).toBe(false);
-    // The flag: stage keeps it, prod never gets it.
-    expect(stackAllowInsecureFor("stage", true)).toBe(true);
-    expect(stackAllowInsecureFor("prod", true)).toBe(false);
-    // ...and prod refuses the flag outright, naming it, before anything starts.
-    expect(refuseAllowInsecureOnProd("prod", true)).toContain("--allow-insecure");
-    expect(refuseAllowInsecureOnProd("prod", false)).toBeNull();
-    expect(refuseAllowInsecureOnProd("stage", true)).toBeNull();
-    expect(buildComposeEnv({ ...cfg, allowInsecure: stackAllowInsecureFor("prod", true) }).RM_ALLOW_INSECURE).toBe("");
-    expect(buildComposeEnv({ ...cfg, rmEnv: "stage", allowInsecure: stackAllowInsecureFor("stage", true) }).RM_ALLOW_INSECURE).toBe("1");
-    // A consumer that decides nothing gets the secure value, not an overlay's old pin.
-    expect(buildComposeEnv(cfg).RM_ALLOW_INSECURE).toBe("");
+    expect("RM_ALLOW_INSECURE" in buildComposeEnv(cfg)).toBe(false);
     // And no one smuggles it back in through the extras map.
-    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/StackConfig field/);
-  });
-
-  test("§4.4: `bun smoke --allow-insecure` is a known flag, and no compose overlay file exists to pin it", () => {
-    expect(DEMO_FLAGS.map((f) => f.flag)).toContain(ALLOW_INSECURE_FLAG);
-    expect(ALLOW_INSECURE_FLAG).toBe("--allow-insecure");
+    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/retired/);
+    expect(DEMO_FLAGS.map((f) => f.flag)).not.toContain("--allow-insecure");
     expect(existsSync(join(import.meta.dir, "../../../docker-compose.smoke.yml"))).toBe(false);
     expect(DEFAULT_COMPOSE_FILES).toEqual(["docker-compose.yml"]);
+  });
+
+  test("issue 1326: no RM_ENV reaches a container — no StackConfig field, no compose env value, no smuggling", () => {
+    const cfg: StackConfig = {
+      repoRoot: "/repo",
+      project: "rm_smoke_stack_rmenv",
+      profile: "core",
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: DEFAULT_STACK_DATABASE,
+      environment: { class: "local", hash: "0123456789" },
+    };
+    expect("RM_ENV" in buildComposeEnv(cfg)).toBe(false);
+    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ENV: "prod" } })).toThrow(/not a container setting/);
   });
 
   test("ignores a name that is not on the allowlist", () => {

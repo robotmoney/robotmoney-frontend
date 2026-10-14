@@ -120,7 +120,10 @@
     "0116_vault_subject_position_actions.sql",
     "0117_subject_daily_epochs.sql",
     "0118_purge_projects_fixture_rows.sql",
-    "0119_rejected_take_health_event.sql"
+    "0119_rejected_take_health_event.sql",
+    "0120_maintenance_windows.sql",
+    "0121_subject_closes_six_hours_apart.sql",
+    "0122_swarm_dormancy_baseline.sql"
   ],
   "exclusions": {
     "roles": [
@@ -132,7 +135,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "9790d249fa52b85fbca9e0e80cffd23226bca4774850a745c24ae96f745d23ff",
+  "contentHash": "f141890f8d0b35b36e4e96722a4e2a85fa1d8f3fc9b04a471bc76311e2cc5c1b",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -1555,6 +1558,41 @@
       "type": "numeric",
       "notnull": "no"
     },
+    "column public.maintenance_windows.actor": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.maintenance_windows.at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "now()"
+    },
+    "column public.maintenance_windows.event": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.maintenance_windows.expected_end": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.maintenance_windows.id": {
+      "type": "bigint",
+      "notnull": "yes",
+      "default": "nextval('public.maintenance_windows_id_seq'::regclass)"
+    },
+    "column public.maintenance_windows.message": {
+      "type": "text",
+      "notnull": "yes",
+      "default": "''::text"
+    },
+    "column public.maintenance_windows.starts_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.maintenance_windows.window_id": {
+      "type": "uuid",
+      "notnull": "yes"
+    },
     "column public.openclaw_agents.created_at": {
       "type": "timestamp with time zone",
       "notnull": "yes",
@@ -2368,6 +2406,15 @@
     "column public.swarm_consensus_receipts.subject_id": {
       "type": "text",
       "notnull": "yes"
+    },
+    "column public.swarm_dormancy_baseline.counted_from": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.swarm_dormancy_baseline.id": {
+      "type": "boolean",
+      "notnull": "yes",
+      "default": "true"
     },
     "column public.swarm_judge_config.id": {
       "type": "smallint",
@@ -4232,6 +4279,18 @@
     "constraint public.lobster_coins.lobster_coins_project_id_fkey": {
       "definition": "FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE SET NULL"
     },
+    "constraint public.maintenance_windows.maintenance_windows_event_check": {
+      "definition": "CHECK ((event = ANY (ARRAY['scheduled'::text, 'started'::text, 'ended'::text, 'cancelled'::text])))"
+    },
+    "constraint public.maintenance_windows.maintenance_windows_message_check": {
+      "definition": "CHECK ((char_length(message) <= 500))"
+    },
+    "constraint public.maintenance_windows.maintenance_windows_pkey": {
+      "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.maintenance_windows.maintenance_windows_times_check": {
+      "definition": "CHECK ((expected_end > starts_at))"
+    },
     "constraint public.openclaw_agents.openclaw_agents_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
@@ -4465,6 +4524,12 @@
     },
     "constraint public.swarm_consensus_receipts.swarm_consensus_receipts_session_matches_check": {
       "definition": "CHECK ((((receipt ->> 'session_id'::text) = (session_id)::text) AND ((receipt ->> 'subject_id'::text) = subject_id) AND ((receipt ->> 'schema_version'::text) = schema_version)))"
+    },
+    "constraint public.swarm_dormancy_baseline.swarm_dormancy_baseline_pkey": {
+      "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.swarm_dormancy_baseline.swarm_dormancy_baseline_singleton_check": {
+      "definition": "CHECK (id)"
     },
     "constraint public.swarm_judge_config.swarm_judge_config_id_check": {
       "definition": "CHECK ((id = 1))"
@@ -5224,6 +5289,12 @@
     "index public.lobster_coins_project_name_idx": {
       "definition": "CREATE UNIQUE INDEX lobster_coins_project_name_idx ON public.lobster_coins USING btree (project_id, name)"
     },
+    "index public.maintenance_windows_pkey": {
+      "definition": "CREATE UNIQUE INDEX maintenance_windows_pkey ON public.maintenance_windows USING btree (id)"
+    },
+    "index public.maintenance_windows_window_idx": {
+      "definition": "CREATE INDEX maintenance_windows_window_idx ON public.maintenance_windows USING btree (window_id, id DESC)"
+    },
     "index public.openclaw_agents_pkey": {
       "definition": "CREATE UNIQUE INDEX openclaw_agents_pkey ON public.openclaw_agents USING btree (id)"
     },
@@ -5403,6 +5474,9 @@
     },
     "index public.swarm_consensus_receipts_subject_idx": {
       "definition": "CREATE INDEX swarm_consensus_receipts_subject_idx ON public.swarm_consensus_receipts USING btree (subject_id, published_at DESC)"
+    },
+    "index public.swarm_dormancy_baseline_pkey": {
+      "definition": "CREATE UNIQUE INDEX swarm_dormancy_baseline_pkey ON public.swarm_dormancy_baseline USING btree (id)"
     },
     "index public.swarm_judge_config_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_judge_config_pkey ON public.swarm_judge_config USING btree (id)"
@@ -5832,6 +5906,16 @@
       "cache": "1",
       "cycle": "no"
     },
+    "sequence public.maintenance_windows_id_seq": {
+      "owner": "rm_owner",
+      "type": "bigint",
+      "start": "1",
+      "increment": "1",
+      "min": "1",
+      "max": "9223372036854775807",
+      "cache": "1",
+      "cycle": "no"
+    },
     "sequence public.prices_id_seq": {
       "owner": "rm_owner",
       "type": "bigint",
@@ -6152,6 +6236,9 @@
     "table public.lobster_coins": {
       "owner": "rm_owner"
     },
+    "table public.maintenance_windows": {
+      "owner": "rm_owner"
+    },
     "table public.openclaw_agents": {
       "owner": "rm_owner"
     },
@@ -6219,6 +6306,9 @@
       "owner": "rm_owner"
     },
     "table public.swarm_consensus_receipts": {
+      "owner": "rm_owner"
+    },
+    "table public.swarm_dormancy_baseline": {
       "owner": "rm_owner"
     },
     "table public.swarm_judge_config": {

@@ -1349,8 +1349,8 @@ function dangerousKeyReason(key: string): string | null {
  * running as stage`, proceed".
  *
  * Serves spec §10 W2 "`RM_ENV=stage` + typed owner password against
- * `deployment_identity = production` refuses; plain stage boot incl.
- * `--allow-insecure` against production identity refuses."
+ * `deployment_identity = production` refuses; plain stage boot against
+ * production identity refuses."
  */
 export async function checkEnvIdentity(
   db: PreflightDb,
@@ -1656,9 +1656,6 @@ export interface StartupPreflightOptions {
    *  claim with, and nothing else. Never logged. Absent or empty (the
    *  variable was never set) is a check 1 refusal, never a fallback. */
   readonly databaseUrl: string | undefined;
-  /** `RM_ENV` as config.ts resolved it. Mapped into the context only: checks
-   *  1-3 do not read it (checks 4-6, which do, are not a container's). */
-  readonly rmEnv: string;
   /** Wall-clock bound on the whole run. Default
    *  `STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS`. */
   readonly budgetMs?: number;
@@ -1679,8 +1676,8 @@ export interface StartupPreflightOutcome {
  * and project jobs as `rm_worker` — run checks 1–3 at startup against their own
  * credential, log, and refuse to serve or claim work on failure."
  *
- * Inputs: the role, the process's connection string, `RM_ENV`, and an optional
- * budget. Output: whether it passed, and the log lines. It does not log and
+ * Inputs: the role, the process's connection string, and an optional budget.
+ * No policy value: a container reads no `RM_ENV` (issue #973). Output: whether it passed, and the log lines. It does not log and
  * does not exit — the entrypoint does both, because only the entrypoint knows
  * what "refuse" means for it (no listener, no claim).
  *
@@ -1757,10 +1754,10 @@ export async function runStartupPreflight(options: StartupPreflightOptions): Pro
   }
 
   const context: PreflightContext = {
-    // §4.1: `stage` covers stage, test and CI. Neither this nor `connection`
-    // nor `envFilePath` is read by checks 1-3 — they feed checks 4-6, which
-    // are the operator's environment and not a container's to judge.
-    env: options.rmEnv === "prod" ? "prod" : "stage",
+    // Neither this nor `connection` nor `envFilePath` is read by checks 1-3 —
+    // they feed checks 4-6, which are the operator's environment and not a
+    // container's to judge. A container declares no policy (issue #973).
+    env: null,
     connection: "remote",
     roles: [role],
     codeFilenames,

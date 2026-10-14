@@ -44,6 +44,7 @@
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="rm-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
+          <template x-if="statusLine(member)"><span class="rr-meta__i" data-testid="member-status-line" x-text="statusLine(member)"></span></template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>

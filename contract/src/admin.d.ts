@@ -354,6 +354,12 @@ export interface AdminMember {
   appliedAt: string | null;
   activatedAt: string | null;
   updatedAt: string;
+  /** Consecutive missed sessions (issue 1269), as SwarmMember.silentSessions:
+   * counted for an active member-role seat on the admin list, null otherwise
+   * and on every single-member admin response. */
+  silentSessions: number | null;
+  /** SWARM_DORMANCY_THRESHOLD_SESSIONS, as SwarmMember.silentThreshold. */
+  silentThreshold: number;
 }
 
 /** GET .../applications row. listApplicationsAdmin() returns raw, unprojected
@@ -595,3 +601,11 @@ export interface SwarmAuditListResponse {
 
 // ── Re-exported for callers that only need the member/subject base shape ────
 export type { SwarmMember, SwarmSubject };
+
+/** `GET ROUTES.status.maintenance` (issue 1220). */
+export interface MaintenanceStatus {
+  state: "none" | "scheduled" | "active";
+  startsAt: string | null;
+  expectedEnd: string | null;
+  message: string | null;
+}

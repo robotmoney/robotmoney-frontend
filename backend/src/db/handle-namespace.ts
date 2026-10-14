@@ -411,8 +411,8 @@ export async function checkHandleNamespace(
 }
 
 /** The env var that turns the api's fail-closed refusal into a loud warning.
- *  `RM_ALLOW_*` is the repo's existing shape for a deliberate, operator-set
- *  relaxation of a fail-closed default (RM_ALLOW_INSECURE, config.ts:470). */
+ *  `RM_ALLOW_*` is the repo's shape for a deliberate, operator-set relaxation
+ *  of a fail-closed default (RM_ALLOW_UNARMED_APPEND_ONLY_GUARD is the other). */
 export const HANDLE_NAMESPACE_OVERRIDE_ENV = "RM_ALLOW_HANDLE_NAMESPACE_VIOLATION";
 
 /**

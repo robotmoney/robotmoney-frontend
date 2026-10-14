@@ -113,6 +113,16 @@ INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, la
 
 
 --
+-- Data for Name: swarm_dormancy_baseline; Type: TABLE DATA; Schema: public; Owner: rm_owner
+--
+-- Migration 0122's one row (issue 1269): a blank database counts missed
+-- sessions from the moment it is bootstrapped, as a migrated one does from the
+-- moment 0122 applies.
+
+INSERT INTO public.swarm_dormancy_baseline (id, counted_from) VALUES (true, now());
+
+
+--
 -- Data for Name: swarm_judge_config; Type: TABLE DATA; Schema: public; Owner: rm_owner
 --
 

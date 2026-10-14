@@ -48,10 +48,10 @@ test("fail-closed: no token → 403", async () => {
   expect((await call(regReq()))?.status).toBe(403);
 });
 
-test("RM_ENV=ephemeral no longer opens privileged endpoints without a token (D52 (1))", async () => {
+test("the test harness no longer opens privileged endpoints without a token (D52 (1))", async () => {
   // tests/preload.ts runs this process as RM_ENV=ephemeral — the env that used
   // to wave a tokenless caller through.
-  expect(process.env.RM_ENV).toBe("ephemeral");
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   expect((await call(regReq()))?.status).toBe(403);
 });
 

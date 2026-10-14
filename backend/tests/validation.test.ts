@@ -335,3 +335,26 @@ test("admin member patch rejects an over-long or blank value on every text field
     expect(validateMemberAdminPatch({ [key]: 7 }).ok).toBe(false);
   }
 });
+
+test("sessionId is optional on a submission: a session id string is accepted, a non-string is refused (issue #1249)", () => {
+  const sub = {
+    memberId: "cygnus", date: "2026-09-25", subjectId: "woon", nonce: "n1",
+    stance: "bullish", confidence: 0.7, signature: "sig",
+  };
+  const sessionId = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  const named = validateSubmission({ ...sub, sessionId });
+  expect(named.ok).toBe(true);
+  if (named.ok) expect(named.data.sessionId).toBe(sessionId);
+  const unnamed = validateSubmission(sub);
+  expect(unnamed.ok).toBe(true);
+  if (unnamed.ok) expect(unnamed.data.sessionId).toBeUndefined();
+  for (const bad of [42, true, { id: sessionId }, null]) {
+    const res = validateSubmission({ ...sub, sessionId: bad });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain("sessionId");
+  }
+  // The signing draft accepts the same field, so a member signs the draft it submits.
+  const { signature: _sig, ...draft } = sub;
+  expect(validateSigningDraft({ ...draft, sessionId }).ok).toBe(true);
+  expect(validateSigningDraft({ ...draft, sessionId: 42 }).ok).toBe(false);
+});

@@ -82,7 +82,7 @@ beforeAll(async () => {
   const port = await freePort();
   const proc = Bun.spawn(["bun", "run", "src/api/index.ts"], {
     cwd: BACKEND_DIR,
-    env: { ...process.env, RM_ENV: "stage", DATABASE_URL: databaseUrl(name, APP), API_PORT: String(port) },
+    env: { ...process.env, DATABASE_URL: databaseUrl(name, APP), API_PORT: String(port) },
     stdout: "ignore",
     stderr: "pipe",
   });

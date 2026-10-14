@@ -108,9 +108,10 @@ serving `/api/admin/*`, and the buildless `/admin` frontend view
 All four are PRIVILEGED with the same guard the swarm/projects admin routes
 use: the operator's admin service token presented as `X-Admin-Token` and
 validated against the API's token store (smoke spec §3; this replaces the
-`ADMIN_TOKEN` environment variable), or —
-only outside prod — the `config.allowInsecure` convenience path. Fail-closed: the
-403 check runs before any DB work. The `/admin` view is intentionally NOT in the
+`ADMIN_TOKEN` environment variable). There is no convenience path: issue #973
+retired `config.allowInsecure` and the runtime's environment class, so every
+stack requires the credential. Fail-closed: the 403 check runs before any DB
+work. The `/admin` view is intentionally NOT in the
 public nav; the token is kept in `sessionStorage` for the tab. The old smoke
 TUI's per-boot token display is a legacy implementation detail and is not part
 of the adopted deployment design. Use the adopted credential model for future
@@ -159,7 +160,9 @@ into six independently testable stages — **access → extract → transform �
   (`tests/no-dead-provider-chain.test.ts`) greps `backend/src` to keep the dead
   chain from reappearing.
 - **`extract/`** — pull raw series from KEYLESS public sources. `http.ts`
-  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`), one
+  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`: off on
+  the standing and `RM_ENV=prod` boots; where on, bounded by expiry deletion and the
+  `HTTP_FETCH_CACHE_MAX_BYTES` size cap, issue 1258), one
   pure parser per source — **`fred.ts`, `yahoo.ts`, `defillama.ts`,
   `blockchain-com.ts`, `coinmetrics.ts`, `geckoterminal.ts`, `shiller.ts`,
   `edgar.ts`** (JSON/CSV in → `Point[]` out, throw on garbage) — and `sources.ts`,
@@ -416,8 +419,9 @@ are NEVER in the seed; they are fetched live per
   degrades, and last-persisted rows keep serving). Recover with
   `git checkout backend/src/projects/seed/v0-roster-data.json
   backend/src/projects/seed/v0-roster-data.manifest.json`; the next 02:00 cron
-  re-runs on its own. `ROSTER_SEED_PATH` / `ROSTER_SEED_MANIFEST_PATH` are
-  test-only overrides and are REFUSED under `RM_ENV=prod`.
+  re-runs on its own. There is no environment override of the seed path
+  (issue #973 retired `ROSTER_SEED_PATH` / `ROSTER_SEED_MANIFEST_PATH`); only
+  an explicit argument reads another file.
 - **Review expectations:** same as the EDGAR seed — a PR that regenerates this
   seed is a data change, not a code change. Check the manifest's counts against
   its `upstreamTotals`/`skipped`, confirm `generatedAt` moved forward, and treat

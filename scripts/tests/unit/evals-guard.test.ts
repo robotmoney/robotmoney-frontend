@@ -82,7 +82,7 @@ describe("real-inference evals stay OFF the per-PR trigger", () => {
   // say "eval" inside a per-PR `run:` and must not go red:
   //   * e2e-onboarding.yml's job-summary step, whose prose explains where the eval DOES
   //     run and mentions "per-PR evals" in so many words;
-  //   * onboarding-eval-rails.yml's inference-off rails step, which executes
+  //   * integration.yml's `bun run test:integration` step, which executes
   //     scripts/tests/integration/onboarding-eval-infra.test.ts; and
   //   * this very suite, scripts/tests/unit/evals-guard.test.ts.
   // A false RED on any of them is as much an instrument lie as a false green,

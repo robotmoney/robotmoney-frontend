@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../../src/db/client.ts";
 import { fixtureDb } from "./fixture-db.ts";
+import { readManifest, writeManifest } from "../../src/db/schema-manifest.ts";
+import { loadSnapshot } from "../../src/db/schema-snapshot.ts";
 import { HOLDER_RIGHTS, provisionAutomationToken, type AutomationHolder } from "../../src/db/automation-tokens.ts";
 
 let issued = 0;
@@ -89,7 +91,13 @@ function freePort(): Promise<number> {
 
 /**
  * Boot the api on a free port, connected to the database this test file's
- * pool is on (tests/support/clean-db.ts moves the pool, not DATABASE_URL).
+ * pool is on (tests/support/clean-db.ts moves the pool, not DATABASE_URL), AS
+ * `rm_app`: the credential a stack hands the api, so the entrypoint's startup
+ * preflight passes on its own terms. There is no harness exception in the
+ * entrypoint (issue #973) and no `RM_ENV` for it to read. The suite's template
+ * carries no manifest row (tests/preload.ts), and check 3 refuses a database
+ * that declares none, so the snapshot's manifest is published first, through
+ * the owner, exactly as a `--local blank` bootstrap publishes it.
  *
  * `env` is laid over the test process's own; `preload` names a module passed
  * to `bun --preload`, which is how a red control swaps a guard back to its old
@@ -97,8 +105,11 @@ function freePort(): Promise<number> {
  */
 export async function bootApi(opts: { env?: Record<string, string>; preload?: string } = {}): Promise<ApiProcess> {
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+  if ((await readManifest(fixtureDb)) === null) await writeManifest(fixtureDb, (await loadSnapshot()).manifest);
   const url = new URL(process.env.DATABASE_URL!);
   url.pathname = `/${db}`;
+  url.username = "rm_app";
+  url.password = process.env.RM_TEST_ROLE_PASSWORD!;
   const port = await freePort();
   const argv = ["bun", "run", ...(opts.preload ? ["--preload", opts.preload] : []), "src/api/index.ts"];
   const proc = Bun.spawn(argv, {

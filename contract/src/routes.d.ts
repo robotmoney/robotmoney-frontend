@@ -4,6 +4,7 @@ export const ROUTES: {
   health: string;
   version: string;
   apiVersion: string;
+  status: { maintenance: string };
   comments: { list: string; create: string };
   dashboards: {
     regimeSnapshots: string;
@@ -68,6 +69,7 @@ export const ROUTES: {
     register: string;
     regime: string;
     submit: string;
+    submitDryRun: string;
     scheduler: {
       fullRead: string;
       /** A WebSocket upgrade (D55 (11)): `?cursor=N` only; the token only in the `Authorization` header. */
@@ -148,6 +150,10 @@ export const ROUTES: {
     jobRetry: string;
     runs: string;
     schedule: string;
+    maintenanceSchedule: string;
+    maintenanceStart: string;
+    maintenanceEnd: string;
+    maintenanceCancel: string;
     audit: string;
     researchRuns: string;
     researchRun: string;

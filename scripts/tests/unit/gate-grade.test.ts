@@ -109,11 +109,17 @@ describe("evaluateJudgeConfig and evaluateContainers", () => {
   test("a restart fails after a release and warns in a baseline; one-shots are not graded", () => {
     const svc: ContainerState = { name: "s", running: true, health: "healthy", restarts: 1, startedAt: "", oneShot: false, participantKind: null };
     const once: ContainerState = { name: "m-run-1", running: false, health: "none", restarts: 0, startedAt: "", oneShot: true, participantKind: null };
-    expect(evaluateContainers([svc, once], "p", true).failures).toEqual(["s: restarted 1 time(s)"]);
+    expect(evaluateContainers([svc, once], "p", true).failures).toEqual(["s: restarted 1 time(s) (last stop unknown)"]);
     const base = evaluateContainers([svc, once], "p", false);
     expect(base.failures).toEqual([]);
-    expect(base.warnings).toEqual(["s: restarted 1 time(s)"]);
+    expect(base.warnings).toEqual(["s: restarted 1 time(s) (last stop unknown)"]);
     expect(evaluateContainers([], "p", true).failures).toEqual(["no service containers found for project p"]);
+  });
+
+  test("a restart names the last stop: time, exit code, oom flag, docker error (issue 1279)", () => {
+    const svc: ContainerState = { name: "s", running: true, health: "healthy", restarts: 1, startedAt: "", oneShot: false, participantKind: null,
+      lastStop: { exitCode: 137, oomKilled: false, error: "", finishedAt: "2026-10-09T16:55:26Z" } };
+    expect(evaluateContainers([svc], "p", false).warnings).toEqual(["s: restarted 1 time(s) (last stop 2026-10-09T16:55:26Z, exit code 137, oom-killed false)"]);
   });
 
   test("a stopped service and an unhealthy service fail; a service with no healthcheck is fine", () => {

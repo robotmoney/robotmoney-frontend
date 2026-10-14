@@ -114,6 +114,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 100 B",
   },
   {
+    id: "getMaintenanceStatus",
+    method: "GET",
+    path: ROUTES.status.maintenance,
+    summary: "Whether a maintenance window is scheduled or under way",
+    description:
+      "Returns `state` (`none`, `scheduled` or `active`), `startsAt` and `expectedEnd` as ISO-8601 instants, and a short `message`; the times and message are null when `state` is `none`. During a window the site stays up and shows the expected end. Needs no credential.",
+    backs: [],
+    contractType: "MaintenanceStatus",
+    sizeHint: "under 300 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
@@ -692,6 +703,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.register]: "privileged demo and E2E shortcut",
   [ROUTES.swarm.signingPayload]: "member write flow; documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.submit]: "member write flow; requires a member bearer and an Ed25519 signature",
+  [ROUTES.swarm.submitDryRun]: "member write flow, checked without writing; requires a member bearer, documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.memos]: "member write flow",
   [ROUTES.swarm.memberProfile]: "member write flow; the GET side is covered by getSwarmMember",
   [ROUTES.swarm.verifyToken]: "member bearer introspection",

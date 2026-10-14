@@ -109,9 +109,12 @@ DECLARE
   -- sweep used to hand rm_app INSERT and UPDATE on it every run, so a runtime role
   -- could have recorded a migration that never ran or relabelled a breaking one
   -- additive. Every ledger writer is the migrate step, as rm_owner.
+  -- 0122 added `swarm_dormancy_baseline`, the instant missed sessions are
+  -- counted from (issue 1269): the migration is its one writer, so the sweep
+  -- must not hand rm_app INSERT or UPDATE on it.
   read_only_for_runtime text[] := ARRAY[
     'analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens',
-    'schema_migrations'
+    'schema_migrations', 'swarm_dormancy_baseline'
   ];
   -- The subset of `read_only_for_runtime` whose SELECT is restored to rm_app and
   -- rm_worker after the REVOKE ALL below. Not optional for `schema_migrations`: the
@@ -119,7 +122,7 @@ DECLARE
   -- and §7.2 has every database-holding container run preflight check 3, which
   -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
   -- credential. Dropping a name from this list stops those boots.
-  select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations'];
+  select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations', 'swarm_dormancy_baseline'];
   -- SELECT restored to rm_app ALONE (migration 0112, issue #1095): the api serves
   -- GET /api/public/analytics/overwrite-events from `analytics_overwrite_events`,
   -- whose READ 0056's REVOKE ALL took along with the write. rm_worker reads
@@ -139,7 +142,7 @@ DECLARE
     'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
     'analytics_data_vintages', 'analytics_vintage_members',
     'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
-    'analytics_parity_observations'
+    'analytics_parity_observations', 'maintenance_windows'
   ];
   rel record;
   usurped text;

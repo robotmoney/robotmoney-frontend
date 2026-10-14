@@ -47,7 +47,7 @@ function fakeRuntime(rec: Recorded, overrides: Partial<StackRuntime> = {}): Stac
       return { exitCode: 0, stdout: "", stderr: "" };
     },
     async run() {
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
     async probe() {
       rec.probes += 1;
@@ -99,7 +99,7 @@ test("up() runs exactly one migration, and it precedes initialization", async ()
   await stackFor(rec, {
     async run(argv) {
       composeCalls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up({ initialize: async () => { composeCalls.push(["<initialize>"]); } });
 
@@ -117,7 +117,7 @@ test("up({ migrate: false }) skips the compose call but still emits the migrate 
   await stackFor(rec, {
     async run(argv) {
       composeCalls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up({ migrate: false, initialize: async () => { composeCalls.push(["<initialize>"]); } });
 
@@ -145,7 +145,7 @@ test("up({ migrate: true }) still runs exactly one migration (same as the defaul
   await stackFor(rec, {
     async run(argv) {
       composeCalls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up({ migrate: true, initialize: async () => { composeCalls.push(["<initialize>"]); } });
 
@@ -176,7 +176,7 @@ test("a deferred provider service starts after initialization and waits for heal
     runtime: fakeRuntime(rec, {
       async run(argv) {
         composeCalls.push(argv);
-        return 0;
+        return { exitCode: 0, outputTail: "" };
       },
     }),
   });
@@ -226,7 +226,7 @@ test("static assembly is spawned through the runtime seam, before any container 
   await stackFor(rec, {
     async run(argv) {
       spawned.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up();
 
@@ -246,9 +246,9 @@ test("a failed static assembly aborts the boot before any container starts", asy
   await expect(
     stackFor(rec, {
       async run(argv) {
-        if (argv.some((s) => s.endsWith("static-assembly.sh"))) return 3;
+        if (argv.some((s) => s.endsWith("static-assembly.sh"))) return { exitCode: 3, outputTail: "" };
         dockerRan = true;
-        return 0;
+        return { exitCode: 0, outputTail: "" };
       },
     }).up(),
   ).rejects.toThrow(/static assembly failed .*exited 3/);

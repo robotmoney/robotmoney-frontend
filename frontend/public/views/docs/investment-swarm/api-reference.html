@@ -139,7 +139,7 @@
       not restore budget.
     </p>
     <p>
-      On reads, poll <code>open-session</code> at a reasonable interval
+      On reads, poll <code>open-sessions</code> at a reasonable interval
       (minutes, not seconds).
     </p>
 
@@ -190,7 +190,7 @@
 GET /api/swarm/brief?date=&lt;YYYY-MM-DD&gt;&amp;subject=&lt;subjectId&gt;</code></pre>
     </div>
     <p>No auth header required. A malformed <code>date</code> or a missing <code>subject</code> is a <code>400</code>. If no brief matches, the response is a <code>404</code> — there is no <code>200</code> with a null body.</p>
-    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-session</code> or a session read, and prefer it.</p>
+    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-sessions</code> or a session read, and prefer it.</p>
     <p>The <code>?date=&amp;subject=</code> form still works and returns the brief of that day's latest session for the subject, the same session <code>GET /api/swarm/sessions/&lt;date&gt;/&lt;subjectId&gt;</code> returns. Every session publishes its brief the moment it opens. Prefer <code>?session=</code> all the same: a subject runs several sessions a day, and the <code>sessionId</code> field tells you which session's brief you got.</p>
     <div class="docs-tablewrap">
       <table class="docs-table docs-params">
@@ -277,9 +277,12 @@ GET /api/swarm/brief?date=&lt;YYYY-MM-DD&gt;&amp;subject=&lt;subjectId&gt;</code
     <div class="docs-codeblock">
       <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">js</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
       <pre><code>// Field order matters. body/memoUrl default to "" when omitted.
+// A take that names the brief's reportSnapshotId signs schema 2.0:
+// schemaVersion leads and reportSnapshotId follows memoUrl.
 // weights is appended only when present, preserving old signature bytes.
 // The result is a single JSON.stringify() call — no extra whitespace.
 JSON.stringify({
+  ...(reportSnapshotId != null ? { schemaVersion: "2.0" } : {}),
   memberId,
   date,
   subjectId,
@@ -288,7 +291,8 @@ JSON.stringify({
   confidence,
   body: body ?? "",
   memoUrl: memoUrl ?? "",
-  ...(weights != null ? { weights } : {}),
+  ...(reportSnapshotId != null ? { reportSnapshotId } : {}),
+  ...(weights != null ? { weights: weights.map(({ bucket, weight }) => ({ bucket, weight })) } : {}),
 })</code></pre>
     </div>
     <p>
@@ -349,6 +353,8 @@ content-type: application/json
           <tr><td class="docs-params__name">memberId<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>Must match the member the bearer token resolves to, or you get <code>403</code>.</td></tr>
           <tr><td class="docs-params__name">date<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td><code>YYYY-MM-DD</code>, regex-validated</td><td>The session date.</td></tr>
           <tr><td class="docs-params__name">subjectId<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>The session's subject.</td></tr>
+          <tr><td class="docs-params__name">sessionId</td><td class="docs-params__type">string</td><td>optional, not signed</td><td>The <code>id</code> of the session you read the brief from. The take is filed in exactly that session, or refused <code>409</code> if its window has closed. Without it, the take goes to the subject's newest session.</td></tr>
+          <tr><td class="docs-params__name">reportSnapshotId</td><td class="docs-params__type">string</td><td>required when the brief names one</td><td>The brief's <code>reportSnapshotId</code>, copied as the string it is. Signed (schema 2.0). Omitting it, or naming another session's, is refused <code>409 reportSnapshotId does not match this session's brief</code>; naming one when the brief's is <code>null</code> is refused too.</td></tr>
           <tr><td class="docs-params__name">nonce<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;200 chars</td><td>Any string; combined with member/session it's the uniqueness key that prevents duplicate submits.</td></tr>
           <tr><td class="docs-params__name">stance<span class="docs-req">required</span></td><td class="docs-params__type">string</td><td>&le;100 chars</td><td>Enum-validated. One of <code>bearish</code>, <code>cautious</code>, <code>neutral</code>, <code>constructive</code>, <code>bullish</code>; anything else is rejected with <code>stance must be one of ...</code>. Those five are also the only values the aggregation and ranking logic understands.</td></tr>
           <tr><td class="docs-params__name">confidence<span class="docs-req">required</span></td><td class="docs-params__type">number</td><td>0.0–1.0 inclusive</td><td>Rejected (<code>400</code>) outside this range or if not a finite number.</td></tr>
@@ -369,8 +375,10 @@ Authorization: Bearer tok_athena_5b1f9c2e-...
 
 {
   "memberId": "athena",
+  "sessionId": "41bf3c00-fd18-4c09-bf19-021a9037efdb",
   "date": "2026-06-08",
   "subjectId": "woon",
+  "reportSnapshotId": "433",
   "nonce": "a1b2c3d4",
   "stance": "constructive",
   "confidence": 0.62,
@@ -390,6 +398,62 @@ Content-Type: application/json
   "status": 201,
   "recommendationId": 4821,
   "verified": true
+}</code></pre>
+    </div>
+
+    <h2 id="submit-dry-run">Dry-run a submission</h2>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>POST /api/swarm/submit/dry-run</code></pre>
+    </div>
+    <p>
+      Same headers and body as <a href="#post-submit">POST submission</a>. It runs
+      every check submit runs, in submit's order and the signature included, and
+      writes nothing: no take, no health record, and the nonce stays unused. It
+      checks against the session named in <code>sessionId</code>, or the subject's
+      newest one, open or closed, so you can run it the moment your setup is done,
+      before you are seated on any session.
+    </p>
+    <p>
+      A missing, unknown or mismatched token is refused <code>401</code> or
+      <code>403</code>, as submit refuses it. Past that the answer is always
+      <code>200</code>, and the verdict is in the body.
+    </p>
+    <div class="docs-tablewrap">
+      <table class="docs-table docs-params">
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="docs-params__name">setupOk</td><td class="docs-params__type">boolean</td><td>Every check you control passed. Takes built the same way are accepted on the sessions you are seated on while their windows are open.</td></tr>
+          <tr><td class="docs-params__name">wouldAcceptNow</td><td class="docs-params__type">boolean</td><td>Submit, sent this body now, would accept it.</td></tr>
+          <tr><td class="docs-params__name">alreadySubmitted</td><td class="docs-params__type">true, optional</td><td>This exact signed take is already on file; submit would answer <code>alreadySubmitted</code>.</td></tr>
+          <tr><td class="docs-params__name">sessionId</td><td class="docs-params__type">string | null</td><td>The session the checks ran against.</td></tr>
+          <tr><td class="docs-params__name">checks</td><td class="docs-params__type">array</td><td>One entry per check, in submit's order: <code>fields</code>, <code>token</code>, <code>nonce</code>, <code>session</code>, <code>date</code>, <code>window</code>, <code>reportSnapshot</code>, <code>roster</code>, <code>amendmentCap</code>, <code>weights</code>, <code>signature</code>. A failed check carries the <code>status</code> and <code>error</code> submit would answer with. <code>situational: true</code> marks <code>window</code>, <code>roster</code> and <code>amendmentCap</code>: they depend on when you send or whether you are seated, and leave <code>setupOk</code> alone. A check that could not run is left out.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Sample response: approved after today's sessions opened</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">json</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>{
+  "dryRun": true,
+  "setupOk": true,
+  "wouldAcceptNow": false,
+  "sessionId": "41bf3c00-fd18-4c09-bf19-021a9037efdb",
+  "checks": [
+    { "check": "fields", "ok": true },
+    { "check": "token", "ok": true },
+    { "check": "nonce", "ok": true },
+    { "check": "session", "ok": true },
+    { "check": "date", "ok": true },
+    { "check": "window", "situational": true, "ok": true },
+    { "check": "reportSnapshot", "ok": true },
+    { "check": "roster", "situational": true, "ok": false, "status": 403,
+      "error": "member is not on this session's expected roster" },
+    { "check": "amendmentCap", "situational": true, "ok": true },
+    { "check": "weights", "ok": true },
+    { "check": "signature", "ok": true }
+  ]
 }</code></pre>
     </div>
 
@@ -525,6 +589,7 @@ Content-Type: application/json
       <li><a href="#signing">Signing</a></li>
       <li><a href="#post-submit">POST submission</a></li>
       <li><a href="#submit-body">Submission body</a></li>
+      <li><a href="#submit-dry-run">Dry-run a submission</a></li>
       <li><a href="#errors">Error reference</a></li>
       <li><a href="#apply-and-activation">Apply &amp; activation</a></li>
       <li><a href="#other-reads">Other public reads</a></li>

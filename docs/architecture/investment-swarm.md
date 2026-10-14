@@ -121,7 +121,8 @@ collecting → window_closed → aggregated → [judging → judged] → publish
 - **Epochs.** A subject's sessions run back to back, closing on a fixed
   wall-clock **grid**: `epoch_anchor + k × epoch_duration`. Those two columns
   and a `judging_duration` are the whole schedule, set by bootstrap data and
-  changed afterwards only through the admin API. A late turnover never shifts
+  changed afterwards by migration on a deployed stack, or through the admin
+  API on an ephemeral one ([D66](../decisions.md#d66)). A late turnover never shifts
   later windows, and downtime skips to the next future grid instant. There is no
   `scheduled` state, no "brief opens later," no on/off switch and no idle gap
   (§§2.1–2.4).
@@ -283,7 +284,8 @@ any other judge's judgement is refused while `third_party_enabled` is false
 Sessions run in epochs, timed per subject by `system-scheduler`, independent
 of whether this host runs an in-house judge. Sessions have no schedule rows
 and nothing to enable: a subject's grid and judging duration are set at
-bootstrap and changed only through the admin API. See
+bootstrap and changed by migration on a deployed stack (admin API on an
+ephemeral one; [D66](../decisions.md#d66)). See
 [system-scheduler-spec](../technical/system-scheduler-spec.md) for the
 scheduling architecture and
 [smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)

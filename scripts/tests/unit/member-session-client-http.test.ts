@@ -9,6 +9,7 @@ import {
   resolveRequireWeights,
   reportSnapshotIdFromBrief,
   restJson,
+  submitTake,
 } from "../../agent/member-session-client.ts";
 
 const originalFetch = globalThis.fetch;
@@ -150,4 +151,27 @@ test("a member carries the brief's report binding into its signed draft", () => 
   expect(reportSnapshotIdFromBrief({ reportSnapshotId: "42" })).toBe("42");
   expect(reportSnapshotIdFromBrief({ reportSnapshotId: null })).toBeUndefined();
   expect(reportSnapshotIdFromBrief(undefined)).toBeUndefined();
+});
+
+test("the submit body names the session the take was authored from: sessionId equals RM_SESSION_ID (issue #1249)", async () => {
+  const original = process.env.RM_SESSION_ID;
+  process.env.RM_SESSION_ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+  try {
+    let sent: Record<string, unknown> | undefined;
+    mockFetch(async (input, init) => {
+      expect(String(input)).toBe(`http://member-api${ROUTES.swarm.submit}`);
+      sent = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ ok: true, verified: true }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const draft = { memberId: "athena", subjectId: "woon", nonce: "n1" };
+    const res = await submitTake("tok", draft, "sig");
+    expect(res.status).toBe(201);
+    expect(sent).toEqual({ ...draft, sessionId: "0f8fad5b-d9cb-469f-a165-70867728950e", signature: "sig" });
+  } finally {
+    if (original === undefined) delete process.env.RM_SESSION_ID;
+    else process.env.RM_SESSION_ID = original;
+  }
 });

@@ -50,16 +50,17 @@ The grid keeps windows from drifting. A late turnover does not push later window
 
 - **Turnover.** Epoch N+1 closes at the first grid instant after N's `window_closes_at` — on an unchanged grid, exactly `window_closes_at + epoch_duration`. If that instant has already passed, it closes at the first grid instant after now instead. Missed slots are skipped, never opened (§3.2).
 - **First epoch.** An epoch opened with no predecessor (a fresh database, an activation, a reactivation) closes at the first grid instant at least **half of `epoch_duration`** after now; if the next instant is nearer than that, it closes at the one after. Its window is therefore between half a duration and one and a half, never a sliver. Without the floor, a subject activated moments before a grid instant would open a window nobody can submit into and then publish a session recording every seated member absent.
-- **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction; a subject with no open window keeps its anchor. The current window is unchanged, and the grid continues from its close with the new spacing.
+- **Duration change.** Changing `epoch_duration` through the admin API also sets `epoch_anchor` to the current window's `window_closes_at`, in the same transaction; a subject with no open window keeps its anchor. The current window is unchanged, and the grid continues from its close with the new spacing. A migration that changes the columns (§2.3) sets both values itself and publishes no event: the migrate step runs before the stack is rebuilt, and the scheduler's full read on start (§3) picks the new grid up.
 
 ### 2.3 Where it lives and who sets it
 
 `epoch_duration`, `epoch_anchor` and `judging_duration` are columns on the subject.
 
 - On a **blank database** they are set by the bootstrap data in the schema snapshot (`smoke-production-spec.md` §8.1), once, at initial migration.
-- Afterwards they are changed only through the **admin API**, as an ordinary authenticated update to the subject.
+- On a **deployed stack** (production, and stage as its rehearsal) they are changed afterwards only by a **migration** under `backend/migrations`, applied by the release's migrate step ([D66](../decisions.md#d66); owner, 2026-10-09). Migration 0117 set the daily epochs; 0121 set the closes six hours apart.
+- On an **ephemeral stack** (a smoke run, a CI stack, a throwaway copy of production) they are changed through the **admin API**, as an ordinary authenticated update to the subject (`backend/src/swarm/admin.ts`, through `backend/src/api/routes/swarm-admin.ts`). The route carries no deployment guard; the rule keeps it off deployed stacks.
 
-No environment variable sets them. No seed command sets them. No boot overwrites them on a populated database. A rehearsal that wants short epochs or a short judging wait on a copy of production changes the subjects through the admin API.
+No environment variable sets them. No seed command sets them. No boot overwrites them on a populated database. A rehearsal that wants short epochs or a short judging wait on a throwaway copy of production changes the subjects through the admin API; a change meant for production is a migration, rehearsed on stage first.
 
 ### 2.4 Never disabled
 
@@ -240,13 +241,13 @@ How that automation token is issued, validated, delivered and rotated is defined
 
 ## 8. Environments
 
-The same `system-scheduler` image and code run in production, stage, test and CI. Only the subjects' scheduling columns differ: a blank database gets its bootstrap values, and any other environment changes them through the admin API. A test that needs a fast lifecycle sets short epoch and judging durations and runs the real scheduler; it does not bypass the scheduler.
+The same `system-scheduler` image and code run in production, stage, test and CI. Only the subjects' scheduling columns differ: a blank database gets its bootstrap values, a deployed stack changes them by migration, and an ephemeral stack changes them through the admin API (§2.3). A test that needs a fast lifecycle sets short epoch and judging durations and runs the real scheduler; it does not bypass the scheduler.
 
 ## 9. Invariants
 
 - **A transition transaction never spans a network call, a model call, or a wait on another service.** It does database work and commits. The event counter (§6.3) therefore serializes only database work, bounded by the slowest single transition. Without this rule, one transition holding its transaction open would stall every other subject's.
 - Exactly two running services hold a database credential: `api`, and the pipeline worker running the vault, wallet, buyback and project jobs as `rm_worker` (`smoke-production-spec.md` §7.2). A third is a defect. The pipeline worker's move to the same no-database model is a later document.
-- A subject's scheduling columns are set once by bootstrap and afterwards only by the admin API.
+- A subject's scheduling columns are set once by bootstrap and afterwards only by a migration on a deployed stack, or by the admin API on an ephemeral one (§2.3).
 - Every window closes on its subject's grid. A late turnover never shifts later windows.
 - Event sequence numbers are gapless and assigned in commit order.
 - Every comparison against a stored instant uses the database clock.
@@ -320,7 +321,7 @@ Adopting this document superseded these clauses of `smoke-production-spec.md`. T
 
 | clause | said before | says now |
 |---|---|---|
-| §4.4 | stage runs "accelerated `SWARM_*_CRON` values"; `--schedules-off` flag | stage sets short epoch durations on subjects through the admin API; no flag |
+| §4.4 | stage runs "accelerated `SWARM_*_CRON` values"; `--schedules-off` flag | an ephemeral stack sets short epoch durations on subjects through the admin API; stage takes production's values by migration (§2.3); no flag |
 | §6.3 | `worker-swarm` schedules sessions from `job_schedules` rows; `bun run schedules:enable`; preflight-vs-readiness on `next_run_at` | `system-scheduler` and epochs, per this document; no enable command; nothing to disable |
 | §7 check 6 | "the five `swarm.*` schedule rows are enabled and their cron strings parse" | preflight: every active subject has an epoch duration. Readiness, separately (§6.3): every active subject has a `collecting` session and the scheduler reports healthy |
 | §6.3 (addition) | readiness = a `collecting` row per active subject | readiness also requires scheduler authentication, a synchronized stream, a completed initial rebuild, and no exhausted work; receipt vs live health distinguished |

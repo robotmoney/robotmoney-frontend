@@ -125,7 +125,7 @@ describe("judge coverage runs through the participant judge (smoke spec §6.2; D
     const { participantEnv } = await import("../../lib/participant-compose.ts");
     const env = participantEnv(
       { name: "themis", kind: "judge", credential: { memberId: "m-themis", publicKeyB64: "p", privateJwk: { kty: "OKP" }, bearer: "b", modelKey: "k" } },
-      { instance: "i", envDir: "/x", apiUrl: "http://api:8787", rmEnv: "stage", inference: { wireId: "w", baseUrl: "u" }, image: "img" },
+      { instance: "i", envDir: "/x", apiUrl: "http://api:8787", inference: { wireId: "w", baseUrl: "u" }, image: "img" },
     );
     expect(env.RM_PARTICIPANT_KIND).toBe("judge");
     const dispatch = codeOnly(participantMain.slice(participantMain.indexOf("export async function runParticipant(")));

@@ -4352,6 +4352,11 @@ these holds:
 - the operator types the `rm_owner` password;
 - the operator answers an explicit `y`.
 
+Amended on 2026-10-12 ([D67](#d67)): the exact match against
+`SUPPORTED_RELEASES` is this pass's guard alone. Every other `bun run migrate`
+and the release preflight reconcile the ledger with the migration files and
+the release tag's bytes, and name no per-release constant.
+
 Its receipt records the pre-identity state: that no identity row existed, the
 release the ledger matched, and that ledger's filename list. The pass writes
 `production` with 0081 (decision 9,
@@ -4437,6 +4442,31 @@ one file more or less. Decision 5's ledger match reads this list, so the
 first-migrate exception accepts only the 76-name ledger. Adding a baseline to
 the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
 list, and `backend/tests/fixtures/releases/production-2026-10-01/` pins it.
+
+<a id="d55-8-amendment-1272"></a>
+**Amendment to decision 8 (issue 1272, 2026-10-12).** The release runner no longer
+reads `SUPPORTED_RELEASES`. Steps R1.2 (`scripts/release/precondition.ts`) and R2.3
+(`scripts/release/baseline.ts`) judge the ledger by filename set against
+`backend/migrations` (`scripts/release/ledger.ts`): every recorded name must be a
+repository file and no repository file below the newest recorded one may be
+missing; a count is never judged, and the pending set is the repository minus the
+ledger. Production's 116-row ledger after v0.6.0 passes the same check the 76-row
+ledger passed before it, and the ledger after the next patch will pass it too, with
+no new constant. The list in `backend/src/db/supported-releases.ts` stays what it
+is for the backend's own importers (the migrate's first-migrate exception, the
+upgrade tests, `smoke-prepare`); retiring it there is a later decision. Why: the
+runner was written for one upgrade and refused the system it had to upgrade
+(the v0.6.1 preflight, 2026-10-10: production holds 116 rows, the constant holds
+76). The owner wants the fact removed, not retyped each release (the closed simplify
+attempt pr (1271)). See [D61's amendment](#d61-amendment-1272) for the rest of the
+removal.
+
+Amended again on 2026-10-13 ([D67](#d67)), superseding the gap rule of the 1272 amendment above: this list is the pre-identity baseline
+of decision 5 only, the state a pre-0081 dump restored for a rehearsal pass
+holds. It is not the release preflight's guard and is not extended for later
+releases: production enrolled on 2026-10-08, and from v0.6.0 on the preflight
+and the normal migrate path reconcile the ledger with the files and the
+release tag's bytes, and `scripts/release/ledger.ts`'s "no repository file below the newest recorded one may be missing" rule goes with it, because the checks read no number order. The v0.6.0 entry added on 2026-10-09 is removed.
 
 Production records `0080_analytics_ledger_compaction`, so a pending file
 numbered 0063 to 0079 sorts below the last recorded row and the gap rule
@@ -5201,6 +5231,7 @@ exactly one workflow, so a check cannot run twice or never), and the retargeted
 
 ---
 
+<a id="d61"></a>
 ## D61 — Release runbooks are executed end to end by an agent from the control machine; the privileged credentials live in the host's `~/.env` (supersedes parts of D47 §3, D55 (5) and policy §4.7; owner, 2026-10-08)
 
 **Status.** Accepted 2026-10-08. Implementation tracked on the v0.6.0 QA branch.
@@ -5290,6 +5321,42 @@ irreversible step.
 
 ---
 
+<a id="d61-amendment-1272"></a>
+**Amendment (issue 1272, 2026-10-12): the runner holds no past-upgrade fact.** The
+text above names the legacy tmux stack, R6.2a, the supported-baseline match and
+"before R6.1 stops the legacy stack". Those were facts of the v0.5.4 to v0.6.0
+upgrade, typed into the tool. They are gone:
+
+- The target files (`scripts/release/targets/{prod,stage}.json`) carry no `legacy`
+  block: no previous checkout, commit, tmux session, compose project or driver log.
+  A `legacy`, `commit`, `tag` or `tmuxSession` key refuses by name. A target names
+  where it lives and nothing of what runs there.
+- R6.1 stops whatever stack the host's smoke state names for the instance, with
+  `bun run smoke:down --instance <instance>` (never `-v`), and refuses with a
+  non-zero exit when the state names no stack. No release step drives or kills a
+  tmux session. S8.1 (the legacy checkout rename) and R7.7's retired-checkout scan
+  left with it: a checkout booted by `bun smoke` holds no credential (`~/.env`
+  does), so there is nothing to retire.
+- R6.2a, R6.7c and R6.7d, the one-time v0.6.0 cutover actions, left the generic
+  list. A release that needs a one-time action declares a delta step
+  (`RELEASE_DELTAS`, `stepsFor` in `scripts/release/steps.ts`) in its own delta
+  runbook, gated on a precondition receipt that proves it has not run.
+- R2.5 runs from the release checkout, like every other target step, and grades the
+  running stack the instance's smoke state names.
+- R1.2 and R2.3 judge the ledger against `backend/migrations` by filename set
+  ([D55 decision 8's amendment](#d55-8-amendment-1272)). R1.2 requires the
+  `RM_CREDENTIALS` line before the first irreversible step, since no step writes it.
+- `stage-target up --dump <dir>` builds the target from the dump's own ledger and
+  the tag and commit production's `/api/version` reports, replaying exactly that
+  ledger; `STAGE_TARGET` holds no previous commit, fixed ledger or driver script.
+- The step-list hash changed once, deliberately; `docs/runbooks/release-run.md`
+  records it, `steps-table.ts --write` keeps it, and a unit test holds the record
+  equal to the computed one. Every earlier stage journal is refused by SP.8.
+
+Rules 1 to 4 stand. The trade-off and the 2026-10-08 amendment stand. Why: the
+same list must run any patch from the version production actually runs, with no
+per-release code edit (owner, 2026-10-09, during the v0.6.1 QA session).
+
 ## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
 
 **Status.** Accepted 2026-10-09.
@@ -5313,3 +5380,287 @@ irreversible step.
 
 **Why.** A release line stays reviewable and main-first. Every change on it is
 either already on `main` or has a named reason it cannot be.
+
+## D63 — A release that reached production gets its version tag unless it was rolled back; failed checks are ticketed against the next patch version (refines policy §3; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10.
+
+**Decision.**
+
+1. A commit deployed to production gets the final tag `vA.B.C`, unless the
+   release was rolled back. A failed postflight or watch does not withhold it.
+2. Every failed check becomes an issue against the next patch version
+   `vA.B.(C+1)`. Its fixes start at `vA.B.(C+1)-rc.0`.
+3. A rollback withholds the tag. The next attempt is `vA.B.C-rc.(N+1)`.
+4. When the runner stops at a failed step after R6.1, the operator tags the
+   running commit with `bun scripts/release/tag.ts final`.
+
+**Why.** Production must never run a commit that no version names. The owner
+applied this rule to v0.5.1 (2026-09-28) and v0.6.0 (2026-10-09). Policy §3 still
+said the opposite, that a failed postflight consumes another rc of the same
+version. On 2026-10-10 the v0.6.1 production run failed R7.3a on one boot-race
+log line (issue 1280). Production was healthy on `v0.6.1-rc.0`, and the runner
+could not reach W3.
+
+## D64 — Stage runs a release-branch commit; once it passes, the rc tag is cut there, and production runs only by that rc tag (refines policy §3 and D61; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10.
+
+**Decision.**
+
+1. Stage runs a commit on `releases-A.B.x`. Never a PR head, a QA branch commit
+   or any commit the release branch does not contain.
+2. When the stage run passes, `vA.B.C-rc.N` is cut at that exact commit and
+   pushed.
+3. The production go names that rc tag. Production never runs from a branch name
+   or a bare commit.
+4. A production run refuses a tag that does not point at the stage-passed commit
+   or is not reachable from `releases-A.B.x`.
+
+**Why.** On 2026-10-10 the v0.6.1 runs used the head of PR 1274 (`bca5186e`).
+Its squash merges gave `main` and `releases-0.6.x` the same tree under other
+hashes. `/health` on production then reported a commit that neither branch
+contained, and both v0.6.1 tags pointed outside the release branch. An
+empty-diff merge (`83985379`) repaired the branch. Cutting the rc on the release
+branch after stage, and deploying only that tag, makes the deployed commit, the
+tags and the branch agree by construction.
+
+
+## D65 — CI caches nothing, and a test that needs a build runs in one job per push (owner, 2026-09-24)
+
+**Status.** Accepted 2026-09-24. Recorded with issue 1040.
+
+**Decision.**
+
+1. No workflow caches anything. No step uses `actions/cache`, no step sets
+   buildx `cache-from` or `cache-to`, and no job pulls a pre-built project
+   image.
+2. Every `oven-sh/setup-bun` step sets `no-cache: true`. Every
+   `docker/setup-buildx-action` step sets `cache-binary: false`. No
+   `actions/setup-node` step sets a `cache` input.
+3. A test that builds an image runs in exactly one push-triggered job. The
+   inference-off rails test, `onboarding-eval-infra.test.ts`, runs in
+   `integration.yml` only.
+4. A failed compose step reports the tail of its own output, and the downloads
+   in the member-agent image retry. A network blip is retried in the build. It
+   is not hidden by a cache.
+
+**Why.** A cache hit hides a change in the dependency universe, and CI exists to
+catch that change. On 2026-09-24 main went red twice with a bare
+`compose build member-agent failed (exit 1)`. The image downloads without
+retries, the stack module never read the child's output, and the same test ran
+twice per push. The fix makes the failure visible and repeatable instead of
+caching around it.
+
+**Enforcement.** `scripts/tests/unit/ci-no-cache.test.ts`,
+`scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts` and
+`scripts/tests/unit/member-agent-dockerfile-retries.test.ts`.
+
+---
+
+<a id="d66"></a>
+## D66 — Production data changes only through a migration (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09 as decision 2 of the
+[v0.6.0 upgrade post-mortem](./post-mortems/2026-10-09T1704Z-0.6.0-upgrade.md#owner-decisions-record-2026-10-09).
+Carried into the release standing runbook as rule 7 by the v0.6.1 runbook pr
+(1324). Recorded here with issue 1312.
+
+**Decision.**
+
+1. Every change to production data ships as a file under `backend/migrations`
+   and is applied by the release's migrate step (R6.3). No admin-route write, no
+   SQL by hand, no one-off script.
+2. This covers operator state as much as schema: a subject's scheduling columns
+   (`epoch_duration`, `epoch_anchor`, `judging_duration`), fixture purges and
+   value retypes. Migration 0117 (daily epochs), 0118 (fixture purge) and 0121
+   (closes six hours apart) are the first three.
+3. The migration ledger (`schema_migrations`) is the record of every production
+   data change. A release runbook lists its migrations and nothing else as its
+   data delta.
+4. The admin API remains the way an **ephemeral** stack (a smoke run, a CI
+   stack, a rehearsal copy of production) changes a subject's scheduling
+   columns. That write is `backend/src/swarm/admin.ts`, reached through
+   `backend/src/api/routes/swarm-admin.ts`; it has no deployment guard. The
+   rule, not the code, keeps it off production and stage.
+
+**Why.** On 2026-10-09 an operator set the 24 h epoch duration on production by
+hand through the admin route at 16:55 UTC. The change was correct and still left
+no record a later release could read, replay on stage or roll back. The
+post-mortem's third decision kept that edit live only until migration 0117
+replaced it with the same values. The fixture purge of issue 1208 had ruled a
+migration out of scope the day before; this rule overrides that.
+
+**Rejected.** An admin-route write with an audit row: the row records the
+change but a release cannot replay it on stage before production. A one-off
+script under `scripts/`: it runs outside the ledger and leaves no proof of
+whether it ran.
+
+**Enforcement.** `scripts/lint-docs.sh` check 7 and
+`scripts/tests/unit/docs-migration-rule-decision.test.ts` require this entry
+and refuse any current doc that still names the admin API as the sole way a
+subject's scheduling columns change.
+
+---
+
+<a id="d67"></a>
+## D67 — The ledger is reconciled with the migration files and the release tag's bytes, never matched against a per-release constant; new migration prefixes are unique and strictly increasing (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09. Recorded with issue 1273, after the v0.6.1 QA
+session. Amends [D55](#d55) (5) and (8).
+
+**Decision.**
+
+1. One deterministic read-only check, `backend/src/db/ledger-reconcile.ts`,
+   compares the ledger with the files. Check 1: every name in
+   `schema_migrations` exists in `backend/migrations/` (else
+   `ledger-not-subset`). Check 2: pending is exactly the repository minus the
+   ledger, by filename; a caller that names the list it intends to apply gets
+   `unexpected-pending` on any difference. Check 3: for each applied name the
+   sha256 of the checked-out file equals the sha256 of the same path at the
+   pin ref (`bytes-differ` with both hashes; `unpinned` when the ref lacks
+   it). No check reads a 4-digit prefix or the `applied_at` order.
+2. The pin ref is the caller's. The database records no release tag, so the
+   runner takes `--pin-ref <tag|commit>`, the version production reports,
+   resolves it with `git rev-parse --verify` in the checkout, and refuses with
+   `pin-ref-unresolved` when it is absent. It never falls back to `HEAD` or to
+   the checkout.
+3. The release preflight's R1.2 and R2.3 and `bun run migrate`'s normal path
+   call this runner and refuse on any verdict but `ok`. `bun run migrate` runs
+   checks 1 and 2 before applying anything and check 3 under `--pin-ref`.
+   `bun run --cwd backend reconcile --pin-ref <ref> --json` prints the
+   receipt and exits 0 only on `ok`.
+4. `SUPPORTED_RELEASES` shrinks to the pre-identity baseline of D55 (5) and
+   (8), the one state the identity-first pass starts from. It is not retyped
+   per release. The supported-releases bump pr (1271) and its issue (1270),
+   which would have made it the 116-name v0.6.1 ledger, were closed unmerged.
+5. A new migration file takes the 4-digit prefix one above the highest prefix
+   present. The fourteen prefixes already carrying more than one file and the
+   `0064` to `0079` gap are grandfathered by the explicit allowlist in
+   `backend/tests/migration-numbering.test.ts`. No existing file is renamed.
+
+**Why.** `backend/migrations` holds 122 files; fourteen prefixes are used more
+than once and sixteen are skipped, so a number is neither a key nor a
+sequence. Production's ledger applied seven files out of number order and the
+ledger keys on the full filename, which is the only reason the duplicates do
+no harm. The preflight's exact match against a hard-coded list of the
+previous release's filenames refused a healthy production database after
+every release until someone edited the constant, and never checked the SQL
+bytes that ran, so an edited applied file passed unnoticed. Migrations are the
+one path production data may change by, so the check must be sound and must
+need no upkeep: the repository is the only file list, and the tag production
+reports is the only source of the bytes. The single-file migration strategy
+(issue 1173, folded into 1220) is a separate, later direction.
+
+**Enforcement.** `backend/tests/migration-numbering.test.ts`,
+`backend/tests/ledger-reconcile.test.ts`,
+`backend/tests/ledger-reconcile-runner.test.ts`, the reconcile cases of
+`backend/tests/migrate-run.test.ts`, and the R1.2 and R2.3 cases of
+`scripts/tests/unit/release-run.test.ts`.
+
+---
+
+<a id="d68"></a>
+## D68 — A take that names its session is filed against that session or refused; it is never routed into the next session (issue 1249, 2026-10-14)
+
+**Status.** Proposed 2026-10-14. Amends the issue 570 routing rule recorded in
+`submitRecommendation` (`backend/src/swarm/domain.ts`): "a take arriving after
+session N closed lands on N+1".
+
+**Decision.**
+
+1. `POST /api/swarm/submit` and `POST /api/swarm/signing-payload` accept an
+   optional `sessionId` (a session uuid). It is outside the signed bytes:
+   `canonicalizeSubmission` never reads it, so the canonical string is
+   identical with and without it.
+2. When a take names a session, submit looks up that session by id. The take
+   is stored on it while it is `collecting` and its `window_closes_at` has not
+   passed. Otherwise submit answers `409 submission window closed (session
+   <id>)` and stores nothing. The INSERT predicate re-checks the same session
+   id, its subject, its state and its close instant.
+3. A named session of another subject answers 409, not 404, and stores
+   nothing. An unknown session id answers 404.
+4. A take that names no session keeps the issue 570 behaviour: it is filed on
+   the subject's newest session.
+5. The bundled member client (`scripts/agent/member-session-client.ts`) sends
+   `RM_SESSION_ID`. The onboarding skill tells external members to send the
+   open session's id.
+
+**Why.** On 2026-10-08 the inference provider slowed and members filed takes
+after their session's window closed. Under the epoch model turnover opens N+1
+`collecting` in the transaction that closes N, so a late take written against
+N's brief passed every check and was stored on N+1. It counted toward a
+consensus whose brief its author never read. It was refused only when N+1's
+brief bound a different report snapshot. A take authored from one brief must
+not count toward another session's consensus.
+
+**Not decided here.** Making `sessionId` required or signed, rmpc changes, and
+removing the session-less fallback.
+
+**Enforcement.** `backend/tests/swarm-submission-window.test.ts` (late,
+on-time and wrong-subject named takes, and the unchanged issue 570 cases),
+`backend/tests/validation.test.ts`, `backend/tests/signing.test.ts`, and
+`scripts/tests/unit/member-session-client-http.test.ts`.
+
+---
+
+## D69 — The runtime has no environment class: `RM_ENV` is no runtime class, the insecure flag is retired, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; agent, 2026-10-13)
+
+**Status:** proposed. Drafted by the agent with issue 973 (pr 1325); the owner
+accepted the issue's three-slice split on 2026-10-14.
+
+**Decision.**
+
+1. `RM_ENV` is not a runtime class. `backend/src/config.ts` has no `env`
+   field. The api's and the workers' startup preflight takes no policy value.
+   The health payload and the boot log lines report no environment. No
+   container reads `RM_ENV`: the last reader, the stack's declared acceptance
+   path, retired with the acceptance-path issue (1326) under part 6.
+2. `RM_ALLOW_INSECURE`, `config.allowInsecure` and `bun smoke --allow-insecure`
+   are retired. No compose file, launcher or stack configuration defines or
+   forwards the variable, and a stack configuration that is handed it refuses.
+   Every privileged route requires its configured credential on every stack
+   (D52 (1)), with no opt-out of any kind.
+3. The test-only paths that `RM_ENV=ephemeral` used to open — re-pointing the
+   db pools, serving the fixture projects source, writing synthetic regime rows
+   — are opened by `backend/src/test-seam.ts`, armed by
+   `backend/tests/preload.ts` in the `bun test` process and by nothing else. A
+   process that is not the armed harness refuses each of them whatever its
+   environment says. The fixture projects source is injected by the harness;
+   a deployed process selects the live source with `PROJECTS_SOURCE=live` or
+   refuses. There is no environment override of the roster seed path.
+4. One `RM_ENV` reader remains after this decision and part 6. The
+   operator tools (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates,
+   D61) read it as their §4.1 policy input. The owner decided on 2026-10-14
+   that they take an explicit flag instead, with the policy-input issue (1327).
+   This decision retires the runtime class and the insecure flag only.
+5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
+   on a new read of `RM_ENV` in `backend/src` outside `deploy-policy.ts`, on
+   any mention of the retired names in a process, compose file or workflow, on
+   an `RM_ENV` key in a compose file, stack composefile or workflow, and on a
+   second caller of the seam.
+6. No environment value declares the acceptance path (issue 1326; agent,
+   2026-10-14, proposed: the issue asked for an owner call between the
+   standing-stack flag and a pin applied everywhere, and this takes both).
+   `backend/src/acceptance-path.ts` reads no environment. A caller states the
+   path: the armed test harness states `development` through the seam,
+   `bun smoke` states the kind of boot (`standingStack`: a `--static-port` or
+   `prod`-policy boot is the acceptance path, an operator's own stage boot is
+   development), and the local throwaway onboarding eval states
+   `development`. A caller that states nothing is the acceptance path. So the
+   api and the participant judge apply the AC-MODEL-01 judge pin on every
+   deployed stack, a stub judge model is reachable only through the armed
+   seam, and the standalone session driver refuses a keyless model on every
+   host. `StackConfig.rmEnv`, the participant env's `RM_ENV`, the plan
+   configuration's `RM_ENV` key, `docker-compose.yml`'s and the stack
+   composefiles' `RM_ENV` and the e2e workflow steps' `RM_ENV` are gone;
+   `buildComposeEnv()` refuses an `RM_ENV` handed through its extras. The e2e
+   setup action keeps `RM_ENV=stage` as `bun smoke`'s policy input (part 4).
+
+**Why.** A deployment's identity used to alter runtime authority and
+data-safety behaviour: `smoke`, `stage` and `ephemeral` each relaxed something,
+and an environment variable reaches a deployed process through a compose
+default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
+persisted fixture projects (issue 1208). Tests take their isolation from an
+ephemeral Postgres and injected credentials; they do not need the server to
+fail open, and a seam armed in one process is a claim the process can verify.

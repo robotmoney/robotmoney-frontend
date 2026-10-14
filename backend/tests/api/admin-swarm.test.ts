@@ -400,8 +400,8 @@ test("audit: GET returns entries (200) and honors ?limit=", async () => {
   expect((res!.body as any).entries.length).toBeLessThanOrEqual(5);
 });
 
-test("RM_ENV=ephemeral no longer opens the surface without a credential (D52 (1))", async () => {
-  expect(process.env.RM_ENV).toBe("ephemeral");
+test("the test harness no longer opens the surface without a credential (D52 (1))", async () => {
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   const res = await call(req("GET", "/api/swarm/admin/subjects"));
   expect(res?.status).toBe(403);
 });
@@ -490,6 +490,9 @@ test("members: update writes every editable field, bumps version, and the projec
     appliedAt: member.appliedAt,
     activatedAt: member.activatedAt,
     updatedAt: member.updatedAt,
+    // Issue 1269: counted on the admin list only; a single-member response is null.
+    silentSessions: null,
+    silentThreshold: 7,
   });
   expect(member).not.toHaveProperty("token_hash");
   expect(member).not.toHaveProperty("public_key");

@@ -44,7 +44,6 @@ function stackConfig(env: Record<string, string | undefined>): StackConfig {
     // smoke-main.ts: an ephemeral data path takes DEFAULT_STACK_DATABASE, no URL.
     database: DEFAULT_STACK_DATABASE,
     environment: { class: "local", hash: "c32c32c32c" },
-    rmEnv: "smoke",
     // smoke-main.ts always hands the stack its instance (smoke spec §1.1).
     instance: { name: "rm_local_c32render", stateDir: "/var/empty/rm_local_c32render" },
     extraComposeEnv: { ...smokePassthroughEnv(env) },

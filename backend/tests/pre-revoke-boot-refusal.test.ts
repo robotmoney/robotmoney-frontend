@@ -67,7 +67,7 @@ async function bootApi(preload?: string): Promise<Boot> {
   const port = await freePort();
   const proc = Bun.spawn(["bun", "run", ...(preload ? ["--preload", preload] : []), "src/api/index.ts"], {
     cwd: BACKEND_DIR,
-    env: { ...process.env, RM_ENV: "stage", DATABASE_URL: databaseUrl(NAME, APP), API_PORT: String(port) },
+    env: { ...process.env, DATABASE_URL: databaseUrl(NAME, APP), API_PORT: String(port) },
     stdout: "pipe",
     stderr: "pipe",
   });

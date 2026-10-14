@@ -50,3 +50,7 @@ Product behavior for sessions, judging, analytics, and member onboarding is
 specified in §§9 and 11 and their linked contracts. Do not infer participant
 or scheduler deployment behavior from those product descriptions; use the
 adopted smoke spec.
+
+## Maintenance windows (issue 1220)
+
+A planned window is announced, shown and closed through the product, not by stopping containers unannounced. The table `maintenance_windows` (migration 0120) is an append-only event log: `scheduled`, `started`, `ended` or `cancelled`, one row per change, the newest row of a window being its state. At most one window is live at a time. `GET /api/status/maintenance` answers `{state: none|scheduled|active, startsAt, expectedEnd, message}` with no credential. The operator drives the window through `POST /api/admin/maintenance` (schedule) and `POST /api/admin/maintenance/:id/start|end|cancel`; each writes its event and one `audit_log` row in one transaction. The site banner, the website-server fallback and the per-service rollout order are separate scope items of the same issue.

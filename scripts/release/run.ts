@@ -14,11 +14,14 @@
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
 //   bun run release:run --target <t> --go <go file> --after-preflight <preflight dir>   (continue from a green preflight, within 1 h)
 //   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
+//   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
 //
 // What it does, in order: load and validate the target; read the go file, which
-// names this release and target and is the one source of the release commit
-// (a target file names none); print the plan (target, commit, step-list hash,
-// every step and its remote command). `--preflight` (`--dry-run` is the same
+// names this release and target and is the one source of the release ref (a
+// target file names none): a stage go names a commit, a production go names
+// the rc tag, which the runner resolves to its commit on the control machine
+// (D64); refuse a commit that is not on the release branch; print the plan
+// (target, commit, step-list hash, every step and its remote command). `--preflight` (`--dry-run` is the same
 // flag) needs no go: it runs every check the run needs and every step before
 // the first irreversible one, changes nothing a running service uses, and
 // exits 0 only when every check is green (./preflight.ts). Otherwise: refuse
@@ -36,15 +39,15 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateGo, type GoRecord } from "./go.ts";
+import { goRef, originProblems, validateGo, type GoRecord, type ResolvedGo } from "./go.ts";
 import {
-  checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
+  acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, notBeforeOf, READY_PENDING, RELEASE_STEPS, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, stepsFor, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
@@ -71,6 +74,10 @@ export interface RunArgs {
   afterPreflight?: string;
   /** A run stamp to mark failed: the operator says it is dead. */
   abandon?: string;
+  /** A failed step the owner accepts, with `--reason` and `--issue`, in the run `--run` names. */
+  accept?: string;
+  reason?: string;
+  issue?: string;
 }
 
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
@@ -78,7 +85,7 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   const valued: Record<string, keyof RunArgs> = {
     "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
     "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
-    "--after-preflight": "afterPreflight", "--abandon": "abandon",
+    "--after-preflight": "afterPreflight", "--abandon": "abandon", "--accept": "accept", "--reason": "reason", "--issue": "issue",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -98,6 +105,14 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   if (out.afterPreflight !== undefined && (out.run !== undefined || out.only !== undefined || out.preflight)) return { error: "--after-preflight starts a new run from a green preflight: it takes no --run, --from, --only or --preflight" };
   if (out.abandon !== undefined && !RUN_TS_RE.test(out.abandon)) return { error: `--abandon takes a run stamp like 20261008T142233Z, got "${out.abandon}"` };
   if (out.abandon !== undefined && (out.go !== undefined || out.run !== undefined || out.preflight || out.afterPreflight !== undefined)) return { error: "--abandon takes only --target and the run stamp" };
+  if (out.accept !== undefined) {
+    if (out.run === undefined) return { error: "--accept names a step of a run: name the run with --run <run-ts>" };
+    if (!out.reason?.trim()) return { error: "--accept needs --reason \"<why the owner accepts this failure>\"" };
+    if (out.issue === undefined || !/^[1-9]\d*$/.test(out.issue)) return { error: `--accept needs --issue <n>, the issue that records the failure; got "${out.issue ?? ""}"` };
+    if (out.go !== undefined || out.from !== undefined || out.only !== undefined || out.preflight || out.afterPreflight !== undefined || out.abandon !== undefined) {
+      return { error: "--accept takes only --target, --run, the step, --reason and --issue" };
+    }
+  } else if (out.reason !== undefined || out.issue !== undefined) return { error: "--reason and --issue go with --accept <step>" };
   return out;
 }
 
@@ -113,7 +128,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  legacy stack  ${target.legacy.checkout} (${target.legacy.version}${target.legacy.commit ? ` at ${target.legacy.commit.slice(0, 8)}` : ""}), tmux ${target.legacy.tmuxSession}, compose project ${target.legacy.composeProject}${target.legacy.log ? `, log ${target.legacy.log}` : ""}`,
+    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
@@ -129,16 +144,22 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
   return lines.join("\n");
 }
 
-/** The whole run. Returns the process exit code. */
-export async function runRelease(argv: readonly string[], deps: RunnerDeps, steps: readonly StepTemplate[] = RELEASE_STEPS): Promise<number> {
+/**
+ * The whole run. Returns the process exit code. `stepList` is the generic
+ * list; the release's delta steps (RELEASE_DELTAS) join it once the target
+ * names the release.
+ */
+export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
   const args = parseArgs(argv);
   if ("error" in args) {
     deps.error(`[${NAME}] ${args.error}`);
     return 2;
   }
   let target: ReleaseTarget;
+  let steps: readonly StepTemplate[];
   try {
     target = loadTarget(targetPath(args.target!));
+    steps = stepsFor(target.release, stepList);
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
@@ -164,20 +185,42 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 0;
   }
 
-  // Rule 1: the one recorded go. It is the only source of the release commit.
-  let go: GoRecord | undefined;
+  // The owner's recorded acceptance of one failed step (issue 1282): the journal keeps the step's
+  // failure, exit and output, plus why the owner accepts it and the issue; the run continues past it.
+  if (args.accept !== undefined) {
+    const dir = join(args.journalRoot ?? journalRoot(deps.home), target.name, args.run!);
+    const j = readJournal(dir);
+    if (j === undefined) { deps.error(`[${NAME}] refusing: no journal at ${dir}.`); return 2; }
+    const at = deps.now().toISOString();
+    const refusal = acceptStep(j, args.accept, { reason: args.reason!.trim(), issue: Number(args.issue), at }, {
+      ids: stepIds(steps), irreversible: (id) => steps.find((s) => s.id === id)?.irreversible === true,
+    });
+    if (refusal !== undefined) { deps.error(`[${NAME}] refusing: ${refusal}.`); return 2; }
+    writeFileSync(join(dir, args.accept, "result.json"), `${JSON.stringify(j.steps[args.accept], null, 2)}\n`, { mode: 0o600 });
+    writeJournal(dir, j);
+    deps.log(`[${NAME}] ${args.accept} of run ${args.run} accepted by the owner at ${at} (issue ${args.issue}): ${args.reason!.trim()}. The run is ${j.status}; continue it with --run ${args.run} [--from <step>].`);
+    return 0;
+  }
+
+  // Rule 1: the one recorded go. It is the only source of the release ref.
+  let go: ResolvedGo | undefined;
   if (args.go) {
     const goText = deps.readText(args.go);
     if (goText === undefined) {
       deps.error(`[${NAME}] refusing: the go file ${args.go} cannot be read.`);
       return 2;
     }
-    const goResult = validateGo(goText, { release: target.release, target: target.name });
+    const goResult = validateGo(goText, { release: target.release, target: target.name, rmEnv: target.rmEnv });
     if ("errors" in goResult) {
       deps.error(`[${NAME}] refusing: the go file does not authorize this run:\n  - ${goResult.errors.join("\n  - ")}`);
       return 2;
     }
-    go = goResult.go;
+    const resolved = await resolveGo(goResult.go, deps);
+    if ("error" in resolved) {
+      deps.error(`[${NAME}] refusing: ${resolved.error}.`);
+      return 2;
+    }
+    go = resolved.go;
   } else if (!args.preflight) {
     deps.error(`[${NAME}] refusing: no --go <file>. The operator's go names the release, the commit and the target (D61 rule 1).`);
     return 2;
@@ -193,6 +236,14 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (go === undefined) return 2;
   const commit = go.commit;
+
+  // D64: the commit is on the release branch, whatever the go wrote (a tag resolves there too).
+  const branches = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q origin && git branch -r --contains ${commit}`);
+  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+  if (origin.length > 0) {
+    deps.error(`[${NAME}] refusing: ${origin.join("; ")}.`);
+    return 2;
+  }
 
   let selected: string[];
   try {
@@ -217,7 +268,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     }
   }
   const runTs = args.run ?? preflight?.runTs ?? runStamp(deps.now());
-  const values = templateValues(target, commit, runTs);
+  const values = templateValues(target, commit, runTs, READY_PENDING, go.ref);
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
@@ -287,7 +338,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
   writeJournal(runDir, journal);
-  deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.commit} on ${go.target}; journal ${runDir}`);
+  deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
   for (const id of selected) {
     const template = steps[ids.indexOf(id)]!;
@@ -328,7 +379,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     }
 
     const readyIso = journal.steps[READY_STEP]?.status === "ok" ? journal.steps[READY_STEP]!.endedAt : undefined;
-    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING));
+    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
     const started = deps.now();
     const record: StepRecord = {
       id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
@@ -350,6 +401,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       deps.error(`[${NAME}] ${id} FAILED: ${record.error}. Nothing after it ran.`);
       if (step.irreversible) deps.error(`[${NAME}] ${id} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
       deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
+      if (!step.irreversible) deps.error(`[${NAME}] or record the owner's acceptance of this failure, then resume at the next step:\n  ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
       return 1;
     }
     deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);
@@ -361,6 +413,21 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (journal.downtimeSeconds !== undefined) deps.log(`[${NAME}] downtime window R6.1 to R6.9: ${journal.downtimeSeconds} s`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
+}
+
+/**
+ * D64: the go's ref as a commit. A stage go's commit is taken as written. A
+ * production go's rc tag resolves on the control machine after a tag fetch; a
+ * tag origin does not have refuses. The commit's branch is checked by the
+ * caller (originProblems), once the commit is known.
+ */
+export async function resolveGo(go: GoRecord, deps: Pick<RunnerDeps, "collect">): Promise<{ go: ResolvedGo } | { error: string }> {
+  const ref = goRef(go);
+  if (go.tag === undefined) return { go: { ...go, commit: go.commit!, ref } };
+  const r = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q --tags origin && git rev-parse --verify --quiet ${shellQuote(`${go.tag}^{commit}`)}`);
+  const commit = r.stdout.trim();
+  if (r.code !== 0 || !/^[0-9a-f]{40}$/.test(commit)) return { error: `the go names ${go.tag}, which origin has no tag for; cut it at the stage-passed commit first (bun scripts/release/tag.ts rc --release ${go.release} --commit <stage commit>)` };
+  return { go: { ...go, commit, ref } };
 }
 
 /** PURE. Why a step does not run on this target, or undefined when it runs. */
@@ -377,9 +444,9 @@ export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | un
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);
 }
 
-function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: GoRecord, runTs: string, now: Date): RunJournal {
+function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: ResolvedGo, runTs: string, now: Date): RunJournal {
   return {
-    version: 1, target: target.name, rmEnv: target.rmEnv, release: target.release, commit, stepListHash: hash, stepIds: ids,
+    version: 1, target: target.name, rmEnv: target.rmEnv, release: target.release, commit, ...(go.tag ? { tag: go.tag } : {}), stepListHash: hash, stepIds: ids,
     goSha256: go.sha256, runTs, startedAt: now.toISOString(), updatedAt: now.toISOString(), status: "running", steps: {},
   };
 }

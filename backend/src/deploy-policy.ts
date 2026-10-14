@@ -25,7 +25,7 @@
 // ── Why the matrix exists ────────────────────────────────────────────────────
 //
 // The failure it prevents is the one that has no undo: a stage-shaped boot —
-// `--allow-insecure`, `--seed`, `--spoof-keys`, a migration — resolving a remote
+// `--seed`, `--spoof-keys`, a migration — resolving a remote
 // connection string that happens to point at the production database. `RM_ENV`
 // alone cannot prevent it, because `RM_ENV` is a value the operator types and
 // the operator is exactly who is mistaken in that scenario. So the spec pairs
@@ -37,7 +37,7 @@
 //
 // Governing spec sections: §4.1 (`RM_ENV` is policy only: `prod | stage`), §4.2
 // (the identity row), §4.3 (the matrix and the rehearsal-only preparation
-// rule), §4.4 (`--allow-insecure` is a refusal on prod), §7 check 5.
+// rule), §4.4 (no weakening knob survives, issue #973), §7 check 5.
 
 /** The two policy values of spec §4.1. Stage, test and CI share `stage`. */
 export type PolicyEnv = "prod" | "stage";
@@ -152,8 +152,8 @@ function describeIdentity(identity: PolicyInput["identity"]): string {
  *
  * Every refusal names the observed `RM_ENV`, the connection, the observed
  * identity and the row that fired, with the spec's own reasoning where it
- * states one ("stage policy (incl. `--allow-insecure`) never touches production
- * data"; "a reattached volume gets no weaker policy than a remote"). A missing
+ * states one ("stage policy never touches production data"; "a reattached
+ * volume gets no weaker policy than a remote"). A missing
  * row and an unreadable table are never evidence of either kind.
  */
 export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
@@ -200,7 +200,7 @@ export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
       allow: false,
       reason:
         `RM_ENV=stage against a remote target whose deployment_identity is ${seen}: refusing ` +
-        `— stage policy (incl. --allow-insecure) never touches production data (spec §4.3). ` +
+        `— stage policy never touches production data (spec §4.3). ` +
         `No flag relaxes this row.` +
         (identity === null || identity === "unreadable" ? ` ${PRE_IDENTITY_TWIN_INTERVENTION}` : ""),
     };
@@ -217,24 +217,6 @@ export function resolveDeploymentPolicy(input: PolicyInput): PolicyVerdict {
 
   const warnings = resolved.source === "unset" ? [RM_ENV_UNSET_WARNING] : [];
   return { allow: true, env: "stage", posture: "stage", warnings };
-}
-
-/**
- * §4.4: `--allow-insecure`, the former overlay's one surviving knob, is a
- * refusal under `RM_ENV=prod` whatever the database says. There is no
- * `--schedules-off` and so no refusal for one: scheduling has no off state.
- */
-export function refuseWeakeningFlagsOnProd(
-  env: PolicyEnv,
-  flags: { readonly allowInsecure: boolean },
-): { readonly allow: true } | { readonly allow: false; readonly reason: string } {
-  if (env !== "prod" || !flags.allowInsecure) return { allow: true };
-  return {
-    allow: false,
-    reason:
-      `--allow-insecure refused under RM_ENV=prod: parity with production is a tested ` +
-      `property, not an overlay (spec §4.4).`,
-  };
 }
 
 /**

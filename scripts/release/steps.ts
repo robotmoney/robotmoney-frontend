@@ -12,10 +12,17 @@
 // with stdin closed. The marker lets the runner copy back only the receipts a
 // step wrote (find -newer).
 //
-// The ids follow the v0.6.0 runbook (docs/runbooks/v0-6-0-rollout.md): R1 the
-// release identity, R2 the baseline, R6 the cutover, S8 the recovery matrix's
-// legacy rename, R7 the postflight. `standing` names the standing runbook rows
-// each step satisfies (docs/runbooks/release-standing-runbook.md).
+// The ids keep the shape the v0.6.0 runbook introduced: R1 the release
+// identity, R2 the baseline, R6 the cutover, R7 the postflight, W the watch.
+// `standing` names the standing runbook rows each step satisfies
+// (docs/runbooks/release-standing-runbook.md).
+//
+// The list holds no past-upgrade fact (issue 1272): it reads the running
+// system (the ledger against backend/migrations, the stack the host's smoke
+// state names, /api/version) and runs any patch from the version production
+// actually runs. A one-time action one release needs is a delta step
+// (RELEASE_DELTAS, stepsFor), gated on a precondition receipt that proves it
+// has not run; it never joins this list.
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +30,7 @@ import type { ReleaseTarget } from "./target.ts";
 
 /**
  * Where a step runs: the target host, the capture host, or the control
- * machine itself (the release tags, R5.rc and W3).
+ * machine itself (the release tag, W3).
  */
 export type StepHost = "target" | "capture" | "control";
 
@@ -54,17 +61,11 @@ export interface StepTemplate {
   readonly standing: readonly string[];
   readonly description: string;
   readonly host: StepHost;
-  /**
-   * `legacy` runs the step from the target's LEGACY checkout, with HOME set and
-   * no RM_ENV: the old code grades the old stack it started (R2.5). Default:
-   * the release checkout.
-   */
-  readonly checkout?: "release" | "legacy";
   /** Commands as argv templates; they run in order joined by `&&`. */
   readonly cmds: readonly (readonly string[])[];
   /** Extra non-secret environment for every command, templated. */
   readonly env?: Readonly<Record<string, string>>;
-  /** The step also exports the target's `bootEnv` (runbook R6.2a). */
+  /** The step also exports the target's `bootEnv` (the boots). */
   readonly bootEnv?: boolean;
   readonly expectExit: number;
   readonly receipts: readonly ReceiptSpec[];
@@ -73,7 +74,9 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. Only the release tags (R5.rc, W3) use it: a stage run tags nothing.
+   * target. Only the release tag (W3) uses it: a stage run tags nothing. The
+   * rc is no step (D64): it is cut after the stage run passes, before the
+   * production go names it (`bun scripts/release/tag.ts rc`).
    */
   readonly onlyFor?: "prod";
   /**
@@ -97,15 +100,63 @@ export interface StepTemplate {
   /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
-   * Only R1.4 sets it: the capture checkout is the release runner's own folder
-   * (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a deleted folder
-   * heals instead of failing. A folder that exists without `.git` is never
-   * touched: the clone refuses a non-empty directory, and the step fails.
+   * R1.1 sets it: every release names a new release checkout on the host
+   * (`/root/rm-060`, `/root/rm-061`), and the v0.6.1 production preflight's
+   * R1.1 failed with `cd: /root/rm-061: No such file or directory`
+   * (2026-10-10). R1.4 sets it: the capture checkout is the release runner's
+   * own folder (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a
+   * deleted folder heals instead of failing. A folder that exists without
+   * `.git` is never touched: the clone refuses a non-empty directory, and the
+   * step fails. The clone is plain, never `--reference <another checkout>`:
+   * a checkout that later moves would break an alternates pointer.
    */
   readonly cloneFrom?: string;
+  /**
+   * A delta step's gate: the step runs only while this file (templated) is
+   * absent on its host, and is recorded `skipped: <path> exists` once it is
+   * there. A one-time action proves it has not run by the receipt it leaves
+   * (for example credential.json), so a second run of the same list never
+   * repeats it. Only a delta step (RELEASE_DELTAS) carries it.
+   */
+  readonly gateAbsent?: string;
 }
 
-/** The repository every checkout fetches from; R1.4 clones a missing capture checkout from it. */
+/**
+ * A release-specific step: a one-time action one release's delta runbook
+ * declares, inserted after `after` in the generic list for that release only.
+ * It carries a gate (`gateAbsent`), so it is idempotent by construction.
+ */
+export interface DeltaStep extends StepTemplate {
+  readonly after: string;
+  readonly gateAbsent: string;
+}
+
+/**
+ * The delta steps by release name (the target's `release`). The generic list
+ * holds none; a release that needs a one-time action declares it here, with
+ * its delta runbook, and it leaves when the release ships. Empty today.
+ */
+export const RELEASE_DELTAS: Readonly<Record<string, readonly DeltaStep[]>> = Object.freeze({});
+
+/**
+ * PURE. The step list of one release: the generic list with that release's
+ * delta steps inserted after their `after` step. An `after` the list lacks,
+ * or a delta id the list already holds, throws. The hash is taken over the
+ * result, so stage and prod of one release share it and a delta changes it.
+ */
+export function stepsFor(release: string, base: readonly StepTemplate[] = RELEASE_STEPS, deltas: Readonly<Record<string, readonly DeltaStep[]>> = RELEASE_DELTAS): StepTemplate[] {
+  const out: StepTemplate[] = [...base];
+  for (const d of deltas[release] ?? []) {
+    const at = out.findIndex((s) => s.id === d.after);
+    if (at < 0) throw new Error(`delta step ${d.id} of ${release} runs after ${d.after}, which the list lacks`);
+    if (out.some((s) => s.id === d.id)) throw new Error(`delta step ${d.id} of ${release} is already a step of the list`);
+    const { after: _after, ...step } = d;
+    out.splice(at + 1, 0, step);
+  }
+  return out;
+}
+
+/** The repository every checkout fetches from; R1.1 and R1.4 clone a missing checkout from it. */
 export const RELEASE_REPO_URL = "git@github.com:robotmoney/robotmoney-frontend.git";
 
 /** The time a step may take unless it names its own `maxMinutes`. */
@@ -157,14 +208,14 @@ const boot = (): string[] => ["bun", "run", "smoke", "--static-port", "--instanc
 export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R1 release identity, on both hosts ────────────────────────────────────
   {
-    id: "R1.1", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
-    description: "Target checkout: fetch, then detach at the release commit",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
+    id: "R1.1", standing: ["SP.1"], host: "target", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)",
+    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger is a supported baseline, its identity is absent or matches RM_ENV; before R6.1, ~/.env holds a non-empty rm_owner line and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin; RM_CREDENTIALS is not required (R6.2a writes it)",
-    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", RUN_DIR]],
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
+    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R1.3", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -173,8 +224,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.4", standing: ["SP.1"], host: "capture", cloneFrom: RELEASE_REPO_URL, irreversible: false, expectExit: 0, receipts: [],
-    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch, then detach at the release commit",
-    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{commit}"]],
+    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref",
+    cmds: [["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]],
   },
   {
     id: "R1.5", standing: ["SP.1"], host: "capture", irreversible: false, expectExit: 0, receipts: [{ dir: CAPTURE_RUN_DIR, pattern: "host-identity.json", required: true }],
@@ -208,26 +259,19 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
     receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
-    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, supported-baseline match, R2.4 counts and size",
-    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}"]],
+    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size",
+    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]],
   },
   {
-    id: "R2.5", standing: ["SP.5"], host: "target", checkout: "legacy", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
-    description: "Log baseline of the running legacy stack, graded by the legacy checkout's own prod:gate for the instance",
+    id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout",
     cmds: [["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", `${RUN_DIR}/prod-gate-baseline.md`]],
-  },
-  // ── R5 release candidate tag (prod only; stage records it skipped) ────────
-  {
-    id: "R5.rc", standing: [], host: "control", onlyFor: "prod", irreversible: false, expectExit: 0, receipts: [],
-    description: "Tag the release candidate at the commit (the next free <release>-rc.N) unless one already points there; push it",
-    cmds: [["bun", "scripts/release/tag.ts", "rc", "--release", "{release}", "--commit", "{commit}"]],
   },
   // ── R6 cutover ────────────────────────────────────────────────────────────
   {
     id: "R6.1", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0, receipts: [runReceipts("stop-legacy.json")],
-    description: "Stop the legacy stack: its tmux driver, then docker compose down (never -v); prove no legacy container remains",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--session", "{legacySession}", "--project", "{legacyProject}",
-      "--legacy-checkout", "{legacyCheckout}", "--compose-files", "{legacyComposeFiles}", "--receipt-dir", RUN_DIR]],
+    description: "Stop the running stack: the one the instance's smoke state names, with bun run smoke:down --instance {instance} (never -v); refuses when the state names no stack; proves no container of its project remains",
+    cmds: [["bun", "scripts/release/stop-legacy.ts", "stop", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.2", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("env-rewrite.json")],
@@ -239,11 +283,6 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     receipts: [stateReceipts("migrate-receipt-*.json"), stateReceipts("migrate-journal-*.json", false)],
     description: "The first migrate: 0081 first with the identity RM_ENV implies, then every pending file",
     cmds: [["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]],
-  },
-  {
-    id: "S8.1", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("retire-legacy.json")],
-    description: "Rename the legacy checkout to <path>.<version>-retired, then move its .env secrets (database URLs, model keys) to ~/.env.legacy-retired-<ts> and make that .env 0600",
-    cmds: [["bun", "scripts/release/stop-legacy.ts", "retire", "--legacy-checkout", "{legacyCheckout}", "--version", "{legacyVersion}", "--run", "{runTs}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R6.4", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("set-identity")],
@@ -278,8 +317,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   // ── R7 postflight ─────────────────────────────────────────────────────────
   {
     id: "R7.1", standing: ["SV.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("identity-check.json")],
-    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown",
-    cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--receipt-dir", RUN_DIR]],
+    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)",
+    cmds: [["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R7.3", standing: ["SV.3"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -308,8 +347,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R7.7", standing: ["SV.6"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-guards.json")],
-    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home or the retired checkout holds a postgres URL with a password",
-    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--legacy-retired", "{legacyCheckout}.{legacyVersion}-retired", "--receipt-dir", RUN_DIR]],
+    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password",
+    cmds: [["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", RUN_DIR]],
   },
   // ── W watch: every subject publishes once after READY ─────────────────────
   {
@@ -343,13 +382,18 @@ export interface TemplateValues {
   readonly [key: string]: string;
 }
 
-/** The template values of one run of one target. */
-export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING): TemplateValues {
+/**
+ * The template values of one run of one target. `ref` is what the go wrote
+ * (the rc tag on prod, the commit on stage, D64); R1.1 and R1.4 detach at it,
+ * R7.1 checks it. It defaults to the commit.
+ */
+export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
   return {
     readyIso,
     target: target.name,
     release: target.release,
     commit,
+    ref,
     runTs,
     instance: target.instance,
     home: target.home,
@@ -360,11 +404,6 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     publicOrigin: target.publicOrigin,
     watchMinAttendance: String(target.watchMinAttendance),
     watchSessions: target.watchSessions,
-    legacyCheckout: target.legacy.checkout,
-    legacySession: target.legacy.tmuxSession,
-    legacyProject: target.legacy.composeProject,
-    legacyComposeFiles: target.legacy.composeFiles.join(","),
-    legacyVersion: target.legacy.version,
   };
 }
 
@@ -417,8 +456,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   }
   const onCapture = step.host === "capture";
   const host = onCapture ? target.capture.host : target.host;
-  const legacy = !onCapture && step.checkout === "legacy";
-  const checkout = onCapture ? target.capture.checkout : legacy ? target.legacy.checkout : target.checkout;
+  const checkout = onCapture ? target.capture.checkout : target.checkout;
   const home = onCapture ? target.capture.home : target.home;
   const runDir = fill(onCapture ? CAPTURE_RUN_DIR : RUN_DIR, values);
   const marker = `${runDir}/.step-${step.id}`;
@@ -427,15 +465,18 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   // does not. Only these variables exist, the same names on every host.
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
   for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
-  if (!onCapture && !legacy) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
+  if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;
   const commands = step.cmds.map(envCmd);
-  // A step that owns its checkout clones it first when it is missing (R1.4).
+  // A step that owns its checkout clones it first when it is missing (R1.1, R1.4).
   const clone = step.cloneFrom === undefined ? []
     : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
-  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...commands].join(" && ");
+  // A delta step runs only while its gate file is absent: its own receipt proves the one-time action ran.
+  const body = step.gateAbsent === undefined ? commands
+    : [`{ if test -e ${shellQuote(fill(step.gateAbsent, values))}; then echo ${shellQuote(`[release] ${step.id} skipped: ${fill(step.gateAbsent, values)} exists`)}; else ${commands.join(" && ")}; fi; }`];
+  const remote = [`mkdir -p ${shellQuote(runDir)}`, `touch ${shellQuote(marker)}`, ...clone, `cd ${shellQuote(checkout)}`, ...body].join(" && ");
   return { ...common, host, remote, marker };
 }
 
@@ -446,9 +487,9 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
  */
 export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): string {
   const canonical = steps.map((s) => ({
-    id: s.id, standing: s.standing, description: s.description, host: s.host, checkout: s.checkout ?? "release", cmds: s.cmds,
+    id: s.id, standing: s.standing, description: s.description, host: s.host, cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
-    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null,
+    onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };

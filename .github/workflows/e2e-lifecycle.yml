@@ -131,7 +131,6 @@ jobs:
         run: bun --no-env-file scripts/smoke-e2e.ts --attached --keep
         env:
           CI: "true"
-          RM_ENV: stage
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
       - name: Tear down this job's smoke stack

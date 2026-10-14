@@ -20,8 +20,7 @@
 #
 # All other (non-secret) values are forwarded as ${VAR} / ${VAR:-} — the same
 # env-var SET docker-compose.yml already forwards to `api`, but WITHOUT that
-# file's non-empty inline defaults (its RM_ENV default of "smoke", and so
-# on): an inline non-empty default would
+# file's non-empty inline defaults: an inline non-empty default would
 # silently beat `--config` (field guide §5), so an operator must forward the
 # value explicitly (`stack init --config VAR=value`) rather than rely on one
 # baked in here. No non-empty fallback form appears in this file outside the
@@ -34,7 +33,6 @@ services:
     environment:
       # Required — no fallback, matching docker-compose.yml's own ${DATABASE_URL}.
       DATABASE_URL: ${STACK_SECRET_DATABASE_URL:-}
-      RM_ENV: ${RM_ENV:-}
       # Handle/id namespace boot guard (issue #602): escape hatch + wall-clock
       # budget. Blank default = unset inside the container (fail-closed).
       RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: ${RM_ALLOW_HANDLE_NAMESPACE_VIOLATION:-}
@@ -50,6 +48,7 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      HTTP_FETCH_CACHE_MAX_BYTES: ${HTTP_FETCH_CACHE_MAX_BYTES:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       # No session-scheduling variables are forwarded (issue #1026): a subject's
       # epoch duration is the whole schedule, set by bootstrap on a blank

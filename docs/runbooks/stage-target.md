@@ -8,9 +8,14 @@
 
 ## What it is
 
-The stage target is a copy of production as it stands before the v0.6.0 cutover.
-It lives on `rm-frontend-stage-2`. The release runner runs the production step list
-against it with `bun run release:run --target stage`. No step takes a stage-only path.
+The stage target is a copy of production as it stands before the next patch. It lives on
+`rm-frontend-stage-2`. The release runner runs the production step list against it with
+`bun run release:run --target stage`. No step takes a stage-only path.
+
+The tool holds no past-upgrade fact (issue 1272). The tag and commit come from production's
+`/api/version`; the ledger comes from the dump itself; the stack is booted the production way
+from a checkout at that tag. There is no previous commit, no fixed ledger list and no driver
+script in `scripts/release/stage-target-lib.ts`; a unit test keeps the exported constants so.
 
 The target file names these fields:
 
@@ -19,10 +24,9 @@ The target file names these fields:
 | host | `rm-frontend-stage-2` (user `stage-server`) | `rm-frontend-prod-1` (user `root`) |
 | `HOME` | `/home/stage-server/stage-target` | `/root` |
 | checkout | `/home/stage-server/rm-stage-target` | the release checkout |
-| legacy checkout | `/home/stage-server/rm-stage-legacy` | `/root/robotmoney-frontend` |
+| running checkout (built by `up`, not a target field) | `/home/stage-server/rm-stage-running` at the tag production reports | the previous release's checkout, whatever `/api/version` reports |
 | capture checkout | `/home/stage-server/rm-capture`, owned by the release runner, not by the stage target | the same folder on `rm-frontend-stage-2` |
 | instance | `stage_target` | `rm_prod` |
-| driver tmux session | `stage-driver` | `driver` |
 | `RM_ENV` | `stage` | `prod` |
 
 ## What it builds
@@ -31,62 +35,55 @@ The target file names these fields:
 It copies itself to stage-2 and does the work there over ssh, with stdin closed.
 It builds these pieces, in order:
 
-1. **Two checkouts.** The legacy checkout sits at production's legacy commit
-   `1cda4085` (v0.5.4). The v0.6.0 checkout sits at `a502de30`. The runner checks
-   out the release commit itself.
-2. **The database.** One Postgres 18 container, `rm-stage-target-pg`. It listens on
+1. **What production runs.** It reads `https://robotmoney.network/api/version` (the
+   prod target file's `publicOrigin`) and takes the commit and, when the boot carried one,
+   the tag. A body with `+dirty` or `+unknown` refuses.
+2. **The running checkout.** `rm-stage-running`, detached at that tag (else that commit),
+   with `bun install` in root and backend. It never creates the release checkout:
+   R1.1 clones that one.
+3. **The database.** One Postgres 18 container, `rm-stage-target-pg`. It listens on
    `172.17.0.1:25060`. Its data lives in the named volume `rm-stage-target-pgdata`.
    It restarts with Docker.
-3. **TLS.** The tool makes a self-signed certificate on the host. Every network
+4. **TLS.** The tool makes a self-signed certificate on the host. Every network
    login must use TLS and a password. The container superuser cannot log in over
    the network.
-4. **Roles.** The tool reads the roles from the dump's own globals file. It keeps
+5. **Roles.** The tool reads the roles from the dump's own globals file. It keeps
    every role that is not a superuser, with DigitalOcean's exact attribute line.
    `doadmin` is `LOGIN CREATEROLE CREATEDB`, never a superuser. It holds ADMIN over
    `rm_owner`, `rm_app`, `rm_worker` and `rm_readonly`. `rm_owner` carries
-   production's login attribute: `NOLOGIN` before `role-passwords` ever ran on
-   production, `LOGIN` after (production, 2026-10-08). The check accepts either. The tool generates every password on the host.
+   production's login attribute. The tool generates every password on the host.
    It holds the `doadmin` password in memory for the checks and then drops it:
    doadmin is stored in no file ([D61](../decisions.md), owner 2026-10-08).
-5. **Owners and grants.** The capture carries no owners and no grants. So the tool
-   replays production's 76 ledger files in a scratch database. It applies them the
-   way the legacy runner did: as `doadmin`, with `SET LOCAL ROLE rm_owner` from 0054
-   on. It then runs 0053 alone once more, with the two `rm_readonly` sequence
-   grants, as `scripts/ops/provision-db-role-taxonomy.sh` did on production. That
-   run is why production's `rm_app` holds UPDATE and DELETE on the analytics ledger
-   tables, and why production's legacy boot passes its `analytics-ledger-guard`
-   step. It copies the resulting owners, grants and default privileges onto the
-   restored copy. It then compares the two line by line and stops on any difference.
 6. **The data.** The tool decrypts the dump with the passphrase in the dump
    directory. It restores it with the same pipeline `bun smoke --local dump` uses
-   (`restorePipelineArgv` in `scripts/lib/restore-container.ts`).
-7. **The checks.** The ledger equals production's 76-name baseline. There is no
-   `deployment_identity` table. `rm_owner` cannot log in. `doadmin` is not a
-   superuser and holds `CREATEROLE`. Each login role connects over TLS from the
-   host. A login without TLS fails. The tool writes no env file until every check
-   passes.
-8. **`~/.env`.** The file `/home/stage-server/stage-target/.env` has mode 0600. It
+   (`restorePipelineArgv` in `scripts/lib/restore-container.ts`). Then it reads the
+   restored `schema_migrations` back, in applied order: that list is the dump's own
+   ledger, and the only ledger the tool knows.
+7. **Owners and grants.** The capture carries no owners and no grants. So the tool
+   replays exactly the dump's ledger, in the dump's order, from the running checkout's
+   `backend/migrations` in a scratch database, the way the migrate applied them: as
+   `doadmin`, with `SET LOCAL ROLE rm_owner` from 0054 on (0053 created the role), then
+   `backend/schema/grants.sql` as the migrate reconciles it. A ledger name the running
+   checkout lacks refuses (`upPlan` in `stage-target-lib.ts`). It copies the resulting
+   owners, grants and default privileges onto the restored copy, compares the two line by
+   line and stops on any difference. The identity row is enrolled `rehearsal`.
+8. **The checks.** The ledger equals what the replay applied. The `deployment_identity`
+   table exists. `doadmin` is not a superuser and holds `CREATEROLE`. Each login role
+   connects over TLS from the host. A login without TLS fails. The tool writes no env
+   file until every check passes.
+9. **`~/.env`.** The file `/home/stage-server/stage-target/.env` has mode 0600. It
    holds production's key names in production's order: `rm_app`, `rm_worker`,
    `rm_readonly`, `SWARM_SCHEDULES_ENABLED`, `host`, `port`, `database`, `sslmode`,
-   `OPENCODE_API_KEY`, `COINGECKO_API_KEY`. It has no `rm_owner` line and no
-   `doadmin` line: that is production's state before `role-passwords` runs. The
-   two model and data keys come from stage-2's own `~/.env`.
-9. **The legacy checkout `.env`.** Production's legacy checkout holds a `.env`
-   that Bun loads into the legacy driver. The stage copy has the same key names:
-   `DATABASE_URL`, `WORKER_DATABASE_URL`, `username`, `password`, `host`, `port`,
-   `database`, `sslmode`, `OPENCODE_API_KEY`, `SWARM_SCHEDULES_ENABLED` and
-   `MIGRATE_DATABASE_URL` (a working `doadmin` URL, as on production: the v0.5.4
-   boot runs its migrations through it). `stage-target doadmin` rotates the stage
-   doadmin right after `up`, so that copy goes stale before the release runs.
-10. **The legacy stack and its driver.** tmux session `stage-driver` runs
-    `$HOME/legacy-launch.sh` in the legacy checkout. The script runs production's
-    line: `SMOKE_PROJECT=stage_target bun run smoke:archive -- --no-tui`, piped
-    through a timestamp to `$HOME/smoke-archive-v0.5.4.log`. That is the legacy
-    `--smoke --static-port --db external` boot. It starts the compose stack and then
-    drives sessions itself. The site answers on `:48787`. The compose project is
-    `stage_target`. The boot writes `rm-stage-legacy/.agents/smoke-state.json`,
-    as production's writes `/root/robotmoney-frontend/.agents/smoke-state.json`.
-    `up` checks that the driver process is still running 90 seconds later.
+   `OPENCODE_API_KEY`, `COINGECKO_API_KEY`, plus the `rm_owner` line production's
+   `role-passwords` wrote. The two model and data keys come from stage-2's own `~/.env`.
+10. **The stack.** From the running checkout, under `env -i` with the stage `HOME`, the
+    production boot sequence: the credential file for the in-house members
+    (`scripts/release/credentials-init.ts`, fresh stage keys, `RM_CREDENTIALS` appended
+    to `~/.env`), the env rewrite, the service tokens, `bun smoke --static-port --instance
+    stage_target`, the rebind of the in-house members onto the stage keys (the dump holds
+    production's), and a second boot. Docker keeps the stack running, as on production.
+    The boot writes the instance's smoke state under `HOME`, which is what R6.1 stops.
+    The site answers on `:48787`, and `/api/version` reports the tag and commit.
 
 `bun scripts/release/stage-target.ts status` reports each piece.
 `bun scripts/release/stage-target.ts down` removes each piece.
@@ -96,23 +93,13 @@ sets the password through the container's local superuser socket and writes it t
 no file. It exists only because the stage database is disposable. Production has
 no such command: there the admin types the doadmin password.
 
-## How production runs the legacy stack
+## How production runs its stack
 
-Read on 2026-10-08 from `rm-frontend-prod-1`, read-only:
-
-- tmux session `driver` holds an interactive bash in `/root/robotmoney-frontend`.
-- That bash runs `SMOKE_PROJECT=rm_prod bun run smoke:archive -- --no-tui`, piped
-  through a timestamp to `tee /root/smoke-archive-v0.5.4.log`.
-- `smoke:archive` is `bun scripts/smoke.ts --smoke --static-port --db external`.
-- One process is both the stack's launcher and the host driver.
-- The compose project is `rm_prod`. It runs six containers. The site is on `:48787`.
-- The legacy smoke reads the database address and the `rm_app` password from
-  `/root/.env`. It writes the overlay `.agents/smoke-rm_prod-external-pg.yml`.
-- Bun loads `/root/robotmoney-frontend/.env` into the driver. That file supplies
-  `WORKER_DATABASE_URL`, `MIGRATE_DATABASE_URL`, `OPENCODE_API_KEY` and
-  `SWARM_SCHEDULES_ENABLED=0`.
-- The droplet's `/etc/environment` exports `DATABASE_*`, a `doadmin` connection.
-- The driver's shell exported `COINGECKO_API_KEY`.
+Since the v0.6.0 cutover (2026-10-08) production's stack is the one `bun smoke --static-port
+--instance rm_prod` booted from the release checkout of the running version, with `HOME=/root`.
+Docker keeps it running. Its smoke state lives under `/root/.local/state/robotmoney-smoke/rm_prod/`;
+`bun run smoke:down --instance rm_prod` is the one way to stop it, and R6.1 runs exactly that.
+`/api/version` reports the commit and, for a boot at a tag, the tag. No tmux session drives it.
 
 ## Rebuild it for each rehearsal
 
@@ -145,20 +132,19 @@ The release's own R2.1 still captures a new backup during the run.
 4. Read `status`. Then run the release runner against the target.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
-unless `--replace` is given. `--replace` runs `down` first. `down` removes the
-container, the volume, the legacy stack, both checkouts (`rm-stage-target` and
-`rm-stage-legacy`, with any retired legacy checkout), the tmux session, the
-target `HOME` and any v0.6 stack the instance booted. It never touches stage-2's
-own `~/.env`, `~/rm-060`, the capture checkout `/home/stage-server/rm-capture`,
-other checkouts or the dump directories.
+unless `--replace` is given. `--replace` runs `down` first. `down` stops the instance's
+stack with `bun smoke:down`, then removes its containers, networks, volumes and images, the
+Postgres container, the volume, the running checkout `rm-stage-running`, the release checkout
+`rm-stage-target` and the target `HOME`. It never touches stage-2's own `~/.env`, `~/rm-060`,
+the capture checkout `/home/stage-server/rm-capture`, other checkouts or the dump directories.
 
 The capture checkout belongs to the release runner, for both targets. Its R1.4
 clones it when it is missing. `up` never creates it. `down` refuses to remove it, or
 any folder holding it (`removalRefusal` in `stage-target-lib.ts`). See
 [the capture checkout convention](release-run.md#capture-checkout-convention).
 
-A full `up` takes about 15 minutes. The restore takes about 3. The legacy image
-build takes most of the rest.
+A full `up` takes about 15 minutes. The restore takes about 3. The image build and the
+two boots take most of the rest.
 
 ## What differs from production, and why
 
@@ -168,13 +154,11 @@ build takes most of the rest.
 | `host` is `172.17.0.1`, an address, not a hostname. | The containers and the host both reach the bridge address. A user without root cannot add a DNS name. |
 | No DigitalOcean pooler, no replica, no `_dodb` or `postgres` superuser. | The release path uses the direct port only. The capture keeps reading production's own replica. The platform superusers belong to DigitalOcean. |
 | Per-role settings and extension parameter grants (`pgaudit.*`, `anon.*`) are left out. | Those extensions do not exist in the stock image. |
-| Owners and grants come from a replay of the 76 ledger files, then one provisioning run. | The capture is taken with `--no-owner --no-privileges`. The tool never reads production's catalog. It assumes the provisioning script ran after the last ledger file. Any other grant made on production by hand is not reproduced. |
+| Owners and grants come from a replay of the dump's ledger, then the grants reconcile. | The capture is taken with `--no-owner --no-privileges`. The tool never reads production's catalog. The migrate reconciles `grants.sql` at the end of every run, so the replay ends the same way. Any grant made on production by hand is not reproduced. |
 | Extensions are owned by the container superuser. | `pg_restore` creates them. DigitalOcean's are owned by the role that created them. |
 | `defaultdb` is owned by `doadmin`. | This is DigitalOcean's default. It was not read from production. |
-| `/etc/environment` cannot be written without root. | `legacy-launch.sh` exports the same `DATABASE_*` names from the stage `~/.env` before it starts the driver. An ssh session on stage does not get them. An ssh session on production does. |
-| The legacy checkout `.env` has mode 0600. | Production's has 0644. A stage file is not made weaker on purpose. |
-| The stage `~/.env` has no `RM_ENV` line. | Production's has none either. The cutover adds it. |
-| `legacy-launch.sh` exports an inert `DATABASE_PASSWORD`. | Production's `/etc/environment` holds the real doadmin password. Stage stores doadmin in no file (D61, owner 2026-10-08), so the script draws a random value doadmin does not have. The v0.5.4 driver builds its own container URLs and does not connect with it. |
+| `/etc/environment` cannot be written without root. | Production's exports a `doadmin` `DATABASE_URL`; stage's exports nothing. Every release step runs under `env -i`, so neither host's login environment reaches a command. |
+| The in-house members run on stage keys. | The dump holds production's member keys; `up` writes a fresh credential file and rebinds the in-house members onto it, so the stage agents can file. |
 | `stage-target doadmin` prints a doadmin password. | The stage database is disposable. Production has no such command; its admin types the password at `role-passwords`' hidden prompt. |
 | The model key is stage-2's own key. | No production secret leaves production. |
 | The container has 1 GB of shared memory and stage-2's 4 CPUs and 7 GB. | Production's managed primary is sized by DigitalOcean. |

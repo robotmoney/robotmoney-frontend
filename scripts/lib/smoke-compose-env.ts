@@ -1,56 +1,30 @@
 // WHAT REACHES THE STACK'S COMPOSE ENVIRONMENT, AND WHERE IT CAME FROM.
 //
-// Three halves of one question, kept together because they are the same
-// argument seen from different ends: which RM_ENV this boot declares (never the
-// operator's shell), which operator knobs the shell may still contribute, and
-// which stack-owned values it may NOT contribute even though it set them.
+// Two halves of one question, kept together because they are the same
+// argument seen from different ends: which operator knobs the shell may still
+// contribute, and which stack-owned values it may NOT contribute even though it
+// set them.
 //
-// WHICH RM_ENV THIS BOOT DECLARES (D13).
-//
-// `RM_ENV` used to reach the containers from whatever the operator's shell last
-// exported — or, far more often, from docker-compose.yml's `${RM_ENV:-smoke}`
-// interpolation default, because nothing in the repository set it at all. That
-// is how rm-frontend-stage-1 came to be running `RM_ENV=smoke` on 2026-09-13
-// with every AC-MODEL-01 refusal disabled in the api, the worker and the judge.
-//
-// It is now a StackConfig field (`rmEnv`), derived HERE from the §4.3 policy the
-// boot resolved (backend/src/deploy-policy.ts, which is what refuses `smoke`,
-// `ephemeral` and any typo in the operator's shell) and the kind of boot, and
-// emitted into every service by buildComposeEnv(). The rule itself lives in
-// backend/src/acceptance-path.ts with the shared acceptance predicate.
-import { resolveStackRmEnv, type RmEnv } from "../../backend/src/acceptance-path.ts";
-import { refuseWeakeningFlagsOnProd } from "../../backend/src/deploy-policy.ts";
+// NO RM_ENV REACHES A CONTAINER (issue 1326, D69). It used to be derived here
+// from the boot's policy and emitted into every service, for the acceptance
+// path the api read. That path is now stated by the boot itself, never read
+// from an environment (backend/src/acceptance-path.ts).
 import { DEMO_COMPOSE_PASSTHROUGH as LEAF_COMPOSE_PASSTHROUGH } from "./smoke-compose-passthrough.ts";
 
-/** The containers' `RM_ENV` for a boot under `policy`; `--static-port` runs `prod` by rule. */
-export function stackRmEnvFor(standingStack: boolean, policy: "prod" | "stage"): RmEnv {
-  return resolveStackRmEnv({ standingStack, policy });
-}
-
 /**
- * Whether the api runs allow-insecure (RM_ALLOW_INSECURE=1) for a boot under
- * `policy`, given whether `--allow-insecure` was passed. Secure by default: no
- * flag means no allow-insecure, on every policy. With the flag, the §4.4 rule
- * itself decides (refuseWeakeningFlagsOnProd): stage keeps it, and a boot under
- * `RM_ENV=prod` never gets it, whatever else is true. The boot refuses before
- * this is asked (`refuseAllowInsecureOnProd`). Handed to the stack as
- * StackConfig.allowInsecure. There is no compose overlay to pin it.
+ * True for a boot whose stack is an acceptance deployment: the `prod` policy,
+ * or the standing `--static-port` stack a tunnel points at under either policy.
+ * Its inference is the acceptance path, and it must hand the live settings.
  */
-export function stackAllowInsecureFor(policy: "prod" | "stage", requested: boolean): boolean {
-  return requested && refuseWeakeningFlagsOnProd(policy, { allowInsecure: true }).allow;
-}
-
-/** The refusal text when `--allow-insecure` is passed under prod; null when nothing refuses. */
-export function refuseAllowInsecureOnProd(policy: "prod" | "stage", requested: boolean): string | null {
-  const verdict = refuseWeakeningFlagsOnProd(policy, { allowInsecure: requested });
-  return verdict.allow ? null : verdict.reason;
+export function isAcceptanceBoot(standingStack: boolean, policy: "prod" | "stage"): boolean {
+  return policy === "prod" || standingStack;
 }
 
 // ── What else the operator's shell may still contribute ─────────────────────
 //
 // The allowlist lives one module further down (smoke-compose-passthrough.ts) so
-// the judge-transport test can import it without importing this file's RM_ENV
-// resolver. It is used as it stands: nothing is added to it here any more.
+// the judge-transport test can import it without importing this file. It is
+// used as it stands: nothing is added to it here any more.
 //
 //   * NO MIGRATION CREDENTIAL reaches compose. MIGRATE_DATABASE_URL used to be
 //     added here so a one-shot migrate container could run the legacy runner
@@ -98,23 +72,23 @@ export function dropShellMigrationCredential(env: Record<string, string | undefi
 }
 
 /**
- * The refusal text when a boot whose containers run `RM_ENV=prod` has no
- * `PROJECTS_SOURCE=live` to hand them; null when nothing refuses (issue #1113).
+ * The refusal text when an acceptance boot ({@link isAcceptanceBoot}) has no
+ * `PROJECTS_SOURCE=live` to hand its containers; null when nothing refuses
+ * (issue #1113).
  *
- * `selectProjectsDataSource()` throws under `RM_ENV=prod` unless
- * `PROJECTS_SOURCE=live`, so every projects job dies one tick after a boot that
- * forgot it. v0.5.x got the value from the checkout `.env`; the boot now runs
+ * `selectProjectsDataSource()` throws unless `PROJECTS_SOURCE=live`, so every
+ * projects job dies one tick after a boot that forgot it. v0.5.x got the value from the checkout `.env`; the boot now runs
  * `--no-env-file`, so the only path is the shell. Judged on the value the
  * passthrough will actually forward (set and non-empty), not on mere presence.
  */
 export function refuseProdWithoutProjectsSource(
-  stackRmEnv: RmEnv,
+  acceptanceBoot: boolean,
   env: Record<string, string | undefined>,
 ): string | null {
-  if (stackRmEnv !== "prod") return null;
+  if (!acceptanceBoot) return null;
   if (env.PROJECTS_SOURCE === "live") return null;
   return (
-    "PROJECTS_SOURCE=live is required for a boot whose containers run RM_ENV=prod, and it is " +
+    "PROJECTS_SOURCE=live is required for a production or standing boot, and it is " +
     (env.PROJECTS_SOURCE ? `\`${env.PROJECTS_SOURCE}\`` : "not set") +
     ". Every projects pipeline throws without it. `bun smoke` ignores the checkout `.env`: " +
     "export PROJECTS_SOURCE=live in the shell, then boot again. Nothing was started."
@@ -126,8 +100,8 @@ export function refuseProdWithoutProjectsSource(
  * `.env` that are unset in this boot's shell. A note, never a refusal: each has
  * a working built-in default, but the default is not what v0.5.x ran.
  */
-export function missingProdSettingNotes(stackRmEnv: RmEnv, env: Record<string, string | undefined>): string[] {
-  if (stackRmEnv !== "prod") return [];
+export function missingProdSettingNotes(acceptanceBoot: boolean, env: Record<string, string | undefined>): string[] {
+  if (!acceptanceBoot) return [];
   return ["BASE_RPC_URL", "WEBAUTHN_ORIGIN"]
     .filter((k) => env[k] === undefined || env[k] === "")
     .map(

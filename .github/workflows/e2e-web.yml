@@ -125,7 +125,6 @@ jobs:
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check swarm-session
         env:
           CI: "true"
-          RM_ENV: stage
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
@@ -133,7 +132,6 @@ jobs:
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check frontend
         env:
           CI: "true"
-          RM_ENV: stage
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
@@ -141,7 +139,6 @@ jobs:
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check browser
         env:
           CI: "true"
-          RM_ENV: stage
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}

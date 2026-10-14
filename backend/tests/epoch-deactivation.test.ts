@@ -72,7 +72,7 @@ beforeAll(async () => {
   // Judge mode `off`: settlement is aggregate then finalize, with nothing to
   // wait on, so the whole path to `published` runs inside a test.
   await setJudgeMode("off");
-  api = await bootApi({ env: { RM_ENV: "ephemeral" } });
+  api = await bootApi();
 }, 90_000);
 
 afterAll(() => api?.stop());
@@ -277,7 +277,7 @@ test("169 RED CONTROL: with the same-transaction close restored in the admin dea
       "judging_duration_seconds = 900 WHERE subject_id = ${id} AND state = 'collecting'`;\n" +
       '    await audit(actor, "subject_deactivate", { subjectId: id }, tx);',
   );
-  const broken = await bootApi({ env: { RM_ENV: "ephemeral" }, preload });
+  const broken = await bootApi({ preload });
   try {
     const filer = await activeMember();
     const { subjectId, sessionId, date } = await opened("deact_red");

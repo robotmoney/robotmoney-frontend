@@ -133,9 +133,9 @@ describe("admin credential claim lifecycle (issues #553, #584 / D32)", () => {
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });
   });
 
-  test("RM_ENV=ephemeral opens the admin gate neither before nor after a claim (D52 (1))", async () => {
+  test("the test harness opens the admin gate neither before nor after a claim (D52 (1))", async () => {
     // Pre-claim used to be open under insecure mode; there is no such mode now.
-    expect(process.env.RM_ENV).toBe("ephemeral");
+    expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
     expect((await call(authReq()))?.status).toBe(403);
     expect((await call(claimReq(PASSWORD)))?.status).toBe(403);
     expect(await call(isClaimedReq())).toEqual({ status: 200, body: { claimed: false } });

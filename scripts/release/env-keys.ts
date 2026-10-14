@@ -34,13 +34,14 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
 
 /**
  * Keys `~/.env` must hold before a run (`bun run role-passwords --target
- * <target>` writes `rm_owner`). R1.2 refuses without them, before R6.1 stops the legacy
+ * <target>` writes `rm_owner`; `RM_CREDENTIALS` has named the credential file
+ * since v0.6.0). R1.2 refuses without them, before R6.1 stops the running
  * stack: a run that stopped the site and then found one missing would leave
  * the site down.
  */
 export const PRE_CUTOVER_REQUIRED_KEYS: readonly string[] = Object.freeze(["rm_owner", "RM_CREDENTIALS"]);
 
-/** Keys the run writes itself, and the step that writes each. None since v0.6.0: the cutover wrote RM_CREDENTIALS. */
+/** Keys the run writes itself, and the step that writes each. None: the generic list writes no `~/.env` key (issue 1272). */
 export const RUN_WRITTEN_KEYS: Readonly<Record<string, string>> = Object.freeze({});
 
 /** Keys R6.2 (the env rewrite) requires again, as defence in depth. */
@@ -58,7 +59,7 @@ export function preCutoverKeyProblems(env: Record<string, string | undefined>, e
   if (missing.length === 0) return [];
   return [
     `${envPath} has no non-empty ${missing.join(" or ")} line; run \`bun run role-passwords --target <target>\` first. ` +
-      "R6.1 stops the legacy stack, so this is checked before it",
+      "R6.1 stops the running stack, so this is checked before it",
   ];
 }
 

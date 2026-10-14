@@ -21,7 +21,10 @@ never silently drops one. It points here and then lists only what is new.
 3. A release runbook adds checks as **release-specific rows** in its own sections.
    They run after the standing row of the same phase.
    One-time migrations that only one release performs (for example 0.6.0's credential
-   rebind of the in-house members, R6.7) belong to that release's runbook, never here.
+   rebind of the in-house members, R6.7) belong to that release's runbook, never here. In
+   the runner they are delta steps of that release (`RELEASE_DELTAS` in
+   `scripts/release/steps.ts`, [`release-run.md`](./release-run.md#delta-steps)), gated on a
+   precondition receipt, never rows of the generic list.
 4. The checks are **cumulative**. A check a past release needed stays here after
    that release ships. A check leaves only through section 6, with an owner decision
    that says why.
@@ -29,6 +32,16 @@ never silently drops one. It points here and then lists only what is new.
    file in the same pull request, or files the issue that does.
 6. A check with no tool is a missing tool. The row says `gap`, names the issue, and
    the release stays blocked until the issue closes or the owner records an exception.
+7. **Every production data change ships as a migration** (owner, 2026-10-09). No admin-route
+   write, no SQL by hand, no one-off script. R6.3 is the one step of a release that writes
+   production data, and the migration ledger is the record of every change. A release runbook
+   lists its migrations and nothing else as its data delta.
+
+A release runbook holds only its delta: its identity, its migrations, its new routes and
+checks, its exceptions and its owner decisions. Everything a release repeats is a row here,
+cited by ID. The record of a shipped release stays as it was written (its runbook is history
+from the day W3 tags it), so a reader of the live delta runbook never meets a past release's
+one-time steps.
 
 ## 2. How to read the tables
 
@@ -51,7 +64,7 @@ unverified, not satisfied.
 |---|---|---|---|---|
 | SP.1 | Position: which release, which commit, which phase | `bun smoke:status` and the release runbook's section 1 | both | script |
 | SP.2 | Backup taken and **restore proven** into a fresh local database, with the restore time recorded | `bun run release:run` R2.1, R2.2 and R2.4r (`scripts/release/restore-proof.ts`) | both | script |
-| SP.3 | Production's real migration ledger read from the replica and equal to the shipped baseline | `rm_readonly` query, per release runbook | prod | manual |
+| SP.3 | Production's real migration ledger, read through `rm_readonly`, reconciles with `backend/migrations` and the bytes at the version the running stack reports: no recorded name the repository lacks, no applied file whose bytes differ from the tag's, never a count or a number order (D67, issue 1273; "a prefix by filename set" from 2026-10-12 under issue 1272, "equal to the shipped baseline" before that) | `bun run release:run` R1.2 and R2.3 (`scripts/release/ledger.ts`) | both | script |
 | SP.4 | Smoke preflight: 1 role auth, 2 privileges, 3a manifest, 3b compat, 4 `~/.env` keys, 5 identity, 6 subject scheduling columns | `bun smoke` (runs at boot) | both | script |
 | SP.5 | Log baseline: what is already broken, triaged before the cutover | `bun run prod:gate --mode baseline` | prod | script |
 | SP.6 | Product baseline: row counts, published AUM, database size, recorded for the postflight comparison | release runbook R2.4 | prod | manual |
@@ -77,7 +90,7 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
 | SR.4 | Twin gate, after SR.9: sessions judged (a `no_consensus` publish is a warning, owner 2026-10-06), participants never restarted, judge on, no dead job, containers healthy, every log error classified, no FATAL | `bun run twin:gate` | stage | script |
 | SR.5 | Interruption at a phase boundary resumes, before and after replace | release runbook R3.6 | stage | manual |
 | SR.6 | Rollback rehearsal: restore time recorded, and the old code's behavior against the new schema recorded | release runbook R3.9 | stage | manual |
-| SR.7 | Cumulative standing invariants (the 0.5.x R8 list, section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
+| SR.7 | Cumulative standing invariants (section 7) | `bun run soak:checks --instance NAME --since T0 --full` (`--record` once at READY) | stage | script |
 | SR.10 | Cutover rehearsal: the production step list runs unmodified and unattended against the production-shaped stage target (D61), once, from a dump under 24 hours old (SR.0) (the standing rule since 2026-10-08; a release runbook may ask for more) | `bun run release:run --target stage` | stage | gap, issue agent-executed runbooks (1225) |
 | SR.8 | Rehearsal report: RC SHA, dump identity, plan id, receipts, results, what could not be covered, operator go/no-go | policy 4.5 | stage | manual |
 
@@ -106,22 +119,21 @@ never rewritten (owner 2026-10-07): when the session needs a new base, cut a new
   never reused.
 - A row going from `gap` or `manual` to `script` is an edit of its Status cell and Tool cell only.
 
-## 7. The 0.5.x standing invariants, ported (issue 1179)
+## 7. The standing invariants (SR.7, SW.2)
 
-The 0.5.3-to-0.5.4 `soak-checks.sh` ran these read-only checks at every gate. They are owed by
-SR.7 and SW.2 and now run as ONE instance-aware script, `bun run soak:checks`
-(`scripts/standing-soak.ts`, decisions in `scripts/lib/gate/standing.ts`), beside `twin:gate` and
-`prod:gate`. Like the gates it takes `--instance`, reads the stack record, runs every query through
-the instance's api container on a read-only session, reads container logs and `docker inspect`, and
-holds no admin token, no superuser and no Docker socket. T0 is the instant the stack became READY
-(`--since`). Run it once with `--record` at READY: R8.d and R8.p compare with that baseline
-(without one R8.p FAILS and R8.d is unverified). `--full` adds the slow vintage join of R8.l.
-Every check has a unit test with a red control (`scripts/tests/unit/standing-soak.test.ts`).
-Source of the old list: the script header at tag `v0.5.4`.
+These read-only invariants hold on every healthy stack, at every gate. They run as ONE
+instance-aware script, `bun run soak:checks` (`scripts/standing-soak.ts`, decisions in
+`scripts/lib/gate/standing.ts`), beside `twin:gate` and `prod:gate`. Like the gates it takes
+`--instance`, reads the stack record, runs every query through the instance's api container on a
+read-only session, reads container logs and `docker inspect`, and holds no admin token, no
+superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
+with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
+R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner runs it at R7.3b.
 
-| Old id | Invariant | Status | Note on the port |
+| Id | Invariant | Status | Note |
 |---|---|---|---|
-| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). 0.5.x production ran every 3 h (:30, :00), so the 3 h cadence holds only if the deploy sets those variables. A cron the script cannot expand is a WARN |
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). A cron the script cannot expand is a WARN |
 | R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
 | R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
 | R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
@@ -133,28 +145,36 @@ Source of the old list: the script header at tag `v0.5.4`.
 | R8.l | Newest vintage: run lengths add up to the member count | script | |
 | R8.m | No connection-pool starvation (sessions idle in a transaction) | script | `pg_stat_activity` shows the api role only its own sessions, so the detail says how many of the open sessions it could see |
 | R8.n | Host disk | script | `df /` on the host the script runs on |
-| R8.p | `schema_migrations` equals the shipped baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it |
+| R8.n2 | No container's writable layer is over 2 GB | script | `docker inspect --size` (`SizeRw`) for every project container. Issue 1258: the HTTP fetch cache grew to 20 GB in one worker's writable layer while R8.n still passed. An unreadable size is a FAIL |
+| R8.n3 | Host free disk has not fallen more than 2 GB since the baseline | script | The baseline's free space comes from `--record`. A baseline without it (recorded before this check) is a WARN until the next `--record` |
+| R8.p | `schema_migrations` equals the recorded baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it. Rule 7 of section 1: the ledger is the record of every data change |
 | R8.q | Judge config: enforce, pinned model, third parties off | script | The pin is `deepseek-v4.1-flash` (migration 0111). The two pre-0111 ids are a WARN, valid only before 0111 applies |
-| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants, as in 0.5.x |
+| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants |
 | R8.s | `/health` and the judgements route answer 200 | script | Probes the api at the stack record's port. `--base-url` probes the public origin instead |
-| R8.t | Every published session has `openedAt` | script | Sessions dated on or after `--opened-at-from` (default 2026-09-22), as in 0.5.x |
-| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed | script | R8.u2 lists slow requests as a WARN |
+| R8.t | Every published session has `openedAt` | script | Sessions dated on or after `--opened-at-from` (default 2026-09-22) |
+| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed | script | R8.u2 lists slow requests as a WARN. The api's limit is 10 s and a request over 5 s is logged |
 | R8.v | The buyback scan never fails on a refused range | script | Reads every `worker-*` lane, not one named container |
 | R8.w | Gecko tier matches the key, no 429/401/403, the key is in no ledger row or api/website environment | script | Key presence is read from `docker inspect`; no value is ever printed. R8.w2 and R8.w3 are its error and containment halves |
-| R8.x | The regime day is logged | script | 0.5.x read a host driver log. Main logs `regime asof D` from the `analytics-producer` container, so each line is compared with its own Docker timestamp |
+| R8.x | The regime day is logged | script | `regime asof D` is logged from the `analytics-producer` container, so each line is compared with its own Docker timestamp |
 | R8.o | Informational: error-like lines per container | script | INFO by design: it never fails. The gates classify the lines |
 
-The old script had no R8.y. Its R8.z (a query that errored must never read as a pass) is built in:
-a read that fails is a FAIL of the check that needed it.
+A query that errored never reads as a pass: a read that fails is a FAIL of the check that needed it.
+A release that adds an invariant adds a row here, with its red-control test, in the same pull request
+(rule 5 of section 1).
 
-## 8. What was lost between 0.5.x and 0.6.0, and where it stands
+## 8. Keeping the site up through a release (issue 1220)
 
-Recorded 2026-10-06 so the loss is not found twice.
+The website is its own release unit (D54), so a release does not stop it.
 
-| Lost | Where it was | Status |
-|---|---|---|
-| Cumulative standing invariants script | `upgrades/0.5.3-to-0.5.4/soak-checks.sh` | ported, issue 1179: `bun run soak:checks` (section 7) |
-| Release-independent procedure (position probe, backup proof, twin, rollback limits) | `docs/runbooks/rollout-procedure.md` | not carried, issue 1180 |
-| Environment and credential inventory | `docs/runbooks/deployment.md` | not carried, issue 1180 |
-| Per-release `preflight.ts` and `postflight.ts` | `backend/scripts/upgrades/<from>-to-<to>/` | their stack-level checks became SP.4 and SV.2. Release-level schema checks are `manual` rows SP.3 and SV.5 |
-| Log gates | `twin:gate`, `prod:gate` | kept, ported to the instance model (1071). Never run on a healthy 0.6.0 stack before 2026-10-06 |
+Order of units, one at a time: the website, then the api and workers, then the migrate, then the participants. `bun scripts/rollout-probe.ts plan <plan.json>` refuses a plan that is out of order. It also refuses a step that stops website-server unless the step carries an `ownerDecision` naming the owner decision that allows it.
+
+Before a window that takes the api down:
+
+1. Schedule it with `POST /api/admin/maintenance`. The site shows a banner with the start and expected end.
+2. Start the probe: `bun scripts/rollout-probe.ts run <site-url> <receipts.jsonl>`. It asks for `/` every 15 s.
+3. At the start, call `POST /api/admin/maintenance/:id/start`, then write `maintenance.json` into the instance web directory (`writeMaintenanceFile`, `scripts/lib/maintenance-file.ts`). website-server serves it for `/api/status/maintenance` and answers other `/api/` calls with a 503 maintenance body while the api is down.
+4. At the end, call `POST /api/admin/maintenance/:id/end` and remove `maintenance.json` (`clearMaintenanceFile`).
+
+Postflight: `bun scripts/rollout-probe.ts grade <receipts.jsonl> <startMs> <endMs>` fails on any non-200 answer or any gap over 15 s.
+
+Host or tunnel loss is covered off-host: `ops/cloudflare/offhost-fallback.html` and `ops/cloudflare/error-pages.json` (5xx and 1033). Applying them to the Cloudflare zone is an operator step.

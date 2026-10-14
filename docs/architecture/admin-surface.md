@@ -85,8 +85,8 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
 - There are no swarm schedule rows, cron strings or enable switches in the
   target. A topic's grid (epoch duration and anchor) and judging duration are
   its whole schedule: set by bootstrap data
-  on a blank database, changed afterwards only through the admin API (US-C1),
-  and never disabled. Schedule toggles in this UI concern analytics rows only.
+  on a blank database, changed afterwards by migration on a deployed stack or
+  through the admin API on an ephemeral one (US-C1, D66), and never disabled. Schedule toggles in this UI concern analytics rows only.
   See [smoke-production-spec §6.3](../technical/smoke-production-spec.md#63-sessions-are-independent)
   and [scheduler spec §2](../technical/system-scheduler-spec.md#2-epochs).
 
@@ -349,6 +349,20 @@ Acceptance:
   a 409, race-safely (a transaction-scoped advisory lock serializes admissions
   so two concurrent activations cannot both slip past the last free seat).
 - All writes require the current member `version`; stale writes return 409.
+- A silent seat is shown, never removed by the system (issue 1269, owner
+  decision 2026-10-09). `silentSessions` on the admin member list and on
+  `GET /api/swarm/members/:id` counts an active member-role seat's `absent`
+  sessions convened after the latest of its newest take, its activation and
+  `swarm_dormancy_baseline.counted_from` (migration 0122, the instant the
+  release carrying the count was migrated). An excused session does not
+  count, and a judge or inactive member has none (null). At
+  `SWARM_DORMANCY_THRESHOLD_SESSIONS` (default 7) the admin list and the
+  public member page show `Silent: missed N consecutive sessions`. Both
+  responses serve that threshold as `silentThreshold` beside
+  `silentSessions`, and the page's `memberStatusLine` reads it (falling back to
+  7 when a payload has none). Nothing
+  deactivates, excuses or revokes on it: the member stays `active`, keyed and
+  seated as `expected`, and removal stays the explicit deactivate above.
 
 ### US-C3 — Observe a topic's current epoch and its sessions
 
@@ -810,8 +824,11 @@ only the `admin` right, and every epoch lifecycle route refuses it
 ([scheduler spec §4.6](../technical/system-scheduler-spec.md#46-transition-calls-that-fail)).
 
 The generic existing `/api/swarm/admin/:action` endpoints remain for smoke
-compatibility but the new browser must not call them. Mark `reset` and
-`subject_fixtures` dev/smoke-only and return 403 for them when `RM_ENV=prod`.
+compatibility but the new browser must not call them. `reset` and
+`subject_fixtures` require the admin credential like every other action; there
+is no environment class to key a 403 on (issue #973), and `subject_fixtures`
+writes synthetic regime history only in the armed test harness, never on a
+deployed stack (`backend/src/swarm/domain.ts` `backfillRegimeHistory`).
 
 ### 6.4 Required domain corrections
 

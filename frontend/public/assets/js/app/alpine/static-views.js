@@ -15,6 +15,7 @@ import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
+import { memberStatusLine } from "../lib/member-status.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
@@ -264,6 +265,11 @@ export function camelMember(raw) {
     avatar: raw.avatar,
     wallet: raw.wallet,
     activatedAt: raw.activatedAt || raw.activated_at,
+    // Consecutive missed sessions (issue 1269): only the member route counts
+    // it; the roster and the static archive carry none.
+    silentSessions: typeof raw.silentSessions === "number" ? raw.silentSessions : null,
+    // The deployment's SWARM_DORMANCY_THRESHOLD_SESSIONS; the helper falls back to 7.
+    silentThreshold: typeof raw.silentThreshold === "number" ? raw.silentThreshold : null,
   };
 }
 
@@ -3119,6 +3125,9 @@ export function registerStaticViews(Alpine) {
     },
     isJudge(m) { return isJudge(m); },
     roleLabel(m) { return roleLabel(m); },
+    // A seat silent for the threshold's sessions says so (issue 1269). A
+    // line, never an action: the member stays seated.
+    statusLine(m) { return memberStatusLine(m); },
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
     // A record card's call (the badge) and, for a hold, why.

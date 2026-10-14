@@ -14,8 +14,10 @@ import {
   path as routePath,
   ROUTES,
   STANCES,
+  type SwarmSubmitDryRunResult,
+  type SwarmTakeCheck,
 } from "@robotmoney/contract";
-import { config } from "../config.ts";
+import { testSeamArmed } from "../test-seam.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../db/registry.ts";
 import { hashKey } from "../lib/keys.ts";
@@ -70,6 +72,7 @@ import { ledgerCurrentBriefBySession } from "../analytics/cutover/ledger-current
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
 import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
+import { silentSessionsByMember } from "./dormancy.ts";
 import {
   day,
   instant,
@@ -464,7 +467,11 @@ async function resolveMemberRow(ref: string) {
 }
 export async function getMember(id: string) {
   const row = await resolveMemberRow(id);
-  return row ? toMember(row) : null;
+  if (!row) return null;
+  // Issue 1269: the member page's consecutive-missed-sessions count, null for
+  // a seat that has none (a judge, an inactive member).
+  const silent = await silentSessionsByMember(row.id);
+  return toMember({ ...row, silent_sessions: silent.get(row.id) ?? null });
 }
 
 // Serves the bytes admin.ts's uploadMemberAvatarAdmin (issue #626) writes to
@@ -1395,6 +1402,11 @@ export interface SubmissionInput {
   reportSnapshotId?: string;
   weights?: { bucket: string; weight: number }[];
   cites?: string[];
+  // Issue #1249: the session whose brief this take was authored from. Optional
+  // and OUTSIDE the signed bytes (canonicalizeSubmission never reads it). When
+  // named, submitRecommendation files the take against exactly this session or
+  // refuses it; it is never redirected to the subject's next session.
+  sessionId?: string;
   signature: string;
 }
 
@@ -1547,6 +1559,7 @@ const SUBMIT_INSERT_PROBE = {
                $12::bigint, $13::bigint, c.at
         FROM swarm_sessions s, (SELECT clock_timestamp() AS at) c
         WHERE s.id = $14
+          AND s.subject_id = $2
           AND s.state = 'collecting'
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
@@ -1577,6 +1590,21 @@ const submitSession = registerQuery({
                               WHERE subject_id = $1
                               ORDER BY convened_at DESC LIMIT 1`,
     params: ["probe"],
+  },
+});
+const submitSessionById = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitRecommendation.sessionById",
+  purpose: "Read the session a take names and whether its window has passed on the database clock (issue #1249).",
+  callers: [SWARM_ROUTE],
+  probe: {
+    statement: `SELECT *,
+                                    (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
+                               FROM swarm_sessions
+                              WHERE id = $1`,
+    params: [SAMPLE_ID],
   },
 });
 const submitBrief = registerQuery({
@@ -1685,12 +1713,55 @@ const submitAudit = registerQuery({
   callers: [SWARM_ROUTE],
   probe: { statement: "INSERT INTO audit_log (actor, action, scope) VALUES ($1, $2, $3::jsonb)", params: ["probe", "submit_recommendation", "{}"] },
 });
-export async function submitRecommendation(token: string, sub: SubmissionInput): Promise<SubmitTakeResult> {
+// ── THE CHECKS SUBMIT RUNS, IN ONE PLACE (RM-178) ───────────────────────────
+//
+// POST /api/swarm/submit and POST /api/swarm/submit/dry-run run the same
+// checks, in the same order, through checkTake, so a dry run cannot pass a take
+// submit would refuse. checkTake writes nothing. Submit stops at its first
+// refusal and makes the write it always made for it (refuseAsSubmit: the
+// `rejected_take` row, or the `rejected_signature` event). A dry run carries on
+// past every refusal a later check can still run after, and writes nothing.
+
+/** One check's outcome, and what submit records when it is submit's refusal. */
+interface TakeCheckOutcome extends SwarmTakeCheck {
+  record?: { rejectedTake: string } | { rejectedSignature: string };
+}
+
+interface CheckedTake {
+  memberId: string | null;
+  session: Record<string, any> | null;
+  key: { id: string; publicKey: string } | null;
+  latestRevision: number;
+  /** This exact signed take is already on file under its nonce: a retry. */
+  retryOf: RecordedSubmission | null;
+  checks: TakeCheckOutcome[];
+}
+
+async function checkTake(token: string, sub: SubmissionInput, collectAll: boolean): Promise<CheckedTake> {
+  const out: CheckedTake = { memberId: null, session: null, key: null, latestRevision: 0, retryOf: null, checks: [] };
+  // Record one check's outcome. True when the caller must stop here: submit
+  // stops at its first refusal, a dry run only where no later check can run.
+  const record = (outcome: TakeCheckOutcome, fatal = false): boolean => {
+    out.checks.push(outcome);
+    return !outcome.ok && (fatal || !collectAll);
+  };
+
   const memberId = await memberIdForToken(token);
-  if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
-  if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+  if (!memberId) {
+    record({ check: "token", ok: false, status: 401, error: "unknown member token" }, true);
+    return out;
+  }
+  if (memberId !== sub.memberId) {
+    record({ check: "token", ok: false, status: 403, error: "token/member mismatch" }, true);
+    return out;
+  }
   const member = (await on(sql, submitMemberRole)<{ role: string }>`SELECT role FROM swarm_members WHERE id = ${memberId}`)[0];
-  if (member?.role === "judge") return { ok: false, status: 403, error: "judge_role_cannot_submit_takes" };
+  if (member?.role === "judge") {
+    record({ check: "token", ok: false, status: 403, error: "judge_role_cannot_submit_takes" }, true);
+    return out;
+  }
+  record({ check: "token", ok: true });
+  out.memberId = memberId;
 
   // ── A RETRY IS IDENTIFIED BY ITS SIGNED NONCE (D52, smoke spec §6.2) ────────
   //
@@ -1718,14 +1789,18 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // replay adds no row (D51: "a retry of the same submission returns the
   // existing record rather than adding a row").
   const recorded = await recordedSubmission(memberId, sub.nonce);
-  if (recorded) {
-    if (recorded.signature === sub.signature) return alreadySubmitted(recorded);
-    return {
-      ok: false,
-      status: 409,
-      error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend",
-    };
+  if (recorded && recorded.signature === sub.signature) {
+    out.retryOf = recorded;
+    record({ check: "nonce", ok: true });
+    return out;
   }
+  const replay: TakeCheckOutcome = {
+    check: "nonce",
+    ok: false,
+    status: 409,
+    error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend",
+  };
+  if (record(recorded ? replay : { check: "nonce", ok: true })) return out;
 
   // Resolve the session by WHICH ONE IS COLLECTING for this subject, not by the
   // date the member signed. Since migration 0022 a subject may convene several
@@ -1747,141 +1822,37 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // the read. It is not the authority — the INSERT below re-checks against its
   // own reading — but a late take is refused here, before the signature work,
   // exactly as it was when this was an application-clock comparison.
-  const session = (await on(sql, submitSession)<Record<string, any>>`SELECT *,
+  //
+  // A TAKE THAT NAMES ITS SESSION IS FILED THERE OR NOWHERE (issue #1249,
+  // decisions.md D68). The newest-session lookup routes a late take into the
+  // session turnover just opened, so a take written against N's brief would
+  // count toward N+1's consensus. A member that sends `sessionId` gets that
+  // exact session: the take lands in it, or is refused 409 with its id. A
+  // session of another subject is a 409 too (the take is not for this
+  // session), never a 404 that invites a retry. A member that names no session
+  // keeps the newest-session behaviour below unchanged.
+  const named = sub.sessionId ?? null;
+  const session = named
+    ? (await on(sql, submitSessionById)<Record<string, any>>`SELECT *,
+                                    (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
+                               FROM swarm_sessions
+                              WHERE id = ${named}`)[0]
+    : (await on(sql, submitSession)<Record<string, any>>`SELECT *,
                                     (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
                                FROM swarm_sessions
                               WHERE subject_id = ${sub.subjectId}
                               ORDER BY convened_at DESC LIMIT 1`)[0];
-  if (!session) return { ok: false, status: 404, error: "no session for subject" };
-  // THE DEADLINE IS THE TIMESTAMP, NOT THE STATE (issue #570). There used to be
-  // a `session.state !== 'collecting'` gate here returning
-  // `submission window not open (state=<state>)`. It was the dead zone: an agent
-  // polling on its own schedule, which is what every external operator's agent
-  // does, hit it whenever it arrived in the gap between the previous session's
-  // close and the next brief being published — a refusal that had nothing to do
-  // with the deadline it had been given. With the window now equal to one full
-  // cadence interval, a subject always has a session whose advertised window has
-  // not passed, so the two `window_closes_at` comparisons below (this one, and
-  // the INSERT predicate that re-checks it inside the same statement) are the
-  // whole of the timing contract. A take arriving after session N closed and
-  // before session N+1 has published its brief lands on N+1 — the session it
-  // belongs to — because N+1 is the newest row and carries no deadline yet.
-  //
-  // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
-  // not here, and with a different answer. The dead zone this paragraph
-  // describes cannot recur: for an active subject, turnover opens N+1
-  // `collecting` in the transaction that closes N, so the newest session is
-  // always the collecting one; for an inactive one the boundary opens nothing,
-  // and "too late" is the true answer. What the conjunct refuses is a take
-  // into an epoch that turnover already closed (a deactivation closes nothing:
-  // D55 (4), §4.5), and it answers `submission window closed` — the same "you
-  // are too late" as the instant — never `not open`. The early check below
-  // reads the same two facts (state and instant) so a late take is refused
-  // before the signature work; the INSERT's conjuncts remain the authority.
-  //
-  // Signed-date agreement. A stale agent that woke with yesterday's brief must
-  // not have its take filed against today's session.
-  if (sub.date && day(session.date) !== sub.date) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "signed_date_mismatch",
-      `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`);
+  if (!session) {
+    const error = named ? `no such session (${named})` : "no session for subject";
+    if (record({ check: "session", ok: false, status: 404, error })) return out;
+  } else if (named && session.subject_id !== sub.subjectId) {
+    const error = `session ${named} is not a session of ${sub.subjectId}`;
+    if (record({ check: "session", ok: false, status: 409, error })) return out;
+  } else {
+    record({ check: "session", ok: true });
+    out.session = session;
+    if (await checkTakeAgainstSession(out, sub, record)) return out;
   }
-  if (session.window_passed === true || session.state !== "collecting") {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "submission_window_closed", "submission window closed");
-  }
-
-// Report-snapshot binding (issue #978 AC6). Once this session's brief is
-  // bound to an analytics report snapshot, every take must name the SAME
-  // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
-  // Ed25519 verify (same "cheap refusals first" discipline as the checks
-  // below): a genuinely tampered id is instead caught by the signature
-  // itself failing to verify (schema 2.0's canonical bytes include it), so
-  // this check exists for the HONEST-but-wrong case, not the forged one.
-  // A brief with no bound report snapshot (report_snapshot_id NULL — no
-  // analytics run has submitted a report for this session's date) names
-  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
-  // keeps working — but a submission that DOES name one is refused rather
-  // than waved through. The skipped-when-unbound version of this check let a
-  // take signed under schema 2.0 carry a cryptographically-signed binding to
-  // an arbitrary report (another date's, say) that the brief never
-  // referenced, straight into the consensus receipt.
-  const brief = (await on(sql, submitBrief)<{ report_snapshot_id: string | null }>`
-    SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
-  const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
-  if (boundReportSnapshotId === null) {
-    if (sub.reportSnapshotId != null) {
-      return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_unbound",
-        "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId");
-    }
-  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_mismatch",
-      `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`);
-  }
-  // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
-  // transaction that opens it (insertEpoch), and the roster is immutable from
-  // then on: a member activated mid-epoch joins the next one (admin-surface.md
-  // US-C3). When a session has roster rows, only a member with a non-excused
-  // ('expected') row on it may submit — this is what makes the roster
-  // authoritative rather than advisory, and it is the same set
-  // loadFrozenTakeSet counts and recordAbsencesTx records absences against.
-  //
-  // THE BYPASS IS KEYED ON THE SESSION'S ORIGIN, NOT ON AN EMPTY ROSTER. The
-  // legacy two-step fixture path (openSession, then publishBrief) seats no
-  // roster, and publishBrief stamps `brief_opens_at` when it opens that
-  // session's window — the "brief opens later" shape §4.1 retired. Only such a
-  // row skips the gate. An epoch (insertEpoch) never has `brief_opens_at`, so
-  // an epoch opened while no member was active has an EMPTY roster that still
-  // gates: a member activated mid-epoch is refused here and is not offered the
-  // session by pendingTakesFor. Keying on `rosterRows.length === 0` let that
-  // member submit into an epoch it was never seated in.
-  const legacyUnrostered = session.brief_opens_at != null;
-  const rosterRows = await on(sql, submitRoster)<{ status: string }>`
-    SELECT status FROM swarm_session_members WHERE session_id = ${session.id}`;
-  if (rosterRows.length > 0 || !legacyUnrostered) {
-    const mine = (await on(sql, submitSeat)<{ status: string }>`
-      SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
-    if (!mine) return refuseTake(session.id, memberId, sub.subjectId, 403, "not_on_roster", "member is not on this session's expected roster");
-    if (mine.status === "excused") return refuseTake(session.id, memberId, sub.subjectId, 403, "excused", "member is excused from this session");
-  }
-
-  // ── CHEAP REFUSALS, BEFORE THE ED25519 VERIFY (issue #573) ───────────────
-  //
-  // THIS ORDERING IS A REQUIREMENT, NOT AN OPTIMISATION. Until #573 the only
-  // refusal of a repeat submit was the `UNIQUE (session_id, member_id)`
-  // violation raised by the INSERT at the very bottom of this function — so a
-  // looping agent paid for a token lookup, a session lookup, two roster
-  // queries, `publicKeyFor` AND a full signature verification on every single
-  // rejected call. Relaxing that constraint (migration 0028) removes the only
-  // server-side bound there was on a member's write volume, and the members
-  // are unattended LLM-driven agents shipped with a `while :; do … done` poll
-  // loop. Both checks below are single indexed lookups, and both sit ABOVE
-  // `publicKeyFor` and `verifySubmissionSignature` so a runaway loop is cheap
-  // to refuse. Anything added between here and the verify must stay cheap.
-  //
-  // Pinned by backend/tests/swarm-take-revisions.test.ts, which proves the
-  // ordering behaviourally rather than by reading this comment: it submits an
-  // INVALID signature over the cap and asserts the cap's 409 (not the
-  // signature's 400) AND that no `rejected_signature` agent-health event — the
-  // observable side effect of the verify branch below — was ever written.
-  const priorRow = (await on(sql, submitPrior)<{ n: number; latest: number }>`
-    SELECT count(*)::int AS n, coalesce(max(revision), 0)::int AS latest
-    FROM swarm_recommendations
-    WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
-  const priorCount = priorRow?.n ?? 0;
-  const latestRevision = priorRow?.latest ?? 0;
-
-  // An AMENDMENT is a new nonce inside the window (D51, D52), and it meets the
-  // same window as a first take: the state and instant checked above and again
-  // on the INSERT. No second, state-keyed amendment gate exists (see the note
-  // where TAKES_AMENDABLE_STATES used to be). What an amendment still meets
-  // that a first take cannot is the cap.
-  if (priorCount >= SWARM_TAKE_REVISION_CAP) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "amendment_cap_reached",
-      `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`);
-  }
-
-  // A replayed nonce never reaches this point: the retry lookup at the top of
-  // this function answers it, one indexed lookup in, before the session is
-  // even resolved.
 
   // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
   //
@@ -1910,13 +1881,22 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // does not exist yet while takes are being collected, and the subject is what
   // the brief was built from (`publishBrief`, takeSchema.weights.optional).
   const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
-  if (weightsRefused) {
-    return refuseTake(session.id, memberId, sub.subjectId, weightsRefused.status,
-      weightsRefused.error.split(":")[0]!, weightsRefused.error);
-  }
+  if (record(weightsRefused
+    ? {
+        check: "weights",
+        ok: false,
+        status: weightsRefused.status,
+        error: weightsRefused.error,
+        record: { rejectedTake: weightsRefused.error.split(":")[0]! },
+      }
+    : { check: "weights", ok: true })) return out;
 
   const key = await activeKeyFor(memberId);
-  if (!key) return { ok: false, status: 403, error: "no registered key for member" };
+  if (!key) {
+    record({ check: "signature", ok: false, status: 403, error: "no registered key for member" }, true);
+    return out;
+  }
+  out.key = key;
   const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
   if (!verified) {
     // Agent-health surface (issue #208, scout #214): a rejected/tampered
@@ -1935,19 +1915,288 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     // the second is told apart: the signature is checked against the member's
     // inactive keys, and one that verifies answers 403 with no row written.
     // Only on this failure path, so the happy path pays for one verify.
+    // submitRecommendation writes the event (refuseAsSubmit); a dry run does not.
     const superseded = await verifiesUnderSupersededKey(memberId, key.publicKey, sub);
-    await recordAgentHealthEvent("rejected_signature", session.id, memberId, {
-      reason: superseded ? "signed with a superseded key" : "signature verification failed",
-    });
-    if (superseded) {
-      return {
+    record(superseded
+      ? {
+          check: "signature",
+          ok: false,
+          status: 403,
+          error: "signing_key_superseded: this take is signed with a key the member no longer holds active; sign with the current key",
+          record: { rejectedSignature: "signed with a superseded key" },
+        }
+      : {
+          check: "signature",
+          ok: false,
+          status: 400,
+          error: "signature verification failed",
+          record: { rejectedSignature: "signature verification failed" },
+        });
+    return out;
+  }
+  record({ check: "signature", ok: true });
+  return out;
+}
+
+/**
+ * The checks that need the session the take is for, in submit's order: the
+ * signed date, the window, the report snapshot, the roster and the amendment
+ * cap. Returns true when the caller must stop. Writes nothing.
+ */
+async function checkTakeAgainstSession(
+  out: CheckedTake,
+  sub: SubmissionInput,
+  record: (outcome: TakeCheckOutcome, fatal?: boolean) => boolean,
+): Promise<boolean> {
+  const session = out.session!;
+  const memberId = out.memberId!;
+  const named = sub.sessionId ?? null;
+  const windowClosedError = named ? `submission window closed (session ${named})` : "submission window closed";
+  // THE DEADLINE IS THE TIMESTAMP, NOT THE STATE (issue #570). There used to be
+  // a `session.state !== 'collecting'` gate here returning
+  // `submission window not open (state=<state>)`. It was the dead zone: an agent
+  // polling on its own schedule, which is what every external operator's agent
+  // does, hit it whenever it arrived in the gap between the previous session's
+  // close and the next brief being published — a refusal that had nothing to do
+  // with the deadline it had been given. With the window now equal to one full
+  // cadence interval, a subject always has a session whose advertised window has
+  // not passed, so the two `window_closes_at` comparisons below (this one, and
+  // the INSERT predicate that re-checks it inside the same statement) are the
+  // whole of the timing contract. A take that names NO session, arriving after
+  // session N closed, lands on N+1 because N+1 is the newest row. A take that
+  // names N is refused instead (issue #1249): it was written against N's brief.
+  //
+  // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
+  // not here, and with a different answer. The dead zone this paragraph
+  // describes cannot recur: for an active subject, turnover opens N+1
+  // `collecting` in the transaction that closes N, so the newest session is
+  // always the collecting one; for an inactive one the boundary opens nothing,
+  // and "too late" is the true answer. What the conjunct refuses is a take
+  // into an epoch that turnover already closed (a deactivation closes nothing:
+  // D55 (4), §4.5), and it answers `submission window closed` — the same "you
+  // are too late" as the instant — never `not open`. The early check below
+  // reads the same two facts (state and instant) so a late take is refused
+  // before the signature work; the INSERT's conjuncts remain the authority.
+  //
+  // Signed-date agreement. A stale agent that woke with yesterday's brief must
+  // not have its take filed against today's session.
+  if (record(sub.date && day(session.date) !== sub.date
+    ? {
+        check: "date",
         ok: false,
-        status: 403,
-        error: "signing_key_superseded: this take is signed with a key the member no longer holds active; sign with the current key",
+        status: 409,
+        error: `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`,
+        record: { rejectedTake: "signed_date_mismatch" },
+      }
+    : { check: "date", ok: true })) return true;
+  if (record(session.window_passed === true || session.state !== "collecting"
+    ? {
+        check: "window",
+        situational: true,
+        ok: false,
+        status: 409,
+        error: windowClosedError,
+        record: { rejectedTake: "submission_window_closed" },
+      }
+    : { check: "window", situational: true, ok: true })) return true;
+
+// Report-snapshot binding (issue #978 AC6). Once this session's brief is
+  // bound to an analytics report snapshot, every take must name the SAME
+  // one — a stale or mismatched reportSnapshotId is refused here, BEFORE the
+  // Ed25519 verify (same "cheap refusals first" discipline as the checks
+  // below): a genuinely tampered id is instead caught by the signature
+  // itself failing to verify (schema 2.0's canonical bytes include it), so
+  // this check exists for the HONEST-but-wrong case, not the forged one.
+  // A brief with no bound report snapshot (report_snapshot_id NULL — no
+  // analytics run has submitted a report for this session's date) names
+  // NOTHING, so a schema-1.0 (legacy) submission with no reportSnapshotId
+  // keeps working — but a submission that DOES name one is refused rather
+  // than waved through. The skipped-when-unbound version of this check let a
+  // take signed under schema 2.0 carry a cryptographically-signed binding to
+  // an arbitrary report (another date's, say) that the brief never
+  // referenced, straight into the consensus receipt.
+  const brief = (await on(sql, submitBrief)<{ report_snapshot_id: string | null }>`
+    SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
+  const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
+  let snapshotRefused: TakeCheckOutcome | null = null;
+  if (boundReportSnapshotId === null) {
+    if (sub.reportSnapshotId != null) {
+      snapshotRefused = {
+        check: "reportSnapshot",
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+        record: { rejectedTake: "report_snapshot_unbound" },
       };
     }
-    return { ok: false, status: 400, error: "signature verification failed" };
+  } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
+    snapshotRefused = {
+      check: "reportSnapshot",
+      ok: false,
+      status: 409,
+      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
+      record: { rejectedTake: "report_snapshot_mismatch" },
+    };
   }
+  if (record(snapshotRefused ?? { check: "reportSnapshot", ok: true })) return true;
+  // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
+  // transaction that opens it (insertEpoch), and the roster is immutable from
+  // then on: a member activated mid-epoch joins the next one (admin-surface.md
+  // US-C3). When a session has roster rows, only a member with a non-excused
+  // ('expected') row on it may submit — this is what makes the roster
+  // authoritative rather than advisory, and it is the same set
+  // loadFrozenTakeSet counts and recordAbsencesTx records absences against.
+  //
+  // THE BYPASS IS KEYED ON THE SESSION'S ORIGIN, NOT ON AN EMPTY ROSTER. The
+  // legacy two-step fixture path (openSession, then publishBrief) seats no
+  // roster, and publishBrief stamps `brief_opens_at` when it opens that
+  // session's window — the "brief opens later" shape §4.1 retired. Only such a
+  // row skips the gate. An epoch (insertEpoch) never has `brief_opens_at`, so
+  // an epoch opened while no member was active has an EMPTY roster that still
+  // gates: a member activated mid-epoch is refused here and is not offered the
+  // session by pendingTakesFor. Keying on `rosterRows.length === 0` let that
+  // member submit into an epoch it was never seated in.
+  const legacyUnrostered = session.brief_opens_at != null;
+  const rosterRows = await on(sql, submitRoster)<{ status: string }>`
+    SELECT status FROM swarm_session_members WHERE session_id = ${session.id}`;
+  let rosterRefused: TakeCheckOutcome | null = null;
+  if (rosterRows.length > 0 || !legacyUnrostered) {
+    const mine = (await on(sql, submitSeat)<{ status: string }>`
+      SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
+    if (!mine) {
+      rosterRefused = {
+        check: "roster",
+        situational: true,
+        ok: false,
+        status: 403,
+        error: "member is not on this session's expected roster",
+        record: { rejectedTake: "not_on_roster" },
+      };
+    } else if (mine.status === "excused") {
+      rosterRefused = {
+        check: "roster",
+        situational: true,
+        ok: false,
+        status: 403,
+        error: "member is excused from this session",
+        record: { rejectedTake: "excused" },
+      };
+    }
+  }
+  if (record(rosterRefused ?? { check: "roster", situational: true, ok: true })) return true;
+
+  // ── CHEAP REFUSALS, BEFORE THE ED25519 VERIFY (issue #573) ───────────────
+  //
+  // THIS ORDERING IS A REQUIREMENT, NOT AN OPTIMISATION. Until #573 the only
+  // refusal of a repeat submit was the `UNIQUE (session_id, member_id)`
+  // violation raised by the INSERT at the very bottom of this function — so a
+  // looping agent paid for a token lookup, a session lookup, two roster
+  // queries, `publicKeyFor` AND a full signature verification on every single
+  // rejected call. Relaxing that constraint (migration 0028) removes the only
+  // server-side bound there was on a member's write volume, and the members
+  // are unattended LLM-driven agents shipped with a `while :; do … done` poll
+  // loop. Both checks below are single indexed lookups, and both sit ABOVE
+  // `publicKeyFor` and `verifySubmissionSignature` so a runaway loop is cheap
+  // to refuse. Anything added between here and the verify must stay cheap.
+  //
+  // Pinned by backend/tests/swarm-take-revisions.test.ts, which proves the
+  // ordering behaviourally rather than by reading this comment: it submits an
+  // INVALID signature over the cap and asserts the cap's 409 (not the
+  // signature's 400) AND that no `rejected_signature` agent-health event — the
+  // observable side effect of the verify branch below — was ever written.
+  const priorRow = (await on(sql, submitPrior)<{ n: number; latest: number }>`
+    SELECT count(*)::int AS n, coalesce(max(revision), 0)::int AS latest
+    FROM swarm_recommendations
+    WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
+  const priorCount = priorRow?.n ?? 0;
+  out.latestRevision = priorRow?.latest ?? 0;
+
+  // An AMENDMENT is a new nonce inside the window (D51, D52), and it meets the
+  // same window as a first take: the state and instant checked above and again
+  // on the INSERT. No second, state-keyed amendment gate exists (see the note
+  // where TAKES_AMENDABLE_STATES used to be). What an amendment still meets
+  // that a first take cannot is the cap.
+  if (record(priorCount >= SWARM_TAKE_REVISION_CAP
+    ? {
+        check: "amendmentCap",
+        situational: true,
+        ok: false,
+        status: 409,
+        error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
+        record: { rejectedTake: "amendment_cap_reached" },
+      }
+    : { check: "amendmentCap", situational: true, ok: true })) return true;
+
+  // A replayed nonce never reaches this point: the retry lookup at the top of
+  // this function answers it, one indexed lookup in, before the session is
+  // even resolved.
+  return false;
+}
+
+/** Submit's answer to its first refusal, with the write submit has always made for it. */
+async function refuseAsSubmit(
+  checked: CheckedTake,
+  sub: SubmissionInput,
+  refused: TakeCheckOutcome,
+): Promise<{ ok: false; status: number; error: string }> {
+  const status = refused.status!;
+  const error = refused.error!;
+  if (refused.record && "rejectedTake" in refused.record) {
+    return refuseTake(checked.session!.id, checked.memberId!, sub.subjectId, status, refused.record.rejectedTake, error);
+  }
+  if (refused.record && "rejectedSignature" in refused.record) {
+    await recordAgentHealthEvent("rejected_signature", checked.session!.id, checked.memberId!, {
+      reason: refused.record.rejectedSignature,
+    });
+  }
+  return { ok: false, status, error };
+}
+
+/**
+ * POST /api/swarm/submit/dry-run (RM-178): every check submit runs, the
+ * signature included, with nothing written. It answers against the named
+ * session or the subject's newest one, open or closed, so a member can prove
+ * its setup before it is seated on a session that is still collecting.
+ * `setupOk` ignores the situational checks (window, roster, amendment cap).
+ */
+export async function dryRunSubmission(token: string, sub: SubmissionInput): Promise<SwarmSubmitDryRunResult> {
+  const checked = await checkTake(token, sub, true);
+  const checks: SwarmTakeCheck[] = [
+    { check: "fields", ok: true },
+    ...checked.checks.map(({ record: _record, ...check }) => check),
+  ];
+  return {
+    dryRun: true,
+    setupOk: checks.every((c) => c.ok || c.situational === true),
+    wouldAcceptNow: checked.retryOf != null || checks.every((c) => c.ok),
+    ...(checked.retryOf ? { alreadySubmitted: true as const } : {}),
+    sessionId: checked.session ? String(checked.session.id) : null,
+    checks,
+  };
+}
+
+/** The dry run's answer to a body submit would refuse before any check runs. */
+export function dryRunFieldsRefusal(error: string): SwarmSubmitDryRunResult {
+  return {
+    dryRun: true,
+    setupOk: false,
+    wouldAcceptNow: false,
+    sessionId: null,
+    checks: [{ check: "fields", ok: false, status: 400, error }],
+  };
+}
+
+export async function submitRecommendation(token: string, sub: SubmissionInput): Promise<SubmitTakeResult> {
+  const checked = await checkTake(token, sub, false);
+  if (checked.retryOf) return alreadySubmitted(checked.retryOf);
+  const refused = checked.checks.find((c) => !c.ok);
+  if (refused) return refuseAsSubmit(checked, sub, refused);
+  const memberId = checked.memberId!;
+  const session = checked.session!;
+  const key = checked.key!;
+  const latestRevision = checked.latestRevision;
+  const named = sub.sessionId ?? null;
+  const windowClosedError = named ? `submission window closed (session ${named})` : "submission window closed";
 
   try {
     // Close the TOCTOU gap: re-check the window inside the same statement by
@@ -2032,6 +2281,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
                ${key.id}, ${sub.reportSnapshotId ?? null}::bigint, c.at
         FROM swarm_sessions s, (SELECT clock_timestamp() AS at) c
         WHERE s.id = ${session.id}
+          AND s.subject_id = ${sub.subjectId}
           AND s.state = 'collecting'
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
@@ -2054,7 +2304,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
           error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
         };
       }
-      return { ok: false, status: 409, error: "submission window closed" };
+      return { ok: false, status: 409, error: windowClosedError };
     }
     const revision = Number(rows[0].revision);
     await on(sql, submitAudit)`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, ${revision > 1 ? "amend_recommendation" : "submit_recommendation"}, ${sql.json({ sessionId: session.id, revision, supersedes: revision > 1 ? latestRevision : null })})`;
@@ -3135,12 +3385,14 @@ function syntheticRegimePoint(date: string, t: number, rng: () => number) {
 // `endDate` so downstream sparklines always have enough points. ON CONFLICT DO
 // NOTHING preserves any REAL analytics rows — this only fills gaps.
 //
-// DEMO-ONLY synthesis (finding 009): regime_snapshots is owned by the analytics
-// classifier; synthetic rows may be seeded only for smoke fixtures, never on a
-// live/prod deployment. Gated on RM_ENV: a prod backend refuses to write
-// synthetic rows (a sparse prod table stays sparse and visibly so). The live
-// aggregation path (buildRegimeSummary) no longer calls this at all — only the
-// smoke fixture seeding path (ensureSmokeSubjectFixtures) does.
+// TEST-ONLY synthesis (finding 009, issue #973): regime_snapshots is owned by
+// the analytics classifier; synthetic rows may be written only by the test
+// harness, never by a deployed process. Gated on the test seam
+// (backend/src/test-seam.ts): a process that is not the harness writes nothing
+// (a sparse table stays sparse and visibly so), whatever its environment says.
+// The live aggregation path (buildRegimeSummary) no longer calls this at all —
+// only the smoke fixture seeding path (ensureSmokeSubjectFixtures) does, and on
+// a stack that path upserts the subject and leaves the regime history alone.
 const backfillCount = registerQuery({
   role: "rm_app",
   object: "regime_snapshots",
@@ -3170,7 +3422,7 @@ const backfillInsert = registerQuery({
   },
 });
 export async function backfillRegimeHistory(endDate: string, minPoints = 8): Promise<void> {
-  if (config.env === "prod") return; // never write synthetic rows on the live deployment
+  if (!testSeamArmed()) return; // never write synthetic rows outside the test harness
   const existing = await on(sql, backfillCount)<{ n: number }>`SELECT count(*)::int AS n FROM regime_snapshots`;
   if (Number(existing[0]?.n ?? 0) >= minPoints) return;
   const span = Math.max(minPoints, 14);

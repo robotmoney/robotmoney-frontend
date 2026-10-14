@@ -192,10 +192,10 @@ test("every mutation: 401 with no bearer, 403 with a wrong/admin/member bearer â
   }
 });
 
-test("fail-closed with no opt-out: RM_ENV=ephemeral opens nothing without the producer's token (D52 (1))", async () => {
+test("fail-closed with no opt-out: the test harness opens nothing without the producer's token (D52 (1))", async () => {
   // tests/preload.ts runs this process as RM_ENV=ephemeral â€” the env that
   // used to open this boundary to a tokenless caller.
-  expect(process.env.RM_ENV).toBe("ephemeral");
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   const [method, path] = ["POST", A.rawHistory] as const;
   const ind = rid();
   const body = { history: { [ind]: [{ date: "2020-01-01", value: 1 }] } };

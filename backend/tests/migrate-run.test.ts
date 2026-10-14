@@ -36,7 +36,7 @@
 // would, and nothing else about it is adjusted.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import postgres from "postgres";
@@ -297,7 +297,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     expect(refusals.map((r) => r.reason)).toContain("identity_not_rehearsal");
     // The words are resolveDeploymentPolicy's (backend/src/deploy-policy.ts):
     // one matrix, so the operator reads the same sentence from every tool.
-    expect(refusals[0]?.message).toContain("stage policy (incl. --allow-insecure) never touches production data");
+    expect(refusals[0]?.message).toContain("stage policy never touches production data");
   });
 
   test("the operator caller MAY run on prod against a production identity", async () => {
@@ -865,6 +865,7 @@ describe("the migrate journal — written before each phase, closed on every exi
       ["plan", "committed"],
       ["lock", "committed"],
       ["gates", "committed"],
+      ["reconcile", "committed"],
       ["owner", "committed"],
       ["confirm", "committed"],
       ["migrate: start", "committed"],
@@ -1626,6 +1627,111 @@ describe("MigrateRunSeams — migrationsDir with snapshotDir publishes M's manif
       expect(result.manifest.contentHash).toBe(metadata.contentHash);
       expect(await readManifest(fixtures)).toEqual(result.manifest);
       expect((await detectManifestState(fixtures)).kind).toBe("published");
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// The ledger reconciliation precondition (D67; spec §8.1, §9.1)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Before the owner password is read, `migrateCommand` reconciles the ledger
+// with the migrations directory on the reader (src/db/ledger-reconcile.ts):
+// check 1 (every recorded name is a file here) and check 2 (the pending set)
+// on every run, check 3 (the applied bytes against --pin-ref) only when a pin
+// ref is given. The receipt carries the reconciliation.
+describe("migrateCommand — the reconcile precondition runs after the gates and before the owner (D67)", () => {
+  const log = (): void => {};
+  type ReconcileField = { verdict: string; pending: string[]; pinRef: string | null; pinCommit: string | null; perFile: { name: string; verdict: string }[] };
+
+  function command(database: string, receiptDir: string, journal: MigrateJournal, over: { migrationsDir?: string; pinRef?: string } = {}) {
+    return migrateCommand({
+      caller: "smoke_flag",
+      env: "stage",
+      connection: "local",
+      readerUrl: urlFor(database),
+      localOwnerPassword: OWNER_PASSWORD,
+      lock: { acquire: { holder: { tool: "migrate", planId: null, instance: null, host: "h", pid: process.pid }, timeoutMs: 5_000 } },
+      receiptPath: migrateReceiptPath(receiptDir, new Date()),
+      journal,
+      ...(over.migrationsDir ? { seams: { migrationsDir: over.migrationsDir } } : {}),
+      ...(over.pinRef ? { pinRef: over.pinRef } : {}),
+      log,
+    });
+  }
+  const journalIn = (dir: string): MigrateJournal =>
+    MigrateJournal.open(migrateJournalPath(dir, new Date()), { caller: "smoke_flag", env: "stage", startedAt: new Date() });
+  const readJournal = (path: string): MigrateJournalFile => JSON.parse(readFileSync(path, "utf8")) as MigrateJournalFile;
+
+  test("check 1: a ledger name the checkout lacks refuses before anything is applied, in the `reconcile` phase, naming the file", async () => {
+    await setIdentity("rehearsal");
+    const before = await ledgerNames();
+    const missing = before.at(-1)!;
+    const dir = migrationsWith({});
+    unlinkSync(join(dir, missing));
+    const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-reconcile-"));
+    plantedDirs.push(receiptDir);
+    const journal = journalIn(receiptDir);
+    const refusal = command(fileDb, receiptDir, journal, { migrationsDir: dir });
+    await expect(refusal).rejects.toBeInstanceOf(MigrateRefused);
+    await expect(refusal).rejects.toThrow("ledger-not-subset");
+    await expect(refusal).rejects.toThrow(missing);
+    expect(await ledgerNames()).toEqual(before);
+    expect(await readManifest(sql)).toBeNull();
+    const file = readJournal(journal.path);
+    expect(file.phases.at(-1)).toMatchObject({ phase: "reconcile", status: "refused" });
+    expect(file.phases.map((r) => r.phase)).toEqual(["plan", "lock", "gates", "reconcile"]);
+    expect(readdirSync(receiptDir).filter((name) => name.startsWith("migrate-receipt-"))).toEqual([]);
+  });
+
+  test("check 2: the receipt lists the pending set, and without --pin-ref claims nothing about bytes", async () => {
+    await withClone(async ({ fixtures, name }) => {
+      await setIdentity("rehearsal", fixtures);
+      const dir = mkdtempSync(join(tmpdir(), "rm-migrate-reconcile-"));
+      plantedDirs.push(dir);
+      await command(name, dir, journalIn(dir));
+      const planted = migrationsWith({ "0199_reconcile_probe.sql": `${ADDITIVE}CREATE TABLE rm_reconcile_probe (id integer);\n` });
+      const { receipt, result } = await command(name, dir, journalIn(dir), { migrationsDir: planted });
+      expect(result.applied).toEqual(["0199_reconcile_probe.sql"]);
+      const written = JSON.parse(readFileSync(receipt, "utf8")) as { reconcile: ReconcileField };
+      expect(written.reconcile.verdict).toBe("ok");
+      expect(written.reconcile.pending).toEqual(["0199_reconcile_probe.sql"]);
+      expect({ pinRef: written.reconcile.pinRef, pinCommit: written.reconcile.pinCommit, perFile: written.reconcile.perFile }).toEqual({ pinRef: null, pinCommit: null, perFile: [] });
+    });
+  });
+
+  test("check 3 runs only with --pin-ref: a tag over a copy of the migrations pins every applied file; an unresolvable ref refuses with pin-ref-unresolved", async () => {
+    await withClone(async ({ fixtures, name }) => {
+    await setIdentity("rehearsal", fixtures);
+    const root = mkdtempSync(join(tmpdir(), "rm-migrate-pin-"));
+    plantedDirs.push(root);
+    const dir = join(root, "backend", "migrations");
+    mkdirSync(dir, { recursive: true });
+    cpSync(MIGRATIONS, dir, { recursive: true });
+    const git = (...args: string[]): void => {
+      const proc = Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+      if (proc.exitCode !== 0) throw new Error(Buffer.from(proc.stderr).toString());
+    };
+    git("init", "-q", "-b", "main");
+    git("add", ".");
+    git("commit", "-q", "-m", "release");
+    git("tag", "v0.6.1-test");
+    const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-reconcile-"));
+    plantedDirs.push(receiptDir);
+
+    const { receipt } = await command(name, receiptDir, journalIn(receiptDir), { migrationsDir: dir, pinRef: "v0.6.1-test" });
+    const written = JSON.parse(readFileSync(receipt, "utf8")) as { reconcile: ReconcileField };
+    expect(written.reconcile.verdict).toBe("ok");
+    expect(written.reconcile.pinRef).toBe("v0.6.1-test");
+    expect(written.reconcile.pinCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(written.reconcile.perFile.map((f) => f.name)).toEqual(await ledgerNames(fixtures));
+    expect(written.reconcile.perFile.every((f) => f.verdict === "match")).toBe(true);
+
+    const journal = journalIn(receiptDir);
+    const refusal = command(name, receiptDir, journal, { migrationsDir: dir, pinRef: "v9.9.9" });
+    await expect(refusal).rejects.toBeInstanceOf(MigrateRefused);
+    await expect(refusal).rejects.toThrow("pin-ref-unresolved");
+    expect(readJournal(journal.path).phases.at(-1)).toMatchObject({ phase: "reconcile", status: "refused" });
     });
   });
 });
