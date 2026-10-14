@@ -207,6 +207,46 @@ export interface StackUpOptions {
   beforeStep?: (step: StackStep) => Promise<void>;
   pgTimeoutMs?: number;
   healthTimeoutMs?: number;
+  /**
+   * A rolling replace (owner, 2026-10-14: the website never goes down; every
+   * release, stage and prod, is a rolling upgrade). When website-server already
+   * runs, the services are replaced ONE AT A TIME (`up -d --no-deps --wait`,
+   * ROLLING_ORDER), each healthy before the next starts, and website-server is
+   * never recreated: nginx keeps serving the site, and `/api/` answers the
+   * maintenance fallback (website-server/nginx.conf) while the api swaps. A
+   * boot whose website-server would be recreated (compose's own dry run says
+   * Recreate: its image or configuration changed) refuses before replacing
+   * anything. With no website-server running there is nothing to keep up, and
+   * the boot starts the services as it always has.
+   */
+  rolling?: boolean;
+}
+
+/** The order a rolling replace takes: the api first, then the lanes and the clock. Deferred services follow initialization as before. */
+export const ROLLING_ORDER = ["api", "worker-analytics", "system-scheduler", "analytics-producer"] as const;
+
+/** PURE. The services a rolling replace touches, in ROLLING_ORDER, then any other service in the given order; never website-server or postgres. */
+export function rollingReplaceOrder(services: readonly string[]): string[] {
+  const named = services.filter((s) => s !== "website-server" && s !== "postgres");
+  const ranked = ROLLING_ORDER.filter((s) => named.includes(s));
+  return [...ranked, ...named.filter((s) => !(ROLLING_ORDER as readonly string[]).includes(s))];
+}
+
+/** Where website-server's image keeps the one file it adds to nginx (website-server/Dockerfile). */
+export const WEBSITE_NGINX_CONF = { source: "website-server/nginx.conf", target: "/etc/nginx/conf.d/default.conf" } as const;
+
+/** PURE. The hash `docker compose config --hash <service>` prints for `service`, or undefined. */
+export function parseConfigHash(output: string, service: string): string | undefined {
+  for (const line of output.split("\n")) {
+    const [name, hash] = line.trim().split(/\s+/);
+    if (name === service && hash && /^[0-9a-f]{64}$/.test(hash)) return hash;
+  }
+  return undefined;
+}
+
+/** PURE. Whether `compose up --dry-run` output says the container would be recreated or started anew. */
+export function dryRunRecreates(output: string): boolean {
+  return /\bContainer\s+\S+\s+(Recreate|Create)\b/.test(output);
 }
 
 export interface Stack {
@@ -410,6 +450,36 @@ export function createStack(
 
   function compose(args: string[], io: StackIo = defaultIo): ComposeResult {
     return runtime.runSync(["docker", ...prefix, ...args], io);
+  }
+
+  /**
+   * Ship website-server's nginx.conf into the running container with a graceful
+   * reload: keep the old file, copy the new one in, `nginx -t`, then `nginx -s
+   * reload`. A config that fails the test is put back and the boot refuses, with
+   * nginx still serving the old one.
+   */
+  async function reloadWebsiteConfig(): Promise<void> {
+    const { source, target } = WEBSITE_NGINX_CONF;
+    emit({ phase: "log", message: `rolling: website-server keeps running; ${source} ships by graceful reload` });
+    const step = (args: string[], label: string) => {
+      const r = compose(args, { stdout: "pipe", stderr: "pipe" });
+      if (r.exitCode !== 0) throw new Error(failureMessage(`rolling: ${label} failed`, `${r.stdout}${r.stderr}`));
+    };
+    step(["exec", "-T", "website-server", "cp", target, `${target}.prev`], "keeping the old nginx.conf");
+    step(["cp", join(cfg.repoRoot, source), `website-server:${target}`], "copying the new nginx.conf");
+    const test = compose(["exec", "-T", "website-server", "nginx", "-t"], { stdout: "pipe", stderr: "pipe" });
+    if (test.exitCode !== 0) {
+      compose(["exec", "-T", "website-server", "cp", `${target}.prev`, target], { stdout: "pipe", stderr: "pipe" });
+      throw new Error(failureMessage("rolling: the new nginx.conf fails nginx -t; the old one is back and still served", `${test.stdout}${test.stderr}`));
+    }
+    step(["exec", "-T", "website-server", "nginx", "-s", "reload"], "the graceful nginx reload");
+    emit({ phase: "log", message: "rolling: website-server reloaded its new nginx.conf gracefully" });
+  }
+
+  /** The ids of `service`'s running containers in this project; empty when none runs. */
+  function runningServiceIds(service: string): string[] {
+    const r = compose(["ps", "-q", "--status", "running", service], { stdout: "pipe", stderr: "pipe" });
+    return r.exitCode === 0 ? r.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
   }
 
   async function composeAsync(args: string[], label: string, io: StackIo = defaultIo): Promise<void> {
@@ -746,22 +816,52 @@ export function createStack(
     const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
     assertContainerTokenFiles(cfg);
     await boundary("services");
-    emit({ phase: "services", status: "start", detail: rest.join(", ") });
-    // `up -d` is idempotent: a second pass starts only what the first left down.
-    // Docker hands out ephemeral host ports without coordinating between one
-    // service's loopback publish and another's wildcard publish, so two services
-    // can be given the same number and the later container fails to bind
-    // ("address already in use"). A retry gets fresh numbers. The publish stays
-    // on loopback: widening it to make the collision impossible would expose the
-    // scheduler's health surface on every interface.
-    for (let attempt = 1; ; attempt++) {
-      try {
-        await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
-        break;
-      } catch (e) {
-        if (attempt >= START_SERVICES_ATTEMPTS) throw e;
-        emit({ phase: "log", message: `start services failed (attempt ${attempt} of ${START_SERVICES_ATTEMPTS}); retrying once for a host port collision` });
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+    const keepWebsite = upOpts.rolling === true && services.includes("website-server") && runningServiceIds("website-server").length > 0;
+    if (keepWebsite) {
+      // Refuse before the first replacement: a rolling release never takes the site down.
+      const dry = compose([...upArgs(["website-server"], { noBuild: shippedImages }), "--no-deps", "--dry-run"], { stdout: "pipe", stderr: "pipe" });
+      if (dry.exitCode !== 0) throw new Error(failureMessage("rolling: the website-server dry run failed", `${dry.stdout}${dry.stderr}`));
+      if (dryRunRecreates(`${dry.stdout}${dry.stderr}`)) {
+        // Compose would recreate it. With its compose configuration unchanged
+        // (the config hash its container carries), only the image differs, and
+        // the image adds one file: nginx.conf. That ships as a graceful reload
+        // into the running container, never a recreate. Any other change refuses.
+        const want = parseConfigHash(compose(["config", "--hash", "website-server"], { stdout: "pipe", stderr: "pipe" }).stdout, "website-server");
+        const id = runningServiceIds("website-server")[0]!;
+        const have = runtime.runSync(["docker", "inspect", "--format", "{{index .Config.Labels \"com.docker.compose.config-hash\"}}", id], { stdout: "pipe", stderr: "pipe" }).stdout.trim();
+        if (want === undefined || want !== have) {
+          throw new Error(
+            "rolling: website-server's compose configuration changed, so it would be recreated, and a rolling release never takes the website down. " +
+            "Ship that change on its own availability plan; nothing was replaced.",
+          );
+        }
+        await reloadWebsiteConfig();
+      }
+    }
+    emit({ phase: "services", status: "start", detail: keepWebsite ? `rolling, one at a time: ${rollingReplaceOrder(rest).join(", ")}; website-server kept` : rest.join(", ") });
+    if (keepWebsite) {
+      for (const service of rollingReplaceOrder(rest)) {
+        emit({ phase: "log", message: `rolling: replacing ${service}` });
+        await composeAsync([...upArgs([service], { noBuild: shippedImages, wait: true, waitTimeoutSeconds: 300 }), "--no-deps"], `rolling: replace ${service}`);
+        emit({ phase: "log", message: `rolling: ${service} healthy` });
+      }
+    } else {
+      // `up -d` is idempotent: a second pass starts only what the first left down.
+      // Docker hands out ephemeral host ports without coordinating between one
+      // service's loopback publish and another's wildcard publish, so two services
+      // can be given the same number and the later container fails to bind
+      // ("address already in use"). A retry gets fresh numbers. The publish stays
+      // on loopback: widening it to make the collision impossible would expose the
+      // scheduler's health surface on every interface.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await composeAsync(upArgs(rest, { noBuild: shippedImages }), "start services");
+          break;
+        } catch (e) {
+          if (attempt >= START_SERVICES_ATTEMPTS) throw e;
+          emit({ phase: "log", message: `start services failed (attempt ${attempt} of ${START_SERVICES_ATTEMPTS}); retrying once for a host port collision` });
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+        }
       }
     }
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
@@ -807,10 +907,16 @@ export function createStack(
       const deferred = [...requestedDeferred];
       await boundary("deferred");
       emit({ phase: "services", status: "start", detail: deferred.join(", ") });
-      await composeAsync(
-        upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),
-        `start deferred services ${deferred.join(" ")}`,
-      );
+      if (keepWebsite) {
+        for (const service of rollingReplaceOrder(deferred)) {
+          await composeAsync([...upArgs([service], { wait: true, waitTimeoutSeconds: 600 }), "--no-deps"], `rolling: replace deferred ${service}`);
+        }
+      } else {
+        await composeAsync(
+          upArgs(deferred, { wait: true, waitTimeoutSeconds: 600 }),
+          `start deferred services ${deferred.join(" ")}`,
+        );
+      }
       emit({ phase: "services", status: "done", detail: deferred.join(", ") });
     }
 

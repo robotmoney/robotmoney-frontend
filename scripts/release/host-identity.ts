@@ -5,7 +5,8 @@
 //
 // Proves the checkout this runs from is the release: HEAD equals --commit and
 // `git status --porcelain` is empty (policy 4.6: a host runs a clean checkout
-// of a pushed commit). Checks that bun, docker and tmux are on PATH. With
+// of a pushed commit). Checks that bun, docker and git are on PATH; no release
+// step uses tmux, so a host without it passes. With
 // --confirm-target, resolves `host:port/database` from `$HOME/.env` and
 // refuses unless it equals the flag: the run's confirmTarget is the database
 // this host actually names, before any write is attempted. Then it checks the
@@ -17,7 +18,7 @@
 // to pin the applied bytes to, and nothing is assumed in its place.
 //
 // With --confirm-target it also proves what the cutover needs later, before
-// R6.1 stops the running stack (the run's first irreversible step):
+// R6.3 starts the cutover (the run's first irreversible step):
 //   - `~/.env` holds non-empty `rm_owner` and `RM_CREDENTIALS` lines
 //     (./env-keys.ts PRE_CUTOVER_REQUIRED_KEYS). R6.2 checks them again.
 //   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
@@ -65,13 +66,13 @@ async function main(): Promise<number> {
   if (porcelain.status !== 0) problems.push("git status failed");
   else if (porcelain.stdout.trim() !== "") problems.push(`the checkout is not clean:\n${porcelain.stdout.trimEnd()}`);
   const tools: Record<string, string> = {};
-  for (const [tool, args] of [["bun", ["--version"]], ["docker", ["--version"]], ["tmux", ["-V"]], ["git", ["--version"]]] as const) {
+  for (const [tool, args] of [["bun", ["--version"]], ["docker", ["--version"]], ["git", ["--version"]]] as const) {
     const r = sh(tool, [...args]);
     if (r.status !== 0) problems.push(`${tool} is not on PATH for a non-interactive ssh command`);
     else tools[tool] = r.stdout.trim();
   }
   // The runner starts every command under `env -i` with one fixed PATH (steps.ts REMOTE_PATH); record where each tool resolved.
-  const toolPaths = sh("sh", ["-c", "for t in bun docker tmux git; do printf '%s=%s\\n' \"$t\" \"$(command -v $t)\"; done"]).stdout.trim().split("\n");
+  const toolPaths = sh("sh", ["-c", "for t in bun docker git; do printf '%s=%s\\n' \"$t\" \"$(command -v $t)\"; done"]).stdout.trim().split("\n");
   const inherited = Object.keys(process.env).filter((k) => k.startsWith("DATABASE_"));
   if (inherited.length > 0) problems.push(`the command inherited ${inherited.join(", ")}: it did not start under env -i`);
   let resolvedTarget: string | undefined;

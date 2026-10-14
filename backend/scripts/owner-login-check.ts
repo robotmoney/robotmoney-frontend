@@ -3,7 +3,7 @@
 // 2026-10-08: the release runbook uses `rm_owner` only, never `doadmin`.
 //
 // WHAT IT DOES, AND NOTHING ELSE: log in as `rm_owner` with the password in
-// `~/.env` and run `SELECT 1`. It changes nothing. R1.2 runs it before R6.1
+// `~/.env` and run `SELECT 1`. It changes nothing. R1.2 runs it before R6.3
 // stops the legacy stack, so a missing, wrong or NOLOGIN owner refuses the run
 // while the legacy site still serves. The fix is the provisioning step run
 // before a release, `bun run role-passwords --target <target>`, which sets the

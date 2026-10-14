@@ -8,14 +8,16 @@
 //   local, on the control machine
 //     P.target     confirmTarget is filled in (the run refuses the placeholder)
 //     P.go         the go file is valid for this release and target. Pending without --go
-//     P.recovery   the go's signed recovery matrix is readable (SC.1). Pending without --go
+//     P.recovery   the release's runbook YAML records its recovery decision (SC.1)
 //     P.commit     the commit (the go's, else the control checkout's HEAD) is the
 //                  control checkout's clean HEAD, so the printed step list is that commit's
-//     P.origin     the commit is on origin's release branch, releases-A.B.x (D64; R1.1 fetches it there)
+//     P.origin     the commit is on a QA branch of the release line (stage) or on releases-A.B.x (prod) (D70)
 //     P.ci         CI on the commit: every check run completed and green, and each
 //                  required workflow present (runbook R0, standing SP.7)
-//     P.stage      prod only: a passed stage journal of this step list at this
-//                  commit exists (SP.8). Its path is what --stage-journal takes
+//     P.lockfile   stage only: a fresh resolve of the commit gives its committed
+//                  lockfiles (./lockfile.ts; every rc carries a new lockfile)
+//     P.stage      prod only: a passed stage journal of this step list on this
+//                  commit's tree exists (SP.8, D70). Its path is what --stage-journal takes
 //     P.live       the release checkout on each host is not the one a running
 //                  compose project was started from
 //     P.busy       no run of this target is in flight in the journal root: its
@@ -167,12 +169,12 @@ export function runsInFlight(root: string, target: string): { runTs: string; upd
   return names.map((n) => readJournal(join(dir, n))).filter((j) => j?.status === "running").map((j) => ({ runTs: j!.runTs, updatedAt: j!.updatedAt }));
 }
 
-/** The passed stage journals under `root` for this step list and commit, newest first. */
-export function passedStageJournals(root: string, hash: string, commit: string, ids: readonly string[]): string[] {
+/** The passed stage journals under `root` for this step list and tree, newest first. */
+export function passedStageJournals(root: string, hash: string, tree: string, ids: readonly string[]): string[] {
   const dir = join(root, "stage");
   let names: string[];
   try { names = readdirSync(dir).filter((n) => RUN_TS_RE.test(n)).sort().reverse(); } catch { return []; }
-  return names.map((n) => join(dir, n)).filter((p) => checkStageJournal(readJournal(p), { stepListHash: hash, commit, stepIds: ids }).length === 0);
+  return names.map((n) => join(dir, n)).filter((p) => checkStageJournal(readJournal(p), { stepListHash: hash, tree, stepIds: ids }).length === 0);
 }
 
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -206,10 +208,8 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     confirmTargetFilled(target) ? `confirmTarget ${target.confirmTarget}` : `confirmTarget is the placeholder: write host:port/database from ${target.host}:${target.home}/.env into the target file`);
   if (go) add("P.go", "green", `${input.goPath}: ${go.release} at ${go.ref}${go.tag ? ` (${go.commit})` : ""} on ${go.target} (sha256 ${go.sha256.slice(0, 12)})`);
   else add("P.go", "pending", "no --go: the run needs the owner's go file (D61 rule 1)");
-  if (go) {
-    const rec = readRecovery(go, deps);
-    add("P.recovery", "error" in rec ? "red" : "green", "error" in rec ? rec.error : `${rec.ref}${rec.sha256 ? ` (sha256 ${rec.sha256.slice(0, 12)})` : ""}`);
-  } else add("P.recovery", "pending", "named by the go: the signed recovery matrix (SC.1)");
+  const rec = readRecovery(target.release, deps);
+  add("P.recovery", "error" in rec ? "red" : "green", "error" in rec ? rec.error : `${rec.ref}${rec.sha256 ? ` (sha256 ${rec.sha256.slice(0, 12)})` : ""}`);
 
   // The commit: the go's, else the control checkout's HEAD as the candidate.
   const head = (await deps.collect(CONTROL_HOST, inRepo("git rev-parse HEAD"))).stdout.trim();
@@ -225,7 +225,7 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
 
   if (/^[0-9a-f]{40}$/.test(commit)) {
     const branches = await deps.collect(CONTROL_HOST, inRepo(`git fetch -q origin && git branch -r --contains ${commit}`));
-    const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+    const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
     add("P.origin", origin.length === 0 ? "green" : "red", origin.length === 0 ? `on ${lines(branches.stdout).join(", ")}` : origin.join("; "));
     const ci = await deps.collect(CONTROL_HOST, inRepo(`gh api ${shellQuote(`repos/{owner}/{repo}/commits/${commit}/check-runs?per_page=100`)} --paginate --jq '.check_runs[] | "\\(.name)\\t\\(.status)\\t\\(.conclusion)"'`));
     if (ci.code !== 0) add("P.ci", "red", "gh could not read the commit's check runs");
@@ -233,19 +233,24 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
       const problems = ciProblems(lines(ci.stdout));
       add("P.ci", problems.length === 0 ? "green" : "red", problems.length === 0 ? `${lines(ci.stdout).length} check runs green, ${REQUIRED_CI.join(", ")} present` : problems.join("; "));
     }
+    if (target.rmEnv === "stage") {
+      const lock = await deps.collect(CONTROL_HOST, inRepo(`bun scripts/release/lockfile.ts check ${commit} 2>&1`));
+      add("P.lockfile", lock.code === 0 ? "green" : "red", lock.code === 0 ? "every committed bun.lock equals a fresh resolve" : lock.stdout.trim() || "lockfile.ts check failed");
+    }
     if (target.rmEnv === "prod") {
+      const tree = (await deps.collect(CONTROL_HOST, inRepo(`git rev-parse ${commit}^{tree}`))).stdout.trim();
       if (input.stageJournal) {
         const sj = readJournal(input.stageJournal);
-        const refusals = checkStageJournal(sj, { stepListHash: hash, commit, stepIds: ids });
+        const refusals = checkStageJournal(sj, { stepListHash: hash, tree, stepIds: ids });
         add("P.stage", refusals.length === 0 ? "green" : "red", refusals.length === 0
-          ? `${input.stageJournal} passed at this commit and step list${sj?.downtimeSeconds !== undefined ? `; its downtime window R6.1 to R6.9 was ${sj.downtimeSeconds} s` : ""}`
+          ? `${input.stageJournal} passed on this tree and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}`
           : refusals.join("; "));
       } else {
-        const passed = passedStageJournals(input.root, hash, commit, ids);
-        const dt = passed.length > 0 ? readJournal(passed[0]!)?.downtimeSeconds : undefined;
+        const passed = passedStageJournals(input.root, hash, tree, ids);
+        const dt = passed.length > 0 ? readJournal(passed[0]!)?.cutoverSeconds : undefined;
         add("P.stage", passed.length > 0 ? "green" : "red", passed.length > 0
-          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its downtime window R6.1 to R6.9 was ${dt} s` : ""}`
-          : `no passed stage run of step list ${hash.slice(0, 12)} at ${commit.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)`);
+          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}`
+          : `no passed stage run of step list ${hash.slice(0, 12)} on tree ${tree.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)`);
       }
     }
   }

@@ -47,8 +47,9 @@ import {
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, stepsFor, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
+import { loadReleaseRunbook } from "./runbook.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
 const READY_STEP = "R6.9";
@@ -128,7 +129,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,
+    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (the rolling boot replaces it one service at a time; website-server is kept)`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
@@ -145,9 +146,10 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
 }
 
 /**
- * The whole run. Returns the process exit code. `stepList` is the generic
- * list; the release's delta steps (RELEASE_DELTAS) join it once the target
- * names the release.
+ * The whole run. Returns the process exit code. The steps are the release's
+ * own runbook (runbooks/releases/<release>.yaml, ./runbook.ts), which only
+ * adds to its template; a missing runbook or one that drops a template step
+ * refuses. `stepList` replaces it in tests.
  */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
   const args = parseArgs(argv);
@@ -159,7 +161,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let steps: readonly StepTemplate[];
   try {
     target = loadTarget(targetPath(args.target!));
-    steps = stepsFor(target.release, stepList);
+    steps = stepList ?? loadReleaseRunbook(target.release).steps;
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
@@ -237,11 +239,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (go === undefined) return 2;
   const commit = go.commit;
 
-  // D64: the commit is on the release branch, whatever the go wrote (a tag resolves there too).
+  // D70: stage runs a QA branch commit; production the release branch's rc (a tag resolves there).
   const branches = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q origin && git branch -r --contains ${commit}`);
-  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
   if (origin.length > 0) {
     deps.error(`[${NAME}] refusing: ${origin.join("; ")}.`);
+    return 2;
+  }
+  // The commit's tree: what SP.8 compares between the stage QA commit and the production squash commit (D70).
+  const tree = (await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git rev-parse ${commit}^{tree}`)).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(tree)) {
+    deps.error(`[${NAME}] refusing: the tree of ${commit} cannot be read on the control machine.`);
     return 2;
   }
 
@@ -272,8 +280,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
-  // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
-  const recovery = readRecovery(go, deps);
+  // SC.1: the recovery decision in the release's runbook YAML; its sha256 is journaled.
+  const recovery = readRecovery(target.release, deps);
   if ("error" in recovery) {
     deps.error(`[${NAME}] refusing: ${recovery.error}.`);
     return 2;
@@ -288,12 +296,12 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let stageRecord: RunJournal["stageJournal"];
   if (target.rmEnv === "prod") {
     const stage = args.stageJournal ? readJournal(resolve(args.stageJournal)) : undefined;
-    const refusals = checkStageJournal(stage, { stepListHash: hash, commit, stepIds: ids });
+    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids });
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
     }
-    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit };
+    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit, tree: stage!.tree };
   }
 
   const runDir = join(root, target.name, runTs);
@@ -337,6 +345,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
+  journal.tree = tree;
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
@@ -408,9 +417,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   journal.status = runStatus(journal, ids);
-  journal.downtimeSeconds = downtimeSeconds(journal);
+  journal.cutoverSeconds = cutoverSeconds(journal);
   writeJournal(runDir, journal);
-  if (journal.downtimeSeconds !== undefined) deps.log(`[${NAME}] downtime window R6.1 to R6.9: ${journal.downtimeSeconds} s`);
+  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window R6.3 to READY (R6.9): ${journal.cutoverSeconds} s; the website stayed up (C9)`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
@@ -436,9 +445,12 @@ export function skipReason(step: StepTemplate, target: ReleaseTarget): string | 
   return undefined;
 }
 
-/** PURE. The downtime window: R6.1's start to R6.9's end, in seconds, once both are ok. */
-export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
-  const a = journal.steps["R6.1"];
+/** The cutover's first irreversible step: the migrate under the running release. */
+const CUTOVER_STEP = "R6.3";
+
+/** PURE. The cutover window: R6.3's start to READY (R6.9's end), in seconds, once both are ok. The website stays up through it (C9). */
+export function cutoverSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
+  const a = journal.steps[CUTOVER_STEP];
   const b = journal.steps[READY_STEP];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);

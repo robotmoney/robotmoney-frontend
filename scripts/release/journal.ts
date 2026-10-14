@@ -57,6 +57,8 @@ export interface RunJournal {
   readonly rmEnv: "stage" | "prod";
   readonly release: string;
   readonly commit: string;
+  /** The commit's tree (`git rev-parse <commit>^{tree}`): what SP.8 compares, because stage runs the QA commit and production the squash commit (D70). */
+  tree?: string;
   /** The rc tag the go named (a production run, D64); the commit is its resolution. */
   readonly tag?: string;
   readonly stepListHash: string;
@@ -68,11 +70,11 @@ export interface RunJournal {
   status: "running" | "failed" | "passed" | "incomplete";
   steps: Record<string, StepRecord>;
   /** The stage journal production checked (SP.8), for the record. */
-  stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string };
+  stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string; tree?: string };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
-  /** R6.1's start to R6.9's end, once both passed: the window the running stack was down. */
-  downtimeSeconds?: number;
+  /** R6.3's start to R6.9's end, once both passed: the cutover window. The website stays up through it (C9). */
+  cutoverSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };
 }
@@ -102,7 +104,7 @@ export function runStatus(journal: Pick<RunJournal, "steps">, ids: readonly stri
  */
 export function checkStageJournal(
   journal: RunJournal | undefined,
-  expected: { stepListHash: string; commit: string; stepIds: readonly string[] },
+  expected: { stepListHash: string; tree: string; stepIds: readonly string[] },
 ): string[] {
   if (journal === undefined) return ["SP.8: no stage run journal was found; production runs only what stage passed (pass --stage-journal <run dir>)"];
   const out: string[] = [];
@@ -110,7 +112,9 @@ export function checkStageJournal(
   if (journal.stepListHash !== expected.stepListHash) {
     out.push(`SP.8: the stage run used step list ${journal.stepListHash.slice(0, 12)}; this run is ${expected.stepListHash.slice(0, 12)}`);
   }
-  if (journal.commit !== expected.commit) out.push(`SP.8: the stage run was at commit ${journal.commit}; this run is ${expected.commit}`);
+  // D70: stage ran the QA commit, production runs the squash commit; the tree is what they share.
+  if (journal.tree === undefined) out.push(`SP.8: the stage run (commit ${journal.commit}) records no tree; rerun stage with this runner`);
+  else if (journal.tree !== expected.tree) out.push(`SP.8: the stage run's tree is ${journal.tree.slice(0, 12)} (commit ${journal.commit.slice(0, 12)}); this run's tree is ${expected.tree.slice(0, 12)}`);
   const status = runStatus(journal, expected.stepIds);
   if (status !== "passed") {
     const notOk = expected.stepIds.filter((id) => !stepDone(journal.steps[id]?.status));

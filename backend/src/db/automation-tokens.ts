@@ -117,6 +117,19 @@ const lookupToken = registerQuery({
   },
 });
 
+const currentToken = registerQuery({
+  role: "rm_owner",
+  object: "automation_tokens",
+  privileges: ["SELECT"],
+  site: "src/db/automation-tokens:holdsCurrentToken",
+  purpose: "Tell whether a holder's token file still matches its row and rights, so a re-provision keeps it instead of rotating it.",
+  callers: ["scripts/provision-tokens"],
+  probe: {
+    statement: "SELECT rights FROM automation_tokens WHERE instance = $1 AND holder = $2 AND token_hash = $3",
+    params: ["probe-instance", "system-scheduler", "0000000000000000000000000000000000000000000000000000000000000000"],
+  },
+});
+
 /** The token's wire prefix, so an operator reading a file knows what it is holding. */
 const TOKEN_PREFIX = "rmat_";
 
@@ -199,4 +212,27 @@ export async function lookupAutomationToken(presented: string | null): Promise<A
   const [row] = await on(sql, lookupToken)<{ instance: string; holder: AutomationHolder; rights: AutomationRight[] }>`
     SELECT instance, holder, rights FROM automation_tokens WHERE token_hash = ${hashKey(presented)}`;
   return row ? { instance: row.instance, holder: row.holder, rights: row.rights } : null;
+}
+
+/**
+ * Whether `presented` is `holder`'s current token on `instance`, with exactly
+ * that holder's rights. A rolling release keeps such a token (D55 (6) still
+ * holds for a rotation): the running holder goes on authenticating while the
+ * services are replaced one at a time, and no restart is owed. Runs on the
+ * caller's fenced `rm_owner` transaction.
+ */
+export async function holdsCurrentToken(
+  instance: string,
+  holder: AutomationHolder,
+  presented: string,
+  options: { db?: RegistryDb } = {},
+): Promise<boolean> {
+  const presentedToken = presented.trim();
+  if (!presentedToken.startsWith(TOKEN_PREFIX)) return false;
+  const [row] = await on(options.db ?? sql, currentToken)<{ rights: string[] }>`
+    SELECT rights FROM automation_tokens WHERE instance = ${instance} AND holder = ${holder} AND token_hash = ${hashKey(presentedToken)}`;
+  if (!row) return false;
+  const want = [...HOLDER_RIGHTS[holder]].sort();
+  const have = [...row.rights].sort();
+  return want.length === have.length && want.every((r, i) => r === have[i]);
 }

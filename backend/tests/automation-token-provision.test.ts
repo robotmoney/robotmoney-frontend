@@ -19,9 +19,9 @@
 // the table's grants are the snapshot's and the write is the owner's.
 // automation-token.test.ts owns the read side (lookup, rights on routes).
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import postgres from "postgres";
 import { config } from "../src/config.ts";
@@ -203,6 +203,44 @@ describe("re-provisioning replaces one holder's row in place (D55 (6)) and leave
         expect(readdirSync(paths.tokenDirs[holder])).toEqual(["token"]);
         expect((await db`SELECT 1 FROM automation_tokens WHERE token_hash = ${hashKey(before[holder]!)}`).length).toBe(1);
       }
+    });
+  }, 60_000);
+});
+
+describe("a release keeps every valid token (keep: rolling upgrade, owner 2026-10-14)", () => {
+  test("valid files are kept untouched; a missing, forged or another instance's file is provisioned", async () => {
+    await withDatabase(async ({ name, db }) => {
+      const a = stateFor("rm_it_keep");
+      await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_keep", tokenFiles: a.paths.tokenFiles });
+      const before = Object.fromEntries(SERVICE_TOKEN_HOLDERS.map((h) => [h, secretOf(a.paths.tokenFiles[h])]));
+      const rowsBefore = new Map((await rowsOf(db)).map((r) => [r.holder, r.token_hash]));
+
+      // A second run with keep: nothing rotates, nothing is written.
+      const again = await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_keep", tokenFiles: a.paths.tokenFiles, keep: true });
+      expect(again.kept.sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
+      expect(again.holders).toEqual([]);
+      for (const h of SERVICE_TOKEN_HOLDERS) expect(secretOf(a.paths.tokenFiles[h])).toBe(before[h]!);
+      for (const r of await rowsOf(db)) expect(r.token_hash).toBe(rowsBefore.get(r.holder)!);
+
+      // red controls: a forged operator file and a missing scheduler file are provisioned; the producer is kept.
+      writeFileSync(a.paths.tokenFiles.operator, `rmat_${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
+      rmSync(a.paths.tokenFiles["system-scheduler"]);
+      const mixed = await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_keep", tokenFiles: a.paths.tokenFiles, keep: true });
+      expect(mixed.kept).toEqual(["analytics-producer"]);
+      expect(mixed.holders.sort()).toEqual(["operator", "system-scheduler"]);
+      expect(secretOf(a.paths.tokenFiles["analytics-producer"])).toBe(before["analytics-producer"]!);
+      for (const h of SERVICE_TOKEN_HOLDERS) {
+        expect((await db`SELECT 1 FROM automation_tokens WHERE token_hash = ${hashKey(secretOf(a.paths.tokenFiles[h]))}`).length).toBe(1);
+      }
+
+      // A file valid for another instance is not this instance's token.
+      const b = stateFor("rm_it_keep_b");
+      for (const h of SERVICE_TOKEN_HOLDERS) {
+        mkdirSync(dirname(b.paths.tokenFiles[h]), { recursive: true, mode: 0o700 });
+        writeFileSync(b.paths.tokenFiles[h], `${secretOf(a.paths.tokenFiles[h])}\n`, { mode: 0o600 });
+      }
+      const other = await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_keep_b", tokenFiles: b.paths.tokenFiles, keep: true });
+      expect(other.kept).toEqual([]);
     });
   }, 60_000);
 });

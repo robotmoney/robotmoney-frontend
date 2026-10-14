@@ -77,7 +77,8 @@ describe("R7.4a close spacing (issue 1310)", () => {
       return remote.slice(remote.indexOf("bun scripts/release/schedule-parity.ts")).replace(/--instance \S+/, "--instance X").replace(/--receipt-dir \S+/, "--receipt-dir X");
     };
     expect(cmd("stage")).toBe("bun scripts/release/schedule-parity.ts --instance X --run 20261008T000000Z --sessions deferred --receipt-dir X");
-    expect(cmd("stage").replace("--sessions deferred", "--sessions graded")).toBe(cmd("prod"));
+    // Both targets defer sessions in the 30-minute soak (owner, 2026-10-14): the same command.
+    expect(cmd("prod")).toBe(cmd("stage"));
     // The spacing check takes the subjects only: no sessions mode can gate it.
     expect(closeSpacingProblems.length).toBe(1);
   });

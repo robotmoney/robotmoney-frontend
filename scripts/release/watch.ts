@@ -1,4 +1,12 @@
-// scripts/release/watch.ts — how long the release watch (W1, R7.4a) waits after READY.
+// scripts/release/watch.ts — how long the release soak (W1, W2, R7.4a) waits after READY.
+//
+// THE SOAK (owner, 2026-10-14). Every target soaks SOAK_HOURS (30 minutes)
+// after READY, with sessions deferred, then collects every container's logs
+// (W2). The release no longer waits for a session to publish: the version tag
+// is cut at the cutover (D70), so a session outcome cannot change the release,
+// and a 37 h wait only delayed the evidence. Sessions are graded afterwards, as
+// a report, by the same gate with `--sessions graded` once DEFAULT_WATCH_HOURS
+// have passed (docs/technical/release-runbooks.md §4.7). The text below derives that bound.
 //
 // W1 runs `prod:gate --mode post-release --since READY`. Its check 7 needs
 // every subject to publish one good (judged, receipted, attended) session in
@@ -20,10 +28,9 @@
 // A subject whose window was already open at boot closes it within one epoch
 // (24 h), well inside that bound.
 //
-// Production watches that long and grades sessions. A stage target may watch
-// for less (owner decision 2026-10-08: 15 minutes) only with sessions
-// deferred: W1 runs prod:gate --sessions deferred and R7.4a skips the
-// in-flight publish check, because no 24 h epoch can close in that time.
+// A target that grades sessions in its soak must wait that long. The default
+// soak defers them: W1 runs prod:gate --sessions deferred and R7.4a skips the
+// in-flight publish check, because no 24 h epoch can close in 30 minutes.
 // The target file sets both (./target.ts); the step list never changes.
 //
 // Pure. Unit tests: scripts/tests/unit/release-watch.test.ts.
@@ -59,7 +66,10 @@ export function watchHoursFor(inputs: WatchInputs): number {
   return Math.ceil((FIRST_EPOCH_FACTOR * epochSeconds + judgingSeconds + graceSeconds) / 3600);
 }
 
-/** The watch every target gets unless its file sets a longer `watchHours`: 37 h. */
+/** The soak every target gets unless its file sets another `watchHours`: 30 minutes (owner, 2026-10-14). */
+export const SOAK_HOURS = 0.5;
+
+/** The bound after which every subject has published once: 37 h. The post-release session report waits this long; the release does not. */
 export const DEFAULT_WATCH_HOURS = watchHoursFor({
   epochSeconds: PRODUCTION_EPOCH_SECONDS,
   judgingSeconds: DEFAULT_JUDGING_SECONDS,

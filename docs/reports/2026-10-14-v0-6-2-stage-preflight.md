@@ -6,7 +6,7 @@
 
 - Candidate: `5cb1baa502f9b3e68eefcb143763793c0b864a2d` on `releases-0.6.x`.
 - Main merged: `a0c8457d` through merge commit `01bf7c87`.
-- Runbook: [v0.6.2 delta](../runbooks/v0-6-2-rollout.md).
+- Runbook: [v0.6.2 delta](https://github.com/robotmoney/robotmoney-frontend/blob/a314e887/docs/runbooks/v0-6-2-rollout.md).
 - SSH alias: `rm-frontend-stage-2`, using the control machine's existing SSH configuration.
 - Candidate checkout: `/home/stage-server/rm-stage-target-v062`.
 - Stage instance: `stage_target`, HOME `/home/stage-server/stage-target`.
@@ -70,7 +70,7 @@ zero-downtime claim follows from this attempt. No RC or final tag was created.
 
 CI subsequently completed unit with two failures: the historical checkout fixture
 and the delta runbook's 150-line limit. Both were corrected after this attempt: the
-website procedure now lives in [a linked guide](../runbooks/website-rollout.md), while
+website procedure now lives in [a linked guide](https://github.com/robotmoney/robotmoney-frontend/blob/a314e887/docs/runbooks/website-rollout.md), while
 the v0.6.2 delta is 145 lines. This does not turn the original candidate's CI green.
 
 Local checks: docs lint passed; 123 release-runner, step-table and delta-runbook tests

@@ -82,7 +82,8 @@ It builds these pieces, in order:
     to `~/.env`), the env rewrite, the service tokens, `bun smoke --static-port --instance
     stage_target`, the rebind of the in-house members onto the stage keys (the dump holds
     production's), and a second boot. Docker keeps the stack running, as on production.
-    The boot writes the instance's smoke state under `HOME`, which is what R6.1 stops.
+    The boot writes the instance's smoke state under `HOME`, which the release's rolling boot
+    (R6.7a) replaces one service at a time.
     The site answers on `:48787`, and `/api/version` reports the tag and commit.
 
 `bun scripts/release/stage-target.ts status` reports each piece.
@@ -98,7 +99,8 @@ no such command: there the admin types the doadmin password.
 Since the v0.6.0 cutover (2026-10-08) production's stack is the one `bun smoke --static-port
 --instance rm_prod` booted from the release checkout of the running version, with `HOME=/root`.
 Docker keeps it running. Its smoke state lives under `/root/.local/state/robotmoney-smoke/rm_prod/`;
-`bun run smoke:down --instance rm_prod` is the one way to stop it, and R6.1 runs exactly that.
+A release never stops it: R6.7a replaces its services one at a time and keeps website-server up
+(release policy §4.7).
 `/api/version` reports the commit and, for a boot at a tag, the tag. No tmux session drives it.
 
 ## Rebuild it for each rehearsal
@@ -141,7 +143,7 @@ the capture checkout `/home/stage-server/rm-capture`, other checkouts or the dum
 The capture checkout belongs to the release runner, for both targets. Its R1.4
 clones it when it is missing. `up` never creates it. `down` refuses to remove it, or
 any folder holding it (`removalRefusal` in `stage-target-lib.ts`). See
-[the capture checkout convention](release-run.md#capture-checkout-convention).
+the capture checkout convention (`CAPTURE_CHECKOUT` in `scripts/release/target.ts`).
 
 A full `up` takes about 15 minutes. The restore takes about 3. The image build and the
 two boots take most of the rest.
