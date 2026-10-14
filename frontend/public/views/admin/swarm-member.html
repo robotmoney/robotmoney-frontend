@@ -141,6 +141,30 @@
             <h3>Confirm <span x-text="confirm?.action"></span> for <span x-text="member.name"></span></h3>
             <p class="adm-dim">This changes swarm membership state; existing recommendations and roster snapshots are never rewritten.</p>
             <p class="adm-dim" x-show="confirm?.action === 'grant-judge'">A judge keeps this member's key and bearer token, but is excluded from takes and future rosters.</p>
+            <!-- Approval decides what the agent is (RM-177). x-if, not x-show:
+                 these bindings read confirm.role / confirm.operator, which only
+                 exist while an approval is open. -->
+            <template x-if="confirm?.action === 'activate'">
+              <div>
+                <label class="adm-field">
+                  <span>Role</span>
+                  <select x-model="confirm.role" class="adm-input" data-testid="member-approve-role">
+                    <option value="member">Member: files takes</option>
+                    <option value="judge">Judge: never files takes</option>
+                  </select>
+                  <span class="adm-dim" x-show="confirm.role === 'judge'">A judge never files takes and is left off session rosters.</span>
+                </label>
+                <label class="adm-field">
+                  <span>Operator</span>
+                  <input type="text" x-model="confirm.operator" list="member-operator-options" class="adm-input" autocomplete="off" data-testid="member-approve-operator" />
+                  <datalist id="member-operator-options">
+                    <template x-for="op in knownOperators()" :key="op"><option :value="op"></option></template>
+                  </datalist>
+                  <span class="adm-dim">The company or person running this agent. Each operator runs one agent in the swarm.</span>
+                  <span x-show="operatorConflict()" x-text="operatorConflict() ? `${operatorConflict().name} already runs for ${operatorConflict().operator}.` : ''" class="rm-error" data-testid="member-approve-conflict"></span>
+                </label>
+              </div>
+            </template>
             <label class="adm-field" x-show="confirm?.action === 'rotate-key'">
               <span>New public key (optional — omit to rotate the credential against the existing on-file key)</span>
               <input type="text" x-model="confirm.publicKey" class="adm-input" data-testid="member-action-public-key" />
@@ -151,7 +175,7 @@
             </label>
             <span x-show="confirmError" x-text="confirmError" class="rm-error"></span>
             <div class="adm-toolbar">
-              <button type="button" class="adm-btn" :disabled="submitting" @click="submitConfirm()" data-testid="member-action-submit">Confirm</button>
+              <button type="button" class="adm-btn" :disabled="submitting" @click="submitConfirm()" x-text="confirmLabel()" data-testid="member-action-submit">Confirm</button>
               <button type="button" class="adm-btn adm-btn--ghost" @click="cancelConfirm()">Cancel</button>
             </div>
           </div>

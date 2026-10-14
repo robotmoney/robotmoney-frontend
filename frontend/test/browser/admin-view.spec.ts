@@ -690,6 +690,9 @@ async function mockSwarmApi(
   // inactive by construction), so cleo needs the route as well as athena.
   await page.route(/\/api\/swarm\/admin\/members\/cleo\/rotate-key$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, memberId: "cleo", token: "cleo-rotated-bearer-token-jkl012" })));
+  // Approval saves the operator through the same versioned edit (RM-177).
+  await page.route(/\/api\/swarm\/admin\/members\/nova\/update$/, (route) =>
+    route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_APPLIED, version: 2 } })));
   // #567's versioned profile edit.
   await page.route(/\/api\/swarm\/admin\/members\/athena\/update$/, (route) =>
     route.fulfill(jsonReply({ ok: true, status: 200, member: { ...MEMBER_ACTIVE, version: 3 } })));
@@ -1223,6 +1226,7 @@ test("swarm admin: member filters, one-time credential reveal, and redacted deta
   // silently fails here. `x-show` hides without unmounting, hence toBeHidden
   // rather than toHaveCount(0) — same pattern as the public-key field below.
   await expect(page.getByTestId("member-action-reason")).toBeHidden();
+  await page.getByTestId("member-approve-operator").fill("Nova Labs");
   await page.getByTestId("member-action-submit").click();
 
   const tokenEl = page.getByTestId("credential-token");
@@ -1634,3 +1638,104 @@ test("swarm admin: the lifecycle panel shows the steps the scheduler made, and f
 // in-shell /admin section first — see admin-surface.spec.ts for its
 // dedicated, real-shape coverage. The standalone page was a duplicate and
 // was removed (PR #172).
+
+// ── Approval decides the role, and records the operator (RM-177) ────────────
+// The review route has always taken `role`; approval now always sends one, and
+// saves the operator through the versioned edit FIRST, so a failed save never
+// approves anyone.
+
+async function openNovaApproval(page: Page): Promise<string[]> {
+  const posts: string[] = [];
+  page.on("request", (r) => {
+    const p = new URL(r.url()).pathname;
+    if (r.method() === "POST" && p.startsWith("/api/swarm/admin/members/")) posts.push(p);
+  });
+  await signIn(page, "/admin/swarm/members/nova");
+  await expect(page.getByRole("heading", { name: /Member nova/ })).toBeVisible();
+  await page.getByTestId("member-activate").click();
+  return posts;
+}
+
+test("swarm admin: approving as a judge saves the operator, then reviews with the role", async ({ page }) => {
+  await mockSwarmApi(page);
+  const bodies: Record<string, unknown>[] = [];
+  await page.route(/\/api\/swarm\/admin\/members\/nova\/(update|review)$/, (route) => {
+    bodies.push(JSON.parse(route.request().postData() ?? "{}"));
+    const isUpdate = route.request().url().endsWith("/update");
+    return route.fulfill(jsonReply(isUpdate
+      ? { ok: true, status: 200, member: { ...MEMBER_APPLIED, version: 2, operator: "Acme" } }
+      : { ok: true, status: 200, memberId: "nova", memberStatus: "active", role: "judge", claimRequired: true }));
+  });
+  const posts = await openNovaApproval(page);
+
+  // Member is the default; the button names the decision.
+  await expect(page.getByTestId("member-approve-role")).toHaveValue("member");
+  await expect(page.getByTestId("member-action-submit")).toHaveText("Approve as member");
+  await page.getByTestId("member-approve-role").selectOption("judge");
+  await expect(page.getByTestId("member-action-submit")).toHaveText("Approve as judge");
+
+  await page.getByTestId("member-approve-operator").fill("  Acme  ");
+  await page.getByTestId("member-action-submit").click();
+  await expect(page.getByTestId("member-action-confirm")).toBeHidden();
+
+  expect(posts).toEqual(["/api/swarm/admin/members/nova/update", "/api/swarm/admin/members/nova/review"]);
+  expect(bodies).toEqual([
+    { expectedVersion: 1, operator: "Acme" },
+    { decision: "approve", role: "judge" },
+  ]);
+});
+
+test("swarm admin: approval without an operator sends nothing", async ({ page }) => {
+  await mockSwarmApi(page);
+  const posts = await openNovaApproval(page);
+  await page.getByTestId("member-action-submit").click();
+  await expect(page.getByTestId("member-action-confirm")).toContainText("Operator is required.");
+  expect(posts).toEqual([]);
+});
+
+test("swarm admin: an operator that already runs an active agent blocks approval", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
+    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, operator: "Acme" }, MEMBER_INACTIVE] })));
+  const posts = await openNovaApproval(page);
+
+  await page.getByTestId("member-approve-operator").fill("acme");
+  await expect(page.getByTestId("member-approve-conflict")).toHaveText("Athena already runs for Acme.");
+  await page.getByTestId("member-action-submit").click();
+  await expect(page.getByTestId("member-action-confirm")).toContainText("Each operator runs one agent.");
+  expect(posts).toEqual([]);
+
+  // The in-house operator is exempt, as on the server.
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
+    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, operator: "robotmoney" }, MEMBER_INACTIVE] })));
+  await page.reload();
+  await page.getByTestId("member-activate").click();
+  await page.getByTestId("member-approve-operator").fill("robotmoney");
+  await expect(page.getByTestId("member-approve-conflict")).toBeHidden();
+});
+
+test("swarm admin: a failed operator save never sends the review", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/members\/nova\/update$/, (route) =>
+    route.fulfill(jsonReply({ error: "stale_version" }, 409)));
+  const posts = await openNovaApproval(page);
+  await page.getByTestId("member-approve-operator").fill("Acme");
+  await page.getByTestId("member-action-submit").click();
+  await expect(page.getByTestId("member-action-confirm")).toContainText("stale version");
+  expect(posts).toEqual(["/api/swarm/admin/members/nova/update"]);
+});
+
+test("swarm admin: a failed review after the operator saved says so and keeps the dialog", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/members\/nova\/review$/, (route) =>
+    route.fulfill(jsonReply({ error: "roster is full" }, 409)));
+  await openNovaApproval(page);
+  await page.getByTestId("member-approve-role").selectOption("judge");
+  await page.getByTestId("member-approve-operator").fill("Acme");
+  await page.getByTestId("member-action-submit").click();
+  const dialog = page.getByTestId("member-action-confirm");
+  await expect(dialog).toContainText("Operator saved, but approval failed: roster is full");
+  // The decision survives the reload, so a retry is one click.
+  await expect(page.getByTestId("member-approve-role")).toHaveValue("judge");
+  await expect(page.getByTestId("member-action-submit")).toHaveText("Approve as judge");
+});
