@@ -90,7 +90,7 @@ export function createAnalytics(win, doc, config) {
     if (loaderStarted) win.location.reload();
   });
   // BFCache can resurrect a document with old consent; use a clean load.
-  win.addEventListener("pageshow", (event) => { if (event.persisted) win.location.reload(); });
+  win.addEventListener("pageshow", (event) => { if (event.persisted && loaderStarted) win.location.reload(); });
   return { choose, getChoice: () => choice, configured, viewChanged };
 }
 

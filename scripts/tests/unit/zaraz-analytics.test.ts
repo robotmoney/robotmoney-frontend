@@ -28,6 +28,7 @@ function harness(path = "/", choice = "unknown", origin = "https://robotmoney.ne
     scripts[0]?.onload();
   }
   return { adapter, win, doc, scripts, tracks, ready, expire: () => timeout(), reloads: () => reloads,
+    restore: () => events.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true })),
     render: () => events.dispatchEvent(new Event("rm:view-changed")) };
 }
 
@@ -76,6 +77,10 @@ describe("consent-gated Zaraz adapter", () => {
       if (unavailable) h.expire(); else h.scripts[0].onerror();
       h.ready(); h.render(); expect(h.tracks).toHaveLength(0); expect(h.scripts).toHaveLength(1);
     }
+  });
+  test("BFCache discards loaded analytics but leaves inactive documents alone", () => {
+    const inactive = harness("/", "unknown"); inactive.render(); inactive.restore(); expect(inactive.reloads()).toBe(0);
+    const loaded = harness("/", "accepted"); loaded.render(); loaded.restore(); expect(loaded.reloads()).toBe(1);
   });
   test("allowlist discards all query/hash values", () => {
     expect(pageFields({ origin: "https://robotmoney.network", pathname: "/privacy", search: "?token=x&email=x&utm_source=x", hash: "#secret" }, "Title")).toEqual({ page_title: "Title", page_path: "/privacy", page_location: "https://robotmoney.network/privacy" });
