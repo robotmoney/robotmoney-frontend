@@ -74,8 +74,15 @@ const MAX_BIAS_LEN = 200;
 // The operator is required at approval because each operator runs one agent in
 // the swarm, and the backend's policy for that (issue #1335) keys on it. It is
 // saved through the existing versioned profile update FIRST, then the review is
-// sent: two requests, ordered so a failed save never approves anyone. The
-// in-house operator is exempt from the one-agent rule, as on the server.
+// sent: two requests, ordered so a failed save never approves anyone.
+//
+// The in-house operator is REFUSED here, not exempted. `robotmoney` makes an
+// agent in-house, and an in-house judge skips the third-party gate: it becomes
+// eligible at once and, if its id sorts below Themis's, its judgement is the one
+// adopted on every session (judgeOfRecordTx, lowest member id). Approved by
+// mistake onto an agent that is not running the judge loop, that leaves every
+// session unjudged. In-house agents are seeded, not approved; an admin who
+// means it sets the operator from Edit profile first.
 const IN_HOUSE_OPERATOR = "robotmoney";
 const MAX_OPERATOR_LEN = 200; // requiredString(body, "operator", 200) in api/validation.ts
 const ROLES = ["member", "judge"];
@@ -295,14 +302,15 @@ export function registerAdminSwarmMember(Alpine) {
       const seen = new Map();
       for (const m of this.members) {
         const op = String(m.operator || "").trim();
-        if (op && !seen.has(op.toLowerCase())) seen.set(op.toLowerCase(), op);
+        if (op && !sameOperator(op, IN_HOUSE_OPERATOR) && !seen.has(op.toLowerCase())) seen.set(op.toLowerCase(), op);
       }
       return [...seen.values()].sort((a, b) => a.localeCompare(b));
     },
 
     // The active member this operator already runs, if any. A heads-up the
     // admin sees before submitting; the server is the authority once #1335
-    // lands. Case-insensitive, since the column is free text.
+    // lands. Case-insensitive, since the column is free text. The in-house
+    // operator is refused outright in submitApprove(), so it never gets here.
     operatorConflict() {
       const op = String(this.confirm?.operator || "").trim();
       if (!op || sameOperator(op, IN_HOUSE_OPERATOR)) return null;
@@ -314,6 +322,10 @@ export function registerAdminSwarmMember(Alpine) {
       const operator = String(this.confirm.operator || "").trim();
       if (!ROLES.includes(role)) { this.confirmError = "Choose a role."; return; }
       if (!operator) { this.confirmError = "Operator is required."; return; }
+      if (sameOperator(operator, IN_HOUSE_OPERATOR)) {
+        this.confirmError = `"${IN_HOUSE_OPERATOR}" is reserved for in-house agents. Set it from Edit profile if this agent is ours.`;
+        return;
+      }
       if (operator.length > MAX_OPERATOR_LEN) { this.confirmError = `Operator must be ${MAX_OPERATOR_LEN} characters or fewer.`; return; }
       const conflict = this.operatorConflict();
       if (conflict) { this.confirmError = `${conflict.name} already runs for ${conflict.operator}. Each operator runs one agent.`; return; }

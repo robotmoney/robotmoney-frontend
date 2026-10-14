@@ -1705,13 +1705,24 @@ test("swarm admin: an operator that already runs an active agent blocks approval
   await expect(page.getByTestId("member-action-confirm")).toContainText("Each operator runs one agent.");
   expect(posts).toEqual([]);
 
-  // The in-house operator is exempt, as on the server.
+});
+
+// `robotmoney` makes an agent in-house, and an in-house judge skips the
+// third-party gate and can become the judge whose verdict every session adopts.
+// Approval never sets it, and never suggests it.
+test("swarm admin: approval refuses the in-house operator and does not suggest it", async ({ page }) => {
+  await mockSwarmApi(page);
   await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
-    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, operator: "robotmoney" }, MEMBER_INACTIVE] })));
-  await page.reload();
-  await page.getByTestId("member-activate").click();
-  await page.getByTestId("member-approve-operator").fill("robotmoney");
-  await expect(page.getByTestId("member-approve-conflict")).toBeHidden();
+    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, operator: "robotmoney" }, { ...MEMBER_INACTIVE, operator: "Acme" }] })));
+  const posts = await openNovaApproval(page);
+  await expect(page.locator("#member-operator-options option")).toHaveCount(1);
+  await expect(page.locator("#member-operator-options option")).toHaveAttribute("value", "Acme");
+
+  await page.getByTestId("member-approve-role").selectOption("judge");
+  await page.getByTestId("member-approve-operator").fill("RobotMoney");
+  await page.getByTestId("member-action-submit").click();
+  await expect(page.getByTestId("member-action-confirm")).toContainText("reserved for in-house agents");
+  expect(posts).toEqual([]);
 });
 
 test("swarm admin: a failed operator save never sends the review", async ({ page }) => {
