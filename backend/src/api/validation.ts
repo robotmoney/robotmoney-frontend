@@ -22,6 +22,7 @@ const SIGNING_KEYS = new Set([
   "memoUrl",
   "reportSnapshotId",
   "weights",
+  "sessionId",
 ]);
 
 const SUBMISSION_KEYS = new Set([
@@ -35,6 +36,7 @@ const SUBMISSION_KEYS = new Set([
   "memoUrl",
   "reportSnapshotId",
   "weights",
+  "sessionId",
   "signature",
 ]);
 
@@ -68,6 +70,17 @@ export function requiredString(
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized && normalized.length <= max ? normalized : null;
+}
+
+// Issue #1249: the session a take names (swarm_sessions.id, a uuid), or
+// omitted. `null` means present but malformed, as optionalReportSnapshotId.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_ERROR = "sessionId must be a session id (uuid string), or omitted";
+function optionalSessionId(body: JsonObject): string | undefined | null {
+  if (body.sessionId === undefined) return undefined;
+  const value = body.sessionId;
+  if (typeof value !== "string" || !UUID_RE.test(value.trim())) return null;
+  return value.trim().toLowerCase();
 }
 
 export function optionalString(
@@ -227,6 +240,11 @@ export function validateSubmission(
     return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
   }
 
+  const sessionId = optionalSessionId(body);
+  if (sessionId === null) {
+    return { ok: false, error: SESSION_ID_ERROR };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
     typeof confidence !== "number"
@@ -248,6 +266,7 @@ export function validateSubmission(
       memoUrl: optionalString(body, "memoUrl", 2000),
       reportSnapshotId,
       weights,
+      sessionId,
     },
   };
 }
@@ -304,6 +323,12 @@ export function validateSigningDraft(
 
   if (reportSnapshotId === null) {
     return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
+  }
+
+  // Accepted so a member signs the same draft it submits, and dropped from
+  // the result: sessionId is outside the signed bytes (issue #1249).
+  if (optionalSessionId(body) === null) {
+    return { ok: false, error: SESSION_ID_ERROR };
   }
 
   if (

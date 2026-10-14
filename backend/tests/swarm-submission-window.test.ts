@@ -76,6 +76,26 @@ async function submit(
   return await ic.submitRecommendation(m.token, { ...sub, signature });
 }
 
+/** A take that NAMES its session (issue #1249); sessionId is outside the signed bytes. */
+async function submitNamed(
+  m: { id: string; token: string; privateKey: CryptoKey },
+  date: string,
+  subjectId: string,
+  sessionId: string,
+) {
+  const sub = {
+    memberId: m.id,
+    date,
+    subjectId,
+    nonce: rid("n"),
+    stance: "neutral",
+    confidence: 0.5,
+    body: "a take authored from one session's brief",
+  };
+  const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
+  return await ic.submitRecommendation(m.token, { ...sub, sessionId, signature });
+}
+
 /** Drive a session all the way to `published` with its window genuinely elapsed. */
 async function runLifecycle(sessionId: string) {
   // The suite has no fake clock and cannot get one: `window_closes_at` is
@@ -287,4 +307,59 @@ test("RED CONTROL: the invariant assertion catches a session published before it
   const gapMin = (new Date(row.published_at).getTime() - new Date(row.window_closes_at).getTime()) / 60_000;
   expect(gapMin).toBeLessThan(0);
   expect(gapMin).toBeGreaterThan(-61); // ~ -59.9, the goldens' own figure
+});
+
+// ── A TAKE THAT NAMES ITS SESSION (issue #1249, decisions.md D68) ──────────
+//
+// The two #570 tests above prove that a take naming NO session is routed to the
+// newest one. That routing is wrong for a take written against N's brief that
+// arrives after turnover: it would count toward N+1's consensus. A take that
+// names its session is filed there or refused, never redirected.
+
+test("a take naming a CLOSED epoch is refused with that epoch's id, and stored on neither epoch", async () => {
+  const subj = await activeSubject("named_late", 600);
+  const m = await activeMember();
+  const opened = await ic.openEpoch(subj);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const a = opened.sessionId;
+  const aDate = sessionDate(await sessionRow(a));
+  await sql`UPDATE swarm_sessions SET window_closes_at = clock_timestamp() - interval '1 second' WHERE id = ${a}`;
+  const turned = await ic.turnOverEpoch(subj, a);
+  if (!turned.ok) throw new Error(`turnOverEpoch: ${JSON.stringify(turned)}`);
+  const b = turned.openedSessionId!;
+  expect((await sessionRow(b)).state).toBe("collecting");
+
+  const late = await submitNamed(m, aDate, subj, a);
+  expect(late.status).toBe(409);
+  expect(late.error).toContain("submission window closed");
+  expect(late.error).toContain(String(a));
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${a}`).length).toBe(0);
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${b}`).length).toBe(0);
+});
+
+test("a take naming the COLLECTING epoch is stored on exactly that epoch", async () => {
+  const subj = await activeSubject("named_ok", 600);
+  const m = await activeMember();
+  const opened = await ic.openEpoch(subj);
+  if (!opened.ok) throw new Error(`openEpoch: ${JSON.stringify(opened)}`);
+  const a = opened.sessionId;
+  const res = await submitNamed(m, sessionDate(await sessionRow(a)), subj, a);
+  expect(res.status).toBe(201);
+  if (!("recommendationId" in res)) throw new Error(`submission failed: ${JSON.stringify(res)}`);
+  const stored = (await sql`SELECT session_id FROM swarm_recommendations WHERE id = ${res.recommendationId}`)[0];
+  expect(String(stored.session_id)).toBe(String(a));
+});
+
+test("a take naming ANOTHER subject's session answers 409, not 404, and stores nothing", async () => {
+  const mine = await activeSubject("named_mine", 600);
+  const other = await activeSubject("named_other", 600);
+  const m = await activeMember();
+  const openedMine = await ic.openEpoch(mine);
+  const openedOther = await ic.openEpoch(other);
+  if (!openedMine.ok || !openedOther.ok) throw new Error("openEpoch failed");
+  const foreign = openedOther.sessionId;
+  const res = await submitNamed(m, sessionDate(await sessionRow(foreign)), mine, foreign);
+  expect(res.status).toBe(409);
+  expect(res.status).not.toBe(404);
+  expect((await sql`SELECT id FROM swarm_recommendations WHERE member_id = ${m.id}`).length).toBe(0);
 });

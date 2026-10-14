@@ -1395,6 +1395,11 @@ export interface SubmissionInput {
   reportSnapshotId?: string;
   weights?: { bucket: string; weight: number }[];
   cites?: string[];
+  // Issue #1249: the session whose brief this take was authored from. Optional
+  // and OUTSIDE the signed bytes (canonicalizeSubmission never reads it). When
+  // named, submitRecommendation files the take against exactly this session or
+  // refuses it; it is never redirected to the subject's next session.
+  sessionId?: string;
   signature: string;
 }
 
@@ -1547,6 +1552,7 @@ const SUBMIT_INSERT_PROBE = {
                $12::bigint, $13::bigint, c.at
         FROM swarm_sessions s, (SELECT clock_timestamp() AS at) c
         WHERE s.id = $14
+          AND s.subject_id = $2
           AND s.state = 'collecting'
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
@@ -1577,6 +1583,21 @@ const submitSession = registerQuery({
                               WHERE subject_id = $1
                               ORDER BY convened_at DESC LIMIT 1`,
     params: ["probe"],
+  },
+});
+const submitSessionById = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:submitRecommendation.sessionById",
+  purpose: "Read the session a take names and whether its window has passed on the database clock (issue #1249).",
+  callers: [SWARM_ROUTE],
+  probe: {
+    statement: `SELECT *,
+                                    (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
+                               FROM swarm_sessions
+                              WHERE id = $1`,
+    params: [SAMPLE_ID],
   },
 });
 const submitBrief = registerQuery({
@@ -1747,12 +1768,33 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // the read. It is not the authority — the INSERT below re-checks against its
   // own reading — but a late take is refused here, before the signature work,
   // exactly as it was when this was an application-clock comparison.
-  const session = (await on(sql, submitSession)<Record<string, any>>`SELECT *,
+  //
+  // A TAKE THAT NAMES ITS SESSION IS FILED THERE OR NOWHERE (issue #1249,
+  // decisions.md D68). The newest-session lookup routes a late take into the
+  // session turnover just opened, so a take written against N's brief would
+  // count toward N+1's consensus. A member that sends `sessionId` gets that
+  // exact session: the take lands in it, or is refused 409 with its id. A
+  // session of another subject is a 409 too (the take is not for this
+  // session), never a 404 that invites a retry. A member that names no session
+  // keeps the newest-session behaviour below unchanged.
+  const named = sub.sessionId ?? null;
+  const session = named
+    ? (await on(sql, submitSessionById)<Record<string, any>>`SELECT *,
+                                    (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
+                               FROM swarm_sessions
+                              WHERE id = ${named}`)[0]
+    : (await on(sql, submitSession)<Record<string, any>>`SELECT *,
                                     (window_closes_at IS NOT NULL AND window_closes_at <= clock_timestamp()) AS window_passed
                                FROM swarm_sessions
                               WHERE subject_id = ${sub.subjectId}
                               ORDER BY convened_at DESC LIMIT 1`)[0];
-  if (!session) return { ok: false, status: 404, error: "no session for subject" };
+  if (!session) {
+    return { ok: false, status: 404, error: named ? `no such session (${named})` : "no session for subject" };
+  }
+  if (named && session.subject_id !== sub.subjectId) {
+    return { ok: false, status: 409, error: `session ${named} is not a session of ${sub.subjectId}` };
+  }
+  const windowClosedError = named ? `submission window closed (session ${named})` : "submission window closed";
   // THE DEADLINE IS THE TIMESTAMP, NOT THE STATE (issue #570). There used to be
   // a `session.state !== 'collecting'` gate here returning
   // `submission window not open (state=<state>)`. It was the dead zone: an agent
@@ -1763,9 +1805,9 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // cadence interval, a subject always has a session whose advertised window has
   // not passed, so the two `window_closes_at` comparisons below (this one, and
   // the INSERT predicate that re-checks it inside the same statement) are the
-  // whole of the timing contract. A take arriving after session N closed and
-  // before session N+1 has published its brief lands on N+1 — the session it
-  // belongs to — because N+1 is the newest row and carries no deadline yet.
+  // whole of the timing contract. A take that names NO session, arriving after
+  // session N closed, lands on N+1 because N+1 is the newest row. A take that
+  // names N is refused instead (issue #1249): it was written against N's brief.
   //
   // THE EPOCH MODEL (issue #1026) put a state conjunct back — on the INSERT,
   // not here, and with a different answer. The dead zone this paragraph
@@ -1786,7 +1828,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
       `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`);
   }
   if (session.window_passed === true || session.state !== "collecting") {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "submission_window_closed", "submission window closed");
+    return refuseTake(session.id, memberId, sub.subjectId, 409, "submission_window_closed", windowClosedError);
   }
 
 // Report-snapshot binding (issue #978 AC6). Once this session's brief is
@@ -2032,6 +2074,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
                ${key.id}, ${sub.reportSnapshotId ?? null}::bigint, c.at
         FROM swarm_sessions s, (SELECT clock_timestamp() AS at) c
         WHERE s.id = ${session.id}
+          AND s.subject_id = ${sub.subjectId}
           AND s.state = 'collecting'
           AND (s.window_closes_at IS NULL OR s.window_closes_at > c.at)
           AND (SELECT count(*) FROM swarm_recommendations r
@@ -2054,7 +2097,7 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
           error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
         };
       }
-      return { ok: false, status: 409, error: "submission window closed" };
+      return { ok: false, status: 409, error: windowClosedError };
     }
     const revision = Number(rows[0].revision);
     await on(sql, submitAudit)`INSERT INTO audit_log (actor, action, scope) VALUES (${memberId}, ${revision > 1 ? "amend_recommendation" : "submit_recommendation"}, ${sql.json({ sessionId: session.id, revision, supersedes: revision > 1 ? latestRevision : null })})`;

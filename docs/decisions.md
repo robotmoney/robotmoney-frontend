@@ -5557,3 +5557,47 @@ reports is the only source of the bytes. The single-file migration strategy
 `backend/tests/ledger-reconcile-runner.test.ts`, the reconcile cases of
 `backend/tests/migrate-run.test.ts`, and the R1.2 and R2.3 cases of
 `scripts/tests/unit/release-run.test.ts`.
+
+---
+
+<a id="d68"></a>
+## D68 — A take that names its session is filed against that session or refused; it is never routed into the next session (issue 1249, 2026-10-14)
+
+**Status.** Accepted 2026-10-14. Amends the issue 570 routing rule recorded in
+`submitRecommendation` (`backend/src/swarm/domain.ts`): "a take arriving after
+session N closed lands on N+1".
+
+**Decision.**
+
+1. `POST /api/swarm/submit` and `POST /api/swarm/signing-payload` accept an
+   optional `sessionId` (a session uuid). It is outside the signed bytes:
+   `canonicalizeSubmission` never reads it, so the canonical string is
+   identical with and without it.
+2. When a take names a session, submit looks up that session by id. The take
+   is stored on it while it is `collecting` and its `window_closes_at` has not
+   passed. Otherwise submit answers `409 submission window closed (session
+   <id>)` and stores nothing. The INSERT predicate re-checks the same session
+   id, its subject, its state and its close instant.
+3. A named session of another subject answers 409, not 404, and stores
+   nothing. An unknown session id answers 404.
+4. A take that names no session keeps the issue 570 behaviour: it is filed on
+   the subject's newest session.
+5. The bundled member client (`scripts/agent/member-session-client.ts`) sends
+   `RM_SESSION_ID`. The onboarding skill tells external members to send the
+   open session's id.
+
+**Why.** On 2026-10-08 the inference provider slowed and members filed takes
+after their session's window closed. Under the epoch model turnover opens N+1
+`collecting` in the transaction that closes N, so a late take written against
+N's brief passed every check and was stored on N+1. It counted toward a
+consensus whose brief its author never read. It was refused only when N+1's
+brief bound a different report snapshot. A take authored from one brief must
+not count toward another session's consensus.
+
+**Not decided here.** Making `sessionId` required or signed, rmpc changes, and
+removing the session-less fallback.
+
+**Enforcement.** `backend/tests/swarm-submission-window.test.ts` (late,
+on-time and wrong-subject named takes, and the unchanged issue 570 cases),
+`backend/tests/validation.test.ts`, `backend/tests/signing.test.ts`, and
+`scripts/tests/unit/member-session-client-http.test.ts`.
