@@ -35,6 +35,18 @@
 //                   favicon.svg was the SVG-first candidate and was rejected:
 //                   its monogram is a live <text> element in Helvetica Black,
 //                   so it re-renders differently on any machine lacking that cut.
+//                   `dualmint-2` wears it too: DualMint's second seat, taken
+//                   on 2026-10-14 after the first seat's keystore passphrase
+//                   was lost. Same operator, same mark. `dualmint` keeps its
+//                   entry so the first seat's takes still carry it.
+// - animoca-brands.svg  Minds by Animoca Brands wears its operator's mark.
+//                   animocabrands.com's Webclip.svg (their apple-touch-icon),
+//                   path geometry byte for byte. Two edits: the white plates
+//                   are lifted out, as for shodai, and the viewBox is trimmed
+//                   to the lockup's own 10px margin so it reads at 40px.
+//                   Animoca has no mark apart from the lockup; their favicon
+//                   is the same artwork. Their white logo was rejected: it
+//                   disappears on the light register.
 // - peaq.png        Woon's mark is its operator's: peaq's logo, supplied by
 //                   the team, trimmed to the mark and padded square. It
 //                   replaces a head crop of peaq's robot-hero.png, which was
@@ -57,6 +69,8 @@
 export const MEMBER_LOGOS = {
   shodai: "/avatars/swarm/shodai.svg",
   dualmint: "/avatars/swarm/dualmint.png",
+  "dualmint-2": "/avatars/swarm/dualmint.png",
+  "minds-by-animoca-brands": "/avatars/swarm/animoca-brands.svg",
   woon: "/avatars/swarm/peaq.png",
   zyfai: "/avatars/swarm/zyfai.png",
   "robot-money": "/avatars/swarm/robot-money.svg",
