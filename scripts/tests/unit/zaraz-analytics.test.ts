@@ -39,7 +39,7 @@ describe("consent-gated Zaraz adapter", () => {
   test.each(["https://staging.robotmoney.network", "http://localhost:8787", "https://www.robotmoney.network"])("excludes %s", (origin) => {
     const h = harness("/", "accepted", origin); h.render(); h.ready(); expect(h.scripts).toHaveLength(0); expect(h.tracks).toHaveLength(0);
   });
-  test.each(["/admin", "/admin/swarm", "/dashboard", "/market", "/list", "/list2", "/list3", "/agents", "/agents/id", "/lobster", "/lobster/id", "/vaults", "/vaults/id", "/wallets", "/wallets/id", "/methodology", "/about", "/ask-mr-roboto", "/admin/", "/%61dmin/swarm", "//admin", "/%2fadmin"])("privileged %s loads/sends nothing", (path) => {
+  test.each(["/admin", "/admin/swarm", "/dashboard", "/market", "/list", "/list2", "/list3", "/agents", "/agents/id", "/lobster", "/lobster/id", "/vaults", "/vaults/id", "/wallets", "/wallets/id", "/methodology", "/about", "/ask-mr-roboto", "/admin/", "/%61dmin/swarm", "//admin", "/%2fadmin", "/public%2f..%2fadmin", "/public/../admin"])("privileged %s loads/sends nothing", (path) => {
     expect(isPrivilegedRoute(path)).toBe(true);
     const h = harness(path, "accepted"); h.render(); h.ready(); expect(h.scripts).toHaveLength(0); expect(h.tracks).toHaveLength(0);
   });
