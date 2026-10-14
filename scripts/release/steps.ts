@@ -42,7 +42,7 @@ export const CONTROL_HOST = "(control)";
 
 /**
  * The one PATH every remote command runs with (`env -i`), the same on every
- * host. It finds bun in either host user's ~/.bun/bin, and docker, tmux and git
+ * host. It finds bun in either host user's ~/.bun/bin, and docker and git
  * in the system directories. R1.2 and R1.5 prove each tool resolves under it
  * and record where.
  */
