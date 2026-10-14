@@ -70,6 +70,7 @@ import { ledgerCurrentBriefBySession } from "../analytics/cutover/ledger-current
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
 import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
+import { silentSessionsByMember } from "./dormancy.ts";
 import {
   day,
   instant,
@@ -464,7 +465,11 @@ async function resolveMemberRow(ref: string) {
 }
 export async function getMember(id: string) {
   const row = await resolveMemberRow(id);
-  return row ? toMember(row) : null;
+  if (!row) return null;
+  // Issue 1269: the member page's consecutive-missed-sessions count, null for
+  // a seat that has none (a judge, an inactive member).
+  const silent = await silentSessionsByMember(row.id);
+  return toMember({ ...row, silent_sessions: silent.get(row.id) ?? null });
 }
 
 // Serves the bytes admin.ts's uploadMemberAvatarAdmin (issue #626) writes to

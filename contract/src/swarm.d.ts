@@ -85,6 +85,15 @@ export interface SwarmMember {
    * read).
    */
   lastTakeAt: string | null;
+  /**
+   * Consecutive missed sessions (issue 1269): the `absent` sessions convened
+   * after the latest of the member's newest take, its activation and the
+   * dormancy baseline (migration 0122), excused sessions not counted. A number
+   * for an active member-role seat on GET /api/swarm/members/:id, null for a
+   * judge, an inactive member, and the roster list, which does not count it.
+   * Display only: nothing deactivates a member on it.
+   */
+  silentSessions: number | null;
 }
 
 export interface SwarmSubject {

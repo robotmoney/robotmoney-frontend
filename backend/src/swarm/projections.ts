@@ -52,6 +52,9 @@ export function toMember(row: Row): SwarmMember {
     // omitted) for any row read by a query that never joined it — same
     // fallback convention `instant` already gives every other field here.
     lastTakeAt: instant(row.last_take_at),
+    // Issue 1269: only getMember() counts it (src/swarm/dormancy.ts); every
+    // other read, and every seat with no count, is null.
+    silentSessions: row.silent_sessions == null ? null : Number(row.silent_sessions),
   };
 }
 

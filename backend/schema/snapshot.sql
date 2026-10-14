@@ -2423,6 +2423,24 @@ COMMENT ON TABLE public.swarm_consensus_receipts IS 'The published Project Fusio
 
 
 --
+-- Name: swarm_dormancy_baseline; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.swarm_dormancy_baseline (
+    id boolean DEFAULT true NOT NULL,
+    counted_from timestamp with time zone NOT NULL,
+    CONSTRAINT swarm_dormancy_baseline_singleton_check CHECK (id)
+);
+
+
+--
+-- Name: TABLE swarm_dormancy_baseline; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.swarm_dormancy_baseline IS 'One row: the instant consecutive missed sessions are counted from (issue 1269). Written once by migration 0122; no runtime role writes it.';
+
+
+--
 -- Name: swarm_judge_config; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4357,6 +4375,14 @@ ALTER TABLE ONLY public.swarm_claim_challenges
 
 ALTER TABLE ONLY public.swarm_consensus_receipts
     ADD CONSTRAINT swarm_consensus_receipts_pkey PRIMARY KEY (session_id);
+
+
+--
+-- Name: swarm_dormancy_baseline swarm_dormancy_baseline_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.swarm_dormancy_baseline
+    ADD CONSTRAINT swarm_dormancy_baseline_pkey PRIMARY KEY (id);
 
 
 --

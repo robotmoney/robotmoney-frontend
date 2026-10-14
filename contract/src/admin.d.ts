@@ -354,6 +354,10 @@ export interface AdminMember {
   appliedAt: string | null;
   activatedAt: string | null;
   updatedAt: string;
+  /** Consecutive missed sessions (issue 1269), as SwarmMember.silentSessions:
+   * counted for an active member-role seat on the admin list, null otherwise
+   * and on every single-member admin response. */
+  silentSessions: number | null;
 }
 
 /** GET .../applications row. listApplicationsAdmin() returns raw, unprojected
