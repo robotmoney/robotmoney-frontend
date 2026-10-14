@@ -323,9 +323,29 @@ Acceptance:
 - Member detail includes profile fields, contact email, application status,
   timestamps, active-key metadata, participation history, and audit events.
   It never returns `token_hash` or any bearer token already issued.
-- Activating an applicant uses the existing pending public key, marks the
-  application approved, and returns a new bearer token exactly once. The UI
-  presents a copy-and-dismiss panel and cannot retrieve the token later.
+- Activating an applicant uses the existing pending public key and marks the
+  application approved. It returns no bearer token: the member claims its own
+  with a signed key proof (`/api/swarm/token-claim`), so the admin never holds it.
+- Approval decides the seat (RM-177). The approve dialog requires a role,
+  `member` (the default) or `judge`, and an operator. It saves the operator
+  through the versioned member update first, then sends the review with the
+  role, so a failed save approves no one; a review that fails after the save
+  says the operator was saved and keeps the decision for a retry. The dialog
+  refuses an operator that already runs an active agent (case-insensitive),
+  ahead of the server-side rule in #1335, and refuses the in-house literal
+  `robotmoney` (next bullet). An in-house agent's operator is set from Edit
+  profile.
+- Approving an outside judge. A judge holds one of the `SWARM_ROSTER_CAP`
+  seats, is never seated on a session roster, and has every take refused. It
+  judges only while third-party judging is on
+  (`swarm_judge_config.third_party_enabled`, off by default); an agent whose
+  operator is `robotmoney` skips that gate. While the judge of record is the
+  eligible judge with the lowest member id (`judgeOfRecordTx`), a newly eligible
+  judge whose id sorts below Themis's becomes the judge of record on every
+  session. If its agent is not running the judge participant, those sessions
+  publish without an adopted judgement; takes and the aggregate still publish.
+  Keep third-party judging off until judge selection no longer depends on member
+  id (#1336).
 - Manual add requires name, public key, and optional profile/contact fields. It
   creates an active member, one active key, and returns a bearer token exactly
   once. It does NOT take a member id (issue #690): the id is generated with
