@@ -6,7 +6,8 @@
 import { test, expect } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission } from "@robotmoney/contract";
+import { canonicalizeSubmission, ROUTES } from "@robotmoney/contract";
+import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 // ic.ensureSubject() defaults recommendation_type to 'bucket_weights' (T17),
@@ -214,4 +215,32 @@ test("no reportSnapshotId that the session's brief does not already vouch for ca
   // And the honest submission — the brief's own id — still lands.
   const ok = await submitSigned(await activeMember(), date, subj, reportSnapshotId);
   expect((ok as { status?: number }).status).toBe(201);
+});
+
+test("signing-payload returns byte-identical canonical bytes with and without sessionId in the draft (issue #1249)", async () => {
+  // sessionId routes a take to its session; it is not part of what the member
+  // signs. Pinned through the route itself, on both schema versions.
+  const subj = rid("sid");
+  await ensureProseSubject(subj, "sessionId signing subject");
+  const canonicalFor = async (draft: Record<string, unknown>): Promise<string> => {
+    const url = `http://localhost${ROUTES.swarm.signingPayload}`;
+    const res = await handleSwarm(
+      new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(draft) }),
+      new URL(url),
+    );
+    if (!res || res instanceof Response) throw new Error("signing-payload was not handled");
+    expect(res.status).toBe(200);
+    return (res.body as { canonical: string }).canonical;
+  };
+  const sessionId = crypto.randomUUID();
+  for (const extra of [{}, { reportSnapshotId: "7" }]) {
+    const draft = {
+      memberId: "m1", date: "2026-10-14", subjectId: subj, nonce: "n1",
+      stance: "neutral", confidence: 0.5, body: "a take", ...extra,
+    };
+    const without = await canonicalFor(draft);
+    const withId = await canonicalFor({ ...draft, sessionId });
+    expect(withId).toBe(without);
+    expect(withId).not.toContain(sessionId);
+  }
 });

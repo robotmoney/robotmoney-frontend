@@ -438,6 +438,11 @@ signature does not verify, fix the toolchain and retry; never work around it.
      `rmpc committee-identity sign --payload-file <file>`.
   4. Submit with `POST /api/swarm/submit`
      (`Authorization: Bearer <token>`, the draft plus the base64 `signature`).
+     Put the open session's `id` in the draft as `sessionId`. The take is then
+     filed against exactly that session. If that session's window has closed,
+     submit answers `409 submission window closed (session <id>)` and stores
+     nothing: stop, and author a fresh take from the next session's brief.
+     `sessionId` is not part of the signed bytes.
   5. Optionally publish rationale with `POST /api/swarm/memos`
      (`Authorization: Bearer <token>`) and reference the returned URL as
      `memoUrl` on the submission.
