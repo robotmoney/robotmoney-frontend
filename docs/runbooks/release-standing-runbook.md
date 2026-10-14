@@ -145,6 +145,8 @@ a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner runs it a
 | R8.l | Newest vintage: run lengths add up to the member count | script | |
 | R8.m | No connection-pool starvation (sessions idle in a transaction) | script | `pg_stat_activity` shows the api role only its own sessions, so the detail says how many of the open sessions it could see |
 | R8.n | Host disk | script | `df /` on the host the script runs on |
+| R8.n2 | No container's writable layer is over 2 GB | script | `docker inspect --size` (`SizeRw`) for every project container. Issue 1258: the HTTP fetch cache grew to 20 GB in one worker's writable layer while R8.n still passed. An unreadable size is a FAIL |
+| R8.n3 | Host free disk has not fallen more than 2 GB since the baseline | script | The baseline's free space comes from `--record`. A baseline without it (recorded before this check) is a WARN until the next `--record` |
 | R8.p | `schema_migrations` equals the recorded baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it. Rule 7 of section 1: the ledger is the record of every data change |
 | R8.q | Judge config: enforce, pinned model, third parties off | script | The pin is `deepseek-v4.1-flash` (migration 0111). The two pre-0111 ids are a WARN, valid only before 0111 applies |
 | R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants |

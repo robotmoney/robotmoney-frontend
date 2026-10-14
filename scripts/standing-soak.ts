@@ -16,7 +16,9 @@
 //
 // BASELINE. R8.d (growth) and R8.p (schema_migrations) compare with what the instance looked like at
 // READY. Run once with `--record` at READY: the baseline is saved in the instance's state directory
-// (`soak-baseline.json`). Without a baseline R8.p FAILS and R8.d is UNVERIFIED.
+// (`soak-baseline.json`). Without a baseline R8.p FAILS and R8.d is UNVERIFIED. R8.n3 (host disk
+// free) compares with the baseline's free space too; a baseline recorded before it had one leaves
+// R8.n3 UNVERIFIED until the next --record.
 //
 //   bun run soak:checks --instance NAME --since ISO [--full] [--record] [--report FILE.md]
 //                       [--base-url URL] [--opened-at-from YYYY-MM-DD]
@@ -30,9 +32,9 @@ import { dirname, join } from "node:path";
 import { containerEnv, containerLogs, dbQuery, projectContainers, serviceContainer, sh } from "./lib/gate/io.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 import {
-  CHAIN_STATE_TABLES, LEDGER_GUARDS, evalApiLogs, evalBuyback, evalCadence, evalConnections, evalDisk, evalErrorLike, evalGecko, evalGrowth, evalGrants,
+  CHAIN_STATE_TABLES, LEDGER_GUARDS, evalApiLogs, evalBuyback, evalCadence, evalConnections, evalDisk, evalDiskGrowth, evalErrorLike, evalGecko, evalGrowth, evalGrants,
   evalGuards, evalHealth, evalJudgeConfig, evalLedgerNoise, evalMigrations, evalOpenedAt, evalParity, evalPayloadsGone, evalProducerFailures, evalQuorum,
-  evalRegimeDay, evalSessionsComplete, evalVintage, evalWebsite, evalWedged, expandCronSlots, unreadable, verdict, type StandingCheck,
+  evalRegimeDay, evalSessionsComplete, evalVintage, evalWebsite, evalWedged, evalWritableLayers, expandCronSlots, unreadable, verdict, type StandingCheck,
 } from "./lib/gate/standing.ts";
 
 const NAME = "soak:checks";
@@ -43,7 +45,7 @@ export const DEFAULT_RESEARCH_CRON = "0 23 * * *";
 /** A slot counts once it is 20 minutes old: the run has had that long to write its artifact. */
 const GRACE_MS = 20 * 60_000;
 
-export interface Baseline { sizeMb: number; migrations: string[]; recordedAt: string }
+export interface Baseline { sizeMb: number; migrations: string[]; recordedAt: string; diskFreeGb?: number | null }
 
 /** Everything the checks read. The real one is below; a test passes a fake that violates a check. */
 export interface StandingIo {
@@ -58,6 +60,8 @@ export interface StandingIo {
   /** GET a path of the stack's api, or null when it is unreachable. */
   http(path: string): Promise<{ status: number; body: string } | null>;
   diskFreeGb(): number | null;
+  /** Each project container's writable-layer size in bytes (`docker inspect --size`), or null when docker cannot be read. */
+  writableLayers(): Array<{ service: string; bytes: number | null }> | null;
   /** Every service container name of the project, for the per-container error counts. */
   containerNames(): Array<{ service: string; logs: Array<{ ts: string | null; text: string }> }>;
 }
@@ -115,9 +119,10 @@ export async function runStandingChecks(io: StandingIo, o: StandingOpts): Promis
   // R8.d  growth, against the baseline. R8.p  schema_migrations equals the baseline.
   const size = attempt("R8.d", "database size", out, () => num(q("SELECT (pg_database_size(current_database()) / 1048576)::int AS mb")[0]?.mb));
   const migrations = attempt("R8.p", "schema_migrations", out, () => q("SELECT name FROM schema_migrations ORDER BY name").map((r) => String(r.name)));
+  const diskFree = io.diskFreeGb();
   let base: Baseline | null = o.baseline;
   if (o.record && size !== FAILED && migrations !== FAILED) {
-    base = { sizeMb: size, migrations, recordedAt: new Date(o.nowMs).toISOString() };
+    base = { sizeMb: size, migrations, recordedAt: new Date(o.nowMs).toISOString(), diskFreeGb: diskFree };
     o.record(base);
   }
   if (size !== FAILED) out.push(evalGrowth(size, base?.sizeMb ?? null, hours));
@@ -175,8 +180,10 @@ export async function runStandingChecks(io: StandingIo, o: StandingOpts): Promis
   const conn = attempt("R8.m", "connections", out, () => q("SELECT (count(*) FILTER (WHERE state = 'idle in transaction' AND now() - state_change > interval '60 seconds'))::int AS idle_in_tx, count(*)::int AS total, (count(*) FILTER (WHERE state IS NOT NULL))::int AS visible FROM pg_stat_activity WHERE datname = current_database()")[0]);
   if (conn !== FAILED) out.push(evalConnections(conn && { idleInTx: num(conn.idle_in_tx), total: num(conn.total), visible: num(conn.visible) }));
 
-  // R8.n  host disk
-  out.push(evalDisk(io.diskFreeGb()));
+  // R8.n  host disk. R8.n2  container writable layers. R8.n3  host disk free against the baseline.
+  out.push(evalDisk(diskFree));
+  out.push(evalWritableLayers(io.writableLayers()));
+  out.push(evalDiskGrowth(diskFree, base?.diskFreeGb));
 
   // R8.q  judge config
   const jc = attempt("R8.q", "judge config", out, () => q("SELECT mode, model, third_party_enabled AS third_party FROM swarm_judge_config WHERE id = 1")[0]);
@@ -254,6 +261,15 @@ function realIo(project: string, api: string, baseUrl: string, diskPath: string,
       return r.code === 0 && Number.isFinite(n) && n > 0 ? n : null;
     },
     containerNames: () => projectContainers(project).map((c) => ({ service: serviceOf(project, c.name), logs: containerLogs(c.name, since) })),
+    writableLayers: () => {
+      const r = sh(["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`]);
+      if (r.code !== 0) return null;
+      return projectContainers(project).filter((c) => !c.oneShot).map((c) => {
+        const s = sh(["docker", "inspect", "--size", c.name, "--format", "{{.SizeRw}}"]);
+        const n = Number(s.out.trim());
+        return { service: serviceOf(project, c.name), bytes: s.code === 0 && s.out.trim() !== "" && Number.isFinite(n) ? n : null };
+      });
+    },
   };
 }
 

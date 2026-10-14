@@ -7,9 +7,9 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  CHAIN_STATE_TABLES, LEDGER_GUARDS, LEGACY_JUDGE_MODELS, PINNED_JUDGE_MODEL, evalApiLogs, evalBuyback, evalCadence, evalConnections, evalDisk, evalErrorLike,
+  CHAIN_STATE_TABLES, DISK_FREE_DROP_LIMIT_GB, LEDGER_GUARDS, LEGACY_JUDGE_MODELS, PINNED_JUDGE_MODEL, WRITABLE_LAYER_LIMIT_GB, evalApiLogs, evalBuyback, evalCadence, evalConnections, evalDisk, evalDiskGrowth, evalErrorLike,
   evalGecko, evalGrants, evalGrowth, evalGuards, evalHealth, evalJudgeConfig, evalLedgerNoise, evalMigrations, evalOpenedAt, evalParity, evalPayloadsGone,
-  evalProducerFailures, evalQuorum, evalRegimeDay, evalSessionsComplete, evalVintage, evalWebsite, evalWedged, expandCronSlots, unreadable, verdict,
+  evalProducerFailures, evalQuorum, evalRegimeDay, evalSessionsComplete, evalVintage, evalWebsite, evalWedged, evalWritableLayers, expandCronSlots, unreadable, verdict,
   type StandingCheck,
 } from "../../lib/gate/standing.ts";
 import { DEFAULT_REGIME_CRON, DEFAULT_RESEARCH_CRON, parseSoakArgs, renderSoakReport, runStandingChecks, serviceOf, type StandingIo, type StandingOpts } from "../../standing-soak.ts";
@@ -44,6 +44,7 @@ interface Facts {
   sessionId: string | null;
   ledgerKeyRows: number;
   disk: number | null;
+  layers: Array<{ service: string; bytes: number | null }> | null;
   http: Record<string, number | null>;
   sessions: Array<{ state: string; openedAt: string | null; date: string }>;
   logs: Record<string, Line[]>;
@@ -68,6 +69,7 @@ function healthy(): Facts {
     judge: { mode: "enforce", model: PINNED_JUDGE_MODEL, third_party: false },
     grants: { worker_insert: true, who: "rm_app", readonly_seq: true },
     sessionId: "11111111-1111-1111-1111-111111111111", ledgerKeyRows: 0, disk: 80,
+    layers: [{ service: "api", bytes: 40 * 1024 ** 2 }, { service: "worker-analytics", bytes: 300 * 1024 ** 2 }],
     http: { "/health": 200, "/api/health": 200, "/api/swarm/sessions/11111111-1111-1111-1111-111111111111/judgements": 200 },
     sessions: [{ state: "published", openedAt: "2026-10-05T13:00:00Z", date: "2026-10-05" }],
     logs: {
@@ -125,19 +127,20 @@ function fakeIo(f: Facts, sqlSeen: string[] = []): StandingIo {
       ? (path.startsWith("/api/swarm/sessions?") ? { status: 200, body: JSON.stringify({ sessions: f.sessions }) } : null)
       : { status: f.http[path]!, body: "" }),
     diskFreeGb: () => f.disk,
+    writableLayers: () => f.layers,
     containerNames: () => Object.entries(f.logs).map(([service, logs]) => ({ service, logs })),
   };
 }
 
 function opts(f: Facts, over: Partial<StandingOpts> = {}): StandingOpts {
-  return { since: SINCE, nowMs: NOW, full: false, dbMode: "external", openedAtFrom: "2026-09-22", baseline: { sizeMb: 5000, migrations: [...f.migrations], recordedAt: SINCE }, record: null, ...over };
+  return { since: SINCE, nowMs: NOW, full: false, dbMode: "external", openedAtFrom: "2026-09-22", baseline: { sizeMb: 5000, migrations: [...f.migrations], recordedAt: SINCE, diskFreeGb: 81 }, record: null, ...over };
 }
 
 const run = (f: Facts, over: Partial<StandingOpts> = {}) => runStandingChecks(fakeIo(f), opts(f, over));
 
 // ── the healthy run, and the port table ─────────────────────────────────────────
 
-const PORTED = ["R8.a", "R8.b", "R8.c", "R8.d", "R8.e", "R8.f", "R8.g", "R8.h", "R8.i", "R8.j", "R8.k", "R8.k2", "R8.l", "R8.m", "R8.n", "R8.p", "R8.q", "R8.r", "R8.s", "R8.t", "R8.u", "R8.u2", "R8.v", "R8.w", "R8.w2", "R8.w3", "R8.x", "R8.o"];
+const PORTED = ["R8.a", "R8.b", "R8.c", "R8.d", "R8.e", "R8.f", "R8.g", "R8.h", "R8.i", "R8.j", "R8.k", "R8.k2", "R8.l", "R8.m", "R8.n", "R8.n2", "R8.n3", "R8.p", "R8.q", "R8.r", "R8.s", "R8.t", "R8.u", "R8.u2", "R8.v", "R8.w", "R8.w2", "R8.w3", "R8.x", "R8.o"];
 
 describe("a healthy stack", () => {
   test("every ported check runs and nothing fails", async () => {
@@ -184,6 +187,9 @@ const RED: Array<[id: string, expected: "FAIL" | "WARN", mutate: (f: Facts) => v
   ["R8.l", "FAIL", (f) => { f.vintage = { id: "9", member_count: "100", covered: "99" }; }],
   ["R8.m", "FAIL", (f) => { f.conn = { idle_in_tx: 2, total: 9, visible: 4 }; }],
   ["R8.n", "FAIL", (f) => { f.disk = 1; }],
+  // Issue 1258: a fetch cache filled one worker's writable layer to 20 GB while R8.n still passed.
+  ["R8.n2", "FAIL", (f) => { f.layers = [{ service: "api", bytes: 40 * 1024 ** 2 }, { service: "worker-analytics", bytes: 20 * 1024 ** 3 }]; }],
+  ["R8.n3", "FAIL", (f) => { f.disk = 70; }],
   ["R8.p", "FAIL", (f) => { f.migrations = [...f.migrations, "0099_surprise.sql"]; }, { baseline: { sizeMb: 5000, migrations: ["0001_a.sql", "0002_b.sql"], recordedAt: SINCE } }],
   ["R8.q", "FAIL", (f) => { f.judge = { mode: "off", model: PINNED_JUDGE_MODEL, third_party: false }; }],
   ["R8.r", "FAIL", (f) => { f.grants = { worker_insert: true, who: "doadmin", readonly_seq: true }; }],
@@ -233,10 +239,25 @@ describe("red controls: each check fails on a fixture that violates it", () => {
     expect(c.find((x) => x.id === "R8.d")!.detail[0]).toContain("+0 MB");
   });
 
-  test("without a baseline R8.p FAILS and R8.d is unverified", async () => {
+  test("without a baseline R8.p FAILS and R8.d and R8.n3 are unverified", async () => {
     const c = await run(healthy(), { baseline: null });
     expect(status(c, "R8.p")).toEqual(["FAIL"]);
     expect(status(c, "R8.d")).toEqual(["WARN"]);
+    expect(status(c, "R8.n3")).toEqual(["WARN"]);
+  });
+
+  test("a baseline recorded before R8.n3 existed (no disk field) leaves R8.n3 unverified, never passed", async () => {
+    const f = healthy();
+    const c = await run(f, { baseline: { sizeMb: 5000, migrations: [...f.migrations], recordedAt: SINCE } });
+    expect(status(c, "R8.n3")).toEqual(["WARN"]);
+  });
+
+  test("--record saves the host disk free, and R8.n3 then reads no drop", async () => {
+    const f = healthy();
+    let saved: { diskFreeGb?: number | null } | null = null;
+    const c = await run(f, { baseline: null, record: (b) => { saved = b; } });
+    expect(saved).toMatchObject({ diskFreeGb: 80 });
+    expect(status(c, "R8.n3")).toEqual(["PASS"]);
   });
 
   test("--full runs the id join, and a short join fails R8.l", async () => {
@@ -338,6 +359,24 @@ describe("pure evaluators: pass and red control", () => {
   test("R8.m names how much of the pool the api role can see", () => {
     expect(evalConnections({ idleInTx: 0, total: 9, visible: 3 }).detail.join()).toContain("3 of 9");
     expect(evalConnections({ idleInTx: 1, total: 9, visible: 3 }).status).toBe("FAIL");
+  });
+  test("R8.n2 writable layers: under the limit passes, over it, unreadable, or no docker fails, none is unverified", () => {
+    const limit = WRITABLE_LAYER_LIMIT_GB * 1024 ** 3;
+    expect(evalWritableLayers([{ service: "a", bytes: limit }]).status).toBe("PASS");
+    const over = evalWritableLayers([{ service: "a", bytes: 1 }, { service: "worker-analytics", bytes: limit + 1 }]);
+    expect(over.status).toBe("FAIL");
+    expect(over.detail.join()).toContain("worker-analytics");
+    expect(evalWritableLayers([{ service: "a", bytes: null }]).status).toBe("FAIL");
+    expect(evalWritableLayers(null).status).toBe("FAIL");
+    expect(evalWritableLayers([]).status).toBe("WARN");
+  });
+  test("R8.n3 disk free against the baseline: inside the limit passes, past it fails, no baseline is unverified", () => {
+    expect(evalDiskGrowth(50, 50 + DISK_FREE_DROP_LIMIT_GB).status).toBe("PASS");
+    expect(evalDiskGrowth(60, 50).status).toBe("PASS");
+    expect(evalDiskGrowth(50, 50 + DISK_FREE_DROP_LIMIT_GB + 1).status).toBe("FAIL");
+    expect(evalDiskGrowth(50, null).status).toBe("WARN");
+    expect(evalDiskGrowth(50, undefined).status).toBe("WARN");
+    expect(evalDiskGrowth(null, 50).status).toBe("FAIL");
   });
   test("R8.n thresholds", () => {
     expect(evalDisk(5).status).toBe("PASS");

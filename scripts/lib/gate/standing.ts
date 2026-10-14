@@ -209,7 +209,7 @@ export function evalOpenedAt(sessions: ReadonlyArray<{ state?: string; openedAt?
     : mk("R8.t", title, "FAIL", `${missing} published session(s) dated ${fromDate} or later lack openedAt`);
 }
 
-// ── host, database health, grants, schema (R8.m, R8.n, R8.p, R8.r, R8.s) ────────
+// ── host, database health, grants, schema (R8.m, R8.n, R8.n2, R8.n3, R8.p, R8.r, R8.s) ─
 
 /** R8.m. No connection-pool starvation: sessions idle in a transaction over 60 s. Counts only the sessions this role can see. */
 export function evalConnections(r: { idleInTx: number; total: number; visible: number } | undefined): StandingCheck {
@@ -225,6 +225,49 @@ export function evalDisk(freeGb: number | null): StandingCheck {
   if (freeGb === null || !Number.isFinite(freeGb)) return mk("R8.n", title, "FAIL", "df could not be read");
   const d = `${freeGb} GB`;
   return freeGb >= 5 ? mk("R8.n", title, "PASS", d) : freeGb >= 3 ? mk("R8.n", title, "WARN", d) : mk("R8.n", title, "FAIL", d);
+}
+
+/** R8.n2 limit: one container's writable layer (`docker inspect --size` SizeRw). */
+export const WRITABLE_LAYER_LIMIT_GB = 2;
+
+/**
+ * R8.n2. No container's writable layer is over WRITABLE_LAYER_LIMIT_GB (issue 1258). An unbounded
+ * file cache in a container's writable layer filled prod's host disk while R8.n, a one-shot free
+ * space check, still passed. `layers` null means docker could not be read; a container whose size is
+ * null could not be inspected. Both FAIL. No container at all is UNVERIFIED.
+ */
+export function evalWritableLayers(layers: ReadonlyArray<{ service: string; bytes: number | null }> | null): StandingCheck {
+  const title = "container writable layers";
+  if (layers === null) return mk("R8.n2", title, "FAIL", "docker inspect --size could not be read");
+  if (layers.length === 0) return mk("R8.n2", title, "WARN", "no container to inspect: UNVERIFIED");
+  const gb = (b: number) => Math.round((b / 1024 ** 3) * 100) / 100;
+  const limit = WRITABLE_LAYER_LIMIT_GB * 1024 ** 3;
+  const unread = layers.filter((l) => l.bytes === null || !Number.isFinite(l.bytes)).map((l) => l.service);
+  const over = layers.filter((l) => l.bytes !== null && l.bytes > limit).map((l) => `${l.service} ${gb(l.bytes!)} GB`);
+  if (unread.length || over.length) {
+    return mk("R8.n2", title, "FAIL", ...(over.length ? [`over the ${WRITABLE_LAYER_LIMIT_GB} GB limit: ${over.join(", ")}`] : []), ...(unread.length ? [`size unreadable: ${unread.join(", ")}`] : []));
+  }
+  const top = [...layers].sort((a, b) => b.bytes! - a.bytes!)[0]!;
+  return mk("R8.n2", title, "PASS", `${layers.length} container(s), the largest ${top.service} at ${gb(top.bytes!)} GB (limit ${WRITABLE_LAYER_LIMIT_GB} GB)`);
+}
+
+/** R8.n3 limit: how far host free disk may fall below the recorded baseline. */
+export const DISK_FREE_DROP_LIMIT_GB = 2;
+
+/**
+ * R8.n3. Host free disk has not fallen more than DISK_FREE_DROP_LIMIT_GB since the baseline recorded
+ * at READY (issue 1258). Catches steady growth long before R8.n's absolute floor. No baseline is
+ * UNVERIFIED, never a pass.
+ */
+export function evalDiskGrowth(freeGb: number | null, baseFreeGb: number | null | undefined): StandingCheck {
+  const title = "host disk free since the baseline";
+  if (freeGb === null || !Number.isFinite(freeGb)) return mk("R8.n3", title, "FAIL", "df could not be read");
+  if (baseFreeGb === null || baseFreeGb === undefined || !Number.isFinite(baseFreeGb)) {
+    return mk("R8.n3", title, "WARN", `${freeGb} GB free, but no disk baseline is recorded (run once with --record): growth UNVERIFIED`);
+  }
+  const drop = baseFreeGb - freeGb;
+  const d = `${freeGb} GB free (${drop > 0 ? "-" : "+"}${Math.abs(drop)} GB since the baseline ${baseFreeGb} GB; limit -${DISK_FREE_DROP_LIMIT_GB} GB)`;
+  return drop <= DISK_FREE_DROP_LIMIT_GB ? mk("R8.n3", title, "PASS", d) : mk("R8.n3", title, "FAIL", d);
 }
 
 /** R8.p. schema_migrations equals the baseline recorded at READY (this release's migrations are in it, so any drift is a surprise). */
