@@ -31,7 +31,7 @@ data delta is section 2.1 and nothing else: no admin-route write, no SQL, no one
 | Release branch | `releases-0.6.x`, taking `main` by merge (D62 route (a)) |
 | From | v0.6.1 at `bca5186e`: `/root/rm-061`, instance `rm_prod`, ledger through `0119`. R1.2 reads it from the database; the runner holds no baseline constant (issue 1272) |
 | To | v0.6.2 at the commit the rc tag names, in a new checkout (`/root/rm-062`), the same instance |
-| Stage | a `releases-0.6.x` commit named by the stage go's `commit:` (D64) |
+| Stage | Candidate checkout `/home/stage-server/rm-stage-target-v062`; a `releases-0.6.x` commit named by the stage go's `commit:` (D64) |
 | rc | `bun scripts/release/tag.ts rc --release v0.6.2 --commit <stage commit>` once the stage run passes; the production go names `tag: v0.6.2-rc.N` |
 | Final tag | W3 tags `v0.6.2` at the same commit. A failed later check does not withhold it (D63) |
 | Availability | Website stays reachable throughout deploy and rollback; a backend upgrade may temporarily disable API features behind a maintenance notice. Whole-stack stop is forbidden for this release |
