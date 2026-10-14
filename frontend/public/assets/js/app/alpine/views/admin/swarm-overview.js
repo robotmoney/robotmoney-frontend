@@ -15,6 +15,7 @@
 // the PUBLIC ROUTES.swarm.sessions list instead.
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { adminAuthState, apiErrorText, fmtUtc, fmtLocal } from "./shared.js";
+import { memberStatusLine } from "../../../lib/member-status.js";
 
 const TOPIC_ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 const REASON_MIN = 10;
@@ -235,6 +236,9 @@ export function registerAdminSwarmOverview(Alpine) {
     // common case (a member with no entry is not flagged — see the type's
     // doc comment) — the row's cell renders nothing rather than a dash.
     memberSilence(m) { return this.silenceFlags[m.id] || null; },
+    // Issue 1269: the same line the public member page shows for a seat
+    // silent for the threshold's sessions. Shown, never acted on.
+    memberStatusLine(m) { return memberStatusLine(m); },
     memberSilenceLabel(flag) {
       if (!flag) return "";
       return flag.type === "never_submitted"

@@ -490,6 +490,9 @@ test("members: update writes every editable field, bumps version, and the projec
     appliedAt: member.appliedAt,
     activatedAt: member.activatedAt,
     updatedAt: member.updatedAt,
+    // Issue 1269: counted on the admin list only; a single-member response is null.
+    silentSessions: null,
+    silentThreshold: 7,
   });
   expect(member).not.toHaveProperty("token_hash");
   expect(member).not.toHaveProperty("public_key");

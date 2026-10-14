@@ -156,6 +156,7 @@ const NOT_IN_PRODUCTION = [
   "0119_rejected_take_health_event.sql",
   "0120_maintenance_windows.sql",
   "0121_subject_closes_six_hours_apart.sql",
+  "0122_swarm_dormancy_baseline.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

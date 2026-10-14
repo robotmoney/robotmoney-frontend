@@ -349,6 +349,20 @@ Acceptance:
   a 409, race-safely (a transaction-scoped advisory lock serializes admissions
   so two concurrent activations cannot both slip past the last free seat).
 - All writes require the current member `version`; stale writes return 409.
+- A silent seat is shown, never removed by the system (issue 1269, owner
+  decision 2026-10-09). `silentSessions` on the admin member list and on
+  `GET /api/swarm/members/:id` counts an active member-role seat's `absent`
+  sessions convened after the latest of its newest take, its activation and
+  `swarm_dormancy_baseline.counted_from` (migration 0122, the instant the
+  release carrying the count was migrated). An excused session does not
+  count, and a judge or inactive member has none (null). At
+  `SWARM_DORMANCY_THRESHOLD_SESSIONS` (default 7) the admin list and the
+  public member page show `Silent: missed N consecutive sessions`. Both
+  responses serve that threshold as `silentThreshold` beside
+  `silentSessions`, and the page's `memberStatusLine` reads it (falling back to
+  7 when a payload has none). Nothing
+  deactivates, excuses or revokes on it: the member stays `active`, keyed and
+  seated as `expected`, and removal stays the explicit deactivate above.
 
 ### US-C3 — Observe a topic's current epoch and its sessions
 

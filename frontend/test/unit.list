@@ -23,6 +23,7 @@ scripts/tests/unit/frontend-routes.test.ts
 scripts/tests/unit/camel-session.test.ts
 scripts/tests/unit/member-avatar-precedence.test.ts
 scripts/tests/unit/member-mark-distinctness.test.ts
+scripts/tests/unit/member-status-line.test.ts
 scripts/tests/unit/prerender-content.test.ts
 scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts

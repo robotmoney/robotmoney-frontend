@@ -214,6 +214,8 @@
                 <td>
                   <span x-show="memberSilence(m)" :class="memberSilenceClass(memberSilence(m))"
                         x-text="memberSilenceLabel(memberSilence(m))" data-testid="member-silence-flag"></span>
+                  <span x-show="memberStatusLine(m)" class="adm-badge adm-badge--run"
+                        x-text="memberStatusLine(m)" data-testid="member-status-line"></span>
                 </td>
               </tr>
             </template>
