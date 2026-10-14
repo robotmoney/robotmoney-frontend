@@ -82,7 +82,7 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373). This keeps 04:37 UTC,
   # the slot the retired swarm-opencode-nightly.yml held: a `schedule` run of
   # THIS workflow is the real-inference onboarding admission's scheduled home

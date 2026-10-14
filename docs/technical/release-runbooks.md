@@ -65,7 +65,8 @@ branch, never on `main` or a QA branch.
 `qa/A.B.x-<YYYY-MM-DD>` branch from the release branch tip and pushes it. Every patch of the
 session, runbook corrections included, merges there by PR. A pushed QA branch is never rewritten:
 no force push, reset or rebase. A new base means a new branch, `qa/A.B.x-<YYYY-MM-DD>-2`, and the
-session report names which branch each piece of evidence ran on.
+session report names which branch each piece of evidence ran on. Every CI workflow runs on a push
+to `qa/**`, so the commit stage runs carries its own green CI (SP.7).
 
 ## 3. Release candidates and version tags
 
