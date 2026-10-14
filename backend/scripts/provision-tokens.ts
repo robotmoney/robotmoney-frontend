@@ -181,7 +181,6 @@ async function main(request: ProvisionRequest): Promise<ProvisionResult> {
   // enters the environment.
   process.env.DATABASE_URL = readerUrl;
   process.env.WORKER_DATABASE_URL = readerUrl;
-  process.env.RM_ENV = "stage";
   const { default: postgres } = await import("postgres");
   const { observeTargetLock } = await import("../src/db/target-lock.ts");
   const reader = postgres(readerUrl, { max: 1, onnotice: () => {} });

@@ -7,7 +7,7 @@
 // The real `bun --no-env-file scripts/smoke.ts` process — the command an
 // operator types — against a "remote" database enrolled `rehearsal`
 // (./remote-db-harness.ts: the four roles, rm_owner owning the database, the
-// schema bootstrapped from the snapshot), under RM_ENV=stage, from an operator
+// schema bootstrapped from the snapshot), under --policy stage, from an operator
 // whose `$HOME/.env` holds only the §3 keys and whose instance holds NO token
 // files. The boot refuses at its token decision (scripts/lib/smoke-main.ts,
 // the `tokenReuseRefusal(paths, "remote")` check after the target read and
@@ -48,8 +48,8 @@ describe("a remote rehearsal boot with no token files refuses and mints nothing 
     // No --migrate, no --seed: nothing prompts, so the boot runs straight to
     // the token decision with no terminal.
     const r = Bun.spawnSync(
-      ["bun", "--no-env-file", "scripts/smoke.ts", "--instance", instance, "--credentials", op.roster, "--lock-timeout", "10"],
-      { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 600_000 },
+      ["bun", "--no-env-file", "scripts/smoke.ts", "--policy", "stage", "--instance", instance, "--credentials", op.roster, "--lock-timeout", "10"],
+      { cwd: repoRoot, env: { ...op.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 600_000 },
     );
     const out = `${r.stdout.toString()}${r.stderr.toString()}`;
     expect({ code: r.exitCode === 0 ? 0 : "non-zero" }).toEqual({ code: "non-zero" });
@@ -82,8 +82,8 @@ describe("a remote rehearsal boot with no token files refuses and mints nothing 
       writeFileSync(paths.tokenFiles[holder], `rmat_placeholder_${holder}\n`, { mode: 0o600 });
     }
     const again = Bun.spawn(
-      ["bun", "--no-env-file", "scripts/smoke.ts", "--instance", instance, "--credentials", op.roster, "--lock-timeout", "10"],
-      { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      ["bun", "--no-env-file", "scripts/smoke.ts", "--policy", "stage", "--instance", instance, "--credentials", op.roster, "--lock-timeout", "10"],
+      { cwd: repoRoot, env: { ...op.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
     let text = "";
     const pump = async (stream: ReadableStream<Uint8Array>) => {

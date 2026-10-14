@@ -9,7 +9,7 @@ import { confirmTargetField, requireRemoteOwnerPreparation } from "./privileged-
 import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
 import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseProdWithoutProjectsSource, isAcceptanceBoot } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
-import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
+import { policyFlag, resolveDeploymentPolicy, resolvePolicy } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
 import { dumpOwnershipSql, hostReadTargetState, instanceRolePasswords, localSuperuserSql, prepareChildEnv, roleUrl, runPrepareStep, superuserSqlSettled, type HostTarget, type PrepareStep } from "./smoke-database.ts";
 import { acquireTargetLock, assertStillHeld, readTargetState, type TargetLock, type TargetState } from "../../backend/src/db/target-lock.ts";
@@ -286,20 +286,27 @@ try {
 // Refused BEFORE the instance is resolved: resolution may persist a fresh
 // instance name, and a refused boot leaves the host exactly as it found it.
 //
-// RM_ENV comes from the process, else — for the remote database — from `~/.env`
-// (§3 lists it there; args override env). A local mode reads no `~/.env` at all
-// (§3: it ignores every remote connection value). The matrix is ONE function,
+// The policy is this command's own `--policy prod|stage` flag (D69 part 4,
+// issue 1327). No environment value and no `~/.env` line is read for it. A
+// local mode reads no `~/.env` at all (§3: it ignores every remote connection
+// value). The matrix is ONE function,
 // backend/src/deploy-policy.ts, the same one `bun run migrate` and preflight
 // check 5 call. Every row that does not depend on the target's answer refuses
 // HERE — unset against a remote, `prod` against a local mode, any other value —
 // judged with the one identity that row could allow. The rows that do depend on
 // it run again, on the target's own answer, once the target lock is held.
 const homeEnv: Record<string, string> = requestedDataPath.kind === "external" ? (loadEnvFile(homeEnvFilePath()) ?? {}) : {};
-const declaredRmEnv = process.env.RM_ENV ?? homeEnv.RM_ENV;
+const declaredPolicy = (() => {
+  try {
+    return policyFlag(process.argv.slice(2));
+  } catch (err) {
+    return fatal(err);
+  }
+})();
 const connection = targetConnection(requestedDataPath);
-const parsedPolicy = resolveRmEnv({ RM_ENV: declaredRmEnv });
+const parsedPolicy = resolvePolicy(declaredPolicy);
 const earlyVerdict = resolveDeploymentPolicy({
-  rmEnv: declaredRmEnv,
+  policy: declaredPolicy,
   connection,
   identity: parsedPolicy.ok && parsedPolicy.env === "prod" ? "production" : "rehearsal",
 });
@@ -307,12 +314,12 @@ if (!earlyVerdict.allow) fatal(earlyVerdict.reason);
 for (const warning of earlyVerdict.warnings) console.warn(`[smoke] ${warning}`);
 const policy = earlyVerdict.env;
 // §4.3, §8.5: `--migrate` and `--seed` are rehearsal-only and refuse on
-// RM_ENV=prod, whatever the database says — so that refusal needs no database
+// --policy prod, whatever the database says — so that refusal needs no database
 // and comes before anything connects, and long before the owner logs in.
 // `--spoof-keys` (§6.4) joins them: explicit on argv or not requested at all.
 const spoofRequest = spoofKeysRequest(process.argv);
 for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate"], [shouldSeed(process.argv), "seed"], [spoofRequest.explicit, "spoof-keys"]] as const) {
-  const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, rmEnv: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
+  const gate = requested && policy === "prod" ? requireRehearsalTarget({ preparation, policy: "prod", identity: "rehearsal", explicitlyRequested: true }) : null;
   if (gate && !gate.allow) fatal(gate.reason);
 }
 // D61: a remote `--migrate` or `--seed` needs `--confirm-target` and `~/.env`'s rm_owner line.
@@ -328,11 +335,9 @@ const acceptanceBoot = isAcceptanceBoot(staticPortMode, policy);
   if (refusal !== null) fatal(refusal);
   for (const note of missingProdSettingNotes(acceptanceBoot, process.env)) console.warn(`[smoke] ${note}`);
 }
-// …and this process's own RM_ENV is the policy the matrix resolved — an unset
-// RM_ENV under `--local` is `stage` (§4.3), a `~/.env` RM_ENV counts as set —
-// so a host-side operator tool this boot starts reads that policy (§4.1), never
-// the raw shell value. Nothing reads it as an acceptance path any more.
-process.env.RM_ENV = policy;
+// The resolved policy travels to each preparation step in its request
+// (`PrepareStep.rmEnv`), never through this process's environment: no tool
+// reads a policy from the environment (D69 part 4).
 
 // --- Which deployment instance this run acts on (spec §1.1) -----------------
 // `--instance <name>`; then the CI job's identity; then the name a previous
@@ -1489,7 +1494,7 @@ async function main(): Promise<void> {
 
     // THE MATRIX (§4.3), on the target's own answer, read under the lock.
     const locked = await readTargetState(targetLock.connection);
-    const verdict = resolveDeploymentPolicy({ rmEnv: declaredRmEnv, connection, identity: locked.identity === "missing" ? null : locked.identity });
+    const verdict = resolveDeploymentPolicy({ policy: declaredPolicy, connection, identity: locked.identity === "missing" ? null : locked.identity });
     if (!verdict.allow) throw new Error(verdict.reason);
     await holdSchemaToJournal();
     await commit();

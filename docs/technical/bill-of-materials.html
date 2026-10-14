@@ -415,7 +415,7 @@ footer {
   <div class="note">
     <strong>Design Philosophy:</strong> minimal dependencies and no frontend build step; one route table shared by
     both sides; a Postgres-backed task queue for background work; and fail-closed configuration throughout — an unset
-    or unrecognized value refuses to start rather than guessing (<code>RM_ENV</code>, <code>WORKER_LANE</code>,
+    or unrecognized value refuses to start rather than guessing (<code>WORKER_LANE</code>,
     <code>ANALYTICS_SOURCE</code>, <code>BASE_RPC_SOURCE</code>, <code>PROJECTS_SOURCE</code> in prod).
   </div>
 </section>
@@ -2030,13 +2030,6 @@ footer {
           = a random free port).</td>
       </tr>
       <tr>
-        <td><code>RM_ENV</code></td>
-        <td><strong>prod</strong></td>
-        <td><code>ephemeral | smoke | prod</code>. Fail-closed: <strong>unset defaults to prod</strong>, and an
-          unrecognized value refuses to start, so a typo like "production" can never silently open the privileged
-          surface.</td>
-      </tr>
-      <tr>
         <td><code>TRUST_PROXY</code></td>
         <td>off</td>
         <td>Trust <code>X-Forwarded-For</code> for the client IP used in rate limiting. Set only behind a known proxy.</td>
@@ -2109,8 +2102,8 @@ footer {
       <tr>
         <td><code>PROJECTS_SOURCE</code></td>
         <td>The /projects pipeline selector: unset → vendored offline fixtures, <code>live</code> → real keyless
-          providers. <strong>Fail-closed in prod</strong> — under <code>RM_ENV=prod</code> the pipelines REQUIRE an
-          explicit <code>PROJECTS_SOURCE=live</code> and throw otherwise, so fixture data is never served as
+          providers. <strong>Fail-closed</strong> — a deployed process REQUIRES an
+          explicit <code>PROJECTS_SOURCE=live</code> and throws otherwise, so fixture data is never served as
           production data.</td>
       </tr>
       <tr>
@@ -2242,7 +2235,8 @@ footer {
     <li>Copy <code>.env.example</code> → <code>.env</code>. Do <strong>not</strong> add <code>WEB_PORT</code> or
       <code>POSTGRES_PORT</code>; delete them if an old <code>.env</code> has them.</li>
     <li>Set <code>DATABASE_URL</code> to your Postgres instance (the only required value)</li>
-    <li>Set <code>RM_ENV</code> explicitly. Remember unset means <strong>prod</strong>.</li>
+    <li>Pass <code>--policy prod</code> or <code>--policy stage</code> to the operator tools (<code>bun smoke</code>,
+      <code>bun run migrate</code>, <code>prod-init</code>). No environment value declares the policy (D69 part 4).</li>
     <li>For production: set <code>ADMIN_TOKEN</code>, <code>ANALYTICS_TOKEN</code>, and
       <code>PROJECTS_SOURCE=live</code> (the projects pipelines refuse to serve fixtures in prod)</li>
     <li>No provider API keys are needed — the analytics fetchers are keyless</li>
@@ -2252,8 +2246,8 @@ footer {
   </ol>
 
   <div class="note">
-    <strong>Note:</strong> every privileged endpoint requires its real credential in every stack. The api reads no
-    <code>RM_ENV</code> and no insecure flag (issue #973).
+    <strong>Note:</strong> every privileged endpoint requires its real credential in every stack. No process reads
+    <code>RM_ENV</code>, and there is no insecure flag (issue #973, D69).
   </div>
 </section>
 

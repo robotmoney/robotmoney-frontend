@@ -258,7 +258,7 @@ describe("the §6.4 guards refuse on the target's own enrollment, before anythin
     throw new Error("expected a SpoofKeysRefusal");
   };
 
-  test("deployment_identity = production refuses, whatever RM_ENV says", async () => {
+  test("deployment_identity = production refuses, whatever --policy says", async () => {
     await enroll("production");
     const { inHouse } = await seat();
     const root = stateRoot();
@@ -273,7 +273,7 @@ describe("the §6.4 guards refuse on the target's own enrollment, before anythin
     expect((await refusalOf(run(stateRoot(), inHouse))).reason).toBe("identity_not_rehearsal");
   });
 
-  test("RM_ENV = prod refuses", async () => {
+  test("--policy prod refuses", async () => {
     await enroll("rehearsal");
     const { inHouse } = await seat();
     expect((await refusalOf(run(stateRoot(), inHouse, { rmEnv: "prod" }))).reason).toBe("rm_env_prod");

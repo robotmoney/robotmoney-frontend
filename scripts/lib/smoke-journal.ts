@@ -285,7 +285,7 @@ export function assertPlanRedacted(plan: DeploymentPlan, options: RedactionOptio
     assertExactKeys(target, ["kind", "rmEnv", "identity", "mode", "volume"], "plan.target");
     if (!["blank", "dump", "volume"].includes(target.mode)) refuseField("plan.target.mode", "is not a §5 local mode");
     if (!VOLUME_PATTERN.test(target.volume)) refuseField("plan.target.volume", "is not a Docker volume name");
-    if (target.rmEnv !== "stage") refuseField("plan.target.rmEnv", "is not stage, and §4.3 refuses RM_ENV=prod locally");
+    if (target.rmEnv !== "stage") refuseField("plan.target.rmEnv", "is not stage, and §4.3 refuses --policy prod locally");
   } else {
     refuseField("plan.target.kind", "is neither remote nor local");
   }
@@ -387,7 +387,7 @@ export const DEPLOYMENT_PHASES: readonly DeploymentPhase[] = [
 /**
  * The resolved target of §4, as the plan names it: its IDENTITY, never a way
  * to connect to it. A remote target is host, port and database name; a local
- * one is the §5 mode and the volume smoke owns. Either carries the `RM_ENV`
+ * one is the §5 mode and the volume smoke owns. Either carries the `--policy`
  * policy and the `deployment_identity` kind the plan was built against.
  */
 /** A `deployment_identity` kind as a plan records it; `absent` means no enrollment row. */
@@ -411,7 +411,7 @@ export type PlanTarget =
     }
   | {
       readonly kind: "local";
-      /** §4.3: `prod` with `--local` refuses, and an unset `RM_ENV` runs as `stage`. */
+      /** §4.3: `prod` with `--local` refuses, and an absent `--policy` runs as `stage`. */
       readonly rmEnv: "stage";
       readonly identity: "production" | "rehearsal";
       readonly mode: "blank" | "dump" | "volume";
@@ -557,7 +557,7 @@ export function computePlanId(plan: DeploymentPlan, options: RedactionOptions = 
 }
 
 function renderTarget(target: PlanTarget): string {
-  const policy = `RM_ENV=${target.rmEnv}, deployment_identity ${target.identity}`;
+  const policy = `--policy ${target.rmEnv}, deployment_identity ${target.identity}`;
   return target.kind === "remote"
     ? `target: remote ${target.host}:${target.port}/${target.dbname} (${policy})`
     : `target: local ${target.mode} on volume ${target.volume} (${policy})`;

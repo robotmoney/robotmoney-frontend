@@ -18,7 +18,7 @@
 // not claim a transition that did not happen — and it writes no row where
 // there is none:
 //   - `production`  reported, unchanged (enrollAsProduction returns the row it
-//                   finds, after its RM_ENV=prod and confirmation gates);
+//                   finds, after its --policy prod and confirmation gates);
 //   - no row        refuses: the first migrate writes the row with the table,
 //                   so a table without one was emptied or created out of band
 //                   and needs a human, not a second writer;
@@ -26,7 +26,7 @@
 //                   step;
 //   - no table      refuses, naming the first migrate that creates it.
 //
-// UNDER RM_ENV=stage (D61 rule 2). The stage cutover rehearsal runs the same
+// UNDER --policy stage (D61 rule 2). The stage cutover rehearsal runs the same
 // step against a remote target the remote rehearsal pass enrolled
 // `rehearsal`: `expected: "rehearsal"` reads and reports that row the same way,
 // under the fence, and refuses anything else. The kind is the policy's: prod
@@ -43,8 +43,8 @@ export interface SetIdentityOptions {
   readonly ownerUrl: string;
   /** The kind the policy names: `production` under prod (the default), `rehearsal` under stage (D61). */
   readonly expected?: "production" | "rehearsal";
-  /** The resolved `RM_ENV`. `production` requires `prod`; `rehearsal` requires `stage`. */
-  readonly rmEnv: string | undefined;
+  /** The caller's resolved `--policy`. `production` requires `prod`; `rehearsal` requires `stage`. */
+  readonly policy: string | undefined;
   /** The operator's explicit `y`. */
   readonly confirmed: boolean;
   /** Kept for the command's interface; the row's note is the first migrate's. */
@@ -64,17 +64,17 @@ export interface SetIdentityResult {
 /**
  * Report the target's `production` row, read as rm_owner inside the fence.
  *
- * Refusal cases (nothing is written in any case): `RM_ENV` not `prod`; no
+ * Refusal cases (nothing is written in any case): the policy is not `prod`; no
  * confirmation; the table cannot be read (not migrated yet); no row; the row
  * says `rehearsal`; the lock cannot be proven held.
  */
 export async function setProductionIdentity(options: SetIdentityOptions): Promise<SetIdentityResult> {
   const expected = options.expected ?? "production";
   const policy = expected === "production" ? "prod" : "stage";
-  if (options.rmEnv !== policy) {
+  if (options.policy !== policy) {
     throw new Error(
-      `deployment_identity: set-identity confirms \`${expected}\` only under RM_ENV=${policy} (D61: never crosswise); ` +
-        `RM_ENV is ${options.rmEnv === undefined ? "unset" : `"${options.rmEnv}"`}. Nothing was written.`,
+      `deployment_identity: set-identity confirms \`${expected}\` only under --policy ${policy} (D61: never crosswise); ` +
+        `--policy is ${options.policy === undefined ? "not given" : `"${options.policy}"`}. Nothing was written.`,
     );
   }
   const { assertStillHeld, withMutationFence } = await import("../src/db/target-lock.ts");
@@ -101,16 +101,16 @@ export async function setProductionIdentity(options: SetIdentityOptions): Promis
       throw new Error(
         expected === "production"
           ? "deployment_identity: this database is enrolled as `rehearsal`; promoting a rehearsal database to `production` is not a step of §9.1."
-          : "deployment_identity: this database is enrolled as `production`; RM_ENV=stage never confirms a production database (§4.3, D61). Nothing was written.",
+          : "deployment_identity: this database is enrolled as `production`; --policy stage never confirms a production database (§4.3, D61). Nothing was written.",
       );
     }
     if (expected === "rehearsal") {
       // Read, reported, never rewritten: the row is the remote rehearsal pass's.
       return { before: "rehearsal", row: before.row, written: false };
     }
-    // The gates (RM_ENV=prod, the confirmation) and the no-rewrite rule are
+    // The gates (--policy prod, the confirmation) and the no-rewrite rule are
     // enrollAsProduction's: on a `production` row it returns that row as found.
-    const row = await enrollAsProduction(store, { rmEnv: options.rmEnv, confirmed: options.confirmed, note: options.note });
+    const row = await enrollAsProduction(store, { policy: options.policy, confirmed: options.confirmed, note: options.note });
     return { before: "production", row, written: false };
   });
 }

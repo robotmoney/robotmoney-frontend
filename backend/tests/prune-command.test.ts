@@ -18,7 +18,7 @@
 // itself and watch the prune wait behind it.
 //
 // THE DATABASE is this file's own (useCleanDatabase), enrolled `rehearsal` by
-// rm_owner and run under RM_ENV=stage, with `$HOME/.env` holding the
+// rm_owner and run under `--policy stage`, with `$HOME/.env` holding the
 // connection, an rm_readonly password and (per test) an rm_owner line. The rows
 // planted, by age:
 //   events      8 days old (pruned), 6 days old and new (kept);
@@ -106,9 +106,9 @@ async function runCommand(
   const home = operatorHome(owner);
   // The password is never an argument (D61).
   if (owner !== null && args.join(" ").includes(owner)) throw new Error("a password reached argv");
-  const child = Bun.spawn(["bun", "scripts/prune.ts", ...args], {
+  const child = Bun.spawn(["bun", "scripts/prune.ts", "--policy", "stage", ...args], {
     cwd: BACKEND,
-    env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage" },
+    env: { PATH: process.env.PATH ?? "", HOME: home },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

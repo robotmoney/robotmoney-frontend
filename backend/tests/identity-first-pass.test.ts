@@ -14,7 +14,7 @@
 //   refuses."
 //
 // This file holds the PRODUCTION pass's kill-and-rerun (`bun run migrate`),
-// the REMOTE REHEARSAL pass (D61 rule 2: the same command under RM_ENV=stage
+// the REMOTE REHEARSAL pass (D61 rule 2: the same command under --policy stage
 // writes `rehearsal`), and the normal path's acceptance rule. The `--local
 // dump` pass's kill-and-rerun is
 // scripts/tests/integration/smoke-dump-identity-first.test.ts's.
@@ -208,17 +208,17 @@ async function waitOwnerGone(database: string): Promise<void> {
 
 /** Start the operator's command: ~/.env's rm_owner, the exact --confirm-target (D61). */
 async function startConfirmed(database: string): Promise<LiveMigrate> {
-  const run = startMigrate({ databaseUrl: urlFor(database), readonlyPassword: READONLY_PASSWORD, ownerPassword: OWNER_PASSWORD, rmEnv: "prod" });
+  const run = startMigrate({ databaseUrl: urlFor(database), readonlyPassword: READONLY_PASSWORD, ownerPassword: OWNER_PASSWORD, policy: "prod" });
   homes.push(run.home);
   return run;
 }
 
-async function rerun(database: string, rmEnv = "prod") {
+async function rerun(database: string, policy = "prod") {
   const run = await runMigrateCommand({
     databaseUrl: urlFor(database),
     readonlyPassword: READONLY_PASSWORD,
     ownerPassword: OWNER_PASSWORD,
-    rmEnv,
+    policy,
   });
   homes.push(run.home);
   expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
@@ -353,7 +353,7 @@ describe("§10 W2 — kill the production pass and rerun it (`bun run migrate`, 
   }, 240_000);
 });
 
-describe("D61 rule 2 — the remote rehearsal pass (`RM_ENV=stage bun run migrate --confirm-target …`)", () => {
+describe("D61 rule 2 — the remote rehearsal pass (`bun run migrate --policy stage --confirm-target …`)", () => {
   // A production dump restored into a REMOTE stage Postgres: no
   // deployment_identity table, the production baseline ledger. Stage rehearses
   // the production cutover on it with the same command; the pass writes
@@ -399,7 +399,7 @@ describe("D61 rule 2 — the remote rehearsal pass (`RM_ENV=stage bun run migrat
       databaseUrl: urlFor(name),
       readonlyPassword: READONLY_PASSWORD,
       ownerPassword: OWNER_PASSWORD,
-      rmEnv: "stage",
+      policy: "stage",
     });
     homes.push(run.home);
     expect(run.code).not.toBe(0);
@@ -415,7 +415,7 @@ describe("D61 rule 2 — the remote rehearsal pass (`RM_ENV=stage bun run migrat
       databaseUrl: urlFor(name),
       readonlyPassword: READONLY_PASSWORD,
       ownerPassword: OWNER_PASSWORD,
-      rmEnv: "stage",
+      policy: "stage",
       confirmTarget: `${urlFor(name).hostname}:1/${name}`,
     });
     homes.push(run.home);
@@ -577,7 +577,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
       const expected = (await readPreIdentityLedger(owner))!;
       expect(expected.release).toBe(TAG);
       await expect(
-        applyIdentityFirst(owner, { kind: "rehearsal", rmEnv: "stage", remote: true, expected, note: "remote rehearsal attempt" }),
+        applyIdentityFirst(owner, { kind: "rehearsal", policy: "stage", remote: true, expected, note: "remote rehearsal attempt" }),
       ).rejects.toThrow("REMOTE database");
     } finally {
       await owner.end({ timeout: 5 });
@@ -592,7 +592,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
       // Admitted on the baseline, run against v0.5.0 alone.
       const expected = { identity: "no table" as const, release: TAG, ledger: BASELINE_FILES };
       await expect(
-        applyIdentityFirst(owner, { kind: "production", rmEnv: "prod", remote: true, expected, note: "moved" }),
+        applyIdentityFirst(owner, { kind: "production", policy: "prod", remote: true, expected, note: "moved" }),
       ).rejects.toThrow("no longer qualifies");
     } finally {
       await owner.end({ timeout: 5 });
@@ -605,7 +605,7 @@ describe("the identity-first pass itself (applyIdentityFirst), on the fenced pat
     const owner = connect(name, asOwner);
     try {
       const expected = (await readPreIdentityLedger(owner))!;
-      const result = await applyIdentityFirst(owner, { kind: "rehearsal", rmEnv: "stage", remote: false, expected, note: "local dump" });
+      const result = await applyIdentityFirst(owner, { kind: "rehearsal", policy: "stage", remote: false, expected, note: "local dump" });
       expect(result.row).toMatchObject({ kind: "rehearsal", writtenBy: "rm_owner" });
     } finally {
       await owner.end({ timeout: 5 });

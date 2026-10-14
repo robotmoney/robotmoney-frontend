@@ -630,7 +630,7 @@ export async function seed(db: RegistryDb = sql): Promise<void> {
  *
  * Refusals, in order, each naming what it saw:
  *   - the rehearsal-only gate (`requireRehearsalTarget`, the one shared with
- *     `--migrate` and `--spoof-keys`): `RM_ENV=prod`, a value that is not a
+ *     `--migrate` and `--spoof-keys`): `--policy prod`, a value that is not a
  *     policy, a seed nobody asked for, and a `production`, missing or
  *     unreadable enrollment;
  *   - a POPULATED database: any table holding rows a blank bootstrap did not
@@ -652,7 +652,7 @@ export async function assertSeedable(
   const identity = await readIdentityKind(db);
   const gate = requireRehearsalTarget({
     preparation: "seed",
-    rmEnv: request.rmEnv,
+    policy: request.rmEnv,
     identity,
     explicitlyRequested: request.explicitlyRequested,
     ...(request.connection === "remote" ? { connection: "remote" as const } : {}),

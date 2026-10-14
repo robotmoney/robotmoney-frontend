@@ -5607,7 +5607,9 @@ on-time and wrong-subject named takes, and the unchanged issue 570 cases),
 ## D69 — The runtime has no environment class: `RM_ENV` is no runtime class, the insecure flag is retired, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; agent, 2026-10-13)
 
 **Status:** proposed. Drafted by the agent with issue 973 (pr 1325); the owner
-accepted the issue's three-slice split on 2026-10-14.
+accepted the issue's three-slice split on 2026-10-14. Part 4 is the owner's
+decision of 2026-10-14, implemented with issue 1327. Part 6 is accepted:
+decision issue 1345 settled it from canon (part 3 and D52 (1)).
 
 **Decision.**
 
@@ -5629,19 +5631,31 @@ accepted the issue's three-slice split on 2026-10-14.
    environment says. The fixture projects source is injected by the harness;
    a deployed process selects the live source with `PROJECTS_SOURCE=live` or
    refuses. There is no environment override of the roster seed path.
-4. One `RM_ENV` reader remains after this decision and part 6. The
-   operator tools (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates,
-   D61) read it as their §4.1 policy input. The owner decided on 2026-10-14
-   that they take an explicit flag instead, with the policy-input issue (1327).
-   This decision retires the runtime class and the insecure flag only.
+4. No tool reads `RM_ENV`. The owner decided on 2026-10-14 that the operator
+   tools take their §4.1 policy as an explicit flag (issue 1327): `bun run
+   migrate`, `bun run prune`, `prod-init` (all four commands), `bun smoke`,
+   `bun smoke:web` and the release runner's host steps take `--policy
+   prod|stage`, parsed by `policyFlag()` in `backend/src/deploy-policy.ts` and
+   judged by the same §4.3 matrix. No flag behaves as the unset row did: it
+   refuses against a remote and warns and runs as stage under `--local`. An
+   `RM_ENV` in the process or in `~/.env` declares nothing. `RM_ENV` is off
+   preflight check 4's allowlist and the release env rewrite's allowlist, so a
+   leftover `~/.env` line is a finding named as the retired variable (refused
+   under `prod`, warned under `stage`), and R6.2 moves it out. A preparation
+   step gets the policy in its request, never through the environment. The
+   one place that still names the variable is
+   `scripts/release/legacy-policy-env.ts`: `bun run role-passwords` and
+   `stage-target up` run tools from a checkout that may predate the flag, so
+   they hand such a checkout the legacy variable. It goes once production runs
+   a release that takes `--policy`.
 5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
-   on a new read of `RM_ENV` in `backend/src` outside `deploy-policy.ts`, on
-   any mention of the retired names in a process, compose file or workflow, on
-   an `RM_ENV` key in a compose file, stack composefile or workflow, and on a
-   second caller of the seam.
-6. No environment value declares the acceptance path (issue 1326; agent,
-   2026-10-14, proposed: the issue asked for an owner call between the
-   standing-stack flag and a pin applied everywhere, and this takes both).
+   on any read or assignment of `RM_ENV` in `backend/src`, `backend/scripts`
+   or `scripts/` outside the legacy module, on any mention of the retired
+   names in a process, compose file or workflow, on an `RM_ENV` key in a
+   compose file, stack composefile or workflow, and on a second caller of the
+   seam.
+6. No environment value declares the acceptance path (issue 1326; accepted:
+   decision issue 1345 settled it from canon, part 3 and D52 (1)).
    `backend/src/acceptance-path.ts` reads no environment. A caller states the
    path: the armed test harness states `development` through the seam,
    `bun smoke` states the kind of boot (`standingStack`: a `--static-port` or
@@ -5655,7 +5669,7 @@ accepted the issue's three-slice split on 2026-10-14.
    configuration's `RM_ENV` key, `docker-compose.yml`'s and the stack
    composefiles' `RM_ENV` and the e2e workflow steps' `RM_ENV` are gone;
    `buildComposeEnv()` refuses an `RM_ENV` handed through its extras. The e2e
-   setup action keeps `RM_ENV=stage` as `bun smoke`'s policy input (part 4).
+   setup action passes `--policy stage` to `bun smoke` (part 4).
 
 **Why.** A deployment's identity used to alter runtime authority and
 data-safety behaviour: `smoke`, `stage` and `ephemeral` each relaxed something,
@@ -5664,3 +5678,6 @@ default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
 persisted fixture projects (issue 1208). Tests take their isolation from an
 ephemeral Postgres and injected credentials; they do not need the server to
 fail open, and a seam armed in one process is a claim the process can verify.
+The same holds for the operator's policy (part 4): a value that lives in an
+environment survives in a profile line after the operator forgot it, while a
+flag is typed on the command it governs and is visible in that command line.

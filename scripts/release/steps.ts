@@ -8,9 +8,11 @@
 // passed stage journal with that hash exists (standing check SP.8, ./journal.ts).
 //
 // Each step runs on the target host or on the capture host, over ssh, as
-//   ssh -T -o BatchMode=yes <host> 'mkdir -p <run dir> && touch <marker> && cd <checkout> && env -i HOME=<home> PATH=<REMOTE_PATH> LANG=C.UTF-8 RM_ENV=<env> <cmd>'
+//   ssh -T -o BatchMode=yes <host> 'mkdir -p <run dir> && touch <marker> && cd <checkout> && env -i HOME=<home> PATH=<REMOTE_PATH> LANG=C.UTF-8 <cmd>'
 // with stdin closed. The marker lets the runner copy back only the receipts a
-// step wrote (find -newer).
+// step wrote (find -newer). No command reads a policy from its environment
+// (D69 part 4, issue 1327): each command that takes one names it on its own
+// argv as `--policy {policy}`, filled from the target's `rmEnv`.
 //
 // The ids keep the shape the v0.6.0 runbook introduced: R1 the release
 // identity, R2 the baseline, R6 the cutover, R7 the postflight, W the watch.
@@ -200,9 +202,9 @@ export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, ta
   return { afterStep: nb.afterStep, hours: nb.hours === "watchHours" ? target.watchHours : nb.hours };
 }
 
-const prodInit = (command: string): string[] => ["bun", "scripts/prod-init.ts", command, "--instance", "{instance}", "--confirm-target", "{confirmTarget}"];
+const prodInit = (command: string): string[] => ["bun", "scripts/prod-init.ts", command, "--policy", "{policy}", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"];
 const status = (): string[] => ["bun", "run", "smoke:status", "--instance", "{instance}"];
-const boot = (): string[] => ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"];
+const boot = (): string[] => ["bun", "run", "smoke", "--policy", "{policy}", "--static-port", "--instance", "{instance}"];
 
 /** The release run, in order. Read docs/runbooks/release-run.md for the table. */
 export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
@@ -214,8 +216,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   },
   {
     id: "R1.2", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [runReceipts("host-identity.json")],
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
-    cmds: [["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", RUN_DIR]],
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches the target's policy; before R6.1, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin",
+    cmds: [["bun", "scripts/release/host-identity.ts", "--policy", "{policy}", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", RUN_DIR]],
   },
   {
     id: "R1.3", standing: ["SP.1"], host: "target", irreversible: false, expectExit: 0, receipts: [],
@@ -260,7 +262,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
     id: "R2.3", standing: ["SP.3", "SP.6"], host: "target", irreversible: false, expectExit: 0,
     receipts: [{ dir: `${STATE_DIR}/release/{runTs}`, pattern: "baseline*", required: true }],
     description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size",
-    cmds: [["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]],
+    cmds: [["bun", "scripts/release/baseline.ts", "--policy", "{policy}", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]],
   },
   {
     id: "R2.5", standing: ["SP.5"], host: "target", irreversible: false, expectExit: 0, triage: true, receipts: [runReceipts("prod-gate-baseline.*")],
@@ -281,8 +283,8 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "R6.3", standing: ["SC.2"], host: "target", irreversible: true, expectExit: 0,
     receipts: [stateReceipts("migrate-receipt-*.json"), stateReceipts("migrate-journal-*.json", false)],
-    description: "The first migrate: 0081 first with the identity RM_ENV implies, then every pending file",
-    cmds: [["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]],
+    description: "The first migrate: 0081 first with the identity --policy implies, then every pending file",
+    cmds: [["bun", "run", "migrate", "--policy", "{policy}", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]],
   },
   {
     id: "R6.4", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [prodInitReceipt("set-identity")],
@@ -312,7 +314,7 @@ export const RELEASE_STEPS: readonly StepTemplate[] = Object.freeze([
   {
     id: "R6.10", standing: [], host: "target", irreversible: false, expectExit: 0, receipts: [],
     description: "Site: bun smoke:web (refuses a site whose apiRange excludes the api)",
-    cmds: [["bun", "run", "smoke:web", "--instance", "{instance}"]],
+    cmds: [["bun", "run", "smoke:web", "--policy", "{policy}", "--instance", "{instance}"]],
   },
   // ── R7 postflight ─────────────────────────────────────────────────────────
   {
@@ -396,6 +398,7 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     ref,
     runTs,
     instance: target.instance,
+    policy: target.rmEnv,
     home: target.home,
     checkout: target.checkout,
     captureHome: target.capture.home,
@@ -465,7 +468,6 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   // does not. Only these variables exist, the same names on every host.
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
   for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
-  if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;

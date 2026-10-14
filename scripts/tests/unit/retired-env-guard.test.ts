@@ -3,10 +3,10 @@
 // backend/src/test-seam.ts alone.
 //
 // What it pins, against the real tree:
-//   1. No runtime module reads `RM_ENV`. The only reader left in backend/src
-//      is the §4.3 policy input of the OPERATOR tools (deploy-policy.ts);
-//      backend/scripts are the operator's commands and not a container's
-//      process. The stack's acceptance path reads no environment (issue 1326).
+//   1. Nothing reads `RM_ENV` (issue 1327, D69 part 4): no module in
+//      backend/src, backend/scripts or scripts/ reads, assigns or hands a child
+//      the variable. The operator tools take `--policy` instead (rule 6). The
+//      stack's acceptance path reads no environment (issue 1326).
 //   2. `config.env`, `config.allowInsecure` and `RM_ALLOW_INSECURE` exist
 //      nowhere a process, a compose file or a workflow could read them. The one
 //      allowed mention is the refusal that names the retired variable.
@@ -16,6 +16,11 @@
 //      it by accident again.
 //   5. No container is handed `RM_ENV` (issue 1326): no compose file, stack
 //      composefile, workflow step, StackConfig or participant env carries it.
+//   6. The operator tools take their §4.1 policy as `--policy` (issue 1327):
+//      each parses it with deploy-policy.ts `policyFlag()`, neither ~/.env
+//      allowlist admits an `RM_ENV` line, and the variable's name is a string
+//      in exactly three places: check 4's naming of a leftover line, the
+//      compose env's refusal, and the release tooling's legacy module.
 //
 // A guard that only ever passes is theatre, so each rule has a red control: the
 // scanner is run over a planted violation and must report it.
@@ -37,10 +42,25 @@ function walk(dir: string, keep: (name: string) => boolean): string[] {
 const isTs = (n: string) => /\.tsx?$/.test(n);
 const isYml = (n: string) => /\.ya?ml$/.test(n);
 
-/** Every way a module could READ `RM_ENV` from an environment record (comments and prose are not reads). */
+/** Drop `//` line comments and block comments, so prose naming the variable is not a use. */
+function code(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+}
+
+/**
+ * Every way a module could READ `RM_ENV` from an environment record, assign
+ * it, or hand it to a child process: `env.RM_ENV` (process.env's included),
+ * `env["RM_ENV"]`, an `RM_ENV:` object key, an `RM_ENV=${…}` env pair.
+ * Comments and prose are not uses.
+ */
 function rmEnvReads(text: string): string[] {
-  const re = /\benv\.RM_ENV\b|\benv\[\s*["']RM_ENV["']\s*\]|\bRM_ENV\s*:\s*(?:process\.env|env)\.RM_ENV\b/g;
-  return [...text.matchAll(re)].map((m) => m[0]);
+  const re = /\benv\.RM_ENV\b|\benv\[\s*["']RM_ENV["']\s*\]|\bRM_ENV\s*:|\bRM_ENV=\$\{/g;
+  return [...code(text).matchAll(re)].map((m) => m[0]);
+}
+
+/** The variable's name as a string literal in code. */
+function rmEnvLiterals(text: string): string[] {
+  return [...code(text).matchAll(/["'`]RM_ENV["'`]/g)].map((m) => m[0]);
 }
 
 /** Any mention at all of a retired name, token or field. */
@@ -56,14 +76,24 @@ function hits(files: string[], scan: (text: string) => string[], allow: readonly
 }
 
 const BACKEND_SRC = walk(join(repoRoot, "backend", "src"), isTs);
+/** Every module a process runs: the runtime, the operator's commands and the host tooling (tests excluded). */
+const SOURCES = [
+  ...BACKEND_SRC,
+  ...walk(join(repoRoot, "backend", "scripts"), isTs),
+  ...walk(join(repoRoot, "scripts"), isTs).filter((f) => !f.includes(`${join("scripts", "tests")}/`)),
+];
 
-describe("1. no runtime module reads RM_ENV (issue #973)", () => {
-  /** The §4.3 policy input: the one operator-facing reader the smoke spec keeps (§4.1, §4.3). */
-  const POLICY_READERS = ["backend/src/deploy-policy.ts"];
-
-  test("backend/src reads RM_ENV only in the §4.3 policy readers", () => {
+describe("1. nothing reads RM_ENV (issue #973; the operator tools since issue 1327)", () => {
+  test("no module in backend/src, backend/scripts or scripts/ reads, assigns or forwards RM_ENV", () => {
     expect(BACKEND_SRC.length).toBeGreaterThan(50); // walker sanity
-    expect(hits(BACKEND_SRC, rmEnvReads, POLICY_READERS)).toEqual([]);
+    expect(SOURCES.length).toBeGreaterThan(300);
+    expect(hits(SOURCES, rmEnvReads)).toEqual([]);
+  });
+
+  test("deploy-policy.ts, once the one reader, reads no environment at all", () => {
+    const policy = readFileSync(join(repoRoot, "backend", "src", "deploy-policy.ts"), "utf8");
+    expect(rmEnvReads(policy)).toEqual([]);
+    expect(code(policy)).not.toMatch(/process\.env/);
   });
 
   test("config.ts has no RM_ENV read and exports no `env` field", () => {
@@ -94,14 +124,17 @@ describe("1. no runtime module reads RM_ENV (issue #973)", () => {
     }
   });
 
-  test("red control: the scanner finds each read shape", () => {
+  test("red control: the scanner finds each read, assignment and hand-off shape, and skips prose", () => {
     const planted = [
       `const e = process.env.RM_ENV ?? "prod";`,
       `const f = env["RM_ENV"];`,
-      `resolveRmEnv({ RM_ENV: process.env.RM_ENV });`,
-      `// a comment naming RM_ENV is not a read`,
+      `process.env.RM_ENV = policy;`,
+      `Bun.spawn(argv, { env: { ...process.env, RM_ENV: "stage" } });`,
+      "const pair = `RM_ENV=${target.rmEnv}`;",
+      `// a comment naming RM_ENV: or process.env.RM_ENV is not a read`,
+      `/* nor is RM_ENV: in a block comment */`,
     ].join("\n");
-    expect(rmEnvReads(planted)).toHaveLength(3);
+    expect(rmEnvReads(planted)).toEqual(["env.RM_ENV", `env["RM_ENV"]`, "env.RM_ENV", "RM_ENV:", "RM_ENV=${"]);
   });
 });
 
@@ -201,11 +234,11 @@ describe("5. no container is handed RM_ENV (issue 1326)", () => {
   /** A compose or workflow line that SETS `RM_ENV` (a YAML key), not prose naming it. */
   const rmEnvKeys = (text: string): string[] => [...text.matchAll(/^\s*RM_ENV\s*:.*$/gm)].map((m) => m[0].trim());
 
-  test("docker-compose.yml, the stack composefiles and the workflows set no RM_ENV", () => {
+  test("docker-compose.yml, the stack composefiles, the workflows and the composite actions set no RM_ENV", () => {
     const files = [
       join(repoRoot, "docker-compose.yml"),
       ...walk(join(repoRoot, "stacks"), isYml),
-      ...walk(join(repoRoot, ".github", "workflows"), isYml),
+      ...walk(join(repoRoot, ".github"), isYml),
     ];
     expect(files.length).toBeGreaterThan(5);
     expect(hits(files, rmEnvKeys)).toEqual([]);
@@ -224,5 +257,50 @@ describe("5. no container is handed RM_ENV (issue 1326)", () => {
       "RM_ENV: ${RM_ENV:-prod}",
       "RM_ENV: stage",
     ]);
+  });
+});
+
+describe("6. the operator tools take --policy, and nothing else names the variable (issue 1327, D69 part 4)", () => {
+  test("every operator tool parses its own --policy with deploy-policy.ts policyFlag()", () => {
+    for (const file of [
+      "backend/scripts/migrate.ts",
+      "backend/scripts/prune.ts",
+      "scripts/prod-init.ts",
+      "scripts/lib/smoke-main.ts",
+      "scripts/smoke-web.ts",
+    ]) {
+      const text = code(readFileSync(join(repoRoot, file), "utf8"));
+      expect(`${file}: ${/\bpolicyFlag\(/.test(text)}`).toBe(`${file}: true`);
+    }
+  });
+
+  test("the variable's name is a string in three places only: check 4's naming, the compose refusal, the legacy release module", () => {
+    expect(hits(SOURCES, rmEnvLiterals).map((h) => h.split(":")[0]).sort()).toEqual([
+      "backend/src/db/preflight.ts",
+      "scripts/release/legacy-policy-env.ts",
+      "scripts/stack/config.ts",
+    ]);
+    const legacyUsers = SOURCES.filter((f) => /from "\.\/legacy-policy-env\.ts"/.test(readFileSync(f, "utf8"))).map((f) => relative(repoRoot, f)).sort();
+    expect(legacyUsers).toEqual(["scripts/release/role-passwords.ts", "scripts/release/stage-target.ts"]);
+  });
+
+  test("neither ~/.env allowlist admits an RM_ENV line, and .env.example sets none", async () => {
+    // preflight.ts validates its config at import, so check 4's list is read from its source.
+    const preflight = readFileSync(join(repoRoot, "backend", "src", "db", "preflight.ts"), "utf8");
+    const allowed = preflight.match(/export const ENV_FILE_ALLOWED_KEYS[^=]*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/)?.[1];
+    expect(allowed).toContain('"rm_owner"'); // the extraction found the list
+    expect(allowed).not.toContain("RM_ENV");
+    const { D61_ENV_ALLOWLIST } = await import("../../release/env-keys.ts");
+    expect(D61_ENV_ALLOWLIST).not.toContain("RM_ENV");
+    expect(readFileSync(join(repoRoot, ".env.example"), "utf8")).not.toMatch(/^\s*RM_ENV\s*=/m);
+  });
+
+  test("the e2e setup action declares the boot's policy as --policy stage", () => {
+    const action = readFileSync(join(repoRoot, ".github", "actions", "e2e-setup", "action.yml"), "utf8");
+    expect(action).toContain("scripts/smoke.ts --policy stage --local blank");
+  });
+
+  test("red control: the literal scanner finds a quoted name in code and skips prose", () => {
+    expect(rmEnvLiterals(`if ("RM_ENV" in env) {}\n// NO "RM_ENV" here\nconst k = 'RM_ENV';`)).toEqual([`"RM_ENV"`, `'RM_ENV'`]);
   });
 });

@@ -2,7 +2,7 @@
 // criterion 53 (smoke-production-spec.md §4.3, §8.5), the password half of
 // criterion 14, and decision D61.
 //
-//   §8.5: "`--migrate` ... refuses on `RM_ENV=prod` or `deployment_identity ≠
+//   §8.5: "`--migrate` ... refuses on `--policy prod` or `deployment_identity ≠
 //          rehearsal`. In local modes it uses the owner password smoke
 //          generated."
 //   D61:  the remote owner password is `~/.env`'s `rm_owner` line, and the
@@ -20,7 +20,7 @@
 // (.github/workflows/unit.yml), so nothing here may sit under tests/unit.
 //
 // What each case proves, and where the refusal lands:
-//   - RM_ENV=prod refuses before anything connects;
+//   - --policy prod refuses before anything connects;
 //   - no `rm_owner` line, no `--confirm-target`, and a wrong one each refuse
 //     before anything connects, naming what is missing (the wrong target is
 //     printed beside the resolved one);
@@ -67,19 +67,19 @@ function operatorFor(name: string, authority: Authority): Operator {
   return db.operator(name, [...(owner === null ? [] : [`rm_owner = ${owner}`]), `doadmin = ${DOADMIN}`]);
 }
 
-function bootArgv(op: Operator, name: string, authority: Authority, flag = "--migrate"): string[] {
+function bootArgv(op: Operator, name: string, authority: Authority, flag = "--migrate", policy = "stage"): string[] {
   holdTokenFiles(op, instanceOf(name));
   const confirm = authority.confirm === undefined ? target() : authority.confirm;
-  const argv = ["bun", "--no-env-file", "scripts/smoke.ts", flag, "--instance", instanceOf(name), "--credentials", op.roster, "--lock-timeout", "10"];
+  const argv = ["bun", "--no-env-file", "scripts/smoke.ts", "--policy", policy, flag, "--instance", instanceOf(name), "--credentials", op.roster, "--lock-timeout", "10"];
   return confirm === null ? argv : [...argv, "--confirm-target", confirm];
 }
 
 /** A boot with no terminal at all: stdin closed (D61 rule 1). */
 function runPlain(name: string, rmEnv: string, authority: Authority = {}, flag = "--migrate"): { code: number; out: string; op: Operator } {
   const op = operatorFor(name, authority);
-  const argv = bootArgv(op, name, authority, flag);
+  const argv = bootArgv(op, name, authority, flag, rmEnv);
   for (const secret of [db.passwords.rm_owner, DOADMIN]) expect(argv.join(" ")).not.toContain(secret);
-  const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env, RM_ENV: rmEnv }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}`, op };
 }
 
@@ -95,19 +95,19 @@ function ledger(): string[] {
 }
 
 describe("`bun smoke --migrate` on a remote database — refusals before anything connects (§4.3, §8.5, D61)", () => {
-  test("RM_ENV=prod refuses before anything connects", () => {
+  test("--policy prod refuses before anything connects", () => {
     db.setIdentity("production");
     const { code, out } = runPlain("prod", "prod");
     expect(code).not.toBe(0);
-    expect(out).toContain("--migrate is refused under RM_ENV=prod");
+    expect(out).toContain("--migrate is refused under --policy prod");
     expect(out).not.toContain("phase:");
   }, 60_000);
 
-  test("`--seed` refuses on RM_ENV=prod the same way — before anything connects (§4.3: rehearsal-only preparation)", () => {
+  test("`--seed` refuses on --policy prod the same way — before anything connects (§4.3: rehearsal-only preparation)", () => {
     db.setIdentity("production");
     const { code, out } = runPlain("prod_seed", "prod", {}, "--seed");
     expect(code).not.toBe(0);
-    expect(out).toContain("--seed is refused under RM_ENV=prod");
+    expect(out).toContain("--seed is refused under --policy prod");
     expect(out).not.toContain("phase:");
   }, 60_000);
 
@@ -151,7 +151,7 @@ describe("`bun smoke --migrate` on a remote database — refusals under the targ
     db.setIdentity("production");
     const { code, out, op } = runPlain("production", "stage");
     expect(code).not.toBe(0);
-    expect(out).toContain("RM_ENV=stage against a remote target whose deployment_identity is production");
+    expect(out).toContain("--policy stage against a remote target whose deployment_identity is production");
     expectRefusedAtTheLock(op, "production", out);
   }, 120_000);
 
@@ -180,7 +180,7 @@ describe("`bun smoke --migrate` on a remote REHEARSAL with ~/.env's rm_owner and
   test("proceeds: the migrate run commits, a Ctrl-C then stops the boot at its next boundary, and neither privileged password is anywhere", async () => {
     db.setIdentity("rehearsal");
     const op = operatorFor("yes_flag", {});
-    const boot = onTerminal(bootArgv(op, "yes_flag", {}), { ...op.env, RM_ENV: "stage" });
+    const boot = onTerminal(bootArgv(op, "yes_flag", {}), { ...op.env });
     try {
       // The migrate run has committed once the boot moves on to placing the
       // site. (The site is ASSEMBLED before the lock — smoke spec §13.3 — and

@@ -115,7 +115,8 @@ runs:
     # demo data, never production. `--no-env-file`: the boot refuses an
     # environment bun filled from the checkout's `.env`.
     #
-    # UNATTENDED (spec §10 W2): RM_ENV=stage is the policy, stdin is closed, and
+    # UNATTENDED (spec §10 W2): `--policy stage` is the policy (D69 part 4: no
+    # environment value declares it), stdin is closed, and
     # a local mode has no terminal prompt. A boot that asked for rm_owner or a
     # y/n would be waiting on nobody, so the transcript is checked for either
     # prompt and the step fails if one appeared.
@@ -123,14 +124,13 @@ runs:
       shell: bash
       run: |
         set -o pipefail
-        bun --no-env-file scripts/smoke.ts --local blank --migrate --seed --credentials test-fixtures/smoke/empty-roster.credentials.json < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
+        bun --no-env-file scripts/smoke.ts --policy stage --local blank --migrate --seed --credentials test-fixtures/smoke/empty-roster.credentials.json < /dev/null 2>&1 | tee "$RUNNER_TEMP/e2e-smoke.log"
         if grep -Eq "rm_owner password|type y to continue" "$RUNNER_TEMP/e2e-smoke.log"; then
           echo "::error::the unattended CI boot printed an interactive prompt (spec §5: no terminal prompt exists in local modes)"
           exit 1
         fi
       env:
         CI: "true"
-        RM_ENV: stage
         # Swarm takes are always live-authored through opencode: a missing
         # credential, CLI, or model response fails the job loudly.
         OPENCODE_API_KEY: ${{ inputs.opencode-api-key }}

@@ -215,7 +215,8 @@ export interface OperatorOptions {
   readonly readonlyPassword: string;
   /** The `rm_owner = …` line of `~/.env` (D61), or `null` for no line. */
   readonly ownerPassword: string | null;
-  readonly rmEnv: string;
+  /** The command's `--policy` (D69 part 4); `null` for no flag. */
+  readonly policy: string | null;
   /** `--confirm-target`: the exact target by default, `null` for no flag,
    *  or any other string to pass as given. */
   readonly confirmTarget?: string | null;
@@ -248,8 +249,8 @@ export interface LiveMigrate {
 /**
  * Start `bun run migrate` (backend/scripts/migrate.ts) as the release runbook
  * runs it (D61): no terminal (stdin closed), a `$HOME/.env` holding the
- * connection values, an `rm_readonly` line and the `rm_owner` line, RM_ENV in
- * the environment, and `--confirm-target` on the command line. The password
+ * connection values, an `rm_readonly` line and the `rm_owner` line, and `--policy`
+ * and `--confirm-target` on the command line. The password
  * is never an argument.
  */
 export function startMigrate(options: OperatorOptions): LiveMigrate {
@@ -271,13 +272,13 @@ export function startMigrate(options: OperatorOptions): LiveMigrate {
   const receiptDir = join(home, "receipts");
   const receiptPath = join(receiptDir, "migrate-receipt.json");
   const confirm = options.confirmTarget === undefined ? operatorTarget(url) : options.confirmTarget;
-  const argv = ["bun", "scripts/migrate.ts", "--receipt", receiptPath, ...(confirm === null ? [] : ["--confirm-target", confirm])];
+  const argv = ["bun", "scripts/migrate.ts", ...(options.policy === null ? [] : ["--policy", options.policy]), "--receipt", receiptPath, ...(confirm === null ? [] : ["--confirm-target", confirm])];
   if (options.ownerPassword !== null && argv.join(" ").includes(options.ownerPassword)) {
     throw new Error("the owner password reached argv");
   }
   const child = Bun.spawn(argv, {
     cwd: BACKEND_DIR,
-    env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: options.rmEnv },
+    env: { PATH: process.env.PATH ?? "", HOME: home },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

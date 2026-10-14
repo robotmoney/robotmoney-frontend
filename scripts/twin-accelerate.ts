@@ -26,8 +26,10 @@
 //      state directory.
 //
 // REFUSES (exit 2, nothing written) unless the instance's stack is a smoke-twin
-// (`--local dump`), and whenever RM_ENV is prod. A deployment's database is never
-// touched: the re-time runs inside the twin's own restore container.
+// (`--local dump`). The production instance is never a smoke-twin, so no policy
+// value is read: the stack kind is the guard (D69 part 4 retired the `RM_ENV`
+// refusal this used to carry). A deployment's database is never touched: the
+// re-time runs inside the twin's own restore container.
 //
 // Run it AFTER the realistic-grid checks that need production's epochs (R3.5's B3
 // proof: epoch_duration_seconds = 21600, closes on the continued grid), and BEFORE the
@@ -100,20 +102,11 @@ function psqlStdin(argv: string[], sqlText: string): { code: number; out: string
   return { code: p.exitCode ?? 1, out: `${p.stdout.toString()}${p.stderr.toString()}` };
 }
 
-/** The refusal for this environment, or null. */
-export function refusal(env: Record<string, string | undefined>): string | null {
-  if ((env.RM_ENV ?? "").trim().toLowerCase() === "prod") {
-    return "Refusing: RM_ENV is prod. twin:accelerate changes a twin's schedule only; production keeps its epochs.";
-  }
-  return null;
-}
 
 interface AdminSubject { id: string; status: string; version: number; epochDuration: number | null; judgingDurationSeconds: number | null }
 
 async function main(argv: string[]): Promise<number> {
   const env = process.env as Record<string, string | undefined>;
-  const refused = refusal(env);
-  if (refused) { console.error(`[${NAME}] ${refused}`); return 2; }
   const args = parseArgs(argv);
   if ("error" in args) { console.error(`[${NAME}] ${args.error}`); return 2; }
 

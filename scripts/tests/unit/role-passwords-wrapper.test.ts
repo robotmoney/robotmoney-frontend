@@ -5,11 +5,12 @@
 // ssh's stdin, and nowhere else.
 import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseWrapperArgs, remoteCommand, runWrapper, sshArgv, type WrapperDeps } from "../../release/role-passwords.ts";
 import { loadTarget } from "../../release/target.ts";
+import { checkoutTakesPolicyFlag, policyForCheckout } from "../../release/legacy-policy-env.ts";
 import type { SecretInput } from "../../lib/doadmin-input.ts";
 
 const SECRET = "piped-doadmin-Zz9!secret";
@@ -71,12 +72,15 @@ describe("bun run role-passwords", () => {
 
   test("the remote command is the release's own env -i shape from the release checkout (cloned and installed when missing), with --doadmin-stdin and the target's names only", () => {
     const remote = remoteCommand(STAGE, { target: "stage", doadminStdin: true, roles: "rm_owner,rm_app", rotate: "rm_app" });
+    // The checkout may predate `--policy` (issue 1327): the command carries the
+    // flag for a current prod-init and the legacy variable for an older one
+    // (scripts/release/legacy-policy-env.ts).
     const env = `env -i HOME=${STAGE.home} PATH=/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 RM_ENV=stage`;
     expect(remote).toBe(
       `{ test -e ${STAGE.checkout}/.git || ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${STAGE.checkout}; } && ` +
         `cd ${STAGE.checkout} && ` +
         `{ test -e node_modules -a -e backend/node_modules || { ${env} bun install --force && ${env} bun install --force --cwd backend; }; } && ` +
-        `${env} bun scripts/prod-init.ts role-passwords --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin ` +
+        `${env} bun scripts/prod-init.ts role-passwords --policy stage --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin ` +
         "--roles rm_owner,rm_app --rotate rm_app",
     );
     // A target holds no running-stack checkout (issue 1272): the command names the release checkout only.
@@ -120,5 +124,22 @@ describe("bun run role-passwords", () => {
     expect("error" in bad && !bad.error.includes(SECRET)).toBe(true);
     expect(parseWrapperArgs(["--target", "stage", "--roles", "rm_owner;rm -rf /"])).toMatchObject({ error: expect.stringContaining("comma-separated") });
     expect(parseWrapperArgs([])).toMatchObject({ error: expect.stringContaining("--target is required") });
+  });
+});
+
+describe("legacy-policy-env: a checkout's tools get the policy in the form they read (issue 1327)", () => {
+  test("this checkout takes --policy; a checkout without the flag gets the legacy variable", () => {
+    expect(checkoutTakesPolicyFlag(join(import.meta.dir, "../../.."))).toBe(true);
+    const old = mkdtempSync(join(tmpdir(), "rm-legacy-checkout-"));
+    try {
+      expect(checkoutTakesPolicyFlag(old)).toBe(false);
+      mkdirSync(join(old, "backend", "src"), { recursive: true });
+      writeFileSync(join(old, "backend", "src", "deploy-policy.ts"), "export function resolveRmEnv() {}\n");
+      expect(checkoutTakesPolicyFlag(old)).toBe(false);
+    } finally {
+      rmSync(old, { recursive: true, force: true });
+    }
+    expect(policyForCheckout(true, "stage")).toEqual({ args: ["--policy", "stage"], env: [] });
+    expect(policyForCheckout(false, "prod")).toEqual({ args: [], env: ["RM_ENV=prod"] });
   });
 });

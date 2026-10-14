@@ -10,7 +10,7 @@
 //
 // Driven through the REAL migrate run (`runMigrate`, backend/scripts/
 // migrate-run.ts) as the operator's `bun run migrate` drives it — caller
-// `operator`, `RM_ENV=prod`, a remote connection, a database enrolled as
+// `operator`, `--policy prod`, a remote connection, a database enrolled as
 // production, logged in AS rm_owner, under the §2 target lock — against
 // databases with NO manifest, which is exactly production before §9.1 step 2.
 // Each database is its own (one per case, from a blank or from the template),

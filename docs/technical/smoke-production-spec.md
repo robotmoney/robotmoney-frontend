@@ -16,7 +16,7 @@
 > **Scope.** This specification governs every service the stack runs: `api`,
 > `website-server`, `system-scheduler`, `analytics-producer`, the pipeline
 > worker, local Postgres, and the participants. Amended 2026-09-24 (§12),
-> 2026-09-25, 2026-09-28, 2026-10-03 and 2026-10-08 (§14).
+> 2026-09-25, 2026-09-28, 2026-10-03, 2026-10-08 and 2026-10-14 (§14).
 > The static website is its own release unit, with its own deploy command and
 > version check (§13, [D54](../decisions.md#d54)).
 
@@ -42,7 +42,7 @@ is the repository's existing Compose library, not the external `stack` tool.
 
 ## 1. Boot
 
-`bun smoke --static-port` brings up the production cluster and **exits**. Containers stay up under Docker (`restart: unless-stopped`). `bun smoke:down` is the only way to stop them. `bun smoke:status` and `bun smoke:tui` observe a running stack from another terminal; `bun smoke` never draws a TUI.
+`bun smoke --policy prod --static-port` brings up the production cluster and **exits**. Containers stay up under Docker (`restart: unless-stopped`). `bun smoke:down` is the only way to stop them. `bun smoke:status` and `bun smoke:tui` observe a running stack from another terminal; `bun smoke` never draws a TUI.
 
 `--static-port` is the one option production passes. Retired with no alias: `SMOKE_PROJECT`, `--no-tui`, `--agents`, `--smoke`, `--db`, `--pg-data`, `--twin`, `smoke:archive`, `smoke:stage`.
 
@@ -97,7 +97,7 @@ One protocol for every tool that mutates or deploys against a database: `bun smo
 
 **Only `rm_owner` may `DELETE` or `TRUNCATE`** ([D55](../decisions.md#d55) (6)). No runtime role — `rm_app`, `rm_worker`, `rm_readonly` — holds `DELETE` or `TRUNCATE` on any table, append-only or not. Runtime code never removes a row. Where it deletes today, it is redesigned into one of three shapes: a tombstone column every read filters on; a read that filters out expired rows, with pruning left to an `rm_owner` run; or an upsert that replaces the row in place. Security revocations stay immediately effective: a revoked key, token or membership is refused on the next request, because the revoking transaction writes the tombstone, never because a later prune removed a row. Preflight check 2 enforces the grant half (§7). Two constraints bind the redesign. A table that unauthenticated requests write stays bounded with no `rm_owner` run: WebAuthn challenges use a fixed set of 32 slots, overwritten oldest-first under `CHALLENGE_ISSUE_LOCK` and consumed by a single-use conditional `UPDATE`. No release ships code that writes a revocation or consumption tombstone unless the same release carries the `compat: breaking` migration that revokes runtime `DELETE`, so code that ignores the tombstone can never boot beside it. Pruning is a manual, receipted `rm_owner` command with a 7-day minimum window, which never removes a security tombstone or audit history ([D55](../decisions.md#d55) (12), scheduler spec §6.3).
 
-**`~/.env`** is the deploying user's home-directory file, outside every checkout. It holds exactly these keys and nothing else: the remote connection (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and `rm_readonly`; the owner password `rm_owner` ([D61](../decisions.md#d61)); `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY` (the paid CoinGecko key, see "The CoinGecko key and GeckoTerminal" below). It must not contain `doadmin`, another superuser token, a service token, a signing key or a model key; preflight enforces the list (§7 check 4). `bun smoke` forwards only `rm_app`, `rm_worker` and `rm_readonly` to containers. No container, compose file, image or log receives `rm_owner` or `doadmin`. Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
+**`~/.env`** is the deploying user's home-directory file, outside every checkout. It holds exactly these keys and nothing else: the remote connection (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and `rm_readonly`; the owner password `rm_owner` ([D61](../decisions.md#d61)); `RM_CREDENTIALS`; and `COINGECKO_API_KEY` (the paid CoinGecko key, see "The CoinGecko key and GeckoTerminal" below). It must not contain `doadmin`, another superuser token, a service token, a signing key or a model key; preflight enforces the list (§7 check 4). `bun smoke` forwards only `rm_app`, `rm_worker` and `rm_readonly` to containers. No container, compose file, image or log receives `rm_owner` or `doadmin`. Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
 
 **Participant credentials** live in `credential.json` (§6.1), never in `~/.env`. Each entry holds that participant's signing key, its API bearer token and its model key.
 
@@ -122,16 +122,16 @@ The source ledger redacts every `*api-key` request header. Setting the key is an
 
 ## 4. Environment and target
 
-### 4.1 `RM_ENV` (policy)
+### 4.1 `--policy` (policy)
 
-Values: `prod`, `stage`. Stage, test, and CI are isomorphic and share `stage`. `RM_ENV` is policy only; it does not name the instance (§1.1).
+Values: `prod`, `stage`. Stage, test, and CI are isomorphic and share `stage`. The policy is policy only; it does not name the instance (§1.1). Each operator tool takes it as its own flag, `--policy prod` or `--policy stage`: `bun smoke`, `bun smoke:web`, `bun run migrate`, `bun run prune` and every `prod-init` command ([D69](../decisions.md#d69) part 4). No tool reads a policy from its environment or from `~/.env`; the `RM_ENV` variable that carried it is retired, and a leftover `~/.env` line is a key off the §3 list (§7 check 4).
 
 ### 4.2 `deployment_identity` (target enrollment)
 
-A one-row table in the database, `deployment_identity.kind ∈ {production, rehearsal}`, writable only by `rm_owner`. `production` is written once by production initialization (§9.1). `rehearsal` is written by every `--local blank` bootstrap, every `--local dump` restore, and every restore of a production dump into a remote database, which must end by writing `rehearsal` through `rm_owner` before any stage tool connects. A pre-0081 production dump has no `deployment_identity` table, so nothing can hold `rehearsal` until 0081 is applied. **A stage `bun run migrate` prepares such a remote twin** ([D61](../decisions.md#d61) rule 2, 2026-10-08; this reverses the 2026-09-28 call of [D55](../decisions.md#d55) (10)). It is the remote rehearsal pass of §4.3. It runs the same command, at the same commit, with the same steps as the first production migrate. Only `RM_ENV` and the identity it writes differ.
+A one-row table in the database, `deployment_identity.kind ∈ {production, rehearsal}`, writable only by `rm_owner`. `production` is written once by production initialization (§9.1). `rehearsal` is written by every `--local blank` bootstrap, every `--local dump` restore, and every restore of a production dump into a remote database, which must end by writing `rehearsal` through `rm_owner` before any stage tool connects. A pre-0081 production dump has no `deployment_identity` table, so nothing can hold `rehearsal` until 0081 is applied. **A stage `bun run migrate` prepares such a remote twin** ([D61](../decisions.md#d61) rule 2, 2026-10-08; this reverses the 2026-09-28 call of [D55](../decisions.md#d55) (10)). It is the remote rehearsal pass of §4.3. It runs the same command, at the same commit, with the same steps as the first production migrate. Only `--policy` and the identity it writes differ.
 
 - The twin tooling (`bun run smoke:twin`, `bun run smoke:twin:once`) and every stage tool other than `bun run migrate` refuse a remote target with no `deployment_identity` table. The refusal changes nothing, and its message names the remote rehearsal pass.
-- The operator restores the dump into the remote database first. Then `RM_ENV=stage bun run migrate --confirm-target <host:port/database>` applies 0081 and writes `rehearsal` in one fenced transaction. It then applies the five files below 0081 and the rest through the normal path (§9.1). Its receipt records the pre-identity state. All of this happens before any other stage tool connects.
+- The operator restores the dump into the remote database first. Then `bun run migrate --policy stage --confirm-target <host:port/database>` applies 0081 and writes `rehearsal` in one fenced transaction. It then applies the five files below 0081 and the rest through the normal path (§9.1). Its receipt records the pre-identity state. All of this happens before any other stage tool connects.
 - The hand step of the [pre-identity remote twin runbook](../runbooks/pre-identity-remote-twin.md) is retired. Its end state is the one the pass leaves, so a database it prepared is still accepted.
 - Otherwise a twin of such a dump uses `bun smoke --local dump` (§5), which prepares it with the local pass of §4.3.
 
@@ -141,7 +141,7 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 
 ### 4.3 Policy × identity matrix (enforced before any service starts)
 
-| `RM_ENV` | connection | identity row | result |
+| `--policy` | connection | identity row | result |
 |---|---|---|---|
 | `prod` | remote | `production` | production guards armed |
 | `prod` | remote | anything else | refuse |
@@ -151,20 +151,20 @@ It marks what the target is enrolled for. It is an accidental-target safeguard, 
 | `stage` | `--local blank`/`dump` | written by smoke as `rehearsal` | stage |
 | `stage` | `--local volume` | `rehearsal` | stage |
 | `stage` | `--local volume` | anything else | refuse; a reattached volume gets no weaker policy than a remote |
-| unset | remote | any | refuse |
-| unset | `--local` | as `stage` | warn `RM_ENV not set, running as stage`, proceed |
+| not given | remote | any | refuse |
+| not given | `--local` | as `stage` | warn `--policy not given, running as stage`, proceed |
 | other | any | any | refuse |
 
 **Three named exceptions for a database with no identity row** ([D55](../decisions.md#d55) (5), (9), (10), [D61](../decisions.md#d61)). Only these three tool passes may run against a database with no `deployment_identity` table. Each applies `0081_deployment_identity` before any other pending migration.
 
-- **Production first pass** (`bun run migrate`, §9.1). A remote connection, `RM_ENV=prod`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `production`.
-- **Remote rehearsal pass** (`bun run migrate`, §4.2, [D61](../decisions.md#d61)). A remote connection, `RM_ENV=stage`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `rehearsal` and never `production`. It is the production first pass with only the policy changed, so stage rehearses the cutover unmodified.
-- **`--local dump` preparation** (`bun smoke`, §5). Only on the Postgres container the same run created and restored. `RM_ENV` must not be `prod`, and it uses the owner password smoke generated. It writes `rehearsal`. It checks for itself that its connection is that local container, and it refuses any remote connection whatever `RM_ENV`, password or acknowledgement says.
+- **Production first pass** (`bun run migrate`, §9.1). A remote connection, `--policy prod`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `production`.
+- **Remote rehearsal pass** (`bun run migrate`, §4.2, [D61](../decisions.md#d61)). A remote connection, `--policy stage`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `rehearsal` and never `production`. It is the production first pass with only the policy changed, so stage rehearses the cutover unmodified.
+- **`--local dump` preparation** (`bun smoke`, §5). Only on the Postgres container the same run created and restored. `--policy` must not be `prod`, and it uses the owner password smoke generated. It writes `rehearsal`. It checks for itself that its connection is that local container, and it refuses any remote connection whatever `--policy`, password or acknowledgement says.
 All three share three rules. 0081's DDL, its `schema_migrations` row and the identity row commit in one fenced transaction (§2). Before the pass, the ledger must equal a supported baseline of §9.1 exactly; any other pre-identity ledger refuses. No tool applies 0081 out of order outside these three passes. No boot and no other tool has an exception, and every later run requires the row. A second run with the row present takes the normal path. A remote target with no table refuses every other tool, naming the remote rehearsal pass of §4.2.
 
 **Rehearsal-only preparation:** `--migrate`, `--seed`, `--spoof-keys` require `rehearsal` in addition to their own guards.
 
-**Production initialization** (§9.1) is a set of separate commands allowed on `production`, each gated by `RM_ENV=prod`, `--confirm-target`, a receipt and the target lock. Stage runs the same commands unmodified ([D61](../decisions.md#d61) rule 2): under `RM_ENV=stage` each requires a `rehearsal` target. No command runs crosswise: prod against `rehearsal`, or stage against `production`, refuses. `role-passwords` runs before the first migrate, so it also accepts a target with no identity row under either policy, when the ledger equals a supported baseline exactly. A command that writes the database directly also requires the `rm_owner` line of `~/.env`; the key rotation of §9.1 step 6 goes through the admin API with the operator's admin service token instead. No release step acts as `doadmin`: only the provisioning script `bun run role-passwords` does (`prod-init role-passwords` on the host), from a hidden prompt or `--doadmin-stdin`, never from `~/.env` or any file ([D61](../decisions.md#d61), amendment 2026-10-08). None is reachable through `bun smoke`.
+**Production initialization** (§9.1) is a set of separate commands allowed on `production`, each gated by `--policy prod`, `--confirm-target`, a receipt and the target lock. Stage runs the same commands unmodified ([D61](../decisions.md#d61) rule 2): under `--policy stage` each requires a `rehearsal` target. No command runs crosswise: prod against `rehearsal`, or stage against `production`, refuses. `role-passwords` runs before the first migrate, so it also accepts a target with no identity row under either policy, when the ledger equals a supported baseline exactly. A command that writes the database directly also requires the `rm_owner` line of `~/.env`; the key rotation of §9.1 step 6 goes through the admin API with the operator's admin service token instead. No release step acts as `doadmin`: only the provisioning script `bun run role-passwords` does (`prod-init role-passwords` on the host), from a hidden prompt or `--doadmin-stdin`, never from `~/.env` or any file ([D61](../decisions.md#d61), amendment 2026-10-08). None is reachable through `bun smoke`.
 
 ### 4.4 No smoke overlay
 
@@ -244,7 +244,7 @@ This is recoverable, not atomic. Between (2) and (4) a container may hold the ol
 
 **Roster precedence.** While a spoof generation exists for an instance, reconciliation (§6.1) takes the named members' entries from the generation file instead of `RM_CREDENTIALS`. A later plain boot therefore keeps those members on the keys the database accepts.
 
-Any one of these refuses: `RM_ENV = prod`; `deployment_identity ≠ rehearsal`; no `rm_owner` credential (generated by smoke in local modes, the `rm_owner` line of `~/.env` on a remote connection); flag not explicit.
+Any one of these refuses: `--policy prod`; `deployment_identity ≠ rehearsal`; no `rm_owner` credential (generated by smoke in local modes, the `rm_owner` line of `~/.env` on a remote connection); flag not explicit.
 
 **The owned-twin exception (amended 2026-10-05).** A twin exists to rehearse the swarm it restored, and a twin that seats only the in-house members rehearses two of seven silently. So on a twin the boot owns — `--local dump` or `--local volume`, `deployment_identity = rehearsal` (`resolveSeatAllRestored`) — `--spoof-keys` may rebind ANY active member, third parties and judges included, and with no names it selects every active member. The copy is throwaway: nothing re-keyed here outlives the boot or reaches the real member. The rehearsal credential file lists every active member (throwaway keys, a model key per seat), and the participants phase refuses a twin that leaves any active non-judge member unseated. On any other target the third-party refusal stands.
 
@@ -260,7 +260,7 @@ Boot order: config validation → plan and deployment lock → database create/r
    (a) **integrity** — live definitions of every object class in §8.1 match the manifest for M stored in the database (§8.3), excluding the provider list. Genuine drift fails here whatever code is booting.
    (b) **compatibility** — the booting code supports M (§8.4). An additive change to an existing table passes: (a) compares against M's manifest, which includes it; (b) reads the migration's declaration.
 4. `~/.env` holds only the keys §3 lists, `rm_owner` included. Any other key warns on `stage` and refuses on `prod`; a `doadmin`, superuser or cluster `postgres` credential is named in the message.
-5. `RM_ENV` × `deployment_identity` resolve per §4.3.
+5. `--policy` × `deployment_identity` resolve per §4.3.
 6. Every active subject has its epoch duration, epoch anchor and judging duration. (Whether it has an open epoch is a readiness check, not a preflight one — §6.3.)
 
 ### 7.1 Registry, enforced structurally
@@ -313,15 +313,15 @@ Code built for snapshot N boots against a database at M > N only if every ledger
 
 ### 8.5 `--migrate` and production upgrades
 
-In production an upgrade is an operator intervention: `bun run migrate --confirm-target <host:port/database>`, reading `rm_owner` from `~/.env`, planned per release, receipted. It is never part of the boot. An agent runs it from the control machine over SSH ([D61](../decisions.md#d61)). It needs no terminal.
+In production an upgrade is an operator intervention: `bun run migrate --policy prod --confirm-target <host:port/database>`, reading `rm_owner` from `~/.env`, planned per release, receipted. It is never part of the boot. An agent runs it from the control machine over SSH ([D61](../decisions.md#d61)). It needs no terminal.
 
 **`bun run migrate` refuses** when `~/.env` has no `rm_owner` line, naming the key and the file. It refuses when `--confirm-target` is absent or differs from the resolved target, printing both. It refuses when `rm_owner` is `NOLOGIN`, naming `bun scripts/prod-init.ts role-passwords`. Before the owner password is read it runs the ledger reconciliation of §8.1 on the `rm_readonly` session (checks 1 and 2 always, check 3 under `--pin-ref <tag|commit>`), refuses on any verdict other than `ok` with nothing applied, and records the receipt in its own ([D67](../decisions.md#d67)).
 
-**Where a standalone migrate records itself.** `bun run migrate` writes its receipt, `migrate-receipt-<start>.json`, and its journal, `migrate-journal-<start>.json`, into one directory: the instance's state directory (§1.1; `rm_prod` under `RM_ENV=prod`, else the one `--instance` names), or the directory of `--receipt <path>`. The journal is written before each phase and closed on every exit with the phase it stopped in (§2), so a run that refused, failed, lost its lock or was killed leaves the journal alone, and a run that succeeded leaves both. `bun smoke --migrate` keeps no journal of its own: the smoke journal (§1.3) records its `migrate` preparation.
+**Where a standalone migrate records itself.** `bun run migrate` writes its receipt, `migrate-receipt-<start>.json`, and its journal, `migrate-journal-<start>.json`, into one directory: the instance's state directory (§1.1; `rm_prod` under `--policy prod`, else the one `--instance` names), or the directory of `--receipt <path>`. The journal is written before each phase and closed on every exit with the phase it stopped in (§2), so a run that refused, failed, lost its lock or was killed leaves the journal alone, and a run that succeeded leaves both. `bun smoke --migrate` keeps no journal of its own: the smoke journal (§1.3) records its `migrate` preparation.
 
-**Order.** When every pending migration is `additive`, the operator runs `bun run migrate` against the running stack, then `bun smoke --static-port` with the new images; the old code keeps serving because it supports the additive state (§8.4). When any pending migration is `breaking`, the operator runs `bun smoke:down`, then `bun run migrate`, then `bun smoke --static-port`, so no old service runs against the breaking state. The release's runbook names which case applies.
+**Order.** When every pending migration is `additive`, the operator runs `bun run migrate --policy prod` against the running stack, then `bun smoke --policy prod --static-port` with the new images; the old code keeps serving because it supports the additive state (§8.4). When any pending migration is `breaking`, the operator runs `bun smoke:down`, then `bun run migrate --policy prod`, then `bun smoke --policy prod --static-port`, so no old service runs against the breaking state. The release's runbook names which case applies.
 
-`--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `RM_ENV=prod` or `deployment_identity ≠ rehearsal`, except that it carries the `--local dump` pass of §4.3 on a local database with no identity row. On a remote database with no `deployment_identity` table it refuses and names the remote rehearsal pass of §4.2. In local modes it uses the owner password smoke generated. On a remote connection it reads `rm_owner` from `~/.env`, warns, and requires `--confirm-target`. A remote `--seed` does the same. It runs the migrate run of §8.3.
+`--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `--policy prod` or `deployment_identity ≠ rehearsal`, except that it carries the `--local dump` pass of §4.3 on a local database with no identity row. On a remote database with no `deployment_identity` table it refuses and names the remote rehearsal pass of §4.2. In local modes it uses the owner password smoke generated. On a remote connection it reads `rm_owner` from `~/.env`, warns, and requires `--confirm-target`. A remote `--seed` does the same. It runs the migrate run of §8.3.
 
 ## 9. Production
 
@@ -330,19 +330,19 @@ In production an upgrade is an operator intervention: `bun run migrate --confirm
 1. The role passwords and `rm_owner LOGIN` — `bun scripts/prod-init.ts role-passwords --confirm-target <host:port/database>` ([D61](../decisions.md#d61)), from the control machine as `bun run role-passwords --target <stage|prod>`. It connects as `doadmin`, whose password is typed at a hidden prompt or piped with `--doadmin-stdin` and stored nowhere. It reads `pg_roles` for the four roles. For each role, a `~/.env` line that logs in is kept with no `ALTER`. An absent line is set: the host generates a password, the server receives only its SCRAM-SHA-256 verifier, and the host writes `<role> = <password>` into `~/.env` (atomic, 0600) and proves the login. A line that does not log in refuses. Only `--rotate <role>` replaces one, keeping the old line in `~/.env.retired-<ts>`. `rm_owner` also becomes `LOGIN`. A runtime role's attributes never change. A rerun keeps every role. It takes the target lock and writes a receipt of role → `kept`, `set` or `rotated`. Migration 0053's `NOLOGIN` lines change for fresh databases; existing databases need this step because the runner skips recorded files.
 2. Baseline — compare production's live schema with the snapshot for its installed filename list. Any difference is repaired by a migration first; the first `bun run migrate` publishes a manifest only when the live schema matches.
 3. Grant transition — migrations revoking `DELETE` and `TRUNCATE` on every table from every runtime role (0053 granted `DELETE` on all tables; §3, [D55](../decisions.md#d55) (6)). Check 2 fails until they land.
-4. `deployment_identity = production` — via `rm_owner`, written by the first migrate in the same transaction as 0081 (below, [D55](../decisions.md#d55) (9)). `bun scripts/prod-init.ts set-identity` then confirms the row under the same gates as the other steps and receipts it: it reads the row through `rm_owner` inside the fence and never writes one, so a target with no row refuses. Under `RM_ENV=stage` it confirms `rehearsal` the same way, on the target the remote rehearsal pass enrolled.
+4. `deployment_identity = production` — via `rm_owner`, written by the first migrate in the same transaction as 0081 (below, [D55](../decisions.md#d55) (9)). `bun scripts/prod-init.ts set-identity` then confirms the row under the same gates as the other steps and receipts it: it reads the row through `rm_owner` inside the fence and never writes one, so a target with no row refuses. Under `--policy stage` it confirms `rehearsal` the same way, on the target the remote rehearsal pass enrolled.
 5. Provision the three service tokens (§3).
 6. Rebind each seated member to its `credential.json` key through the admin `rotate-key` route, one member at a time, writing each returned bearer token into that member's entry.
 
 **The first production migrate runs before the identity row exists** ([D55](../decisions.md#d55) (5)). Production's ledger is v0.5.0's 72 files plus four more (`0061_rm_worker_wallet_backfill_grant.sql`, `0062_rm_readonly_sequence_select.sql`, `0063_swarm_judge_model_default.sql` and `0080_analytics_ledger_compaction.sql`), which predates the `deployment_identity` table (0081) and the manifest (0082), and every migrate run otherwise refuses a database with no identity row. So the first `bun run migrate`, which carries steps 2 and 3, may run once with no row, or no table, only when every one of these holds:
 
 - a remote connection;
-- `RM_ENV=prod`;
+- `--policy prod`;
 - the ledger's filename list is exactly equal to the filename list of the one `SUPPORTED_RELEASES` entry, the pre-identity baseline (production's observed 76-name ledger, read on 2026-10-01: v0.5.0 plus `0061_rm_worker_wallet_backfill_grant`, `0062_rm_readonly_sequence_select` with the c3a68812 SQL, `0063_swarm_judge_model_default` and `0080_analytics_ledger_compaction`, which Lucas confirmed on 2026-10-03, [D55](../decisions.md#d55) (8)): no file missing, none extra, none renamed. A pure v0.5.0 ledger is four files less, the earlier 73-name ledger is three less, and both refuse. This exact match exists for the identity-first pass alone; every other run of `bun run migrate`, and the release preflight, reconcile the ledger with the files instead (§8.1, [D67](../decisions.md#d67)) and name no per-release constant;
 - `~/.env` holds the `rm_owner` line;
 - `--confirm-target` names exactly the target `~/.env` resolves to.
 
-It takes the target lock (§2) like every other mutation. Its receipt records the pre-identity state: that no identity row existed, the supported release the ledger matched, and that ledger's filename list. From then on every run of every tool requires the row, and the exception is never available again on that database. A ledger that matches no supported release, a partly migrated ledger, an `RM_ENV` other than `prod` or `stage`, a missing `rm_owner` line or a `--confirm-target` that is absent or wrong refuses and changes nothing. Under `RM_ENV=stage` the same run is the remote rehearsal pass of §4.3. It writes `rehearsal`, never `production`.
+It takes the target lock (§2) like every other mutation. Its receipt records the pre-identity state: that no identity row existed, the supported release the ledger matched, and that ledger's filename list. From then on every run of every tool requires the row, and the exception is never available again on that database. A ledger that matches no supported release, a partly migrated ledger, a `--policy` other than `prod` or `stage`, a missing `rm_owner` line or a `--confirm-target` that is absent or wrong refuses and changes nothing. Under `--policy stage` the same run is the remote rehearsal pass of §4.3. It writes `rehearsal`, never `production`.
 
 **Identity first** ([D55](../decisions.md#d55) (9)). The guarded pass applies `0081_deployment_identity` before any other pending migration, out of filename order. 0081's DDL, its `schema_migrations` row and step 4's row, `production`, commit in one fenced transaction. The remaining pending migrations then take the normal path in filename order.
 
@@ -350,12 +350,12 @@ It takes the target lock (§2) like every other mutation. Its receipt records th
 
 So an interruption at any point after 0081 commits leaves the row in place, and a rerun takes the normal path and resumes from the first unapplied migration (§8.3), the five lower files included. An interruption before 0081 commits leaves the ledger on the baseline, and a rerun takes the guarded pass again. No tool applies 0081 out of order outside the three passes of §4.3; the runner refuses it anywhere else.
 
-**A production dump takes the same path** ([D55](../decisions.md#d55) (10)). A dump restored from production has no `deployment_identity` table either. A `--local dump` whose restored ledger equals the production baseline is prepared by smoke: it applies 0081 first and writes `rehearsal` in the same transaction, before any other pending migration, and the rest take the normal path. It needs no `RM_ENV=prod` and no `--confirm-target`: smoke owns the container and generated the owner password (§5). The local pass keeps the guards of §4.3. A remote twin of such a dump is prepared by `RM_ENV=stage bun run migrate --confirm-target …`, the remote rehearsal pass of §4.3. It runs the production first pass's steps and writes `rehearsal`. A dump with any other pre-identity ledger refuses.
+**A production dump takes the same path** ([D55](../decisions.md#d55) (10)). A dump restored from production has no `deployment_identity` table either. A `--local dump` whose restored ledger equals the production baseline is prepared by smoke: it applies 0081 first and writes `rehearsal` in the same transaction, before any other pending migration, and the rest take the normal path. It needs no `--policy prod` and no `--confirm-target`: smoke owns the container and generated the owner password (§5). The local pass keeps the guards of §4.3. A remote twin of such a dump is prepared by `bun run migrate --policy stage --confirm-target …`, the remote rehearsal pass of §4.3. It runs the production first pass's steps and writes `rehearsal`. A dump with any other pre-identity ledger refuses.
 
 ### 9.2 Every boot
 
-1. Host: `RM_ENV=prod`; `~/.env` with the §3 keys only (`rm_owner` included, never `doadmin`); `RM_CREDENTIALS` pointing at the credential file (today: agents `athena`, `noop-analyst`, `robot-money`; judge `themis`).
-2. `bun smoke --static-port`
+1. Host: `~/.env` with the §3 keys only (`rm_owner` included, never `doadmin`); `RM_CREDENTIALS` pointing at the credential file (today: agents `athena`, `noop-analyst`, `robot-money`; judge `themis`).
+2. `bun smoke --policy prod --static-port`
 3. Plan printed, locks taken, preflight passes or the boot stops with the reason. On success smoke exits; the stack runs under Docker.
 4. Observe with `bun smoke:status`. Stop only with `bun smoke:down`.
 
@@ -368,7 +368,7 @@ The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard ha
 Each is an executable release gate. Cutover requires all three workstreams green. The W7 gates govern the website lifecycle (§13), which ships on its own schedule.
 
 **W1 deployment lifecycle**
-- Unset `RM_ENV` against a remote target refuses.
+- No `--policy` against a remote target refuses.
 - Concurrent CI jobs plus a standing stage select distinct instances with prior state present.
 - Second `bun smoke` against a locked instance refuses.
 - Two instances preparing the same remote database serialize on the target lock.
@@ -391,24 +391,24 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - A blank bootstrap seeds the pipeline worker's schedule rows and no session schedule row.
 
 **W2 schema and privilege verification**
-- `RM_ENV=stage` + the `rm_owner` line against `deployment_identity = production` refuses; plain stage boot against production identity refuses.
+- `--policy stage` + the `rm_owner` line against `deployment_identity = production` refuses; plain stage boot against production identity refuses.
 - Snapshot bootstrap then `--migrate`; snapshot bootstrap boots without `--seed`.
 - Old code boots after an additive change to an existing table while genuine drift on the same database still fails.
 - Old release reads compat metadata written by a newer one and refuses unknown `metadata_version`.
 - Migrate fails between commits and during grant reconciliation; rerun reaches a verified final state.
 - Denylist: runtime role with `rm_owner` membership, object ownership, or `DELETE` or `TRUNCATE` on any table fails preflight.
 - No runtime path deletes: a revoked key, token or membership is refused on its next request with no `DELETE` issued, and an expired row stops being served before any prune runs.
-- First production migrate: with no `deployment_identity` row and a ledger exactly equal to the production baseline (the 76-name ledger of §9.1), `RM_ENV=prod`, the `rm_owner` line and a matching `--confirm-target` migrate once and receipt the pre-identity state. A ledger with one file more or less (a pure v0.5.0 ledger included), a missing `rm_owner` line, or an absent or wrong `--confirm-target` refuses and changes nothing. A second run with no row still refuses.
-- Remote rehearsal pass: the same state under `RM_ENV=stage` applies 0081 first, writes `rehearsal` in the same transaction, and migrates the rest. A non-baseline pre-identity ledger refuses and changes nothing. The production pass is unchanged and still writes `production`. A second run with the row present takes the normal path.
+- First production migrate: with no `deployment_identity` row and a ledger exactly equal to the production baseline (the 76-name ledger of §9.1), `--policy prod`, the `rm_owner` line and a matching `--confirm-target` migrate once and receipt the pre-identity state. A ledger with one file more or less (a pure v0.5.0 ledger included), a missing `rm_owner` line, or an absent or wrong `--confirm-target` refuses and changes nothing. A second run with no row still refuses.
+- Remote rehearsal pass: the same state under `--policy stage` applies 0081 first, writes `rehearsal` in the same transaction, and migrates the rest. A non-baseline pre-identity ledger refuses and changes nothing. The production pass is unchanged and still writes `production`. A second run with the row present takes the normal path.
 - Identity first: the production pass applies 0081 and commits its DDL, its ledger row and `production` in the same transaction, before any other migration. Kill any migrate between two commits: the rerun resumes. Applying 0081 out of order outside the three passes of §4.3 refuses.
 - Kill and rerun, for each of the three passes: kill it before 0081 commits, and the rerun takes the pass again; kill it after 0081, and the rerun resumes through the normal path and applies the five files below 0081 (§9.1).
 - The normal path applies a pending file below a recorded 0081 only when the identity row exists and the rest of the ledger equals the baseline plus 0081, plus files applied after it; every other out-of-order state refuses.
-- A `--local dump` whose ledger equals the production baseline applies 0081 first, writes `rehearsal` in the same transaction, and boots; a dump with any other pre-identity ledger refuses. Pointed at a remote connection, the local dump preparation refuses, whatever `RM_ENV`, password or acknowledgement says.
+- A `--local dump` whose ledger equals the production baseline applies 0081 first, writes `rehearsal` in the same transaction, and boots; a dump with any other pre-identity ledger refuses. Pointed at a remote connection, the local dump preparation refuses, whatever `--policy`, password or acknowledgement says.
 - A remote target with no `deployment_identity` table and a stage policy is refused by the twin tooling and by every stage tool but `bun run migrate` (`bun smoke`, `--migrate`, `--seed`, `--spoof-keys`). The refusal changes nothing and names the remote rehearsal pass.
 - A remote database left in the retired hand step's state (the baseline plus 0081, and `rehearsal`) is accepted by a stage `bun run migrate`, which applies the five files below 0081 and the rest through the normal path.
 - Privileged credentials ([D61](../decisions.md#d61)): `bun run migrate`, `bun run prune`, a remote `--migrate` or `--seed`, `prod-init set-identity` and `provision-tokens` refuse when `~/.env` has no `rm_owner` line, naming the key and the file. Each refuses an absent or wrong `--confirm-target`, printing both targets, and proceeds when it matches. No test path reads a terminal.
 - `role-passwords`: working lines are kept with no `ALTER`, and a rerun keeps every role. An absent line is set through a SCRAM verifier, written to `~/.env` and proven. A failing line refuses unless `--rotate` names it. An empty line refuses. A kept `NOLOGIN` `rm_owner` gets exactly `ALTER ROLE rm_owner LOGIN`, then a verified login. A wrong `--confirm-target`, or no terminal and no `--doadmin-stdin`, refuses and writes nothing. A `doadmin` line in `~/.env` is never read. A target with no identity row is accepted only when its ledger equals a supported baseline.
-- Production initialization never runs crosswise: each of `role-passwords`, `set-identity`, `provision-tokens` and `rebind-members` proceeds under `RM_ENV=prod` against `production` and under `RM_ENV=stage` against `rehearsal`, and refuses prod against `rehearsal` and stage against `production`.
+- Production initialization never runs crosswise: each of `role-passwords`, `set-identity`, `provision-tokens` and `rebind-members` proceeds under `--policy prod` against `production` and under `--policy stage` against `rehearsal`, and refuses prod against `rehearsal` and stage against `production`.
 - Neither privileged password appears in a receipt, a journal, a log line, an error message or a process argument. No container environment or compose file `bun smoke` assembles carries `rm_owner` or `doadmin`.
 - More than 32 unauthenticated WebAuthn option requests leave the challenge row count at 32.
 - Code built before the `compat: breaking` migration that revokes runtime `DELETE` refuses to boot after it.
@@ -564,3 +564,15 @@ Amended on 2026-10-08 by the owner's decision [D61](../decisions.md#d61): releas
 | §8.5 | `bun run migrate` prompts for `rm_owner` and asks `y/n` | it reads `rm_owner` from `~/.env`, takes `--confirm-target`, and names `role-passwords` for a `NOLOGIN` owner |
 | §9.1 | step 1 is a hand `ALTER ROLE … LOGIN PASSWORD` through `doadmin`; the first migrate needs a typed password and `y` | step 1 is `prod-init role-passwords`, which keeps working role lines, generates absent ones through a SCRAM verifier and makes `rm_owner` LOGIN; the first migrate needs the `rm_owner` line and `--confirm-target` |
 | §10 W2 | typed-owner and `y` gates; stage `bun run migrate` refuses a remote target with no table | `~/.env` and `--confirm-target` gates; the remote rehearsal pass; `role-passwords`; the no-leak invariants |
+
+Amended on 2026-10-14 by the owner's decision [D69](../decisions.md#d69) part 4 (issue 1327): the operator tools take the policy as an explicit flag. This table supersedes every `RM_ENV` row of the tables above.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended through 2026-10-08 | also amended 2026-10-14 |
+| §3 | `~/.env` holds `RM_ENV` | `~/.env` holds no policy line; a leftover `RM_ENV` line is a key off the list, named as the retired variable by check 4 |
+| §4.1 | `RM_ENV` is the policy, read from the process or `~/.env` | `--policy prod` or `--policy stage` is each tool's own flag; no tool reads `RM_ENV` |
+| §4.3 | rows keyed on `RM_ENV`; unset warns `RM_ENV not set, running as stage` | rows keyed on `--policy`; no flag warns `--policy not given, running as stage` under `--local` and refuses against a remote |
+| §7 check 5 | `RM_ENV` × `deployment_identity` | `--policy` × `deployment_identity` |
+| §8.5, §9.1, §9.2 | `RM_ENV=prod` on the host; `bun run migrate`, `bun smoke --static-port` | `bun run migrate --policy prod`, `bun smoke --policy prod --static-port`, `prod-init <command> --policy prod` |
+| §10 | gates name `RM_ENV` | the same gates name `--policy` |

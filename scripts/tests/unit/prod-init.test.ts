@@ -2,7 +2,7 @@
 // steps 4-6, §4.3, §5.
 //
 //   §4.3: production initialization is "a set of separate commands allowed on
-//   `production`, each gated by `RM_ENV=prod`, `y/n`, a receipt and the target
+//   `production`, each gated by `--policy prod`, `y/n`, a receipt and the target
 //   lock. A command that writes the database directly also requires a typed
 //   `rm_owner`; the key rotation of §9.1 step 6 goes through the admin API with
 //   the operator's admin service token instead. None is reachable through
@@ -22,7 +22,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { PROD_INIT_COMMANDS, ProdInitRefusal, runProdInit, type ProdInitDeps } from "../../prod-init.ts";
+import { PROD_INIT_COMMANDS, ProdInitRefusal, runProdInit as realRunProdInit, type ProdInitDeps } from "../../prod-init.ts";
 import { instancePaths, writeStackState } from "../../lib/smoke-state.ts";
 import { PROVISION_TOKENS_COMMAND, tokenReuseRefusal } from "../../lib/smoke-secret.ts";
 import type { TargetState } from "../../../backend/src/db/target-lock.ts";
@@ -38,7 +38,7 @@ const OWNER_PASSWORD = "home-env-owner-secret-7f3a";
 const DOADMIN_PASSWORD = "home-env-doadmin-secret-91c2";
 /** What the admin types (or pipes) for role-passwords. A doadmin line in ~/.env (DOADMIN_PASSWORD) is never read. */
 const TYPED_DOADMIN = "typed-doadmin-secret-55e1";
-const HOME_ENV: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_owner: OWNER_PASSWORD, doadmin: DOADMIN_PASSWORD, RM_ENV: "prod" };
+const HOME_ENV: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_owner: OWNER_PASSWORD, doadmin: DOADMIN_PASSWORD };
 /** The target ~/.env resolves to, exactly as D61's --confirm-target must name it. */
 const TARGET = "db.example.internal:25060/defaultdb";
 const CONFIRM = ["--confirm-target", TARGET] as const;
@@ -52,9 +52,22 @@ interface Recorder {
 /** The supported baseline's ledger: the pre-identity state role-passwords accepts (D61). */
 const BASELINE_LEDGER = [...SUPPORTED_RELEASES[0]!.migrations];
 
+/**
+ * The `--policy` each fake's command line carries (D69 part 4: the policy is
+ * the command's own flag, never `env` or `~/.env`). `fake({ policy })` sets it:
+ * `prod` by default (a deps object copied from a fake's included), `null` for
+ * no flag at all. This file's `runProdInit` appends it, so every call site
+ * below runs the real command with the flag.
+ */
+const POLICY = new WeakMap<ProdInitDeps, string | null>();
+function runProdInit(argv: readonly string[], deps: ProdInitDeps): ReturnType<typeof realRunProdInit> {
+  const policy = POLICY.has(deps) ? POLICY.get(deps)! : "prod";
+  return realRunProdInit(policy === null ? argv : [...argv, "--policy", policy], deps);
+}
+
 /** A full set of fake effects that records every call, with overrides. */
 
-function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]; canLogin?: boolean; ledger?: readonly string[] } = {}): Recorder {
+function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]; canLogin?: boolean; ledger?: readonly string[]; policy?: string | null } = {}): Recorder {
   const root = mkdtempSync(join(tmpdir(), "rm-prod-init-"));
   roots.push(root);
   const calls: string[] = [];
@@ -78,7 +91,7 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
     },
     setIdentity: async (options) => {
       const kind = options.expected ?? "production";
-      calls.push(`setIdentity:${options.rmEnv}:${options.confirmed}${kind === "production" ? "" : `:${kind}`}`);
+      calls.push(`setIdentity:${options.policy}:${options.confirmed}${kind === "production" ? "" : `:${kind}`}`);
       return {
         before: kind,
         row: { kind, writtenAt: "2026-09-25T00:00:00.000Z", writtenBy: "rm_owner", note: "bun run migrate: the identity-first pass" },
@@ -107,6 +120,7 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
     log: () => {},
     ...over,
   };
+  POLICY.set(deps, over.policy === undefined ? "prod" : over.policy);
   return { calls, deps, root };
 }
 
@@ -134,29 +148,38 @@ describe("every command refuses before anything changes", () => {
     await refused(["enable-schedules"], fake(), /unknown command.*role-passwords\|set-identity\|provision-tokens\|rebind-members/);
   });
 
-  test("RM_ENV unset refuses each command", async () => {
+  test("no --policy refuses each command", async () => {
     for (const command of PROD_INIT_COMMANDS) {
-      const { RM_ENV: _rm, ...homeEnv } = HOME_ENV;
-      await refused([command], fake({ homeEnv }), /RM_ENV is unset/);
+      await refused([command], fake({ policy: null }), /--policy is not given/);
     }
   });
 
-  test("D61: RM_ENV=stage holds set-identity to a `rehearsal` target; a production one refuses", async () => {
-    await refused(["set-identity", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /RM_ENV=stage requires .* enrolled `rehearsal`; it reads `production`/);
+  test("D69 part 4: an RM_ENV in the environment or in ~/.env declares nothing; without --policy every command refuses", async () => {
+    for (const command of PROD_INIT_COMMANDS) {
+      await refused([command, ...CONFIRM], fake({ policy: null, env: { RM_ENV: "prod" }, homeEnv: { ...HOME_ENV, RM_ENV: "prod" } }), /--policy is not given/);
+    }
   });
 
-  test("RM_ENV=stage lets rebind-members past the policy gate (R3.8/B10, owner 2026-10-05) and then holds it to a `rehearsal` target", async () => {
+  test("a --policy with no value refuses, naming the flag", async () => {
+    await refused(["set-identity", ...CONFIRM, "--policy"], fake({ policy: null }), /--policy needs a value/);
+  });
+
+  test("D61: --policy stage holds set-identity to a `rehearsal` target; a production one refuses", async () => {
+    await refused(["set-identity", ...CONFIRM], fake({ policy: "stage", identity: "production" }), /--policy stage requires .* enrolled `rehearsal`; it reads `production`/);
+  });
+
+  test("--policy stage lets rebind-members past the policy gate (R3.8/B10, owner 2026-10-05) and then holds it to a `rehearsal` target", async () => {
     // Past the policy: the next gate is the target's enrollment, which a
     // production-enrolled target fails under stage policy (§4.3).
-    await refused(["rebind-members"], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /requires .* enrolled `rehearsal`/);
+    await refused(["rebind-members"], fake({ policy: "stage", identity: "production" }), /requires .* enrolled `rehearsal`/);
   });
 
-  test("any other RM_ENV refuses provision-tokens", async () => {
-    await refused(["provision-tokens"], fake({ env: { RM_ENV: "smoke" } }), /RM_ENV is "smoke"/);
+  test("any other --policy refuses provision-tokens", async () => {
+    await refused(["provision-tokens"], fake({ policy: "smoke" }), /--policy is "smoke"/);
   });
 
   test("no remote connection in ~/.env refuses, naming the file", async () => {
-    await refused(["set-identity"], fake({ homeEnv: undefined, env: { RM_ENV: "prod" } }), /\/home\/operator\/\.env/);
+    await refused(["set-identity"], fake({ homeEnv: undefined, policy: "prod" }), /\/home\/operator\/\.env/);
     const { rm_readonly: _ro, ...noReader } = HOME_ENV;
     await refused(["provision-tokens"], fake({ homeEnv: noReader }), /rm_readonly/);
   });
@@ -175,8 +198,8 @@ describe("every command refuses before anything changes", () => {
   });
 
   test("stage policy never touches production data: provision-tokens under stage refuses a production target", async () => {
-    await refused(["provision-tokens"], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /enrolled `rehearsal`.*reads `production`/);
-    await refused(["provision-tokens"], fake({ env: { RM_ENV: "stage" }, identity: "missing" }), /reads `missing`/);
+    await refused(["provision-tokens"], fake({ policy: "stage", identity: "production" }), /enrolled `rehearsal`.*reads `production`/);
+    await refused(["provision-tokens"], fake({ policy: "stage", identity: "missing" }), /reads `missing`/);
   });
 
   test("the target lock held elsewhere refuses, naming the holder", async () => {
@@ -259,8 +282,8 @@ describe("a remote rehearsal target's tokens come only from the explicit command
     expect(smokeMain.lastIndexOf("if (mintsServiceTokens(mode, reuseTwin)", provision)).toBeGreaterThan(-1);
   });
 
-  test("the explicit command provisions a rehearsal target under RM_ENV=stage, receipted", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
+  test("the explicit command provisions a rehearsal target under --policy stage, receipted", async () => {
+    const rec = fake({ policy: "stage", identity: "rehearsal" });
     const receipt = await runProdInit(["provision-tokens", "--instance", "rm_remote_rehearsal", ...CONFIRM], rec.deps);
     expect(rec.calls).toContain("provisionTokens:rm_remote_rehearsal");
     expect(receipt).toMatchObject({ rmEnv: "stage", instance: "rm_remote_rehearsal", identityBefore: "rehearsal", outcome: "completed" });
@@ -294,7 +317,7 @@ function setup(rec: Recorder, instance = "rm_prod"): { credentialPath: string } 
 
 describe("rebind-members writes each returned bearer back into its credential.json entry", () => {
   test("one member at a time, through rotate-key with the entry's key, each bearer written to its own entry", async () => {
-    const rec = fake({ env: { RM_ENV: "prod" } });
+    const rec = fake({ policy: "prod" });
     const { credentialPath } = setup(rec);
     const receipt = await runProdInit(["rebind-members", "--credentials", credentialPath, "--api", "http://127.0.0.1:9", ...CONFIRM], rec.deps);
     expect(rec.calls.filter((c) => c.startsWith("rotateKey"))).toEqual(["rotateKey:m-athena", "rotateKey:m-boreas", "rotateKey:m-themis"]);
@@ -314,7 +337,7 @@ describe("rebind-members writes each returned bearer back into its credential.js
 
   test("a refused rotation stops there: earlier entries keep their new bearer, later ones are untouched, the receipt says failed", async () => {
     const rec = fake({
-      env: { RM_ENV: "prod" },
+      policy: "prod",
       rotateKey: async (_api, _token, memberId) => {
         rec.calls.push(`rotateKey:${memberId}`);
         return memberId === "m-boreas" ? { status: 409, error: "no on-file public key" } : { status: 200, token: `tok_${memberId}_new` };
@@ -332,7 +355,7 @@ describe("rebind-members writes each returned bearer back into its credential.js
   });
 
   test("the api address defaults to the instance's recorded stack", async () => {
-    const rec = fake({ env: { RM_ENV: "prod" } });
+    const rec = fake({ policy: "prod" });
     const { credentialPath } = setup(rec);
     const paths = instancePaths(rec.root, "rm_prod");
     writeStackState(paths, {
@@ -394,11 +417,11 @@ describe("production initialization is unreachable from `bun smoke` and scripts/
 });
 
 // ---------------------------------------------------------------------------
-// R3.8: under RM_ENV=stage, rebind-members addresses the instance's own
+// R3.8: under --policy stage, rebind-members addresses the instance's own
 // smoke-owned twin through its generated rm_readonly, never ~/.env (which on a
 // stage host names production's read replica). Under prod the twin is ignored.
 // ---------------------------------------------------------------------------
-describe("rebind-members targets the instance's own twin under RM_ENV=stage", () => {
+describe("rebind-members targets the instance's own twin under --policy stage", () => {
   function twin(rec: Recorder, instance: string): void {
     const paths = instancePaths(rec.root, instance, { create: true });
     writeStackState(paths, {
@@ -411,7 +434,7 @@ describe("rebind-members targets the instance's own twin under RM_ENV=stage", ()
   }
 
   test("the twin's generated rm_readonly is the target, and the receipt names it", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
+    const rec = fake({ policy: "stage", identity: "rehearsal" });
     const { credentialPath } = setup(rec, "rehearse");
     twin(rec, "rehearse");
     const targets: string[] = [];
@@ -426,15 +449,15 @@ describe("rebind-members targets the instance's own twin under RM_ENV=stage", ()
   });
 
   test("a stage host with no ~/.env still reaches its twin", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal", homeEnv: undefined });
+    const rec = fake({ policy: "stage", identity: "rehearsal", homeEnv: undefined });
     const { credentialPath } = setup(rec, "rehearse");
     twin(rec, "rehearse");
     const receipt = await runProdInit(["rebind-members", "--instance", "rehearse", "--credentials", credentialPath], rec.deps);
     expect(receipt.outcome).toBe("completed");
   });
 
-  test("under RM_ENV=prod the twin is ignored: ~/.env's connection is the target", async () => {
-    const rec = fake({ env: { RM_ENV: "prod" } });
+  test("under --policy prod the twin is ignored: ~/.env's connection is the target", async () => {
+    const rec = fake({ policy: "prod" });
     const { credentialPath } = setup(rec);
     twin(rec, "rm_prod");
     const targets: string[] = [];
@@ -449,7 +472,7 @@ describe("rebind-members targets the instance's own twin under RM_ENV=stage", ()
   });
 
   test("provision-tokens under stage never takes the twin route: a twin's tokens are smoke's phase", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "production" });
+    const rec = fake({ policy: "stage", identity: "production" });
     twin(rec, "rehearse");
     await refused(["provision-tokens", "--instance", "rehearse"], rec, /enrolled `rehearsal`.*reads `production`/);
   });
@@ -556,7 +579,7 @@ describe("D61: --confirm-target replaces the y", () => {
   });
 
   test("rebind-members against the instance's own local twin needs no flag", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
+    const rec = fake({ policy: "stage", identity: "rehearsal" });
     const { credentialPath } = setup(rec, "rehearse");
     const paths = instancePaths(rec.root, "rehearse", { create: true });
     writeStackState(paths, {
@@ -675,8 +698,8 @@ describe("D61: role-passwords", () => {
     };
     return { rec, homeEnvPath, proofs };
   }
-  const FILE_NO_OWNER = "# panel paste\nhost = db.example.internal\nport = 25060\n\ndatabase = defaultdb\nsslmode = require\nrm_readonly = ro-pw\nrm_app = app-pw\nrm_worker = worker-pw\nRM_ENV=prod\n";
-  const ENV_NO_OWNER: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_app: "app-pw", rm_worker: "worker-pw", RM_ENV: "prod" };
+  const FILE_NO_OWNER = "# panel paste\nhost = db.example.internal\nport = 25060\n\ndatabase = defaultdb\nsslmode = require\nrm_readonly = ro-pw\nrm_app = app-pw\nrm_worker = worker-pw\n";
+  const ENV_NO_OWNER: Record<string, string> = { host: "db.example.internal", port: "25060", database: "defaultdb", sslmode: "require", rm_readonly: "ro-pw", rm_app: "app-pw", rm_worker: "worker-pw" };
 
   test("a missing rm_owner line is set: written to ~/.env, every other line kept, mode 0600; the receipt says set, never the value", async () => {
     const { rec, homeEnvPath, proofs } = onDisk(ENV_NO_OWNER, FILE_NO_OWNER);
@@ -713,7 +736,7 @@ describe("D61: role-passwords", () => {
 
   test("--rotate replaces the line in place and keeps the old one in ~/.env.retired-<ts>, both 0600", async () => {
     const text = `host = db.example.internal\nrm_owner = ${OWNER_PASSWORD}\nport = 25060\ndatabase = defaultdb\n`;
-    const { rec, homeEnvPath } = onDisk({ host: "db.example.internal", port: "25060", database: "defaultdb", rm_owner: OWNER_PASSWORD, rm_readonly: "ro-pw", RM_ENV: "prod" }, text);
+    const { rec, homeEnvPath } = onDisk({ host: "db.example.internal", port: "25060", database: "defaultdb", rm_owner: OWNER_PASSWORD, rm_readonly: "ro-pw" }, text);
     const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM, "--roles", "rm_owner", "--rotate", "rm_owner"], rec);
     expect(error).toBeUndefined();
     expect(readFileSync(homeEnvPath, "utf8")).toBe(`host = db.example.internal\nrm_owner = ${GENERATED("rm_owner")}\nport = 25060\ndatabase = defaultdb\n`);
@@ -740,10 +763,10 @@ describe("D61: role-passwords", () => {
   });
 
   test("the identity gate refuses the cross: prod against rehearsal, stage against production", async () => {
-    await refused(["role-passwords", ...CONFIRM], fake({ identity: "rehearsal" }), /RM_ENV=prod requires .* enrolled `production`; it reads `rehearsal`/);
-    await refused(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity: "production" }), /RM_ENV=stage requires .* enrolled `rehearsal`; it reads `production`/);
+    await refused(["role-passwords", ...CONFIRM], fake({ identity: "rehearsal" }), /--policy prod requires .* enrolled `production`; it reads `rehearsal`/);
+    await refused(["role-passwords", ...CONFIRM], fake({ policy: "stage", identity: "production" }), /--policy stage requires .* enrolled `rehearsal`; it reads `production`/);
     for (const identity of ["missing", "rehearsal"] as const) {
-      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: "stage" }, identity }).deps);
+      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ policy: "stage", identity }).deps);
       expect(receipt.outcome).toBe("completed");
     }
   });
@@ -785,7 +808,7 @@ describe("D61: every command runs prod against `production` and stage against `r
   for (const command of PROD_INIT_COMMANDS) {
     test(`${command}: prod + production and stage + rehearsal proceed`, async () => {
       for (const [rmEnv, identity] of [["prod", "production"], ["stage", "rehearsal"]] as const) {
-        const rec = fake({ env: { RM_ENV: rmEnv }, identity, homeEnv: { ...HOME_ENV, RM_ENV: rmEnv } });
+        const rec = fake({ policy: rmEnv, identity, homeEnv: HOME_ENV });
         const { error } = await run(command, rec, rmEnv);
         expect({ command, rmEnv, error: error?.message }).toEqual({ command, rmEnv, error: undefined });
       }
@@ -793,7 +816,7 @@ describe("D61: every command runs prod against `production` and stage against `r
 
     test(`${command}: RED CONTROL — prod + rehearsal and stage + production refuse before anything changes`, async () => {
       for (const [rmEnv, identity] of [["prod", "rehearsal"], ["stage", "production"]] as const) {
-        const rec = fake({ env: { RM_ENV: rmEnv }, identity, homeEnv: { ...HOME_ENV, RM_ENV: rmEnv } });
+        const rec = fake({ policy: rmEnv, identity, homeEnv: HOME_ENV });
         const { error } = await run(command, rec, rmEnv);
         expect(error).toBeInstanceOf(ProdInitRefusal);
         expect(error?.message).toContain("never crosswise");
@@ -803,7 +826,7 @@ describe("D61: every command runs prod against `production` and stage against `r
   }
 
   test("set-identity under stage reads and reports `rehearsal`, receipted", async () => {
-    const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
+    const rec = fake({ policy: "stage", identity: "rehearsal" });
     const receipt = await runProdInit(["set-identity", ...CONFIRM], rec.deps);
     expect(rec.calls).toContain("setIdentity:stage:true:rehearsal");
     expect(receipt.detail).toMatchObject({ before: "rehearsal", after: "rehearsal", written: false });
@@ -811,7 +834,7 @@ describe("D61: every command runs prod against `production` and stage against `r
 
   test("role-passwords on a pre-identity target proceeds under either policy when the ledger is a supported baseline", async () => {
     for (const rmEnv of ["prod", "stage"] as const) {
-      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing" }).deps);
+      const receipt = await runProdInit(["role-passwords", ...CONFIRM], fake({ policy: rmEnv, identity: "missing" }).deps);
       expect(receipt.outcome).toBe("completed");
     }
   });
@@ -819,7 +842,7 @@ describe("D61: every command runs prod against `production` and stage against `r
   test("role-passwords on a pre-identity target: RED CONTROL — a ledger that is not a supported baseline refuses under either policy", async () => {
     for (const rmEnv of ["prod", "stage"] as const) {
       for (const ledger of [["0001_init.sql"], BASELINE_LEDGER.slice(0, -1), [...BASELINE_LEDGER, "0081_deployment_identity.sql"]]) {
-        await refused(["role-passwords", ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing", ledger }), /requires a ledger exactly equal to a supported baseline/);
+        await refused(["role-passwords", ...CONFIRM], fake({ policy: rmEnv, identity: "missing", ledger }), /requires a ledger exactly equal to a supported baseline/);
       }
     }
   });
@@ -827,7 +850,7 @@ describe("D61: every command runs prod against `production` and stage against `r
   test("the other commands never accept a pre-identity target, whatever its ledger", async () => {
     for (const command of ["set-identity", "provision-tokens"] as const) {
       for (const rmEnv of ["prod", "stage"] as const) {
-        await refused([command, ...CONFIRM], fake({ env: { RM_ENV: rmEnv }, identity: "missing" }), /reads `missing`/);
+        await refused([command, ...CONFIRM], fake({ policy: rmEnv, identity: "missing" }), /reads `missing`/);
       }
     }
   });

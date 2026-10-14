@@ -137,7 +137,7 @@ const LOCAL_INSTANCE_POINTER = "local-instance";
 
 /**
  * The instance `bun smoke:web` deploys to: `bun smoke`'s precedence (spec
- * §1.1) — `--instance`, then `rm_prod` under `RM_ENV=prod`, then the CI job's
+ * §1.1) — `--instance`, then `rm_prod` under `--policy prod`, then the CI job's
  * identity, then the name a previous local run persisted — without its last
  * rule. A site is deployed onto a stack, so this never mints a fresh name.
  *
@@ -154,7 +154,7 @@ export function resolveWebInstance(input: {
   let name: string;
   if (input.flag !== undefined) {
     if (input.rmEnv === "prod" && input.flag !== PRODUCTION_INSTANCE) {
-      throw new Error(`Refusing: RM_ENV=prod acts on ${PRODUCTION_INSTANCE}, not \`${input.flag}\`.`);
+      throw new Error(`Refusing: --policy prod acts on ${PRODUCTION_INSTANCE}, not \`${input.flag}\`.`);
     }
     if (input.rmEnv !== "prod" && input.flag === PRODUCTION_INSTANCE) {
       throw new Error(`Refusing: naming ${PRODUCTION_INSTANCE} under a stage policy would contend for production's lock.`);

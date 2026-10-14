@@ -2,7 +2,7 @@
 // scheduler spec §10; plan P6). One command, run unattended, against a real
 // `bun smoke` stack it boots itself and always takes down again:
 //
-//   RM_ENV=stage bun scripts/smoke-e2e.ts [--instance <name>] [--keep] [--attached]
+//   bun scripts/smoke-e2e.ts [--instance <name>] [--keep] [--attached]
 //
 // `--attached` skips the boot of step 1 for a caller that ran it already (the
 // e2e workflow does, as its own step) and starts from the stack it left.
@@ -59,13 +59,13 @@ let instance = flag("--instance");
 const keep = argv.includes("--keep");
 const instanceArgs = (): string[] => (instance ? ["--instance", instance] : []);
 
-// The environment every child runs in. RM_ENV=stage is the policy (§4.1). With
+// The environment every child runs in. The policy is `--policy stage` on each
+// `bun smoke` it starts (§4.1, D69 part 4), never an environment value. With
 // no model credential at all the boot's inference preflight would refuse the
 // default paid model, and the judge refuses a keyless family, so a placeholder
 // key stands in: it reaches no container but the participants' own env files
 // (no-model-key-outside-participants) and is never sent anywhere that checks it.
 const env: Record<string, string> = Object.fromEntries(Object.entries(process.env).filter((e): e is [string, string] => e[1] !== undefined));
-env.RM_ENV ??= "stage";
 if (!env.OPENCODE_API_KEY) {
   env.OPENCODE_API_KEY = "sk-placeholder-never-forwarded";
   env.AGENT_MODEL = "deepseek";
@@ -104,7 +104,7 @@ async function run(cmd: string[], label: string): Promise<Run> {
 }
 
 const smokeArgv = (mode: "blank" | "volume", extra: string[]): string[] => [
-  "bun", "--no-env-file", "scripts/smoke.ts", "--local", mode, ...extra, ...instanceArgs(),
+  "bun", "--no-env-file", "scripts/smoke.ts", "--policy", "stage", "--local", mode, ...extra, ...instanceArgs(),
 ];
 
 function docker(args: string[]): { code: number; out: string } {

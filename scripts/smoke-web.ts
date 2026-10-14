@@ -1,4 +1,4 @@
-// `bun smoke:web [--instance <name>] [--rollback]` — deploy the static website
+// `bun smoke:web [--policy <prod|stage>] [--instance <name>] [--rollback]` — deploy the static website
 // and nothing else (D54; smoke spec §13.2, issue #1026 W7).
 //
 // Builds the site from this checkout into the instance's `web/` directory,
@@ -22,8 +22,7 @@
 // host's environment reaches compose through the docker-client allowlist only.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { homeEnvFilePath, loadEnvFile } from "./lib/env-role.ts";
-import { resolveRmEnv } from "./lib/smoke-env-policy.ts";
+import { policyFlag, resolvePolicy } from "./lib/smoke-env-policy.ts";
 import { buildSmokeLifecycleComposeEnv } from "./lib/smoke-lifecycle-env.ts";
 import { instanceFlag, readStackState, stateRoot, type InstancePaths, type StackStateRecord } from "./lib/smoke-state.ts";
 import { deploySite, resolveWebInstance, rollbackSite, WEB_SOURCE_CONTEXTS, type WebReleaseDeps } from "./lib/website-release.ts";
@@ -43,20 +42,20 @@ function fail(message: string): never {
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {
   const token = argv[i]!;
-  if (token === "--rollback" || token.startsWith("--instance=")) continue;
-  if (token === "--instance") {
+  if (token === "--rollback" || token.startsWith("--instance=") || token.startsWith("--policy=")) continue;
+  if (token === "--instance" || token === "--policy") {
     i++;
     continue;
   }
-  fail(`Refusing: unknown argument ${token}. Usage: bun smoke:web [--instance <name>] [--rollback]`);
+  fail(`Refusing: unknown argument ${token}. Usage: bun smoke:web [--policy <prod|stage>] [--instance <name>] [--rollback]`);
 }
 const rollback = argv.includes("--rollback");
 
 let paths: InstancePaths;
 let stack: StackStateRecord | null;
 try {
-  // RM_ENV from the process, else from `~/.env` (spec §3), exactly as `bun smoke` reads it.
-  const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? loadEnvFile(homeEnvFilePath())?.RM_ENV });
+  // The policy is this command's `--policy` flag, exactly as `bun smoke` takes it (D69 part 4).
+  const policy = resolvePolicy(policyFlag(argv));
   if (!policy.ok) fail(policy.reason);
   paths = resolveWebInstance({
     flag: instanceFlag(argv),

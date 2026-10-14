@@ -60,11 +60,11 @@ describe("planTwin — the decisions it will not let you skip", () => {
   test("--backup-dir is forwarded to the boot as the dump's directory", () => {
     const p = plan("--backup-dir", "/srv/b");
     expect(p.backupDir).toBe("/srv/b");
-    expect(p.args).toEqual(["--local", "dump=/srv/b", "--migrate", "--static-port", "--cadence", "fast"]);
+    expect(p.args).toEqual(["--policy", "stage", "--local", "dump=/srv/b", "--migrate", "--static-port", "--cadence", "fast"]);
   });
 
   test("nothing else is invented", () => {
-    expect(plan().args).toEqual(["--local", `dump=${defaultTwinDir()}`, "--migrate", "--static-port", "--cadence", "fast"]);
+    expect(plan().args).toEqual(["--policy", "stage", "--local", `dump=${defaultTwinDir()}`, "--migrate", "--static-port", "--cadence", "fast"]);
   });
 
   test("boots from the twin's own directory, never the backup directory", () => {

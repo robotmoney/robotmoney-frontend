@@ -2,7 +2,7 @@
 
 > **Retired 2026-10-08 by [D61](../decisions.md#d61).** Do not run this hand step.
 > A stage `bun run migrate` now prepares the remote twin: run
-> `RM_ENV=stage bun run migrate --confirm-target <host:port/database>` against the
+> `bun run migrate --policy stage --confirm-target <host:port/database>` against the
 > restored dump. It applies 0081 and writes `rehearsal` in one fenced transaction,
 > then migrates the rest ([smoke production spec](../technical/smoke-production-spec.md)
 > §4.2, §4.3). A database this runbook already prepared is still accepted. The text
@@ -24,7 +24,7 @@ Use `bun smoke --local dump` instead whenever a local twin will do
 (smoke spec §5). It prepares the same dump with no hand step.
 
 Never run it against production. Production takes its own first pass
-(`bun run migrate` under `RM_ENV=prod`, smoke spec §9.1). This step writes
+(`bun run migrate --policy prod`, smoke spec §9.1). This step writes
 `rehearsal`, and `rehearsal` on the production database would disarm every
 production guard.
 
@@ -198,7 +198,7 @@ whose `$HOME/.env` names production. `bun run migrate` reads the target from
 that file. It reads `rm_owner` from that file and takes `--confirm-target` (D61).
 
 ```bash
-RM_ENV=stage bun run migrate --instance "$TWIN_INSTANCE" --confirm-target <host:port/database>
+bun run migrate --policy stage --instance "$TWIN_INSTANCE" --confirm-target <host:port/database>
 ```
 
 It applies `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,

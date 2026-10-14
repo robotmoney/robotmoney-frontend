@@ -203,7 +203,7 @@ export interface SpoofRebindOptions {
  * Steps (1) and (2) of §6.4 against the target `ownerUrl` names, as rm_owner.
  *
  * The four guards run on the target's own enrollment, read on the owner
- * connection: `RM_ENV` must not be prod, `deployment_identity` must be
+ * connection: the `--policy` must not be prod, `deployment_identity` must be
  * rehearsal, the owner credential is in hand (it is: this function holds its
  * URL), and the flag was explicit. Then `spoofKeys` persists or reuses the
  * generation and rebinds in one fence.
@@ -277,7 +277,6 @@ async function main(request: SpoofRebindRequest): Promise<SpoofKeysOutcome> {
   // which can write nothing; the owner credential never enters the environment.
   process.env.DATABASE_URL = readerUrl;
   process.env.WORKER_DATABASE_URL = readerUrl;
-  process.env.RM_ENV = "stage";
   const { default: postgres } = await import("postgres");
   const { observeTargetLock } = await import("../src/db/target-lock.ts");
   const reader = postgres(readerUrl, { max: 1, onnotice: () => {} });

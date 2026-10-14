@@ -260,7 +260,7 @@ describe("the scheme is actually wired into every spawner", () => {
     // The boot step itself carries no SMOKE_PROJECT: its env block ends at the
     // end of the action, and the boot would refuse the variable anyway.
     const boot = setup.slice(setup.indexOf("- name: Full-stack smoke"));
-    expect(boot).toContain("scripts/smoke.ts --local blank");
+    expect(boot).toContain("scripts/smoke.ts --policy stage --local blank");
     expect(boot).not.toMatch(/^\s*SMOKE_PROJECT:/m);
 
     const workflows = readdirSync(join(repoRoot, ".github", "workflows")).filter((f) => /^e2e-.+\.ya?ml$/.test(f));

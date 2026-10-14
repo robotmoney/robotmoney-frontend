@@ -21,7 +21,7 @@
 // distinguishable from the others.
 //
 // Acceptance gates served (spec §10): W1 — the identity half of the policy
-// matrix and the rehearsal-only lifecycle gates; W2 — "`RM_ENV=stage` + typed
+// matrix and the rehearsal-only lifecycle gates; W2 — "`--policy stage` + typed
 // owner password against `deployment_identity = production` refuses"; W3 — the
 // `--spoof-keys` guards.
 import { describe, expect, test } from "bun:test";
@@ -133,54 +133,60 @@ describe("readIdentityForPolicy — the three-way read must reach the matrix as 
 describe("enrollAsRehearsal — §4.2/§5, the write that a dump restore must perform", () => {
   test("writes exactly `rehearsal`, carrying the caller's provenance note", async () => {
     const store = fakeStore({ state: "absent" });
-    const row = await enrollAsRehearsal(store, { note: "restored from prod-2026-09-20.dump", remoteAcknowledged: true });
+    const row = await enrollAsRehearsal(store, { policy: "stage", note: "restored from prod-2026-09-20.dump", remoteAcknowledged: true });
     expect(row.kind).toBe("rehearsal");
     expect(store.writes).toEqual([{ kind: "rehearsal", note: "restored from prod-2026-09-20.dump" }]);
   });
 
   test("overwrites the `production` row a production dump carried in — that overwrite is the whole point", async () => {
     const store = fakeStore(enrolled("production"));
-    const row = await enrollAsRehearsal(store, { note: "twin restore", remoteAcknowledged: true });
+    const row = await enrollAsRehearsal(store, { policy: "stage", note: "twin restore", remoteAcknowledged: true });
     expect(row.kind).toBe("rehearsal");
     expect(store.writes).toEqual([{ kind: "rehearsal", note: "twin restore" }]);
   });
 
   test("a remote target without the operator's explicit acknowledgement refuses, and writes nothing", async () => {
     const store = openDeploymentIdentityStore({ databaseUrl: REMOTE_URL, role: "rm_owner", writable: true });
-    await expect(enrollAsRehearsal(store, { note: null, remoteAcknowledged: false })).rejects.toThrow(
+    await expect(enrollAsRehearsal(store, { policy: "stage", note: null, remoteAcknowledged: false })).rejects.toThrow(
       /acknowledg|confirm/i,
     );
   });
 
   test("a store that was not opened writable refuses", async () => {
     const readOnly = openDeploymentIdentityStore({ databaseUrl: REMOTE_URL, role: "rm_app", writable: false });
-    await expect(enrollAsRehearsal(readOnly, { note: null, remoteAcknowledged: true })).rejects.toThrow(/rm_owner|writ/i);
+    await expect(enrollAsRehearsal(readOnly, { policy: "stage", note: null, remoteAcknowledged: true })).rejects.toThrow(/rm_owner|writ/i);
+  });
+
+  test("a run under --policy prod never writes `rehearsal`, and the store is untouched (D69 part 4: the caller's flag, not the environment)", async () => {
+    const store = fakeStore({ state: "absent" });
+    await expect(enrollAsRehearsal(store, { policy: "prod", note: null, remoteAcknowledged: true })).rejects.toThrow(/--policy prod/);
+    expect(store.writes).toEqual([]);
   });
 
   test("the returned row records who wrote it, for the incident question `since when, and by whom`", async () => {
     const store = fakeStore({ state: "absent" });
-    const row = await enrollAsRehearsal(store, { note: null, remoteAcknowledged: true });
+    const row = await enrollAsRehearsal(store, { policy: "stage", note: null, remoteAcknowledged: true });
     expect(row.writtenBy).toBe("rm_owner");
     expect(Number.isNaN(Date.parse(row.writtenAt))).toBe(false);
   });
 });
 
 describe("enrollAsProduction — §9.1 step 3, written once, gated four ways", () => {
-  test("RM_ENV that is not exactly `prod` refuses and writes nothing", async () => {
+  test("a --policy that is not exactly `prod` refuses and writes nothing", async () => {
     const store = fakeStore({ state: "absent" });
-    await expect(enrollAsProduction(store, { rmEnv: "stage", confirmed: true, note: null })).rejects.toThrow(/prod/);
+    await expect(enrollAsProduction(store, { policy: "stage", confirmed: true, note: null })).rejects.toThrow(/prod/);
     expect(store.writes).toEqual([]);
   });
 
-  test("an unset RM_ENV refuses — enrollment is never reachable by forgetting to export", async () => {
+  test("an absent --policy refuses — enrollment is never reachable by forgetting the flag", async () => {
     const store = fakeStore({ state: "absent" });
-    await expect(enrollAsProduction(store, { rmEnv: undefined, confirmed: true, note: null })).rejects.toThrow(/RM_ENV/);
+    await expect(enrollAsProduction(store, { policy: undefined, confirmed: true, note: null })).rejects.toThrow(/--policy/);
     expect(store.writes).toEqual([]);
   });
 
   test("an unconfirmed invocation refuses rather than defaulting to yes", async () => {
     const store = fakeStore({ state: "absent" });
-    await expect(enrollAsProduction(store, { rmEnv: "prod", confirmed: false, note: null })).rejects.toThrow(
+    await expect(enrollAsProduction(store, { policy: "prod", confirmed: false, note: null })).rejects.toThrow(
       /confirm|y\/n/i,
     );
     expect(store.writes).toEqual([]);
@@ -188,21 +194,21 @@ describe("enrollAsProduction — §9.1 step 3, written once, gated four ways", (
 
   test("an un-enrolled database under prod, confirmed, is enrolled as production", async () => {
     const store = fakeStore({ state: "absent" });
-    const row = await enrollAsProduction(store, { rmEnv: "prod", confirmed: true, note: "initialization step 3" });
+    const row = await enrollAsProduction(store, { policy: "prod", confirmed: true, note: "initialization step 3" });
     expect(row.kind).toBe("production");
     expect(store.writes).toEqual([{ kind: "production", note: "initialization step 3" }]);
   });
 
   test("a database already enrolled as production is reported as a no-op and is NOT rewritten", async () => {
     const store = fakeStore(enrolled("production"));
-    const row = await enrollAsProduction(store, { rmEnv: "prod", confirmed: true, note: null });
+    const row = await enrollAsProduction(store, { policy: "prod", confirmed: true, note: null });
     expect(row.kind).toBe("production");
     expect(store.writes).toEqual([]);
   });
 
   test("promoting a rehearsal database to production refuses and names both kinds", async () => {
     const store = fakeStore(enrolled("rehearsal"));
-    await expect(enrollAsProduction(store, { rmEnv: "prod", confirmed: true, note: null })).rejects.toThrow(
+    await expect(enrollAsProduction(store, { policy: "prod", confirmed: true, note: null })).rejects.toThrow(
       /rehearsal/,
     );
     expect(store.writes).toEqual([]);
@@ -210,7 +216,7 @@ describe("enrollAsProduction — §9.1 step 3, written once, gated four ways", (
 
   test("a store that is not writable as rm_owner refuses", async () => {
     const readOnly = openDeploymentIdentityStore({ databaseUrl: REMOTE_URL, role: "rm_app", writable: false });
-    await expect(enrollAsProduction(readOnly, { rmEnv: "prod", confirmed: true, note: null })).rejects.toThrow(
+    await expect(enrollAsProduction(readOnly, { policy: "prod", confirmed: true, note: null })).rejects.toThrow(
       /rm_owner|writ/i,
     );
   });
@@ -222,15 +228,15 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
   for (const preparation of ALL) {
     test(`${preparation} on a correctly enrolled rehearsal target under stage is allowed with no prompt`, () => {
       expect(
-        requireRehearsalTarget({ preparation, rmEnv: "stage", identity: "rehearsal", explicitlyRequested: true }),
+        requireRehearsalTarget({ preparation, policy: "stage", identity: "rehearsal", explicitlyRequested: true }),
       ).toEqual({ allow: true });
     });
   }
 
   for (const preparation of ALL) {
-    test(`${preparation} refuses under RM_ENV=prod whatever the identity says — a production run never prepares`, () => {
+    test(`${preparation} refuses under --policy prod whatever the identity says — a production run never prepares`, () => {
       for (const identity of ["production", "rehearsal", null, "unreadable"] as const) {
-        const result = requireRehearsalTarget({ preparation, rmEnv: "prod", identity, explicitlyRequested: true });
+        const result = requireRehearsalTarget({ preparation, policy: "prod", identity, explicitlyRequested: true });
         expect(result.allow).toBe(false);
         if (result.allow) throw new Error("expected a refusal");
         expect(result.reason).toContain(preparation);
@@ -242,7 +248,7 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
   test("a production identity refuses under stage, naming the preparation and what the target says", () => {
     const result = requireRehearsalTarget({
       preparation: "seed",
-      rmEnv: "stage",
+      policy: "stage",
       identity: "production",
       explicitlyRequested: true,
     });
@@ -255,7 +261,7 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
   test("an un-enrolled database refuses: absence of a row is not rehearsal", () => {
     const result = requireRehearsalTarget({
       preparation: "migrate",
-      rmEnv: "stage",
+      policy: "stage",
       identity: null,
       explicitlyRequested: true,
     });
@@ -267,7 +273,7 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
   test("an unreadable identity refuses with its own text: no evidence, no preparation", () => {
     const result = requireRehearsalTarget({
       preparation: "spoof-keys",
-      rmEnv: "stage",
+      policy: "stage",
       identity: "unreadable",
       explicitlyRequested: true,
     });
@@ -279,13 +285,13 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
   test("the absent refusal and the unreadable refusal do not share text — they have different fixes", () => {
     const absent = requireRehearsalTarget({
       preparation: "seed",
-      rmEnv: "stage",
+      policy: "stage",
       identity: null,
       explicitlyRequested: true,
     });
     const unreadable = requireRehearsalTarget({
       preparation: "seed",
-      rmEnv: "stage",
+      policy: "stage",
       identity: "unreadable",
       explicitlyRequested: true,
     });
@@ -299,7 +305,7 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
     test(`${preparation} refuses when it was not explicitly requested — no mode may imply a preparation`, () => {
       const result = requireRehearsalTarget({
         preparation,
-        rmEnv: "stage",
+        policy: "stage",
         identity: "rehearsal",
         explicitlyRequested: false,
       });
@@ -309,20 +315,20 @@ describe("requireRehearsalTarget — §4.3, the floor under --migrate, --seed an
     });
   }
 
-  test("an unset RM_ENV is stage policy here too, so a correctly enrolled rehearsal target still prepares", () => {
+  test("an absent --policy is stage policy here too, so a correctly enrolled rehearsal target still prepares", () => {
     const result = requireRehearsalTarget({
       preparation: "seed",
-      rmEnv: undefined,
+      policy: undefined,
       identity: "rehearsal",
       explicitlyRequested: true,
     });
     expect(result.allow).toBe(true);
   });
 
-  test("an unknown RM_ENV value refuses rather than being read as stage", () => {
+  test("an unknown --policy value refuses rather than being read as stage", () => {
     const result = requireRehearsalTarget({
       preparation: "seed",
-      rmEnv: "smoke",
+      policy: "smoke",
       identity: "rehearsal",
       explicitlyRequested: true,
     });

@@ -199,7 +199,7 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
         "",
       ].join("\n"),
     );
-    return { PATH: process.env.PATH ?? "", HOME: migrateHome, RM_ENV: "stage" };
+    return { PATH: process.env.PATH ?? "", HOME: migrateHome };
   }
 
   /** `--confirm-target` for the boot's database under `host` (D61). */
@@ -260,7 +260,7 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
   }
 
   function runMigrate(env: Record<string, string>, lockTimeoutSeconds: number): { code: number; out: string } {
-    const r = Bun.spawnSync(["bun", "scripts/migrate.ts", "--instance", x!.instance, "--lock-timeout", String(lockTimeoutSeconds), ...confirmArgs("localhost")], {
+    const r = Bun.spawnSync(["bun", "scripts/migrate.ts", "--policy", "stage", "--instance", x!.instance, "--lock-timeout", String(lockTimeoutSeconds), ...confirmArgs("localhost")], {
       cwd: join(repoRoot, "backend"),
       env,
       stdin: "ignore",
@@ -365,7 +365,7 @@ describe("`bun run migrate` and `bun smoke` contend on the target lock as proces
     readonly kill: () => void;
   } {
     const env = { ...migrateEnv("127.0.0.1"), RM_SMOKE_STATE_ROOT: x!.root };
-    const child = Bun.spawn(["bun", "scripts/migrate.ts", "--instance", x!.instance, "--lock-timeout", "5", ...confirmArgs("127.0.0.1")], {
+    const child = Bun.spawn(["bun", "scripts/migrate.ts", "--policy", "stage", "--instance", x!.instance, "--lock-timeout", "5", ...confirmArgs("127.0.0.1")], {
       cwd: join(repoRoot, "backend"),
       env,
       stdin: "ignore",

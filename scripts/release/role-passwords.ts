@@ -12,14 +12,20 @@
 // can pipe it), then runs on the target host
 //
 //   ssh -T -o BatchMode=yes <host> '{ test -e <checkout>/.git || git clone <repo> <checkout>; } && cd <checkout> \
-//     && { test -e node_modules || bun install --force ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
-//     bun scripts/prod-init.ts role-passwords --instance <i> --confirm-target <T> --doadmin-stdin [...]'
+//     && { test -e node_modules || bun install --force ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 <legacy policy> \
+//     bun scripts/prod-init.ts role-passwords --policy <p> --instance <i> --confirm-target <T> --doadmin-stdin [...]'
 //
 // and writes the password, with one newline, to that ssh process's stdin and
 // nothing else. The value never appears in an argument, a file or any output
 // on either machine: the remote command line holds only the target's names,
 // the same `env -i` environment every release step runs with
 // (scripts/release/steps.ts BASE_ENV), and the flags.
+//
+// THE POLICY (D69 part 4, issue 1327). The checkout on the host may predate
+// `--policy`, and this wrapper cannot look at it before it runs. A pre-1327
+// `prod-init` ignores the flag and reads the legacy variable; a current one
+// ignores the variable and reads the flag. So the command carries both
+// (./legacy-policy-env.ts), and each tool reads the one it knows.
 //
 // It runs from the target's release checkout, the one R1.1 fetches and
 // detaches later: provisioning precedes the run, so the wrapper clones and
@@ -31,6 +37,7 @@
 // instance and `--confirm-target` are the ones the release itself will use.
 import { DOADMIN_STDIN_FLAG, readDoadminPassword, type SecretInput, type SecretOutput } from "../lib/doadmin-input.ts";
 import { targetPath } from "./run.ts";
+import { LEGACY_POLICY_ENV, policyForCheckout } from "./legacy-policy-env.ts";
 import { BASE_ENV, RELEASE_REPO_URL, shellQuote } from "./steps.ts";
 import { loadTarget, type ReleaseTarget } from "./target.ts";
 
@@ -71,10 +78,11 @@ export function parseWrapperArgs(argv: readonly string[]): WrapperArgs | { error
 
 /** The remote shell command: names and flags only, never a secret. */
 export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string {
-  const env = [`HOME=${shellQuote(target.home)}`, ...Object.entries(BASE_ENV).map(([k, v]) => `${k}=${shellQuote(v)}`), `RM_ENV=${shellQuote(target.rmEnv)}`];
+  const env = [`HOME=${shellQuote(target.home)}`, ...Object.entries(BASE_ENV).map(([k, v]) => `${k}=${shellQuote(v)}`), `${LEGACY_POLICY_ENV}=${shellQuote(target.rmEnv)}`];
   const envCmd = (argv: readonly string[]) => `env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
   const argv = [
     "bun", "scripts/prod-init.ts", "role-passwords",
+    ...policyForCheckout(true, target.rmEnv).args,
     "--instance", target.instance,
     "--confirm-target", target.confirmTarget,
     DOADMIN_STDIN_FLAG,

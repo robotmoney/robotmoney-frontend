@@ -12,7 +12,7 @@
 // target precondition (./precondition.ts), read-only through `rm_readonly`:
 // the database answers, its ledger reconciles with backend/migrations and the
 // bytes at the tag the running stack reports at `--origin`/api/version
-// (./ledger.ts, D67), and its deployment_identity is absent or the kind RM_ENV
+// (./ledger.ts, D67), and its deployment_identity is absent or the kind `--policy`
 // implies. A running stack that reports no version refuses: there is nothing
 // to pin the applied bytes to, and nothing is assumed in its place.
 //
@@ -54,8 +54,10 @@ async function main(): Promise<number> {
   const confirm = flag("--confirm-target");
   const origin = flag("--origin");
   const receiptDir = flag("--receipt-dir");
+  // The target's policy, from the release step's own argv (D69 part 4); the capture host passes none.
+  const policy = flag("--policy");
   if (!commit || !/^[0-9a-f]{40}$/.test(commit) || !receiptDir) {
-    console.error("usage: bun scripts/release/host-identity.ts --commit <40-hex sha> [--confirm-target host:port/db] [--origin <url>] --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/host-identity.ts [--policy <prod|stage>] --commit <40-hex sha> [--confirm-target host:port/db] [--origin <url>] --receipt-dir <dir>");
     return 2;
   }
   const problems: string[] = [];
@@ -104,7 +106,7 @@ async function main(): Promise<number> {
         const table = (await db.query<{ t: string | null }>("SELECT to_regclass('public.deployment_identity')::text AS t"))[0]?.t ?? null;
         const identity = table ? (await db.query<{ kind: string }>("SELECT kind FROM deployment_identity"))[0]?.kind ?? null : null;
         const reconcile = reconcileLedger(ledger, running ? { pinRef: running.pinRef } : {});
-        const found = preconditionProblems({ rmEnv: process.env.RM_ENV, ledger, identity, reconcile });
+        const found = preconditionProblems({ rmEnv: policy, ledger, identity, reconcile });
         precondition = { ledgerCount: ledger.length, identity, running, reconcile, problems: found };
         problems.push(...found.map((p) => `target precondition: ${p}`));
       } finally {
@@ -120,7 +122,7 @@ async function main(): Promise<number> {
   const ownerUrl = env ? urlForRole(env, "rm_owner") : undefined;
   if (confirm !== undefined && resolvedTarget !== undefined && resolvedTarget === confirm && ownerUrl !== undefined) {
     try {
-      await proveOwnerLogin(ownerUrl, process.env.RM_ENV === "prod" || process.env.RM_ENV === "stage" ? process.env.RM_ENV : "<target>");
+      await proveOwnerLogin(ownerUrl, policy === "prod" || policy === "stage" ? policy : "<target>");
       ownerLogin = "proven";
     } catch (error) {
       ownerLogin = "failed";
@@ -132,7 +134,7 @@ async function main(): Promise<number> {
     host: hostname(),
     user: userInfo().username,
     home: process.env.HOME,
-    rmEnv: process.env.RM_ENV ?? null,
+    rmEnv: policy ?? null,
     commit: head,
     expectedCommit: commit,
     clean: porcelain.status === 0 && porcelain.stdout.trim() === "",

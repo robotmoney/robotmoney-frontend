@@ -87,7 +87,7 @@ async function main(): Promise<number> {
   const run = flag("--run");
   const origin = flag("--origin");
   if (!instance || !run || !/^\d{8}T\d{6}Z$/.test(run) || !origin) {
-    console.error("usage: bun scripts/release/baseline.ts --instance <name> --run <run-ts> --origin <url>");
+    console.error("usage: bun scripts/release/baseline.ts [--policy <prod|stage>] --instance <name> --run <run-ts> --origin <url>");
     return 2;
   }
   // The pin ref (D67): the tag the running stack reports, else its commit.
@@ -126,7 +126,7 @@ async function main(): Promise<number> {
       instance,
       run,
       target: db.target,
-      rmEnv: process.env.RM_ENV ?? null,
+      rmEnv: flag("--policy") ?? null,
       readAt: new Date().toISOString(),
       ledger: { count: ledger.length, names: ledger },
       deploymentIdentity: { table: identityTable !== null, kind: identity },

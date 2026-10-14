@@ -118,7 +118,7 @@ export const READONLY_ENV_FILE = homeEnvFilePath();
  *
  * FROM THE PROCESS ENVIRONMENT, AND NOWHERE ELSE. It used to be read from
  * $HOME/.env as a fallback. Spec §3 (as amended by D52) makes that file hold
- * EXACTLY the connection values, the three runtime role passwords, RM_ENV and
+ * EXACTLY the connection values, the three runtime role passwords, rm_owner and
  * RM_CREDENTIALS — "It must not contain ... a model key" — and preflight check 4
  * refuses any other key there on prod. A model key belongs to the participant
  * that spends it (its credential.json entry); the operator running a one-off
@@ -242,7 +242,7 @@ export async function runSmokeTwinRehearsal(opts: RehearsalOptions): Promise<num
     // exactly this stack.
     const instance = `rm_twin_rehearsal_${randomBytes(4).toString("hex")}`;
     rehearsalInstance = instance;
-    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate", "--instance", instance];
+    const args = ["bun", "--no-env-file", "scripts/smoke.ts", "--policy", "stage", "--local", opts.backupDir ? `dump=${opts.backupDir}` : "dump", "--migrate", "--instance", instance];
     log(`booting: ${args.slice(2).join(" ")}  (this can take several minutes)`);
     log(`inference: production default model, OPENCODE_API_KEY from ${zen.source} — real spend on a real key`);
 

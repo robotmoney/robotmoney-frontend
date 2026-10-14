@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DEFAULT_EPOCH_SECONDS, MIN_EPOCH_SECONDS, parseArgs, planCloses, refusal, RETIME_SQL, retimeArgv } from "../../twin-accelerate.ts";
+import { DEFAULT_EPOCH_SECONDS, MIN_EPOCH_SECONDS, parseArgs, planCloses, RETIME_SQL, retimeArgv } from "../../twin-accelerate.ts";
 
 describe("arguments", () => {
   test("default epoch, explicit epoch and judging", () => {
@@ -41,10 +41,6 @@ describe("the plan", () => {
 });
 
 describe("refusals", () => {
-  test("production is refused", () => {
-    expect(refusal({ RM_ENV: "prod" })).toMatch(/RM_ENV is prod/);
-    expect(refusal({ RM_ENV: "stage" })).toBeNull();
-  });
   test("only a smoke-twin stack is accepted, and the scheduler is restarted so its timers rebuild", () => {
     const src = readFileSync(join(import.meta.dir, "..", "..", "twin-accelerate.ts"), "utf8");
     expect(src).toContain('resolveGateStack(argv, env, ["smoke-twin"])');

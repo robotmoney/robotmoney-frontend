@@ -121,10 +121,10 @@ describe("a failed boot's printed report (it replaced the failure pane)", () => 
   Bun.write(credentials, JSON.stringify({ agents: {}, judges: {} }));
   const run = () => {
     const r = Bun.spawnSync(
-      ["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), "--local", "blank", "--instance", "rm_local_failreport", "--credentials", credentials],
+      ["bun", "--no-env-file", join(repoRoot, "scripts", "smoke.ts"), "--policy", "stage", "--local", "blank", "--instance", "rm_local_failreport", "--credentials", credentials],
       {
         cwd: repoRoot,
-        env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), RM_ENV: "stage", AGENT_MODEL: "free" },
+        env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), AGENT_MODEL: "free" },
         stdout: "pipe",
         stderr: "pipe",
       },

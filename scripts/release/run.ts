@@ -26,7 +26,7 @@
 // the first irreversible one, changes nothing a running service uses, and
 // exits 0 only when every check is green (./preflight.ts). Otherwise: refuse
 // without a go file; refuse a placeholder confirmTarget;
-// under RM_ENV=prod refuse unless --stage-journal names a passed stage run of
+// under the prod policy refuse unless --stage-journal names a passed stage run of
 // the same step list at the same commit (SP.8); then run the steps in order,
 // journal each one locally (./journal.ts), copy its receipts back, and stop at
 // the first step whose exit differs from the expected one, printing the exact
@@ -125,7 +125,7 @@ export function targetPath(arg: string): string {
 export function renderPlan(target: ReleaseTarget, commit: string, hash: string, steps: readonly RenderedStep[]): string {
   const lines = [
     `release:run plan`,
-    `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
+    `  target        ${target.name} (--policy ${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
     `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,

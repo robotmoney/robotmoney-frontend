@@ -54,7 +54,6 @@ const operatorTokenEnv: Record<string, string> = { [OPERATOR_TOKEN_FILE_ENV]: pa
 const spawnEnv: Record<string, string> = {
   ...buildSmokeLifecycleComposeEnv(stackRecord, process.env),
   ...instanceComposeEnv({ name: paths.dir.split("/").at(-1)!, stateDir: paths.dir }),
-  RM_ENV: process.env.RM_ENV ?? "stage",
   WORKER_DATABASE_URL: stackRecord.databaseUrl,
 };
 

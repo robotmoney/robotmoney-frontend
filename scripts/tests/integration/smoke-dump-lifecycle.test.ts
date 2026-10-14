@@ -1,4 +1,4 @@
-// `RM_ENV=stage bun smoke --local dump=<dir>` in a REAL process, against a
+// `bun smoke --policy stage --local dump=<dir>` in a REAL process, against a
 // real gpg-encrypted backup — issue #1026 criteria 13 (the stage × `--local
 // dump` row of §4.3) and 76 (a dump restore leaves deployment_identity
 // `rehearsal`, and no runtime role can write it), smoke-production-spec.md §4.2,
@@ -124,7 +124,7 @@ async function stopAfter(h: BootHarness, boot: RunningBoot, step: string): Promi
   return await boot.exited;
 }
 
-describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypted backup", () => {
+describe("`bun smoke --policy stage --local dump --migrate` against a real encrypted backup", () => {
   // The production-identity instance, shared by its first boot and the rerun;
   // torn down once both have run.
   let prod: { h: BootHarness; boot?: RunningBoot; twin?: string } | undefined;
@@ -142,7 +142,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     expect(productionDump.identity).toBe("production");
     const h = harness("dumpprod");
     prod = { h };
-    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, env: { RM_ENV: "stage" } });
+    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, policy: "stage" });
     prod.boot = boot;
     const code = await stopAfter(h, boot, "migrate");
     // Stopped by the test at a phase boundary, never refused.
@@ -151,7 +151,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     expect(out).toContain(`restoring backup ${productionDump.stamp}`);
     // A PLAN check only: the plan summary (smoke-journal.ts renderTarget),
     // printed before the restore. What the copy says is read back below.
-    expect(out).toContain("RM_ENV=stage, deployment_identity rehearsal");
+    expect(out).toContain("--policy stage, deployment_identity rehearsal");
     expect(out).toContain("target lock held");
     expect(out).not.toContain("startup failed");
 
@@ -222,7 +222,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     prod.twin = container;
     const first = journalNow(h)!;
     const writtenAt = psql(copy.superuserUrl, "SELECT written_at FROM deployment_identity").out;
-    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, env: { RM_ENV: "stage" } });
+    const boot = spawnBoot(h, [], { local: `dump=${productionDump.dir}`, policy: "stage" });
     prod.boot = boot;
     await waitFor(
       () => (journalNow(h)?.phases ?? []).filter((r) => r.phase === "prepare" && r.step === "lock" && r.status === "committed").length >= 2,
@@ -259,7 +259,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     const h = harness("dumpbl");
     let boot: RunningBoot | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${baselineDump.dir}`, env: { RM_ENV: "stage" } });
+      boot = spawnBoot(h, [], { local: `dump=${baselineDump.dir}`, policy: "stage" });
       const b = boot;
       // Either the boot ends on its own, or it commits migrate and is stopped there.
       await waitFor(
@@ -322,7 +322,7 @@ describe("`RM_ENV=stage bun smoke --local dump --migrate` against a real encrypt
     const h = harness("dumprel");
     let boot: RunningBoot | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${releaseDump.dir}`, env: { RM_ENV: "stage" } });
+      boot = spawnBoot(h, [], { local: `dump=${releaseDump.dir}`, policy: "stage" });
       const code = await boot.exited;
       const s = steps(h);
       const copy = restoredCopy(h);

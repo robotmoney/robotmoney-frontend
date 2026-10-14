@@ -2,15 +2,15 @@
 //
 //   "First production migrate: with no `deployment_identity` row and a ledger
 //   exactly equal to the production baseline (the 76-name ledger of §9.1),
-//   `RM_ENV=prod`, a typed `rm_owner` and `y` migrate once and receipt the
+//   `--policy prod`, a typed `rm_owner` and `y` migrate once and receipt the
 //   pre-identity state. A ledger with one file more or less (a pure v0.5.0
-//   ledger included), `RM_ENV=stage`, a missing owner password, or any answer
+//   ledger included), `--policy stage`, a missing owner password, or any answer
 //   but `y` refuses and changes nothing. A second run with no row still
 //   refuses."
 //
 // As amended by D61: the typed `rm_owner` is `~/.env`'s `rm_owner` line and
 // the `y` is `--confirm-target <host:port/database>`. A missing line, no flag
-// and a wrong flag each refuse and change nothing. `RM_ENV=stage` on this
+// and a wrong flag each refuse and change nothing. `--policy stage` on this
 // state is now the remote rehearsal pass (D61 rule 2), which writes
 // `rehearsal`; identity-first-pass.test.ts holds it. Here, stage on the
 // baseline is only shown NOT to write `production`.
@@ -162,12 +162,12 @@ interface Authority {
   readonly confirm?: string | null;
 }
 
-async function operator(database: string, rmEnv: string, authority: Authority = {}): Promise<MigrateRun> {
+async function operator(database: string, policy: string | null, authority: Authority = {}): Promise<MigrateRun> {
   const run = await runMigrateCommand({
     databaseUrl: urlFor(database),
     readonlyPassword: READONLY_PASSWORD,
     ownerPassword: authority.owner === undefined ? OWNER_PASSWORD : authority.owner,
-    rmEnv,
+    policy,
     ...(authority.confirm === undefined ? {} : { confirmTarget: authority.confirm }),
   });
   homes.push(run.home);
@@ -303,7 +303,7 @@ describe("the baseline is production's state, not only its ledger", () => {
 });
 
 describe("§10 W2 — First production migrate", () => {
-  test("RM_ENV=stage never writes `production`: on this state it is the remote rehearsal pass (D61), held here to a wrong target so nothing changes", async () => {
+  test("--policy stage never writes `production`: on this state it is the remote rehearsal pass (D61), held here to a wrong target so nothing changes", async () => {
     const before = await fingerprint(DB.exact);
     const run = await operator(DB.exact, "stage", { confirm: "not-this-target:5432/x" });
     expect(run.screen).toContain("REMOTE REHEARSAL PASS");
@@ -402,7 +402,7 @@ describe("§10 W2 — First production migrate", () => {
     expect(await fingerprint(DB.exact)).toEqual(before);
   });
 
-  test("no row, production's exact observed ledger, RM_ENV=prod, ~/.env's rm_owner and the exact --confirm-target: migrates once, identity first, and receipts the pre-identity state", async () => {
+  test("no row, production's exact observed ledger, --policy prod, ~/.env's rm_owner and the exact --confirm-target: migrates once, identity first, and receipts the pre-identity state", async () => {
     const run = await operator(DB.exact, "prod");
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });
     expect(run.screen).not.toContain(OWNER_PASSWORD);

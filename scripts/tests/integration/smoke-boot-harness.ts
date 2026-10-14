@@ -47,7 +47,7 @@ export interface BootHarness {
 export function harness(prefix: string, opts: { root?: string } = {}): BootHarness {
   const root = opts.root ?? mkdtempSync(join(tmpdir(), `rm-${prefix}-`));
   const instance = `rm_it_${prefix.replace(/[^a-z0-9]/g, "")}_${Math.random().toString(16).slice(2, 8)}`;
-  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, RM_ENV: "stage", AGENT_MODEL: "free" };
+  const env: Record<string, string> = { RM_SMOKE_STATE_ROOT: root, AGENT_MODEL: "free" };
   for (const key of ["PATH", "HOME", "TMPDIR", "DOCKER_HOST", "DOCKER_CONFIG", "DOCKER_CONTEXT", "BUN_INSTALL", "BUN_INSTALL_CACHE_DIR"]) {
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
@@ -74,9 +74,12 @@ export interface RunningBoot {
   exitCode(): number | null;
 }
 
-/** The argv an operator types, for this harness's instance. */
-export function bootArgs(h: BootHarness, extra: readonly string[] = [], local = "blank"): string[] {
-  return ["bun", "--no-env-file", "scripts/smoke.ts", "--local", local, "--migrate", "--instance", h.instance, ...extra];
+/**
+ * The argv an operator types, for this harness's instance. `policy` is the
+ * boot's `--policy` (D69 part 4): `stage` by default, `null` for no flag.
+ */
+export function bootArgs(h: BootHarness, extra: readonly string[] = [], local = "blank", policy: string | null = "stage"): string[] {
+  return ["bun", "--no-env-file", "scripts/smoke.ts", ...(policy === null ? [] : ["--policy", policy]), "--local", local, "--migrate", "--instance", h.instance, ...extra];
 }
 
 /**
@@ -87,9 +90,9 @@ export function bootArgs(h: BootHarness, extra: readonly string[] = [], local = 
 export function spawnBoot(
   h: BootHarness,
   extra: readonly string[] = [],
-  opts: { tty?: boolean; local?: string; ownProcessGroup?: boolean; env?: Record<string, string | undefined>; migrate?: boolean } = {},
+  opts: { tty?: boolean; local?: string; ownProcessGroup?: boolean; env?: Record<string, string | undefined>; migrate?: boolean; policy?: string | null } = {},
 ): RunningBoot {
-  const base = bootArgs(h, extra.length > 0 ? extra : ["--credentials", h.emptyRoster], opts.local);
+  const base = bootArgs(h, extra.length > 0 ? extra : ["--credentials", h.emptyRoster], opts.local, opts.policy === undefined ? "stage" : opts.policy);
   // `migrate: false` drops the `--migrate` bootArgs always passes.
   const argv = opts.migrate === false ? base.filter((a) => a !== "--migrate") : base;
   // `env`: per-boot overrides of the harness environment; `undefined` removes a key.

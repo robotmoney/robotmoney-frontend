@@ -1,7 +1,9 @@
 // scripts/release/target.ts — the release target file (D61 rule 2).
 //
 // A target file names WHERE a release run acts: the host, the checkout, the
-// instance, the policy (`RM_ENV`), the home directory whose `~/.env` the
+// instance, the policy (`rmEnv`, handed to each command as `--policy`; the
+// field keeps its name, the variable it once exported is retired, D69 part 4),
+// the home directory whose `~/.env` the
 // commands read, the capture host and the database the writes must confirm.
 // It never names WHAT runs: the step list (./steps.ts) is one list for every
 // target. Stage and production differ only in their target file, which is
@@ -161,7 +163,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
   const checkout = str(raw, "checkout", name, ABS_PATH_RE);
   const home = str(raw, "home", name, ABS_PATH_RE);
   const instance = str(raw, "instance", name, NAME_RE);
-  if (rmEnv === "prod" && instance !== undefined && instance !== "rm_prod") errors.push(`${name}: RM_ENV=prod acts on rm_prod only`);
+  if (rmEnv === "prod" && instance !== undefined && instance !== "rm_prod") errors.push(`${name}: the prod policy acts on rm_prod only`);
   if (rmEnv === "stage" && instance === "rm_prod") errors.push(`${name}: a stage target never names rm_prod`);
   const publicOrigin = str(raw, "publicOrigin", name, /^https?:\/\/[A-Za-z0-9.:-]+$/);
   const confirmTarget = str(raw, "confirmTarget", name);

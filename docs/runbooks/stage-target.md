@@ -27,7 +27,7 @@ The target file names these fields:
 | running checkout (built by `up`, not a target field) | `/home/stage-server/rm-stage-running` at the tag production reports | the previous release's checkout, whatever `/api/version` reports |
 | capture checkout | `/home/stage-server/rm-capture`, owned by the release runner, not by the stage target | the same folder on `rm-frontend-stage-2` |
 | instance | `stage_target` | `rm_prod` |
-| `RM_ENV` | `stage` | `prod` |
+| policy (`rmEnv`, passed as `--policy`) | `stage` | `prod` |
 
 ## What it builds
 
@@ -84,6 +84,9 @@ It builds these pieces, in order:
     production's), and a second boot. Docker keeps the stack running, as on production.
     The boot writes the instance's smoke state under `HOME`, which is what R6.1 stops.
     The site answers on `:48787`, and `/api/version` reports the tag and commit.
+    The policy is `stage`: passed as `--policy stage` to a running checkout whose tools
+    take the flag, and as the legacy `RM_ENV=stage` to one that predates it
+    (`scripts/release/legacy-policy-env.ts`, [D69](../decisions.md#d69) part 4).
 
 `bun scripts/release/stage-target.ts status` reports each piece.
 `bun scripts/release/stage-target.ts down` removes each piece.
@@ -110,7 +113,7 @@ The release's own R2.1 still captures a new backup during the run.
 1. Only when no dump on stage-2 is under 24 hours old, capture one. It reads production's replica as `rm_readonly`:
 
    ```bash
-   ssh rm-frontend-stage-2 'cd ~/rm-060 && RM_ENV=stage bun smoke:capture --out ~/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)' </dev/null
+   ssh rm-frontend-stage-2 'cd ~/rm-060 && bun smoke:capture --out ~/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)' </dev/null
    ```
 
 2. Rebuild the target from the control machine:

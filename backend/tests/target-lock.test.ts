@@ -852,7 +852,7 @@ describe("the seed and the identity write are fenced mutations — a competitor'
         await Bun.sleep(150);
         const write = withMutationFence({ databaseUrl: url, label: "identity" }, async (tx) => {
           order.push("identity:start");
-          const row = await enrollAsRehearsal(transactionIdentityStore(tx, { remote: false }), { note: "fence test", remoteAcknowledged: false });
+          const row = await enrollAsRehearsal(transactionIdentityStore(tx, { remote: false }), { policy: "stage", note: "fence test", remoteAcknowledged: false });
           order.push("identity:wrote");
           return row;
         });
@@ -1074,7 +1074,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
       const [before] = await admin<{ written_at: string }[]>`SELECT written_at::text AS written_at FROM deployment_identity`;
       let result: Awaited<ReturnType<typeof setProductionIdentity>> | undefined;
       const order = await competitorBlocks(url, "deployment_identity", async () => {
-        result = await setProductionIdentity({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), rmEnv: "prod", confirmed: true, note: "fence test" });
+        result = await setProductionIdentity({ ownerUrl: asRole(url, "rm_owner", OWNER_PASSWORD), policy: "prod", confirmed: true, note: "fence test" });
       });
       expect(order).toEqual(expected("deployment_identity"));
       expect(result?.written).toBe(false);
@@ -1090,7 +1090,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
       const order = await competitorBlocks(url, "job_schedules", async () => {
         const child = Bun.spawn(["bun", "--no-env-file", "run", "src/db/seed.ts"], {
           cwd: join(import.meta.dir, ".."),
-          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DATABASE_URL: owner, WORKER_DATABASE_URL: owner, RM_ENV: "stage" },
+          env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DATABASE_URL: owner, WORKER_DATABASE_URL: owner },
           stdout: "pipe",
           stderr: "pipe",
         });

@@ -317,9 +317,10 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
   // --no-env-file proves nothing unless the WRAPPER also ran without the file:
   // a planted value bun loaded into the wrapper would ride into the child.
   //
-  // The run is stopped before any work: RM_ENV=bogus makes the boot refuse at
-  // its RM_ENV check, which comes AFTER the SMOKE_PROJECT refusal and before
-  // any port probe, restore or container. So which of the two refusals fires
+  // The run is stopped before any work: the twin is a standing boot, and
+  // without PROJECTS_SOURCE=live the boot refuses at that check (issue 1113),
+  // which comes AFTER the SMOKE_PROJECT refusal and before any port probe,
+  // restore or container. So which of the two refusals fires
   // says whether the planted SMOKE_PROJECT reached the boot. `--reuse` skips
   // the capture, and the key is a dummy the boot never gets to use.
   const planted = mkdtempSync(join(tmpdir(), "rm-planted-twin-dotenv-"));
@@ -329,7 +330,7 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
   const run = (argv: string[], extra: Record<string, string> = {}) => {
     const r = Bun.spawnSync(["bun", ...argv], {
       cwd: planted,
-      env: { PATH: process.env.PATH ?? "", HOME: planted, OPENCODE_API_KEY: "zen-dummy", RM_ENV: "bogus", ...extra },
+      env: { PATH: process.env.PATH ?? "", HOME: planted, OPENCODE_API_KEY: "zen-dummy", ...extra },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -338,8 +339,8 @@ describe("the twin wrappers hand the boot no checkout .env (criterion 122)", () 
 
   test("smoke:twin as package.json runs it: the boot never sees the planted SMOKE_PROJECT", () => {
     const r = run(["--no-env-file", twin, "--reuse"]);
-    expect(r.out).toMatch(/equivalent: bun smoke --local dump=\S+-twin --migrate/);
-    expect(r.out).toContain('RM_ENV="bogus" is not a policy value');
+    expect(r.out).toMatch(/equivalent: bun smoke --policy stage --local dump=\S+-twin --migrate/);
+    expect(r.out).toContain("PROJECTS_SOURCE=live is required");
     expect(r.out).not.toContain("SMOKE_PROJECT is retired");
     expect(r.code).toBe(1);
   }, 30_000);

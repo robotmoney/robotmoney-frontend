@@ -13,11 +13,11 @@ and exits. The stack keeps running under Docker; smoke itself does not stay
 up to supervise it.
 
 ```
-bun smoke --static-port
+bun smoke --policy prod --static-port
 ```
 
-is the whole production invocation. `--static-port` is the one option
-production passes. `bun smoke:status` and `bun smoke:tui` observe a running
+is the whole production invocation. `--static-port` and the declared policy
+are the options production passes. `bun smoke:status` and `bun smoke:tui` observe a running
 stack from another terminal — `bun smoke` never draws a TUI. `bun
 smoke:down` is the only way to stop a stack it started.
 
@@ -26,7 +26,7 @@ smoke:down` is the only way to stop a stack it started.
 By default smoke connects to the **remote** database named in `$HOME/.env`
 (host/port/dbname plus one `role = password` line per runtime role). That
 file lives in the deploying user's home directory, never in a checkout, and it
-holds only those lines plus `RM_ENV` and `RM_CREDENTIALS`. Per-instance state
+holds only those lines plus `rm_owner` and `RM_CREDENTIALS`. Per-instance state
 (generated passwords, service tokens, the journal and receipt) lives under
 `$HOME/.local/state/robotmoney-smoke/<instance>`, also outside the checkout.
 
@@ -86,16 +86,18 @@ any participant — third parties may run every one of them. The credential file
 selects in-house participant containers; `--seed` adds demo data only to an
 eligible blank rehearsal database. Neither controls session cadence.
 
-## Environment
+## Policy
 
-`RM_ENV` stays `prod` or `stage` (stage covers today's test/CI too — they run
-identically). Alongside it, every database carries a `deployment_identity`
+`--policy` is `prod` or `stage` (stage covers today's test/CI too — they run
+identically). It is a flag on each command, never an environment value: the
+`RM_ENV` variable it replaced is retired (D69 part 4) and no tool reads it.
+Alongside it, every database carries a `deployment_identity`
 row (`production` or `rehearsal`) written once when the database is stood
 up. `--migrate`, `--seed`, and `--spoof-keys` all require a `rehearsal`
-target in addition to `RM_ENV=stage`. The policy/identity matrix applies even
+target in addition to `--policy stage`. The policy/identity matrix applies even
 to an ordinary boot: stage against production identity refuses, production
 against rehearsal identity refuses, and production with `--local` refuses.
-Unset `RM_ENV` refuses on a remote target and defaults to stage only for local modes.
+No `--policy` refuses on a remote target and defaults to stage only for local modes.
 
 ## Credentials
 
@@ -146,9 +148,9 @@ startup, against their own credential; `system-scheduler` and
 | Local dev from an empty database | `bun smoke --local blank --seed` |
 | Restart a local database from a saved volume | `bun smoke --local volume` |
 | Rehearse against a copy of real data, full committee | `bun smoke --local dump --credentials rehearsal-creds.json --spoof-keys` |
-| Bring up production | `bun smoke --static-port` |
-| Upgrade production's schema, additive release | `bun run migrate`, then `bun smoke --static-port` |
-| Upgrade production's schema, breaking release | `bun smoke:down`, `bun run migrate`, then `bun smoke --static-port` |
+| Bring up production | `bun smoke --policy prod --static-port` |
+| Upgrade production's schema, additive release | `bun run migrate --policy prod`, then `bun smoke --policy prod --static-port` |
+| Upgrade production's schema, breaking release | `bun smoke:down`, `bun run migrate --policy prod`, then `bun smoke --policy prod --static-port` |
 
 For the full design — the plan/lock/journal model, the schema snapshot,
 target enrollment, and every acceptance case — see the

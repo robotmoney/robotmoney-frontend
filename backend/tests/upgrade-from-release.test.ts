@@ -48,7 +48,7 @@
 // The baseline predates 0081, so its database has no `deployment_identity`
 // table and no row to enroll it. The upgrade runs exactly as production's will (spec
 // §9.1, D55 (5), D61): `bun run migrate` as a PROCESS with no terminal,
-// RM_ENV=prod, `~/.env`'s rm_owner line and the exact `--confirm-target` — the one
+// --policy prod, `~/.env`'s rm_owner line and the exact `--confirm-target` — the one
 // run §4.3 allows without the row, because the ledger equals the baseline's
 // filename list exactly. It applies 0081 FIRST, with `production` in 0081's own
 // transaction (D55 (9)), then EVERY other pending file in filename order,
@@ -435,7 +435,7 @@ for (const [index, { name: tag }] of PINNED_RELEASES.entries()) {
       expect(ledger.map((r) => r.name)).toEqual(release.migrations.map((m) => m.file));
     });
 
-    test("`bun run migrate` — RM_ENV=prod, ~/.env's rm_owner, --confirm-target — reaches the branch's version in one run", async () => {
+    test("`bun run migrate` — --policy prod, ~/.env's rm_owner, --confirm-target — reaches the branch's version in one run", async () => {
       // A release past 0081 would be enrolled already (§9.1 step 4); only one
       // that predates the table takes the pre-identity path.
       if (!predatesIdentity) await enroll(db, "production");
@@ -443,7 +443,7 @@ for (const [index, { name: tag }] of PINNED_RELEASES.entries()) {
         databaseUrl: new URL(urlFor(name)),
         readonlyPassword: READONLY_PASSWORD,
         ownerPassword: OWNER_PASSWORD,
-        rmEnv: "prod",
+        policy: "prod",
       });
       homes.push(run.home);
       expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-3000) }).toEqual({ code: 0, tail: "" });

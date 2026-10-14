@@ -7,7 +7,7 @@
 //   "A `--local dump` whose ledger equals the production baseline applies 0081
 //   first, writes `rehearsal` in the same transaction, and boots; a dump with
 //   any other pre-identity ledger refuses. Pointed at a remote connection, the
-//   local dump preparation refuses, whatever `RM_ENV`, password or
+//   local dump preparation refuses, whatever `--policy`, password or
 //   acknowledgement says."
 //   "Kill and rerun, for each of the three passes: kill it before 0081
 //   commits, and the rerun takes the pass again; kill it after 0081, and the
@@ -195,7 +195,7 @@ async function rerunStep(h: BootHarness, action: "enroll" | "migrate"): Promise<
   }
 }
 
-describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`: the identity-first pass", () => {
+describe("`bun smoke --policy stage --local dump=<production baseline> --migrate`: the identity-first pass", () => {
   test("the dump is production's baseline: the 73-name ledger and no deployment_identity table", () => {
     expect(dump.ledger).toEqual([...BASELINE.migrations]);
     expect(dump.identity).toBeNull();
@@ -209,7 +209,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     const h = harness("dumpbase");
     let boot: RunningBoot | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, env: { RM_ENV: "stage" } });
+      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, policy: "stage" });
       const b = boot;
       await waitFor(() => b.exitCode() !== null || stepCommitted(h, "migrate"), BOOT_TIMEOUT_MS, "the boot to commit migrate or end", b);
       if (b.exitCode() === null) b.proc.kill("SIGINT");
@@ -263,7 +263,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, env: { RM_ENV: "stage" }, ownProcessGroup: true });
+      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, policy: "stage", ownProcessGroup: true });
       const b = boot;
       await waitFor(() => stepCommitted(h, "restore"), BOOT_TIMEOUT_MS, "the restore to commit", b);
       const copy = restoredCopy(h);
@@ -292,7 +292,7 @@ describe("`RM_ENV=stage bun smoke --local dump=<production baseline> --migrate`:
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, env: { RM_ENV: "stage" }, ownProcessGroup: true });
+      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, policy: "stage", ownProcessGroup: true });
       const b = boot;
       await waitFor(() => stepCommitted(h, "restore"), BOOT_TIMEOUT_MS, "the restore to commit", b);
       const copy = restoredCopy(h);
@@ -413,18 +413,18 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
 
   // The loop above stops each request at the FIRST guard it meets: `prod`
   // keeps connection=remote, and `claimslocal` names an instance with no
-  // restored container. The guards after those — RM_ENV=prod on the local
+  // restored container. The guards after those — --policy prod on the local
   // copy, the journal of another plan, and the published host:port — are
   // reached only from an instance whose plan really restored a copy. So one
   // boot restores the baseline dump and is killed with enroll blocked (the
   // copy keeps its baseline, the journal stays open with its restore
   // committed), and each request below is aimed from that state.
-  test("from a plan that really restored a copy: RM_ENV=prod, another plan's lock, and a local claim aimed at another host:port each refuse at their own guard — and the plan's own request then passes", async () => {
+  test("from a plan that really restored a copy: --policy prod, another plan's lock, and a local claim aimed at another host:port each refuse at their own guard — and the plan's own request then passes", async () => {
     const h = harness("dumpguards");
     let boot: RunningBoot | undefined;
     let blocker: { release(): Promise<void> } | undefined;
     try {
-      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, env: { RM_ENV: "stage" }, ownProcessGroup: true });
+      boot = spawnBoot(h, [], { local: `dump=${dump.dir}`, policy: "stage", ownProcessGroup: true });
       const b = boot;
       await waitFor(() => stepCommitted(h, "restore"), BOOT_TIMEOUT_MS, "the restore to commit", b);
       const copy = restoredCopy(h);
@@ -480,8 +480,8 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
         return error;
       };
 
-      // 1. RM_ENV=prod on the very copy this plan restored.
-      expect(refusal(await enroll(own, copy.target, planId, "prod"))).toContain("RM_ENV=prod. The pass writes `rehearsal`");
+      // 1. --policy prod on the very copy this plan restored.
+      expect(refusal(await enroll(own, copy.target, planId, "prod"))).toContain("--policy prod. The pass writes `rehearsal`");
       expect(stateOf(copy.superuserUrl)).toEqual(baselineCopy);
 
       // 2. The same copy, under a lock another plan holds: the open journal
@@ -519,17 +519,17 @@ describe("pointed at a REMOTE database with no identity table and the baseline l
     }
   }, BOOT_TIMEOUT_MS);
 
-  test("RM_ENV=stage `bun smoke` against it refuses at the §4.3 matrix under the target lock: 0081 not applied, no row written", async () => {
+  test("--policy stage `bun smoke` against it refuses at the §4.3 matrix under the target lock: 0081 not applied, no row written", async () => {
     const op = remote.operator("stagebaseline", [], BASELINE_DB);
     holdTokenFiles(op, "rm_it_stagebaseline");
     const r = Bun.spawnSync(
-      ["bun", "--no-env-file", "scripts/smoke.ts", "--instance", "rm_it_stagebaseline", "--credentials", op.roster, "--lock-timeout", "10"],
-      { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+      ["bun", "--no-env-file", "scripts/smoke.ts", "--policy", "stage", "--instance", "rm_it_stagebaseline", "--credentials", op.roster, "--lock-timeout", "10"],
+      { cwd: repoRoot, env: { ...op.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
     );
     const out = `${r.stdout.toString()}${r.stderr.toString()}`;
     expect(r.exitCode).not.toBe(0);
     expect(out).toContain("target lock held");
-    expect(out).toContain("RM_ENV=stage against a remote target whose deployment_identity is");
+    expect(out).toContain("--policy stage against a remote target whose deployment_identity is");
     expect(out).not.toContain("phase: prepare (migrate)");
     expect(out).not.toContain("rm_owner password");
     expect(baselineState()).toEqual({ ledger: [...BASELINE.migrations], table: false, identity: "" });

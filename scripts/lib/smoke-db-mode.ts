@@ -263,8 +263,10 @@ export const DEMO_FLAGS: readonly FlagSpec[] = Object.freeze([
   // Spec §2: "A tool that finds the lock held waits with a timeout, then
   // refuses naming the holder." Seconds; LOCK_TIMEOUT_DEFAULT_SECONDS when absent.
   Object.freeze({ flag: LOCK_TIMEOUT_FLAG, arity: 1 as const }),
-  // Spec §4.4: the one knob the deleted compose overlay left behind. Explicit or
-  // absent, and a refusal under RM_ENV=prod (backend/src/deploy-policy.ts).
+  // Spec §4.1: the declared policy, `prod` or `stage` (D69 part 4, issue 1327).
+  // It replaces the retired `RM_ENV` variable; the matrix that judges it is
+  // backend/src/deploy-policy.ts.
+  Object.freeze({ flag: "--policy", arity: 1 as const }),
   // D61: the `y` a remote `--migrate` or `--seed` asked for, as a flag that must
   // name exactly the `host:port/database` `~/.env` resolves to
   // (scripts/lib/privileged-env.ts).

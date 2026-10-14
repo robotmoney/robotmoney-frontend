@@ -98,7 +98,7 @@
 // The first of §4.3's three named exceptions, D55 (5): production runs v0.5.0 plus four more
 // files (its observed 76-name ledger, ../src/db/supported-releases.ts), which predates
 // the `deployment_identity` table (0081), so the first `bun run migrate` there
-// meets no row and no table. It may run anyway exactly when RM_ENV=prod, the
+// meets no row and no table. It may run anyway exactly when --policy prod, the
 // ledger's filename list equals one SUPPORTED_RELEASES baseline's list exactly,
 // `~/.env` holds the `rm_owner` line, and `--confirm-target` names the target
 // exactly (D61). `readPreIdentityState` decides the first two; the owner line
@@ -108,7 +108,7 @@
 //
 // THE REMOTE REHEARSAL PASS (D61 rule 2). Stage rehearses that run unmodified:
 // a production dump restored into a REMOTE stage Postgres has the same state,
-// and the same `bun run migrate --confirm-target …` under RM_ENV=stage takes
+// and the same `bun run migrate --confirm-target …` under --policy stage takes
 // the same pass, writing `rehearsal` instead of `production`
 // (`identityFirstKind`). It never writes `production`; any other pre-identity
 // ledger refuses; a second run, with the row present, takes the normal path.
@@ -162,7 +162,7 @@ import {
   transactionIdentityStore,
   type DeploymentIdentityRow,
 } from "../../scripts/lib/smoke-identity.ts";
-import { requireRehearsalTarget, resolveDeploymentPolicy, resolveRmEnv } from "../src/deploy-policy.ts";
+import { requireRehearsalTarget, resolveDeploymentPolicy, resolvePolicy } from "../src/deploy-policy.ts";
 import { checkAppendOnlyGuard } from "../src/db/append-only-guard.ts";
 import {
   COMPAT_COLUMNS,
@@ -261,7 +261,7 @@ export const IDENTITY_MIGRATION = "0081_deployment_identity.sql";
  *  refuse, never in what the run does. */
 export type MigrateCaller =
   /** `bun run migrate` — the operator intervention. May run against
-   *  `deployment_identity = production` under `RM_ENV=prod`. */
+   *  `deployment_identity = production` under `--policy prod`. */
   | "operator"
   /** `bun smoke --migrate` — the stage/test/CI convenience. Refuses `prod` and
    *  refuses anything but `rehearsal`. */
@@ -270,8 +270,8 @@ export type MigrateCaller =
 /** What the gates judge: who is asking, under which policy, over which connection. */
 export interface MigrateGateOptions {
   readonly caller: MigrateCaller;
-  /** Resolved policy; `null` when `RM_ENV` is unset (§4.3 gives unset its own
-   *  row). */
+  /** Resolved policy (the caller's `--policy` flag); `null` when no policy was
+   *  given (§4.3 gives that its own row). */
   readonly env: "prod" | "stage" | null;
   /** Remote connection or a Postgres container smoke owns (§5). Drives the
    *  warning and `--confirm-target`, and where the owner password comes from. */
@@ -506,7 +506,7 @@ export async function runMigrate(
     const kind = identityFirstKind(options.env);
     const pass = await applyIdentityFirst(db, {
       kind,
-      rmEnv: options.env,
+      policy: options.env,
       remote: options.connection === "remote",
       ...(kind === "rehearsal" ? { remoteRehearsalConfirmed: true } : {}),
       expected: preIdentity,
@@ -1011,21 +1011,21 @@ export interface MigrateRefusal {
  * enrolled by its bootstrap or restore, so its row must read `rehearsal`.
  *
  * For `caller: "smoke_flag"`, spec §8.5 adds that `--migrate` "refuses on
- * `RM_ENV=prod` or `deployment_identity ≠ rehearsal`", and §4.3 that
+ * `--policy prod` or `deployment_identity ≠ rehearsal`", and §4.3 that
  * rehearsal-only preparation requires `rehearsal` "in addition to their own
  * guards" — `requireRehearsalTarget`, the same gate `--seed` and `--spoof-keys`
  * share. For `caller: "operator"`, production is allowed under the policy that
  * names it and nothing else: a stage policy "never touches production data",
  * owner password or not.
  *
- * §4.3's FIRST NAMED EXCEPTION: an operator run under RM_ENV=prod against a remote
+ * §4.3's FIRST NAMED EXCEPTION: an operator run under --policy prod against a remote
  * database with no deployment_identity table, whose ledger equals one
  * SUPPORTED_RELEASES entry exactly, is not refused here
- * (`readPreIdentityState`). Nor is the same run under RM_ENV=stage, the remote
+ * (`readPreIdentityState`). Nor is the same run under --policy stage, the remote
  * rehearsal pass (D61 rule 2). A missing row that fails any of those guards
  * refuses as `identity_missing`, and the refusal names the guard it failed.
  *
- * Serves spec §10 W2 "`RM_ENV=stage` + owner password against
+ * Serves spec §10 W2 "`--policy stage` + owner password against
  * `deployment_identity = production` refuses."
  */
 export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions): Promise<readonly MigrateRefusal[]> {
@@ -1033,8 +1033,8 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   const push = (refusal: MigrateRefusal): void => {
     if (!refusals.some((r) => r.reason === refusal.reason)) refusals.push(refusal);
   };
-  const rmEnv = options.env === null ? undefined : options.env;
-  const valid = resolveRmEnv({ RM_ENV: rmEnv });
+  const declared = options.env === null ? undefined : options.env;
+  const valid = resolvePolicy(declared);
 
   const identity = await readDeploymentIdentity(db);
   if (identity.kind === "ambiguous") {
@@ -1053,18 +1053,18 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   // §4.3's first named exception (§9.1, D55 (5)): the first production migrate. When
   // it applies, the identity half of the matrix has nothing to judge — there
   // is no row — and every other guard of the exception is either checked here
-  // (RM_ENV=prod, the exact ledger) or is the remote path of `migrateCommand`
+  // (--policy prod, the exact ledger) or is the remote path of `migrateCommand`
   // (`~/.env`'s owner, `--confirm-target`), which `runMigrate` holds it to.
   // The remote rehearsal pass (D61 rule 2) is the same state under
-  // RM_ENV=stage, and writes `rehearsal` instead.
+  // --policy stage, and writes `rehearsal` instead.
   if (await readPreIdentityState(db, options)) return refusals;
 
   // §8.5: `--migrate` is a stage/test/CI convenience.
-  if (options.caller === "smoke_flag" && rmEnv === "prod") {
+  if (options.caller === "smoke_flag" && declared === "prod") {
     push({
       reason: "prod_env",
       message:
-        "Refusing: `--migrate` is a convenience for stage, test and CI, and refuses on RM_ENV=prod. In " +
+        "Refusing: `--migrate` is a convenience for stage, test and CI, and refuses on --policy prod. In " +
         "production an upgrade is an operator intervention — `bun run migrate`, planned per release and " +
         "receipted — and is never part of a boot (spec §8.5).",
     });
@@ -1072,7 +1072,7 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
 
   // §4.3, the one matrix.
   const verdict = resolveDeploymentPolicy({
-    rmEnv,
+    policy: declared,
     connection: options.connection === "remote" ? "remote" : "local-volume",
     identity: kind,
   });
@@ -1088,7 +1088,7 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
             : "identity_not_rehearsal";
     // `prod` + a smoke-owned Postgres under `--migrate` is already the
     // `prod_env` refusal above; reporting the same fact twice helps nobody.
-    if (!(options.caller === "smoke_flag" && reason === "env_invalid" && rmEnv === "prod")) {
+    if (!(options.caller === "smoke_flag" && reason === "env_invalid" && declared === "prod")) {
       const lead =
         reason === "identity_missing"
           ? "this database has no deployment_identity row, so it is not enrolled as anything, and absence of " +
@@ -1106,7 +1106,7 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
   // own guards. Judged on the identity alone here (the policy half is above),
   // so a `prod` + `production` run learns both of its refusals in one pass.
   if (options.caller === "smoke_flag" && kind !== "rehearsal") {
-    const gate = requireRehearsalTarget({ preparation: "migrate", rmEnv: "stage", identity: kind, explicitlyRequested: true, connection: options.connection === "remote" ? "remote" : "local-volume" });
+    const gate = requireRehearsalTarget({ preparation: "migrate", policy: "stage", identity: kind, explicitlyRequested: true, connection: options.connection === "remote" ? "remote" : "local-volume" });
     if (!gate.allow) {
       push({
         reason: kind === "production" ? "identity_not_rehearsal" : "identity_missing",
@@ -1123,14 +1123,14 @@ export async function checkMigrateGates(db: ReadDb, options: MigrateGateOptions)
  * qualifies for one, else `null`.
  *
  * Two passes share this state, told apart by the policy alone:
- *   - RM_ENV=prod: the first production migrate (§9.1, D55 (5)). It writes
+ *   - --policy prod: the first production migrate (§9.1, D55 (5)). It writes
  *     `production`.
- *   - RM_ENV=stage: the remote rehearsal pass (D61 rule 2). A production dump
+ *   - --policy stage: the remote rehearsal pass (D61 rule 2). A production dump
  *     restored into a remote stage Postgres has the same pre-identity state,
  *     and stage rehearses the production cutover on it unmodified. It writes
  *     `rehearsal`, never `production` (`identityFirstKind`).
  *
- * Qualifies: the operator caller (`bun run migrate`), RM_ENV=prod or stage, a
+ * Qualifies: the operator caller (`bun run migrate`), --policy prod or stage, a
  * remote connection, no `deployment_identity` table at all, and a ledger whose
  * filename list equals one SUPPORTED_RELEASES entry's exactly. `~/.env`'s
  * owner and `--confirm-target` are not decided here: they are what
@@ -1198,12 +1198,12 @@ export interface IdentityFirstPass {
   /** The policy the pass runs under. The production write refuses anything
    *  but `prod` (enrollAsProduction); the rehearsal write refuses `prod`
    *  (enrollAsRehearsal). */
-  readonly rmEnv: "prod" | "stage" | null;
+  readonly policy: "prod" | "stage" | null;
   /** Whether the pass's connection is a remote one. The rehearsal write
    *  refuses a remote connection unless `remoteRehearsalConfirmed` is set. */
   readonly remote: boolean;
   /** The remote rehearsal pass only (D61 rule 2): `bun run migrate` under
-   *  RM_ENV=stage held the run to `--confirm-target` before it got here. The
+   *  --policy stage held the run to `--confirm-target` before it got here. The
    *  `--local dump` pass never sets it, so its rule (D55 (9): never remote)
    *  holds unchanged. */
   readonly remoteRehearsalConfirmed?: boolean;
@@ -1243,11 +1243,11 @@ export interface IdentityFirstResult {
  *
  * Refusals: the state under the fence is not a pre-identity baseline (no
  * table and a baseline ledger), or not the expected one; the identity write's
- * own guards (production: RM_ENV=prod; rehearsal:
+ * own guards (production: --policy prod; rehearsal:
  * not prod, and never a remote connection).
  *
- * Callers: `runMigrate`'s first production migrate (`production`, RM_ENV=prod),
- * `runMigrate`'s remote rehearsal pass (`rehearsal`, RM_ENV=stage, D61 rule 2)
+ * Callers: `runMigrate`'s first production migrate (`production`, --policy prod),
+ * `runMigrate`'s remote rehearsal pass (`rehearsal`, --policy stage, D61 rule 2)
  * and backend/scripts/smoke-prepare.ts's `--local dump` enroll step
  * (`rehearsal`). Each proves its own pass's guards before calling it.
  */
@@ -1270,8 +1270,9 @@ export async function applyIdentityFirst(db: MigrateDb, pass: IdentityFirstPass)
     const store = transactionIdentityStore(tx, { remote: pass.remote });
     const row =
       pass.kind === "production"
-        ? await enrollAsProduction(store, { rmEnv: pass.rmEnv ?? undefined, confirmed: true, note: pass.note })
+        ? await enrollAsProduction(store, { policy: pass.policy ?? undefined, confirmed: true, note: pass.note })
         : await enrollAsRehearsal(store, {
+            policy: pass.policy,
             note: pass.note,
             remoteAcknowledged: pass.remote && pass.remoteRehearsalConfirmed === true,
           });
@@ -1334,7 +1335,7 @@ async function describeWhyNoPreIdentityException(
     "The runs allowed without the row, the first production migrate (spec §9.1, D55 (5)) and the remote " +
     "rehearsal pass (D61), need";
   if (options.env !== "prod" && options.env !== "stage") {
-    return `${lead} RM_ENV=prod or RM_ENV=stage, and this run is RM_ENV=${options.env ?? "(unset)"}.`;
+    return `${lead} --policy prod or --policy stage, and this run gave ${options.env === null ? "no --policy" : `--policy ${options.env}`}.`;
   }
   if (options.connection !== "remote") return `${lead} a remote target.`;
   const ledger = await ledgerOf(db);
@@ -1615,7 +1616,7 @@ export async function migrateCommand(input: {
 
     // 4–5. The owner credential for this one run, then --confirm-target.
     await phase("owner");
-    input.log(`RM_ENV=${input.env ?? "(unset)"}, ${input.connection} target ${target}`);
+    input.log(`--policy ${input.env ?? "(not given)"}, ${input.connection} target ${target}`);
     const password = await resolveOwnerPassword(
       { ...gateOptions, localOwnerPassword: input.localOwnerPassword, remote: input.remote },
       input.readerUrl,

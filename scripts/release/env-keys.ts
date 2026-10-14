@@ -14,6 +14,10 @@
 // process's memory. R6.2 moves a stray `doadmin` line out of `~/.env`, like
 // any other key off the list.
 //
+// `RM_ENV` is NOT on the list either (D69 part 4, issue 1327): every release
+// command carries the target's policy as `--policy`, and R6.2 moves a leftover
+// `RM_ENV` line out with the rest.
+//
 // Pure: no file read, no environment read.
 import { databaseName } from "../lib/env-role.ts";
 
@@ -27,7 +31,6 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   "rm_worker",
   "rm_readonly",
   "rm_owner",
-  "RM_ENV",
   "RM_CREDENTIALS",
   "COINGECKO_API_KEY",
 ]);

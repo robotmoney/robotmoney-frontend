@@ -114,7 +114,9 @@ export function planTwin(passthrough: readonly string[]): SmokeTwinPlan | { erro
   // `--migrate` is explicit for the same reason: no mode implies it, and a
   // fresh dump is on production's schema, which the checkout is usually ahead
   // of. Without it the boot refuses the stale schema instead of serving it.
-  const args = ["--local", `dump=${backupDir}`, "--migrate", "--static-port", "--cadence", "fast"];
+  // `--policy stage` because a twin is always a rehearsal: production policy
+  // never runs on a database smoke owns (spec §4.3; the flag is D69 part 4).
+  const args = ["--policy", "stage", "--local", `dump=${backupDir}`, "--migrate", "--static-port", "--cadence", "fast"];
 
   return { capture: !passthrough.includes("--reuse"), slim: !passthrough.includes("--full-dump"), args, backupDir };
 }

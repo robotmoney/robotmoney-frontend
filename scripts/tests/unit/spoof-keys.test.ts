@@ -5,10 +5,10 @@
 //
 // WHAT THESE PIN, AND WHY EACH ONE IS A REAL RISK:
 //
-//   - THE FOUR GUARDS REFUSE INDEPENDENTLY. `RM_ENV = prod`,
+//   - THE FOUR GUARDS REFUSE INDEPENDENTLY. `--policy prod`,
 //     `deployment_identity ≠ rehearsal`, no `rm_owner` credential, and a flag
 //     that was not passed explicitly. Passing one never excuses another: a
-//     mistyped `RM_ENV` on a production connection must still refuse on the
+//     mistyped `--policy` on a production connection must still refuse on the
 //     enrolled identity, because the env var is the operator's claim and the
 //     table row is the target's own answer.
 //   - THE OUTPUT PATH IS NEVER `RM_CREDENTIALS`. Overwriting it on a
@@ -231,13 +231,13 @@ describe("assertSpoofKeysAllowed — four guards, each independently fatal", () 
     expect(assertSpoofKeysAllowed(allowed(), GEN)).toBeUndefined();
   });
 
-  test("RM_ENV = prod refuses — spoofing production keys is never a rehearsal flag's business", () => {
+  test("--policy prod refuses — spoofing production keys is never a rehearsal flag's business", () => {
     expect(spoofRefusal(() => assertSpoofKeysAllowed(allowed({ rmEnv: "prod" }), GEN)).reason).toBe("rm_env_prod");
   });
 
-  test("deployment_identity = production refuses even when RM_ENV says stage", () => {
+  test("deployment_identity = production refuses even when --policy says stage", () => {
     // The env var is the operator's CLAIM; the row is the target's own
-    // enrollment. A mistyped RM_ENV must not reach a production database.
+    // enrollment. A mistyped --policy must not reach a production database.
     const r = spoofRefusal(() =>
       assertSpoofKeysAllowed(allowed({ rmEnv: "stage", deploymentIdentity: "production" }), GEN),
     );
@@ -276,7 +276,7 @@ describe("assertSpoofKeysAllowed — four guards, each independently fatal", () 
     ).toBe("no_owner_credential");
   });
 
-  test("the order is RM_ENV, then identity, then owner credential, then the flag", () => {
+  test("the order is --policy, then identity, then owner credential, then the flag", () => {
     const allBad = allowed({
       rmEnv: "prod",
       deploymentIdentity: "production",

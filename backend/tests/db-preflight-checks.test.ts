@@ -1412,13 +1412,14 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
 
   test("the allowlist is exactly §3's keys, spelled the way env-role.ts reads the connection and the roles", () => {
     // §3: "the remote connection (host, port, dbname); the runtime role
-    // passwords rm_app, rm_worker and rm_readonly; RM_ENV; and RM_CREDENTIALS."
+    // passwords rm_app, rm_worker and rm_readonly; and RM_CREDENTIALS." The
+    // policy is no line here since D69 part 4: each tool takes `--policy`.
     // D61 adds the owner password `rm_owner`. `doadmin` is not allowed (D61
     // amendment, owner, 2026-10-08): it is never stored in a file.
     // env-role.ts is the one resolver the host-side tools use, so its
     // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
     // spelling of `database` and is accepted beside it.
-    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "rm_owner", "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
+    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "rm_owner", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
   });
 
@@ -1464,12 +1465,11 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect(homeEnvPath()).toBe(homeEnvFilePath());
   });
 
-  test("a file holding exactly the allowlist passes on prod — both database spellings, RM_ENV, RM_CREDENTIALS", async () => {
+  test("a file holding exactly the allowlist passes on prod — both database spellings, RM_CREDENTIALS", async () => {
     const envFilePath = writeEnvFile("exact-allowlist.env", [
       "# the deploying user's home-directory file",
       ...SAFE,
       "dbname = defaultdb",
-      "RM_ENV=prod",
       "export RM_CREDENTIALS=/home/deployer/.robotmoney/credential.json",
     ]);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
@@ -1481,6 +1481,16 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     const envFilePath = writeEnvFile("safe.env", SAFE);
     const result = await checkEnvCredentials(context({ env: "prod", envFilePath }));
     expect(result.findings).toEqual([]);
+  });
+
+  test("a leftover RM_ENV line is the retired policy variable: refused on prod, warned on stage, named as retired (D69 part 4)", async () => {
+    const envFilePath = writeEnvFile("retired-policy.env", [...SAFE, "RM_ENV = prod"]);
+    const prod = await checkEnvCredentials(context({ env: "prod", envFilePath }));
+    expect(prod.findings.map((f) => f.severity)).toEqual(["refuse"]);
+    expect(prod.findings[0]?.message).toContain("RM_ENV, the retired policy variable");
+    expect(prod.findings[0]?.message).toContain("--policy");
+    const stage = await checkEnvCredentials(context({ env: "stage", envFilePath }));
+    expect(stage.findings.map((f) => f.severity)).toEqual(["warn"]);
   });
 
   test("an unlisted key — a model key — refuses on prod and warns on stage, naming the key and never the value", async () => {
@@ -1619,7 +1629,7 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect(refusals(result.findings)).toEqual([]);
   });
 
-  test("unset RM_ENV refuses against a remote and warns under --local, per §4.3's unset row", async () => {
+  test("an absent --policy refuses against a remote and warns under --local, per §4.3's unset row", async () => {
     const envFilePath = writeEnvFile("superuser-unset.env", [...SAFE, "POSTGRES_SUPERUSER_URL=postgres://x"]);
     const remote = await checkEnvCredentials(context({ env: null, connection: "remote", envFilePath }));
     expect(remote.findings[0]?.severity).toBe("refuse");
@@ -1655,10 +1665,10 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Check 5 — RM_ENV x deployment_identity
+// Check 5 — --policy x deployment_identity
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix", () => {
+describe("check 5 — --policy x deployment_identity resolve per the §4.3 matrix", () => {
   // The enrollment column is `kind` — spec §4.2 ("`deployment_identity.kind ∈
   // {production, rehearsal}`") and migration 0081, which is what the template
   // database this test runs against actually holds. The fixture replaces the
@@ -1721,21 +1731,21 @@ describe("check 5 — RM_ENV x deployment_identity resolve per the §4.3 matrix"
     });
   });
 
-  test("unset RM_ENV against a remote refuses", async () => {
+  test("an absent --policy against a remote refuses", async () => {
     await withIdentity("rehearsal", async () => {
       const result = await checkEnvIdentity(sql, context({ env: null, connection: "remote" }));
       expect(refusals(result.findings)).toHaveLength(1);
-      expect(result.findings[0]?.message).toContain("RM_ENV");
+      expect(result.findings[0]?.message).toContain("--policy");
     });
   });
 
-  test("unset RM_ENV under --local warns `RM_ENV not set, running as stage` and proceeds", async () => {
+  test("an absent --policy under --local warns `--policy not given, running as stage` and proceeds", async () => {
     await withIdentity("rehearsal", async () => {
       const result = await checkEnvIdentity(sql, context({ env: null, connection: "local" }));
       expect(refusals(result.findings)).toEqual([]);
       expect(result.findings).toHaveLength(1);
       expect(result.findings[0]?.severity).toBe("warn");
-      expect(result.findings[0]?.message).toContain("RM_ENV not set, running as stage");
+      expect(result.findings[0]?.message).toContain("--policy not given, running as stage");
     });
   });
 

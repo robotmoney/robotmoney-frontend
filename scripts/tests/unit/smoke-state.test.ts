@@ -99,7 +99,7 @@ describe("resolveInstance — §1.1 precedence, applied in order", () => {
     expect(resolved.source).toBe("flag");
   });
 
-  test("rule 2: RM_ENV=prod is the fixed production instance, outranking CI identity", () => {
+  test("rule 2: --policy prod is the fixed production instance, outranking CI identity", () => {
     const root = freshRoot();
     const resolved = resolveInstance(resolution({ stateRoot: root, rmEnv: "prod", environment: CI("aaaaaaaaaa") }));
     expect(resolved.name).toBe(PRODUCTION_INSTANCE);
@@ -163,7 +163,7 @@ describe("resolveInstance — §1.1 precedence, applied in order", () => {
     );
   });
 
-  test("RM_ENV=prod with an `--instance` other than rm_prod refuses", () => {
+  test("--policy prod with an `--instance` other than rm_prod refuses", () => {
     expect(() =>
       resolveInstance(resolution({ stateRoot: freshRoot(), rmEnv: "prod", flag: "something-else" })),
     ).toThrow(/rm_prod/);
@@ -747,7 +747,7 @@ describe("two instances on one host: each command acts only on the named one (cr
   function run(root: string, script: string, args: string[]): { code: number; out: string } {
     const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", script), ...args], {
       cwd: repoRoot,
-      env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), RM_ENV: "stage", AGENT_MODEL: "free" },
+      env: { HOME: process.env.HOME ?? root, RM_SMOKE_STATE_ROOT: root, ...deadDockerEnv(), AGENT_MODEL: "free" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -826,12 +826,12 @@ describe("two instances on one host: each command acts only on the named one (cr
     writeStackState(a, stackRecord("rm_local_alpha"));
     instancePaths(root, "rm_local_bravo", { create: true });
     // bravo has no saved volume: refused, naming bravo — alpha's volume is not borrowed.
-    const bravo = run(root, "smoke.ts", ["--local", "volume", "--instance", "rm_local_bravo"]);
+    const bravo = run(root, "smoke.ts", ["--policy", "stage", "--local", "volume", "--instance", "rm_local_bravo"]);
     expect(bravo.code).toBe(1);
     expect(bravo.out).toContain("found no saved volume for instance rm_local_bravo");
     expect(bravo.out).not.toContain("rm_local_alpha_pgdata_volume");
     // alpha's saved volume is the one asked about (the dead daemon then refuses).
-    const alpha = run(root, "smoke.ts", ["--local", "volume", "--instance", "rm_local_alpha"]);
+    const alpha = run(root, "smoke.ts", ["--policy", "stage", "--local", "volume", "--instance", "rm_local_alpha"]);
     expect(alpha.code).toBe(1);
     expect(alpha.out).toContain("volume=rm_local_alpha_pgdata_volume: could not ask Docker");
   }, 60_000);
@@ -863,7 +863,7 @@ describe("two instances on one host: each command acts only on the named one (cr
     const aPlan = readJournal(a)!.planId;
     // A real boot aimed at alpha. Its plan differs from the planted one, so it
     // supersedes alpha's journal (§1.3 rule 2) — then fails at the dead daemon.
-    const r = run(root, "smoke.ts", ["--local", "blank", "--instance", "rm_local_alpha"]);
+    const r = run(root, "smoke.ts", ["--policy", "stage", "--local", "blank", "--instance", "rm_local_alpha"]);
     expect(r.code).toBe(1);
     expect(r.out).toContain(`The previous plan ${aPlan} is superseded`);
     const archived = readArchivedJournals(a);

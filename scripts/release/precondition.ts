@@ -11,7 +11,7 @@
 //     repository lacks, no applied file whose bytes differ from the pin's;
 //     the pending set is the repository minus the ledger. Never a count,
 //     never a number order;
-//   - `deployment_identity` is absent, or holds the kind RM_ENV implies
+//   - `deployment_identity` is absent, or holds the kind `--policy` implies
 //     (`prod` → `production`, `stage` → `rehearsal`). With the row present, the
 //     ledger may also record `0081_deployment_identity.sql`, the file that
 //     created it (a remote twin prepared by pre-identity-remote-twin.md).
@@ -40,10 +40,10 @@ export function preconditionProblems(input: {
   reconcile: ReconcileReceipt;
 }): string[] {
   const expected = expectedIdentity(input.rmEnv);
-  if (expected === undefined) return [`RM_ENV is ${input.rmEnv ?? "unset"}; a release run is stage or prod`];
+  if (expected === undefined) return [`--policy is ${input.rmEnv ?? "not given"}; a release run is stage or prod`];
   const out: string[] = [];
   if (input.identity !== null && input.identity !== expected) {
-    out.push(`deployment_identity is ${input.identity}; RM_ENV=${input.rmEnv} meets only ${expected} or no row`);
+    out.push(`deployment_identity is ${input.identity}; --policy ${input.rmEnv} meets only ${expected} or no row`);
   }
   if (input.identity === null && input.ledger.includes(IDENTITY_MIGRATION)) {
     out.push(`the ledger records ${IDENTITY_MIGRATION} but deployment_identity has no row`);

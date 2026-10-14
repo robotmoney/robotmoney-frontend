@@ -36,7 +36,7 @@
 //              pass instead (localDumpIdentityFirst, D55 (9), (10)): 0081 and
 //              `rehearsal` in one fenced transaction, only on the container
 //              this run restored, never over a remote connection, never under
-//              RM_ENV=prod, only from the production baseline ledger.
+//              --policy prod, only from the production baseline ledger.
 //   migrate    `--migrate`: migrateCommand as the `smoke_flag` caller — gates,
 //              owner password (smoke's generated one locally, `~/.env`'s
 //              `rm_owner` line on a remote rehearsal, D61), `--confirm-target`
@@ -61,7 +61,7 @@ import type { LockHolder } from "../src/db/target-lock.ts";
 /** Everything one step needs, and no secret: passwords are read from the files it names. */
 export interface PrepareRequest {
   readonly action: "bootstrap" | "enroll" | "migrate" | "seed" | "preflight";
-  /** The §4.1 policy the boot resolved; `null` when RM_ENV is unset. */
+  /** The §4.1 policy the boot resolved; `null` when no `--policy` was given. */
   readonly rmEnv: "prod" | "stage" | null;
   readonly connection: "remote" | "local";
   /** How the host reaches the target. */
@@ -146,11 +146,11 @@ async function main(): Promise<PrepareResult> {
   const readerUrl = required(urlFor(request, "rm_readonly"), "rm_readonly");
 
   // backend/src/config.ts validates at IMPORT: DATABASE_URL is the runtime
-  // role that can do no DDL, and RM_ENV the policy this boot runs under. The
-  // owner credential never goes into the environment.
+  // role that can do no DDL. The policy this boot runs under travels in the
+  // request (`request.rmEnv`, from `bun smoke --policy`), never the
+  // environment. The owner credential never goes into the environment.
   process.env.DATABASE_URL = readerUrl;
   process.env.WORKER_DATABASE_URL = readerUrl;
-  process.env.RM_ENV = request.rmEnv ?? "stage";
 
   const { assertStillHeld, observeTargetLock, withMutationFence } = await import("../src/db/target-lock.ts");
   const reader = postgres(readerUrl, { max: 1, onnotice: () => {} });
@@ -188,7 +188,7 @@ async function main(): Promise<PrepareResult> {
         }
         const row = await withMutationFence(
           { databaseUrl: required(urlFor(request, "rm_owner"), "rm_owner"), label: "identity" },
-          (tx) => enrollAsRehearsal(transactionIdentityStore(tx, { remote }), { note: request.note ?? null, remoteAcknowledged: false }),
+          (tx) => enrollAsRehearsal(transactionIdentityStore(tx, { remote }), { policy: request.rmEnv, note: request.note ?? null, remoteAcknowledged: false }),
         );
         return done({ kind: row.kind, writtenBy: row.writtenBy });
       }
@@ -293,11 +293,11 @@ async function main(): Promise<PrepareResult> {
  *
  * Its guards, each checked here for itself, in this order, before anything is
  * written — and none of them relaxable by any input:
- *   1. NEVER REMOTE. A remote connection refuses whatever RM_ENV, password or
+ *   1. NEVER REMOTE. A remote connection refuses whatever --policy, password or
  *      acknowledgement says: the request's connection must be local and its
  *      owner password the one smoke generated for the instance (§5). The identity write itself refuses a
  *      remote store too (enrollAsRehearsal), so the rule holds twice.
- *   2. NOT PROD. `RM_ENV=prod` refuses (§4.3: prod never runs on a database
+ *   2. NOT PROD. `--policy prod` refuses (§4.3: prod never runs on a database
  *      smoke owns; enrollAsRehearsal refuses it again).
  *   3. THE COPY THIS RUN RESTORED. The instance's stack record names the
  *      restored container; this plan's open journal has its `restore`
@@ -327,10 +327,10 @@ async function localDumpIdentityFirst(
     refuse(
       `its connection is remote (${request.target.host}:${request.target.port}, ${request.connection}). The pass runs ` +
         "only on the Postgres container this smoke run restored, with the owner password smoke " +
-        "generated; a remote connection refuses whatever RM_ENV, password or acknowledgement says.",
+        "generated; a remote connection refuses whatever --policy, password or acknowledgement says.",
     );
   }
-  if (request.rmEnv === "prod") refuse("RM_ENV=prod. The pass writes `rehearsal` and never runs under production policy.");
+  if (request.rmEnv === "prod") refuse("--policy prod. The pass writes `rehearsal` and never runs under production policy.");
   proveRestoredByThisPlan(request, refuse);
 
   const { applyIdentityFirst, describeUnmatchedPreIdentity, readPreIdentityLedger } = await import("./migrate-run.ts");
@@ -344,7 +344,7 @@ async function localDumpIdentityFirst(
   try {
     return await applyIdentityFirst(owner, {
       kind: "rehearsal",
-      rmEnv: request.rmEnv,
+      policy: request.rmEnv,
       remote,
       expected: state!,
       note: `${request.note ?? "--local dump"}: identity-first from ${state!.release} (spec §4.3, D55 (10))`,

@@ -1,4 +1,4 @@
-// `bun smoke`'s view of the `RM_ENV` policy × `deployment_identity` matrix of
+// `bun smoke`'s view of the `--policy` × `deployment_identity` matrix of
 // smoke-production-spec.md §4.3 — a RE-EXPORT, not a copy.
 //
 // The matrix has exactly one implementation, backend/src/deploy-policy.ts, which
@@ -14,19 +14,21 @@
 // resolver, `resolveSmokeEnv`). This one keeps the `-policy` suffix so the two
 // never merge by accident.
 //
-// Acceptance gates served (spec §10): W1 "Unset `RM_ENV` against a remote target
-// refuses."; W2 "`RM_ENV=stage` + typed owner password against
+// Acceptance gates served (spec §10): W1 "No `--policy` against a remote target
+// refuses."; W2 "`--policy stage` + typed owner password against
 // `deployment_identity = production` refuses; plain stage boot against
 // production identity refuses."
 export {
   describePolicyVerdict,
   resolveDeploymentPolicy,
-  resolveRmEnv,
-  RM_ENV_UNSET_WARNING,
-  type PolicyEnv as RmEnv,
+  policyFlag,
+  POLICY_FLAG,
+  POLICY_UNSET_WARNING,
+  resolvePolicy,
+  type PolicyEnv,
   type PolicyInput,
   type PolicyPosture,
+  type PolicySource,
   type PolicyVerdict,
-  type RmEnvSource,
   type TargetConnection,
 } from "../../backend/src/deploy-policy.ts";

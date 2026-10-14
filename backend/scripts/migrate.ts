@@ -30,7 +30,7 @@
 // target `~/.env` names (`host`, `port` or 5432, `database` or `dbname`, as
 // spelled there). A mismatch prints both. Nothing is normalized.
 //
-// usage: bun run migrate --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>] [--pin-ref <tag|commit>]
+// usage: bun run migrate --policy <prod|stage> --confirm-target <host:port/database> [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>] [--pin-ref <tag|commit>]
 //
 // THE PRECONDITION (D67). Before the owner password is read, the command
 // reconciles the ledger with backend/migrations read-only (src/db/
@@ -39,7 +39,7 @@
 // version production reports) every applied file's bytes must equal the pin's.
 // Any other verdict refuses with nothing applied; the receipt records it.
 //
-// `--instance` defaults to the production instance under RM_ENV=prod. Any other
+// `--instance` defaults to the production instance under --policy prod. Any other
 // policy must name where the receipt goes, because a receipt written to a
 // guessed instance is a record in the wrong place.
 //
@@ -52,18 +52,18 @@
 // phase could not start; a run killed by a signal says it was interrupted.
 //
 // THE FIRST PRODUCTION MIGRATE (§9.1, D55 (5), (9)) is this command, unchanged:
-// under RM_ENV=prod, against a database with no identity row whose ledger
+// under --policy prod, against a database with no identity row whose ledger
 // equals a supported release's, the gates let it through, the confirmation
 // names that state, the run applies 0081 first with `production` in its
 // transaction (migrate-run.ts applyIdentityFirst), and the receipt records the
 // pre-identity state and the row. A run killed after that transaction reruns
-// as an ordinary `bun run migrate`. Under RM_ENV=stage the same state takes
+// as an ordinary `bun run migrate`. Under --policy stage the same state takes
 // the remote rehearsal pass (D61 rule 2): the same steps, writing `rehearsal`.
 import { hostname } from "node:os";
 import { dirname, resolve } from "node:path";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../../scripts/lib/env-role.ts";
 import { confirmTargetFlag, homeEnvTarget } from "../../scripts/lib/privileged-env.ts";
-import { resolveRmEnv } from "../src/deploy-policy.ts";
+import { policyFlag, resolvePolicy } from "../src/deploy-policy.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
 import { MigrateJournal, migrateJournalPath } from "./migrate-journal.ts";
 
@@ -101,19 +101,26 @@ if (!Number.isFinite(lockTimeoutSeconds) || lockTimeoutSeconds < 0) refuse("--lo
 const envPath = homeEnvFilePath();
 const env = loadEnvFile(envPath);
 
-// Args override env (§3), so the process's RM_ENV wins over the file's. The
-// value is judged by the §4.3 matrix itself (the gates, below); here it is only
+// The §4.1 policy is this command's own `--policy` flag (D69 part 4, issue
+// 1327); no environment value and no `~/.env` line is read for it. The value
+// is judged by the §4.3 matrix itself (the gates, below); here it is only
 // parsed, so a typo refuses before anything connects.
-const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env?.RM_ENV });
+let declaredPolicy: string | undefined;
+try {
+  declaredPolicy = policyFlag(process.argv.slice(2));
+} catch (error) {
+  refuse((error as Error).message);
+}
+const policy = resolvePolicy(declaredPolicy);
 if (!policy.ok) refuse(policy.reason);
-const rmEnv = policy.source === "unset" ? null : policy.env;
+const declared = policy.source === "unset" ? null : policy.env;
 
 // The receipt's home is decided BEFORE anything connects: finding out after a
 // production migration that there is nowhere to record it is the wrong order.
 const startedAt = new Date();
 let receiptDir: string;
 if (receiptFlag === undefined) {
-  const instance = instanceFlag ?? (rmEnv === "prod" ? PRODUCTION_INSTANCE : undefined);
+  const instance = instanceFlag ?? (declared === "prod" ? PRODUCTION_INSTANCE : undefined);
   if (instance === undefined) {
     refuse("name the instance whose state directory receives the receipt (--instance <name>), or pass --receipt <path>.");
   }
@@ -127,7 +134,7 @@ if (receiptFlag === undefined) {
 // handler — closes it naming the phase it
 // stopped in; the `exit` handler catches the ones that leave without closing.
 // Nothing before this point connected to anything or had a place to journal.
-journal = MigrateJournal.open(migrateJournalPath(receiptDir, startedAt), { caller: "operator", env: rmEnv, startedAt });
+journal = MigrateJournal.open(migrateJournalPath(receiptDir, startedAt), { caller: "operator", env: declared, startedAt });
 process.on("exit", (code) => journal?.closeOnExit(code));
 journal.begin("config");
 
@@ -147,8 +154,7 @@ const resolvedTarget = homeEnvTarget(env)!;
 // backend/src/config.ts validates at IMPORT, and the run's modules import it
 // (append-only-guard.ts → db/client.ts). It requires DATABASE_URL: this
 // process's is the rm_readonly target above, a runtime credential that can do
-// no DDL. It accepts RM_ENV=stage (#1026) as the policy this command runs
-// under, so nothing is re-presented to it under another name.
+// no DDL. It reads no policy value: the policy is this command's `--policy`.
 process.env.DATABASE_URL = readonlyUrl;
 
 // The run's modules are imported only now: nothing above may depend on them,
@@ -159,7 +165,7 @@ const receiptPath = receiptFlag === undefined ? migrateReceiptPath(receiptDir, s
 try {
   const { result, receipt } = await migrateCommand({
     caller: "operator",
-    env: rmEnv,
+    env: declared,
     // `bun run migrate` never targets a Postgres smoke owns: that is
     // `bun smoke --migrate`, which uses smoke's generated password (§8.5).
     connection: "remote",

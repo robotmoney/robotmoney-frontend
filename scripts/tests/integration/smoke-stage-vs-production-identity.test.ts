@@ -1,7 +1,7 @@
 // The §4.3 policy × identity matrix, row by row, in REAL `bun smoke` processes —
 // criteria 13 and 46 (smoke-production-spec.md §4.1-§4.3, §10 W1/W2).
 //
-//   | RM_ENV | connection         | identity row   | result                         |
+//   | policy | connection         | identity row   | result                         |
 //   |--------|--------------------|----------------|--------------------------------|
 //   | prod   | remote             | production     | production guards armed        |
 //   | prod   | remote             | anything else  | refuse                         |
@@ -91,24 +91,29 @@ function expectRefusedAtTheLock(op: Operator, instance: string, out: string): vo
 }
 
 /** Run to completion; for the refusing rows. */
-function remoteRefusal(op: Operator, env: Record<string, string | undefined>, instance: string | null): { code: number; out: string } {
+/** `policy` is the boot's `--policy` (D69 part 4), `null` for no flag; `env` overrides the operator's environment. */
+function policyArgs(policy: string | null): string[] {
+  return policy === null ? [] : ["--policy", policy];
+}
+
+function remoteRefusal(op: Operator, policy: string | null, instance: string | null, env: Record<string, string | undefined> = {}): { code: number; out: string } {
   const full: Record<string, string> = { ...op.env };
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete full[k];
     else full[k] = v;
   }
-  const r = Bun.spawnSync(remoteArgv(op, instance), { cwd: repoRoot, env: full, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const r = Bun.spawnSync(remoteArgv(op, instance, policyArgs(policy)), { cwd: repoRoot, env: full, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   return { code: r.exitCode ?? -1, out: `${r.stdout.toString()}${r.stderr.toString()}` };
 }
 
 /** Run until the `lock` preparation commits, then stop it; for the allowed rows. */
-async function remoteAllowed(op: Operator, env: Record<string, string | undefined>, instance: string | null): Promise<{ code: number; out: string }> {
+async function remoteAllowed(op: Operator, policy: string | null, instance: string | null, env: Record<string, string | undefined> = {}): Promise<{ code: number; out: string }> {
   const full: Record<string, string> = { ...op.env };
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete full[k];
     else full[k] = v;
   }
-  const proc = Bun.spawn(remoteArgv(op, instance), { cwd: repoRoot, env: full, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(remoteArgv(op, instance, policyArgs(policy)), { cwd: repoRoot, env: full, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   let out = "";
   const pumps = Promise.all(
     [proc.stdout, proc.stderr].map(async (stream) => {
@@ -138,9 +143,9 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     // A production-policy boot demands a funded model for its host-side
     // drivers (AC-MODEL-01, scripts/lib/smoke-inference-preflight.ts). The key
     // is a placeholder: this boot is stopped long before anything spends it.
-    const r = await remoteAllowed(op, { RM_ENV: "prod", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent" }, null);
+    const r = await remoteAllowed(op, "prod", null, { AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent" });
     expect(r.out).toContain("target: remote");
-    expect(r.out).toContain("RM_ENV=prod, deployment_identity production");
+    expect(r.out).toContain("--policy prod, deployment_identity production");
     expect(r.out).toContain("instance=rm_prod");
     expect(r.out).toContain("target lock held");
     // Stopped by the test after the lock, never refused by the matrix.
@@ -151,7 +156,7 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
   test("prod × remote × production without PROJECTS_SOURCE: refused before the lock, nothing started (issue #1113)", () => {
     db.setIdentity("production");
     const op = db.operator("prod_no_projects_source");
-    const r = remoteRefusal(op, { RM_ENV: "prod", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent", PROJECTS_SOURCE: undefined }, null);
+    const r = remoteRefusal(op, "prod", null, { AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent", PROJECTS_SOURCE: undefined });
     expect(r.code).not.toBe(0);
     expect(r.out).toContain("PROJECTS_SOURCE=live is required");
     expect(r.out).not.toContain("target lock held");
@@ -163,21 +168,20 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
       const op = db.operator(`prod_${kind ?? "none"}`);
       // A production-policy boot demands a funded model before the plan
       // (AC-MODEL-01); the placeholder is never spent.
-      const r = remoteRefusal(op, { RM_ENV: "prod", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent" }, null);
+      const r = remoteRefusal(op, "prod", null, { AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-spent" });
       expect(r.code).not.toBe(0);
       expect(r.out).toContain("prod policy requires an identity of production");
       // The plan records what it read, and does not dress an absent row up as rehearsal.
-      expect(r.out).toContain(`RM_ENV=prod, deployment_identity ${kind ?? "absent"}`);
+      expect(r.out).toContain(`--policy prod, deployment_identity ${kind ?? "absent"}`);
       expectRefusedAtTheLock(op, "rm_prod", r.out);
     }, 120_000);
   }
 
-  test("stage × remote × rehearsal: stage — and RM_ENV from ~/.env counts, since §3 lists it there", async () => {
+  test("stage × remote × rehearsal: stage, declared by `--policy stage` on the command line", async () => {
     db.setIdentity("rehearsal");
-    // No RM_ENV in the process: the ~/.env line decides (args override env).
-    const op = db.operator("stage_rehearsal", ["RM_ENV = stage"]);
-    const r = await remoteAllowed(op, { RM_ENV: undefined }, "rm_it_matrix_stage");
-    expect(r.out).toContain("RM_ENV=stage, deployment_identity rehearsal");
+    const op = db.operator("stage_rehearsal");
+    const r = await remoteAllowed(op, "stage", "rm_it_matrix_stage");
+    expect(r.out).toContain("--policy stage, deployment_identity rehearsal");
     expect(r.out).toContain("target lock held");
     expect(r.code).toBe(130);
     // Criterion 34 on the REMOTE path, from the journal the boot wrote: the
@@ -193,9 +197,9 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     test(`stage × remote × ${kind ?? "no row"}: a PLAIN stage boot refuses at the lock — stage never touches production data`, () => {
       db.setIdentity(kind);
       const op = db.operator(`stage_${kind ?? "none"}`);
-      const r = remoteRefusal(op, { RM_ENV: "stage" }, "rm_it_matrix_plain");
+      const r = remoteRefusal(op, "stage", "rm_it_matrix_plain");
       expect(r.code).not.toBe(0);
-      expect(r.out).toContain(`RM_ENV=stage against a remote target whose deployment_identity is ${kind ?? "no identity row"}`);
+      expect(r.out).toContain(`--policy stage against a remote target whose deployment_identity is ${kind ?? "no identity row"}`);
       expect(r.out).toContain("stage policy never touches production data");
       expectRefusedAtTheLock(op, "rm_it_matrix_plain", r.out);
     }, 120_000);
@@ -207,8 +211,8 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     // would use the password is never reached.
     db.setIdentity("production");
     const op = db.operator("stage_typed", [`rm_owner = ${db.passwords.rm_owner}`]);
-    const argv = remoteArgv(op, "rm_it_matrix_typed", ["--migrate", "--confirm-target", `${db.host}:${db.port}/${db.database}`]);
-    const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env, RM_ENV: "stage" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const argv = remoteArgv(op, "rm_it_matrix_typed", ["--policy", "stage", "--migrate", "--confirm-target", `${db.host}:${db.port}/${db.database}`]);
+    const r = Bun.spawnSync(argv, { cwd: repoRoot, env: { ...op.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const out = `${r.stdout.toString()}${r.stderr.toString()}`;
     expect(r.exitCode).not.toBe(0);
     expect(out).toContain("whose deployment_identity is production");
@@ -216,11 +220,11 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     expectRefusedAtTheLock(op, "rm_it_matrix_typed", out);
   }, 120_000);
 
-  test("unset × remote: refuses before any connection or step, even against a rehearsal target", () => {
+  test("unset × remote: refuses before any connection or step, even against a rehearsal target — and an RM_ENV in the process or ~/.env declares nothing (D69 part 4)", () => {
     db.setIdentity("rehearsal");
-    const r = remoteRefusal(db.operator("unset_remote"), { RM_ENV: undefined }, "rm_it_matrix_unset");
+    const r = remoteRefusal(db.operator("unset_remote", ["RM_ENV = stage"]), null, "rm_it_matrix_unset", { RM_ENV: "stage" });
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain("RM_ENV is not set and the target is reached as a remote connection");
+    expect(r.out).toContain("--policy is not given and the target is reached as a remote connection");
     expect(r.out).not.toContain("phase:");
     expect(r.out).not.toContain("plan id:");
   }, 120_000);
@@ -233,7 +237,7 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
     // `lock` preparation journaled failed, nothing after it run.
     const { acquireTargetLock, readTargetStateAt } = await import("../../../backend/src/db/target-lock.ts");
     db.setIdentity("rehearsal");
-    const op = db.operator("revalidate", ["RM_ENV = stage"]);
+    const op = db.operator("revalidate");
     const url = `postgres://rm_readonly:${db.passwords.rm_readonly}@${db.host}:${db.port}/${db.database}?sslmode=disable`;
     const held = await acquireTargetLock({
       databaseUrl: url,
@@ -242,7 +246,7 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
       expected: await readTargetStateAt(url),
     });
     if (!held.acquired) throw new Error(held.reason);
-    const proc = Bun.spawn(remoteArgv(op, "rm_it_matrix_revalidate", [], 60), {
+    const proc = Bun.spawn(remoteArgv(op, "rm_it_matrix_revalidate", ["--policy", "stage"], 60), {
       cwd: repoRoot,
       env: { ...op.env },
       stdin: "ignore",
@@ -279,9 +283,9 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
 
   test("other × remote: the retired `smoke` value refuses, and is not downgraded to stage", () => {
     db.setIdentity("rehearsal");
-    const r = remoteRefusal(db.operator("other_remote"), { RM_ENV: "smoke" }, "rm_it_matrix_other");
+    const r = remoteRefusal(db.operator("other_remote"), "smoke", "rm_it_matrix_other");
     expect(r.code).not.toBe(0);
-    expect(r.out).toContain('RM_ENV="smoke" is not a policy value');
+    expect(r.out).toContain('--policy "smoke" is not a policy value');
     expect(r.out).not.toContain("phase:");
   }, 120_000);
 });
@@ -310,10 +314,10 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
   test("prod × --local: refuses before anything is created", async () => {
     const x = harness("mxprod");
     try {
-      const boot = spawnBoot(x, [], { env: { RM_ENV: "prod" }, migrate: false });
+      const boot = spawnBoot(x, [], { policy: "prod", migrate: false });
       const code = await boot.exited;
       expect(code).not.toBe(0);
-      expect(boot.output()).toContain("RM_ENV=prod with connection local-blank: refusing — production never runs on a database smoke owns");
+      expect(boot.output()).toContain("--policy prod with connection local-blank: refusing — production never runs on a database smoke owns");
       expect(boot.output()).not.toContain("phase:");
     } finally {
       teardown(x);
@@ -323,9 +327,9 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
   test("other × --local: refuses before anything is created", async () => {
     const x = harness("mxother");
     try {
-      const boot = spawnBoot(x, [], { env: { RM_ENV: "ephemeral" }, migrate: false });
+      const boot = spawnBoot(x, [], { policy: "ephemeral", migrate: false });
       expect(await boot.exited).not.toBe(0);
-      expect(boot.output()).toContain('RM_ENV="ephemeral" is not a policy value');
+      expect(boot.output()).toContain('--policy "ephemeral" is not a policy value');
     } finally {
       teardown(x);
     }
@@ -340,7 +344,7 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
     let boot: RunningBoot | undefined;
     try {
       expect(backup.identity).toBe("production");
-      boot = spawnBoot(x, [], { env: { RM_ENV: "stage" }, local: `dump=${backup.dir}`, migrate: false });
+      boot = spawnBoot(x, [], { policy: "stage", local: `dump=${backup.dir}`, migrate: false });
       await waitFor(() => {
         const j = journalNow(x);
         return j !== null && j.phases.some((r) => r.phase === "prepare" && r.step === "enroll" && r.status === "committed");
@@ -354,7 +358,7 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
       // and the matrix allows it because the connection is local
       // (backend/src/deploy-policy.ts). The proof that the matrix passed is the
       // journal below: lock committed, then enroll committed.
-      expect(boot.output()).toContain("RM_ENV=stage, deployment_identity rehearsal");
+      expect(boot.output()).toContain("--policy stage, deployment_identity rehearsal");
       expect(boot.output()).toContain("target lock held");
       expect(boot.output()).not.toContain("refusing");
       // The site is assembled and its web compatibility decided BEFORE the
@@ -376,13 +380,13 @@ describe("§4.3 local rows — a real `bun smoke` against its own Postgres", () 
     }
   }, BOOT_TIMEOUT_MS);
 
-  test("unset × --local blank: warns `RM_ENV not set, running as stage`, proceeds, and the bootstrap writes rehearsal", async () => {
+  test("unset × --local blank: warns `--policy not given, running as stage`, proceeds, and the bootstrap writes rehearsal", async () => {
     h = harness("mxlocal");
     const since = Date.now();
-    current = spawnBoot(h, [], { env: { RM_ENV: undefined }, migrate: false });
+    current = spawnBoot(h, [], { policy: null, migrate: false });
     const code = await stopAfter(current, "bootstrap", since);
     expect(code).toBe(130);
-    expect(current.output()).toContain("RM_ENV not set, running as stage");
+    expect(current.output()).toContain("--policy not given, running as stage");
     expect(current.output()).toContain("target lock held");
     expect(bootQuery(h.project, "SELECT kind FROM deployment_identity")).toBe("rehearsal");
   }, BOOT_TIMEOUT_MS);

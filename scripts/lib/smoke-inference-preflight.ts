@@ -58,7 +58,12 @@ import { loadEnvFile } from "./smoke-external-pg.ts";
 import { loadCredentialFile, resolveCredentialPath } from "./swarm/credential-file.ts";
 
 export interface InferencePreflightOptions {
-  /** The `--static-port` boot: the standing/public stack, i.e. staging. */
+  /**
+   * An acceptance boot (smoke-compose-env.ts `isAcceptanceBoot`): a
+   * `--policy prod` boot, or the standing `--static-port` stack under either
+   * policy (issue 1326). Its inference is the acceptance path: the stack's
+   * model key is resolved, and a keyless or raw-id model refuses.
+   */
   standingStack: boolean;
   repoRoot: string;
   /** Mutated in place on success — the stack's compose env is built from it. */

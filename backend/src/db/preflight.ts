@@ -96,8 +96,9 @@ export type PreflightCheckId =
 
 /** `prod` and `stage` only — spec §4.1. `stage` covers stage, test and CI,
  *  which "are isomorphic and share `stage`". `smoke` is not a value; §9.3
- *  records that today's production host runs `RM_ENV=smoke`, which is exactly
- *  why "no `prod` guard has ever been armed" there. */
+ *  records that the production host once ran under a `smoke` value, which is
+ *  exactly why "no `prod` guard has ever been armed" there. The value is the
+ *  caller's `--policy` flag (D69 part 4). */
 export type RmEnv = "prod" | "stage";
 
 /** Spec §4.2's one-row table. `production` is written once by production
@@ -107,7 +108,7 @@ export type DeploymentIdentity = "production" | "rehearsal";
 
 /** What a caller knows that the database cannot tell it. */
 export interface PreflightContext {
-  /** Resolved policy, or `null` when `RM_ENV` is unset — a distinct input, not
+  /** Resolved policy, or `null` when no `--policy` was given — a distinct input, not
    *  a default, because §4.3 gives unset its own row (refuse against a remote,
    *  warn and proceed under `--local`). */
   readonly env: RmEnv | null;
@@ -1107,12 +1108,16 @@ export interface SchemaIdentity {
 /**
  * The keys §3 allows in `~/.env`, and nothing else: "the remote connection
  * (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and
- * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D61 adds
+ * `rm_readonly`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D61 adds
  * the owner password `rm_owner` (read by `bun run migrate`, `bun run prune`, a
  * remote `bun smoke --migrate/--seed` and `prod-init`). No container receives
  * it. `doadmin` is NOT allowed (D61 amendment, owner, 2026-10-08): it is never
  * stored in a file; the admin types it at the hidden prompt of `bun run
  * role-passwords`, and a `doadmin` line here is named as what it is.
+ * `RM_ENV` is NOT allowed any more (D69 part 4, issue 1327): the policy is
+ * each tool's `--policy` flag, nothing reads the line, and an unread key is
+ * exactly what this check finds. The release runner's env rewrite (R6.2)
+ * moves a leftover line out.
  *
  * The connection keys are spelled the way scripts/lib/env-role.ts's
  * `CONNECTION_TOKENS` reads them — the DigitalOcean panel's `host`, `port`,
@@ -1138,7 +1143,6 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
   "rm_worker",
   "rm_readonly",
   "rm_owner",
-  "RM_ENV",
   "RM_CREDENTIALS",
   "COINGECKO_API_KEY",
 ]);
@@ -1201,7 +1205,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
     return { check: "env_credentials", findings };
   }
 
-  // §7 check 4: warn on stage, refuse on prod. With RM_ENV unset, §4.3's unset
+  // §7 check 4: warn on stage, refuse on prod. With no --policy, §4.3's unset
   // row decides: refuse against a remote, warn under `--local`.
   const severity: PreflightFinding["severity"] =
     context.env === "prod" ? "refuse" : context.env === "stage" ? "warn" : context.connection === "remote" ? "refuse" : "warn";
@@ -1216,7 +1220,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         severity,
         message:
           `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the database ` +
-          "role passwords (rm_app, rm_worker, rm_readonly, rm_owner), RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
+          "role passwords (rm_app, rm_worker, rm_readonly, rm_owner), RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
       });
       continue;
     }
@@ -1230,7 +1234,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         message:
           `${path} line ${line.number} has a key that is not a plain name, ` +
           `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
-          "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, RM_ENV, " +
+          "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, " +
           "RM_CREDENTIALS and COINGECKO_API_KEY",
       });
       continue;
@@ -1241,7 +1245,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
       severity,
       message:
         `${path} holds ${line.key}, ${reason ?? "a key §3 does not list"} — §3 allows only the connection values ` +
-        "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, RM_ENV, " +
+        "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, " +
         "RM_CREDENTIALS and COINGECKO_API_KEY",
     });
   }
@@ -1316,6 +1320,9 @@ function dangerousKeyReason(key: string): string | null {
   if (name === "doadmin") {
     return "the cluster provisioning credential (D61 amendment: doadmin is never stored; type it into `bun run role-passwords`)";
   }
+  if (key === "RM_ENV") {
+    return "the retired policy variable (D69 part 4: no tool reads it; each operator tool takes `--policy prod|stage`)";
+  }
   if (name.includes("superuser")) return "a superuser credential";
   if (name === "postgres" || /(^|_)postgres_(user|password|url|superuser)/.test(name)) {
     return "a cluster superuser credential";
@@ -1324,7 +1331,7 @@ function dangerousKeyReason(key: string): string | null {
 }
 
 /**
- * Check 5 — `RM_ENV` × `deployment_identity` resolve per the §4.3 matrix.
+ * Check 5 — the caller's `--policy` × `deployment_identity` resolve per the §4.3 matrix.
  *
  * Inputs: a handle (to read the one-row `deployment_identity` table) and the
  * context. Output: findings.
@@ -1345,10 +1352,10 @@ function dangerousKeyReason(key: string): string | null {
  *
  * Refusals: every refusing row of §4.3, with the matrix's own reason; a table
  * absent or unreadable (never evidence of either kind); no row; more than one
- * row. Unset + `--local` is a WARNING, not a refusal: "warn `RM_ENV not set,
+ * row. Unset + `--local` is a WARNING, not a refusal: "warn `--policy not given,
  * running as stage`, proceed".
  *
- * Serves spec §10 W2 "`RM_ENV=stage` + typed owner password against
+ * Serves spec §10 W2 "`--policy stage` + typed owner password against
  * `deployment_identity = production` refuses; plain stage boot against
  * production identity refuses."
  */
@@ -1371,7 +1378,7 @@ export async function checkEnvIdentity(
     };
   }
   const verdict = resolveDeploymentPolicy({
-    rmEnv: context.env ?? undefined,
+    policy: context.env ?? undefined,
     connection: context.connection === "remote" ? "remote" : "local-volume",
     identity: identity.value,
   });

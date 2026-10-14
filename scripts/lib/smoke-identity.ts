@@ -1,6 +1,6 @@
 // `deployment_identity` — the one-row table that tells a tool what the database
 // it is connected to is ENROLLED FOR, independently of whatever the operator
-// typed into `RM_ENV`. This module reads it, writes it, and implements the
+// typed as `--policy`. This module reads it, writes it, and implements the
 // rehearsal-only gate that `--migrate`, `--seed` and `--spoof-keys` share.
 //
 // Implemented for issue #1026, W1 step 2. The table itself is created by
@@ -63,13 +63,13 @@
 //         bootstrap; `--local volume` reattaches a volume that must already
 //         carry it.
 //   §6.4  `--spoof-keys` refuses unless the row says `rehearsal`.
-//   §8.5  `--migrate` refuses on `RM_ENV=prod` or identity ≠ `rehearsal`.
+//   §8.5  `--migrate` refuses on `--policy prod` or identity ≠ `rehearsal`.
 //   §9.1  the first production migrate writes `production` exactly once, via
 //         `rm_owner`, in 0081's transaction, receipted, never through
 //         `bun smoke` (D55 (9)).
 //
 // Acceptance gates served (spec §10): W1 — the identity half of the policy
-// matrix; W2 — "`RM_ENV=stage` + typed owner password against
+// matrix; W2 — "`--policy stage` + typed owner password against
 // `deployment_identity = production` refuses"; W3 — the `--spoof-keys` guards.
 //
 // ── Layering note ───────────────────────────────────────────────────────────
@@ -317,7 +317,7 @@ export async function readIdentityForPolicy(
  * longer than one step is not.
  *
  * Refusal cases:
- *  - `RM_ENV=prod`: nothing that runs under production policy ever writes
+ *  - the caller's policy is `prod`: nothing that runs under production policy ever writes
  *    `rehearsal` (it would be the exact inverse of the safeguard).
  *  - the store was not opened writable / the role is not `rm_owner`.
  *  - a remote connection without an explicit operator acknowledgement: writing
@@ -325,16 +325,21 @@ export async function readIdentityForPolicy(
  *    disarm a protection, so the remote-twin procedure's confirmation is a
  *    parameter here, not a convention in a runbook.
  *
- * Serves spec §10 W2's "`RM_ENV=stage` + typed owner password against
+ * Serves spec §10 W2's "`--policy stage` + typed owner password against
  * `deployment_identity = production` refuses" from the other side: that gate is
  * only meaningful if the rehearsal enrollment path is the one that can flip it.
  */
 export async function enrollAsRehearsal(
   store: DeploymentIdentityStore,
-  options: { readonly note: string | null; readonly remoteAcknowledged: boolean },
+  options: {
+    /** The policy the calling run resolved from its `--policy` flag; `null` when none was given (§4.3: stage). */
+    readonly policy: "prod" | "stage" | null;
+    readonly note: string | null;
+    readonly remoteAcknowledged: boolean;
+  },
 ): Promise<DeploymentIdentityRow> {
-  if (process.env.RM_ENV === "prod") {
-    throw new Error("deployment_identity: a run under RM_ENV=prod never writes `rehearsal` (§4.2).");
+  if (options.policy === "prod") {
+    throw new Error("deployment_identity: a run under --policy prod never writes `rehearsal` (§4.2).");
   }
   requireWritable(store);
   if (contexts.get(store)?.remote === true && !options.remoteAcknowledged) {
@@ -354,11 +359,11 @@ export async function enrollAsRehearsal(
  * first", D55 (9)), and reported — never rewritten — by `bun scripts/prod-init.ts
  * set-identity` afterwards. Never by `bun smoke`: spec §4.3 makes production
  * initialization "a set of separate commands allowed on `production`, each
- * gated by `RM_ENV=prod`, `y/n`, a receipt and the target lock. None is
+ * gated by `--policy prod`, `y/n`, a receipt and the target lock. None is
  * reachable through `bun smoke`."
  *
  * Refusal cases:
- *  - `RM_ENV` is not exactly `prod`.
+ *  - the caller's policy is not exactly `prod`.
  *  - the store is not writable as `rm_owner`.
  *  - the operator did not confirm `y/n` at a terminal (a non-interactive
  *    invocation refuses rather than defaulting to yes; an unattended process
@@ -372,11 +377,11 @@ export async function enrollAsRehearsal(
  */
 export async function enrollAsProduction(
   store: DeploymentIdentityStore,
-  options: { readonly rmEnv: string | undefined; readonly confirmed: boolean; readonly note: string | null },
+  options: { readonly policy: string | undefined; readonly confirmed: boolean; readonly note: string | null },
 ): Promise<DeploymentIdentityRow> {
-  if (options.rmEnv !== "prod") {
-    const observed = options.rmEnv === undefined ? "RM_ENV is unset" : `RM_ENV is "${options.rmEnv}"`;
-    throw new Error(`deployment_identity: production enrollment requires RM_ENV=prod (§9.1); ${observed}.`);
+  if (options.policy !== "prod") {
+    const observed = options.policy === undefined ? "--policy is not given" : `--policy is "${options.policy}"`;
+    throw new Error(`deployment_identity: production enrollment requires --policy prod (§9.1); ${observed}.`);
   }
   if (!options.confirmed) {
     throw new Error(

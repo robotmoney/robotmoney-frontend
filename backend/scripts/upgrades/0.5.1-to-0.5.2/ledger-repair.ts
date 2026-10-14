@@ -556,11 +556,10 @@ async function main(): Promise<number> {
     console.error("[ledger-repair] no database: pass --database-url, or set MIGRATE_DATABASE_URL");
     return 2;
   }
-  // The backend's config module is imported by the modules the repair reuses.
-  // It refuses a doadmin DATABASE_URL when RM_ENV is prod (the default), and the
-  // migration login IS doadmin in production. This script opens exactly one
-  // connection, to the URL it was given, so it runs as a smoke-class process.
-  process.env.RM_ENV ??= "smoke";
+  // The backend's config module is imported by the modules the repair reuses
+  // and needs a DATABASE_URL at import. This script opens exactly one
+  // connection, to the URL it was given. (It once set a policy value here as
+  // well; no tool reads one from the environment since D69 part 4.)
   process.env.DATABASE_URL ??= url;
   const dryRun = process.argv.includes("--dry-run");
   const startedAt = new Date().toISOString();

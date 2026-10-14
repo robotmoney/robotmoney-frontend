@@ -1,4 +1,4 @@
-// Unit specification for scripts/lib/smoke-env-policy.ts — the `RM_ENV` policy
+// Unit specification for scripts/lib/smoke-env-policy.ts — the `--policy`
 // value (§4.1), the full policy × identity matrix (§4.3), and the absence of
 // any weakening knob (§4.4, issue #973) of docs/technical/smoke-production-spec.md,
 // and how a `--local` data path reaches the matrix (§3, §5).
@@ -18,7 +18,7 @@
 // text an operator reads.
 //
 // Acceptance gates served (spec §10, W1):
-//   - "Unset `RM_ENV` against a remote target refuses."
+//   - "No `--policy` against a remote target refuses."
 //   - "Overlay-free stage boots with the real scheduler" (the §4.4 half: no
 //     weakening flag exists at all, issue #973).
 import { describe, expect, test } from "bun:test";
@@ -26,7 +26,8 @@ import * as policy from "../../lib/smoke-env-policy.ts";
 import {
   describePolicyVerdict,
   resolveDeploymentPolicy,
-  resolveRmEnv,
+  policyFlag,
+  resolvePolicy,
   type PolicyInput,
   type PolicyVerdict,
   type TargetConnection,
@@ -46,8 +47,8 @@ type Identity = DeploymentIdentityKind | null | "unreadable";
 const LOCAL_MODES: readonly TargetConnection[] = ["local-blank", "local-dump", "local-volume"];
 const ALL_IDENTITIES: readonly Identity[] = ["production", "rehearsal", null, "unreadable"];
 
-function input(rmEnv: string | undefined, connection: TargetConnection, identity: Identity): PolicyInput {
-  return { rmEnv, connection, identity };
+function input(declared: string | undefined, connection: TargetConnection, identity: Identity): PolicyInput {
+  return { policy: declared, connection, identity };
 }
 
 /** Narrow to the refuse arm, failing the test with the allow arm's contents if it is not one. */
@@ -57,29 +58,29 @@ function refusal(verdict: PolicyVerdict): string {
   return verdict.reason;
 }
 
-describe("resolveRmEnv — §4.1, RM_ENV is policy only and has exactly two spellings", () => {
-  test("`prod` resolves to the prod policy and reports that it was set explicitly", () => {
-    expect(resolveRmEnv({ RM_ENV: "prod" })).toEqual({ ok: true, env: "prod", source: "explicit" });
+describe("resolvePolicy — §4.1, the policy has exactly two spellings", () => {
+  test("`prod` resolves to the prod policy and reports that it was given explicitly", () => {
+    expect(resolvePolicy("prod")).toEqual({ ok: true, env: "prod", source: "explicit" });
   });
 
-  test("`stage` resolves to the stage policy and reports that it was set explicitly", () => {
-    expect(resolveRmEnv({ RM_ENV: "stage" })).toEqual({ ok: true, env: "stage", source: "explicit" });
+  test("`stage` resolves to the stage policy and reports that it was given explicitly", () => {
+    expect(resolvePolicy("stage")).toEqual({ ok: true, env: "stage", source: "explicit" });
   });
 
-  test("an absent RM_ENV resolves to stage but reports source `unset`, because §4.3 treats the two differently", () => {
-    expect(resolveRmEnv({})).toEqual({ ok: true, env: "stage", source: "unset" });
+  test("an absent --policy resolves to stage but reports source `unset`, because §4.3 treats the two differently", () => {
+    expect(resolvePolicy(undefined)).toEqual({ ok: true, env: "stage", source: "unset" });
   });
 
-  test("an empty RM_ENV is an absence, not an unknown value — `RM_ENV=` in a profile must not send the operator hunting a typo", () => {
-    expect(resolveRmEnv({ RM_ENV: "" })).toEqual({ ok: true, env: "stage", source: "unset" });
+  test("an empty value is an absence, not an unknown value", () => {
+    expect(resolvePolicy("")).toEqual({ ok: true, env: "stage", source: "unset" });
   });
 
-  test("a whitespace-only RM_ENV is an absence for the same reason", () => {
-    expect(resolveRmEnv({ RM_ENV: "   " })).toEqual({ ok: true, env: "stage", source: "unset" });
+  test("a whitespace-only value is an absence for the same reason", () => {
+    expect(resolvePolicy("   ")).toEqual({ ok: true, env: "stage", source: "unset" });
   });
 
   test("the retired `smoke` value refuses and names both legal values, rather than downgrading to stage", () => {
-    const result = resolveRmEnv({ RM_ENV: "smoke" });
+    const result = resolvePolicy("smoke");
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a refusal");
     expect(result.reason).toContain("smoke");
@@ -87,22 +88,54 @@ describe("resolveRmEnv — §4.1, RM_ENV is policy only and has exactly two spel
     expect(result.reason).toContain("stage");
   });
 
-  test("the retired `ephemeral` value refuses — config.ts's VALID_ENVS still accepts it and this module must not", () => {
-    const result = resolveRmEnv({ RM_ENV: "ephemeral" });
+  test("the retired `ephemeral` value refuses", () => {
+    const result = resolvePolicy("ephemeral");
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a refusal");
     expect(result.reason).toContain("ephemeral");
   });
 
   test("the comparison is case-sensitive: `PROD` is an unknown value, never the prod policy", () => {
-    const result = resolveRmEnv({ RM_ENV: "PROD" });
+    const result = resolvePolicy("PROD");
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected a refusal");
     expect(result.reason).toContain("PROD");
   });
 
   test("a value with surrounding whitespace is not silently trimmed into a legal value", () => {
-    expect(resolveRmEnv({ RM_ENV: " prod " }).ok).toBe(false);
+    expect(resolvePolicy(" prod ").ok).toBe(false);
+  });
+});
+
+describe("policyFlag — the policy is the command's own flag, never an environment value (D69 part 4, issue 1327)", () => {
+  test("reads `--policy <v>` and `--policy=<v>`", () => {
+    expect(policyFlag(["--local", "blank", "--policy", "stage"])).toBe("stage");
+    expect(policyFlag(["--policy=prod", "--static-port"])).toBe("prod");
+  });
+
+  test("an argv without the flag declares nothing, whatever the environment holds", () => {
+    const before = process.env.RM_ENV;
+    process.env.RM_ENV = "prod";
+    try {
+      expect(policyFlag(["--static-port"])).toBeUndefined();
+      expect(resolveDeploymentPolicy(input(policyFlag(["--static-port"]), "remote", "production")).allow).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.RM_ENV;
+      else process.env.RM_ENV = before;
+    }
+  });
+
+  test("a flag with no value refuses: typing the flag means declaring something", () => {
+    expect(() => policyFlag(["--policy"])).toThrow(/--policy needs a value/);
+    expect(() => policyFlag(["--policy", "--static-port"])).toThrow(/--policy needs a value/);
+  });
+
+  test("a flag given twice refuses rather than letting the last one win", () => {
+    expect(() => policyFlag(["--policy", "stage", "--policy=prod"])).toThrow(/2 times/);
+  });
+
+  test("`bun smoke` knows the flag, so a declared policy is never an unknown-flag refusal", () => {
+    expect(DEMO_FLAGS.find((f) => f.flag === "--policy")).toEqual({ flag: "--policy", arity: 1 });
   });
 });
 
@@ -199,20 +232,20 @@ describe("resolveDeploymentPolicy — §4.3 row: stage × --local volume", () =>
 
 describe("resolveDeploymentPolicy — §4.3 row: unset × remote refuses (the §10 W1 gate)", () => {
   for (const identity of ALL_IDENTITIES) {
-    test(`an unset RM_ENV against a remote target refuses even when the identity says ${String(identity)}`, () => {
+    test(`an absent --policy against a remote target refuses even when the identity says ${String(identity)}`, () => {
       const reason = refusal(resolveDeploymentPolicy(input(undefined, "remote", identity)));
-      expect(reason).toContain("RM_ENV");
+      expect(reason).toContain("--policy");
       expect(reason).toContain("remote");
     });
   }
 
-  test("an empty RM_ENV against a remote target refuses the same way an absent one does", () => {
+  test("an empty --policy against a remote target refuses the same way an absent one does", () => {
     expect(resolveDeploymentPolicy(input("", "remote", "rehearsal")).allow).toBe(false);
   });
 
-  test("the unset-remote refusal is NOT the unknown-value refusal — it must not claim RM_ENV held a bad value", () => {
+  test("the unset-remote refusal is NOT the unknown-value refusal — it must not claim --policy held a bad value", () => {
     const reason = refusal(resolveDeploymentPolicy(input(undefined, "remote", "rehearsal")));
-    expect(reason.toLowerCase()).toContain("not set");
+    expect(reason.toLowerCase()).toContain("not given");
   });
 });
 
@@ -224,7 +257,7 @@ describe("resolveDeploymentPolicy — §4.3 row: unset × --local warns and proc
         allow: true,
         env: "stage",
         posture: "stage",
-        warnings: ["RM_ENV not set, running as stage"],
+        warnings: ["--policy not given, running as stage"],
       });
     });
   }
@@ -236,7 +269,7 @@ describe("resolveDeploymentPolicy — §4.3 row: unset × --local warns and proc
 
 describe("resolveDeploymentPolicy — §4.3 row: other × any × any refuses", () => {
   for (const connection of ["remote", ...LOCAL_MODES] as const) {
-    test(`an unknown RM_ENV refuses on ${connection}, and is not downgraded to stage`, () => {
+    test(`an unknown --policy refuses on ${connection}, and is not downgraded to stage`, () => {
       const reason = refusal(resolveDeploymentPolicy(input("smoke", connection, "rehearsal")));
       expect(reason).toContain("smoke");
       expect(reason).toContain("prod");
@@ -300,10 +333,10 @@ describe("a --local mode ignores a remote host in ~/.env (criterion 32)", () => 
     }
   });
 
-  test("the matrix then treats it as local: unset RM_ENV warns and proceeds as stage (§4.3 row 10)", () => {
+  test("the matrix then treats it as local: an absent --policy warns and proceeds as stage (§4.3 row 10)", () => {
     const { dataPath } = parseDataPath(argv("--local", "blank"), { envFilePath: homeEnv });
-    const verdict = resolveDeploymentPolicy({ rmEnv: undefined, connection: targetConnection(dataPath), identity: "rehearsal" });
-    expect(verdict).toEqual({ allow: true, env: "stage", posture: "stage", warnings: ["RM_ENV not set, running as stage"] });
+    const verdict = resolveDeploymentPolicy({ policy: undefined, connection: targetConnection(dataPath), identity: "rehearsal" });
+    expect(verdict).toEqual({ allow: true, env: "stage", posture: "stage", warnings: ["--policy not given, running as stage"] });
   });
 });
 

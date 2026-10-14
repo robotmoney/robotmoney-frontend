@@ -52,6 +52,7 @@ import { POSTGRES_IMAGE } from "../lib/postgres-image.ts";
 import { resolveBackupFiles, restorePipelineArgv, SHM_FLAGS } from "../lib/restore-container.ts";
 import { instanceStackProject } from "../lib/smoke-state.ts";
 import { repoMigrations } from "./ledger.ts";
+import { checkoutTakesPolicyFlag, policyForCheckout } from "./legacy-policy-env.ts";
 import { CAPTURE_CHECKOUT } from "./target.ts";
 import {
   ACL_EXPORT_SQL,
@@ -456,14 +457,17 @@ async function startStack(): Promise<void> {
   const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
   mkdirSync(receipts, { recursive: true });
   const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
-  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
+  // The running checkout may predate `--policy` (issue 1327): hand it the
+  // policy in the form its tools read (./legacy-policy-env.ts).
+  const policy = policyForCheckout(checkoutTakesPolicyFlag(T.runningCheckout), "stage");
+  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", ...policy.env, "PROJECTS_SOURCE=live"];
   const steps: [string, string[]][] = [
     ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
     ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
-    ["tokens", ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", T.instance, "--confirm-target", confirm]],
-    ["boot 1", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
-    ["rebind", ["bun", "scripts/prod-init.ts", "rebind-members", "--instance", T.instance, "--confirm-target", confirm]],
-    ["boot 2", ["bun", "run", "smoke", "--static-port", "--instance", T.instance]],
+    ["tokens", ["bun", "scripts/prod-init.ts", "provision-tokens", ...policy.args, "--instance", T.instance, "--confirm-target", confirm]],
+    ["boot 1", ["bun", "run", "smoke", ...policy.args, "--static-port", "--instance", T.instance]],
+    ["rebind", ["bun", "scripts/prod-init.ts", "rebind-members", ...policy.args, "--instance", T.instance, "--confirm-target", confirm]],
+    ["boot 2", ["bun", "run", "smoke", ...policy.args, "--static-port", "--instance", T.instance]],
   ];
   for (const [name, argv] of steps) await stream([...env, ...argv], `stack: ${name}`, { cwd: T.runningCheckout });
 }
@@ -562,7 +566,7 @@ async function remoteDown(): Promise<number> {
   const tool = [T.runningCheckout, T.checkout].find((d) => existsSync(join(d, "package.json")));
   if (existsSync(state) && tool !== undefined) {
     log(`bun smoke:down --instance ${T.instance} (from ${tool})`);
-    run(["bun", "smoke:down", "--instance", T.instance], { cwd: tool, env: { HOME: T.home, RM_ENV: "stage" } });
+    run(["bun", "smoke:down", "--instance", T.instance], { cwd: tool, env: { HOME: T.home } });
   }
   const containers = projectContainers();
   if (containers.length) {

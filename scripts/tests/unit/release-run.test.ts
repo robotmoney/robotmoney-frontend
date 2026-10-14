@@ -210,7 +210,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     const render = (t: typeof prod) => renderStep(r11, t, templateValues(t, SHA, "20261008T000000Z"));
     const rp = render(prod);
     expect(rp.host).toBe(prod.host);
-    const envp = `env -i HOME=${prod.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=prod`;
+    const envp = `env -i HOME=${prod.home} PATH=${REMOTE_PATH} LANG=C.UTF-8`;
     expect(rp.remote).toBe([
       `mkdir -p ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z`,
       `touch ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z/.step-R1.1`,
@@ -224,7 +224,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     // Stage renders the same shape on its own host and checkout.
     const rs = render(stage);
     expect(rs.host).toBe(stage.host);
-    expect(rs.remote).toContain(`{ test -e ${stage.checkout}/.git || env -i HOME=${stage.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=stage git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${stage.checkout}; } && cd ${stage.checkout} && `);
+    expect(rs.remote).toContain(`{ test -e ${stage.checkout}/.git || env -i HOME=${stage.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${stage.checkout}; } && cd ${stage.checkout} && `);
   });
 
   test("the clone source is part of the step-list hash", () => {
@@ -287,9 +287,10 @@ describe("one step list for every target (D61 rule 2)", () => {
     // what is left is the commands' shape, which must be the same for both.
     const shape = (t: typeof prod, steps: readonly StepTemplate[] = RELEASE_STEPS) => {
       const values = templateValues(t, SHA, "20261008T000000Z");
-      const own = [...Object.entries(values).filter(([k]) => k !== "target" && k !== "release").map(([, v]) => v), t.host, t.capture.host]
+      // The policy (`prod` / `stage`) is a whole word only: `prod` is also part of fixed words (`prod:gate`, `prod-init.ts`).
+      const own = [...Object.entries(values).filter(([k]) => k !== "target" && k !== "release" && k !== "policy").map(([, v]) => v), t.host, t.capture.host]
         .filter((v) => v.length >= 3);
-      const carriesValue = (w: string) => /^[A-Z_]+=/.test(w) || /robotmoney-release\/|rm-backup-/.test(w) || own.some((v) => w.includes(v));
+      const carriesValue = (w: string) => /^[A-Z_]+=/.test(w) || /robotmoney-release\/|rm-backup-/.test(w) || w === values.policy || own.some((v) => w.includes(v));
       return steps.map((s) => renderStep(s, t, values).remote.split(" && ").map((seg) => seg.split(" ").filter((w) => !carriesValue(w)).join(" ")));
     };
     expect(shape(prod)).toEqual(shape(stage));
@@ -331,7 +332,8 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(out.status).toBe(0);
     expect(out.stdout).not.toContain("DATABASE_");
     expect(out.stdout).toContain(`HOME=${scratch}`);
-    expect(out.stdout).toContain("RM_ENV=prod");
+    // D69 part 4: no policy reaches a command through its environment.
+    expect(out.stdout).not.toContain("RM_ENV");
     // red control: the same command without env -i inherits it.
     const leaky = spawnSync("sh", ["-c", r.remote.replace(/env -i /g, "env ")], { env: polluted, encoding: "utf8" });
     expect(leaky.stdout).toContain("DATABASE_URL=");
@@ -358,12 +360,26 @@ describe("one step list for every target (D61 rule 2)", () => {
 });
 
 describe("R2.5 grades the running stack from the release checkout; every target step runs there", () => {
-  test("R2.5 runs prod:gate --mode baseline for the instance from the release checkout, under RM_ENV, on both targets", () => {
+  test("R2.5 runs prod:gate --mode baseline for the instance from the release checkout, on both targets", () => {
     for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
       const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
-      expect(r.remote).toContain(`cd ${t.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=${t.rmEnv} bun run prod:gate --mode baseline --instance ${t.instance}`);
+      expect(r.remote).toContain(`cd ${t.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 bun run prod:gate --mode baseline --instance ${t.instance}`);
     }
   });
+  test("D69 part 4: every command that takes the policy names it on its own argv, filled from the target", () => {
+    const takers = RELEASE_STEPS.filter((s) => s.cmds.some((c) => c.includes("{policy}"))).map((s) => s.id);
+    expect(takers).toEqual(["R1.2", "R2.3", "R6.3", "R6.4", "R6.5", "R6.7a", "R6.10"]);
+    for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
+      for (const id of takers) {
+        const r = renderStep(RELEASE_STEPS.find((s) => s.id === id)!, t, templateValues(t, SHA, "20261008T000000Z"));
+        expect(`${id}: ${r.remote.includes(`--policy ${t.rmEnv} `)}`).toBe(`${id}: true`);
+        expect(r.remote).not.toContain("RM_ENV");
+      }
+    }
+    // The capture host's identity check runs with no policy at all.
+    expect(RELEASE_STEPS.find((s) => s.id === "R1.5")!.cmds.flat()).not.toContain("--policy");
+  });
+
   test("every target step runs from the release checkout; no step names another checkout", () => {
     const t = loadTarget(join(targetsDir, "prod.json"));
     const values = templateValues(t, SHA, "20261008T000000Z");
@@ -482,7 +498,7 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
     }
   });
 
-  test("red: the wrong identity, 0081 without a row, no RM_ENV", () => {
+  test("red: the wrong identity, 0081 without a row, no --policy", () => {
     const receipt = at(ledger116, "v0.6.0");
     expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "rehearsal", reconcile: receipt }).join()).toContain("rehearsal");
     expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "production", reconcile: receipt }).join()).toContain("production");
@@ -1310,8 +1326,8 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
       vcs("init", "-q");
       vcs("commit", "-q", "--allow-empty", "-m", "x");
       const sha = vcs("rev-parse", "HEAD").stdout.trim();
-      const env: Record<string, string> = { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8", RM_ENV: "prod" };
-      const r = spawnSync("bun", [join(repoRoot, "scripts/release/host-identity.ts"), "--commit", sha, "--confirm-target", "127.0.0.1:1/rm", "--receipt-dir", receipts],
+      const env: Record<string, string> = { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" };
+      const r = spawnSync("bun", [join(repoRoot, "scripts/release/host-identity.ts"), "--policy", "prod", "--commit", sha, "--confirm-target", "127.0.0.1:1/rm", "--receipt-dir", receipts],
         { cwd: repo, env, encoding: "utf8", timeout: 60_000 });
       let receipt = "";
       try { receipt = readFileSync(join(receipts, "host-identity.json"), "utf8"); } catch { /* none */ }

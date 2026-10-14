@@ -169,7 +169,7 @@ export const PRODUCTION_INSTANCE = "rm_prod";
 export type InstanceSource =
   /** `--instance <name>` on the command line. Highest precedence. */
   | "flag"
-  /** `RM_ENV=prod`: the fixed {@link PRODUCTION_INSTANCE}. */
+  /** `--policy prod`: the fixed {@link PRODUCTION_INSTANCE}. */
   | "production"
   /** Hashed from the CI run's identity vars. Never from persisted state. */
   | "ci-identity"
@@ -202,7 +202,7 @@ export interface ResolvedInstance {
 export interface InstanceResolutionInput {
   /** `--instance <name>`, or `undefined` when not passed. */
   readonly flag: string | undefined;
-  /** Resolved `RM_ENV` policy; `prod` forces {@link PRODUCTION_INSTANCE}. */
+  /** Resolved `--policy`; `prod` forces {@link PRODUCTION_INSTANCE}. */
   readonly rmEnv: "prod" | "stage";
   /** From `resolveStackEnvironment()`; its `class` distinguishes CI from local. */
   readonly environment: StackEnvironment;
@@ -217,7 +217,7 @@ export interface InstanceResolutionInput {
  *  1. `--instance <name>` — an explicit operator statement outranks every
  *     inference. It is also the only way to act on an instance whose persisted
  *     name was lost.
- *  2. `RM_ENV=prod` → {@link PRODUCTION_INSTANCE}. Production is not resolved,
+ *  2. `--policy prod` → {@link PRODUCTION_INSTANCE}. Production is not resolved,
  *     it is named.
  *  3. CI job identity, when `environment.class === "ci"`. Spec §1.1's
  *     parenthesis is a prohibition, not a description: "hashed from the run's
@@ -231,10 +231,10 @@ export interface InstanceResolutionInput {
  *
  * Refusal cases:
  *  - `--instance` with a name that is not a legal compose project name, or that
- *    is `rm_prod` while `RM_ENV` is not `prod` (naming the production instance
+ *    is `rm_prod` while the policy is not `prod` (naming the production instance
  *    from a stage policy is never a legitimate request, and the resulting run
  *    would contend for production's lock and journal).
- *  - `RM_ENV=prod` together with an `--instance` that is not `rm_prod`.
+ *  - `--policy prod` together with an `--instance` that is not `rm_prod`.
  *  - a state root that exists but is not a directory, or is not writable — a
  *    run that cannot persist its instance name cannot honour rule 4 on the next
  *    boot, and silently degrading to `fresh` every time would give the operator
@@ -249,7 +249,7 @@ export function resolveInstance(input: InstanceResolutionInput): ResolvedInstanc
   if (input.flag !== undefined) {
     assertInstanceName(input.flag);
     if (input.rmEnv === "prod" && input.flag !== PRODUCTION_INSTANCE) {
-      throw new Error(`Refusing: RM_ENV=prod acts on ${PRODUCTION_INSTANCE}, not \`${input.flag}\`.`);
+      throw new Error(`Refusing: --policy prod acts on ${PRODUCTION_INSTANCE}, not \`${input.flag}\`.`);
     }
     if (input.rmEnv !== "prod" && input.flag === PRODUCTION_INSTANCE) {
       throw new Error(

@@ -2,7 +2,7 @@
 // smoke-production-spec.md §9.1 steps 4-6, §4.3, §2, §3; D47, D52, D55 (9).
 //
 //   §4.3: production initialization is "a set of separate commands allowed on
-//   `production`, each gated by `RM_ENV=prod`, `y/n`, a receipt and the target
+//   `production`, each gated by `--policy prod`, `y/n`, a receipt and the target
 //   lock. A command that writes the database directly also requires a typed
 //   `rm_owner`; the key rotation of §9.1 step 6 goes through the admin API with
 //   the operator's admin service token instead. None is reachable through
@@ -102,12 +102,12 @@ afterAll(async () => {
 /** The target ~/.env resolves to, as the harness writes it. */
 const target = (): string => `${db.host}:${db.port}/${db.database}`;
 
-/** `bun scripts/prod-init.ts <argv>` with no terminal under RM_ENV=prod (D61).
+/** `bun scripts/prod-init.ts <argv> --policy prod` with no terminal (D61, D69 part 4).
  *  `confirm` is `--confirm-target`: the exact target by default, `null` for none. */
 async function prodInit(argv: readonly string[], confirm: string | null = target(), stdin?: string): Promise<{ code: number; screen: string }> {
-  const full = ["bun", "--no-env-file", "scripts/prod-init.ts", ...argv, ...(confirm === null ? [] : ["--confirm-target", confirm])];
+  const full = ["bun", "--no-env-file", "scripts/prod-init.ts", ...argv, "--policy", "prod", ...(confirm === null ? [] : ["--confirm-target", confirm])];
   for (const secret of [db.passwords.rm_owner, DOADMIN_PASSWORD]) expect(full.join(" ")).not.toContain(secret);
-  const child = Bun.spawn(full, { cwd: repoRoot, env: { ...op.env, RM_ENV: "prod" }, stdin: stdin === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(full, { cwd: repoRoot, env: { ...op.env }, stdin: stdin === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
   if (stdin !== undefined && child.stdin) {
     child.stdin.write(stdin);
     await child.stdin.end();
@@ -152,7 +152,7 @@ describe("§9.1 step 4 — `prod-init set-identity` confirms the production row 
     expect(receipts("set-identity")).toEqual([]);
   }, 120_000);
 
-  test("RM_ENV=prod, ~/.env's rm_owner, the exact --confirm-target and the target lock: the row is read through rm_owner inside the fence, reported, unchanged, and receipted", async () => {
+  test("--policy prod, ~/.env's rm_owner, the exact --confirm-target and the target lock: the row is read through rm_owner inside the fence, reported, unchanged, and receipted", async () => {
     const before = db.superuser("SELECT kind || '|' || written_by || '|' || written_at::text FROM deployment_identity");
     const run = await prodInit(["set-identity"]);
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
@@ -311,7 +311,6 @@ describe("§9.1 step 6 — `prod-init rebind-members` rotates each member to its
         HOME: process.env.HOME ?? "/tmp",
         DATABASE_URL: `postgres://rm_app:${db.passwords.rm_app}@${db.host}:${db.port}/${db.database}?sslmode=disable`,
         API_PORT: String(apiPort),
-        RM_ENV: "stage",
       },
       stdout: "pipe",
       stderr: "pipe",

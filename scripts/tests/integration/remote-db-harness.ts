@@ -97,7 +97,7 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
   const ownerUrl = `postgres://rm_owner:${passwords.rm_owner}@${host}:${port}/${DB}?sslmode=disable`;
   const bootstrap = Bun.spawnSync(
     ["bun", "-e", 'import postgres from "postgres"; import { bootstrapBlankDatabase, loadSnapshot } from "./src/db/schema-snapshot.ts"; const db = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} }); await bootstrapBlankDatabase(db, await loadSnapshot()); await db.end(); process.exit(0);'],
-    { cwd: BACKEND, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DATABASE_URL: ownerUrl, RM_ENV: "stage" }, stdout: "pipe", stderr: "pipe" },
+    { cwd: BACKEND, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DATABASE_URL: ownerUrl }, stdout: "pipe", stderr: "pipe" },
   );
   if (bootstrap.exitCode !== 0) throw new Error(`bootstrap failed: ${bootstrap.stderr.toString()}`);
 

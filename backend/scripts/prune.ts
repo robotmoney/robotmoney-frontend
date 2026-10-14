@@ -50,7 +50,7 @@
 // and interrupted runs included (§2: a losing tool "journals the phase and
 // exits non-zero").
 //
-// usage: bun run prune --confirm-target <host:port/database> [--retention-days <n>] [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
+// usage: bun run prune --policy <prod|stage> --confirm-target <host:port/database> [--retention-days <n>] [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
 //
 // Nothing prompts and no terminal is needed (D61 rule 1).
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
@@ -67,7 +67,7 @@ import {
   type RemoteAuthority,
 } from "../../scripts/lib/privileged-env.ts";
 import { PRODUCTION_INSTANCE, instancePaths, stateRoot } from "../../scripts/lib/smoke-state.ts";
-import { resolveDeploymentPolicy, resolveRmEnv } from "../src/deploy-policy.ts";
+import { policyFlag, resolveDeploymentPolicy, resolvePolicy } from "../src/deploy-policy.ts";
 import { on, registerQuery } from "../src/db/registry.ts";
 import {
   acquireTargetLock,
@@ -436,7 +436,7 @@ export async function pruneCommand(input: {
     // not pruned.
     await phase("gates");
     const verdict = resolveDeploymentPolicy({
-      rmEnv: input.env ?? undefined,
+      policy: input.env ?? undefined,
       connection: "remote",
       identity: expected.identity === "missing" ? null : expected.identity,
     });
@@ -544,15 +544,22 @@ async function main(): Promise<never> {
 
   const envPath = homeEnvFilePath();
   const env = loadEnvFile(envPath);
-  const policy = resolveRmEnv({ RM_ENV: process.env.RM_ENV ?? env?.RM_ENV });
+  // The §4.1 policy is this command's `--policy` flag (D69 part 4, issue 1327).
+  let declaredPolicy: string | undefined;
+  try {
+    declaredPolicy = policyFlag(process.argv.slice(2));
+  } catch (error) {
+    refuse((error as Error).message);
+  }
+  const policy = resolvePolicy(declaredPolicy);
   if (!policy.ok) refuse(policy.reason);
-  const rmEnv = policy.ok && policy.source !== "unset" ? policy.env : null;
+  const declared = policy.ok && policy.source !== "unset" ? policy.env : null;
 
   // The receipt's home, before anything connects.
   const startedAt = new Date();
   let receiptDir: string;
   if (receiptFlag === undefined) {
-    const instance = instanceFlag ?? (rmEnv === "prod" ? PRODUCTION_INSTANCE : undefined);
+    const instance = instanceFlag ?? (declared === "prod" ? PRODUCTION_INSTANCE : undefined);
     if (instance === undefined) {
       refuse("name the instance whose state directory receives the receipt (--instance <name>), or pass --receipt <path>.");
     }
@@ -560,7 +567,7 @@ async function main(): Promise<never> {
   } else {
     receiptDir = dirname(resolve(receiptFlag));
   }
-  journal = PruneJournal.open(pruneJournalPath(receiptDir, startedAt), rmEnv, startedAt);
+  journal = PruneJournal.open(pruneJournalPath(receiptDir, startedAt), declared, startedAt);
   process.on("exit", (code) => journal?.closeOnExit(code));
   journal.begin("config");
 
@@ -573,7 +580,7 @@ async function main(): Promise<never> {
   const receiptPath = receiptFlag === undefined ? pruneReceiptPath(receiptDir, startedAt) : resolve(receiptFlag);
   try {
     const { receipt, tables } = await pruneCommand({
-      env: rmEnv,
+      env: declared,
       readerUrl: readerUrl!,
       windowDays,
       holder: { tool: NAME, planId: null, instance: instanceFlag ?? null, host: hostname(), pid: process.pid },

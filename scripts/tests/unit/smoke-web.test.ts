@@ -360,7 +360,7 @@ describe("instance resolution follows `bun smoke`'s precedence and never mints",
     expect(resolveWebInstance({ flag: "rm_local_named", rmEnv: "stage", environment: local as never, stateRoot: root }).dir).toBe(paths.dir);
     expect(() => resolveWebInstance({ flag: "rm_local_other", rmEnv: "stage", environment: local as never, stateRoot: root })).toThrow(/no state/);
     expect(() => resolveWebInstance({ flag: "rm_prod", rmEnv: "stage", environment: local as never, stateRoot: root })).toThrow(/stage policy/);
-    expect(() => resolveWebInstance({ flag: "rm_local_named", rmEnv: "prod", environment: local as never, stateRoot: root })).toThrow(/RM_ENV=prod/);
+    expect(() => resolveWebInstance({ flag: "rm_local_named", rmEnv: "prod", environment: local as never, stateRoot: root })).toThrow(/--policy prod/);
   });
 
   test("CI resolves from the job identity, never from the persisted local name", () => {

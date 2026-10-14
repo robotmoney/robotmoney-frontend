@@ -6,7 +6,7 @@
 //   1. BEHAVIOUR. Each stage tool whose gate is an exported function (preflight
 //      check 5, the migrate gates, `--seed`) is run over a stub database that has
 //      no `deployment_identity` table, reached as a remote target under
-//      RM_ENV=stage, and must refuse naming PRE_IDENTITY_TWIN_RUNBOOK.
+//      --policy stage, and must refuse naming PRE_IDENTITY_TWIN_RUNBOOK.
 //   2. SOURCE. `bun run prune` and `bun smoke` run their gate inside a script
 //      that needs a lock and a server, so their source must route the remote
 //      identity through the policy function and pass `null` for a missing row.
@@ -78,7 +78,7 @@ describe("the stage tools whose gate needs a lock route a remote target through 
 
   test("`bun smoke` asks resolveDeploymentPolicy once the target lock is held, with a missing row as null", () => {
     const source = read("scripts/lib/smoke-main.ts");
-    expect(source).toMatch(/resolveDeploymentPolicy\(\{ rmEnv: declaredRmEnv, connection, identity: locked\.identity === "missing" \? null : locked\.identity \}\)/);
+    expect(source).toMatch(/resolveDeploymentPolicy\(\{ policy: declaredPolicy, connection, identity: locked\.identity === "missing" \? null : locked\.identity \}\)/);
   });
 });
 

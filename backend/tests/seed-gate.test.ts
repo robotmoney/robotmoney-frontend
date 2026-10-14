@@ -197,9 +197,9 @@ describe("--seed requires rehearsal and an explicit request (§4.3, §5)", () =>
     });
   });
 
-  test("RM_ENV=prod refuses whatever the database says", async () => {
+  test("--policy prod refuses whatever the database says", async () => {
     await withDatabase("snapshot", async ({ db, name }) => {
-      await expect(fencedSeed(name, "prod")).rejects.toThrow("refused under RM_ENV=prod");
+      await expect(fencedSeed(name, "prod")).rejects.toThrow("refused under --policy prod");
       expect(await count(db, "jobs")).toBe(0);
     });
   });

@@ -563,7 +563,7 @@ describe("renderPlan — §1.2, every field printed before any mutation", () => 
     const lines = renderPlan(p, id).trimEnd().split("\n");
     expect(lines).toEqual([
       "instance: alpha",
-      "target: remote db.example.invalid:25060/robotmoney (RM_ENV=stage, deployment_identity rehearsal)",
+      "target: remote db.example.invalid:25060/robotmoney (--policy stage, deployment_identity rehearsal)",
       `image: api source ${SOURCE_A} digest ${DIGEST_A}`,
       `image: worker source ${SOURCE_A} digest ${DIGEST_A}`,
       `agent: athena role member key ${FP_ATHENA}`,
@@ -585,7 +585,7 @@ describe("renderPlan — §1.2, every field printed before any mutation", () => 
       mutations: [],
     });
     const text = renderPlan(p, computePlanId(p));
-    expect(text).toContain("target: local dump on volume rm_alpha_pg (RM_ENV=stage, deployment_identity rehearsal)");
+    expect(text).toContain("target: local dump on volume rm_alpha_pg (--policy stage, deployment_identity rehearsal)");
     expect(text).toContain(`image: api source ${SOURCE_B} digest not built yet`);
     expect(text).toContain("agents: none");
     expect(text).toContain("judges: none");

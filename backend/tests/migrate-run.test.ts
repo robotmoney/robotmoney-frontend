@@ -261,7 +261,7 @@ afterEach(async () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner password is ever requested", () => {
-  test("`--migrate` refuses on RM_ENV=prod", async () => {
+  test("`--migrate` refuses on --policy prod", async () => {
     await setIdentity("rehearsal");
     const refusals = await checkMigrateGates(sql, options({ caller: "smoke_flag", env: "prod" }));
     expect(refusals.map((r) => r.reason)).toContain("prod_env");
@@ -286,7 +286,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     expect(await checkMigrateGates(sql, options({ caller: "smoke_flag", env: "stage" }))).toEqual([]);
   });
 
-  test("RM_ENV=stage with a typed owner password against a production identity refuses, with the matrix's own reason", async () => {
+  test("--policy stage with a typed owner password against a production identity refuses, with the matrix's own reason", async () => {
     // The §10 W2 gate, verbatim. The remote confirmation is the last thing in
     // front of this refusal, never a substitute for it.
     await setIdentity("production");
@@ -315,7 +315,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     }
   });
 
-  test("unset RM_ENV against a remote refuses", async () => {
+  test("absent --policy against a remote refuses", async () => {
     await setIdentity("rehearsal");
     const refusals = await checkMigrateGates(
       sql,
@@ -324,7 +324,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     expect(refusals.map((r) => r.reason)).toContain("env_unset_remote");
   });
 
-  test("unset RM_ENV under --local does not refuse", async () => {
+  test("absent --policy under --local does not refuse", async () => {
     await setIdentity("rehearsal");
     expect(await checkMigrateGates(sql, options({ caller: "operator", env: null, connection: "local" }))).toEqual([]);
   });
@@ -354,7 +354,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
 // branch's, gets NO exception: the missing row refuses exactly as before, and
 // the refusal names the guard it failed.
 describe("the first production migrate's exception does not reach a ledger that equals no supported release", () => {
-  test("operator, RM_ENV=prod, remote, no row, a branch ledger: identity_missing, naming the ledger mismatch", async () => {
+  test("operator, --policy prod, remote, no row, a branch ledger: identity_missing, naming the ledger mismatch", async () => {
     await setIdentity(null);
     const gate = options({ caller: "operator", env: "prod", connection: "remote" });
     expect(await readPreIdentityState(sql, gate)).toBeNull();
@@ -365,7 +365,7 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals[0]?.message).toContain(`against ${SUPPORTED_RELEASES[0]!.name}:`);
   });
 
-  test("operator, RM_ENV=stage, a table with no row: identity_missing, naming the missing-table guard it failed", async () => {
+  test("operator, --policy stage, a table with no row: identity_missing, naming the missing-table guard it failed", async () => {
     // The remote rehearsal pass (D61 rule 2) runs only where deployment_identity
     // does not exist at all. A table with no row is not that state.
     await setIdentity(null);
@@ -376,10 +376,10 @@ describe("the first production migrate's exception does not reach a ledger that 
     expect(refusals[0]?.message).toContain("no deployment_identity table at all");
   });
 
-  test("operator, RM_ENV unset, a table with no row: identity_missing, naming RM_ENV=prod or stage as the guard it failed", async () => {
+  test("operator, --policy absent, a table with no row: identity_missing, naming --policy prod or stage as the guard it failed", async () => {
     await setIdentity(null);
     const refusals = await checkMigrateGates(sql, options({ caller: "operator", env: null, connection: "remote" }));
-    expect(refusals.map((r) => r.message).join(" ")).toContain("RM_ENV=prod or RM_ENV=stage");
+    expect(refusals.map((r) => r.message).join(" ")).toContain("--policy prod or --policy stage");
   });
 
   test("D55 (10), D61: a remote stage target with no identity row refuses and names the remote rehearsal pass, for the operator and for `--migrate`", async () => {
@@ -970,8 +970,8 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     plantedDirs.push(home);
     writeFileSync(join(home, ".env"), envFile, "utf8");
     const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home };
-    if (extra.rmEnv) env.RM_ENV = extra.rmEnv;
-    const child = Bun.spawn(["bun", "scripts/migrate.ts", ...(extra.args ?? [])], {
+    const policy = extra.rmEnv ? ["--policy", extra.rmEnv] : [];
+    const child = Bun.spawn(["bun", "scripts/migrate.ts", ...policy, ...(extra.args ?? [])], {
       cwd: BACKEND,
       env,
       stdin: "ignore",
@@ -1034,7 +1034,7 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     expect(out).not.toContain(OWNER_PASSWORD);
   }, 60_000);
 
-  test("runs the gates first: RM_ENV=stage against a production identity refuses without asking for a password", async () => {
+  test("runs the gates first: --policy stage against a production identity refuses without asking for a password", async () => {
     await setIdentity("production");
     const receiptDir = mkdtempSync(join(tmpdir(), "rm-migrate-r-"));
     plantedDirs.push(receiptDir);
@@ -1205,13 +1205,13 @@ describe("`bun run migrate` (backend/scripts/migrate.ts)", () => {
     plantedDirs.push(home);
     writeFileSync(join(home, ".env"), await envFileFor(`rm_owner = ${OWNER_PASSWORD}`), "utf8");
     const receipt = join(home, "receipts", "migrate.json");
-    const argv = ["bun", "scripts/migrate.ts", "--receipt", receipt, "--confirm-target", targetFor()];
+    const argv = ["bun", "scripts/migrate.ts", "--policy", "stage", "--receipt", receipt, "--confirm-target", targetFor()];
     // The password is never an argument (D61).
     expect(argv.join(" ")).not.toContain(OWNER_PASSWORD);
 
     const child = Bun.spawn(argv, {
       cwd: BACKEND,
-      env: { PATH: process.env.PATH ?? "", HOME: home, RM_ENV: "stage" },
+      env: { PATH: process.env.PATH ?? "", HOME: home },
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",

@@ -3,7 +3,7 @@
 // only ever restores into a local container, and every stage tool that reads a
 // remote target with no `deployment_identity` table refuses, changes nothing,
 // and names what can enrol it: since D61 (rule 2) the remote rehearsal pass of
-// `RM_ENV=stage bun run migrate --confirm-target …`, or `bun smoke --local dump`.
+// `bun run migrate --policy stage --confirm-target …`, or `bun smoke --local dump`.
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,12 +19,12 @@ const REPO = join(import.meta.dir, "..", "..", "..");
 describe("a remote target with no deployment_identity refuses and names the runbook", () => {
   for (const identity of [null, "unreadable"] as const) {
     test(`stage, remote, identity ${identity ?? "no row"}: refused, naming the runbook and the local alternative`, () => {
-      const verdict = resolveDeploymentPolicy({ rmEnv: "stage", connection: "remote", identity });
+      const verdict = resolveDeploymentPolicy({ policy: "stage", connection: "remote", identity });
       expect(verdict.allow).toBe(false);
       if (verdict.allow) return;
       expect(verdict.reason).toContain(PRE_IDENTITY_TWIN_RUNBOOK);
       // D61 rule 2: the pointer is the remote rehearsal pass of `bun run migrate`.
-      expect(verdict.reason).toContain("RM_ENV=stage bun run migrate --confirm-target");
+      expect(verdict.reason).toContain("bun run migrate --policy stage --confirm-target");
       expect(verdict.reason).toContain("bun smoke --local dump");
     });
   }
@@ -32,7 +32,7 @@ describe("a remote target with no deployment_identity refuses and names the runb
   test("the rehearsal-only preparations (--migrate, --seed, --spoof-keys) name it too when the target is remote", () => {
     for (const preparation of ["migrate", "seed", "spoof-keys"] as const) {
       for (const identity of [null, "unreadable"] as const) {
-        const gate = requireRehearsalTarget({ preparation, rmEnv: "stage", identity, explicitlyRequested: true, connection: "remote" });
+        const gate = requireRehearsalTarget({ preparation, policy: "stage", identity, explicitlyRequested: true, connection: "remote" });
         expect(gate.allow).toBe(false);
         if (!gate.allow) expect(gate.reason).toContain(PRE_IDENTITY_TWIN_RUNBOOK);
       }
@@ -40,14 +40,14 @@ describe("a remote target with no deployment_identity refuses and names the runb
   });
 
   test("a production or rehearsal identity is refused or allowed as before, with no runbook pointer", () => {
-    const production = resolveDeploymentPolicy({ rmEnv: "stage", connection: "remote", identity: "production" });
+    const production = resolveDeploymentPolicy({ policy: "stage", connection: "remote", identity: "production" });
     expect(production.allow).toBe(false);
     if (!production.allow) expect(production.reason).not.toContain(PRE_IDENTITY_TWIN_RUNBOOK);
-    expect(resolveDeploymentPolicy({ rmEnv: "stage", connection: "remote", identity: "rehearsal" }).allow).toBe(true);
+    expect(resolveDeploymentPolicy({ policy: "stage", connection: "remote", identity: "rehearsal" }).allow).toBe(true);
   });
 
   test("a local twin is not pointed at the remote runbook: smoke prepares a --local dump itself", () => {
-    const local = requireRehearsalTarget({ preparation: "migrate", rmEnv: "stage", identity: null, explicitlyRequested: true, connection: "local-dump" });
+    const local = requireRehearsalTarget({ preparation: "migrate", policy: "stage", identity: null, explicitlyRequested: true, connection: "local-dump" });
     expect(local.allow).toBe(false);
     if (!local.allow) expect(local.reason).not.toContain(PRE_IDENTITY_TWIN_RUNBOOK);
   });
