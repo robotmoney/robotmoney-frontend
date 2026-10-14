@@ -500,7 +500,6 @@ describe("the plan is redacted by structure — §1.2, the printed plan holds no
   // runs here through the real guard, for every spoof shape argv can carry.
   describe("the plan's own configuration passes its own guard (producer composed with guard)", () => {
     const base = {
-      stackRmEnv: "stage" as const,
       cadenceProfile: "fast" as const,
       staticPortMode: true,
       shippedImages: false,

@@ -62,7 +62,6 @@ describe("smokePassthroughEnv", () => {
         roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney", worker: "postgres://rm_worker:w@postgres:5432/robotmoney" },
       },
       environment: { class: "local", hash: "0123456789" },
-      rmEnv: "stage",
       extraComposeEnv: smokePassthroughEnv({ WORKER_DATABASE_URL: "postgres://rm_worker:shell@elsewhere:5432/x" }),
     };
     const env = buildComposeEnv(cfg);
@@ -83,15 +82,26 @@ describe("smokePassthroughEnv", () => {
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
       environment: { class: "local", hash: "0123456789" },
-      rmEnv: "prod",
     };
     expect("RM_ALLOW_INSECURE" in buildComposeEnv(cfg)).toBe(false);
-    expect("RM_ALLOW_INSECURE" in buildComposeEnv({ ...cfg, rmEnv: "stage" })).toBe(false);
     // And no one smuggles it back in through the extras map.
     expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ALLOW_INSECURE: "1" } })).toThrow(/retired/);
     expect(DEMO_FLAGS.map((f) => f.flag)).not.toContain("--allow-insecure");
     expect(existsSync(join(import.meta.dir, "../../../docker-compose.smoke.yml"))).toBe(false);
     expect(DEFAULT_COMPOSE_FILES).toEqual(["docker-compose.yml"]);
+  });
+
+  test("issue 1326: no RM_ENV reaches a container — no StackConfig field, no compose env value, no smuggling", () => {
+    const cfg: StackConfig = {
+      repoRoot: "/repo",
+      project: "rm_smoke_stack_rmenv",
+      profile: "core",
+      composeFiles: DEFAULT_COMPOSE_FILES,
+      database: DEFAULT_STACK_DATABASE,
+      environment: { class: "local", hash: "0123456789" },
+    };
+    expect("RM_ENV" in buildComposeEnv(cfg)).toBe(false);
+    expect(() => buildComposeEnv({ ...cfg, extraComposeEnv: { RM_ENV: "prod" } })).toThrow(/not a container setting/);
   });
 
   test("ignores a name that is not on the allowlist", () => {

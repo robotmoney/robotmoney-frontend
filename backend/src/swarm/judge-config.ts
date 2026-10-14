@@ -193,7 +193,7 @@ export async function setJudgeConfig(
   // backend/src/test-seam.ts, not through an environment value. A deployed
   // process is never armed and gets the acceptance-path rule unchanged.
   if (patch.model !== undefined && patch.model !== null && typeof patch.model === "string") {
-    assertJudgeModelAllowed(patch.model, process.env, testSeamArmed() ? { path: "development" } : {});
+    assertJudgeModelAllowed(patch.model, testSeamArmed() ? { path: "development" } : {});
   }
   if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
     throw new Error("invalid judge thirdPartyEnabled — expected a boolean");
@@ -211,7 +211,7 @@ export async function setJudgeConfig(
     // (AC-MODEL-01): `{"mode":"enforce"}` against a row already holding a
     // keyless model would otherwise enable it with no model check at all.
     if (resultingMode !== "off" && resultingModel) {
-      assertJudgeModelAllowed(resultingModel, process.env, testSeamArmed() ? { path: "development" } : {});
+      assertJudgeModelAllowed(resultingModel, testSeamArmed() ? { path: "development" } : {});
     }
     if (resultingMode !== "off" && !resultingModel) {
       throw new Error(

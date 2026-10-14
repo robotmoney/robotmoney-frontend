@@ -686,7 +686,6 @@ describe("runParticipant — the namespace decides the loop", () => {
     RM_MEMBER_TOKEN: "themis-bearer",
     RM_INFERENCE_KEY: "themis-own-model-key",
     RM_JUDGE_BASE_URL: "https://models.example/v1",
-    RM_ENV: "stage",
   };
   const GREEN: StartupDiagnostic = { apiReachable: true, tokenValid: true, serverMemberId: "m-themis", identityMatchesRoster: true };
 

@@ -3,10 +3,10 @@
 // backend/src/test-seam.ts alone.
 //
 // What it pins, against the real tree:
-//   1. No runtime module reads `RM_ENV`. The only readers left are the §4.3
-//      policy input of the OPERATOR tools (deploy-policy.ts, the acceptance
-//      path, the judge-model message) and backend/scripts, which are the
-//      operator's commands and not a container's process.
+//   1. No runtime module reads `RM_ENV`. The only reader left in backend/src
+//      is the §4.3 policy input of the OPERATOR tools (deploy-policy.ts);
+//      backend/scripts are the operator's commands and not a container's
+//      process. The stack's acceptance path reads no environment (issue 1326).
 //   2. `config.env`, `config.allowInsecure` and `RM_ALLOW_INSECURE` exist
 //      nowhere a process, a compose file or a workflow could read them. The one
 //      allowed mention is the refusal that names the retired variable.
@@ -14,6 +14,8 @@
 //      and the fixture projects source is injected from backend/tests only.
 //   4. The harness sets no `RM_ENV`, so nothing in the runtime can be keyed on
 //      it by accident again.
+//   5. No container is handed `RM_ENV` (issue 1326): no compose file, stack
+//      composefile, workflow step, StackConfig or participant env carries it.
 //
 // A guard that only ever passes is theatre, so each rule has a red control: the
 // scanner is run over a planted violation and must report it.
@@ -56,12 +58,8 @@ function hits(files: string[], scan: (text: string) => string[], allow: readonly
 const BACKEND_SRC = walk(join(repoRoot, "backend", "src"), isTs);
 
 describe("1. no runtime module reads RM_ENV (issue #973)", () => {
-  /** The §4.3 policy input and the acceptance path: operator-facing readers the smoke spec keeps (§4.1, §4.3). */
-  const POLICY_READERS = [
-    "backend/src/deploy-policy.ts",
-    "backend/src/acceptance-path.ts",
-    "backend/src/swarm/judge-model-policy.ts",
-  ];
+  /** The §4.3 policy input: the one operator-facing reader the smoke spec keeps (§4.1, §4.3). */
+  const POLICY_READERS = ["backend/src/deploy-policy.ts"];
 
   test("backend/src reads RM_ENV only in the §4.3 policy readers", () => {
     expect(BACKEND_SRC.length).toBeGreaterThan(50); // walker sanity
@@ -84,6 +82,11 @@ describe("1. no runtime module reads RM_ENV (issue #973)", () => {
       "backend/src/projects/access/select.ts",
       "backend/src/projects/seed/roster-seed.ts",
       "backend/src/swarm/domain.ts",
+      "backend/src/acceptance-path.ts",
+      "backend/src/swarm/judge-model-policy.ts",
+      "backend/src/swarm/judge-config.ts",
+      "scripts/agent/participant/judge-client.ts",
+      "scripts/lib/onboarding-eval.ts",
     ]) {
       const text = readFileSync(join(repoRoot, file), "utf8");
       expect(`${file}: ${rmEnvReads(text).join(",")}`).toBe(`${file}: `);
@@ -191,5 +194,35 @@ describe("4. the harness declares no environment class", () => {
   test("backend/tests/preload.ts sets no RM_ENV", () => {
     const preload = readFileSync(join(repoRoot, "backend", "tests", "preload.ts"), "utf8");
     expect(preload).not.toMatch(/process\.env\.RM_ENV\s*=/);
+  });
+});
+
+describe("5. no container is handed RM_ENV (issue 1326)", () => {
+  /** A compose or workflow line that SETS `RM_ENV` (a YAML key), not prose naming it. */
+  const rmEnvKeys = (text: string): string[] => [...text.matchAll(/^\s*RM_ENV\s*:.*$/gm)].map((m) => m[0].trim());
+
+  test("docker-compose.yml, the stack composefiles and the workflows set no RM_ENV", () => {
+    const files = [
+      join(repoRoot, "docker-compose.yml"),
+      ...walk(join(repoRoot, "stacks"), isYml),
+      ...walk(join(repoRoot, ".github", "workflows"), isYml),
+    ];
+    expect(files.length).toBeGreaterThan(5);
+    expect(hits(files, rmEnvKeys)).toEqual([]);
+  });
+
+  test("the stack config and the participant renderer emit no RM_ENV", () => {
+    for (const file of ["scripts/stack/config.ts", "scripts/lib/participant-compose.ts", "scripts/lib/smoke-plan-configuration.ts"]) {
+      const text = readFileSync(join(repoRoot, file), "utf8");
+      expect(`${file}: ${/^\s*RM_ENV\s*:/m.test(text)}`).toBe(`${file}: false`);
+      expect(`${file}: ${/\brmEnv\b/.test(text)}`).toBe(`${file}: false`);
+    }
+  });
+
+  test("red control: the scanner finds a compose key and ignores prose", () => {
+    expect(rmEnvKeys("  RM_ENV: ${RM_ENV:-prod}\n  # RM_ENV is retired\n        RM_ENV: stage")).toEqual([
+      "RM_ENV: ${RM_ENV:-prod}",
+      "RM_ENV: stage",
+    ]);
   });
 });

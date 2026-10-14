@@ -154,15 +154,11 @@ export function railFromEnv(env: Record<string, string | undefined> = process.en
     composeFiles: env.COMPOSE_FILE ? env.COMPOSE_FILE.split(":") : [...DEFAULT_COMPOSE_FILES],
     composeSpawnEnv,
     // No `standingStack` flag to pass here: this entry point is a CHILD PROCESS
-    // handed the stack's compose env, and knows nothing about the `--static-port`
-    // boot that started it. Its acceptance rule therefore comes from `RM_ENV`
-    // alone — staging runs `RM_ENV=prod` by rule (docs/technical/stack-orchestrator.md
-    // §16), which is what makes resolveModelConfig() refuse a keyless model and
-    // a raw-id override for the member containers it launches (AC-MODEL-01).
-    // That env now always CARRIES an RM_ENV — buildComposeEnv() emits it from
-    // the stack config (D13) — so this driver no longer depends on an operator
-    // having exported one, and an absent value would be the acceptance path
-    // rather than the permissive one.
+    // handed the stack's compose env, and knows nothing about the boot that
+    // started it. It states no path, so resolveModelConfig() judges it as the
+    // acceptance path (backend/src/acceptance-path.ts, issue 1326): a keyless
+    // model or a raw-id override is refused for the member containers it
+    // launches (AC-MODEL-01), on every stack.
     modelConfig: resolveModelConfig(env),
     // This is the ONE place agent.ts learns the operator's token from its
     // environment rather than as an explicit argument, and it learns only the

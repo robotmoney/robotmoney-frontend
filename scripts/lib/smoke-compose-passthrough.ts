@@ -66,11 +66,8 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY",
   "GECKO_OHLCV_MIN_INTERVAL_MS",
   "PG_NAMESPACE_GUARD_TIMEOUT_MS",
-  // NO "RM_ENV". It is a first-class StackConfig field now (`rmEnv`,
-  // scripts/stack/config.ts) resolved from the KIND of boot by
-  // resolveStackRmEnv(), and buildComposeEnv() refuses to see it in the extras
-  // map. Passing it through from the operator's shell is exactly what made the
-  // acceptance path a property of what somebody last typed (D13).
+  // NO "RM_ENV". No container reads it (issue 1326, D69), and
+  // buildComposeEnv() refuses to see it in the extras map.
   // NO "WORKER_DATABASE_URL" either. It is the pipeline worker's rm_worker
   // credential, which buildComposeEnv() emits from the stack's own role URLs
   // (StackDatabase.roleUrls); an exported value must never shadow it.

@@ -5613,11 +5613,9 @@ accepted the issue's three-slice split on 2026-10-14.
 
 1. `RM_ENV` is not a runtime class. `backend/src/config.ts` has no `env`
    field. The api's and the workers' startup preflight takes no policy value.
-   The health payload and the boot log lines report no environment. One
-   reader is still in the api container: the stack's declared acceptance path
-   (`backend/src/acceptance-path.ts`, read by the judge-model pin in
-   `backend/src/swarm/judge-model-policy.ts`). It is the last container reader. It
-   retires with the acceptance-path issue (1326), and part 4 records it.
+   The health payload and the boot log lines report no environment. No
+   container reads `RM_ENV`: the last reader, the stack's declared acceptance
+   path, retired with the acceptance-path issue (1326) under part 6.
 2. `RM_ALLOW_INSECURE`, `config.allowInsecure` and `bun smoke --allow-insecure`
    are retired. No compose file, launcher or stack configuration defines or
    forwards the variable, and a stack configuration that is handed it refuses.
@@ -5631,18 +5629,33 @@ accepted the issue's three-slice split on 2026-10-14.
    environment says. The fixture projects source is injected by the harness;
    a deployed process selects the live source with `PROJECTS_SOURCE=live` or
    refuses. There is no environment override of the roster seed path.
-4. Two `RM_ENV` readers remain after this decision, each owned by a
-   follow-up of issue 973. The stack's declared acceptance path
-   (`backend/src/acceptance-path.ts`) and the compose and workflow emission of
-   `RM_ENV` to containers retire with the acceptance-path issue (1326). The
+4. One `RM_ENV` reader remains after this decision and part 6. The
    operator tools (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates,
    D61) read it as their §4.1 policy input. The owner decided on 2026-10-14
    that they take an explicit flag instead, with the policy-input issue (1327).
    This decision retires the runtime class and the insecure flag only.
 5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
-   on a new read of `RM_ENV` outside the policy readers, on any mention of the
-   retired names in a process, compose file or workflow, and on a second
-   caller of the seam.
+   on a new read of `RM_ENV` in `backend/src` outside `deploy-policy.ts`, on
+   any mention of the retired names in a process, compose file or workflow, on
+   an `RM_ENV` key in a compose file, stack composefile or workflow, and on a
+   second caller of the seam.
+6. No environment value declares the acceptance path (issue 1326; agent,
+   2026-10-14, proposed: the issue asked for an owner call between the
+   standing-stack flag and a pin applied everywhere, and this takes both).
+   `backend/src/acceptance-path.ts` reads no environment. A caller states the
+   path: the armed test harness states `development` through the seam,
+   `bun smoke` states the kind of boot (`standingStack`: a `--static-port` or
+   `prod`-policy boot is the acceptance path, an operator's own stage boot is
+   development), and the local throwaway onboarding eval states
+   `development`. A caller that states nothing is the acceptance path. So the
+   api and the participant judge apply the AC-MODEL-01 judge pin on every
+   deployed stack, a stub judge model is reachable only through the armed
+   seam, and the standalone session driver refuses a keyless model on every
+   host. `StackConfig.rmEnv`, the participant env's `RM_ENV`, the plan
+   configuration's `RM_ENV` key, `docker-compose.yml`'s and the stack
+   composefiles' `RM_ENV` and the e2e workflow steps' `RM_ENV` are gone;
+   `buildComposeEnv()` refuses an `RM_ENV` handed through its extras. The e2e
+   setup action keeps `RM_ENV=stage` as `bun smoke`'s policy input (part 4).
 
 **Why.** A deployment's identity used to alter runtime authority and
 data-safety behaviour: `smoke`, `stage` and `ephemeral` each relaxed something,

@@ -293,12 +293,10 @@ export interface ModelConfig {
 // So the refusal is scoped to the paths where it is true, not applied globally
 // (which would break every keyless local eval and be reverted within a week).
 // The predicate itself lives in backend/src/acceptance-path.ts and is shared
-// with the judge half verbatim (D13). It is re-exported here because this
-// module is where the scripts tree has always imported it from, and because a
-// second definition is exactly what produced the contradiction D13 settles: an
-// unset RM_ENV meant STRICT to the judge and PERMISSIVE here, and both halves
-// had a green test. `ModelPathOptions` keeps its local name — `standingStack`
-// is a smoke-boot concept — and is the shared options type.
+// with the judge half verbatim. No environment value decides it (issue 1326):
+// `bun smoke` states the kind of boot (`standingStack`), and a caller that
+// states nothing gets the acceptance path. `ModelPathOptions` keeps its local
+// name and is the shared options type.
 export {
   isAcceptancePath,
   resolveInferencePath,
@@ -318,7 +316,7 @@ export function resolveModelConfig(
   env: Record<string, string | undefined> = process.env,
   opts: ModelPathOptions = {},
 ): ModelConfig {
-  const path = resolveInferencePath(env, opts);
+  const path = resolveInferencePath(opts);
   const selector = env[AGENT_MODEL_ENV]?.trim() ?? "";
   const model = resolveAgentModel(env); // throws loudly on an unknown family/model
   const keyless = isKeylessModel(model);
@@ -513,6 +511,11 @@ export interface RunOnboardingEvalOptions {
   apiUrlInternal?: string; // the swarm REST API base the CONTAINER reaches over the compose network
   automationToken: string;
   env?: Record<string, string | undefined>; // resolveModelConfig source; default process.env
+  /**
+   * Which inference path this eval runs on (backend/src/acceptance-path.ts).
+   * Absent is the acceptance path; the local throwaway eval states development.
+   */
+  modelPath?: ModelPathOptions;
   timeoutMs?: number;
   pollIntervalMs?: number;
   autoApproveDelayMs?: number;
@@ -600,7 +603,7 @@ export interface OnboardingEvalResult {
  */
 export async function runOnboardingEval(opts: RunOnboardingEvalOptions): Promise<OnboardingEvalResult> {
   const env = opts.env ?? process.env;
-  const modelConfig = resolveModelConfig(env); // throws loudly — no fallback (see doc comment)
+  const modelConfig = resolveModelConfig(env, opts.modelPath); // throws loudly — no fallback (see doc comment)
   const identity = opts.identity ?? generateIdentity();
   const apiUrlInternal = opts.apiUrlInternal ?? DEFAULT_API_URL_INTERNAL;
   const composeFiles = opts.composeFiles ?? DEFAULT_COMPOSE_FILES;
@@ -871,7 +874,7 @@ export async function runOnboardingEvalWithRetry(opts: RunOnboardingEvalWithRetr
   // selector BEFORE any attempt is spent. The retry decision itself no longer
   // depends on the tier (see case 3 in the doc comment above: funded Zen stalls
   // mid-session too), so nothing reads the returned config.
-  resolveModelConfig(opts.env ?? process.env);
+  resolveModelConfig(opts.env ?? process.env, opts.modelPath);
   let last: OnboardingEvalResult | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Fresh CONTACT per attempt — reusing one across retries would re-apply

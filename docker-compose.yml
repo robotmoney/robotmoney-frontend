@@ -161,15 +161,6 @@ x-worker-env: &worker-env
   # someone else's credential.
   DATABASE_URL: ${WORKER_DATABASE_URL:-}
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
-  # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
-  # service, so the value is a property of the stack config rather than of
-  # whatever the operator's shell last exported. It used to default to `smoke`,
-  # which meant a bare `docker compose up` — or any bring-up path that forgot to
-  # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
-  # `prod` is the strict/acceptance path: if the default IS ever reached, the
-  # stack refuses a keyless or unpinned model instead of accepting one.
-  RM_ENV: ${RM_ENV:-prod}
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # The paid CoinGecko plan's key (issue #1047). projects.refresh_coins sends
   # it to the Pro host as x-cg-pro-api-key; blank keeps the keyless public
@@ -295,15 +286,6 @@ services:
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
       FLOOR_SEED_PATH: ${FLOOR_SEED_PATH:-}
       FETCH_CACHE_DIR: ${FETCH_CACHE_DIR:-}
-      # FAIL-CLOSED DEFAULT (D13). This interpolation default must never be reached:
-      # scripts/stack/config.ts's buildComposeEnv() emits RM_ENV explicitly for every
-      # service, so the value is a property of the stack config rather than of
-      # whatever the operator's shell last exported. It used to default to `smoke`,
-      # which meant a bare `docker compose up` — or any bring-up path that forgot to
-      # emit it — silently disabled AC-MODEL-01's refusals in the api and worker.
-      # `prod` is the strict/acceptance path: if the default IS ever reached, the
-      # stack refuses a keyless or unpinned model instead of accepting one.
-      RM_ENV: ${RM_ENV:-prod}
       # website-server (nginx) now sits in front of `api` for EVERY request in
       # every composition this file resolves (issue #892) — website-server/
       # nginx.conf forwards X-Real-IP/X-Forwarded-For/X-Forwarded-Proto to
@@ -364,9 +346,9 @@ services:
       WEBAUTHN_ORIGIN: ${WEBAUTHN_ORIGIN:-}
       WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
       # Projects data source (backend/src/projects/access/select.ts).
-      # FAIL-CLOSED ON EVERY DEPLOYED ENV (issue #1208): RM_ENV smoke, stage and
-      # prod REQUIRE PROJECTS_SOURCE=live — the projects pipelines throw rather
-      # than persist fixture data. The fixture is ephemeral-only. See .env.example.
+      # FAIL-CLOSED ON EVERY DEPLOYED STACK (issue #1208): every deployed process
+      # REQUIRES PROJECTS_SOURCE=live — the projects pipelines throw rather
+      # than persist fixture data. The fixture is test-harness-only. See .env.example.
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}

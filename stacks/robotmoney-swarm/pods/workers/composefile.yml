@@ -28,10 +28,9 @@ x-worker-env: &worker-env
   # Not a stack secret: it names the same external Postgres via a different
   # role, so it carries no separate credential of its own here.
   WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  # No non-empty inline default here (or anywhere below) — docker-compose.yml
-  # defaults this to smoke; forwarding-only means an operator must set it via
-  # --config, so an inline literal here can never shadow that (field guide §5).
-  RM_ENV: ${RM_ENV:-}
+  # No non-empty inline default here (or anywhere below): forwarding-only means
+  # an operator must set a value via --config, so an inline literal here can
+  # never shadow that (field guide §5).
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
   TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
@@ -82,7 +81,7 @@ services:
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
       # No inline default — docker-compose.yml defaults these two crons;
-      # forwarding-only here, same reasoning as RM_ENV above.
+      # forwarding-only here, same reasoning as x-worker-env above.
       PRODUCER_REGIME_CRON: ${PRODUCER_REGIME_CRON:-}
       PRODUCER_RESEARCH_CRON: ${PRODUCER_RESEARCH_CRON:-}
     volumes:

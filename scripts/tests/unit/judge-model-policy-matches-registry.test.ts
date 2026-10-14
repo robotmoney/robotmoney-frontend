@@ -25,11 +25,9 @@ import {
 import {
   assertJudgeModelAllowed,
   FREE_FAMILY_JUDGE_MODELS,
-  isAcceptanceJudgeEnv,
   isKeylessJudgeModel,
   PINNED_JUDGE_MODEL,
 } from "../../../backend/src/swarm/judge-model-policy.ts";
-import { isAcceptancePath, resolveInferencePath } from "../../../backend/src/acceptance-path.ts";
 
 describe("the judge's model policy agrees with the pinned registry", () => {
   test("PINNED_JUDGE_MODEL is the registry's default, in wire form", () => {
@@ -61,66 +59,46 @@ describe("the judge's model policy agrees with the pinned registry", () => {
 });
 
 describe("assertJudgeModelAllowed refuses what AC-MODEL-01 disqualifies", () => {
-  const prod = { RM_ENV: "prod" };
-  const dev = { RM_ENV: "ephemeral" };
+  // No environment value decides the path (issue 1326): the caller states it,
+  // and a caller that states nothing is the acceptance path.
+  const acceptance = {};
+  const staging = { standingStack: true };
+  const dev = { path: "development" as const };
 
   test("the free family is refused on EVERY path, acceptance or not", () => {
     for (const id of FREE_FAMILY_JUDGE_MODELS) {
-      expect(() => assertJudgeModelAllowed(id, prod)).toThrow(/keyless free family|DISQUALIFIED/);
+      expect(() => assertJudgeModelAllowed(id, acceptance)).toThrow(/keyless free family|DISQUALIFIED/);
       expect(() => assertJudgeModelAllowed(id, dev)).toThrow(/keyless free family|DISQUALIFIED/);
       expect(() => assertJudgeModelAllowed(`${ZEN_PREFIX}${id}`, dev)).toThrow(/DISQUALIFIED/);
     }
   });
 
   test("an acceptance path takes the pinned model and nothing else", () => {
-    expect(() => assertJudgeModelAllowed(PINNED_JUDGE_MODEL, prod)).not.toThrow();
-    expect(() => assertJudgeModelAllowed("test/judge-model", prod)).toThrow(/not the pinned acceptance model/);
-    expect(() => assertJudgeModelAllowed("deepseek-v4-pro", prod)).toThrow(/not the pinned acceptance model/);
-    // The PREFIXED form is not the wire id, and is refused with it.
-    expect(() => assertJudgeModelAllowed(`${ZEN_PREFIX}${PINNED_JUDGE_MODEL}`, prod)).toThrow(/not the pinned acceptance model/);
-  });
-
-  test("development keeps its stub ids — its judgements are not evidence", () => {
-    expect(() => assertJudgeModelAllowed("test/judge-model", dev)).not.toThrow();
-    expect(() => assertJudgeModelAllowed("stub-judge", { RM_ENV: "smoke" })).not.toThrow();
-  });
-
-  // THE ONE RULE, ASSERTED AS AN IDENTITY (T05/D13). The two halves of
-  // AC-MODEL-01's control used to answer this question separately and disagreed
-  // about `{}`. They are now the same function; this table is what stops a
-  // future edit from forking them again.
-  test("isAcceptanceJudgeEnv(e) === isAcceptancePath(resolveInferencePath(e)) for every env", () => {
-    const envs: Record<string, string | undefined>[] = [
-      {},
-      { RM_ENV: "" },
-      { RM_ENV: "smoke" },
-      { RM_ENV: "ephemeral" },
-      { RM_ENV: "prod" },
-      { RM_ENV: "staging" },
-    ];
-    for (const e of envs) {
-      expect(isAcceptanceJudgeEnv(e), `RM_ENV=${JSON.stringify(e.RM_ENV)}`)
-        .toBe(isAcceptancePath(resolveInferencePath(e)));
+    for (const opts of [acceptance, staging]) {
+      expect(() => assertJudgeModelAllowed(PINNED_JUDGE_MODEL, opts)).not.toThrow();
+      expect(() => assertJudgeModelAllowed("test/judge-model", opts)).toThrow(/not the pinned acceptance model/);
+      expect(() => assertJudgeModelAllowed("deepseek-v4-pro", opts)).toThrow(/not the pinned acceptance model/);
+      // The PREFIXED form is not the wire id, and is refused with it.
+      expect(() => assertJudgeModelAllowed(`${ZEN_PREFIX}${PINNED_JUDGE_MODEL}`, opts)).toThrow(/not the pinned acceptance model/);
     }
-    // ...and the table is not vacuously true because both sides are constant.
-    expect(envs.map((e) => isAcceptanceJudgeEnv(e))).toEqual([true, true, false, false, true, true]);
   });
 
-  test("the backend half has the explicit-override escape hatch too", () => {
-    // It previously had none: only the scripts half could state the path
-    // outright, so a caller that KNEW had no way to say so.
-    expect(isAcceptanceJudgeEnv({ RM_ENV: "prod" }, { path: "development" })).toBe(false);
-    expect(isAcceptanceJudgeEnv({ RM_ENV: "smoke" }, { standingStack: true })).toBe(true);
-    expect(() => assertJudgeModelAllowed("test/judge-model", { RM_ENV: "prod" }, { path: "development" })).not.toThrow();
-    expect(() => assertJudgeModelAllowed("test/judge-model", { RM_ENV: "smoke" }, { standingStack: true }))
-      .toThrow(/not the pinned acceptance model/);
+  test("only a caller that states development keeps stub ids — its judgements are not evidence", () => {
+    expect(() => assertJudgeModelAllowed("test/judge-model", dev)).not.toThrow();
+    expect(() => assertJudgeModelAllowed("stub-judge", { standingStack: false })).not.toThrow();
   });
 
-  test("an unset RM_ENV is an acceptance path — the fail-closed default", () => {
-    // backend/src/config.ts defaults RM_ENV to "prod" for exactly this reason:
-    // an environment that forgot to say what it is must get the strict rules.
-    expect(isAcceptanceJudgeEnv({})).toBe(true);
-    expect(() => assertJudgeModelAllowed("test/judge-model", {})).toThrow(/not the pinned acceptance model/);
+  test("the default is the acceptance path, and RM_ENV in the process changes nothing", () => {
+    const before = process.env.RM_ENV;
+    try {
+      for (const value of ["smoke", "stage", "ephemeral", "prod"]) {
+        process.env.RM_ENV = value;
+        expect(() => assertJudgeModelAllowed("test/judge-model")).toThrow(/not the pinned acceptance model/);
+      }
+    } finally {
+      if (before === undefined) delete process.env.RM_ENV;
+      else process.env.RM_ENV = before;
+    }
   });
 });
 

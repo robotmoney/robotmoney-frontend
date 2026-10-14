@@ -68,6 +68,7 @@ import {
   renderJudgePrompt,
   type JudgeInput,
 } from "../../../backend/src/swarm/judge.ts";
+import type { InferencePathOptions } from "../../../backend/src/acceptance-path.ts";
 import { assertJudgeModelAllowed } from "../../../backend/src/swarm/judge-model-policy.ts";
 import type { PersonaIdentity } from "../../lib/swarm/credential-file.ts";
 import { runJudge, type JudgeAnswer, type JudgeUsage } from "./judge-runner.ts";
@@ -240,8 +241,12 @@ export async function judgeOne(
   deps: {
     fetchImpl?: typeof globalThis.fetch;
     runJudgeImpl?: typeof runJudge;
-    /** The environment the model policy reads (RM_ENV). Defaults to the process's. */
-    env?: Record<string, string | undefined>;
+    /**
+     * Which path the model policy judges by. A participant container knows
+     * nothing about its stack, so the default is the acceptance path (only the
+     * pinned model). Tests state `development` to use stub model ids.
+     */
+    modelPath?: InferencePathOptions;
   } = {},
 ): Promise<JudgeOutcome> {
   const doFetch = deps.fetchImpl ?? fetch;
@@ -257,7 +262,7 @@ export async function judgeOne(
   try {
     // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
     // everywhere, and anything but the pinned model on an acceptance path.
-    assertJudgeModelAllowed(model, deps.env ?? process.env);
+    assertJudgeModelAllowed(model, deps.modelPath ?? {});
   } catch (err) {
     const detail = (err instanceof Error ? err.message : String(err)).slice(0, DETAIL_MAX);
     return { kind: "refused", sessionId: pending.sessionId, reason: "model_disallowed", detail };

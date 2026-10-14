@@ -11,11 +11,9 @@
 // RPC URL can carry an API key in its path), and no key whose name reads as a
 // secret: the value `--spoof-keys` carries is a member list, so its key says
 // MEMBERS, never KEYS.
-import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import type { SmokeCadenceProfile } from "./smoke-cadence.ts";
 
 export interface PlanConfigurationInputs {
-  readonly stackRmEnv: RmEnv;
   readonly cadenceProfile: SmokeCadenceProfile;
   readonly staticPortMode: boolean;
   readonly shippedImages: boolean;
@@ -30,7 +28,6 @@ export const SPOOF_EVERY_IN_HOUSE_MEMBER = "operator=robotmoney";
 
 export function planConfiguration(inputs: PlanConfigurationInputs): Record<string, string> {
   return {
-    RM_ENV: inputs.stackRmEnv,
     SMOKE_CADENCE: inputs.cadenceProfile,
     STATIC_PORT: String(inputs.staticPortMode),
     SHIPPED_IMAGES: String(inputs.shippedImages),
