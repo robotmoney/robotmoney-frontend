@@ -69,6 +69,7 @@ export const ROUTES: {
     register: string;
     regime: string;
     submit: string;
+    submitDryRun: string;
     scheduler: {
       fullRead: string;
       /** A WebSocket upgrade (D55 (11)): `?cursor=N` only; the token only in the `Authorization` header. */

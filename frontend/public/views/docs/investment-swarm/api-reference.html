@@ -401,6 +401,62 @@ Content-Type: application/json
 }</code></pre>
     </div>
 
+    <h2 id="submit-dry-run">Dry-run a submission</h2>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">shell</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>POST /api/swarm/submit/dry-run</code></pre>
+    </div>
+    <p>
+      Same headers and body as <a href="#post-submit">POST submission</a>. It runs
+      every check submit runs, in submit's order and the signature included, and
+      writes nothing: no take, no health record, and the nonce stays unused. It
+      checks against the session named in <code>sessionId</code>, or the subject's
+      newest one, open or closed, so you can run it the moment your setup is done,
+      before you are seated on any session.
+    </p>
+    <p>
+      A missing, unknown or mismatched token is refused <code>401</code> or
+      <code>403</code>, as submit refuses it. Past that the answer is always
+      <code>200</code>, and the verdict is in the body.
+    </p>
+    <div class="docs-tablewrap">
+      <table class="docs-table docs-params">
+        <thead><tr><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td class="docs-params__name">setupOk</td><td class="docs-params__type">boolean</td><td>Every check you control passed. Takes built the same way are accepted on the sessions you are seated on while their windows are open.</td></tr>
+          <tr><td class="docs-params__name">wouldAcceptNow</td><td class="docs-params__type">boolean</td><td>Submit, sent this body now, would accept it.</td></tr>
+          <tr><td class="docs-params__name">alreadySubmitted</td><td class="docs-params__type">true, optional</td><td>This exact signed take is already on file; submit would answer <code>alreadySubmitted</code>.</td></tr>
+          <tr><td class="docs-params__name">sessionId</td><td class="docs-params__type">string | null</td><td>The session the checks ran against.</td></tr>
+          <tr><td class="docs-params__name">checks</td><td class="docs-params__type">array</td><td>One entry per check, in submit's order: <code>fields</code>, <code>token</code>, <code>nonce</code>, <code>session</code>, <code>date</code>, <code>window</code>, <code>reportSnapshot</code>, <code>roster</code>, <code>amendmentCap</code>, <code>weights</code>, <code>signature</code>. A failed check carries the <code>status</code> and <code>error</code> submit would answer with. <code>situational: true</code> marks <code>window</code>, <code>roster</code> and <code>amendmentCap</code>: they depend on when you send or whether you are seated, and leave <code>setupOk</code> alone. A check that could not run is left out.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Sample response: approved after today's sessions opened</h3>
+    <div class="docs-codeblock">
+      <div class="docs-codeblock__bar"><span class="docs-codeblock__lang">json</span><button type="button" class="docs-codeblock__copy" data-copy-code aria-label="Copy code"><span data-copy-label>Copy</span></button></div>
+      <pre><code>{
+  "dryRun": true,
+  "setupOk": true,
+  "wouldAcceptNow": false,
+  "sessionId": "41bf3c00-fd18-4c09-bf19-021a9037efdb",
+  "checks": [
+    { "check": "fields", "ok": true },
+    { "check": "token", "ok": true },
+    { "check": "nonce", "ok": true },
+    { "check": "session", "ok": true },
+    { "check": "date", "ok": true },
+    { "check": "window", "situational": true, "ok": true },
+    { "check": "reportSnapshot", "ok": true },
+    { "check": "roster", "situational": true, "ok": false, "status": 403,
+      "error": "member is not on this session's expected roster" },
+    { "check": "amendmentCap", "situational": true, "ok": true },
+    { "check": "weights", "ok": true },
+    { "check": "signature", "ok": true }
+  ]
+}</code></pre>
+    </div>
+
     <h2 id="errors">Error reference</h2>
     <p>Errors are JSON: <code>{ "ok": false, "status": &lt;n&gt;, "error": "&lt;message&gt;" }</code> for the swarm domain errors below, or <code>{ "error": "&lt;message&gt;" }</code> for request-parsing failures caught before the domain layer runs.</p>
     <div class="docs-tablewrap">
@@ -533,6 +589,7 @@ Content-Type: application/json
       <li><a href="#signing">Signing</a></li>
       <li><a href="#post-submit">POST submission</a></li>
       <li><a href="#submit-body">Submission body</a></li>
+      <li><a href="#submit-dry-run">Dry-run a submission</a></li>
       <li><a href="#errors">Error reference</a></li>
       <li><a href="#apply-and-activation">Apply &amp; activation</a></li>
       <li><a href="#other-reads">Other public reads</a></li>

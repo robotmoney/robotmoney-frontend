@@ -359,6 +359,7 @@ const PUBLIC_ADMIN = new Set(["admin.isClaimed", "admin.webauthnAuthOptions", "a
 // Member-bearer routes (a swarm_member_keys token, or a judge's).
 const MEMBER = new Set([
   "swarm.submit",
+  "swarm.submitDryRun",
   "swarm.memos",
   "swarm.memberProfile",
   "swarm.verifyToken",

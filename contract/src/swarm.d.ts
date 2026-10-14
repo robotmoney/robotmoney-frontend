@@ -170,6 +170,48 @@ export interface SwarmTake {
   generatedAt?: string;
 }
 
+/**
+ * One check POST /api/swarm/submit runs, as POST /api/swarm/submit/dry-run
+ * reports it (RM-178). In submit's order: `fields`, `token`, `nonce`,
+ * `session`, `date`, `window`, `reportSnapshot`, `roster`, `amendmentCap`,
+ * `weights`, `signature`. A check that could not run (no session to check
+ * against, no key to verify with) is left out.
+ */
+export interface SwarmTakeCheck {
+  check:
+    | "fields" | "token" | "nonce" | "session" | "date" | "window"
+    | "reportSnapshot" | "roster" | "amendmentCap" | "weights" | "signature";
+  ok: boolean;
+  /**
+   * The check depends on when the take is sent or whether the member is
+   * seated (the window, the roster, the amendment cap), not on how the take
+   * was built. A failed situational check leaves `setupOk` true.
+   */
+  situational?: true;
+  /** On a failed check: the status and error submit would answer with. */
+  status?: number;
+  error?: string;
+}
+
+/**
+ * POST /api/swarm/submit/dry-run (RM-178): every check submit runs, the
+ * signature included, against the named session or the subject's newest one,
+ * open or closed. Nothing is written: no take, no agent-health event, and the
+ * nonce stays unused.
+ */
+export interface SwarmSubmitDryRunResult {
+  dryRun: true;
+  /** Every check the member controls passed: the same take is right for any session it is seated on. */
+  setupOk: boolean;
+  /** Submit, sent now with this body, would accept it. */
+  wouldAcceptNow: boolean;
+  /** This exact signed take is already on file: submit would answer `alreadySubmitted`. */
+  alreadySubmitted?: true;
+  /** The session the checks ran against, or null when none was found. */
+  sessionId: string | null;
+  checks: SwarmTakeCheck[];
+}
+
 export interface SwarmMemo {
   id: string | number;
   memberId: string;

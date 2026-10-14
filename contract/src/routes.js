@@ -211,6 +211,7 @@ export const ROUTES = {
     register: "/api/swarm/register", // POST (privileged) — apply+activate shortcut for demo/E2E
     regime: "/api/swarm/regime", // POST (analytics-provider bearer) — provider SUBMITS computed snapshots ({ snapshots }); never a server-side recompute
     submit: "/api/swarm/submit", // POST (member bearer, ed25519-signed)
+    submitDryRun: "/api/swarm/submit/dry-run", // POST (member bearer): every submit check, the signature included, and nothing written (RM-178)
 
     // ── The scheduler's stream (issue #1026 W4.4, system-scheduler-spec.md §6.3)
     // NOT under `admin`, deliberately. These are the surface of ONE credential:
