@@ -47,8 +47,9 @@ import {
 import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, stepsFor, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
+import { loadReleaseRunbook } from "./runbook.ts";
 
 /** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
 const READY_STEP = "R6.9";
@@ -145,9 +146,10 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
 }
 
 /**
- * The whole run. Returns the process exit code. `stepList` is the generic
- * list; the release's delta steps (RELEASE_DELTAS) join it once the target
- * names the release.
+ * The whole run. Returns the process exit code. The steps are the release's
+ * own runbook (runbooks/releases/<release>.yaml, ./runbook.ts), which only
+ * adds to its template; a missing runbook or one that drops a template step
+ * refuses. `stepList` replaces it in tests.
  */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
   const args = parseArgs(argv);
@@ -159,7 +161,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let steps: readonly StepTemplate[];
   try {
     target = loadTarget(targetPath(args.target!));
-    steps = stepsFor(target.release, stepList);
+    steps = stepList ?? loadReleaseRunbook(target.release).steps;
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;

@@ -22,8 +22,8 @@ never silently drops one. It points here and then lists only what is new.
    They run after the standing row of the same phase.
    One-time migrations that only one release performs (for example 0.6.0's credential
    rebind of the in-house members, R6.7) belong to that release's runbook, never here. In
-   the runner they are delta steps of that release (`RELEASE_DELTAS` in
-   `scripts/release/steps.ts`, [`release-run.md`](./release-run.md#delta-steps)), gated on a
+   the runner they are steps that release's runbook adds
+   ([`release-run.md`](./release-run.md#release-runbooks-templates-and-copies)), gated on a
    precondition receipt, never rows of the generic list.
 4. The checks are **cumulative**. A check a past release needed stays here after
    that release ships. A check leaves only through section 6, with an owner decision
