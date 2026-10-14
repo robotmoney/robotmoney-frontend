@@ -1072,6 +1072,17 @@ function runningServices(): Record<string, string> {
   return services;
 }
 
+/** The image id this project's compose tag (`<project>-<service>`) names, for each running service; what a resume may take as the plan's own build. */
+function builtImages(services: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const service of services) {
+    const r = Bun.spawnSync(["docker", "image", "inspect", "--format", "{{.Id}}", `${project}-${service}`], { stdout: "pipe", stderr: "pipe" });
+    const id = r.stdout.toString().trim();
+    if (r.exitCode === 0 && id.startsWith("sha256:")) out[service] = id;
+  }
+  return out;
+}
+
 /** This project's participant containers, as the journal names them (`kind:name`). */
 function runningParticipantNames(): string[] {
   // As runningServices(): what Docker cannot report is recorded as nothing
@@ -1274,7 +1285,7 @@ async function main(): Promise<void> {
   let recheckSchema = journalExpects;
   /** Set when THIS run restored the dump: the restore, not the old journal, defines the schema. */
   let restoredThisRun = false;
-  const decision = decideResume(onDisk, planId, lastExpectations);
+  const decision = decideResume(onDisk, planId, lastExpectations, builtImages(Object.keys(lastExpectations.services)));
   if (decision.kind === "refuse") fatal(`the journal for instance ${instance.name} refuses this run: ${decision.reason}`);
   if (decision.kind === "supersede") log(decision.report);
   if (decision.kind === "resume") log(`resuming the journal for plan ${planId} (it continues at ${decision.nextPhase})`);
