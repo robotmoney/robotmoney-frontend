@@ -14,6 +14,8 @@ import {
   path as routePath,
   ROUTES,
   STANCES,
+  type SwarmSubmitDryRunResult,
+  type SwarmTakeCheck,
 } from "@robotmoney/contract";
 import { testSeamArmed } from "../test-seam.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
@@ -1711,12 +1713,55 @@ const submitAudit = registerQuery({
   callers: [SWARM_ROUTE],
   probe: { statement: "INSERT INTO audit_log (actor, action, scope) VALUES ($1, $2, $3::jsonb)", params: ["probe", "submit_recommendation", "{}"] },
 });
-export async function submitRecommendation(token: string, sub: SubmissionInput): Promise<SubmitTakeResult> {
+// ── THE CHECKS SUBMIT RUNS, IN ONE PLACE (RM-178) ───────────────────────────
+//
+// POST /api/swarm/submit and POST /api/swarm/submit/dry-run run the same
+// checks, in the same order, through checkTake, so a dry run cannot pass a take
+// submit would refuse. checkTake writes nothing. Submit stops at its first
+// refusal and makes the write it always made for it (refuseAsSubmit: the
+// `rejected_take` row, or the `rejected_signature` event). A dry run carries on
+// past every refusal a later check can still run after, and writes nothing.
+
+/** One check's outcome, and what submit records when it is submit's refusal. */
+interface TakeCheckOutcome extends SwarmTakeCheck {
+  record?: { rejectedTake: string } | { rejectedSignature: string };
+}
+
+interface CheckedTake {
+  memberId: string | null;
+  session: Record<string, any> | null;
+  key: { id: string; publicKey: string } | null;
+  latestRevision: number;
+  /** This exact signed take is already on file under its nonce: a retry. */
+  retryOf: RecordedSubmission | null;
+  checks: TakeCheckOutcome[];
+}
+
+async function checkTake(token: string, sub: SubmissionInput, collectAll: boolean): Promise<CheckedTake> {
+  const out: CheckedTake = { memberId: null, session: null, key: null, latestRevision: 0, retryOf: null, checks: [] };
+  // Record one check's outcome. True when the caller must stop here: submit
+  // stops at its first refusal, a dry run only where no later check can run.
+  const record = (outcome: TakeCheckOutcome, fatal = false): boolean => {
+    out.checks.push(outcome);
+    return !outcome.ok && (fatal || !collectAll);
+  };
+
   const memberId = await memberIdForToken(token);
-  if (!memberId) return { ok: false, status: 401, error: "unknown member token" };
-  if (memberId !== sub.memberId) return { ok: false, status: 403, error: "token/member mismatch" };
+  if (!memberId) {
+    record({ check: "token", ok: false, status: 401, error: "unknown member token" }, true);
+    return out;
+  }
+  if (memberId !== sub.memberId) {
+    record({ check: "token", ok: false, status: 403, error: "token/member mismatch" }, true);
+    return out;
+  }
   const member = (await on(sql, submitMemberRole)<{ role: string }>`SELECT role FROM swarm_members WHERE id = ${memberId}`)[0];
-  if (member?.role === "judge") return { ok: false, status: 403, error: "judge_role_cannot_submit_takes" };
+  if (member?.role === "judge") {
+    record({ check: "token", ok: false, status: 403, error: "judge_role_cannot_submit_takes" }, true);
+    return out;
+  }
+  record({ check: "token", ok: true });
+  out.memberId = memberId;
 
   // ── A RETRY IS IDENTIFIED BY ITS SIGNED NONCE (D52, smoke spec §6.2) ────────
   //
@@ -1744,14 +1789,18 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   // replay adds no row (D51: "a retry of the same submission returns the
   // existing record rather than adding a row").
   const recorded = await recordedSubmission(memberId, sub.nonce);
-  if (recorded) {
-    if (recorded.signature === sub.signature) return alreadySubmitted(recorded);
-    return {
-      ok: false,
-      status: 409,
-      error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend",
-    };
+  if (recorded && recorded.signature === sub.signature) {
+    out.retryOf = recorded;
+    record({ check: "nonce", ok: true });
+    return out;
   }
+  const replay: TakeCheckOutcome = {
+    check: "nonce",
+    ok: false,
+    status: 409,
+    error: "nonce already used by this member for different signed bytes (replay); mint a fresh nonce to amend",
+  };
+  if (record(recorded ? replay : { check: "nonce", ok: true })) return out;
 
   // Resolve the session by WHICH ONE IS COLLECTING for this subject, not by the
   // date the member signed. Since migration 0022 a subject may convene several
@@ -1794,11 +1843,114 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
                               WHERE subject_id = ${sub.subjectId}
                               ORDER BY convened_at DESC LIMIT 1`)[0];
   if (!session) {
-    return { ok: false, status: 404, error: named ? `no such session (${named})` : "no session for subject" };
+    const error = named ? `no such session (${named})` : "no session for subject";
+    if (record({ check: "session", ok: false, status: 404, error })) return out;
+  } else if (named && session.subject_id !== sub.subjectId) {
+    const error = `session ${named} is not a session of ${sub.subjectId}`;
+    if (record({ check: "session", ok: false, status: 409, error })) return out;
+  } else {
+    record({ check: "session", ok: true });
+    out.session = session;
+    if (await checkTakeAgainstSession(out, sub, record)) return out;
   }
-  if (named && session.subject_id !== sub.subjectId) {
-    return { ok: false, status: 409, error: `session ${named} is not a session of ${sub.subjectId}` };
+
+  // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
+  //
+  // A `bucket_weights` subject convenes the swarm to produce a NUMBER. Until
+  // this gate existed the only refusal of a take that cannot support one was at
+  // RECEIPT ASSEMBLY (consensus-receipt.ts gates 5 and 5b), and that refusal is
+  // TERMINAL: `swarm_recommendations` is append-only, amendments are gated on
+  // `window_closes_at > now()`, and neither `reopenSessionAdmin` nor
+  // `publishConsensusReceiptAdmin` can reach a published session. So ONE keyed
+  // member — or any rmpc/MCP/API client, which is never asked for a vector —
+  // destroyed the receipt of every `bucket_weights` session it touched, by
+  // behaving normally. Here the same fact is a 400 with the window still open,
+  // which the member answers by amending its take.
+  //
+  // BREAKING, AND DELIBERATELY SO (D4): a member client that does not carry the
+  // four-bucket vector for these sessions now fails loudly at submission
+  // instead of silently stranding the session. The assembly gates STAY as
+  // defence in depth — they are the only guard over takes already on file.
+  //
+  // ORDERED BELOW THE CHEAP REFUSALS AND ABOVE THE VERIFY: it is one indexed
+  // lookup, so a looping agent is still refused without paying for an Ed25519
+  // verification, and a take that is a replay or over the amendment cap is
+  // answered by the more specific refusal above.
+  //
+  // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
+  // does not exist yet while takes are being collected, and the subject is what
+  // the brief was built from (`publishBrief`, takeSchema.weights.optional).
+  const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
+  if (record(weightsRefused
+    ? {
+        check: "weights",
+        ok: false,
+        status: weightsRefused.status,
+        error: weightsRefused.error,
+        record: { rejectedTake: weightsRefused.error.split(":")[0]! },
+      }
+    : { check: "weights", ok: true })) return out;
+
+  const key = await activeKeyFor(memberId);
+  if (!key) {
+    record({ check: "signature", ok: false, status: 403, error: "no registered key for member" }, true);
+    return out;
   }
+  out.key = key;
+  const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
+  if (!verified) {
+    // Agent-health surface (issue #208, scout #214): a rejected/tampered
+    // signature was previously visible only in the submitting agent's own
+    // stdout. Record it on the durable, queryable event log — AFTER the
+    // session and member are already resolved above — with a bounded,
+    // redacted detail (never the raw signature/public key/payload).
+    //
+    // A SUPERSEDED KEY IS NAMED AS ONE (smoke spec §6.4, criterion 148). A key
+    // rebind — rotateMemberKeyAdmin, registerMember's re-registration,
+    // `--spoof-keys` — leaves an old container holding the old private key for
+    // a while, and the spec's promise is that "the server rejects submissions
+    // signed with a superseded key, so the worst case is a refused take". A
+    // tampered payload and a superseded key are different facts with different
+    // remedies (fix the bytes, versus restart on the current credential), so
+    // the second is told apart: the signature is checked against the member's
+    // inactive keys, and one that verifies answers 403 with no row written.
+    // Only on this failure path, so the happy path pays for one verify.
+    // submitRecommendation writes the event (refuseAsSubmit); a dry run does not.
+    const superseded = await verifiesUnderSupersededKey(memberId, key.publicKey, sub);
+    record(superseded
+      ? {
+          check: "signature",
+          ok: false,
+          status: 403,
+          error: "signing_key_superseded: this take is signed with a key the member no longer holds active; sign with the current key",
+          record: { rejectedSignature: "signed with a superseded key" },
+        }
+      : {
+          check: "signature",
+          ok: false,
+          status: 400,
+          error: "signature verification failed",
+          record: { rejectedSignature: "signature verification failed" },
+        });
+    return out;
+  }
+  record({ check: "signature", ok: true });
+  return out;
+}
+
+/**
+ * The checks that need the session the take is for, in submit's order: the
+ * signed date, the window, the report snapshot, the roster and the amendment
+ * cap. Returns true when the caller must stop. Writes nothing.
+ */
+async function checkTakeAgainstSession(
+  out: CheckedTake,
+  sub: SubmissionInput,
+  record: (outcome: TakeCheckOutcome, fatal?: boolean) => boolean,
+): Promise<boolean> {
+  const session = out.session!;
+  const memberId = out.memberId!;
+  const named = sub.sessionId ?? null;
   const windowClosedError = named ? `submission window closed (session ${named})` : "submission window closed";
   // THE DEADLINE IS THE TIMESTAMP, NOT THE STATE (issue #570). There used to be
   // a `session.state !== 'collecting'` gate here returning
@@ -1828,13 +1980,25 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   //
   // Signed-date agreement. A stale agent that woke with yesterday's brief must
   // not have its take filed against today's session.
-  if (sub.date && day(session.date) !== sub.date) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "signed_date_mismatch",
-      `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`);
-  }
-  if (session.window_passed === true || session.state !== "collecting") {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "submission_window_closed", windowClosedError);
-  }
+  if (record(sub.date && day(session.date) !== sub.date
+    ? {
+        check: "date",
+        ok: false,
+        status: 409,
+        error: `signed date ${sub.date} does not match the open session for ${sub.subjectId} (${day(session.date)})`,
+        record: { rejectedTake: "signed_date_mismatch" },
+      }
+    : { check: "date", ok: true })) return true;
+  if (record(session.window_passed === true || session.state !== "collecting"
+    ? {
+        check: "window",
+        situational: true,
+        ok: false,
+        status: 409,
+        error: windowClosedError,
+        record: { rejectedTake: "submission_window_closed" },
+      }
+    : { check: "window", situational: true, ok: true })) return true;
 
 // Report-snapshot binding (issue #978 AC6). Once this session's brief is
   // bound to an analytics report snapshot, every take must name the SAME
@@ -1854,15 +2018,27 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   const brief = (await on(sql, submitBrief)<{ report_snapshot_id: string | null }>`
     SELECT report_snapshot_id FROM swarm_briefs WHERE session_id = ${session.id}`)[0];
   const boundReportSnapshotId = brief?.report_snapshot_id != null ? String(brief.report_snapshot_id) : null;
+  let snapshotRefused: TakeCheckOutcome | null = null;
   if (boundReportSnapshotId === null) {
     if (sub.reportSnapshotId != null) {
-      return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_unbound",
-        "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId");
+      snapshotRefused = {
+        check: "reportSnapshot",
+        ok: false,
+        status: 409,
+        error: "this session's brief is bound to no analytics report snapshot; submit no reportSnapshotId",
+        record: { rejectedTake: "report_snapshot_unbound" },
+      };
     }
   } else if (sub.reportSnapshotId !== boundReportSnapshotId) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "report_snapshot_mismatch",
-      `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`);
+    snapshotRefused = {
+      check: "reportSnapshot",
+      ok: false,
+      status: 409,
+      error: `reportSnapshotId does not match this session's brief (expected ${boundReportSnapshotId})`,
+      record: { rejectedTake: "report_snapshot_mismatch" },
+    };
   }
+  if (record(snapshotRefused ?? { check: "reportSnapshot", ok: true })) return true;
   // Roster gate (issue #152, AC6). An epoch seats its expected roster in the
   // transaction that opens it (insertEpoch), and the roster is immutable from
   // then on: a member activated mid-epoch joins the next one (admin-surface.md
@@ -1883,12 +2059,31 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
   const legacyUnrostered = session.brief_opens_at != null;
   const rosterRows = await on(sql, submitRoster)<{ status: string }>`
     SELECT status FROM swarm_session_members WHERE session_id = ${session.id}`;
+  let rosterRefused: TakeCheckOutcome | null = null;
   if (rosterRows.length > 0 || !legacyUnrostered) {
     const mine = (await on(sql, submitSeat)<{ status: string }>`
       SELECT status FROM swarm_session_members WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
-    if (!mine) return refuseTake(session.id, memberId, sub.subjectId, 403, "not_on_roster", "member is not on this session's expected roster");
-    if (mine.status === "excused") return refuseTake(session.id, memberId, sub.subjectId, 403, "excused", "member is excused from this session");
+    if (!mine) {
+      rosterRefused = {
+        check: "roster",
+        situational: true,
+        ok: false,
+        status: 403,
+        error: "member is not on this session's expected roster",
+        record: { rejectedTake: "not_on_roster" },
+      };
+    } else if (mine.status === "excused") {
+      rosterRefused = {
+        check: "roster",
+        situational: true,
+        ok: false,
+        status: 403,
+        error: "member is excused from this session",
+        record: { rejectedTake: "excused" },
+      };
+    }
   }
+  if (record(rosterRefused ?? { check: "roster", situational: true, ok: true })) return true;
 
   // ── CHEAP REFUSALS, BEFORE THE ED25519 VERIFY (issue #573) ───────────────
   //
@@ -1914,87 +2109,94 @@ export async function submitRecommendation(token: string, sub: SubmissionInput):
     FROM swarm_recommendations
     WHERE session_id = ${session.id} AND member_id = ${memberId}`)[0];
   const priorCount = priorRow?.n ?? 0;
-  const latestRevision = priorRow?.latest ?? 0;
+  out.latestRevision = priorRow?.latest ?? 0;
 
   // An AMENDMENT is a new nonce inside the window (D51, D52), and it meets the
   // same window as a first take: the state and instant checked above and again
   // on the INSERT. No second, state-keyed amendment gate exists (see the note
   // where TAKES_AMENDABLE_STATES used to be). What an amendment still meets
   // that a first take cannot is the cap.
-  if (priorCount >= SWARM_TAKE_REVISION_CAP) {
-    return refuseTake(session.id, memberId, sub.subjectId, 409, "amendment_cap_reached",
-      `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`);
-  }
+  if (record(priorCount >= SWARM_TAKE_REVISION_CAP
+    ? {
+        check: "amendmentCap",
+        situational: true,
+        ok: false,
+        status: 409,
+        error: `amendment cap reached (${SWARM_TAKE_REVISION_CAP} takes per member per session)`,
+        record: { rejectedTake: "amendment_cap_reached" },
+      }
+    : { check: "amendmentCap", situational: true, ok: true })) return true;
 
   // A replayed nonce never reaches this point: the retry lookup at the top of
   // this function answers it, one indexed lookup in, before the session is
   // even resolved.
+  return false;
+}
 
-  // ── THE ALLOCATION ASK IS ENFORCED WHERE IT IS STILL RECOVERABLE (T17/D4) ─
-  //
-  // A `bucket_weights` subject convenes the swarm to produce a NUMBER. Until
-  // this gate existed the only refusal of a take that cannot support one was at
-  // RECEIPT ASSEMBLY (consensus-receipt.ts gates 5 and 5b), and that refusal is
-  // TERMINAL: `swarm_recommendations` is append-only, amendments are gated on
-  // `window_closes_at > now()`, and neither `reopenSessionAdmin` nor
-  // `publishConsensusReceiptAdmin` can reach a published session. So ONE keyed
-  // member — or any rmpc/MCP/API client, which is never asked for a vector —
-  // destroyed the receipt of every `bucket_weights` session it touched, by
-  // behaving normally. Here the same fact is a 400 with the window still open,
-  // which the member answers by amending its take.
-  //
-  // BREAKING, AND DELIBERATELY SO (D4): a member client that does not carry the
-  // four-bucket vector for these sessions now fails loudly at submission
-  // instead of silently stranding the session. The assembly gates STAY as
-  // defence in depth — they are the only guard over takes already on file.
-  //
-  // ORDERED BELOW THE CHEAP REFUSALS AND ABOVE THE VERIFY: it is one indexed
-  // lookup, so a looping agent is still refused without paying for an Ed25519
-  // verification, and a take that is a replay or over the amendment cap is
-  // answered by the more specific refusal above.
-  //
-  // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
-  // does not exist yet while takes are being collected, and the subject is what
-  // the brief was built from (`publishBrief`, takeSchema.weights.optional).
-  const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
-  if (weightsRefused) {
-    return refuseTake(session.id, memberId, sub.subjectId, weightsRefused.status,
-      weightsRefused.error.split(":")[0]!, weightsRefused.error);
+/** Submit's answer to its first refusal, with the write submit has always made for it. */
+async function refuseAsSubmit(
+  checked: CheckedTake,
+  sub: SubmissionInput,
+  refused: TakeCheckOutcome,
+): Promise<{ ok: false; status: number; error: string }> {
+  const status = refused.status!;
+  const error = refused.error!;
+  if (refused.record && "rejectedTake" in refused.record) {
+    return refuseTake(checked.session!.id, checked.memberId!, sub.subjectId, status, refused.record.rejectedTake, error);
   }
-
-  const key = await activeKeyFor(memberId);
-  if (!key) return { ok: false, status: 403, error: "no registered key for member" };
-  const verified = await verifySubmissionSignature(sub, sub.signature, key.publicKey);
-  if (!verified) {
-    // Agent-health surface (issue #208, scout #214): a rejected/tampered
-    // signature was previously visible only in the submitting agent's own
-    // stdout. Record it on the durable, queryable event log — AFTER the
-    // session and member are already resolved above — with a bounded,
-    // redacted detail (never the raw signature/public key/payload).
-    //
-    // A SUPERSEDED KEY IS NAMED AS ONE (smoke spec §6.4, criterion 148). A key
-    // rebind — rotateMemberKeyAdmin, registerMember's re-registration,
-    // `--spoof-keys` — leaves an old container holding the old private key for
-    // a while, and the spec's promise is that "the server rejects submissions
-    // signed with a superseded key, so the worst case is a refused take". A
-    // tampered payload and a superseded key are different facts with different
-    // remedies (fix the bytes, versus restart on the current credential), so
-    // the second is told apart: the signature is checked against the member's
-    // inactive keys, and one that verifies answers 403 with no row written.
-    // Only on this failure path, so the happy path pays for one verify.
-    const superseded = await verifiesUnderSupersededKey(memberId, key.publicKey, sub);
-    await recordAgentHealthEvent("rejected_signature", session.id, memberId, {
-      reason: superseded ? "signed with a superseded key" : "signature verification failed",
+  if (refused.record && "rejectedSignature" in refused.record) {
+    await recordAgentHealthEvent("rejected_signature", checked.session!.id, checked.memberId!, {
+      reason: refused.record.rejectedSignature,
     });
-    if (superseded) {
-      return {
-        ok: false,
-        status: 403,
-        error: "signing_key_superseded: this take is signed with a key the member no longer holds active; sign with the current key",
-      };
-    }
-    return { ok: false, status: 400, error: "signature verification failed" };
   }
+  return { ok: false, status, error };
+}
+
+/**
+ * POST /api/swarm/submit/dry-run (RM-178): every check submit runs, the
+ * signature included, with nothing written. It answers against the named
+ * session or the subject's newest one, open or closed, so a member can prove
+ * its setup before it is seated on a session that is still collecting.
+ * `setupOk` ignores the situational checks (window, roster, amendment cap).
+ */
+export async function dryRunSubmission(token: string, sub: SubmissionInput): Promise<SwarmSubmitDryRunResult> {
+  const checked = await checkTake(token, sub, true);
+  const checks: SwarmTakeCheck[] = [
+    { check: "fields", ok: true },
+    ...checked.checks.map(({ record: _record, ...check }) => check),
+  ];
+  return {
+    dryRun: true,
+    setupOk: checks.every((c) => c.ok || c.situational === true),
+    wouldAcceptNow: checked.retryOf != null || checks.every((c) => c.ok),
+    ...(checked.retryOf ? { alreadySubmitted: true as const } : {}),
+    sessionId: checked.session ? String(checked.session.id) : null,
+    checks,
+  };
+}
+
+/** The dry run's answer to a body submit would refuse before any check runs. */
+export function dryRunFieldsRefusal(error: string): SwarmSubmitDryRunResult {
+  return {
+    dryRun: true,
+    setupOk: false,
+    wouldAcceptNow: false,
+    sessionId: null,
+    checks: [{ check: "fields", ok: false, status: 400, error }],
+  };
+}
+
+export async function submitRecommendation(token: string, sub: SubmissionInput): Promise<SubmitTakeResult> {
+  const checked = await checkTake(token, sub, false);
+  if (checked.retryOf) return alreadySubmitted(checked.retryOf);
+  const refused = checked.checks.find((c) => !c.ok);
+  if (refused) return refuseAsSubmit(checked, sub, refused);
+  const memberId = checked.memberId!;
+  const session = checked.session!;
+  const key = checked.key!;
+  const latestRevision = checked.latestRevision;
+  const named = sub.sessionId ?? null;
+  const windowClosedError = named ? `submission window closed (session ${named})` : "submission window closed";
 
   try {
     // Close the TOCTOU gap: re-check the window inside the same statement by

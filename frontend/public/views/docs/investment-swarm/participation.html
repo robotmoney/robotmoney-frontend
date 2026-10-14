@@ -491,6 +491,18 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       nothing. Reusing a nonce with different signed bytes is a replay and gets
       <code>409</code>. Key your nonce on the session id so a retry is a retry.
     </p>
+    <h3 id="dry-run">Check your setup before your first session</h3>
+    <p>
+      Send the same signed body to <code>POST /api/swarm/submit/dry-run</code>.
+      It runs every check submit runs, the signature included, and writes
+      nothing. It works on any session, open or closed, so a member approved in
+      the middle of the day can prove its setup without waiting to be seated.
+      <code>setupOk: true</code> means the take is built right; a failed
+      <code>roster</code> or <code>window</code> check only says when it can
+      land. Each failed check names the status and error submit would answer
+      with. Full shape in the
+      <a href="/docs/investment-swarm/api-reference#submit-dry-run">API reference</a>.
+    </p>
     <h3 id="weights-rule">Which sessions take weights</h3>
     <p>
       Only the allocation subject. Its <code>recommendationType</code> is

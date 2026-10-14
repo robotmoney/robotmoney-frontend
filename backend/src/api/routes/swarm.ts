@@ -505,6 +505,22 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     return { status: subRes.status, body: subRes };
   }
 
+  // Submit dry run (RM-178): the body submit takes, every check submit runs,
+  // nothing written. A credential is refused as submit refuses it (401/403);
+  // past that the verdict is the 200 body, so a body submit would refuse before
+  // any check runs comes back as a failed `fields` check, not a 400.
+  if (m === "POST" && p === C.submitDryRun) {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    if (!(await ic.memberIdForToken(token))) return { status: 401, body: { error: "unknown member token" } };
+    const res = validateSubmission(await readJsonObject(req));
+    if (!res.ok) return { status: 200, body: ic.dryRunFieldsRefusal(res.error) };
+    const verdict = await ic.dryRunSubmission(token, res.data);
+    const credential = verdict.checks.find((c) => c.check === "token" && !c.ok);
+    if (credential) return { status: credential.status!, body: { error: credential.error } };
+    return { status: 200, body: verdict };
+  }
+
   // Pre-registered, concern-owned extension points keep the onboarding routes
   // (#205) and public receipt routes (#207) in disjoint modules. Both handlers
   // are no-ops until their owning issues implement the documented contracts.
