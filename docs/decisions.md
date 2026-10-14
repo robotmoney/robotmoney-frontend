@@ -5604,15 +5604,20 @@ on-time and wrong-subject named takes, and the unchanged issue 570 cases),
 
 ---
 
-## D69 — The runtime has no environment class: `RM_ENV` and the insecure flag are retired from every container, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; owner, 2026-10-13)
+## D69 — The runtime has no environment class: `RM_ENV` is no runtime class, the insecure flag is retired, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; agent, 2026-10-13)
 
-**Status.** Accepted 2026-10-13. Recorded with issue 973.
+**Status:** proposed. Drafted by the agent with issue 973 (pr 1325); the owner
+accepted the issue's three-slice split on 2026-10-14.
 
 **Decision.**
 
-1. No process in a container reads `RM_ENV`. `backend/src/config.ts` has no
-   `env` field. The api's and the workers' startup preflight takes no policy
-   value. The health payload and the boot log lines report no environment.
+1. `RM_ENV` is not a runtime class. `backend/src/config.ts` has no `env`
+   field. The api's and the workers' startup preflight takes no policy value.
+   The health payload and the boot log lines report no environment. One
+   reader is still in the api container: the stack's declared acceptance path
+   (`backend/src/acceptance-path.ts`, read by the judge-model pin in
+   `backend/src/swarm/judge-model-policy.ts`). It is the last container reader. It
+   retires with the acceptance-path issue (1326), and part 4 records it.
 2. `RM_ALLOW_INSECURE`, `config.allowInsecure` and `bun smoke --allow-insecure`
    are retired. No compose file, launcher or stack configuration defines or
    forwards the variable, and a stack configuration that is handed it refuses.
@@ -5626,11 +5631,14 @@ on-time and wrong-subject named takes, and the unchanged issue 570 cases),
    environment says. The fixture projects source is injected by the harness;
    a deployed process selects the live source with `PROJECTS_SOURCE=live` or
    refuses. There is no environment override of the roster seed path.
-4. `RM_ENV` remains the operator's §4.1 policy input to the operator tools
-   (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates, D61) and the
-   stack's declared acceptance path (`backend/src/acceptance-path.ts`). Whether
-   those two readers survive is a separate decision (the follow-ups filed with
-   issue 973); this decision retires the runtime class only.
+4. Two `RM_ENV` readers remain after this decision, each owned by a
+   follow-up of issue 973. The stack's declared acceptance path
+   (`backend/src/acceptance-path.ts`) and the compose and workflow emission of
+   `RM_ENV` to containers retire with the acceptance-path issue (1326). The
+   operator tools (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates,
+   D61) read it as their §4.1 policy input. The owner decided on 2026-10-14
+   that they take an explicit flag instead, with the policy-input issue (1327).
+   This decision retires the runtime class and the insecure flag only.
 5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
    on a new read of `RM_ENV` outside the policy readers, on any mention of the
    retired names in a process, compose file or workflow, and on a second
