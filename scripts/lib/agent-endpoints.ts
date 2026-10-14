@@ -703,6 +703,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.register]: "privileged demo and E2E shortcut",
   [ROUTES.swarm.signingPayload]: "member write flow; documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.submit]: "member write flow; requires a member bearer and an Ed25519 signature",
+  [ROUTES.swarm.submitDryRun]: "member write flow, checked without writing; requires a member bearer, documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.memos]: "member write flow",
   [ROUTES.swarm.memberProfile]: "member write flow; the GET side is covered by getSwarmMember",
   [ROUTES.swarm.verifyToken]: "member bearer introspection",
