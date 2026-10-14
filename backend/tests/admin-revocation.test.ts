@@ -61,7 +61,6 @@ async function bootApi(preload?: string): Promise<Api> {
     cwd: BACKEND_DIR,
     env: {
       ...process.env,
-      RM_ENV: "stage",
       DATABASE_URL: databaseUrl(name, APP),
       API_PORT: String(port),
       WEBAUTHN_ORIGIN: ORIGIN,

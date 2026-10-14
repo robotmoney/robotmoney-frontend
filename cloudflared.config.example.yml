@@ -51,17 +51,12 @@ ingress:
 # ── Operational notes ───────────────────────────────────────────────────────
 #
 # WHAT IS BEHIND THIS HOSTNAME IS A DEMO STACK, NOT A PROD STACK. The pinned
-# boot runs docker-compose.yml, and runs it insecure only when the operator
-# passes the explicit `--allow-insecure` flag (RM_ALLOW_INSECURE=1: privileged
-# admin / onboarding / analytics endpoints answer with NO token — .env.example
-# says of that flag: "NEVER on a reachable box"; the flag is refused under
-# RM_ENV=prod), applies quota-safe schedules
-# and one-hour capability cache TTLs explicitly, and leaves PROJECTS_SOURCE unset, so /projects serves the
-# vendored offline FIXTURE directory rather than live provider data. A real
-# production deployment is docker-compose.yml with RM_ENV=prod, an explicit
-# ADMIN_TOKEN + ANALYTICS_TOKEN, PROJECTS_SOURCE=live, and a managed
-# DATABASE_URL and runtime-role configuration must be checked against the
-# current host. The adopted target credential model is in smoke-production-spec §3.
+# boot runs docker-compose.yml with the same credential checks as production:
+# there is no insecure mode (issue #973 retired `--allow-insecure` and
+# RM_ALLOW_INSECURE), so every privileged admin / onboarding / analytics
+# endpoint requires its configured credential. The worker requires
+# PROJECTS_SOURCE=live and refuses to start the projects pipelines without it.
+# The adopted target credential model is in smoke-production-spec §3.
 #
 # THE TUNNEL DOES NOT CLOSE THE DIRECT PATH. Compose publishes 48787 on
 # 0.0.0.0, so the droplet's public IP still answers on :48787 alongside the

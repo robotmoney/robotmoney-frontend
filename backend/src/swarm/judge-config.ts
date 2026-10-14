@@ -27,6 +27,7 @@
 import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import { assertJudgeModelAllowed } from "./judge-model-policy.ts";
+import { testSeamArmed } from "../test-seam.ts";
 import type { JudgeMode } from "./domain.ts";
 
 export type { JudgeMode };
@@ -187,8 +188,12 @@ export async function setJudgeConfig(
   // refused everywhere; on an acceptance path only the pinned model is
   // accepted. See judge-model-policy.ts for why the two rules differ in
   // strength.
+  // The armed test harness is a development path (issue #973): the stub judge
+  // models the suite stores are not evidence, and the harness says so through
+  // backend/src/test-seam.ts, not through an environment value. A deployed
+  // process is never armed and gets the acceptance-path rule unchanged.
   if (patch.model !== undefined && patch.model !== null && typeof patch.model === "string") {
-    assertJudgeModelAllowed(patch.model);
+    assertJudgeModelAllowed(patch.model, process.env, testSeamArmed() ? { path: "development" } : {});
   }
   if (patch.thirdPartyEnabled !== undefined && typeof patch.thirdPartyEnabled !== "boolean") {
     throw new Error("invalid judge thirdPartyEnabled — expected a boolean");
@@ -206,7 +211,7 @@ export async function setJudgeConfig(
     // (AC-MODEL-01): `{"mode":"enforce"}` against a row already holding a
     // keyless model would otherwise enable it with no model check at all.
     if (resultingMode !== "off" && resultingModel) {
-      assertJudgeModelAllowed(resultingModel);
+      assertJudgeModelAllowed(resultingModel, process.env, testSeamArmed() ? { path: "development" } : {});
     }
     if (resultingMode !== "off" && !resultingModel) {
       throw new Error(

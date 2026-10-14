@@ -1,6 +1,6 @@
 // Unit specification for scripts/lib/smoke-env-policy.ts — the `RM_ENV` policy
-// value (§4.1), the full policy × identity matrix (§4.3), and the
-// `--allow-insecure` refusal (§4.4) of docs/technical/smoke-production-spec.md,
+// value (§4.1), the full policy × identity matrix (§4.3), and the absence of
+// any weakening knob (§4.4, issue #973) of docs/technical/smoke-production-spec.md,
 // and how a `--local` data path reaches the matrix (§3, §5).
 //
 // TDD RED PHASE (issue #1026, W1 step 2). Every function under test currently
@@ -19,12 +19,12 @@
 //
 // Acceptance gates served (spec §10, W1):
 //   - "Unset `RM_ENV` against a remote target refuses."
-//   - "Overlay-free stage boots with the real scheduler" (the §4.4 half: the
-//     weakening flags exist and are refused under `prod`).
+//   - "Overlay-free stage boots with the real scheduler" (the §4.4 half: no
+//     weakening flag exists at all, issue #973).
 import { describe, expect, test } from "bun:test";
+import * as policy from "../../lib/smoke-env-policy.ts";
 import {
   describePolicyVerdict,
-  refuseWeakeningFlagsOnProd,
   resolveDeploymentPolicy,
   resolveRmEnv,
   type PolicyInput,
@@ -36,7 +36,8 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseDataPath, targetConnection } from "../../smoke.ts";
-import { dropShellMigrationCredential, refuseAllowInsecureOnProd, smokePassthroughEnv, stackAllowInsecureFor } from "../../lib/smoke-compose-env.ts";
+import { dropShellMigrationCredential, smokePassthroughEnv } from "../../lib/smoke-compose-env.ts";
+import { DEMO_FLAGS } from "../../lib/smoke-db-mode.ts";
 import { buildSpawnEnv, DEFAULT_STACK_DATABASE, type StackConfig } from "../../stack/index.ts";
 
 /** Every identity value the matrix distinguishes, including the two non-kinds. */
@@ -161,9 +162,10 @@ describe("resolveDeploymentPolicy — §4.3 row: stage × remote × anything els
     expect(reason.toLowerCase()).toContain("never touches production data");
   });
 
-  test("no flag relaxes this row — `--allow-insecure` is named in the spec sentence and cannot be an escape", () => {
+  test("no flag relaxes this row — the refusal says so and names no flag that could", () => {
     const reason = refusal(resolveDeploymentPolicy(input("stage", "remote", "production")));
-    expect(reason).toContain("--allow-insecure");
+    expect(reason).toContain("No flag relaxes this row");
+    expect(reason).not.toContain("--allow-insecure");
   });
 });
 
@@ -243,57 +245,17 @@ describe("resolveDeploymentPolicy — §4.3 row: other × any × any refuses", (
   }
 });
 
-describe("refuseWeakeningFlagsOnProd — §4.4, the one surviving overlay knob is a refusal under prod", () => {
-  test("`--allow-insecure` under prod refuses, naming the flag", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true });
-    expect(result.allow).toBe(false);
-    if (result.allow) throw new Error("expected a refusal");
-    expect(result.reason).toContain("--allow-insecure");
-  });
-
-  test("the refusal states that parity with production is a tested property, not an overlay", () => {
-    const result = refuseWeakeningFlagsOnProd("prod", { allowInsecure: true });
-    expect(result.allow).toBe(false);
-    if (result.allow) throw new Error("expected a refusal");
-    expect(result.reason.toLowerCase()).toContain("parity");
-  });
-
-  test("no flag under prod allows — a production boot is not weakened by default", () => {
-    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: false })).toEqual({ allow: true });
-  });
-
-  test("`--allow-insecure` under stage allows: stage is where the weakening is legitimate", () => {
-    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true })).toEqual({ allow: true });
-  });
-
-  test("the check does not consult the target: the flag is refused on prod whatever the database says", () => {
-    expect(refuseWeakeningFlagsOnProd("prod", { allowInsecure: true }).allow).toBe(false);
-    expect(refuseWeakeningFlagsOnProd("stage", { allowInsecure: true }).allow).toBe(true);
-  });
-
-  test("`bun smoke --allow-insecure` is wired: a known flag, refused on prod before the port preflight, and never a default", () => {
+describe("§4.4 — no weakening knob survives (issue #973 retired `--allow-insecure`)", () => {
+  test("`bun smoke` accepts no `--allow-insecure` flag, and no compose overlay exists to pin one", () => {
+    expect(DEMO_FLAGS.map((f) => f.flag)).not.toContain("--allow-insecure");
     const main = readFileSync(join(import.meta.dir, "..", "..", "lib", "smoke-main.ts"), "utf8");
-    const refusal = main.indexOf("refuseAllowInsecureOnProd(policy, allowInsecureRequested)");
-    expect(refusal).toBeGreaterThan(0);
-    expect(refusal).toBeLessThan(main.indexOf("if (staticPortMode) await stagePreflight(project);"));
-    expect(main).toContain("allowInsecure: stackAllowInsecureFor(policy, allowInsecureRequested)");
-    // Never a default: without the flag the stack config asks for nothing.
-    expect(stackAllowInsecureFor("stage", false)).toBe(false);
-    expect(stackAllowInsecureFor("prod", false)).toBe(false);
-    expect(refuseAllowInsecureOnProd("prod", true)).toContain("--allow-insecure");
-    expect(refuseAllowInsecureOnProd("stage", true)).toBeNull();
-    // And no compose overlay exists to pin it.
+    expect(main).not.toContain("allow-insecure");
+    expect(main).not.toContain("allowInsecure");
     expect(existsSync(join(import.meta.dir, "..", "..", "..", "docker-compose.smoke.yml"))).toBe(false);
   });
 
-  test("there is no `--schedules-off` to guard: §4.4 says scheduling has no off state", () => {
-    // The guard used to take a `schedulesOff` flag and name it in the refusal,
-    // which read as evidence the flag exists. Its input type no longer has one.
-    const flags: Parameters<typeof refuseWeakeningFlagsOnProd>[1] = { allowInsecure: true };
-    expect(Object.keys(flags)).toEqual(["allowInsecure"]);
-    const result = refuseWeakeningFlagsOnProd("prod", flags);
-    if (result.allow) throw new Error("expected a refusal");
-    expect(result.reason).not.toContain("schedules");
+  test("the policy module exports no weakening-flag guard: there is no flag to guard", () => {
+    expect("refuseWeakeningFlagsOnProd" in policy).toBe(false);
   });
 });
 

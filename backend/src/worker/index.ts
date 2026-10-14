@@ -6,7 +6,7 @@
 // WORKER_LANE is REQUIRED (issue #107): an empty or unknown lane fails loudly
 // here instead of silently claiming every kind — the compose topology runs
 // one worker container, worker-analytics (see docker-compose.yml).
-import { config, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { runStartupPreflight } from "../db/preflight.ts";
 import { resolveLane } from "./lanes.ts";
 
@@ -28,9 +28,9 @@ const lane = resolveLane(process.env.WORKER_LANE);
 // never reports itself alive. The signal a stack's readiness reads is the log
 // line, exactly `startup_preflight: passed` or one
 // `startup_preflight: refused check <n>: <reason>` per refusal, then exit 1.
-// No RM_ENV exception here: nothing spawns this entrypoint against a harness
-// database. backend/tests/worker-startup-preflight.test.ts spawns this file and
-// proves a refusal claims zero jobs.
+// No exception of any kind: a refusal claims no job in every process.
+// backend/tests/worker-startup-preflight.test.ts spawns this file and proves
+// a refusal claims zero jobs.
 //
 // A MISSING credential is check 1's question too, and gets the same signal.
 // db/worker-client.ts refuses at import when WORKER_DATABASE_URL is unset, and
@@ -40,14 +40,14 @@ const lane = resolveLane(process.env.WORKER_LANE);
 // only once it exists. Both are imported BEFORE the preflight runs: check 2
 // judges the registry, and it must hold every query this program registers.
 if (!process.env.WORKER_DATABASE_URL) {
-  const refused = await runStartupPreflight({ role: "rm_worker", databaseUrl: undefined, rmEnv: config.env });
+  const refused = await runStartupPreflight({ role: "rm_worker", databaseUrl: undefined });
   for (const line of refused.lines) console.error(line);
   process.exit(1);
 }
 const { closeDb, workerDatabaseUrl } = await import("../db/worker-client.ts");
 const { startWorker } = await import("./runtime.ts");
 
-const startup = await runStartupPreflight({ role: "rm_worker", databaseUrl: workerDatabaseUrl(), rmEnv: config.env });
+const startup = await runStartupPreflight({ role: "rm_worker", databaseUrl: workerDatabaseUrl() });
 if (!startup.passed) {
   for (const line of startup.lines) console.error(line);
   await closeDb();

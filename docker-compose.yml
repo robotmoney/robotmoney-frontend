@@ -10,9 +10,9 @@
 # api at /api/version.
 #
 # THIS IS THE ONLY BASE COMPOSE FILE. The former smoke overlay is gone (smoke
-# spec §4.4): its reap-by-label stamps and data-path passthroughs live here, and
-# its one surviving knob is the explicit `bun smoke --allow-insecure` flag, which
-# refuses under RM_ENV=prod.
+# spec §4.4): its reap-by-label stamps and data-path passthroughs live here. No
+# knob of it survives: the insecure flag is retired (issue #973), and every
+# stack requires its configured credentials.
 #
 # CONTAINER LABELS — the reap-by-label channel (scripts/stack/naming.ts). Every
 # standing service, the pgdata volume and the default network carry the same
@@ -147,8 +147,8 @@ x-worker-base: &worker-base
   healthcheck: *worker-healthcheck
 
 # Shared worker env. The worker RUNS the projects.* cron pipelines, so a prod
-# worker needs PROJECTS_SOURCE=live (fail-closed — unset throws under RM_ENV
-# smoke, stage and prod; the offline fixture is ephemeral-only, issue #1208).
+# worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in every
+# deployed process; the offline fixture is test-harness-only, issues #1208, #973).
 x-worker-env: &worker-env
   # THE PIPELINE WORKER HOLDS rm_worker AND NOTHING ELSE (smoke-production-spec
   # §7.2: "the pipeline worker running the vault, wallet, buyback and project
@@ -284,11 +284,8 @@ services:
     labels: *smoke-labels
     environment:
       DATABASE_URL: ${DATABASE_URL}
-      # `bun smoke --allow-insecure` only (smoke spec §4.4): scripts/stack/config.ts
-      # buildComposeEnv() emits `1` for that flag and empty otherwise, and the flag
-      # is a refusal under RM_ENV=prod. A bare `docker compose` resolves empty:
-      # secure by default. Nothing in a compose file pins it.
-      RM_ALLOW_INSECURE: ${RM_ALLOW_INSECURE:-}
+      # No insecure flag and no insecure mode of any kind (issue #973):
+      # every privileged route requires its credential on every stack.
       # Data-path knobs (issue #50, #147): every boot is production-parity LIVE.
       # With nothing set each resolves EMPTY and backend config.ts falls through
       # to its live production default. An explicit override always wins.

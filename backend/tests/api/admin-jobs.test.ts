@@ -174,10 +174,10 @@ test("runs feed filtered by ?kind= returns the inserted runs (the log feed)", as
   expect(fb.runs.every((r) => r.status === "failed")).toBe(true);
 });
 
-test("RM_ENV=ephemeral no longer opens the dashboard without a credential (D52 (1))", async () => {
+test("the test harness no longer opens the dashboard without a credential (D52 (1))", async () => {
   // This process runs under RM_ENV=ephemeral (tests/preload.ts), which is
   // exactly the env that used to wave a tokenless caller through.
-  expect(process.env.RM_ENV).toBe("ephemeral");
+  expect(process.env.RM_ENV).toBeUndefined(); // issue #973: the harness declares no env class, and the runtime reads none
   const jobId = await seed();
   expect((await call(req("POST", "/api/admin/auth")))?.status).toBe(403);
   expect((await call(req("GET", "/api/admin/jobs")))?.status).toBe(403);

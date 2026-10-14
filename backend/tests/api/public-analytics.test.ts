@@ -588,7 +588,7 @@ describe("CORS", () => {
 describe("through the real api process", () => {
   let api: ApiProcess;
   beforeAll(async () => {
-    api = await bootApi({ env: { RM_ENV: "ephemeral" } });
+    api = await bootApi();
   }, 90_000);
   afterAll(() => api?.stop());
 
@@ -619,7 +619,7 @@ describe("through the real api process", () => {
   }, 30_000);
 
   test("the limiter keys on the resolved client ip: with TRUST_PROXY=1, CF-Connecting-IP picks the bucket", async () => {
-    const proxied = await bootApi({ env: { RM_ENV: "ephemeral", TRUST_PROXY: "1" } });
+    const proxied = await bootApi({ env: { TRUST_PROXY: "1" } });
     try {
       const hit = (headers: Record<string, string>) => fetch(`${proxied.base}${P.rawHistory}?limit=1`, { headers });
       for (let i = 0; i < 100; i++) expect((await hit({ "CF-Connecting-IP": "203.0.113.5" })).status).toBe(200);

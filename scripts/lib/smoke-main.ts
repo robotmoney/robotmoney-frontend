@@ -6,8 +6,8 @@ import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { confirmTargetField, requireRemoteOwnerPreparation } from "./privileged-env.ts";
-import { ALLOW_INSECURE_FLAG, bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseAllowInsecureOnProd, refuseProdWithoutProjectsSource, stackAllowInsecureFor, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseProdWithoutProjectsSource, stackRmEnvFor } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -318,13 +318,6 @@ for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate
 }
 // D61: a remote `--migrate` or `--seed` needs `--confirm-target` and `~/.env`'s rm_owner line.
 if (connection === "remote" && (requestsMigrate(process.argv) || shouldSeed(process.argv))) try { requireRemoteOwnerPreparation(homeEnv, homeEnvFilePath(), process.argv.slice(2)); } catch (err) { fatal(err); }
-// §4.4: `--allow-insecure` is explicit, and a refusal under RM_ENV=prod. Refused
-// here, before any credential is minted or container created.
-const allowInsecureRequested = process.argv.includes(ALLOW_INSECURE_FLAG);
-{
-  const refusal = refuseAllowInsecureOnProd(policy, allowInsecureRequested);
-  if (refusal !== null) fatal(refusal);
-}
 // The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
 const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
 // Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
@@ -838,8 +831,6 @@ function makeStackConfig(): StackConfig {
     database: databaseFor(dataPath),
     environment: stackEnvironment,
     rmEnv: stackRmEnv,
-    // §4.4: explicit `--allow-insecure` only; refused under RM_ENV=prod above.
-    allowInsecure: stackAllowInsecureFor(policy, allowInsecureRequested),
     imagesOverride,
     instance: { name: instance.name, stateDir: paths.dir },
     // NO MODEL KEY. The judge is a participant and takes its key from
@@ -1803,7 +1794,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
   }
 
   if (process.env.CI && dataPath.kind !== "smoke-twin") {
-    // No RM_ALLOW_INSECURE: D52 (1) retired the insecure gate, and the driver
+    // No insecure flag: D52 (1) retired the insecure gate, and the driver
     // presents the operator's token for its admin calls and asserts that a
     // member token is REFUSED on the role-gated routes (session.ts 5c/5d). The
     // stack's exact compose env + COMPOSE_FILE ride along because the driver

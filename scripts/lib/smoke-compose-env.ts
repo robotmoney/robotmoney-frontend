@@ -19,31 +19,11 @@
 // emitted into every service by buildComposeEnv(). The rule itself lives in
 // backend/src/acceptance-path.ts with the shared acceptance predicate.
 import { resolveStackRmEnv, type RmEnv } from "../../backend/src/acceptance-path.ts";
-import { refuseWeakeningFlagsOnProd } from "../../backend/src/deploy-policy.ts";
 import { DEMO_COMPOSE_PASSTHROUGH as LEAF_COMPOSE_PASSTHROUGH } from "./smoke-compose-passthrough.ts";
 
 /** The containers' `RM_ENV` for a boot under `policy`; `--static-port` runs `prod` by rule. */
 export function stackRmEnvFor(standingStack: boolean, policy: "prod" | "stage"): RmEnv {
   return resolveStackRmEnv({ standingStack, policy });
-}
-
-/**
- * Whether the api runs allow-insecure (RM_ALLOW_INSECURE=1) for a boot under
- * `policy`, given whether `--allow-insecure` was passed. Secure by default: no
- * flag means no allow-insecure, on every policy. With the flag, the §4.4 rule
- * itself decides (refuseWeakeningFlagsOnProd): stage keeps it, and a boot under
- * `RM_ENV=prod` never gets it, whatever else is true. The boot refuses before
- * this is asked (`refuseAllowInsecureOnProd`). Handed to the stack as
- * StackConfig.allowInsecure. There is no compose overlay to pin it.
- */
-export function stackAllowInsecureFor(policy: "prod" | "stage", requested: boolean): boolean {
-  return requested && refuseWeakeningFlagsOnProd(policy, { allowInsecure: true }).allow;
-}
-
-/** The refusal text when `--allow-insecure` is passed under prod; null when nothing refuses. */
-export function refuseAllowInsecureOnProd(policy: "prod" | "stage", requested: boolean): string | null {
-  const verdict = refuseWeakeningFlagsOnProd(policy, { allowInsecure: requested });
-  return verdict.allow ? null : verdict.reason;
 }
 
 // ── What else the operator's shell may still contribute ─────────────────────

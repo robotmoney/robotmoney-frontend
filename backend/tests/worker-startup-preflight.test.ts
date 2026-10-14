@@ -93,7 +93,6 @@ function spawnWorker(label: string, url: string | undefined, extra: Record<strin
   const heartbeat = join(scratch, `${label}.heartbeat`);
   const env: Record<string, string | undefined> = {
     ...process.env,
-    RM_ENV: "stage",
     WORKER_LANE: "generic",
     WORKER_ID: `startup-${label}`,
     WORKER_IDLE_POLL_MS: "200",

@@ -57,10 +57,11 @@ from this repo's own tables and pipelines instead of Supabase.
     run instead of degrading alone).
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
-    (`backend/src/projects/access/select.ts`) selects the hermetic fixture
-    source only under `RM_ENV=ephemeral`, and fails closed (every projects
-    pipeline throws) under `smoke`, `stage` and `prod` without the explicit
-    live opt-in. Issue #1208: production v0.5.4 ran `smoke` without the opt-in,
+    (`backend/src/projects/access/select.ts`) serves the hermetic fixture
+    source only when the test harness injected it through the armed test seam
+    (`backend/src/test-seam.ts`, issue #973), and fails closed (every projects
+    pipeline throws) in every deployed process without the explicit live
+    opt-in; no environment value selects the fixture. Issue #1208: production v0.5.4 ran `smoke` without the opt-in,
     when the refusal covered `prod` only, and persisted the fixture's 4
     projects, 4 tracked wallets and 2 agent vaults. Those rows stay until the
     purge part of issue #1208 ships (owner decision 2026-10-08: guard only, no

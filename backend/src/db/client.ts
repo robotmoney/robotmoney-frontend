@@ -1,6 +1,7 @@
 import postgres from "postgres";
 import type postgresTypes from "postgres";
 import { config } from "../config.ts";
+import { testSeamArmed, testSeamRefusal } from "../test-seam.ts";
 
 // Server-side timeouts, applied as startup parameters so EVERY statement and
 // transaction on this pool inherits them. The API pool is small (default
@@ -53,17 +54,18 @@ export let sql = makePool(config.databaseUrl);
 // long-lived pool and exports its own setDatabase() for the same reason —
 // worker/** may not import this module, so it cannot be rebuilt from here.
 //
-// REFUSED OUTSIDE `ephemeral`. Being a test seam is a claim about where it may
-// run, and an exported function that silently re-points a deployed process's
-// database at an attacker-chosen or merely mistaken URL is not a claim worth
-// making on a comment alone. `config.env` fails closed to "prod" when RM_ENV is
-// unset (config.ts), so the guard is on by default everywhere it matters.
+// REFUSED UNLESS THE TEST SEAM IS ARMED (backend/src/test-seam.ts). Being a
+// test seam is a claim about where it may run, and an exported function that
+// silently re-points a deployed process's database at an attacker-chosen or
+// merely mistaken URL is not a claim worth making on a comment alone. Only
+// backend/tests/preload.ts arms the seam, so a deployed process refuses
+// whatever its environment says (issue #973: no RM_ENV value opens it).
 export async function setDatabase(url: string, options: { purpose?: "migration" } = {}): Promise<void> {
   const migrationRedirect = options.purpose === "migration" && url === process.env.MIGRATE_DATABASE_URL;
-  if (config.env !== "ephemeral" && !migrationRedirect) {
-    throw new Error(
-      `db/client.setDatabase() is a test-only seam and refuses to run under RM_ENV=${config.env}. ` +
-        "Point the process at a different database with DATABASE_URL and restart it.",
+  if (!testSeamArmed() && !migrationRedirect) {
+    throw testSeamRefusal(
+      "db/client.setDatabase()",
+      "Point the process at a different database with DATABASE_URL and restart it.",
     );
   }
   process.env.DATABASE_URL = url;

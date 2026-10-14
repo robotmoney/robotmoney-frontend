@@ -1902,7 +1902,7 @@ describe("runPreflight — one library, three callers (§7.2)", () => {
     // restarts a process that exits, never one that hangs.
     const url = new URL(roleUrl("rm_app", currentDatabaseName()));
     url.password = PASSWORDS.rm_app;
-    const outcome = await runStartupPreflight({ role: "rm_app", databaseUrl: url.toString(), rmEnv: "stage", budgetMs: 1 });
+    const outcome = await runStartupPreflight({ role: "rm_app", databaseUrl: url.toString(), budgetMs: 1 });
     expect(outcome.passed).toBe(false);
     expect(outcome.lines).toEqual([
       "startup_preflight: refused check 1: preflight did not finish within 1ms (roles_authenticate was running): " +

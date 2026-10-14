@@ -1357,7 +1357,7 @@ async function rawUpgradeStatus(base: string, pathAndQuery: string, headers: Rec
 describe("the real api process", () => {
   let api: ApiProcess;
   beforeAll(async () => {
-    api = await bootApi({ env: { RM_ENV: "ephemeral" } });
+    api = await bootApi();
   }, 90_000);
   afterAll(() => api?.stop());
 

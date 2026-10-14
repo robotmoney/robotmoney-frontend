@@ -297,7 +297,7 @@ describe("checkMigrateGates — §8.5 and the ONE §4.3 matrix, before the owner
     expect(refusals.map((r) => r.reason)).toContain("identity_not_rehearsal");
     // The words are resolveDeploymentPolicy's (backend/src/deploy-policy.ts):
     // one matrix, so the operator reads the same sentence from every tool.
-    expect(refusals[0]?.message).toContain("stage policy (incl. --allow-insecure) never touches production data");
+    expect(refusals[0]?.message).toContain("stage policy never touches production data");
   });
 
   test("the operator caller MAY run on prod against a production identity", async () => {

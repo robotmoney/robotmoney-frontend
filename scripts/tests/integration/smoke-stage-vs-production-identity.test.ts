@@ -35,10 +35,9 @@
 // backup built by ../support/make-encrypted-backup.ts from a database enrolled
 // `production`, the way §5.1/§5.2 capture one. (What a dump boot does after its
 // enrollment, and a v0.5.0 dump that predates the identity table, are
-// ./smoke-dump-lifecycle.test.ts's.) `--allow-insecure` is not yet a `bun smoke` flag (the overlay it
-// replaces is removed in a later #1026 wave), so criterion 46's "incl.
-// `--allow-insecure`" is proven here only through the typed-password and plain
-// stage boots.
+// ./smoke-dump-lifecycle.test.ts's.) There is no `--allow-insecure` flag
+// (issue #973 retired it), so criterion 46 is proven through the
+// typed-password and plain stage boots.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   BOOT_TIMEOUT_MS,
@@ -197,7 +196,7 @@ describe("§4.3 remote rows — a real `bun smoke` against a remote database", (
       const r = remoteRefusal(op, { RM_ENV: "stage" }, "rm_it_matrix_plain");
       expect(r.code).not.toBe(0);
       expect(r.out).toContain(`RM_ENV=stage against a remote target whose deployment_identity is ${kind ?? "no identity row"}`);
-      expect(r.out).toContain("stage policy (incl. --allow-insecure) never touches production data");
+      expect(r.out).toContain("stage policy never touches production data");
       expectRefusedAtTheLock(op, "rm_it_matrix_plain", r.out);
     }, 120_000);
   }

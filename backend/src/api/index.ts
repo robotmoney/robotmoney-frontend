@@ -115,22 +115,16 @@ await assertAnalyticsLedgerGuardArmed();
 // refusal binds no port. Bounded (STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS), because
 // it sits between the process and its port and a hung boot is never restarted.
 //
-// The one exception is RM_ENV=ephemeral, the in-process test harness's env: it
-// logs the same refusal lines and serves. No stack reaches it — the §4.3 policy
-// (deploy-policy.ts) refuses `ephemeral`, and every compose file hands the api
-// `prod` or `stage` (acceptance-path.ts resolveStackRmEnv) — and the harness
-// spawns this entrypoint against superuser-built databases for tests whose
-// subject is something else (tests/preload.ts states why the harness is not
-// §7.3-isomorphic). Under every env a stack can run, a refusal exits 1.
+// There is no exception (issue #973 retired the `RM_ENV=ephemeral` one): a
+// refusal exits 1 in every process, and a test that boots this entrypoint
+// hands it an `rm_app` credential on a migrated database, as a stack does
+// (tests/support/automation-auth.ts bootApi).
 // backend/tests/container-startup-preflight.test.ts spawns this file as rm_app
 // and proves each refusal leaves no listener.
 {
-  const startup = await runStartupPreflight({ role: "rm_app", databaseUrl: config.databaseUrl, rmEnv: config.env });
+  const startup = await runStartupPreflight({ role: "rm_app", databaseUrl: config.databaseUrl });
   for (const line of startup.lines) (startup.passed ? console.log : console.error)(line);
-  if (!startup.passed) {
-    if (config.env !== "ephemeral") process.exit(1);
-    console.error("startup_preflight: serving anyway: RM_ENV=ephemeral is the test harness's env, never a stack's");
-  }
+  if (!startup.passed) process.exit(1);
 }
 
 /** Seconds the parity-sweep request may run before Bun closes it (Bun's cap is 255). */
@@ -223,7 +217,6 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // trade a wrong-attribution risk for a restart loop.
       return json({
         status: "ok",
-        env: config.env,
         db,
         handle_namespace: handleNamespaceGuardOutcome(),
         // "armed" | "disarmed" | "not_applied" | "unavailable" | "unchecked".
@@ -461,4 +454,4 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     return new Response("Not found", { status: 404 });
 }
 
-console.log(`api listening on :${server.port} (env=${config.env})`);
+console.log(`api listening on :${server.port}`);
