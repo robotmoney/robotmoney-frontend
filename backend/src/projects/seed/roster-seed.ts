@@ -304,11 +304,11 @@ export async function loadV0RosterWithManifest(path?: string, manifestPath?: str
 
   const file = Bun.file(p);
   if (!(await file.exists())) {
-    throw new Error(`v0 roster seed not found at ${p} — set ROSTER_SEED_PATH or ship the committed seed`);
+    throw new Error(`v0 roster seed not found at ${p} — ship the committed seed`);
   }
   const manifestFile = Bun.file(mp);
   if (!(await manifestFile.exists())) {
-    throw new Error(`v0 roster seed manifest not found at ${mp} — set ROSTER_SEED_MANIFEST_PATH or ship the committed manifest`);
+    throw new Error(`v0 roster seed manifest not found at ${mp} — ship the committed manifest`);
   }
 
   let projects: DiscoveredProject[];
@@ -347,7 +347,7 @@ export async function loadRosterSeedManifest(manifestPath?: string): Promise<Ros
   const mp = resolveManifestPath(manifestPath);
   const manifestFile = Bun.file(mp);
   if (!(await manifestFile.exists())) {
-    throw new Error(`v0 roster seed manifest not found at ${mp} — set ROSTER_SEED_MANIFEST_PATH or ship the committed manifest`);
+    throw new Error(`v0 roster seed manifest not found at ${mp} — ship the committed manifest`);
   }
   let manifest: RosterSeedManifest;
   try {
