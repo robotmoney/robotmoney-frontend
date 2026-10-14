@@ -73,8 +73,6 @@ export interface ParticipantRenderOptions {
   readonly envDir: string;
   /** Compose-internal API base, e.g. `http://api:8787`. */
   readonly apiUrl: string;
-  /** The stack's `RM_ENV`, so a judge applies the acceptance model rules of its host. */
-  readonly rmEnv: string;
   /**
    * The model participants call, as the vendor's REST endpoint spells it (no
    * `opencode/` prefix), and that endpoint. Resolved once by the boot from the
@@ -128,7 +126,6 @@ export function participantEnv(entry: RosterEntry, options: ParticipantRenderOpt
   const identity = JSON.stringify({ publicKeyB64: entry.credential.publicKeyB64, privateJwk: entry.credential.privateJwk });
   const env: Record<string, string> = {
     RM_API_URL: options.apiUrl,
-    RM_ENV: options.rmEnv,
     RM_PARTICIPANT_KIND: entry.kind,
     RM_MEMBER_NAME: entry.name,
     RM_MEMBER_ID: entry.credential.memberId,

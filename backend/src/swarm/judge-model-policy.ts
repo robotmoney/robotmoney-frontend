@@ -20,12 +20,12 @@
 //      nothing usable. No environment has a reason to judge on one, so this rule
 //      has no environment clause.
 //
-//   2. ON THE ACCEPTANCE PATH, ONLY THE PINNED MODEL. RM_ENV=prod is what
-//      staging and production run (docs/technical/stack-orchestrator.md §16;
-//      RM_ENV has no "staging" value and backend/src/config.ts refuses one), and
-//      there AC-MODEL-01 names exactly one model. Development and the ephemeral
-//      test database keep every id, because their judgements are not evidence
-//      and their fixtures legitimately use stub ids like `test/judge-model`.
+//   2. ON THE ACCEPTANCE PATH, ONLY THE PINNED MODEL. The acceptance path is
+//      every stack whose judgements are evidence, and no environment value
+//      decides it (backend/src/acceptance-path.ts, D69 (6)): the api and the
+//      participant judge apply the pin on every deployed stack. Only the armed
+//      test harness keeps every id, because its judgements are not evidence and
+//      its fixtures legitimately use stub ids like `test/judge-model`.
 //
 // WHY THE IDS ARE DUPLICATED HERE. backend/Dockerfile copies `backend/` and
 // `contract/` and nothing else, so `scripts/lib/model-registry.ts` — the pinned
@@ -36,7 +36,7 @@
 // One list in source with a cross-check beats one list in source and one in an
 // operator's memory.
 
-import { isAcceptanceJudgeEnv, type InferencePathOptions } from "../acceptance-path.ts";
+import { isAcceptancePath, resolveInferencePath, type InferencePathOptions } from "../acceptance-path.ts";
 
 /** The wire id AC-MODEL-01 pins, without the `opencode/` prefix Zen's REST endpoint rejects. */
 export const PINNED_JUDGE_MODEL = "deepseek-v4.1-flash";
@@ -61,10 +61,7 @@ export function isKeylessJudgeModel(model: string): boolean {
 }
 
 // The acceptance predicate is NOT defined here. It is one rule, owned by
-// backend/src/acceptance-path.ts and shared with the scripts half — this file
-// re-exports it so its own callers (postflight, setJudgeConfig) keep importing
-// the judge-flavoured name, and so there is no second definition to drift.
-export { isAcceptanceJudgeEnv } from "../acceptance-path.ts";
+// backend/src/acceptance-path.ts and shared with the scripts half.
 
 /**
  * Refuse a judge model this environment may not use. Throws with the reason an
@@ -76,10 +73,10 @@ export { isAcceptanceJudgeEnv } from "../acceptance-path.ts";
  */
 export function assertJudgeModelAllowed(
   model: string,
-  env: Record<string, string | undefined> = process.env,
   opts: InferencePathOptions = {},
 ): void {
   const id = model.trim();
+  const path = resolveInferencePath(opts);
   if (isKeylessJudgeModel(id)) {
     throw new Error(
       `judge model "${id}" is in OpenCode Zen's keyless free family, which is DISQUALIFIED for acceptance ` +
@@ -87,13 +84,13 @@ export function assertJudgeModelAllowed(
         `no credential, so it degrades silently instead of failing closed. Use "${PINNED_JUDGE_MODEL}".`,
     );
   }
-  if (isAcceptanceJudgeEnv(env, opts) && id !== PINNED_JUDGE_MODEL) {
+  if (isAcceptancePath(path) && id !== PINNED_JUDGE_MODEL) {
     throw new Error(
-      `judge model "${id}" is not the pinned acceptance model. RM_ENV=${(env.RM_ENV ?? "<unset>").trim() || "<unset>"} is an ` +
+      `judge model "${id}" is not the pinned acceptance model. This process is on the ${path} ` +
         `acceptance path, where AC-MODEL-01 requires every swarm agent — analysts and judge alike — to run ` +
         `exactly "${PINNED_JUDGE_MODEL}" on paid OpenCode Zen inference. Set that id (no "opencode/" prefix: ` +
-        "Zen's REST endpoint answers the prefixed selector with 401 ModelError), or run this configuration on a " +
-        "development environment where its judgements are not evidence.",
+        "Zen's REST endpoint answers the prefixed selector with 401 ModelError). Every deployed stack " +
+        "applies this pin; only the armed test harness keeps a stub judge model.",
     );
   }
 }

@@ -79,7 +79,6 @@ export function writeParticipantOverlay(
     instance,
     envDir,
     apiUrl: "http://api:8787",
-    rmEnv: "stage",
     inference: { wireId: "deepseek-v4.1-flash", baseUrl: ZEN_API_BASE_URL },
     image,
   });

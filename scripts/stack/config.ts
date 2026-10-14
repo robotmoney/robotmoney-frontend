@@ -19,7 +19,6 @@
 //      (D22 §11.3 E2). A missing dependency is the caller's problem to throw
 //      about, never something this layer papers over.
 import { join } from "node:path";
-import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import {
   ENV_CLASS_COMPOSE_VAR,
   ENV_HASH_COMPOSE_VAR,
@@ -270,23 +269,6 @@ export interface StackConfig {
   // not be attributed to a CI job or to an operator's shell, and therefore
   // could not be reaped without risking the standing smoke.
   environment: StackEnvironment;
-  /**
-   * WHICH RM_ENV THIS STACK DECLARES (D13). Emitted into every service by
-   * buildComposeEnv(), so a container never has to fall back to
-   * docker-compose.yml's interpolation default and no reader of RM_ENV is ever
-   * looking at whatever the operator's shell exported.
-   *
-   * OPTIONAL, AND THE OMITTED CASE IS THE STRICT ONE: absent means `prod`, the
-   * acceptance path, matching backend/src/config.ts's "fail-closed: default to
-   * prod when RM_ENV is unset" and the shared predicate in
-   * backend/src/acceptance-path.ts. A consumer that wants the permissive
-   * development rules — the local smoke boot — says so; a consumer that forgets
-   * gets refused rather than silently unpinned.
-   *
-   * Never read from the ambient environment here. scripts/lib/smoke-main.ts
-   * resolves it with resolveStackRmEnv(), which knows the KIND of boot.
-   */
-  rmEnv?: RmEnv;
   // Extra compose interpolation values a specific consumer needs (the smoke
   // passes its resolved data-path env here). Merged LAST so a consumer can
   // extend, and deliberately never sourced from the ambient environment.
@@ -355,9 +337,8 @@ export function instanceComposeEnv(instance: StackInstance): Record<string, stri
 export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
   if (cfg.extraComposeEnv && "RM_ENV" in cfg.extraComposeEnv) {
     throw new Error(
-      "RM_ENV must not be passed through extraComposeEnv — it is a first-class StackConfig field (`rmEnv`). " +
-        "Routing it through the extras map is how it became a property of the operator's shell instead of the " +
-        "stack's configuration (D13).",
+      "RM_ENV is not a container setting (issue 1326, D69): no service reads it, and no compose env carries it. " +
+        "It is the operator tools' policy input only.",
     );
   }
   if (cfg.extraComposeEnv && "RM_ALLOW_INSECURE" in cfg.extraComposeEnv) {
@@ -389,9 +370,6 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // them now would be a value nothing reads, which is how the last one
     // survived long enough to look like configuration; `bun smoke` warns loudly
     // when it finds either in the operator's environment.
-    // D13: explicit, always, and NOT overridable from extraComposeEnv (asserted
-    // above) — the whole point is that one place decides.
-    RM_ENV: cfg.rmEnv ?? "prod",
     POSTGRES_USER: cfg.database.user,
     POSTGRES_PASSWORD: cfg.database.password,
     POSTGRES_DB: cfg.database.name,

@@ -372,7 +372,6 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     composeFiles: ["docker-compose.yml"],
     database: { ...DEFAULT_STACK_DATABASE, roleUrls: LOCAL_ROLES },
     environment: { class: "local", hash: "c32c32c32c" },
-    rmEnv: "stage",
     extraComposeEnv: { ...smokePassthroughEnv(env) },
   });
 

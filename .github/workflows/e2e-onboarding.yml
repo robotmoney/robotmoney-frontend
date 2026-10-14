@@ -231,7 +231,6 @@ jobs:
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check onboarding
         env:
           CI: "true"
-          RM_ENV: stage
           # This expression is duplicated as REAL_EVAL_REQUESTED on the first
           # step so the job summary always describes what actually happened; the
           # two must stay byte-identical, which

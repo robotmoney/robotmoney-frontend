@@ -7,7 +7,7 @@ import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
 import { confirmTargetField, requireRemoteOwnerPreparation } from "./privileged-env.ts";
 import { bannerFor, dataPathOverlayYaml, keptDataDescription, LOCAL_FLAG, localModeOf, lockTimeoutMs, mintsServiceTokens, ownsData, parseDataPath, parseVolumeHolders, reattachOverlayYaml, redactPostgresUrl, refuseRetiredEnv, refuseVolumeInUse, requestsDump, requestsMigrate, requestsReuse, shouldSeed, targetConnection, usesComposePostgres, type ResolvedDataPath } from "./smoke-db-mode.ts";
-import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseProdWithoutProjectsSource, stackRmEnvFor } from "./smoke-compose-env.ts";
+import { dropShellMigrationCredential, homeEnvComposeEnv, shadowingStackEnvWarnings, smokePassthroughEnv, missingProdSettingNotes, refuseProdWithoutProjectsSource, isAcceptanceBoot } from "./smoke-compose-env.ts";
 import { resolveBackupFiles } from "./restore-container.ts";
 import { resolveDeploymentPolicy, resolveRmEnv } from "./smoke-env-policy.ts";
 import { requireRehearsalTarget } from "./smoke-identity.ts";
@@ -33,7 +33,6 @@ import {
   type AdmissionRecord,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
-import type { RmEnv } from "../../backend/src/acceptance-path.ts";
 import { decideImagesOverride } from "./smoke-images-override.ts";
 import { credentialFileModelKey, preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { adoptRestoredRoster, credentialHandlesOf, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
@@ -318,20 +317,22 @@ for (const [requested, preparation] of [[requestsMigrate(process.argv), "migrate
 }
 // D61: a remote `--migrate` or `--seed` needs `--confirm-target` and `~/.env`'s rm_owner line.
 if (connection === "remote" && (requestsMigrate(process.argv) || shouldSeed(process.argv))) try { requireRemoteOwnerPreparation(homeEnv, homeEnvFilePath(), process.argv.slice(2)); } catch (err) { fatal(err); }
-// The containers' RM_ENV: the policy, and `prod` on the standing stack by rule.
-const stackRmEnv: RmEnv = stackRmEnvFor(staticPortMode, policy);
-// Issue #1113: a prod boot without PROJECTS_SOURCE=live refuses here, before
-// any credential is minted or container created.
+// An acceptance boot: the prod policy, or the standing stack under either
+// policy. Its inference is the acceptance path (AC-MODEL-01), stated to the
+// model checks below rather than handed to any container (issue 1326).
+const acceptanceBoot = isAcceptanceBoot(staticPortMode, policy);
+// Issue #1113: an acceptance boot without PROJECTS_SOURCE=live refuses here,
+// before any credential is minted or container created.
 {
-  const refusal = refuseProdWithoutProjectsSource(stackRmEnv, process.env);
+  const refusal = refuseProdWithoutProjectsSource(acceptanceBoot, process.env);
   if (refusal !== null) fatal(refusal);
-  for (const note of missingProdSettingNotes(stackRmEnv, process.env)) console.warn(`[smoke] ${note}`);
+  for (const note of missingProdSettingNotes(acceptanceBoot, process.env)) console.warn(`[smoke] ${note}`);
 }
-// …and this process's own, so every host-side reader of RM_ENV (the inference
-// preflight below, the drivers this boot starts) judges the boot by the policy
-// the matrix resolved — an unset RM_ENV under `--local` is `stage` (§4.3), a
-// `~/.env` RM_ENV counts as set — never by the raw shell value (D13).
-process.env.RM_ENV = stackRmEnv;
+// …and this process's own RM_ENV is the policy the matrix resolved — an unset
+// RM_ENV under `--local` is `stage` (§4.3), a `~/.env` RM_ENV counts as set —
+// so a host-side operator tool this boot starts reads that policy (§4.1), never
+// the raw shell value. Nothing reads it as an acceptance path any more.
+process.env.RM_ENV = policy;
 
 // --- Which deployment instance this run acts on (spec §1.1) -----------------
 // `--instance <name>`; then the CI job's identity; then the name a previous
@@ -565,7 +566,7 @@ const operatorTokenEnv = (): Record<string, string> => ({ [OPERATOR_TOKEN_FILE_E
 // standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
 const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile });
 const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
-Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: staticPortMode, repoRoot, env: process.env, credentialModelKey: () => credentialFileModelKey(flagValue("--credentials")) }));
+Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: acceptanceBoot, repoRoot, env: process.env, credentialModelKey: () => credentialFileModelKey(flagValue("--credentials")) }));
 
 // Per-instance append log: every orchestrator line lands here as well as on the
 // console, for post-mortem. Opened for every LOCAL run (CI keeps pure console).
@@ -733,7 +734,6 @@ const plan: DeploymentPlan = (() => {
       // Every non-secret value that changes what this boot does
       // (smoke-plan-configuration.ts says what is left out, and why).
       configuration: planConfiguration({
-        stackRmEnv,
         cadenceProfile: cadence.profile,
         staticPortMode,
         shippedImages: Boolean(imagesOverride),
@@ -830,7 +830,6 @@ function makeStackConfig(): StackConfig {
     composeFiles: composeFilesRun.split(":"),
     database: databaseFor(dataPath),
     environment: stackEnvironment,
-    rmEnv: stackRmEnv,
     imagesOverride,
     instance: { name: instance.name, stateDir: paths.dir },
     // NO MODEL KEY. The judge is a participant and takes its key from
@@ -1194,7 +1193,6 @@ async function reconcileParticipants(apiUrl: string): Promise<ParticipantsReconc
     instance: instance.name,
     envDir,
     apiUrl: "http://api:8787",
-    rmEnv: stackRmEnv,
     inference: { wireId: model.startsWith(ZEN_PREFIX) ? model.slice(ZEN_PREFIX.length) : model, baseUrl: ZEN_API_BASE_URL },
     image: apiImage,
   });
@@ -1781,7 +1779,7 @@ async function runCiScenario(stack: Stack): Promise<never> {
       composeFiles: composeFilesRun.split(":"),
       composeSpawnEnv: stack.spawnEnv,
       backendUrl,
-      modelConfig: resolveModelConfig(process.env, { standingStack: staticPortMode }),
+      modelConfig: resolveModelConfig(process.env, { standingStack: acceptanceBoot }),
       onboardedHomes: new Map<string, { volume: string; passphrase?: string }>(),
       operatorToken: operatorToken(),
     };

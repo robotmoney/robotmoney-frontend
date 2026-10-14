@@ -27,7 +27,7 @@
 // arm asserts its D-A7 NAME — the thing an operator acts on — and that NO POST
 // was made, because an implementation that submitted a placeholder AND
 // reported a refusal would pass a weaker assertion.
-import { afterAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { canonicalizeJudgement, ROUTES } from "@robotmoney/contract";
 import {
@@ -42,6 +42,8 @@ import {
 } from "../../agent/participant/judge-client.ts";
 import { classifyModelStatus } from "../../agent/participant/judge-reasons.ts";
 import type { JudgeAnswer } from "../../agent/participant/judge-runner.ts";
+import type { InferencePathOptions } from "../../../backend/src/acceptance-path.ts";
+import { PINNED_JUDGE_MODEL } from "../../../backend/src/swarm/judge-model-policy.ts";
 import {
   inputsDigest,
   JUDGE_PROMPT_HASH,
@@ -57,14 +59,9 @@ const IDENTITY = {
   privateJwk: (await crypto.subtle.exportKey("jwk", keyPair.privateKey)) as Record<string, unknown>,
 };
 
-// The model policy reads RM_ENV when a request is judged. These fixtures use stub
-// model ids, which only a development environment allows (judge-model-policy.ts).
-const RM_ENV_BEFORE = process.env.RM_ENV;
-process.env.RM_ENV = "ephemeral";
-afterAll(() => {
-  if (RM_ENV_BEFORE === undefined) delete process.env.RM_ENV;
-  else process.env.RM_ENV = RM_ENV_BEFORE;
-});
+// A participant judges on the acceptance path (issue 1326): only the pinned
+// model is allowed, so the shared fixture names it. The tests that need a stub
+// id state the development path through `modelPath`.
 
 const CONFIG: JudgeClientConfig = {
   apiUrl: "http://api:3000",
@@ -99,7 +96,7 @@ const PENDING: PendingJudging = {
   date: "2026-09-24",
   judgingDeadlineAt: "2026-09-24T10:00:00.000Z",
   judgingRequestedAt: "2026-09-24T09:45:00.000Z",
-  model: "vendor/model-x",
+  model: PINNED_JUDGE_MODEL,
   input: INPUT,
 };
 
@@ -152,12 +149,12 @@ async function judgeWith(answer: JudgeAnswer) {
 }
 
 describe("the model is the one swarm_judge_config names, served with the request (issue 1118)", () => {
-  const modelsAsked = async (pending: PendingJudging, env: Record<string, string | undefined> = { RM_ENV: "ephemeral" }) => {
+  const modelsAsked = async (pending: PendingJudging, modelPath: InferencePathOptions = { path: "development" }) => {
     const asked: string[] = [];
     const { calls, impl } = recordingFetch({ [ROUTES.swarm.participants.judgement]: accepted });
     const outcome = await judgeOne(CONFIG, pending, {
       fetchImpl: impl,
-      env,
+      modelPath,
       runJudgeImpl: async (run) => {
         asked.push(run.model);
         return { kind: "ok", body: ANSWER };
@@ -184,18 +181,18 @@ describe("the model is the one swarm_judge_config names, served with the request
     }
   });
 
-  test("a keyless free-family model is `model_disallowed`, in every environment", async () => {
-    for (const RM_ENV of ["ephemeral", "prod", undefined]) {
-      const { outcome, asked, posts } = await modelsAsked({ ...PENDING, model: "nemotron-3-ultra-free" }, { RM_ENV });
+  test("a keyless free-family model is `model_disallowed`, on every path", async () => {
+    for (const modelPath of [{ path: "development" as const }, { standingStack: true }, {}]) {
+      const { outcome, asked, posts } = await modelsAsked({ ...PENDING, model: "nemotron-3-ultra-free" }, modelPath);
       expect(outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
       expect(asked).toEqual([]);
       expect(posts).toEqual([]);
     }
   });
 
-  test("on an acceptance path only the pinned model is allowed", async () => {
-    expect((await modelsAsked({ ...PENDING, model: "kimi-k3" }, { RM_ENV: "prod" })).outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
-    expect((await modelsAsked({ ...PENDING, model: "deepseek-v4.1-flash" }, { RM_ENV: "prod" })).outcome.kind).toBe("submitted");
+  test("by default (a participant container states no path) only the pinned model is allowed", async () => {
+    expect((await modelsAsked({ ...PENDING, model: "kimi-k3" }, {})).outcome).toMatchObject({ kind: "refused", reason: "model_disallowed" });
+    expect((await modelsAsked({ ...PENDING, model: "deepseek-v4.1-flash" }, {})).outcome.kind).toBe("submitted");
   });
 });
 
@@ -208,8 +205,6 @@ describe("configuration refuses at startup, by the D-A7 name", () => {
     RM_MEMBER_IDENTITY: JSON.stringify(IDENTITY),
     RM_JUDGE_BASE_URL: "https://x",
     RM_INFERENCE_KEY: "k",
-    // A development environment, where any non-keyless model is allowed.
-    RM_ENV: "ephemeral",
   };
 
   const refusal = (env: Record<string, string | undefined>): JudgeClientConfigError => {
@@ -292,7 +287,7 @@ describe("a judgement that lands is SIGNED with the judge's own key", () => {
     expect(body).toMatchObject({
       sessionId: "s-1",
       opinion: ANSWER,
-      model: "vendor/model-x",
+      model: PINNED_JUDGE_MODEL,
       promptHash: JUDGE_PROMPT_HASH,
       inputsDigest: inputsDigest(INPUT),
     });
