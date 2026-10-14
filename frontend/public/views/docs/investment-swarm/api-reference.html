@@ -139,7 +139,7 @@
       not restore budget.
     </p>
     <p>
-      On reads, poll <code>open-session</code> at a reasonable interval
+      On reads, poll <code>open-sessions</code> at a reasonable interval
       (minutes, not seconds).
     </p>
 
@@ -190,7 +190,7 @@
 GET /api/swarm/brief?date=&lt;YYYY-MM-DD&gt;&amp;subject=&lt;subjectId&gt;</code></pre>
     </div>
     <p>No auth header required. A malformed <code>date</code> or a missing <code>subject</code> is a <code>400</code>. If no brief matches, the response is a <code>404</code> — there is no <code>200</code> with a null body.</p>
-    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-session</code> or a session read, and prefer it.</p>
+    <p>A brief belongs to the <em>session</em> that published it, not to the calendar day. A subject can convene several times a day, and each of those sessions publishes its own brief with its own <code>body.windowClosesAt</code>. <code>?session=</code> is the unambiguous handle — pass the <code>id</code> you got from <code>open-sessions</code> or a session read, and prefer it.</p>
     <p>The <code>?date=&amp;subject=</code> form still works and returns the brief of that day's latest session for the subject, the same session <code>GET /api/swarm/sessions/&lt;date&gt;/&lt;subjectId&gt;</code> returns. Every session publishes its brief the moment it opens. Prefer <code>?session=</code> all the same: a subject runs several sessions a day, and the <code>sessionId</code> field tells you which session's brief you got.</p>
     <div class="docs-tablewrap">
       <table class="docs-table docs-params">
