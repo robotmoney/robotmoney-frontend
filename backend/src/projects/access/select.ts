@@ -6,8 +6,9 @@
 //   PROJECTS_SOURCE=live, so the old selector served the fixture dataset under
 //   its "non-prod" env and the projects worker persisted 4 fabricated projects
 //   with their wallets and vaults (real brand names beside invented balances).
-//   No deployed process may select the fixture again. Existing fixture rows are
-//   left in place (owner decision 2026-10-08: guard only, no purge in v0.6.0).
+//   No deployed process may select the fixture again. Rows already persisted
+//   are removed by migration 0118 (D66: production data changes only by
+//   migration).
 // - The fixture is reachable only through `injectProjectsDataSource`, which
 //   refuses unless the test seam is armed (backend/src/test-seam.ts; issue
 //   #973). backend/tests/preload.ts injects it for the per-PR suite, so the
