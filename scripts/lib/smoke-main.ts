@@ -569,7 +569,7 @@ const operatorTokenEnv = (): Record<string, string> => ({ [OPERATOR_TOKEN_FILE_E
 
 // Model + credential before anything is provisioned (AC-MODEL-01) — what the
 // standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
-const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile, standingStack: staticPortMode, rmEnv: policy });
+const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile, standingStack: staticPortMode, policy });
 const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
 Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: acceptanceBoot, repoRoot, env: process.env, credentialModelKey: () => credentialFileModelKey(flagValue("--credentials")) }));
 

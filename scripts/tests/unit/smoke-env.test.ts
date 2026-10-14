@@ -52,8 +52,8 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
   // them empty and the backend defaults apply (fetch cache OFF, prices 30 s).
   test("a standing boot emits neither cache TTL", () => {
     for (const r of [
-      resolveSmokeEnv({}, { standingStack: true, rmEnv: "stage" }),
-      resolveSmokeEnv({}, { stage: true, rmEnv: "stage" }),
+      resolveSmokeEnv({}, { standingStack: true, policy: "stage" }),
+      resolveSmokeEnv({}, { stage: true, policy: "stage" }),
       resolveSmokeEnv({}, { stage: true, cadence: "fast" }),
     ]) {
       expect("HTTP_FETCH_CACHE_TTL_MS" in r.composeEnv).toBe(false);
@@ -61,18 +61,19 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
     }
   });
 
-  test("an RM_ENV=prod boot emits neither cache TTL", () => {
-    for (const r of [
-      resolveSmokeEnv({}, { standingStack: false, rmEnv: "prod" }),
-      resolveSmokeEnv({ RM_ENV: "prod" }),
-    ]) {
-      expect("HTTP_FETCH_CACHE_TTL_MS" in r.composeEnv).toBe(false);
-      expect("TOKEN_PRICE_CACHE_TTL_MS" in r.composeEnv).toBe(false);
-    }
+  test("a --policy prod boot emits neither cache TTL", () => {
+    const r = resolveSmokeEnv({}, { standingStack: false, policy: "prod" });
+    expect("HTTP_FETCH_CACHE_TTL_MS" in r.composeEnv).toBe(false);
+    expect("TOKEN_PRICE_CACHE_TTL_MS" in r.composeEnv).toBe(false);
+  });
+
+  test("an RM_ENV value in the environment is not the policy (D69 part 4)", () => {
+    const r = resolveSmokeEnv({ RM_ENV: "prod" }, { standingStack: false, policy: "stage" });
+    expect(r.composeEnv.HTTP_FETCH_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
   });
 
   test("a local non-standing stage boot still gets both at one hour", () => {
-    const r = resolveSmokeEnv({}, { standingStack: false, rmEnv: "stage" });
+    const r = resolveSmokeEnv({}, { standingStack: false, policy: "stage" });
     expect(r.composeEnv.HTTP_FETCH_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
     expect(r.composeEnv.TOKEN_PRICE_CACHE_TTL_MS).toBe(String(NORMAL_DEMO_CACHE_TTL_MS));
   });
