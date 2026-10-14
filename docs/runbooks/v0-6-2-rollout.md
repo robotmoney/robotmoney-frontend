@@ -68,6 +68,8 @@ R2.3 lists both as the pending set. R6.3's receipt lists them applied, so the le
   declares no delta step.
 - D64: stage runs a release-branch commit, the rc is cut there, production runs only by the rc tag,
   and R7.1 fails a production boot whose `/api/version` does not carry it.
+- `soak:checks` adds R8.n2 (each container's writable layer under 2 GB) and R8.n3 (host free disk
+  within 2 GB of the `--record` baseline), so R7.3b catches disk growth before an outage (1258).
 
 ## 3. Release-specific checks
 
@@ -77,6 +79,7 @@ R2.3 lists both as the pending set. R6.3's receipt lists them applied, so the le
 | B. `/api/status/maintenance` answers `none` once the window ends | V | `curl` after check A ends | manual, issue 1220 |
 | C. The four anchors' times of day are 21600 s apart and every epoch is 86400 s | V | R7.4a's receipt lists each subject's anchor and epoch; R7.4a asserts both, the epoch and the 21600 s spacing in the order vault, woon, allocation, treasury (issue 1310) | script (R7.4a) |
 | D. The one transition window per moved subject | W | W1 and R7.4a receipts, section 4 | script (R7.4a, graded) |
+| E. No container's writable layer is over 2 GB, and host free disk has not fallen more than 2 GB since the READY baseline (issue 1258: the HTTP fetch cache filled prod's disk) | V | R7.3b: `soak:checks` R8.n2 (writable layers) and R8.n3 (host disk free against the `--record` baseline) | script (R7.3b) |
 
 A `manual` row is read by the operator from the journal or the public API and cited in the report
 (SR.8). A `gap` row names the issue that scripts it; the release runs with the owner's recorded

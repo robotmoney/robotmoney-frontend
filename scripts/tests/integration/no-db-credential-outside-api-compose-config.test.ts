@@ -363,6 +363,7 @@ describe("only the named services carry a database credential (§9, §10)", () =
     "ANALYTICS_SOURCE",
     "ANALYTICS_TOKEN_FILE",
     "COINGECKO_API_KEY",
+    "HTTP_FETCH_CACHE_MAX_BYTES",
     "HTTP_FETCH_CACHE_TTL_MS",
     "PRODUCER_REGIME_CRON",
     "PRODUCER_RESEARCH_CRON",

@@ -48,6 +48,7 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      HTTP_FETCH_CACHE_MAX_BYTES: ${HTTP_FETCH_CACHE_MAX_BYTES:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       # No session-scheduling variables are forwarded (issue #1026): a subject's
       # epoch duration is the whole schedule, set by bootstrap on a blank
