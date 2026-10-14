@@ -5563,7 +5563,7 @@ reports is the only source of the bytes. The single-file migration strategy
 <a id="d68"></a>
 ## D68 — A take that names its session is filed against that session or refused; it is never routed into the next session (issue 1249, 2026-10-14)
 
-**Status.** Accepted 2026-10-14. Amends the issue 570 routing rule recorded in
+**Status.** Proposed 2026-10-14. Amends the issue 570 routing rule recorded in
 `submitRecommendation` (`backend/src/swarm/domain.ts`): "a take arriving after
 session N closed lands on N+1".
 
