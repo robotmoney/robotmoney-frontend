@@ -145,14 +145,19 @@ test("SPA popstate into privileged history entry reloads before rendering", asyn
 test("same-origin transport executes under production CSP, Google/GTM blocked", async ({ page }) => {
   const s = await setup(page, { accepted: true });
   await rendered(page, ORIGIN + "/privacy"); await expect.poll(() => s.events.length).toBe(1);
-  const blocked = await page.evaluate(async () => {
+  const result = await page.evaluate(async () => {
+    const violations: string[] = [];
+    document.addEventListener("securitypolicyviolation", event => violations.push(event.blockedURI));
     const urls = ["https://www.googletagmanager.com/gtm.js?id=GTM-TEST", "https://www.google-analytics.com/analytics.js"];
-    return Promise.all(urls.map(src => new Promise<boolean>(resolve => {
+    const blocked = await Promise.all(urls.map(src => new Promise<boolean>(resolve => {
       const script = document.createElement("script"); script.src = src;
       script.onerror = () => resolve(true); script.onload = () => resolve(false); document.head.append(script);
     })));
+    return { blocked, violations };
   });
-  expect(blocked).toEqual([true, true]); expect(s.events[0].event).toBe("rm_page_view");
+  expect(result.blocked).toEqual([true, true]);
+  expect(result.violations).toEqual(expect.arrayContaining(["https://www.googletagmanager.com/gtm.js?id=GTM-TEST", "https://www.google-analytics.com/analytics.js"]));
+  expect(s.events[0].event).toBe("rm_page_view");
 });
 
 for (const options of [{ blocked: true }, { unavailable: true }, { enabled: false }, { origin: "https://staging.robotmoney.network" }]) {
