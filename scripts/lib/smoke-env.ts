@@ -33,6 +33,14 @@
 // `bun run smoke`, and the smoke-twin's deliberate `--static-port --cadence fast`
 // — injects neither, so compose resolves the COMMITTED production defaults
 // untouched and the CI smoke path is byte-for-byte unaffected.
+//
+// THE CACHE TTLs (issue 1258). HTTP_FETCH_CACHE_TTL_MS and
+// TOKEN_PRICE_CACHE_TTL_MS are emitted at one hour ONLY on a local boot that is
+// neither the standing stack (`--static-port`) nor RM_ENV=prod. A standing or
+// prod boot emits neither, so compose resolves both empty and the backend's
+// production defaults apply: the on-disk HTTP fetch cache OFF, the token-price
+// cache 30 s. Forcing one hour onto the standing boot is how prod's fetch
+// cache filled the host disk.
 import { resolveSmokeCadence, type SmokeCadenceProfile } from "./smoke-cadence.ts";
 
 export const NORMAL_DEMO_CACHE_TTL_MS = 3_600_000;
@@ -60,7 +68,14 @@ export interface SmokeEnvResolution {
 
 export function resolveSmokeEnv(
   env: Record<string, string | undefined> = process.env,
-  opts: { stage?: boolean; cadence?: SmokeCadenceProfile } = {},
+  opts: {
+    stage?: boolean;
+    cadence?: SmokeCadenceProfile;
+    /** The standing stack (`--static-port`). Defaults to `stage`. */
+    standingStack?: boolean;
+    /** The resolved RM_ENV policy. Defaults to env.RM_ENV. */
+    rmEnv?: string;
+  } = {},
 ): SmokeEnvResolution {
   const baseRpcUrl = env.BASE_RPC_URL || undefined;
   const baseRpcSource: "live" = "live";
@@ -78,10 +93,14 @@ export function resolveSmokeEnv(
   const producerCronEnv: Record<string, string> = cadence.profile === "realistic"
     ? { PRODUCER_REGIME_CRON: cadence.regimeCron, PRODUCER_RESEARCH_CRON: cadence.researchCron }
     : {};
-  const cacheEnv: Record<string, string> = {
-    HTTP_FETCH_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
-    TOKEN_PRICE_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
-  };
+  const standingStack = opts.standingStack ?? opts.stage === true;
+  const rmEnv = opts.rmEnv ?? env.RM_ENV;
+  const cacheEnv: Record<string, string> = standingStack || rmEnv === "prod"
+    ? {}
+    : {
+        HTTP_FETCH_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
+        TOKEN_PRICE_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
+      };
 
   const composeEnv: Record<string, string> = {
     ...(baseRpcUrl !== undefined ? { BASE_RPC_URL: baseRpcUrl } : {}),

@@ -160,7 +160,9 @@ into six independently testable stages — **access → extract → transform �
   (`tests/no-dead-provider-chain.test.ts`) greps `backend/src` to keep the dead
   chain from reappearing.
 - **`extract/`** — pull raw series from KEYLESS public sources. `http.ts`
-  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`), one
+  (timeout/abort fetch, plus an opt-in on-disk TTL cache in `fetch-cache.ts`: off on
+  the standing and `RM_ENV=prod` boots; where on, bounded by expiry deletion and the
+  `HTTP_FETCH_CACHE_MAX_BYTES` size cap, issue 1258), one
   pure parser per source — **`fred.ts`, `yahoo.ts`, `defillama.ts`,
   `blockchain-com.ts`, `coinmetrics.ts`, `geckoterminal.ts`, `shiller.ts`,
   `edgar.ts`** (JSON/CSV in → `Point[]` out, throw on garbage) — and `sources.ts`,

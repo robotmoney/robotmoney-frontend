@@ -170,6 +170,7 @@ x-worker-env: &worker-env
   # through: backend parsing treats it as absent, preserving the production
   # defaults (HTTP cache off; token-price cache 30s).
   HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+  HTTP_FETCH_CACHE_MAX_BYTES: ${HTTP_FETCH_CACHE_MAX_BYTES:-}
   TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
   # Base RPC endpoint + the SHARED rate budget (issue #709 / #651).
   # BASE_RPC_MAX_CALLS_PER_SEC is the one token bucket every chain read in the
@@ -352,6 +353,7 @@ services:
       PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
       # Optional capability TTLs. Blank/unset preserves backend defaults.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      HTTP_FETCH_CACHE_MAX_BYTES: ${HTTP_FETCH_CACHE_MAX_BYTES:-}
       TOKEN_PRICE_CACHE_TTL_MS: ${TOKEN_PRICE_CACHE_TTL_MS:-}
       # NO SESSION-SCHEDULING VARIABLE IS DECLARED HERE, and that is the whole
       # of issue #1026. There used to be seven — an enable flag and six cadence
@@ -616,6 +618,7 @@ services:
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       # This process performs HTTP extraction but never token-price lookup.
       HTTP_FETCH_CACHE_TTL_MS: ${HTTP_FETCH_CACHE_TTL_MS:-}
+      HTTP_FETCH_CACHE_MAX_BYTES: ${HTTP_FETCH_CACHE_MAX_BYTES:-}
       # The paid CoinGecko key (issue #1062). The producer's GeckoTerminal new_pools sweep sends it to the Pro host as
       # x-cg-pro-api-key; blank keeps the keyless 10-a-minute host. The source ledger redacts the header.
       COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
