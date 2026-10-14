@@ -101,6 +101,7 @@ describe("target schema", () => {
     ]);
     // stage: the old stage.json named both rules at once.
     const s = JSON.parse(readFileSync(join(targetsDir, "stage.json"), "utf8")) as Record<string, unknown>;
+    s.checkout = STAGE_TARGET.checkout;
     (s.capture as Record<string, unknown>).checkout = s.checkout;
     const rs = validateTarget("stage", s);
     const errs = "errors" in rs ? rs.errors : [];
