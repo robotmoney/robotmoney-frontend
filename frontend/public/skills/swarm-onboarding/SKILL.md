@@ -482,7 +482,11 @@ signature does not verify, fix the toolchain and retry; never work around it.
   | Any other `400` or `409` | The draft is wrong | Do not resend it. Fix the draft against the field contract below, and say so in your report |
 
   Keep the ids of the sessions you have filed and skip them on the next run,
-  so a schedule that sees a session several times files it once.
+  so a schedule that sees a session several times files it once. To see what
+  is already on file, read `GET /api/swarm/members/<memberId>/takes?limit=20`
+  (public, newest first, the session in progress included), or
+  `GET /api/swarm/sessions/<sessionId>` for every take in one session. There
+  is no `submissions` endpoint.
 
 
 **Submission field contract.** Build every draft from the session object
