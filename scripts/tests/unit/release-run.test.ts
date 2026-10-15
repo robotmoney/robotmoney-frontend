@@ -880,6 +880,18 @@ describe("secret scrubbing", () => {
       expect(scrubSecrets(line)).toBe(line);
     }
   });
+  test("a scrubbed docker inspect receipt is still JSON (a value running into its closing quote keeps the quote)", () => {
+    const inspect = JSON.stringify({ HostConfig: { Binds: ["/s/tokens/analytics-producer:/run/rm-token:ro"] } }, null, 4);
+    const scrubbed = scrubSecrets(inspect);
+    expect(scrubbed).toContain('"/s/tokens/analytics-producer:/run/rm-token:***"');
+    expect(() => JSON.parse(scrubbed)).not.toThrow();
+    const oneLine = scrubSecrets('["/s/tokens/x:/run/rm-token:ro"]');
+    expect(oneLine).toBe('["/s/tokens/x:/run/rm-token:***"]');
+    expect(scrubSecrets(scrubbed)).toBe(scrubbed);
+  });
+  test("red: a quote inside an unquoted value never lets the rest of the value through", () => {
+    expect(scrubSecrets('token=ab"cd')).toBe("token=***");
+  });
   test("a secret split across stream chunks is still scrubbed", () => {
     const s = lineScrubber();
     const out = s.push("rm_ow") + s.push("ner=sec") + s.push("ret\nnext") + s.end();

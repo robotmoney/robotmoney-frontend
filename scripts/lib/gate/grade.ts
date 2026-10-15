@@ -22,6 +22,12 @@ export interface SessionRow {
   outcome: string | null;
   /** Minutes since the session convened. */
   ageMin: number;
+  /**
+   * Minutes past the session's own deadline: its judging deadline once judging
+   * was requested, else its window close. Negative while the deadline is ahead;
+   * null when the session stores neither (a hand-opened session).
+   */
+  overdueMin?: number | null;
   /** Epoch ms the session published at, or null. */
   publishedAtMs: number | null;
   /** Distinct members with a signed take (swarm_recommendations). */
@@ -32,11 +38,15 @@ export interface SessionRow {
   receipt: boolean;
 }
 
+/** Grace past a session's own deadline before it counts as stuck: aggregation and judging settle within minutes of it. */
+export const DEFAULT_STUCK_AFTER_MIN = 120;
+
 export interface SessionGradeOptions {
   minSessions: number;
   /** N good sessions in total, whatever their subjects, instead of minSessions per subject. */
   totalSessions?: number;
   minAttendance: number;
+  /** Minutes a session may stay open past its own deadline (see SessionRow.overdueMin). */
   stuckAfterMin: number;
   /** FAIL when nothing has published for this many hours. Omit to skip. */
   livenessHours?: number;
@@ -59,7 +69,12 @@ export interface SessionVerdict {
  *  - published with any other outcome than `judged` (judge off, `not_judged`, none)
  *    FAILS, as does `judged` without an applied model judgement or a consensus
  *    receipt: an unjudged publish is a platform failure;
- *  - a session still open past `stuckAfterMin` FAILS;
+ *  - a session still open more than `stuckAfterMin` past its own deadline (its
+ *    window close, or its judging deadline once judging was requested) FAILS.
+ *    A session that stores neither is measured from when it convened. The
+ *    deadline, not the age: a 24 h epoch (migration 0117) collects for 24 h,
+ *    and a fixed age limit set for 6 h epochs failed every healthy session
+ *    (stage practice run 2026-10-14);
  *  - a session under the attendance bar is a WARNING, not a failure: a take that
  *    timed out or was rejected is a model outcome;
  *  - a subject needs `minSessions` good (judged, receipted, attended) sessions,
@@ -87,8 +102,14 @@ export function evaluateSessions(
       }
       if (r.takes < need) warnings.push(`session ${r.id} (${r.subject}) published with ${r.takes} take(s), under ${need} of ${activeAnalysts} active`);
       if (r.outcome === "judged" && r.judged && r.receipt && r.takes >= need) goodBySubject.set(r.subject, (goodBySubject.get(r.subject) ?? 0) + 1);
-    } else if (r.state !== "cancelled" && r.ageMin > opts.stuckAfterMin) {
-      failures.push(`session ${r.id} (${r.subject}) stuck in '${r.state}' for ${Math.round(r.ageMin)} min`);
+    } else if (r.state !== "cancelled") {
+      const pastDeadline = r.overdueMin != null;
+      const late = pastDeadline ? (r.overdueMin as number) : r.ageMin;
+      if (late > opts.stuckAfterMin) {
+        failures.push(pastDeadline
+          ? `session ${r.id} (${r.subject}) stuck in '${r.state}' ${Math.round(late)} min past its deadline`
+          : `session ${r.id} (${r.subject}) stuck in '${r.state}' for ${Math.round(late)} min (no deadline stored)`);
+      }
     }
   }
   if (opts.totalSessions !== undefined) {
