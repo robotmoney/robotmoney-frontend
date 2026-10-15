@@ -42,19 +42,41 @@ accepted rather than passed (R2.5, W1), so SP.8 refuses this journal for product
 3. **Fixed: CI never ran on `qa/*` pushes**, so P.ci could not pass on a QA commit.
    Every workflow now runs on `qa/**`; `fusion/**` is dropped (owner).
 4. **Fixed: an integration test still expected the old `holders` receipt key.**
-5. **Open, product: `projects.refresh_wallets` hangs forever.** It hung on stage in
-   v0.6.1 and again in v0.6.2 (jobs 71389428, 71388991), and made worker-analytics
-   unhealthy at R2.5 and W1. `backend/src/chain/base-rpc-client.ts` clears the request
-   timeout once the headers arrive, so `res.json()` has no deadline; `rpcBatchRequest`
-   has the same flaw. The worker loop has no per-job limit. Needs its own PR before
-   the production run.
-6. **Open: the api was SIGKILLed once, 100 s after its boot,** in run
+5. **Open, product, in production since v0.6.0: `projects.refresh_wallets` holds the
+   analytics lane 73% of the day.** It does not hang. The production dump's `job_runs`
+   show it refreshed 4 wallets in under a second until 2026-10-08. The fixture-source
+   guard (1244) moved production to the live source; discovery then loaded the v0
+   roster, and from 2026-10-09 06:20 it reads 793 wallets, one RPC call each, at the
+   shared 0.25 calls/s budget: 52 min per attempt (793 / 0.25 = 3172 s). 8 non-Base
+   wallets always fail, so every slot ends `degraded` and is retried 5 times, about
+   4.4 h of each 6 h. Every other analytics job waits behind it: on 2026-10-12/13 the
+   median start lag was 40 min (max 72 min) for `wallet.sample_balances`,
+   `wallet.sample_sleeves`, `ops.repair_gaps` and the rest, against 1 to 2 s before.
+   The worker's 15-min progress budget then marks worker-analytics unhealthy, which
+   is what failed R2.5 and W1. Fix in its own PR: batch the wallets (Multicall3), and
+   do not retry a degrade that is permanent (an unsupported chain).
+   Separately, `base-rpc-client.ts` clears its timeout once headers arrive, so a body
+   read has no deadline; this did not cause the stall, but is worth the same PR.
+6. **Open, product, in production since v0.6.0: no vault TVL has updated.**
+   `projects.fetch_vaults` fails `totalAssets()` on `0x7689…Cb07` (Bankr Agent Token
+   LP, `strategy_type: lp-fees`, not an ERC-4626 vault: the call reverts on Base), and
+   one failed vault degrades the whole run with `updated: 0`. Fix: read only ERC-4626
+   vaults through `totalAssets()`, and degrade per vault as the wallets do (346).
+7. **Open, gate: healthy sessions are graded stuck.** Migration 0117 (1263) moved
+   every subject to 24 h epochs on 2026-10-09; a session collects for its whole epoch.
+   `prod-gate.ts` still fails any open session older than `stuckAfterMin: 780` (13 h),
+   set by the gate port (1132) for 6 h epochs. The dump's sessions run on an exact
+   24 h cadence per subject, 6 h apart: none is stuck. Fix: derive the limit from the
+   subject's `epoch_duration_seconds` plus a margin.
+8. **Open, small: api, system-scheduler and analytics-producer ignore `docker stop`.**
+   `backend/Dockerfile` has no init, and only the worker handles SIGTERM. Bun runs as
+   PID 1, so SIGTERM is ignored, and Docker kills each one after 10 s (exit 137). Every
+   rolling replacement waits 10 s and cuts in-flight requests. Fix: `init: true` in
+   compose, and a SIGTERM drain in each entrypoint.
+9. **Open: the api was SIGKILLed once, 100 s after its boot,** in run
    `20261014T230723Z` (exit 137, no Docker kill or OOM event). The producer seed met
    the gap and failed R6.7a. It did not repeat in the passing run, where the api
-   peaked at 174 MiB with 5.4 GB free. Cause unknown; the kernel log is not readable
-   as `stage-server`.
-7. **Open, small: the old analytics-producer exits 137 on replacement.** It does not
-   stop within Docker's grace period.
-8. **Open, data: production state in the dump.** Sessions stuck in `judging` and
-   `collecting`, and a degraded vault extractor, need the owner's real triage before
-   the production R2.5.
+   peaked at 174 MiB with 5.4 GB free. The resume overwrote R6.7a's logs, so no
+   evidence is left. Cause unknown; the kernel log is not readable as `stage-server`.
+10. **Open, small: `docker inspect` receipts are not valid JSON.** The redaction of
+    the token bind mount (`…/run/rm-token:***`) drops the closing quote.
