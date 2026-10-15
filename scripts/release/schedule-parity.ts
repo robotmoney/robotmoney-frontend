@@ -15,7 +15,9 @@
 //      after that close;
 //   3. the regime run lands at :30 (the analytics-producer container's
 //      PRODUCER_REGIME_CRON, or the compose default, has minute 30);
-//   4. it REPORTS the last parity sweep's duration, and fails a dead one.
+//   4. it REPORTS the last parity sweep's duration, and fails a dead one; and
+//      the sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375,
+//      migration 0123): the one schedule this upgrade intends to move.
 // The stage target runs it unchanged: it is not accelerated.
 //
 // `--sessions` comes from the target's `watchSessions` (./target.ts). With
@@ -149,6 +151,16 @@ export function regimeCronProblems(cron: string): string[] {
   return minute === "30" ? [] : [`the regime cron "${cron}" runs at minute ${minute ?? "?"}, not :30`];
 }
 
+/** The parity sweep's one schedule (db/seed.ts, migration 0123), clear of every data-acquisition job. */
+export const PARITY_SWEEP_CRON = "47 4 * * *";
+
+/** PURE. The enabled analytics.parity_sweep crons must be exactly the one daily row. */
+export function paritySweepScheduleProblems(crons: readonly string[]): string[] {
+  return crons.length === 1 && crons[0] === PARITY_SWEEP_CRON
+    ? []
+    : [`analytics.parity_sweep is scheduled as [${crons.join(", ")}], not once at "${PARITY_SWEEP_CRON}"`];
+}
+
 /** PURE. The last parity sweep, for the report; a dead one fails. */
 export function paritySweep(last: { status: string; secs: number | null } | undefined): { problems: string[]; detail: string } {
   if (!last) return { problems: [], detail: "no parity sweep has run" };
@@ -197,6 +209,7 @@ async function main(): Promise<number> {
   let subjects: ({ id: string; epoch_duration_seconds: number } & AnchoredSubject)[];
   let current: CurrentSession[] = [];
   let last: { status: string; secs: number | null } | undefined;
+  let sweepCrons: string[] = [];
   try {
     subjects = (await db.query<{ id: string; epoch_duration_seconds: number; epoch_anchor: string | Date | null }>(
       "SELECT id::text AS id, epoch_duration_seconds, epoch_anchor FROM swarm_subjects WHERE status = 'active' ORDER BY id",
@@ -216,6 +229,9 @@ async function main(): Promise<number> {
     last = (await db.query<{ status: string; secs: number | null }>(
       "SELECT status, extract(epoch FROM updated_at - created_at)::float8 AS secs FROM jobs WHERE kind = 'analytics.parity_sweep' ORDER BY created_at DESC LIMIT 1",
     ))[0];
+    sweepCrons = (await db.query<{ cron: string }>(
+      "SELECT cron FROM job_schedules WHERE kind = 'analytics.parity_sweep' AND enabled ORDER BY cron",
+    )).map((r) => r.cron);
   } finally {
     await db.close();
   }
@@ -227,6 +243,7 @@ async function main(): Promise<number> {
     ...inFlightProblemsFor(sessions, baseline, current),
     ...("error" in cron ? [cron.error] : regimeCronProblems(cron.cron)),
     ...sweep.problems,
+    ...paritySweepScheduleProblems(sweepCrons),
   ];
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "schedule-parity.json");

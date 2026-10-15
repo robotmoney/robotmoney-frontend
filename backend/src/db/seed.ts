@@ -327,18 +327,21 @@ export const SCHEDULES: SeedSchedule[] = [
   // Handler: worker/handlers/index.ts → ops/asset-prices.ts::backfillAssetPricesForCleanDays.
   { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true },
   // Issue #979 AC2: dual-write parity sweep — the ONLY production caller of
-  // recordParityObservation()/runParitySweep() (analytics/cutover/parity.ts),
-  // which is what populates analytics_parity_observations. That table is the
-  // evidence backend/scripts/analytics-ledger-cutover-gate.ts reads before
-  // ledger-mode reads can ever be armed; the CLI itself only evaluates
-  // existing observations, it never records one. Hourly (staggered to minute
-  // 20 so it never fires in the same minute as vault.sample_share_price /
-  // vault.sample_adapters above): comfortably clears the gate's default
-  // 12-observation minimum inside its default 24h window, and each tick's
-  // cost is a handful of read queries plus one small insert per domain — not
-  // proportional to how often it runs. Handler: worker/handlers/index.ts →
-  // analytics/cutover/parity.ts::runParitySweep.
-  { kind: "analytics.parity_sweep", cron: "20 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  // recordParityObservation() (analytics/cutover/parity.ts), which is what
+  // populates analytics_parity_observations. That table is the evidence
+  // backend/scripts/analytics-ledger-cutover-gate.ts reads before ledger-mode
+  // reads can ever be armed; the CLI itself only evaluates existing
+  // observations, it never records one.
+  //
+  // ONCE A DAY AT 04:47 UTC (issue 1375, migration 0123 moves an existing row).
+  // The minute keeps it at least 15 minutes from every data-acquisition job:
+  // a producer run (compose 22:30/23:00, production every 3 h at :00 and :30),
+  // projects.refresh_coins (:10), projects.refresh_wallets (04:20),
+  // projects.fetch_vaults (04:30) and buybacks.refresh (06:15)
+  // (scripts/tests/unit/parity-sweep-schedule.test.ts). The gate's staleness
+  // budget is 26 h so a daily sweep keeps it fresh (cutover/gate.ts).
+  // Handler: worker/handlers/index.ts → analytics/api-client.ts::triggerParitySweep.
+  { kind: "analytics.parity_sweep", cron: "47 4 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast

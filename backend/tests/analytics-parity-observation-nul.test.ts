@@ -19,6 +19,7 @@ test("a mismatch whose natural key holds a NUL is recorded, with a visible separ
     legacyChecksum: HEX,
     ledgerChecksum: "b".repeat(64),
     matched: false,
+    mismatchCount: 1,
     mismatches: [{ naturalKey: "XLP_XLY\u00002026-03-19", reason: "canonical value differs between compatibility and ledger" }],
   });
   const [row] = await sql`SELECT detail FROM analytics_parity_observations WHERE id = ${id}`;

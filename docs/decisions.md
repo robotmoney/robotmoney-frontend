@@ -4983,6 +4983,52 @@ the fixed writers, relabels included) and
 `backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
 becomes one chain; guards armed; tables smaller on disk).
 
+### Amendment (issue 1375, 2026-10-15) — the parity check runs in Postgres, once a day, one domain per request
+
+**Status:** proposed
+
+**Why.** The parity sweep loaded both sides of all four domains into the api.
+Stage QA on 2026-10-15, with that day's production dump, saw one sweep take
+the api from 71 MiB to 5.9 GiB in 30 s on a 7.75 GiB host and hold 2.5 GiB
+after; an in-flight sweep killed the stage api at 20:27:06Z. Production failed
+17 sweeps from 2026-10-09 with "socket connection closed unexpectedly". The
+owner set three requirements: smarter set-based queries with supporting
+indexes; no parity computation in the api process, which only runs SQL and
+relays small results; and once a day, never overlapping data acquisition.
+
+**What changes.** The comparison rules above, and the observation table, do
+not.
+
+- Each domain is one set-based statement (`analytics/cutover/parity.ts`). It
+  returns both row counts, a sha256 over each side's ordered canonical rows,
+  the mismatch count and at most 20 mismatching keys. Raw history still
+  matches within `withinTolerance()`'s per-source tolerance, written in SQL
+  `double precision`, else after rounding at 1e-9.
+- What the comparison needs from an immutable payload is stored when the row
+  is written (migration 0123): `analytics_output_snapshots.natural_keys` (a
+  regime element's date; a research element's date, key and payload hash) and
+  `swarm_brief_revisions.body_hash`, with a GIN index and a covering index. A
+  research payload or brief body matches when the two `jsonb_hash_extended`
+  values match. A 64-bit collision is the one way a real difference could read
+  as a match.
+- `POST /api/analytics/parity-sweep` takes `{ "domain": ... }` and keeps the
+  api's 10 s limit; the 240 s exemption is gone. The worker posts the four
+  domains in turn and logs one line per domain.
+- The sweep runs at 04:47 UTC daily. The gate's default staleness budget is
+  26 h, so a daily sweep keeps it fresh; the 12-observation minimum now takes
+  12 days.
+
+**Evidence.** On the 2026-10-15 production dump, restored into a throwaway
+local Postgres 18: raw history 0.32 s, regime 0.06 s, research 0.19 s, briefs
+0.22 s, all matched, with the old in-process comparison reaching the same
+verdicts and counts (its regime check alone grew the process by 2.1 GiB).
+`backend/tests/analytics-parity-sql-equivalence.test.ts` holds the SQL to that
+comparison on every planted mismatch kind;
+`backend/tests/analytics-parity-sweep-memory.test.ts` bounds time and memory
+on a production-sized fixture;
+`scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
+every producer run, projects job and buyback refresh by 15 minutes.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)

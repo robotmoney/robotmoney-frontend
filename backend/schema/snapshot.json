@@ -123,7 +123,8 @@
     "0119_rejected_take_health_event.sql",
     "0120_maintenance_windows.sql",
     "0121_subject_closes_six_hours_apart.sql",
-    "0122_swarm_dormancy_baseline.sql"
+    "0122_swarm_dormancy_baseline.sql",
+    "0123_analytics_parity_sweep_daily.sql"
   ],
   "exclusions": {
     "roles": [
@@ -135,7 +136,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "f141890f8d0b35b36e4e96722a4e2a85fa1d8f3fc9b04a471bc76311e2cc5c1b",
+  "contentHash": "374e24d3c4e9d42821dfb77f55a9669697b943ad0ed19c420fa3a8d6f5f8ec43",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -597,6 +598,11 @@
       "type": "bigint",
       "notnull": "yes",
       "identity": "always"
+    },
+    "column public.analytics_output_snapshots.natural_keys": {
+      "type": "text[]",
+      "notnull": "no",
+      "generated": "stored: public.rm_analytics_output_natural_keys(artifact_kind, payload_bytes)"
     },
     "column public.analytics_output_snapshots.payload_bytes": {
       "type": "bytea",
@@ -2296,6 +2302,11 @@
     "column public.swarm_brief_revisions.body_bytes": {
       "type": "bytea",
       "notnull": "yes"
+    },
+    "column public.swarm_brief_revisions.body_hash": {
+      "type": "bigint",
+      "notnull": "no",
+      "generated": "stored: public.rm_json_bytes_hash(body_bytes)"
     },
     "column public.swarm_brief_revisions.checksum": {
       "type": "text",
@@ -4950,6 +4961,10 @@
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_analytics_output_ledger_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'analytics output ledger is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME\n    USING ERRCODE = 'feature_not_supported';\nEND;\n$function$\n"
     },
+    "function public.rm_analytics_output_natural_keys(text,bytea)": {
+      "owner": "rm_owner",
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_analytics_output_natural_keys(artifact_kind text, payload_bytes bytea)\n RETURNS text[]\n LANGUAGE plpgsql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  doc jsonb;\nBEGIN\n  IF artifact_kind NOT IN ('regime_snapshots', 'research_signals') THEN\n    RETURN NULL;\n  END IF;\n  doc := convert_from(payload_bytes, 'UTF8')::jsonb;\n  IF jsonb_typeof(doc) <> 'array' THEN\n    RETURN '{}'::text[];\n  END IF;\n  IF artifact_kind = 'regime_snapshots' THEN\n    RETURN ARRAY(\n      SELECT coalesce(e.elem ->> 'date', '')\n        FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n       ORDER BY e.ord);\n  END IF;\n  RETURN ARRAY(\n    SELECT coalesce(e.elem ->> 'date', '') || chr(31) || coalesce(e.elem ->> 'key', '') || chr(31)\n           || coalesce(jsonb_hash_extended(e.elem -> 'payload', 0)::text, '')\n      FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n     ORDER BY e.ord);\nEXCEPTION WHEN others THEN\n  RETURN NULL;\nEND;\n$function$\n"
+    },
     "function public.rm_analytics_overwrite_event_immutable()": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_analytics_overwrite_event_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RAISE EXCEPTION\n    'analytics_overwrite_events is immutable: UPDATE is not permitted'\n    USING ERRCODE = 'feature_not_supported';\nEND;\n$function$\n"
@@ -4973,6 +4988,10 @@
     "function public.rm_consensus_receipt_immutable()": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_consensus_receipt_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  RAISE EXCEPTION\n    'swarm_consensus_receipts is immutable once published: % refused (issue #754). A consensus receipt''s canonical bytes are what an on-chain digest commits to; publish a corrected receipt under a new session rather than editing this one.',\n    TG_OP\n    USING ERRCODE = 'raise_exception';\nEND;\n$function$\n"
+    },
+    "function public.rm_json_bytes_hash(bytea)": {
+      "owner": "rm_owner",
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_json_bytes_hash(body_bytes bytea)\n RETURNS bigint\n LANGUAGE plpgsql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RETURN jsonb_hash_extended(convert_from(body_bytes, 'UTF8')::jsonb, 0);\nEXCEPTION WHEN others THEN\n  RETURN NULL;\nEND;\n$function$\n"
     },
     "function public.rm_source_ledger_immutable()": {
       "owner": "rm_owner",
@@ -5093,6 +5112,9 @@
     },
     "index public.analytics_ledger_runs_run_key_key": {
       "definition": "CREATE UNIQUE INDEX analytics_ledger_runs_run_key_key ON public.analytics_ledger_runs USING btree (run_key)"
+    },
+    "index public.analytics_output_snapshots_natural_keys_idx": {
+      "definition": "CREATE INDEX analytics_output_snapshots_natural_keys_idx ON public.analytics_output_snapshots USING gin (natural_keys)"
     },
     "index public.analytics_output_snapshots_pkey": {
       "definition": "CREATE UNIQUE INDEX analytics_output_snapshots_pkey ON public.analytics_output_snapshots USING btree (id)"
@@ -5447,6 +5469,9 @@
     },
     "index public.swarm_brief_revisions_session_idx": {
       "definition": "CREATE INDEX swarm_brief_revisions_session_idx ON public.swarm_brief_revisions USING btree (session_id)"
+    },
+    "index public.swarm_brief_revisions_session_newest_idx": {
+      "definition": "CREATE INDEX swarm_brief_revisions_session_newest_idx ON public.swarm_brief_revisions USING btree (session_id, revision DESC) INCLUDE (body_hash)"
     },
     "index public.swarm_briefs_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_briefs_pkey ON public.swarm_briefs USING btree (id)"
