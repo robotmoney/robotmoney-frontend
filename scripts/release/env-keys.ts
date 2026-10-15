@@ -4,7 +4,7 @@
 // The keys spec §3 allows, with D61's `rm_owner`: a copy of preflight check
 // 4's ENV_FILE_ALLOWED_KEYS (backend/src/db/preflight.ts), kept literal so the
 // runner reads it before `bun install`. The release runner's env rewrite
-// (C07-env-rewrite), host guard (C19-host-guards) and target check (P02-identity) use it.
+// (C07-env-rewrite), host guard (S06-host-guards) and target check (P02-identity) use it.
 // scripts/tests/unit/release-run.test.ts pins it equal to check 4's list.
 //
 // `doadmin` is NOT on the list (D61 amendment, owner, 2026-10-08): the release

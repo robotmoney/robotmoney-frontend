@@ -17,7 +17,7 @@
 //     name backend/migrations lacks, and each applied file's bytes against the
 //     version the running stack reports at --origin/api/version (the receipt);
 //   - the R2.4 row counts and the database size;
-//   - the sessions in flight, with their window close (C22-schedule-parity's parity input).
+//   - the sessions in flight, with their window close (V01-subject-spacing's parity input).
 // It writes baseline.json beside them in `<instance state dir>/release/<run-ts>/`.
 //
 // It REFUSES (exit 1, after writing the record) when an in-house handle is in
@@ -36,7 +36,7 @@ import { parsePendingHeader } from "../../backend/src/db/schema-compat.ts";
 import { releaseStateDir } from "./release-state.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook P07-baseline). */
-/** Sessions in flight at the baseline; C22-schedule-parity checks each one published on its normal close. */
+/** Sessions in flight at the baseline; V01-subject-spacing checks each one published on its normal close. */
 export const IN_FLIGHT_SQL = `SELECT id::text AS id, subject_id::text AS subject, state, window_closes_at
   FROM swarm_sessions WHERE state NOT IN ('published', 'cancelled') ORDER BY window_closes_at NULLS LAST, id`;
 

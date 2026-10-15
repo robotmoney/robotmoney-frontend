@@ -117,9 +117,13 @@ and the phases run in this order:
 |---|---|---|---|
 | **QA** | `Q01`… | Stage only, as often as needed, on a QA branch commit | Checks the lockfile, picks or captures the dump, builds the stage target, sets its role passwords. A stage run then runs the preflight and cutover steps exactly as production does |
 | **Preflight** | `P01`… | Production, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
-| **Cutover** | `C01`… | Production, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, verification, the soak |
+| **Cutover** | `C01`… | Production, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade |
+| **Soak** | `S01`… | Every release, on stage (QA) and on production | The general checks: identity, product (readonly tier), logs, the baseline comparison, host guards, then 30 minutes after READY the log gate and the standing invariants (no crashed container, no pipeline errors), then every container's log |
+| **Version** | `V01`… | Every release, on stage (QA) and on production, after the soak | The release's own checks, one per change it ships: a feature landed, a bug is fixed, a feature retired. Only a release runbook adds them; a template has none. A check that must write runs on stage only |
 
-Stage has no preflight: the stage pass earns the rc, and nothing reruns on stage for it.
+A stage run is QA: it builds stage, then runs the preflight, cutover, soak and version steps exactly
+as production will, so production's checks have passed on stage before production runs them. Stage has
+no separate preflight: the stage pass earns the rc, and nothing reruns on stage for it.
 Production's cutover refuses without a green preflight of the same rc and step list from the last
 60 minutes, and carries the preflight steps' records instead of running them again. Preflights are
 cheap: run a new one rather than stretch an old one.
@@ -234,10 +238,10 @@ file: the admin types it into `bun run role-passwords` before the run, and no pr
 `--confirm-target`. No container receives a privileged credential, and no receipt, journal or log
 line prints one.
 
-**Postflight and soak.** C14-verify-version to C19-host-guards verify identity, product (readonly tier), logs, the baseline
-comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): C20-soak-gate grades logs since
-READY, C21-soak-checks runs the standing invariants against the READY baseline, C22-schedule-parity checks schedule parity, and
-C23-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+**Postflight and soak.** S01-verify-version to S06-host-guards verify identity, product (readonly tier), logs, the baseline
+comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): S07-soak-gate grades logs since
+READY, S08-soak-checks runs the standing invariants against the READY baseline, and
+S09-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
@@ -283,8 +287,16 @@ There are two kinds of file, and the runner runs only the second:
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
   anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
-  absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required) and its
-  `notes:`: identity, migrations, exceptions and owner decisions.
+  absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required), its
+  `notes:` (identity, migrations, exceptions and owner decisions), and its `scope:`.
+
+**Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
+`check: <step>`, the version step that proves it landed, or `none: <reason>` (docs only, CI only,
+release tooling the run itself exercises). QA step Q05-scope refuses a commit whose range from the
+version the target runs carries a PR the scope does not list, or a listed PR it does not carry. A
+version check is a file `scripts/release/version-checks/<release>/<name>.ts`, run by
+`scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
+`onlyFor: stage`.
 
 `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
@@ -331,20 +343,22 @@ recorded owner decision.
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
 | SR.0 | Stage's starting dump at most 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
+| SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
 | SC.3 | The operator's go is recorded before the run | `--go` |
 | SC.4 | The website never goes down: every probe answer 200, no gap | C04-probe-start, C13-probe-grade |
 | SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | P07-baseline, C05-migrate, C09-tokens, C10-rolling-boot, C12-site |
-| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | C14-verify-version |
+| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | S01-verify-version |
 | SV.2 | Smoke status: preflight and readiness green | C11-ready |
-| SV.3 | Product verification, readonly tier | C15-verify-product |
-| SV.4 | Log verdict after the release | C16-log-verdict |
-| SV.5 | Row counts only grow; the database did not balloon | C18-compare-baseline |
-| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, C19-host-guards |
-| SW.1 | The soak: logs since READY graded, schedule parity | C20-soak-gate, C22-schedule-parity |
-| SW.2 | The standing invariants over the soak (§10) | C17-soak-record, C21-soak-checks |
+| SV.3 | Product verification, readonly tier | S02-verify-product |
+| SV.4 | Log verdict after the release | S03-log-verdict |
+| SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
+| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
+| SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
+| SW.1 | The soak: logs since READY graded | S07-soak-gate |
+| SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
-| SW.4 | Every container's logs and inspect since READY in the journal | C23-collect-logs |
+| SW.4 | Every container's logs and inspect since READY in the journal | S09-collect-logs |
 
 Retired: SC.2 (2026-10-08, replaced by the go, D61).
 
@@ -358,7 +372,7 @@ read-only session, reads container logs and `docker inspect`, and holds no admin
 superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
 with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
 R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
-a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at C17-soak-record and runs the full check over the soak at C21-soak-checks.
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at S04-soak-record and runs the full check over the soak at S08-soak-checks.
 
 | Id | Invariant | Status | Note |
 |---|---|---|---|

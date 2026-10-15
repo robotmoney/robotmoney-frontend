@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/collect-logs.ts — release step C21-soak-checks, run ON THE TARGET HOST:
+// scripts/release/collect-logs.ts — release step S08-soak-checks, run ON THE TARGET HOST:
 // every container's logs since READY, and its `docker inspect`, into the run's
 // receipt directory, so the control journal holds the soak's whole evidence
 // (owner, 2026-10-14: a short soak that collects more logs).
@@ -11,7 +11,7 @@
 // `logs-<container>.log` (`docker logs --timestamps --since`) and
 // `logs-<container>.inspect.json`, flat in the receipt directory: the runner
 // copies receipts one level deep, as text, through its secret scrubber. The inspect output carries no secret: the
-// runtime holds no credential in its environment (D61, C19-host-guards checks it), and
+// runtime holds no credential in its environment (D61, S06-host-guards checks it), and
 // the scrubber the runner applies to receipts runs over these files too. It
 // writes `collect-logs.json` last: the container list, each file's size, and
 // any container it could not read. A container it could not read fails the
@@ -67,7 +67,7 @@ function main(): number {
     writeFileSync(join(dir, `logs-${stem}.inspect.json`), inspect.stdout, { mode: 0o600 });
     files[name] = { log: statSync(join(dir, `logs-${stem}.log`)).size, inspect: statSync(join(dir, `logs-${stem}.inspect.json`)).size };
   }
-  const receipt = { step: "C21-soak-checks", instance, project: record.project, since, containers: names, files, failed, at: new Date().toISOString() };
+  const receipt = { step: "S08-soak-checks", instance, project: record.project, since, containers: names, files, failed, at: new Date().toISOString() };
   writeFileSync(join(receiptDir, "collect-logs.json"), `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
   console.log(`[collect-logs] ${names.length - failed.length} of ${names.length} container(s) of ${record.project} collected since ${since}`);
   if (names.length === 0) console.error(`[collect-logs] compose project ${record.project} has no containers`);

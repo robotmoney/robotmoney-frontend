@@ -33,7 +33,7 @@ import type { ReleaseTarget } from "./target.ts";
 
 /**
  * Where a step runs: the target host, the capture host, or the control
- * machine itself (the release tag, C23-collect-logs).
+ * machine itself (the release tag, S09-collect-logs).
  */
 export type StepHost = "target" | "capture" | "control";
 
@@ -44,9 +44,16 @@ export type StepHost = "target" | "capture" | "control";
  *   - `preflight`: read-only gates on the target. Production runs them once per
  *     rc with `--preflight`, at most 60 minutes before the cutover, and the
  *     cutover carries their records instead of running them again.
- *   - `cutover`: the release as it happens, backup and restore proof first.
+ *   - `cutover`: the release as it happens, backup and restore proof first,
+ *     through the site switch and the probe's grade.
+ *   - `soak`: the general checks every release runs after READY, on stage and
+ *     production alike: identity, product, logs, the baseline comparison, host
+ *     guards, the 30-minute soak and every container's log.
+ *   - `version`: this release's own checks, one per change in its scope (did a
+ *     feature land, a bug get fixed, a feature retire). Only a release runbook
+ *     adds them; a template has none.
  */
-export type StepPhase = "qa" | "preflight" | "cutover";
+export type StepPhase = "qa" | "preflight" | "cutover" | "soak" | "version";
 
 /** The runner's host name for a control-machine step; never an ssh alias. */
 export const CONTROL_HOST = "(control)";
@@ -89,7 +96,7 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. The release tag (C23-collect-logs) is prod's: a stage run tags nothing. The rc is
+   * target. The release tag (S09-collect-logs) is prod's: a stage run tags nothing. The rc is
    * no step (D64): it is cut after the stage run passes, before the production
    * go names it (`bun scripts/release/tag.ts rc`). Stage's preparation (Q02-dump to
    * Q04-role-passwords: the dump, the target, its role passwords) is stage's: production has
@@ -190,7 +197,7 @@ export interface TemplateValues {
 /**
  * The template values of one run of one target. `ref` is what the go wrote
  * (the rc tag on prod, the commit on stage, D64); P01-checkout and P04-capture-checkout detach at it,
- * C14-verify-version checks it. It defaults to the commit.
+ * S01-verify-version checks it. It defaults to the commit.
  */
 export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
   return {
