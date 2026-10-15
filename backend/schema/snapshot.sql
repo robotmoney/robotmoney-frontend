@@ -94,6 +94,41 @@ $$;
 
 
 --
+-- Name: rm_analytics_output_natural_keys(text, bytea); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_analytics_output_natural_keys(artifact_kind text, payload_bytes bytea) RETURNS text[]
+    LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+DECLARE
+  doc jsonb;
+BEGIN
+  IF artifact_kind NOT IN ('regime_snapshots', 'research_signals') THEN
+    RETURN NULL;
+  END IF;
+  doc := convert_from(payload_bytes, 'UTF8')::jsonb;
+  IF jsonb_typeof(doc) <> 'array' THEN
+    RETURN '{}'::text[];
+  END IF;
+  IF artifact_kind = 'regime_snapshots' THEN
+    RETURN ARRAY(
+      SELECT coalesce(e.elem ->> 'date', '')
+        FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)
+       ORDER BY e.ord);
+  END IF;
+  RETURN ARRAY(
+    SELECT coalesce(e.elem ->> 'date', '') || chr(31) || coalesce(e.elem ->> 'key', '') || chr(31)
+           || coalesce(jsonb_hash_extended(e.elem -> 'payload', 0)::text, '')
+      FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)
+     ORDER BY e.ord);
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END;
+$$;
+
+
+--
 -- Name: rm_analytics_overwrite_event_immutable(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -225,6 +260,22 @@ BEGIN
     'swarm_consensus_receipts is immutable once published: % refused (issue #754). A consensus receipt''s canonical bytes are what an on-chain digest commits to; publish a corrected receipt under a new session rather than editing this one.',
     TG_OP
     USING ERRCODE = 'raise_exception';
+END;
+$$;
+
+
+--
+-- Name: rm_json_bytes_hash(bytea); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_json_bytes_hash(body_bytes bytea) RETURNS bigint
+    LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+BEGIN
+  RETURN jsonb_hash_extended(convert_from(body_bytes, 'UTF8')::jsonb, 0);
+EXCEPTION WHEN others THEN
+  RETURN NULL;
 END;
 $$;
 
@@ -883,6 +934,7 @@ CREATE TABLE public.analytics_output_snapshots (
     checksum text NOT NULL,
     byte_length bigint GENERATED ALWAYS AS (octet_length(payload_bytes)) STORED,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    natural_keys text[] GENERATED ALWAYS AS (public.rm_analytics_output_natural_keys(artifact_kind, payload_bytes)) STORED,
     CONSTRAINT analytics_output_snapshots_artifact_kind_check CHECK ((artifact_kind = ANY (ARRAY['regime_snapshots'::text, 'research_signals'::text, 'warnings'::text, 'logs'::text, 'exceptions'::text]))),
     CONSTRAINT analytics_output_snapshots_check CHECK ((encode(public.digest(payload_bytes, 'sha256'::text), 'hex'::text) = checksum)),
     CONSTRAINT analytics_output_snapshots_checksum_check CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))
@@ -2334,6 +2386,7 @@ CREATE TABLE public.swarm_brief_revisions (
     checksum text NOT NULL,
     report_snapshot_id bigint,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    body_hash bigint GENERATED ALWAYS AS (public.rm_json_bytes_hash(body_bytes)) STORED,
     CONSTRAINT swarm_brief_revisions_check CHECK ((encode(public.digest(body_bytes, 'sha256'::text), 'hex'::text) = checksum)),
     CONSTRAINT swarm_brief_revisions_checksum_check CHECK ((checksum ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT swarm_brief_revisions_revision_check CHECK ((revision > 0))
@@ -4761,6 +4814,13 @@ CREATE INDEX analytics_ledger_runs_job_idx ON public.analytics_ledger_runs USING
 
 
 --
+-- Name: analytics_output_snapshots_natural_keys_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX analytics_output_snapshots_natural_keys_idx ON public.analytics_output_snapshots USING gin (natural_keys);
+
+
+--
 -- Name: analytics_output_snapshots_run_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5121,6 +5181,13 @@ CREATE INDEX swarm_agent_health_events_type_idx ON public.swarm_agent_health_eve
 --
 
 CREATE INDEX swarm_brief_revisions_session_idx ON public.swarm_brief_revisions USING btree (session_id);
+
+
+--
+-- Name: swarm_brief_revisions_session_newest_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_brief_revisions_session_newest_idx ON public.swarm_brief_revisions USING btree (session_id, revision DESC) INCLUDE (body_hash);
 
 
 --

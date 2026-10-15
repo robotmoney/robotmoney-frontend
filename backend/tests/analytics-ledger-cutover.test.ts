@@ -21,7 +21,7 @@ import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { catchUpMissedIndicatorDays, CATCH_UP_PROVENANCE } from "../src/producer/index.ts";
 import { checkRawIndicatorHistoryParity, recordParityObservation } from "../src/analytics/cutover/parity.ts";
-import { evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
+import { defaultCutoverGateConfig, evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
 import { runCutoverGateCli } from "../scripts/analytics-ledger-cutover-gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
 import type { ParityDomain } from "../src/analytics/cutover/parity.ts";
@@ -281,6 +281,46 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith("insufficient count:"))).toBe(true);
     await expectLedgerModeRefused();
+  });
+});
+
+// Issue 1375: the sweep runs once a day, so the DEFAULT gate (no env
+// overrides) must pass on a daily window and still catch a sweep that stopped.
+describe("issue 1375: the default gate on a once-a-day sweep", () => {
+  /** defaultCutoverGateConfig() with none of this file's TEST_GATE_ENV overrides. */
+  function productionDefaults(): CutoverGateConfig {
+    const saved = Object.fromEntries(Object.keys(TEST_GATE_ENV).map((k) => [k, process.env[k]]));
+    for (const k of Object.keys(TEST_GATE_ENV)) delete process.env[k];
+    try {
+      return defaultCutoverGateConfig();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
+    }
+  }
+
+  async function seedDaily(newest: Date, days: number): Promise<void> {
+    for (const domain of DOMAINS) {
+      for (let d = days - 1; d >= 0; d--) await insertObservation(domain, new Date(newest.getTime() - d * 86_400_000), true);
+    }
+  }
+
+  test("twelve daily matched observations pass with the default config", async () => {
+    const config = productionDefaults();
+    expect(config.maxStalenessMs).toBe(26 * 60 * 60 * 1000);
+    const newest = new Date(Date.now() - 60 * 60 * 1000); // the 04:47 sweep, an hour ago
+    await seedDaily(newest, 12);
+    const result = await evaluateCutoverGate(sql, config, new Date());
+    expect(result.reasons).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  test("the default config reports stale when the newest observation is 27 h old", async () => {
+    const config = productionDefaults();
+    const now = new Date();
+    await seedDaily(new Date(now.getTime() - 27 * 60 * 60 * 1000), 12);
+    const result = await evaluateCutoverGate(sql, config, now);
+    expect(result.ok).toBe(false);
+    expect(result.reasons.filter((r) => r.startsWith("stale result:"))).toHaveLength(DOMAINS.length);
   });
 });
 

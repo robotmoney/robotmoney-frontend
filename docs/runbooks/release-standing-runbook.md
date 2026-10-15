@@ -137,7 +137,7 @@ a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner runs it a
 | R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
 | R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
 | R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
-| R8.f | Parity sweeps: none dead, longest under the api statement timeout | script | |
+| R8.f | Parity sweeps: none dead, longest under 60 s, p50 at or under 5 s. The sweep runs once a day at 04:47 UTC, one request per domain (issue 1375), so a soak shorter than a day may see none: that is INFO, not a failure. R7.4a also fails unless `analytics.parity_sweep` is scheduled exactly once, at `47 4 * * *` | script | |
 | R8.g | Website server errors: none, or only warned | script | |
 | R8.h, R8.i | Quorum excludes the judge. Every published session has takes, a judgement and a receipt | script | |
 | R8.j | No session wedged past its window plus grace | script | |

@@ -50,7 +50,7 @@ import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, 
 import { recordedHash } from "../../release/steps-table.ts";
 import { RELEASE_DELTAS, stepsFor, type DeltaStep } from "../../release/steps.ts";
 import { nextRcTag, rcTagsAt } from "../../release/tag.ts";
-import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, regimeCronProblems } from "../../release/schedule-parity.ts";
+import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, paritySweepScheduleProblems, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
@@ -1153,6 +1153,12 @@ describe("schedule parity (R7.4a)", () => {
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T14:00:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("120 min after");
     expect(regimeCronProblems("0 */3 * * *").length).toBe(1);
     expect(paritySweep({ status: "dead", secs: 240 }).problems.length).toBe(1);
+  });
+  test("the parity sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375)", () => {
+    expect(paritySweepScheduleProblems(["47 4 * * *"])).toEqual([]);
+    expect(paritySweepScheduleProblems(["20 * * * *"]).join()).toContain("not once");
+    expect(paritySweepScheduleProblems(["20 * * * *", "47 4 * * *"]).length).toBe(1);
+    expect(paritySweepScheduleProblems([]).length).toBe(1);
   });
   test("deferred (stage's 15-minute watch): a still-collecting in-flight session passes; graded fails it", () => {
     const collecting = [{ id: "s1", state: "collecting", window_closes_at: close, published_at: null, judging_duration_seconds: 900 }];
