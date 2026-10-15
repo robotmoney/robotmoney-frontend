@@ -797,6 +797,14 @@ export function createStack(
     // API that was up but not yet listening. Readiness is a precondition of
     // initialization, so it is sequenced as one.
     if (upOpts.initialize) {
+      // Issue 1378: a deferred service still running from the previous boot
+      // (the old analytics-producer) would run its boot catch-up against the
+      // api while the seed one-shot runs. Stop it first; `compose stop` on a
+      // service with no running container is a no-op. It drains on SIGTERM
+      // inside its stop_grace_period and starts again after initialization.
+      if (requestedDeferred.size > 0) {
+        await composeAsync(["stop", ...requestedDeferred], `stop deferred services ${[...requestedDeferred].join(" ")} before initialization`);
+      }
       await boundary("initialize");
       emit({ phase: "initialize", status: "start" });
       await upOpts.initialize();

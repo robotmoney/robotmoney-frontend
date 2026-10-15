@@ -369,6 +369,24 @@ target that differs from the one it resolved. No container receives a privileged
 and no receipt, journal or log line prints one. Production runs only after a stage run of the
 same step list at the same commit passed (standing check SP.8).
 
+**A boot or a rolling boot is uneventful (issue 1378).** The services hold this
+contract, so a runbook needs no step to drain or clean the queue by hand:
+
+- `worker-analytics` claims no job until the api's `/health` answers. It waits
+  in process as well as through compose, because a rolling boot starts each
+  service with `--no-deps`.
+- At worker start a sweep cancels the stale backlog of the `latest-only` and
+  `collapse-per-bucket` kinds, with the reason `superseded at worker start`.
+  A restored dump's backlog never runs, and live samplers start on time.
+- After downtime each heavy kind enqueues one job, not one per missed slot.
+- The stack stops the old `analytics-producer` before the seed one-shot. The
+  new producer starts its boot catch-up a bounded, jittered delay after api
+  readiness.
+- On stop, `worker-analytics` releases its job inside its 45 s grace period.
+  The api, `system-scheduler` and `analytics-producer` drain on SIGTERM and
+  exit 0. A container that exits 137, or a job the reaper requeues after a
+  stop, is a finding to triage, not expected noise.
+
 ### 4.7.1. Product verification (separate from postflight, and from the deploy)
 
 **Postflight and verification answer different questions, so they are different

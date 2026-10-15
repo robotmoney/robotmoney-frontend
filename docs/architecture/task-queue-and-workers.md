@@ -80,6 +80,38 @@ worker finishes its in-flight job up to `WORKER_SHUTDOWN_TIMEOUT_MS`, then
 releases anything it still owns back to `pending` — a stopped worker never
 leaves an orphaned `running` row.
 
+**Boot and stop contract (issue 1378).** A start, a restart or a rolling boot
+releases no job burst and orphans no job.
+
+- **Catch-up policy.** Each schedule has a `catchup_policy`. `all` enqueues
+  every missed slot. `collapse-per-bucket` enqueues the newest missed slot of
+  each UTC day (the wallet samplers). `latest-only` enqueues one job, for the
+  newest missed slot. The six heavy kinds use `latest-only`:
+  `analytics.parity_sweep`, `projects.refresh_wallets`,
+  `projects.fetch_vaults`, `projects.refresh_coins`, `ops.repair_gaps` and
+  `ops.backfill_asset_prices`.
+- **Stale-backlog sweep.** At worker start, before the first claim, the worker
+  cancels superseded rows. For a `latest-only` kind it cancels every pending
+  row, and every running row whose lease expired, except the newest slot. For
+  a `collapse-per-bucket` kind it keeps the newest slot of each UTC day. Each
+  cancelled row records the reason `superseded at worker start`. `all` kinds
+  are never touched, and no row is deleted. A restored dump's stale backlog
+  therefore never runs.
+- **API readiness.** `worker-analytics` claims no job until the api's `/health`
+  answers 200. Compose gates it on `api: service_healthy`, and the worker also
+  waits in process, because the rolling boot starts services with
+  `--no-deps`. A parity sweep that still meets an unready api degrades and
+  retries; it does not spend its attempt as a hard failure.
+- **Producer.** The producer's boot research and indicator catch-up start
+  `PRODUCER_BOOT_CATCHUP_DELAY_MS` plus a bounded jitter after api readiness.
+  The stack stops the old producer before the seed one-shot runs.
+- **Stop.** On SIGTERM the worker releases its claimed job inside a 45 s
+  `stop_grace_period` (its own release window is 30 s). The api stops
+  accepting, finishes in-flight requests, closes stream sockets and exits 0.
+  The scheduler and the producer stop their timers and exit 0. The four bun
+  services run with `init: true`, so `docker stop` reaches the process and no
+  container exits 137.
+
 **Idempotency** comes from upserting on natural keys; **exactly-once scheduling**
 from the dedupe key; **concurrency safety** from `SKIP LOCKED`. Handlers
 (`worker/handlers/`) are registered per `kind`. The retained `regime.classify`
