@@ -96,4 +96,12 @@ export interface ProjectsDataSource {
   supportsWallet(address: string, chain: string): boolean;
   // Wallet bucket: summed USD balance for a tracked address.
   walletBalanceUsd(address: string, chain: string): Promise<number>;
+  // Wallet bucket, batched (issue 1373): every address's USD balance on one
+  // chain in one call, keyed by the LOWERCASED address. refreshWallets uses
+  // this, so a run costs a few Multicall3 POSTs and one price read instead of
+  // one of each per wallet. Each address carries its own result: one failed
+  // read fails only that address.
+  walletBalancesUsd(addresses: string[], chain: string): Promise<Map<string, WalletBalanceRead>>;
 }
+
+export type WalletBalanceRead = { ok: true; balanceUsd: number } | { ok: false; error: Error };

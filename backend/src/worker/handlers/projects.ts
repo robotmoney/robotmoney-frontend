@@ -526,7 +526,7 @@ const updateCoverage = registerQuery({
 
 import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
-import type { DiscoveredProject, ProjectsDataSource } from "../../projects/access/data-source.ts";
+import type { DiscoveredProject, ProjectsDataSource, WalletBalanceRead } from "../../projects/access/data-source.ts";
 import {
   coinGeckoFields,
   computeCoverage,
@@ -862,6 +862,7 @@ export async function refreshWallets(
   // reported once per run at info level instead of an error line per wallet
   // that also degraded every run.
   let unsupported = 0;
+  const byChain = new Map<string, { id: string; address: string }[]>();
   for (const w of wallets) {
     const address = w.address as string;
     const chain = w.chain ?? "base";
@@ -869,13 +870,35 @@ export async function refreshWallets(
       unsupported += 1;
       continue;
     }
+    const group = byChain.get(chain) ?? [];
+    group.push({ id: w.id, address });
+    byChain.set(chain, group);
+  }
+
+  // Issue 1373: one batched read per chain (in production only "base"), not one
+  // RPC POST per wallet. 793 wallets one at a time took 52 min per attempt at
+  // the shared 0.25 calls/s Base RPC budget; the batched read is a few
+  // Multicall3 POSTs and one price read. Each wallet still gets its own result,
+  // so one failed read fails only that wallet.
+  for (const [chain, group] of byChain) {
+    let reads: Map<string, WalletBalanceRead>;
     try {
-      const balance = await source.walletBalanceUsd(address, chain);
-      updates.push({ id: w.id, balance });
+      reads = await source.walletBalancesUsd(group.map((w) => w.address), chain);
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      reads = new Map(group.map((w) => [w.address.toLowerCase(), { ok: false, error } as const]));
+    }
+    for (const w of group) {
+      const read = reads.get(w.address.toLowerCase()) ?? { ok: false, error: new Error("no balance returned") };
+      if (read.ok) {
+        updates.push({ id: w.id, balance: read.balanceUsd });
+        continue;
+      }
       failed += 1;
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[projects.refresh_wallets] wallet ${w.id} live read failed, keeping last-persisted balance (degraded):`, message);
+      console.error(
+        `[projects.refresh_wallets] wallet ${w.id} live read failed, keeping last-persisted balance (degraded):`,
+        read.error.message,
+      );
     }
   }
 

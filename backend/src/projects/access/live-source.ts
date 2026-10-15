@@ -26,14 +26,9 @@ import {
   multicall3Aggregate3,
   type RpcCallOptions,
 } from "../../chain/base-rpc-client.ts";
-import {
-  persistedFallbackWalletPriceReader,
-  readChainAmountsBatched,
-  valueLeg,
-  type KeyedAssetRead,
-} from "../../chain/wallet-valuation.ts";
+import { persistedFallbackWalletPriceReader, readChainAmountsBatched } from "../../chain/wallet-valuation.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
-import type { DiscoveredProject, Erc4626Read, ProjectsDataSource } from "./data-source.ts";
+import type { DiscoveredProject, Erc4626Read, ProjectsDataSource, WalletBalanceRead } from "./data-source.ts";
 import { loadV0RosterWithManifest, type LoadedRosterSeed } from "../seed/roster-seed.ts";
 
 // CoinGecko has two hosts. The public host serves the keyless, rate-limited
@@ -208,31 +203,60 @@ export const liveProjectsDataSource: ProjectsDataSource = {
   // fallback valuation machinery the prop-wallet feeds share
   // (chain/wallet-valuation.ts) instead of the never-built legacy Alchemy
   // token-balance-scan port. Scope is deliberately narrow — native-ETH balance
-  // on Base only, matching the "smallest first step" the issue asks for: the
-  // discovery roster's wallets that are NOT on "base" (a handful of Ethereum/
-  // Solana treasuries) have no live RPC wired at all in this codebase yet, so
-  // this throws for them rather than fabricate a number; the caller (
-  // worker/handlers/projects.ts refreshWallets) degrades that ONE wallet to
-  // its last-persisted balance_usd, never the whole run.
+  // on Base only. The discovery roster's wallets that are NOT on "base" have no
+  // live RPC wired at all in this codebase yet, so they fail rather than
+  // fabricate a number; refreshWallets skips them first (supportsWallet).
   async walletBalanceUsd(address: string, chain: string): Promise<number> {
+    const read = (await this.walletBalancesUsd([address], chain)).get(address.toLowerCase());
+    if (!read) throw new Error(`live wallet-balance read returned nothing for ${address}`);
+    if (!read.ok) throw read.error;
+    return read.balanceUsd;
+  },
+
+  // Issue 1373: every wallet in ONE readChainAmountsBatched call. Each address
+  // is a Multicall3 getEthBalance sub-call, and multicall3Aggregate3 splits
+  // them into MULTICALL3_MAX_SUBCALLS_PER_POST-sized POSTs, so 785 wallets cost
+  // 8 Base RPC POSTs, not 785. The ETH price is read ONCE for the whole batch.
+  // A failed sub-call, or a chunk whose POST threw, fails only its own
+  // addresses; a failed price read fails every address (nothing to value with).
+  async walletBalancesUsd(addresses: string[], chain: string): Promise<Map<string, WalletBalanceRead>> {
+    const keys = [...new Set(addresses.map((a) => a.toLowerCase()))];
+    const out = new Map<string, WalletBalanceRead>();
+    const failAll = (error: unknown): Map<string, WalletBalanceRead> => {
+      const e = error instanceof Error ? error : new Error(String(error));
+      for (const k of keys) out.set(k, { ok: false, error: e });
+      return out;
+    };
     if (chain !== "base") {
-      throw new Error(
-        `live wallet-balance provider only covers chain "base" (got "${chain}") for ${address} — ` +
-          "no RPC/pricing path exists for other chains yet",
+      return failAll(
+        new Error(
+          `live wallet-balance provider only covers chain "base" (got "${chain}") — ` +
+            "no RPC/pricing path exists for other chains yet",
+        ),
       );
     }
+    if (keys.length === 0) return out;
     const ethAsset = resolveTrackedAssets().find((a) => a.symbol === "ETH");
-    if (!ethAsset) throw new Error("native ETH tracked asset is not configured (resolveTrackedAssets)");
-    const reads: KeyedAssetRead[] = [{ key: address, asset: ethAsset, wallets: [address] }];
-    const chainAmounts = await readChainAmountsBatched(reads, "projects.walletBalanceUsd");
-    const valued = await valueLeg(
-      ethAsset,
-      chainAmounts.get(address) ?? { ok: false },
-      resolveBaseRpcSource(),
-      resolvePriceSource(),
-      persistedFallbackWalletPriceReader,
+    if (!ethAsset) return failAll(new Error("native ETH tracked asset is not configured (resolveTrackedAssets)"));
+    // Keyed by address, one wallet per key, so nothing sums across wallets
+    // (duplicate addresses were collapsed above).
+    const amounts = await readChainAmountsBatched(
+      keys.map((k) => ({ key: k, asset: ethAsset, wallets: [k] })),
+      "projects.walletBalancesUsd",
     );
-    if (!valued.ok) throw valued.error instanceof Error ? valued.error : new Error(String(valued.error));
-    return valued.valueUsd;
+    if (![...amounts.values()].some((a) => a.ok)) {
+      return failAll(new Error("ETH chain read unavailable"));
+    }
+    let priceUsd: number;
+    try {
+      priceUsd = (await persistedFallbackWalletPriceReader.read(ethAsset, resolveBaseRpcSource(), resolvePriceSource())).priceUsd;
+    } catch (err) {
+      return failAll(err);
+    }
+    for (const k of keys) {
+      const a = amounts.get(k);
+      out.set(k, a?.ok ? { ok: true, balanceUsd: a.amount * priceUsd } : { ok: false, error: new Error("ETH chain read unavailable") });
+    }
+    return out;
   },
 };

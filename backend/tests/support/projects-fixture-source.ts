@@ -31,5 +31,6 @@ export function failingSource(prefix: string): ProjectsDataSource {
     vaultErc4626Read: boom,
     supportsWallet: () => true,
     walletBalanceUsd: boom,
+    walletBalancesUsd: boom,
   };
 }

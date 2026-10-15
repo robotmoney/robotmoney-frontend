@@ -23,6 +23,14 @@ import {
 } from "../src/worker/handlers/projects.ts";
 import type { ProjectsDataSource } from "../src/projects/access/data-source.ts";
 import { failingSource, uniqueSlugSource } from "./support/projects-fixture-source.ts";
+import {
+  _resetRpcConcurrencyForTests,
+  decodeAggregate3Calls,
+  encodeAggregate3Result,
+  MULTICALL3_ADDRESS,
+  type Aggregate3Result,
+} from "../src/chain/base-rpc-client.ts";
+import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 
 const KINDS = [
   "projects.discover",
@@ -452,6 +460,155 @@ test("refreshWallets still logs an error and degrades for a base wallet whose re
     expect(Number(balance_usd)).toBe(700);
   } finally {
     con.restore();
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+// ── Issue 1373: one refresh reads every Base wallet in a few Multicall3 POSTs ─
+// Production (2026-10-14) refreshed 793 wallets one Multicall3 POST each through
+// the shared 0.25 calls/s Base RPC bucket: 52 min per attempt. These tests run
+// the REAL live source and transport over 785 Base wallets, with fetch mocked
+// only at the process boundary, and count what goes on the wire.
+const PROD_BASE_WALLETS = 785;
+const GET_ETH_BALANCE = "0x4d2301cc";
+
+interface CountingTransport {
+  posts: string[][]; // the wallets each Base RPC POST asked for
+  priceReads: number;
+}
+
+function countingTransport(opts: { revert?: string; failPostWith?: string } = {}): CountingTransport {
+  const t: CountingTransport = { posts: [], priceReads: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      t.priceReads += 1;
+      const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
+      const token_prices = Object.fromEntries(addrs.map((a) => [a, "2000"]));
+      return new Response(JSON.stringify({ data: { attributes: { token_prices } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: [{ to: string; data: string }, string] };
+    expect(body.method).toBe("eth_call");
+    expect(body.params[0].to).toBe(MULTICALL3_ADDRESS);
+    const calls = decodeAggregate3Calls(body.params[0].data);
+    for (const c of calls) expect(c.callData.slice(0, 10)).toBe(GET_ETH_BALANCE);
+    const wallets = calls.map((c) => "0x" + c.callData.slice(-40));
+    t.posts.push(wallets);
+    if (opts.failPostWith && wallets.includes(opts.failPostWith)) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, error: { code: -32000, message: "forced chunk failure" } }), { status: 200 });
+    }
+    const results: Aggregate3Result[] = wallets.map((w) =>
+      w === opts.revert ? { success: false, returnData: "0x" } : { success: true, returnData: "0x" + (10n ** 18n).toString(16).padStart(64, "0") },
+    );
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  return t;
+}
+
+// 785 Base wallets at a stale $5 balance, under one throwaway project.
+async function seedBaseWallets(tag: string): Promise<{ projectId: string; rows: { id: string; address: string }[] }> {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkbatch_${tag}`}, 'Batched Wallets', 'active') RETURNING id`;
+  const values = Array.from({ length: PROD_BASE_WALLETS }, (_, i) => ({
+    project_id: projectId,
+    label: `w${i}`,
+    chain: "base",
+    address: "0x" + tag + i.toString(16).padStart(32, "0"),
+    is_active: true,
+    balance_usd: 5,
+  }));
+  const rows = await fixtureDb<{ id: string; address: string }[]>`
+    INSERT INTO tracked_wallets ${sql(values)}
+    RETURNING id, address`;
+  return { projectId, rows };
+}
+
+async function balancesById(ids: string[]): Promise<Map<string, { balance: number; refreshed: boolean }>> {
+  const rows = await sql<{ id: string; balance_usd: string; refreshed_at: Date | null }[]>`
+    SELECT id, balance_usd, refreshed_at FROM tracked_wallets WHERE id IN ${sql(ids)}`;
+  return new Map(rows.map((r) => [r.id, { balance: Number(r.balance_usd), refreshed: r.refreshed_at !== null }]));
+}
+
+async function withLiveTransport<T>(run: () => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  _resetRpcConcurrencyForTests();
+  _resetTokenPriceCacheForTests();
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.BASE_RPC_MAX_RETRIES;
+    _resetRpcConcurrencyForTests();
+    _resetTokenPriceCacheForTests();
+  }
+}
+
+test("refreshWallets over 785 Base wallets issues at most 10 Base RPC POSTs and one ETH price read, and updates every wallet", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport();
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      expect(res).toEqual({ ok: true, status: "ok", updated: PROD_BASE_WALLETS, failed: 0, unsupported: 0 });
+      expect(t.posts.length).toBeLessThanOrEqual(10);
+      expect(t.priceReads).toBe(1);
+      expect(t.posts.flat().length).toBe(PROD_BASE_WALLETS); // every wallet asked for once
+      const after = await balancesById(ids);
+      for (const id of ids) expect(after.get(id)).toEqual({ balance: 2000, refreshed: true });
+    });
+  } finally {
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets: a wallet whose getEthBalance sub-call fails keeps its balance and counts as failed; the rest of its chunk updates", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  const reverted = rows[7]!;
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport({ revert: reverted.address });
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      expect(res).toEqual({ ok: false, status: "degraded", updated: PROD_BASE_WALLETS - 1, failed: 1, unsupported: 0 });
+      const chunk = new Set(t.posts.find((p) => p.includes(reverted.address))!);
+      expect(chunk.size).toBeGreaterThan(1);
+      const after = await balancesById(ids);
+      expect(after.get(reverted.id)).toEqual({ balance: 5, refreshed: false });
+      for (const r of rows) {
+        if (r.id !== reverted.id) expect(after.get(r.id)).toEqual({ balance: 2000, refreshed: true });
+      }
+    });
+  } finally {
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets: a chunk whose POST throws fails only that chunk's wallets; wallets in other chunks update", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  const inBrokenChunk = rows[400]!.address;
+  process.env.BASE_RPC_MAX_RETRIES = "0";
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport({ failPostWith: inBrokenChunk });
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      const broken = new Set(t.posts.find((p) => p.includes(inBrokenChunk))!);
+      expect(broken.size).toBeGreaterThan(0);
+      expect(broken.size).toBeLessThan(PROD_BASE_WALLETS);
+      expect(res).toEqual({ ok: false, status: "degraded", updated: PROD_BASE_WALLETS - broken.size, failed: broken.size, unsupported: 0 });
+      const after = await balancesById(ids);
+      for (const r of rows) {
+        expect(after.get(r.id)).toEqual(broken.has(r.address) ? { balance: 5, refreshed: false } : { balance: 2000, refreshed: true });
+      }
+    });
+  } finally {
     await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
   }
 });

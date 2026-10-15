@@ -61,6 +61,20 @@ from this repo's own tables and pipelines instead of Supabase.
     `projects.refresh_wallets` run still updates (issue #346 also fixed a bug
     where one bad wallet used to abort the whole run instead of degrading
     alone).
+  - **Refresh cost per run** (issue 1373): `refreshWallets` reads every
+    supported wallet through ONE batched source call,
+    `walletBalancesUsd(addresses, chain)`. The live source builds one
+    Multicall3 `getEthBalance` sub-call per wallet through
+    `readChainAmountsBatched`, and `multicall3Aggregate3` sends them in POSTs
+    of at most `MULTICALL3_MAX_SUBCALLS_PER_POST` (100) sub-calls
+    (`backend/src/chain/base-rpc-client.ts`). The ETH USD price is read once
+    per run. So the 785 production Base wallets cost 8 Base RPC POSTs and one
+    price read: at most 32 s against the shared 0.25 calls/s budget even from
+    an empty bucket (about 12 s from a full burst of 5),
+    where one POST per wallet took 52 min per attempt (production capture
+    2026-10-14). A reverted sub-call fails only its wallet. A chunk whose POST
+    throws fails only that chunk's wallets. Each failed wallet keeps its
+    last-persisted `balance_usd` and degrades the run as above.
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
     (`backend/src/projects/access/select.ts`) serves the hermetic fixture
