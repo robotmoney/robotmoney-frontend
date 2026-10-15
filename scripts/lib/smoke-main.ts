@@ -33,7 +33,7 @@ import {
   type AdmissionRecord,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
-import { decideImagesOverride } from "./smoke-images-override.ts";
+import { decideImagesOverride, projectImageIds } from "./smoke-images-override.ts";
 import { credentialFileModelKey, preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { adoptRestoredRoster, credentialHandlesOf, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
 import {
@@ -1072,17 +1072,6 @@ function runningServices(): Record<string, string> {
   return services;
 }
 
-/** The image id this project's compose tag (`<project>-<service>`) names, for each running service; what a resume may take as the plan's own build. */
-function builtImages(services: readonly string[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const service of services) {
-    const r = Bun.spawnSync(["docker", "image", "inspect", "--format", "{{.Id}}", `${project}-${service}`], { stdout: "pipe", stderr: "pipe" });
-    const id = r.stdout.toString().trim();
-    if (r.exitCode === 0 && id.startsWith("sha256:")) out[service] = id;
-  }
-  return out;
-}
-
 /** This project's participant containers, as the journal names them (`kind:name`). */
 function runningParticipantNames(): string[] {
   // As runningServices(): what Docker cannot report is recorded as nothing
@@ -1285,7 +1274,7 @@ async function main(): Promise<void> {
   let recheckSchema = journalExpects;
   /** Set when THIS run restored the dump: the restore, not the old journal, defines the schema. */
   let restoredThisRun = false;
-  const decision = decideResume(onDisk, planId, lastExpectations, builtImages(Object.keys(lastExpectations.services)));
+  const decision = decideResume(onDisk, planId, lastExpectations, projectImageIds(project, Object.keys(lastExpectations.services)));
   if (decision.kind === "refuse") fatal(`the journal for instance ${instance.name} refuses this run: ${decision.reason}`);
   if (decision.kind === "supersede") log(decision.report);
   if (decision.kind === "resume") log(`resuming the journal for plan ${planId} (it continues at ${decision.nextPhase})`);
@@ -1982,10 +1971,7 @@ main().catch(async (err) => {
   // LOCAL: the stack stays up for inspection, so the writers must be stopped
   // EXPLICITLY — leaving them running is what let a failed boot go on mutating
   // the database (a remote one, that no teardown can roll back).
-  // A rolling boot (--static-port: the stack that serves the site) is the
-  // exception: by the time it fails, the services it replaced already serve,
-  // and stopping the api takes the site's API down (owner, 2026-10-14: the
-  // website never goes down). They keep running; the runbook's recovery decides.
+  // Except a rolling (--static-port) boot: stopping its api takes the live site's API down (smoke-failure.ts `kept`).
   const writers = !dockerEnv ? "none" : staticPortMode ? "kept" : quiesceWriters();
   // Failure may have happened before readiness wrote the stack record, yet the
   // containers can already be up. Write it best-effort so `smoke:down` can find
