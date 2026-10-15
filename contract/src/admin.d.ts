@@ -316,6 +316,8 @@ export interface AdminTopicListResponse {
 //      typecheck too. Belt-and-braces only — a typecheck is not a test, and
 //      that one IS path-gated on `backend/**`.
 
+import type { AdminMemberReferral } from "./referrals";
+
 export type AdminMemberStatus = "applied" | "active" | "inactive";
 export type AdminMemberRole = "member" | "judge";
 export type ApplicationStatus = "pending" | "approved" | "rejected";
@@ -360,6 +362,9 @@ export interface AdminMember {
   silentSessions: number | null;
   /** SWARM_DORMANCY_THRESHOLD_SESSIONS, as SwarmMember.silentThreshold. */
   silentThreshold: number;
+  /** Issue 1358: the member's referral code from backend config, or null when
+   * the member has none. Admin only; no public member response carries it. */
+  referral: AdminMemberReferral | null;
 }
 
 /** GET .../applications row. listApplicationsAdmin() returns raw, unprojected

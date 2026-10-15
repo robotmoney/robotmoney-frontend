@@ -6,6 +6,8 @@
 import { test, expect, beforeAll } from "bun:test";
 import { generateKeyPair } from "../../src/lib/signing.ts";
 import { handleSwarmAdmin } from "../../src/api/routes/swarm-admin.ts";
+import { handleSwarm } from "../../src/api/routes/swarm.ts";
+import { _setReferralCodesForTests } from "../../src/referrals/check.ts";
 import { sql } from "../../src/db/client.ts";
 import { openEpoch } from "../../src/swarm/domain.ts";
 import { ROUTES } from "@robotmoney/contract";
@@ -493,6 +495,8 @@ test("members: update writes every editable field, bumps version, and the projec
     // Issue 1269: counted on the admin list only; a single-member response is null.
     silentSessions: null,
     silentThreshold: 7,
+    // Issue 1358: no code in REFERRAL_CODES names this member.
+    referral: null,
   });
   expect(member).not.toHaveProperty("token_hash");
   expect(member).not.toHaveProperty("public_key");
@@ -504,6 +508,52 @@ test("members: update writes every editable field, bumps version, and the projec
   expect(listed.biases).toEqual(["never-sells-agent-tokens", "openly-conflicted"]);
   expect(listed.voiceMd).toBe("# voice");
   expect(listed.avatar).toEqual({ path: "/img/woon.png" });
+});
+
+// Issue 1358: the admin member list carries the member's referral code, with
+// whether it is on, from REFERRAL_CODES (injected here). No public member route
+// carries any of it.
+test("members: the admin list carries referral for a member with a code and null otherwise; public member routes carry none", async () => {
+  const withCode = await seatMember();
+  const without = await seatMember();
+  const code = `rm_${withCode.handle.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 20) || "member"}`;
+  _setReferralCodesForTests([
+    { code, memberId: withCode.id, channel: null, termsVersion: "2026-10", enabledAt: "2026-10-01T00:00:00Z", disabledAt: null },
+  ]);
+  try {
+    const list = await call(req("GET", "/api/swarm/admin/members", { token: OPERATOR }));
+    expect(list?.status).toBe(200);
+    const members = (list!.body as any).members as any[];
+    expect(members.find((m) => m.id === withCode.id).referral).toEqual({
+      code,
+      enabled: true,
+      termsVersion: "2026-10",
+      enabledAt: "2026-10-01T00:00:00Z",
+      disabledAt: null,
+    });
+    expect(members.find((m) => m.id === without.id).referral).toBeNull();
+    // Every admin member carries the key, so the admin page can rely on it.
+    for (const m of members) expect(m).toHaveProperty("referral");
+
+    // The public roster and the public member page: no referral key at all.
+    const pub = async (path: string) => {
+      const r = new Request(`http://x${path}`);
+      const res = await handleSwarm(r, new URL(r.url));
+      if (res instanceof Response || !res) throw new Error(`unexpected answer for ${path}`);
+      expect(res.status).toBe(200);
+      return res.body as any;
+    };
+    const roster = await pub(ROUTES.swarm.members);
+    const publicMember = roster.members.find((m: any) => m.id === withCode.id);
+    expect(publicMember).toBeDefined();
+    expect(publicMember).not.toHaveProperty("referral");
+    expect(JSON.stringify(roster)).not.toContain(code);
+    const one = await pub(ROUTES.swarm.member.replace(":id", withCode.id));
+    expect(JSON.stringify(one)).not.toContain("referral");
+    expect(JSON.stringify(one)).not.toContain(code);
+  } finally {
+    _setReferralCodesForTests(null);
+  }
 });
 
 test("members: an explicit null CLEARS the column, and an absent key leaves it alone", async () => {

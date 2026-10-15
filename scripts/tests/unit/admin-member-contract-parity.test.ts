@@ -189,6 +189,11 @@ describe("AdminMember (contract) matches toMemberAdmin() (backend) key-for-key �
     }
   });
 
+  test("issue 1358: referral is declared and projected on both sides", () => {
+    expect(declaredKeys(contractSource)).toContain("referral");
+    expect(projectedKeys(backendSource)).toContain("referral");
+  });
+
   // ── the second line of defence stays wired ─────────────────────────────────
   test("toMemberAdmin() is annotated `: AdminMember`, so backend.yml's typecheck catches a backend-side widening too", () => {
     expect(returnAnnotation(backendSource)).toBe("AdminMember");
