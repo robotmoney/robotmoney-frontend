@@ -81,3 +81,29 @@ accepted rather than passed (R2.5, W1), so SP.8 refuses this journal for product
 10. **Fixed: `docker inspect` receipts were not valid JSON.** The scrubber matched the
     key `token` in the rm-token bind mount and swallowed the closing quote. It now keeps
     the quote.
+
+## Stage QA run on the five-phase runbook (2026-10-15)
+
+Run `20261015T210118Z` at `ff1d2ef9`, step list `9910d29b`, one command:
+`bun run release:run --target stage --go <go>`. Status passed; S07-soak-gate and S08-soak-checks
+were accepted (owner's practice-run override), every other step was ok or skipped. Committed as
+`scripts/tests/fixtures/release/stage-run-20261015T210118Z.json`.
+
+- QA: Q01-lockfile caught a stale lockfile on the run before (`undici-types` 8.12.2), refreshed on
+  the QA branch. Q02-dump reused the day's dump; Q03-stage-up built stage; Q05-scope matched all 29 PRs.
+- Preflight P01 to P08 and the cutover passed. The cutover window (C05-migrate to READY) was 181 s;
+  the website probe saw no failed answer.
+- Every v0.6.2 version check, V01 to V11, passed on its first live run.
+- Findings:
+  11. **Open, product (1375): the parity sweep ends the api.** One sweep raises the api from 71 MiB
+      to 5.9 GiB and leaves it at 2.5 GiB. After the rolling boot the api restarted twice, each time
+      during a sweep (21:29:12 to 21:30:04Z, 21:33:08 to 21:34:02Z); production failed 17 sweeps
+      since 2026-10-09 with "socket connection closed".
+  12. **Fixed: tools trusted the stack record's api port.** A restarted container gets a new host
+      port (32975 recorded, 32977 live); S08's health checks read a healthy api as unreachable. The
+      tools now ask `docker port`.
+  13. **Open, product (1378): a boot releases a burst.** The worker claims before the api listens,
+      the reaper re-queues a dump's running job, and catch-up queues one parity sweep per missed
+      hour; the worker's first claim after the rolling boot was a sweep, under a second after it
+      started. Logs since C10 are saved in the run journal's `boot-logs/`.
+  14. **Fixed (1275, merged)**; **in progress (1373)**: the wallet refresh's lane hold.

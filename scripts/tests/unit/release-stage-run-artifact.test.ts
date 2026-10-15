@@ -12,7 +12,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunJournal } from "../../release/journal.ts";
-import { RELEASE_STEPS, stepIds, stepListHash } from "../../release/steps.ts";
+import { loadReleaseRunbook } from "../../release/runbook.ts";
+import { stepIds, stepListHash } from "../../release/steps.ts";
 
 const dir = join(import.meta.dir, "..", "fixtures", "release");
 
@@ -27,13 +28,17 @@ describe("the committed stage QA run journal (issue 1272)", () => {
     const run = JSON.parse(readFileSync(join(dir, files.at(-1)!), "utf8")) as RunJournal;
     expect(run.target).toBe("stage");
     expect(run.rmEnv).toBe("stage");
-    expect(run.stepListHash).toBe(stepListHash());
+    // A stage run runs its release's own runbook: the template plus that release's version checks.
+    const steps = loadReleaseRunbook(run.release).steps;
+    expect(run.stepListHash).toBe(stepListHash(steps));
     expect(run.commit).toMatch(/^[0-9a-f]{40}$/);
-    const ids = stepIds();
+    const ids = stepIds(steps);
     for (const id of ids) expect(["ok", "skipped", "accepted"], id).toContain(run.steps[id]?.status ?? "missing");
     // The QA steps ran: stage built its own target.
-    for (const s of RELEASE_STEPS.filter((x) => x.phase === "qa")) expect(run.steps[s.id]?.status, s.id).toBe("ok");
+    for (const s of steps.filter((x) => x.phase === "qa")) expect(run.steps[s.id]?.status, s.id).toBe("ok");
+    // Every version check of the release ran and passed: a change it ships is in place.
+    for (const s of steps.filter((x) => x.phase === "version" && x.onlyFor !== "prod")) expect(run.steps[s.id]?.status, s.id).toBe("ok");
     // red control: a journal at another hash is not this proof.
-    expect({ ...run, stepListHash: "0".repeat(64) }.stepListHash).not.toBe(stepListHash());
+    expect({ ...run, stepListHash: "0".repeat(64) }.stepListHash).not.toBe(stepListHash(steps));
   });
 });
