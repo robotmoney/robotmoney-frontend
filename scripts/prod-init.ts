@@ -100,6 +100,8 @@
 // lock and, for a database write, inside the fence. The receipt — what ran,
 // against what, by whom, and what it changed; never a secret — is written
 // under the instance's state directory.
+import { liveHostPort, serviceContainer } from "./lib/gate/io.ts";
+import { API_CONTAINER_PORT } from "./lib/gate/stack.ts";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -141,6 +143,8 @@ export interface ProdInitDeps {
   setIdentity(options: SetIdentityOptions): Promise<SetIdentityResult>;
   provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; kept: string[]; files: Record<string, string> }>;
   rotateKey(apiUrl: string, operatorToken: string, memberId: string, publicKey: string): Promise<{ status: number; token?: string; error?: string }>;
+  /** The host port a compose project's api publishes now, or null (the stack record's port is history). */
+  liveApiPort(project: string): number | null;
   /** role-passwords' database half: the ONLY dep that receives a doadmin URL. */
   rolePasswords(options: RolePasswordsOptions): Promise<RolePasswordsResult>;
   now(): Date;
@@ -324,7 +328,9 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
         return null;
       }
     })();
-    apiUrl = flag(rest, "--api") ?? (recorded?.apiPort ? `http://127.0.0.1:${recorded.apiPort}` : undefined);
+    // The live port, never the record's: a restarted api container gets a new host port (scripts/lib/gate/io.ts liveHostPort).
+    const livePort = recorded?.project ? deps.liveApiPort(recorded.project) : null;
+    apiUrl = flag(rest, "--api") ?? (livePort !== null ? `http://127.0.0.1:${livePort}` : undefined);
     if (!apiUrl) refuse(`no api address: instance ${instanceName} records no running stack; pass --api <url>.`);
   } else {
     if (!homeEnv) refuse(`the remote connection must be in ${deps.homeEnvPath} (§3).`);
@@ -568,6 +574,10 @@ export function realDeps(env: Record<string, string | undefined> = process.env):
     homeEnvPath,
     readDoadmin: (argv) => readDoadminPassword(argv, process.stdin, process.stderr),
     stateRoot: resolveStateRoot(env),
+    liveApiPort(project) {
+      const api = serviceContainer(project, "api");
+      return api ? liveHostPort(api, API_CONTAINER_PORT) : null;
+    },
     async rolePasswords(options) {
       const { rolePasswords } = await import("../backend/scripts/role-passwords.ts");
       return rolePasswords(options);
