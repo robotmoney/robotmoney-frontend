@@ -380,6 +380,14 @@ export const ROUTES = {
     overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
   },
 
+  // Issue 1358 (Linear RM-174): referral codes. Public, no credential, GET only.
+  // One code per request: an on code answers 200 ReferralCodeCheck, and every
+  // other code (unknown, off, malformed) the same 404. Nothing here lists codes
+  // or members. Cacheable for 60 s and rate limited per ip.
+  referrals: {
+    code: "/api/referrals/codes/:code", // GET → ReferralCodeCheck
+  },
+
   // Analytics-provider ingestion boundary (issue #106). Every route requires an
   // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before

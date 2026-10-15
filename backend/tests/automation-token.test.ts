@@ -378,6 +378,7 @@ const PUBLIC = new Set([
   "swarm.sessionJudgements", "swarm.take", "swarm.takePermalink", "swarm.judgement", "swarm.openSession", "swarm.openSessions",
   "swarm.brief", "swarm.signingPayload", "swarm.memo", "swarm.apply", "swarm.applyStatus",
   "swarm.applicationStatus", "swarm.claimChallenge", "swarm.claimToken",
+  "referrals.code",
 ]);
 
 /**

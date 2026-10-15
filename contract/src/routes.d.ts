@@ -122,6 +122,9 @@ export const ROUTES: {
     vintages: string;
     overwriteEvents: string;
   };
+  referrals: {
+    code: string;
+  };
   analytics: {
     readiness: string;
     rawHistory: string;

@@ -117,6 +117,21 @@ async function main(): Promise<void> {
     routes[p] = await get(p);
   }
 
+  // Issue 1358: the referral-code check, one golden per code that is on now.
+  // No route lists codes (by design), so the list comes from REFERRAL_CODES in
+  // backend config. config.ts reads DATABASE_URL at import; this script talks
+  // to BACKEND_URL only and never opens a database, so a placeholder satisfies
+  // the read. An empty list (today) captures nothing.
+  process.env.DATABASE_URL ??= "postgres://goldens-capture-opens-no-database/none";
+  const { REFERRAL_CODES } = await import("../backend/src/config.ts");
+  const { referralCodeState } = await import("../backend/src/referrals/codes.ts");
+  const now = Math.floor(Date.now() / 1000);
+  for (const entry of REFERRAL_CODES) {
+    if (referralCodeState(entry, now) !== "on") continue;
+    const p = expand(ROUTES.referrals.code, { code: entry.code });
+    routes[p] = await get(p);
+  }
+
   const ordered: Record<string, unknown> = {};
   for (const k of Object.keys(routes).sort()) ordered[k] = routes[k];
   const doc = {

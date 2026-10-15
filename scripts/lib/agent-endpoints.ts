@@ -684,6 +684,18 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     contractType: "{ comments: Comment[] }",
     sizeHint: "under 1 KB",
   },
+  {
+    id: "checkReferralCode",
+    method: "GET",
+    path: ROUTES.referrals.code,
+    summary: "Whether one referral code is on right now",
+    description:
+      "Check a swarm member referral code before adding it to a deposit. An on member code answers its `code` (lowercase) and the member's `handle` and `name`; an on team code answers its `code` and `channel`. Every other code (unknown, switched off, not yet on, or malformed) answers the same 404, so the response never says which. One code per request: nothing here lists codes or members. Cacheable for 60 seconds, at most 100 requests a minute per client.",
+    backs: [],
+    params: [{ name: "code", in: "path", required: true, description: "The referral code: `rm_` plus a slug, 32 characters at most, any case.", example: "rm_site" }],
+    contractType: "ReferralCodeCheck",
+    sizeHint: "under 200 B",
+  },
 ];
 
 // Routes deliberately absent from the public catalogue, each with the reason.

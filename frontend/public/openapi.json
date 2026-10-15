@@ -2038,6 +2038,52 @@
           }
         }
       }
+    },
+    "/api/referrals/codes/{code}": {
+      "get": {
+        "operationId": "checkReferralCode",
+        "summary": "Whether one referral code is on right now",
+        "description": "Check a swarm member referral code before adding it to a deposit. An on member code answers its `code` (lowercase) and the member's `handle` and `name`; an on team code answers its `code` and `channel`. Every other code (unknown, switched off, not yet on, or malformed) answers the same 404, so the response never says which. One code per request: nothing here lists codes or members. Cacheable for 60 seconds, at most 100 requests a minute per client.\n\nResponse size: under 200 B.\n\nResponse type: `ReferralCodeCheck` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "description": "The referral code: `rm_` plus a slug, 32 characters at most, any case.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "rm_site"
+          }
+        ],
+        "x-contract-type": "ReferralCodeCheck",
+        "responses": {
+          "200": {
+            "description": "Whether one referral code is on right now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "ReferralCodeCheck"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

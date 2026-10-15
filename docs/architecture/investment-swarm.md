@@ -221,6 +221,32 @@ binary, not a service RM operates.
 > weakens the "signature anchors on-chain later" property. Default: keep member
 > signing.
 
+#### 9.5.2 Referral code check
+
+A deposit made through the deposit skill can carry a swarm member's referral
+code as an ERC-8021 suffix on its calldata (Linear RM-174). The codes are
+`REFERRAL_CODES` in `backend/src/config.ts` and change only by PR. No table
+holds them.
+
+- **Public check.** `GET ROUTES.referrals.code` (`/api/referrals/codes/:code`)
+  needs no credential. It answers whether one code is on right now: an on
+  member code answers `{ code, member: { handle, name } }`, read from
+  `swarm_members` by primary key, and an on team code answers
+  `{ code, channel }`. Unknown, off, malformed and member-row-missing codes all
+  answer the same 404, so the response never says which. The route answers one
+  code per request and nothing lists codes or members. Responses carry
+  `Cache-Control: public, max-age=60`, and each client ip gets 100 requests a
+  minute before a 429 with `Retry-After`.
+- **One check.** `backend/src/referrals/check.ts` uses the format, lookup and
+  on/off helpers in `suffix.ts` and `codes.ts`. It holds no pattern of its own.
+- **Admin view.** Every admin member response carries
+  `referral { code, enabled, termsVersion, enabledAt, disabledAt }` or null.
+  No public member response carries referral data.
+- **Chain reads.** The report that credits referrals reads a deposit's input
+  and receipt through `ethGetTransactionByHash` and `ethGetTransactionReceipt`
+  in `backend/src/chain/base-rpc-client.ts`, on the shared RPC transport and
+  rate limit.
+
 ### 9.6 RM analytics provider (the data utility)
 
 **Required boundary (D25).** The regime classifier runs on the provider's own

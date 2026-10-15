@@ -49,4 +49,44 @@ describe("goldens-drift", () => {
       }
     }
   });
+
+  // Issue 1358: every captured referral-code golden is a ReferralCodeCheck
+  // (contract/src/referrals.d.ts): the lowercase code plus exactly one of a
+  // member { handle, name } or a team channel, and nothing else.
+  it("should hold every /api/referrals/codes/* golden to the ReferralCodeCheck shape", () => {
+    const goldens = JSON.parse(readFileSync(join(repoRoot, "goldens/api-goldens.json"), "utf-8"));
+    for (const [route, body] of Object.entries(goldens.routes as Record<string, unknown>)) {
+      if (!route.startsWith("/api/referrals/")) continue;
+      expect(route.startsWith("/api/referrals/codes/"), route).toBe(true);
+      expect(referralCodeCheckErrors(body), route).toEqual([]);
+    }
+  });
+
+  it("the ReferralCodeCheck shape check refuses a body that lists or leaks", () => {
+    expect(referralCodeCheckErrors({ code: "rm_site", channel: "site" })).toEqual([]);
+    expect(referralCodeCheckErrors({ code: "rm_a", member: { handle: "a", name: "A" } })).toEqual([]);
+    expect(referralCodeCheckErrors({ code: "RM_SITE", channel: "site" })).not.toEqual([]);
+    expect(referralCodeCheckErrors({ code: "rm_a", channel: "x", member: { handle: "a", name: "A" } })).not.toEqual([]);
+    expect(referralCodeCheckErrors({ codes: ["rm_a", "rm_b"] })).not.toEqual([]);
+    expect(referralCodeCheckErrors({ code: "rm_a", member: { handle: "a", name: "A", id: "x" } })).not.toEqual([]);
+  });
 });
+
+/** Every way `body` differs from ReferralCodeCheck; empty when it matches. */
+function referralCodeCheckErrors(body: unknown): string[] {
+  const errors: string[] = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) return ["not an object"];
+  const b = body as Record<string, unknown>;
+  const keys = Object.keys(b).sort().join(",");
+  if (typeof b.code !== "string" || b.code !== b.code.toLowerCase() || !b.code.startsWith("rm_")) errors.push("code");
+  if (keys === "channel,code") {
+    if (typeof b.channel !== "string") errors.push("channel");
+  } else if (keys === "code,member") {
+    const m = b.member as Record<string, unknown> | null;
+    if (!m || typeof m !== "object" || Object.keys(m).sort().join(",") !== "handle,name") errors.push("member keys");
+    else if (typeof m.handle !== "string" || typeof m.name !== "string") errors.push("member values");
+  } else {
+    errors.push(`keys ${keys}`);
+  }
+  return errors;
+}
