@@ -60,7 +60,7 @@ function healthy(): Facts {
     producedSlot: () => 1,
     sizeMb: 5100, migrations: ["0001_a.sql", "0002_b.sql"],
     noise: { n: 40, unchanged: 0, noise: 0 },
-    parity: { ok: 20, dead: 0, p50: 90, max: 140 },
+    parity: { ok: 1, dead: 0, p50: 2, max: 3 },
     active: 7, quorum: { published: 3, bad_quorum: 0 },
     complete: { published: 3, no_takes: 0, no_judgement: 0, no_receipt: 0 },
     wedged: 0, guards: { found: 11, armed: 11 }, payloads: "absent",
@@ -177,7 +177,7 @@ const RED: Array<[id: string, expected: "FAIL" | "WARN", mutate: (f: Facts) => v
   ["R8.c", "FAIL", (f) => { f.logs["analytics-producer"]!.push(L("[analytics-producer] regime failed: boom")); }],
   ["R8.d", "FAIL", (f) => { f.sizeMb = 9000; }],
   ["R8.e", "FAIL", (f) => { f.noise = { n: 40, unchanged: 3, noise: 0 }; }],
-  ["R8.f", "FAIL", (f) => { f.parity = { ok: 5, dead: 2, p50: 90, max: 140 }; }],
+  ["R8.f", "FAIL", (f) => { f.parity = { ok: 5, dead: 2, p50: 2, max: 3 }; }],
   ["R8.g", "FAIL", (f) => { f.logs["website-server"] = Array.from({ length: 11 }, () => L('1.1.1.1 - - "GET /x HTTP/1.1" 502 0')); }],
   ["R8.h", "FAIL", (f) => { f.quorum = { published: 3, bad_quorum: 2 }; }],
   ["R8.i", "FAIL", (f) => { f.complete = { published: 3, no_takes: 0, no_judgement: 1, no_receipt: 0 }; }],
@@ -318,11 +318,14 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalLedgerNoise({ n: 5, unchanged: 0, noise: 0 }).status).toBe("PASS");
     expect(evalLedgerNoise({ n: 5, unchanged: 0, noise: 1 }).status).toBe("FAIL");
   });
-  test("R8.f", () => {
-    expect(evalParity({ ok: 3, dead: 0, p50: 100, max: 200 }).status).toBe("PASS");
-    expect(evalParity({ ok: 3, dead: 0, p50: 200, max: 250 }).status).toBe("WARN");
-    expect(evalParity({ ok: 3, dead: 0, p50: 100, max: 301 }).status).toBe("FAIL");
-    expect(evalParity({ ok: 3, dead: 1, p50: 100, max: 200 }).status).toBe("FAIL");
+  test("R8.f: a daily sweep of four bounded requests (issue 1375)", () => {
+    expect(evalParity({ ok: 1, dead: 0, p50: 2, max: 3 }).status).toBe("PASS");
+    expect(evalParity({ ok: 3, dead: 0, p50: 6, max: 20 }).status).toBe("WARN");
+    expect(evalParity({ ok: 3, dead: 0, p50: 2, max: 61 }).status).toBe("FAIL");
+    expect(evalParity({ ok: 3, dead: 1, p50: 2, max: 3 }).status).toBe("FAIL");
+    // A soak shorter than a day may see no sweep: reported, not failed.
+    expect(evalParity({ ok: 0, dead: 0, p50: 0, max: 0 }).status).toBe("INFO");
+    expect(evalParity({ ok: 0, dead: 1, p50: 0, max: 0 }).status).toBe("FAIL");
   });
   test("R8.g warns up to 10 and fails beyond", () => {
     const l = (n: number) => Array.from({ length: n }, () => '- - "GET / HTTP/1.1" 500 0');

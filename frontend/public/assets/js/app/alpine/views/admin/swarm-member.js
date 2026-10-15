@@ -65,6 +65,29 @@ const HANDLE_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_BIASES = 20;
 const MAX_BIAS_LEN = 200;
 
+// ── Approval (RM-177) ───────────────────────────────────────────────────────
+// Approving an application is where an admin decides what the agent is: a
+// member that files takes, or a judge that never does. The review route has
+// always accepted `role` (default `member`); this dialog now sends it, so the
+// default can no longer be the decision by omission.
+//
+// The operator is required at approval because each operator runs one agent in
+// the swarm, and the backend's policy for that (issue #1335) keys on it. It is
+// saved through the existing versioned profile update FIRST, then the review is
+// sent: two requests, ordered so a failed save never approves anyone.
+//
+// The in-house operator is REFUSED here, not exempted. `robotmoney` makes an
+// agent in-house, and an in-house judge skips the third-party gate: it becomes
+// eligible at once and, if its id sorts below Themis's, its judgement is the one
+// adopted on every session (judgeOfRecordTx, lowest member id). Approved by
+// mistake onto an agent that is not running the judge loop, that leaves every
+// session unjudged. In-house agents are seeded, not approved; an admin who
+// means it sets the operator from Edit profile first.
+const IN_HOUSE_OPERATOR = "robotmoney";
+const MAX_OPERATOR_LEN = 200; // requiredString(body, "operator", 200) in api/validation.ts
+const ROLES = ["member", "judge"];
+const sameOperator = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+
 const linesOf = (text) => String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
 
 export function registerAdminSwarmMember(Alpine) {
@@ -73,6 +96,7 @@ export function registerAdminSwarmMember(Alpine) {
     loading: false,
     error: null,
     member: null,
+    members: [], // the full admin list: the approval dialog reads operators from it
     memberId: null,
     pendingApplication: null, // this member's row from GET .../applications?status=pending, if any
 
@@ -106,6 +130,7 @@ export function registerAdminSwarmMember(Alpine) {
         const found = membersRes.members.find((m) => m.id === this.memberId);
         if (!found) throw new Error(`member '${this.memberId}' not found`);
         this.member = found;
+        this.members = membersRes.members;
         // Application rows are raw DB rows (snake_case member_id) — listApplicationsAdmin()
         // returns unprojected SELECT output.
         this.pendingApplication = applicationsRes.applications.find((a) => a.member_id === this.memberId) || null;
@@ -263,8 +288,81 @@ export function registerAdminSwarmMember(Alpine) {
     },
 
     openConfirm(action) {
-      this.confirm = { action, publicKey: "", reason: "" };
+      this.confirm = { action, publicKey: "", reason: "", role: "member", operator: this.member?.operator || "" };
       this.confirmError = null;
+    },
+
+    confirmLabel() {
+      return this.confirm?.action === "activate" ? `Approve as ${this.confirm.role}` : "Confirm";
+    },
+
+    // Operators already on file, for the input's suggestions: reusing the exact
+    // spelling is what lets the one-agent-per-operator rule recognise a match.
+    knownOperators() {
+      const seen = new Map();
+      for (const m of this.members) {
+        const op = String(m.operator || "").trim();
+        if (op && !sameOperator(op, IN_HOUSE_OPERATOR) && !seen.has(op.toLowerCase())) seen.set(op.toLowerCase(), op);
+      }
+      return [...seen.values()].sort((a, b) => a.localeCompare(b));
+    },
+
+    // The active member this operator already runs, if any. A heads-up the
+    // admin sees before submitting; the server is the authority once #1335
+    // lands. Case-insensitive, since the column is free text. The in-house
+    // operator is refused outright in submitApprove(), so it never gets here.
+    operatorConflict() {
+      const op = String(this.confirm?.operator || "").trim();
+      if (!op || sameOperator(op, IN_HOUSE_OPERATOR)) return null;
+      return this.members.find((m) => m.id !== this.memberId && m.status === "active" && sameOperator(m.operator, op)) || null;
+    },
+
+    async submitApprove() {
+      const { role } = this.confirm;
+      const operator = String(this.confirm.operator || "").trim();
+      if (!ROLES.includes(role)) { this.confirmError = "Choose a role."; return; }
+      if (!operator) { this.confirmError = "Operator is required."; return; }
+      if (sameOperator(operator, IN_HOUSE_OPERATOR)) {
+        this.confirmError = `"${IN_HOUSE_OPERATOR}" is reserved for in-house agents. Set it from Edit profile if this agent is ours.`;
+        return;
+      }
+      if (operator.length > MAX_OPERATOR_LEN) { this.confirmError = `Operator must be ${MAX_OPERATOR_LEN} characters or fewer.`; return; }
+      const conflict = this.operatorConflict();
+      if (conflict) { this.confirmError = `${conflict.name} already runs for ${conflict.operator}. Each operator runs one agent.`; return; }
+
+      this.submitting = true;
+      this.confirmError = null;
+      let operatorSaved = false;
+      try {
+        if (operator !== (this.member.operator || "")) {
+          await api.adminPost(path(ROUTES.swarm.admin.memberUpdate, { id: this.memberId }), this._token(), {
+            expectedVersion: this.member.version, operator,
+          });
+          operatorSaved = true;
+        }
+        const res = await api.adminPost(path(ROUTES.swarm.admin.memberReview, { id: this.memberId }), this._token(), {
+          decision: "approve", role,
+        });
+        this.confirm = null;
+        if (res.token) this.credentialReveal = { token: res.token };
+        await this.load();
+      } catch (e) {
+        if (e.status === 403) return this._handle403();
+        const message = apiErrorText(e);
+        const reason = e.status === 409 && message === "stale_version"
+          ? "This member changed since you loaded it (stale version). Reload and try again."
+          : message;
+        // The operator may already be saved when the review fails. Say so, and
+        // reload, so a retry sends only the review against the current version.
+        this.confirmError = operatorSaved ? `Operator saved, but approval failed: ${reason}` : reason;
+        if (operatorSaved) {
+          const draft = this.confirm;
+          try { await this.load(); } catch { /* load() reports its own error */ }
+          this.confirm = draft;
+        }
+      } finally {
+        this.submitting = false;
+      }
     },
     cancelConfirm() { this.confirm = null; this.confirmError = null; },
 
@@ -274,6 +372,7 @@ export function registerAdminSwarmMember(Alpine) {
 
     async submitConfirm() {
       if (!this.confirm) return;
+      if (this.confirm.action === "activate") return this.submitApprove();
       const { action, publicKey, reason } = this.confirm;
       const trimmedReason = String(reason || "").trim();
       if (REASON_REQUIRED.has(action) && (trimmedReason.length < 10 || trimmedReason.length > 500)) {
@@ -285,10 +384,12 @@ export function registerAdminSwarmMember(Alpine) {
       try {
         let route;
         let body;
-        if (action === "activate" || action === "reject") {
-          // Both are the SAME endpoint: POST .../review, distinguished only by decision.
+        if (action === "reject") {
+          // Approve shares this endpoint (POST .../review, by decision) but has
+          // its own path, submitApprove(), because it carries a role and an
+          // operator.
           route = path(ROUTES.swarm.admin.memberReview, { id: this.memberId });
-          body = { decision: action === "activate" ? "approve" : "reject" };
+          body = { decision: "reject" };
         } else if (action === "deactivate" || action === "reactivate") {
           route = path(ROUTES.swarm.admin[action === "deactivate" ? "memberDeactivate" : "memberReactivate"], { id: this.memberId });
           body = { expectedVersion: this.member.version };

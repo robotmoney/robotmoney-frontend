@@ -29,6 +29,8 @@ export function failingSource(prefix: string): ProjectsDataSource {
     coinGeckoMarkets: boom,
     dexScreenerToken: boom,
     vaultErc4626Read: boom,
+    supportsWallet: () => true,
     walletBalanceUsd: boom,
+    walletBalancesUsd: boom,
   };
 }

@@ -526,7 +526,7 @@ const updateCoverage = registerQuery({
 
 import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
-import type { DiscoveredProject, ProjectsDataSource } from "../../projects/access/data-source.ts";
+import type { DiscoveredProject, ProjectsDataSource, WalletBalanceRead } from "../../projects/access/data-source.ts";
 import {
   coinGeckoFields,
   computeCoverage,
@@ -852,18 +852,53 @@ export async function refreshWallets(
 ): Promise<HandlerResult> {
   const wallets = await on(sql, selectWallets)<{ id: string; address: string | null; chain: string | null }>`
     SELECT id, address, chain FROM tracked_wallets WHERE is_active = true AND address IS NOT NULL`;
-  if (!wallets.length) return { ok: true, status: "ok", updated: 0, failed: 0 };
+  if (!wallets.length) return { ok: true, status: "ok", updated: 0, failed: 0, unsupported: 0 };
 
   const updates: { id: string; balance: number }[] = [];
   let failed = 0;
+  // Issue 1275: a wallet the source has no live read path for (a non-Base
+  // chain, a non-EVM address) is a known, permanent gap, not a failure. It is
+  // skipped before any read, keeps its last-persisted balance_usd, and is
+  // reported once per run at info level instead of an error line per wallet
+  // that also degraded every run.
+  let unsupported = 0;
+  const byChain = new Map<string, { id: string; address: string }[]>();
   for (const w of wallets) {
+    const address = w.address as string;
+    const chain = w.chain ?? "base";
+    if (!source.supportsWallet(address, chain)) {
+      unsupported += 1;
+      continue;
+    }
+    const group = byChain.get(chain) ?? [];
+    group.push({ id: w.id, address });
+    byChain.set(chain, group);
+  }
+
+  // Issue 1373: one batched read per chain (in production only "base"), not one
+  // RPC POST per wallet. 793 wallets one at a time took 52 min per attempt at
+  // the shared 0.25 calls/s Base RPC budget; the batched read is a few
+  // Multicall3 POSTs and one price read. Each wallet still gets its own result,
+  // so one failed read fails only that wallet.
+  for (const [chain, group] of byChain) {
+    let reads: Map<string, WalletBalanceRead>;
     try {
-      const balance = await source.walletBalanceUsd(w.address as string, w.chain ?? "base");
-      updates.push({ id: w.id, balance });
+      reads = await source.walletBalancesUsd(group.map((w) => w.address), chain);
     } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      reads = new Map(group.map((w) => [w.address.toLowerCase(), { ok: false, error } as const]));
+    }
+    for (const w of group) {
+      const read = reads.get(w.address.toLowerCase()) ?? { ok: false, error: new Error("no balance returned") };
+      if (read.ok) {
+        updates.push({ id: w.id, balance: read.balanceUsd });
+        continue;
+      }
       failed += 1;
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[projects.refresh_wallets] wallet ${w.id} live read failed, keeping last-persisted balance (degraded):`, message);
+      console.error(
+        `[projects.refresh_wallets] wallet ${w.id} live read failed, keeping last-persisted balance (degraded):`,
+        read.error.message,
+      );
     }
   }
 
@@ -875,17 +910,24 @@ export async function refreshWallets(
     });
   }
 
-  if (failed === 0) return { ok: true, status: "ok", updated: updates.length, failed: 0 };
+  if (unsupported > 0) {
+    console.log(
+      `[projects.refresh_wallets] skipped ${unsupported} of ${wallets.length} wallet(s) with no live read path ` +
+        "(chain not base, or address not 0x plus 40 hex); kept their last-persisted balance",
+    );
+  }
+
+  if (failed === 0) return { ok: true, status: "ok", updated: updates.length, failed: 0, unsupported };
   // Some (or all) wallets degraded. `ok` must reflect ANY per-wallet failure
   // (not "did at least one wallet succeed") so it stays consistent with every
   // other handler's ok<->status:"degraded" pairing and with loop.ts's
   // isDegradedResult gate, which keys retry/backoff/admin-visibility purely
   // off `ok === false`. A partial failure that also reported ok:true here
   // fell through to the ordinary success path (status='succeeded', last_error
-  // cleared, no backoff, invisible to GET /api/admin/runs?status=degraded) —
-  // and for wallets whose chain has no live RPC path wired yet (see
-  // projects/access/live-source.ts), that failure is permanent, not transient.
-  return { ok: false, status: "degraded", updated: updates.length, failed };
+  // cleared, no backoff, invisible to GET /api/admin/runs?status=degraded).
+  // Wallets with no live path never reach here: they are counted in
+  // `unsupported` above, so `failed` is only real read failures.
+  return { ok: false, status: "degraded", updated: updates.length, failed, unsupported };
 }
 
 // ── Revenue sync (virtuals fee revenue + x402 volume rollup) ─────────────────

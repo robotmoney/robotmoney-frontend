@@ -23,7 +23,8 @@ import {
   virtualsRevenueRow,
   x402RevenueRows,
 } from "../src/projects/transforms.ts";
-import { COINGECKO_MARKETS, DEXSCREENER_TOKENS, VAULT_READS } from "../src/projects/fixtures/dataset.ts";
+import { COINGECKO_MARKETS, DEXSCREENER_TOKENS, VAULT_READS, WALLET_BALANCES } from "../src/projects/fixtures/dataset.ts";
+import { fixtureProjectsDataSource } from "../src/projects/access/fixture-source.ts";
 import {
   COINGECKO_GROUND_TRUTH,
   COVERAGE_FULL,
@@ -165,4 +166,25 @@ test("full pipeline reproduces the ground-truth directory aggregates end to end"
   expect(await revenueFor(virtuals!.id)).toBe(60_000);
   expect(await revenueFor(aixbt!.id)).toBe(30_000);
   expect(await revenueFor(x402!.id)).toBe(15_000);
+});
+
+// Issue 1373: refreshWallets reads through the batched wallet read. The fixture
+// source's batched read must give exactly what its per-wallet read gives, a
+// missing fixture key included (a per-address failure, never a thrown batch).
+test("the fixture source's batched wallet read matches its per-wallet read, address by address", async () => {
+  const src = fixtureProjectsDataSource;
+  const missing = "0xwalletmissingmissingmissingmissingmissin";
+  const addresses = [...Object.keys(WALLET_BALANCES), Object.keys(WALLET_BALANCES)[0]!.toUpperCase().replace("0X", "0x"), missing];
+  const batched = await src.walletBalancesUsd(addresses, "base");
+
+  for (const address of addresses) {
+    const one = await src.walletBalanceUsd(address, "base").then(
+      (balanceUsd) => ({ ok: true as const, balanceUsd }),
+      (error: Error) => ({ ok: false as const, message: error.message }),
+    );
+    const got = batched.get(address.toLowerCase())!;
+    expect(got.ok ? { ok: true, balanceUsd: got.balanceUsd } : { ok: false, message: got.error.message }).toEqual(one);
+  }
+  expect(batched.size).toBe(Object.keys(WALLET_BALANCES).length + 1);
+  expect(batched.get(missing)!.ok).toBe(false);
 });

@@ -175,6 +175,13 @@ jobs:
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: a spec §8.4 schema proof is excluded"; exit 1; }
           done
+      - name: Parity sweep proofs ran (issue 1375)
+        shell: bash
+        run: |
+          for f in tests/analytics-parity-sql-equivalence.test.ts tests/analytics-parity-sweep-memory.test.ts tests/analytics-parity-sweep-dispatch.test.ts tests/api-parity-sweep-timeout.test.ts; do
+            grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
+              || { echo "::error::$f did not run in the backend suite: an issue 1375 parity proof is excluded"; exit 1; }
+          done
       - name: Registry execution proof ran (spec §7.1)
         shell: bash
         run: |

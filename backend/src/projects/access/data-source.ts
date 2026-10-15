@@ -88,6 +88,20 @@ export interface ProjectsDataSource {
   dexScreenerToken(address: string): Promise<DexPayload>;
   // Vault bucket: ERC-4626 totalAssets()/decimals + underlying USD price.
   vaultErc4626Read(vaultAddress: string, chain: string): Promise<Erc4626Read>;
+  // Wallet bucket: whether this source has a live read path for the wallet at
+  // all (issue 1275). refreshWallets asks before each read and skips a wallet
+  // the source cannot read (no error log, balance kept), so a permanent known
+  // gap never reads as a failure. A wallet that IS supported and still fails
+  // to read is a real failure and degrades the run.
+  supportsWallet(address: string, chain: string): boolean;
   // Wallet bucket: summed USD balance for a tracked address.
   walletBalanceUsd(address: string, chain: string): Promise<number>;
+  // Wallet bucket, batched (issue 1373): every address's USD balance on one
+  // chain in one call, keyed by the LOWERCASED address. refreshWallets uses
+  // this, so a run costs a few Multicall3 POSTs and one price read instead of
+  // one of each per wallet. Each address carries its own result: one failed
+  // read fails only that address.
+  walletBalancesUsd(addresses: string[], chain: string): Promise<Map<string, WalletBalanceRead>>;
 }
+
+export type WalletBalanceRead = { ok: true; balanceUsd: number } | { ok: false; error: Error };

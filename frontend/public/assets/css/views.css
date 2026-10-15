@@ -1657,6 +1657,9 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* Single definition (see the header note above) — shared by both the queue/
    research filter forms and the swarm create/edit/confirm forms. */
 .adm-field { display: flex; flex-direction: column; gap: 0.3rem; font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-text-muted); }
+/* .adm-input's flex-basis (12rem) is a WIDTH in row toolbars; in this column it
+   became a 192px height on every labelled input, select and textarea. */
+.adm-field > .adm-input { flex: none; }
 .adm-pager { display: flex; gap: 0.5rem; margin: 0.75rem 0; }
 
 .adm-stages { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.75rem 0 1.5rem; }
