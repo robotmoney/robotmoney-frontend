@@ -3,6 +3,7 @@
 // runtime): the connection is always driven by DATABASE_URL, every protected
 // route always requires its configured credential, and the test-only paths are
 // opened by backend/src/test-seam.ts, never by an environment value.
+import type { ReferralCodeEntry, ReferralManualCredit } from "./referrals/codes.ts";
 
 function required(name: string): string {
   const v = process.env[name];
@@ -637,6 +638,24 @@ export function resolveSwarmPublicBaseUrl(
 ): string {
   return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
 }
+
+// --- Referral codes (Linear RM-174) ------------------------------------------
+// A depositor can name the swarm member who referred them; the code rides in the
+// deposit calldata as an ERC-8021 suffix (backend/src/referrals/suffix.ts). The
+// codes live here, not in a table, and change only by PR:
+//
+//   - A member's code goes in once the member accepts the referral terms, with
+//     the terms version and the time it was switched on. Team channels get codes
+//     too (memberId null, channel set), so every deposit has a source.
+//   - Entries are never deleted and a code is never reissued. When a member
+//     leaves, set `disabledAt`; the wallets the code already bound stay bound.
+//   - A manual credit is for a deposit made without a code: the depositing
+//     wallet signs a message naming the code, and both go in the second list.
+//
+// backend/tests/referrals-config.test.ts runs validateReferralConfig over both
+// lists, so a malformed entry fails CI instead of failing a deposit.
+export const REFERRAL_CODES: readonly ReferralCodeEntry[] = Object.freeze([]);
+export const REFERRAL_MANUAL_CREDITS: readonly ReferralManualCredit[] = Object.freeze([]);
 
 // No environment value, and no insecure flag, opens a privileged route:
 // every service credential is a row in the API's automation-token store
