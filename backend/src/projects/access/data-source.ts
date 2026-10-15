@@ -64,6 +64,14 @@ export interface DiscoveredProject {
   vaults: DiscoveredVault[];
 }
 
+// Issue 1291: a vault read that no retry can change. The contract reverts
+// totalAssets() or asset() (the address is not an ERC-4626 vault), or the
+// address cannot be encoded at all. fetchVaults counts these as permanent: a
+// run in which every vault failed this way settles without the short retry.
+export class PermanentVaultReadError extends Error {
+  override name = "PermanentVaultReadError";
+}
+
 export interface Erc4626Read {
   totalAssetsRaw: string;
   decimals: number;
