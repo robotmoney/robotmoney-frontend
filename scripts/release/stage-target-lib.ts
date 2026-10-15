@@ -698,6 +698,19 @@ export function shellQuote(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * The newest dump (by `capturedAt`) that is at most `maxDumpAgeHours` old, or
+ * null (SR.0, owner 2026-10-08). A dump with no readable `capturedAt`, or one
+ * dated in the future, never qualifies. PURE.
+ */
+export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date): string | null {
+  const fresh = dumps
+    .map((d) => ({ dir: d.dir, at: Date.parse(d.capturedAt ?? ""), age: dumpAgeHours({ capturedAt: d.capturedAt }, now) }))
+    .filter((d) => d.age !== null && d.age >= 0 && d.age <= STAGE_TARGET.maxDumpAgeHours)
+    .sort((a, b) => b.at - a.at);
+  return fresh[0]?.dir ?? null;
+}
+
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */
 export function dumpAgeHours(manifest: { capturedAt?: string }, now: Date): number | null {
   if (!manifest.capturedAt) return null;

@@ -10,7 +10,9 @@
 
 The stage target is a copy of production as it stands before the next patch. It lives on
 `rm-frontend-stage-2`. The release runner runs the production step list against it with
-`bun run release:run --target stage`. No step takes a stage-only path.
+`bun run release:run --target stage`. The list's first three steps, S0 to S2, are stage's own
+preparation (the dump, this target, its role passwords): production skips them, and the step-list
+hash is the same for both. Every other step takes the same path on both.
 
 The tool holds no past-upgrade fact (issue 1272). The tag and commit come from production's
 `/api/version`; the ledger comes from the dump itself; the stack is booted the production way
@@ -105,33 +107,27 @@ A release never stops it: R6.7a replaces its services one at a time and keeps we
 
 ## Rebuild it for each rehearsal
 
-Each rehearsal rebuilds the target. By default it restores the newest production dump
-already on stage-2 (`ls -d ~/rm-backup-prod-*`), if it is under 24 hours old (owner, 2026-10-08).
-The release's own R2.1 still captures a new backup during the run.
+The release runbook's first steps rebuild the target, so the rehearsal needs no typed command
+beyond the runner's (policy section 4.4):
 
-1. Only when no dump on stage-2 is under 24 hours old, capture one. It reads production's replica as `rm_readonly`:
+```bash
+bun run release:run --target stage --go <stage go> --until S2   # S0 dump, S1 up, S2 role passwords
+bun run release:run --target stage --preflight --go <stage go>
+bun run release:run --target stage --go <stage go> --run <run-ts printed by the first command>
+```
 
-   ```bash
-   ssh rm-frontend-stage-2 'cd ~/rm-060 && RM_ENV=stage bun smoke:capture --out ~/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)' </dev/null
-   ```
+- **S0** (`stage-target dump`) uses the newest production dump already on stage-2
+  (`~/rm-backup-prod-*`) if it is at most 24 hours old (owner, 2026-10-08). Otherwise it captures
+  one from production's read replica as `rm_readonly`, with the capture checkout's
+  `bun smoke:capture`. The release's own R2.1 still captures a new backup during the run.
+- **S1** (`stage-target up --dump newest --replace`) rebuilds the target from that dump.
+- **S2** (`stage-target doadmin | bun run role-passwords --target stage --doadmin-stdin`) sets
+  the role passwords, the same precondition production runs before its release. It keeps the
+  working runtime lines, makes `rm_owner` LOGIN, generates its password and writes the
+  `rm_owner` line into the stage `~/.env`. A rerun keeps every role.
 
-2. Rebuild the target from the control machine:
-
-   ```bash
-   bun scripts/release/stage-target.ts up --dump /home/stage-server/rm-backup-prod-<stamp> --replace
-   ```
-
-3. Set the role passwords, the same precondition production runs before its release:
-
-   ```bash
-   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
-   ```
-
-   It keeps the working runtime lines, makes `rm_owner` LOGIN, generates its
-   password and writes the `rm_owner` line into the stage `~/.env`. A rerun keeps
-   every role.
-
-4. Read `status`. Then run the release runner against the target.
+`--until S2` leaves the run incomplete and resumable, so the preflight sees no run in flight.
+Read `status` between steps when something looks wrong.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
 unless `--replace` is given. `--replace` runs `down` first. `down` stops the instance's

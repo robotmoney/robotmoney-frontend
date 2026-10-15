@@ -81,7 +81,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     errors.push(`${at}: receipts is a list of {dir, pattern, required}`);
   }
   if (typeof raw.irreversible !== "boolean") errors.push(`${at}: irreversible is a boolean`);
-  if (raw.onlyFor !== undefined && raw.onlyFor !== "prod") errors.push(`${at}: onlyFor is prod`);
+  if (raw.onlyFor !== undefined && raw.onlyFor !== "prod" && raw.onlyFor !== "stage") errors.push(`${at}: onlyFor is prod or stage`);
   const nb = raw.notBefore;
   if (nb !== undefined && !(isObject(nb) && typeof nb.afterStep === "string" && (nb.hours === "watchHours" || (typeof nb.hours === "number" && nb.hours > 0)) && Object.keys(nb).length === 2)) {
     errors.push(`${at}: notBefore is {afterStep, hours} with hours a positive number or watchHours`);
