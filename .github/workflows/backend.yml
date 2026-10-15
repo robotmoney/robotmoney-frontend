@@ -182,6 +182,13 @@ jobs:
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: an issue 1375 parity proof is excluded"; exit 1; }
           done
+      - name: Boot and stop proofs ran (issue 1378)
+        shell: bash
+        run: |
+          for f in tests/worker-boot-burst.test.ts tests/api-sigterm-drain.test.ts tests/queue.test.ts tests/worker-shutdown.test.ts tests/producer-catchup.test.ts tests/producer-liveness.test.ts tests/migration-history.test.ts; do
+            grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
+              || { echo "::error::$f did not run in the backend suite: an issue 1378 boot or stop proof is excluded"; exit 1; }
+          done
       - name: Registry execution proof ran (spec §7.1)
         shell: bash
         run: |

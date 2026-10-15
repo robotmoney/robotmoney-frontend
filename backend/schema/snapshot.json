@@ -124,7 +124,8 @@
     "0120_maintenance_windows.sql",
     "0121_subject_closes_six_hours_apart.sql",
     "0122_swarm_dormancy_baseline.sql",
-    "0123_analytics_parity_sweep_daily.sql"
+    "0123_analytics_parity_sweep_daily.sql",
+    "0124_job_schedules_latest_only_catchup.sql"
   ],
   "exclusions": {
     "roles": [
@@ -136,7 +137,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "374e24d3c4e9d42821dfb77f55a9669697b943ad0ed19c420fa3a8d6f5f8ec43",
+  "contentHash": "914c1242e1f8624af0ae439796de1063346a0a810b5dcfbebc43be8819e7bd92",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4273,7 +4274,7 @@
       "definition": "PRIMARY KEY (id)"
     },
     "constraint public.job_schedules.job_schedules_catchup_policy_check": {
-      "definition": "CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text])))"
+      "definition": "CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text, 'latest-only'::text])))"
     },
     "constraint public.job_schedules.job_schedules_pkey": {
       "definition": "PRIMARY KEY (id)"

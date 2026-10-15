@@ -72,7 +72,7 @@ interface ScheduleRow {
   payload: Record<string, unknown>;
   timezone: string;
   next_run_at: Date | null;
-  catchup_policy: "all" | "collapse-per-bucket";
+  catchup_policy: "all" | "collapse-per-bucket" | "latest-only";
 }
 
 // Catch-up is bounded per tick so one wedged schedule can't hold the
@@ -123,6 +123,11 @@ export async function tickScheduler(): Promise<number> {
       // clamp above, rather than every schedule paying for a cross-tick
       // dedupe structure this issue's use case (hours, not weeks, of
       // same-day backlog) never needs.
+      //
+      // Under 'latest-only' (issue 1378) the bucket is the whole backlog: only
+      // the newest due slot is inserted. The six heavy kinds recompute current
+      // state from scratch, so an older slot is the same run repeated (migration
+      // 0124's header).
       let pendingBucket: string | null = null;
       let pendingSlotDate: Date | null = null;
       const insertSlot = async (slotDate: Date) => {
@@ -138,8 +143,9 @@ export async function tickScheduler(): Promise<number> {
       for (let guard = 0; guard < MAX_SLOTS_PER_TICK; guard++) {
         const slotDate = it.next().toDate();
         if (slotDate > now) { nextRun = slotDate; break; }
-        if (s.catchup_policy === "collapse-per-bucket") {
-          const bucket = slotDate.toISOString().slice(0, 10); // UTC calendar day
+        if (s.catchup_policy === "collapse-per-bucket" || s.catchup_policy === "latest-only") {
+          // UTC calendar day, or one bucket for the whole backlog.
+          const bucket = s.catchup_policy === "latest-only" ? "latest" : slotDate.toISOString().slice(0, 10);
           if (pendingBucket !== null && bucket !== pendingBucket) await insertSlot(pendingSlotDate!);
           pendingBucket = bucket;
           pendingSlotDate = slotDate;
@@ -166,7 +172,7 @@ export async function tickScheduler(): Promise<number> {
       // guard was exhausted mid-backlog (bucket is only complete so far; a
       // later tick may still add to the SAME day, producing one more job for
       // it — see the per-tick-batch note above).
-      if (s.catchup_policy === "collapse-per-bucket" && pendingSlotDate) await insertSlot(pendingSlotDate);
+      if (s.catchup_policy !== "all" && pendingSlotDate) await insertSlot(pendingSlotDate);
       await on(tx, advanceSchedule)`UPDATE job_schedules SET last_enqueued_at = now(), next_run_at = ${nextRun} WHERE id = ${s.id}`;
     }
     return enqueued;

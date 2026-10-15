@@ -251,7 +251,7 @@ async function seedDemoSubjects(db: RegistryDb): Promise<void> {
   console.log(`seeded ${SEEDED_DEMO_SUBJECTS.length} active demo subject(s)`);
 }
 
-type CatchupPolicy = "all" | "collapse-per-bucket";
+type CatchupPolicy = "all" | "collapse-per-bucket" | "latest-only";
 
 interface SeedSchedule {
   kind: string;
@@ -262,6 +262,8 @@ interface SeedSchedule {
   // Issue #651: defaults to 'all' (every missed slot gets its own catch-up
   // job — current behaviour) when omitted. Only the wallet samplers below
   // opt into 'collapse-per-bucket' — see migration 0034's header for why.
+  // The six heavy kinds use 'latest-only' (issue 1378, migration 0124): a boot
+  // after downtime enqueues one job for each, at its newest due slot.
   catchupPolicy?: CatchupPolicy;
 }
 
@@ -313,7 +315,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // an operator has set BASE_RPC_MAX_CALLS_PER_SEC=0. A hermetic smoke/CI boot
   // reads BASE_RPC_SOURCE=stub, so its sweep costs no provider budget.
   // Handler: worker/handlers/repair.ts.
-  { kind: "ops.repair_gaps", cron: "*/5 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "ops.repair_gaps", cron: "*/5 * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
   // Retroactive asset_prices coverage backfill (issue #927, markets §8.1). The
   // live sampler's forward dual-write (worker/handlers/wallet.ts) only covers
   // days sampled after that change deployed; this cron is what closes the gap
@@ -325,7 +327,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // fall back to the sample row's own price/value while it is missing), and
   // the anti-join query is cheap to run against a caught-up deployment.
   // Handler: worker/handlers/index.ts → ops/asset-prices.ts::backfillAssetPricesForCleanDays.
-  { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "ops.backfill_asset_prices", cron: "*/15 * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
   // Issue #979 AC2: dual-write parity sweep — the ONLY production caller of
   // recordParityObservation() (analytics/cutover/parity.ts), which is what
   // populates analytics_parity_observations. That table is the evidence
@@ -341,7 +343,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // (scripts/tests/unit/parity-sweep-schedule.test.ts). The gate's staleness
   // budget is 26 h so a daily sweep keeps it fresh (cutover/gate.ts).
   // Handler: worker/handlers/index.ts → analytics/api-client.ts::triggerParitySweep.
-  { kind: "analytics.parity_sweep", cron: "47 4 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "analytics.parity_sweep", cron: "47 4 * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
   // Projects "Agentic Economy Ecosystem" pipelines (issue #87). Ordered so a
   // day's chain is coherent: discover identity → refresh live metrics → snapshot
   // today → roll revenue up → recompute coverage. Daily cadence (not the fast
@@ -350,9 +352,9 @@ export const SCHEDULES: SeedSchedule[] = [
   // extra firing is harmless. In prod the worker needs PROJECTS_SOURCE=live
   // (select.ts fails closed rather than serving fixture data as production).
   { kind: "projects.discover", cron: "0 2 * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "projects.refresh_coins", cron: "10 * * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "projects.refresh_wallets", cron: "20 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
-  { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  { kind: "projects.refresh_coins", cron: "10 * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
+  { kind: "projects.refresh_wallets", cron: "20 */6 * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
+  { kind: "projects.fetch_vaults", cron: "30 */6 * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "latest-only" },
   { kind: "projects.snapshot_daily", cron: "40 0 * * *", payload: {}, timezone: "UTC", enabled: true },
   { kind: "projects.sync_revenue", cron: "50 1 * * *", payload: {}, timezone: "UTC", enabled: true },
   // Kept enabled here (byte-for-byte prod/CI shape); the explicit smoke schedule

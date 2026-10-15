@@ -192,6 +192,19 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     expect(differingKeys(diff)).toEqual([]);
   });
 
+  // Issue 1378 (migration 0124): the catch-up policy CHECK accepts exactly
+  // 'all', 'collapse-per-bucket' and 'latest-only' on both sides.
+  test("job_schedules' catch-up policy CHECK accepts exactly 'all', 'collapse-per-bucket' and 'latest-only', on both sides", () => {
+    const key = "constraint public.job_schedules.job_schedules_catchup_policy_check";
+    for (const catalog of [migratedCatalog, snapshotCatalog]) {
+      const entry = catalog.find((e) => e.key === key);
+      expect(entry).toBeDefined();
+      const text = JSON.stringify(entry);
+      const accepted = [...text.matchAll(/'([a-z-]+)'::text/g)].map((m) => m[1]);
+      expect(accepted).toEqual(["all", "collapse-per-bucket", "latest-only"]);
+    }
+  });
+
   test("the real migrate run baselined the migrated side: its live schema matched the snapshot (§9.1 step 2)", () => {
     // The baseline refuses to publish a first manifest over a live schema that
     // differs from the snapshot, so a `true` here is the migrate tool's own

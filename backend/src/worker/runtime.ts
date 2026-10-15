@@ -11,6 +11,7 @@
 import { processOneJob, releaseOwnedJobs } from "./loop.ts";
 import { tickScheduler } from "./scheduler.ts";
 import { reapStuckJobs } from "./reaper.ts";
+import { sweepStaleBacklog, waitForApiReady } from "./boot.ts";
 import { describeLane, type Lane } from "./lanes.ts";
 import { heartbeatPath, schedulerHeartbeatPath, writeHeartbeat } from "../ops/heartbeat.ts";
 
@@ -38,6 +39,10 @@ export interface WorkerOptions {
   schedulerHeartbeatFile?: string;
   /** How long the scheduler's own heartbeat stays valid. */
   schedulerProgressTimeoutMs?: number;
+  /** The api's /health URL. When set, the drain loop claims no job until it
+   *  answers 200 (issue 1378). index.ts passes boot.ts resolveApiHealthUrl();
+   *  null (the default) waits for nothing. */
+  apiHealthUrl?: string | null;
 }
 
 export interface WorkerHandle {
@@ -153,6 +158,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
     // have to finish before the file exists at all. start_period in compose
     // covers the boot window either way.
     await beat("boot", idleProgressTimeoutMs);
+    if (!(await beforeFirstClaim())) return;
     // Edge-triggered: true once we've already written a `faulted` beat for the
     // CURRENT run of consecutive failures, reset back to false the moment a
     // cycle succeeds again. See the catch branch below for why this can't be
@@ -207,6 +213,35 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
         await sleep(idlePollMs);
       }
     }
+  }
+
+  // Issue 1378 (boot.ts): before the first claim, wait for the api, enqueue
+  // this boot's own newest slots, then cancel every older slot they supersede.
+  // Returns false when stop() came first: the worker then claims nothing.
+  async function beforeFirstClaim(): Promise<boolean> {
+    if (opts.apiHealthUrl) {
+      console.log(`[${workerId}] waiting for the api at ${opts.apiHealthUrl} before the first claim`);
+      const ready = await waitForApiReady(opts.apiHealthUrl, {
+        signal: stopped.signal,
+        onWait: (detail) => console.warn(`[${workerId}] ${detail}; retrying`),
+      });
+      if (!ready) return false;
+      console.log(`[${workerId}] api ready; first claim may follow`);
+    }
+    try {
+      await tickScheduler();
+      const cancelled = await sweepStaleBacklog();
+      const byKind = new Map<string, number>();
+      for (const row of cancelled) byKind.set(row.kind, (byKind.get(row.kind) ?? 0) + 1);
+      console.log(
+        `[${workerId}] worker-start sweep cancelled ${cancelled.length} superseded job(s)` +
+          (byKind.size ? `: ${[...byKind].map(([k, n]) => `${k}=${n}`).join(", ")}` : ""),
+      );
+    } catch (err) {
+      // The sweep only trims a backlog; a failure must not keep the lane down.
+      console.error(`[${workerId}] worker-start sweep failed (claiming anyway):`, err);
+    }
+    return running;
   }
 
   async function periodic(label: string, fn: () => Promise<unknown>, everyMs: number): Promise<void> {

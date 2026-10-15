@@ -241,6 +241,7 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0121_subject_closes_six_hours_apart.sql",
     "0122_swarm_dormancy_baseline.sql",
     "0123_analytics_parity_sweep_daily.sql",
+    "0124_job_schedules_latest_only_catchup.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {
