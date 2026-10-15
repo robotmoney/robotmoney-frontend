@@ -11,6 +11,11 @@
 // wallet that is not chain base with a 0x plus 40-hex address before reading
 // it, so a placeholder 0xwallet0… address never logs that error line again.
 // The fixture-wallet line is therefore unclassified like any other.
+//
+// Issue 1291: fetch_vaults reads each vault on its own and logs one line per
+// failing vault instead of one whole-run "extractor failed" line. The per-vault
+// line has its own rule; the whole-run and loop DEGRADED rules stay for the
+// logs of releases before that fix.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,6 +28,8 @@ const wallet = (addr: string) =>
   `[projects.refresh_wallets] wallet ${uuid} live read failed, keeping last-persisted balance (degraded): invalid address: ${addr}`;
 const vaultExtractor = (addr: string) =>
   `[projects.fetch_vaults] extractor failed — keeping last-persisted rows (degraded): invalid address: ${addr}`;
+const vaultRead = (addr: string) =>
+  `[projects.fetch_vaults] vault ${uuid} live read failed, keeping last-persisted TVL (degraded): invalid address: ${addr}`;
 const vaultJob = (addr: string) => `job 4182 (projects.fetch_vaults) DEGRADED — kept last-persisted, retry in 300s: invalid address: ${addr}`;
 const vaultJobExhausted = (addr: string) =>
   `job 4182 (projects.fetch_vaults) DEGRADED — kept last-persisted (attempts exhausted; settled FAILED, next cron re-enqueues): invalid address: ${addr}`;
@@ -46,6 +53,8 @@ test("the fixture addresses are the dataset's own placeholder addresses", () => 
 describe("each logged fixture-address line is known issue 1208", () => {
   const cases: Array<[string, string]> = [
     [vaultExtractor(FIXTURE_VAULT), "known-projects-fixture-vault-extractor"],
+    [vaultRead(FIXTURE_VAULT), "known-projects-fixture-vault-read"],
+    [vaultRead(FIXTURE_VAULT.replace(/aaa$/, "bbb")), "known-projects-fixture-vault-read"],
     [vaultJob(FIXTURE_VAULT), "known-projects-fixture-vault-job-degraded"],
     [vaultJobExhausted(FIXTURE_VAULT), "known-projects-fixture-vault-job-degraded"],
   ];
@@ -83,11 +92,13 @@ describe("RED CONTROL: the same failure on a real address stays unclassified and
     // Issue 1275: no rule excuses the fixture wallets any more (the handler skips them).
     ...FIXTURE_WALLETS.map(wallet),
     vaultExtractor(REAL),
+    vaultRead(REAL),
     vaultJob(REAL),
     vaultJobExhausted(REAL),
     // Near misses: a placeholder of another shape, or a fixture address with a suffix.
     wallet("0xwallet0000000000000000000000000000000eee"),
     vaultExtractor("0xvault0000000000000000000000000000000aaa0"),
+    vaultRead("0xvault0000000000000000000000000000000aaa0"),
   ]) {
     test(line.slice(0, 90), () => {
       const [g] = groupsOf([line]);

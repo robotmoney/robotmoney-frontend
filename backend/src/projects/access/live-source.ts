@@ -28,7 +28,13 @@ import {
 } from "../../chain/base-rpc-client.ts";
 import { persistedFallbackWalletPriceReader, readChainAmountsBatched } from "../../chain/wallet-valuation.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
-import type { DiscoveredProject, Erc4626Read, ProjectsDataSource, WalletBalanceRead } from "./data-source.ts";
+import {
+  PermanentVaultReadError,
+  type DiscoveredProject,
+  type Erc4626Read,
+  type ProjectsDataSource,
+  type WalletBalanceRead,
+} from "./data-source.ts";
 import { loadV0RosterWithManifest, type LoadedRosterSeed } from "../seed/roster-seed.ts";
 
 // CoinGecko has two hosts. The public host serves the keyless, rate-limited
@@ -165,6 +171,9 @@ export const liveProjectsDataSource: ProjectsDataSource = {
   },
 
   async vaultErc4626Read(vaultAddress: string, chain: string): Promise<Erc4626Read> {
+    // Issue 1291: an address that is not 0x plus 40 hex can never be called.
+    // Same message the RPC encoder throws, marked permanent.
+    if (!/^0x[0-9a-fA-F]{40}$/.test(vaultAddress)) throw new PermanentVaultReadError(`invalid address: ${vaultAddress}`);
     const opts = baseRpcOpts();
     // THREE POSTs → TWO. totalAssets() and asset() are independent, so they
     // share one Multicall3 call; decimals() genuinely depends on asset()'s
@@ -177,13 +186,16 @@ export const liveProjectsDataSource: ProjectsDataSource = {
       ],
       opts,
     );
-    if (!taRes || !taRes.success) throw new Error(`live-source: totalAssets() failed for ${vaultAddress}`);
+    if (!taRes) throw new Error(`live-source: totalAssets() failed for ${vaultAddress}`);
+    // A reverted sub-call is the contract's answer, not a transport blip: the
+    // Bankr LP rows (strategy_type lp-fees) revert totalAssets() on every read.
+    if (!taRes.success) throw new PermanentVaultReadError(`live-source: totalAssets() failed for ${vaultAddress}`);
     const totalAssets = decodeUint256(taRes.returnData);
     // An empty/failed asset() is a call to an address with no code. It THROWS
     // rather than decoding to the zero address, preserving callAsset's contract
     // — the caller degrades the whole vault to its last-persisted row.
     const assetRaw = (!assetRes || !assetRes.success ? "" : assetRes.returnData).replace(/^0x/, "");
-    if (assetRaw.length < 40) throw new Error(`Base RPC: empty asset() result from ${vaultAddress}`);
+    if (assetRaw.length < 40) throw new PermanentVaultReadError(`Base RPC: empty asset() result from ${vaultAddress}`);
     const assetAddr = "0x" + assetRaw.slice(-40);
     // decimals() decoding to 0/garbage falls back to 18 (legacy edge-fn semantics).
     const decimals = (await callDecimals(assetAddr, opts)) || 18;

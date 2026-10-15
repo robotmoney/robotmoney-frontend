@@ -75,6 +75,19 @@ from this repo's own tables and pipelines instead of Supabase.
     2026-10-14). A reverted sub-call fails only its wallet. A chunk whose POST
     throws fails only that chunk's wallets. Each failed wallet keeps its
     last-persisted `balance_usd` and degrades the run as above.
+  - **Per-vault isolation** (issue 1291): `fetchVaults` reads each active
+    live vault on its own. A vault whose read throws logs one error line,
+    keeps its last-persisted `tvl_usd`, and gets `last_refresh_status =
+    'failed'`; the other vaults still update and the run returns `ok: true`
+    with a `failed` count. Only a run in which every vault failed returns
+    `{ ok: false, status: "degraded" }`. A failure no retry can change
+    (`PermanentVaultReadError`: `totalAssets()` or `asset()` reverts, or the
+    address is not `0x` plus 40 hex) does not enter the loop's 2 s, 4 s
+    retry: when every failure is permanent the result carries
+    `terminal: true`. Production's two Bankr LP rows (strategy_type
+    `lp-fees`) are not ERC-4626 and revert `totalAssets()` on Base, which
+    used to abort every run with `updated: 0` (production capture
+    2026-10-14). Which vaults belong in the roster is a separate decision.
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
     (`backend/src/projects/access/select.ts`) serves the hermetic fixture

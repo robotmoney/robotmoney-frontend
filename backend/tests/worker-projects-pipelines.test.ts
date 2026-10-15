@@ -632,15 +632,18 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
       INSERT INTO projects (slug, display_name, status) VALUES (${slug}, 'Stall Vault', 'active') RETURNING id`;
     projectId = id;
     const vaultAddr = "0x" + "ab".repeat(20);
-    await fixtureDb`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
-              VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424)`;
+    const [{ id: vaultId }] = await fixtureDb<{ id: string }[]>`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
+              VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424) RETURNING id`;
 
+    // Issue 1291: fetchVaults now reads every vault even after one fails, so
+    // the other tests' live vaults are parked to keep this run to one read.
     const started = Date.now();
-    const res = await fetchVaults({}, liveProjectsDataSource);
+    const res = await withOnlyVaults([vaultId], () => fetchVaults({}, liveProjectsDataSource));
     const elapsed = Date.now() - started;
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe("degraded"); // stalled fetch → degrade-to-persisted
+    expect(res.terminal).toBeUndefined(); // a timeout is transient: the loop retries it
     expect(elapsed).toBeLessThan(5000); // aborted at ~200ms, never hung the slot
 
     const [{ tvl }] = await sql<{ tvl: number }[]>`
@@ -658,6 +661,195 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
     }
   }
 }, 15_000);
+
+// ── Issue 1291: fetchVaults isolates each vault ──────────────────────────────
+// Production 2026-10-14 and the v0.6.2 stage QA run 2026-10-15: the Bankr
+// Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type
+// lp-fees) is not an ERC-4626 vault, so totalAssets() reverts on Base. The
+// handler read every vault in one try block, so that one revert ended the run
+// with updated: 0 and no vault's TVL updated. These tests drive the REAL live
+// source over a mocked Base RPC: one vault reverts totalAssets() and asset()
+// the way the Bankr LP does, the other answers like Robot Money USDC.
+const BANKR_LP = "0x7689006F6C3A3473449E42b628544E60D0bCCb07";
+const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+const SEL_TOTAL_ASSETS = "0x01e1d114";
+const SEL_ASSET = "0x38d52e0f";
+const SEL_DECIMALS = "0x313ce567";
+const word = (n: bigint) => "0x" + n.toString(16).padStart(64, "0");
+
+// fetchVaults reads every active live vault in the shared DB, so each test
+// parks the others for its run and restores them after.
+async function withOnlyVaults<T>(ids: string[], run: () => Promise<T>): Promise<T> {
+  const parked = await fixtureDb<{ id: string }[]>`
+    UPDATE agent_vaults SET is_active = false
+    WHERE is_active = true AND data_source = 'live' AND id NOT IN ${sql(ids)} RETURNING id`;
+  try {
+    return await run();
+  } finally {
+    if (parked.length) await fixtureDb`UPDATE agent_vaults SET is_active = true WHERE id IN ${sql(parked.map((r) => r.id))}`;
+  }
+}
+
+// Answers each Multicall3 sub-call: a vault in `reverting` reverts every call,
+// any other vault holds 1234.5 USDC. USDC answers decimals() = 6.
+function vaultTransport(reverting: Set<string>): { posts: number } {
+  const t = { posts: 0 };
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    t.posts += 1;
+    const body = JSON.parse(String(init?.body)) as { id?: number; params: [{ to: string; data: string }, string] };
+    const { to, data } = body.params[0];
+    const reply = (result: string) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result }), { status: 200 });
+    if (to.toLowerCase() === USDC_BASE && data.startsWith(SEL_DECIMALS)) return reply(word(6n));
+    expect(to).toBe(MULTICALL3_ADDRESS);
+    const results: Aggregate3Result[] = decodeAggregate3Calls(data).map((c) => {
+      if (reverting.has(c.target.toLowerCase())) return { success: false, returnData: "0x" };
+      if (c.callData.startsWith(SEL_TOTAL_ASSETS)) return { success: true, returnData: word(1_234_500_000n) };
+      if (c.callData.startsWith(SEL_ASSET)) return { success: true, returnData: word(BigInt(USDC_BASE)) };
+      throw new Error(`unexpected sub-call ${c.callData}`);
+    });
+    return reply(encodeAggregate3Result(results));
+  }) as unknown as typeof fetch;
+  return t;
+}
+
+async function seedVaults(tag: string, rows: { name: string; address: string; tvl: number | null }[]) {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkvault_${tag}`}, 'Vault Isolation', 'active') RETURNING id`;
+  const byName: Record<string, string> = {};
+  for (const r of rows) {
+    const [{ id }] = await fixtureDb<{ id: string }[]>`
+      INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd, last_refresh_status)
+      VALUES (${projectId}, ${r.name}, ${r.address}, 'base', 'erc4626', 'live', true, ${r.tvl}, 'ok') RETURNING id`;
+    byName[r.name] = id;
+  }
+  return { projectId, byName, ids: Object.values(byName) };
+}
+
+async function vaultRow(id: string) {
+  const [r] = await sql<{ tvl: number | null; status: string | null; refreshed_at: Date | null }[]>`
+    SELECT tvl_usd::float8 AS tvl, last_refresh_status AS status, refreshed_at FROM agent_vaults WHERE id = ${id}`;
+  return r!;
+}
+
+async function dropProject(projectId: string) {
+  await fixtureDb`DELETE FROM daily_tvl_snapshots WHERE vault_id IN (SELECT id FROM agent_vaults WHERE project_id = ${projectId})`;
+  await fixtureDb`DELETE FROM agent_vaults WHERE project_id = ${projectId}`;
+  await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+}
+
+test("fetchVaults: a vault whose totalAssets() reverts keeps its TVL and is marked failed; the valid vault still updates", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "rmusdc", address: "0x" + "4f".repeat(20), tvl: 1 },
+  ]);
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase()]));
+      const res = await withOnlyVaults(ids, () => fetchVaults({}, liveProjectsDataSource));
+      con.restore();
+
+      expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 1 });
+
+      const good = await vaultRow(byName["rmusdc"]!);
+      expect(good.tvl).toBe(1234.5);
+      expect(good.status).toBe("ok");
+      expect(good.refreshed_at).not.toBeNull();
+
+      const bad = await vaultRow(byName["bankr-lp"]!);
+      expect(bad.tvl).toBe(999); // last-persisted TVL kept, never zeroed
+      expect(bad.status).toBe("failed");
+      expect(bad.refreshed_at).toBeNull(); // not refreshed: no new TVL was read
+
+      // One line for the failing vault, naming it, and no whole-run line.
+      expect(con.errors).toEqual([
+        `[projects.fetch_vaults] vault ${byName["bankr-lp"]} live read failed, keeping last-persisted TVL (degraded): live-source: totalAssets() failed for ${BANKR_LP}`,
+      ]);
+    });
+  } finally {
+    con.restore();
+    await dropProject(projectId);
+  }
+});
+
+test("fetchVaults: when every vault fails the run is ok:false, status degraded, and every TVL is kept", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const other = "0x" + "22".repeat(20);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "bnkr-pool", address: other, tvl: 555 },
+  ]);
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase(), other]));
+      const res = await withOnlyVaults(ids, () => fetchVaults({}, liveProjectsDataSource));
+      con.restore();
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("degraded");
+      expect(res.updated).toBe(0);
+      expect(res.failed).toBe(2);
+      // Both are reverts: no retry can change the answer.
+      expect(res.terminal).toBe(true);
+      expect(con.errors.length).toBe(2);
+      expect((await vaultRow(byName["bankr-lp"]!)).tvl).toBe(999);
+      expect((await vaultRow(byName["bnkr-pool"]!)).tvl).toBe(555);
+      expect((await vaultRow(byName["bankr-lp"]!)).status).toBe("failed");
+      expect((await vaultRow(byName["bnkr-pool"]!)).status).toBe("failed");
+    });
+  } finally {
+    con.restore();
+    await dropProject(projectId);
+  }
+});
+
+test("processOneJob: a totalAssets() revert never requeues projects.fetch_vaults on the 2 s backoff", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const { projectId, ids: mixedIds } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "rmusdc", address: "0x" + "4f".repeat(20), tvl: 1 },
+  ]);
+  const onlyBankr = [mixedIds[0]!];
+  const kind = "projects.fetch_vaults";
+  const original = handlers[kind];
+  const jobIds: number[] = [];
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase()]));
+      // Mixed run (production today): the revert is counted and the job succeeds.
+      // Only revert(s) left: the job settles at once, never 'pending' with a backoff.
+      for (const [scope, expected] of [
+        [mixedIds, { job: "succeeded", run: "succeeded" }],
+        [onlyBankr, { job: "failed", run: "failed" }],
+      ] as const) {
+        handlers[kind] = (payload) => withOnlyVaults([...scope], () => fetchVaults(payload, liveProjectsDataSource));
+        const [{ id: jobId }] = await fixtureDb<{ id: number }[]>`
+          INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
+        jobIds.push(jobId);
+        expect(await processOneJob()).toBe(true);
+
+        const [job] = await sql<{ status: string; attempts: number }[]>`SELECT status, attempts FROM jobs WHERE id = ${jobId}`;
+        expect(job.status).toBe(expected.job);
+        expect(job.status).not.toBe("pending");
+        expect(job.attempts).toBe(1);
+        const [run] = await sql<{ status: string }[]>`
+          SELECT status FROM job_runs WHERE job_id = ${jobId} ORDER BY id DESC LIMIT 1`;
+        expect(run.status).toBe(expected.run);
+      }
+    });
+  } finally {
+    con.restore();
+    handlers[kind] = original;
+    if (jobIds.length) {
+      await fixtureDb`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+    }
+    await dropProject(projectId);
+  }
+});
 
 // ── Issue #95: honest degraded-run signalling in the worker loop ─────────────
 // A handler that returns { ok:false } (degraded) must NOT be recorded as
