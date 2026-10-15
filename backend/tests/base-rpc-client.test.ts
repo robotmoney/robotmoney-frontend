@@ -20,6 +20,8 @@ import {
   encodeGetEthBalanceCall,
   decodeUint256,
   multicall3Aggregate3,
+  ethGetTransactionByHash,
+  ethGetTransactionReceipt,
   MULTICALL3_ADDRESS,
   type Call3,
   type Aggregate3Result,
@@ -366,4 +368,72 @@ test("multicall3Aggregate3 with no calls makes zero network requests", async () 
   expect(out).toEqual([]);
   expect(ethCalls).toBe(0);
   globalThis.fetch = realFetch;
+});
+
+// ── Transaction and receipt reads (issue 1358, Linear RM-174) ────────────────
+// The referral report reads a deposit's calldata and its receipt logs. Each test
+// drives the real transport against a stubbed fetch and asserts the JSON-RPC
+// request the node would receive, the parsed result, and the null answer a node
+// gives for a hash it does not know.
+
+const TX_HASH = "0x" + "12".repeat(32);
+
+/** Stub fetch with one answer and record every JSON-RPC body sent. */
+function captureFetch(result: unknown): { method: string; params: unknown[] }[] {
+  const sent: { method: string; params: unknown[] }[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    sent.push(JSON.parse(String(init?.body)));
+    return okResult(result);
+  }) as unknown as typeof fetch;
+  return sent;
+}
+
+test("ethGetTransactionByHash sends eth_getTransactionByHash with the hash and returns the parsed input", async () => {
+  const input = "0x6e553f65" + "00".repeat(64) + "80218021802180218021802180218021";
+  const sent = captureFetch({ hash: TX_HASH, from: ADDR_A, to: ADDR_B, input, blockNumber: "0x10" });
+  const tx = await ethGetTransactionByHash(TX_HASH, OK);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.method).toBe("eth_getTransactionByHash");
+  expect(sent[0]!.params).toEqual([TX_HASH]);
+  expect(tx?.input).toBe(input);
+  expect(tx?.from).toBe(ADDR_A);
+  expect(tx?.blockNumber).toBe("0x10");
+});
+
+test("ethGetTransactionByHash answers null for a hash the node does not know", async () => {
+  captureFetch(null);
+  expect(await ethGetTransactionByHash(TX_HASH, OK)).toBeNull();
+});
+
+test("ethGetTransactionByHash throws on a transaction with no input, never returning an empty one", async () => {
+  captureFetch({ hash: TX_HASH, from: ADDR_A, to: ADDR_B, blockNumber: "0x10" });
+  await expect(ethGetTransactionByHash(TX_HASH, OK)).rejects.toThrow(/without input/);
+});
+
+test("ethGetTransactionReceipt sends eth_getTransactionReceipt with the hash and returns the parsed logs", async () => {
+  const log = {
+    address: ADDR_B,
+    topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"],
+    data: word(5_000_000n),
+    blockNumber: "0x10",
+    transactionHash: TX_HASH,
+    logIndex: "0x0",
+  };
+  const sent = captureFetch({ transactionHash: TX_HASH, from: ADDR_A, to: ADDR_B, status: "0x1", blockNumber: "0x10", logs: [log] });
+  const receipt = await ethGetTransactionReceipt(TX_HASH, OK);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.method).toBe("eth_getTransactionReceipt");
+  expect(sent[0]!.params).toEqual([TX_HASH]);
+  expect(receipt?.status).toBe("0x1");
+  expect(receipt?.logs).toEqual([log]);
+});
+
+test("ethGetTransactionReceipt answers null for a hash the node does not know", async () => {
+  captureFetch(null);
+  expect(await ethGetTransactionReceipt(TX_HASH, OK)).toBeNull();
+});
+
+test("ethGetTransactionReceipt throws on a receipt with no logs, never returning an empty list", async () => {
+  captureFetch({ transactionHash: TX_HASH, from: ADDR_A, to: ADDR_B, status: "0x1", blockNumber: "0x10" });
+  await expect(ethGetTransactionReceipt(TX_HASH, OK)).rejects.toThrow(/without logs/);
 });

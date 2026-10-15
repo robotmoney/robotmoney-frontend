@@ -953,6 +953,46 @@ export async function ethGetLogs(params: EthGetLogsParams, opts: RpcCallOptions)
   return result;
 }
 
+// One transaction and its receipt, by hash (issue 1358, Linear RM-174). The
+// referral report reads a deposit's full calldata (`input`, where an ERC-8021
+// referral suffix rides) and its receipt logs (who paid the USDC). Same
+// transport, retry and rate limit as every read above. A hash the node does not
+// know answers null, never a throw; a present result missing the field the
+// caller needs is a transport fault and throws, so a caller never reads an
+// empty `input` or log list that the node did not actually send.
+export interface EthTransaction {
+  hash: string;
+  from: string;
+  to: string | null;
+  /** The full calldata, 0x-prefixed hex. */
+  input: string;
+  /** 0x-hex; null while pending. */
+  blockNumber: string | null;
+  [k: string]: unknown;
+}
+export interface EthTransactionReceipt {
+  transactionHash: string;
+  from: string;
+  to: string | null;
+  /** "0x1" success, "0x0" reverted. */
+  status: string;
+  blockNumber: string; // 0x-hex
+  logs: EthLog[];
+  [k: string]: unknown;
+}
+export async function ethGetTransactionByHash(hash: string, opts: RpcCallOptions): Promise<EthTransaction | null> {
+  const result = await rpcRequest<EthTransaction | null>("eth_getTransactionByHash", [hash], opts);
+  if (result === null || result === undefined) return null;
+  if (typeof result.input !== "string") throw new Error("Base RPC: transaction without input");
+  return result;
+}
+export async function ethGetTransactionReceipt(hash: string, opts: RpcCallOptions): Promise<EthTransactionReceipt | null> {
+  const result = await rpcRequest<EthTransactionReceipt | null>("eth_getTransactionReceipt", [hash], opts);
+  if (result === null || result === undefined) return null;
+  if (!Array.isArray(result.logs)) throw new Error("Base RPC: receipt without logs");
+  return result;
+}
+
 // A single `eth_getCode`. Used by chain/address-floor-resolver.ts (issue #760;
 // markets §6.1, §8.1) to binary-search an address's earliest-valid-block floor
 // — the first block at which it has on-chain code. `0x` here is the same
