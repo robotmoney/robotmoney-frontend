@@ -217,6 +217,28 @@ test("(f) walletBalanceUsd refuses a non-'base' chain without ever opening a soc
   expect(calls).toBe(0);
 });
 
+// Issue 1275: refreshWallets asks supportsWallet before each read, so the
+// rule must accept exactly what walletBalanceUsd can read: chain "base" with a
+// 0x-prefixed 40-hex address. Everything else is skipped, never read.
+test("(g) supportsWallet is true only for chain 'base' with a 0x plus 40-hex address", () => {
+  const s = liveProjectsDataSource;
+  expect(s.supportsWallet(WALLET, "base")).toBe(true);
+  expect(s.supportsWallet("0x" + "AbCdEf".repeat(6) + "0123", "base")).toBe(true);
+  // Other chains, even with a valid EVM address.
+  expect(s.supportsWallet(WALLET, "ethereum")).toBe(false);
+  expect(s.supportsWallet(WALLET, "solana")).toBe(false);
+  expect(s.supportsWallet(WALLET, "Base")).toBe(false);
+  expect(s.supportsWallet(WALLET, "")).toBe(false);
+  // Non-EVM or malformed addresses on base.
+  expect(s.supportsWallet("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "base")).toBe(false);
+  expect(s.supportsWallet("0xwallet0000000000000000000000000000000aaa", "base")).toBe(false);
+  expect(s.supportsWallet("0x" + "cd".repeat(19), "base")).toBe(false);
+  expect(s.supportsWallet("0x" + "cd".repeat(21), "base")).toBe(false);
+  expect(s.supportsWallet("cd".repeat(20), "base")).toBe(false);
+  expect(s.supportsWallet(` ${WALLET}`, "base")).toBe(false);
+  expect(s.supportsWallet("", "base")).toBe(false);
+});
+
 // CI grep (AC): the live source contains ZERO hand-rolled RPC construction —
 // no JSON-RPC envelope, no eth_call literal, no local 4-byte selector table.
 // Every Base read must arrive via base-rpc-client imports; only the CoinGecko/

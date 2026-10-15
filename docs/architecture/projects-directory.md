@@ -50,11 +50,17 @@ from this repo's own tables and pipelines instead of Supabase.
     (`backend/src/projects/fixtures/dataset.ts`), not the legacy 1963-line
     autonomous multi-source crawler — a tracked follow-up. Wallet balance is
     live ONLY for `chain === "base"`; the discovery roster's handful of
-    Ethereum/Solana treasuries have no RPC/pricing path in this codebase yet,
-    so that ONE wallet's read throws (never a fabricated number) while every
-    other wallet in the same `projects.refresh_wallets` run still updates
-    (issue #346 also fixed a bug where one bad wallet used to abort the whole
-    run instead of degrading alone).
+    Ethereum/Solana treasuries have no RPC/pricing path in this codebase yet.
+    `refreshWallets` asks the source's `supportsWallet(address, chain)` before
+    each read (issue 1275): a wallet on another chain, or whose address is not
+    `0x` plus 40 hex, is skipped with no read and no error line, keeps its
+    last-persisted `balance_usd`, and is counted in the run's `unsupported`
+    total with one info-level summary line per run. A supported Base wallet
+    whose read throws still logs an error and degrades the run (never a
+    fabricated number), while every other wallet in the same
+    `projects.refresh_wallets` run still updates (issue #346 also fixed a bug
+    where one bad wallet used to abort the whole run instead of degrading
+    alone).
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
     (`backend/src/projects/access/select.ts`) serves the hermetic fixture

@@ -196,6 +196,14 @@ export const liveProjectsDataSource: ProjectsDataSource = {
     return { totalAssetsRaw: totalAssets.toString(), decimals, assetPriceUsd };
   },
 
+  // Issue 1275: the live provider reads native ETH on Base only, so a wallet
+  // on any other chain, or whose address is not 0x plus 40 hex digits (a
+  // Solana address, a placeholder), has no live path. refreshWallets skips
+  // those instead of logging the same expected failure every run.
+  supportsWallet(address: string, chain: string): boolean {
+    return chain === "base" && /^0x[0-9a-fA-F]{40}$/.test(address);
+  },
+
   // Issue #346: reuses the SAME batched-Multicall3 + keyless-price + persisted-
   // fallback valuation machinery the prop-wallet feeds share
   // (chain/wallet-valuation.ts) instead of the never-built legacy Alchemy
