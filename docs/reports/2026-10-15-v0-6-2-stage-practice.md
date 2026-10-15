@@ -62,12 +62,12 @@ accepted rather than passed (R2.5, W1), so SP.8 refuses this journal for product
    LP, `strategy_type: lp-fees`, not an ERC-4626 vault: the call reverts on Base), and
    one failed vault degrades the whole run with `updated: 0`. Fix: read only ERC-4626
    vaults through `totalAssets()`, and degrade per vault as the wallets do (346).
-7. **Open, gate: healthy sessions are graded stuck.** Migration 0117 (1263) moved
-   every subject to 24 h epochs on 2026-10-09; a session collects for its whole epoch.
-   `prod-gate.ts` still fails any open session older than `stuckAfterMin: 780` (13 h),
-   set by the gate port (1132) for 6 h epochs. The dump's sessions run on an exact
-   24 h cadence per subject, 6 h apart: none is stuck. Fix: derive the limit from the
-   subject's `epoch_duration_seconds` plus a margin.
+7. **Fixed: healthy sessions were graded stuck.** Migration 0117 (1263) moved every
+   subject to 24 h epochs on 2026-10-09; a session collects for its whole epoch.
+   The gates failed any open session older than 780 min (13 h), a limit set by the
+   gate port (1132) for 6 h epochs. The dump's sessions run on an exact 24 h cadence
+   per subject, 6 h apart: none was stuck. Both gates now measure from the session's
+   own deadline (judging deadline, else window close), with 120 min of grace.
 8. **Open, small: api, system-scheduler and analytics-producer ignore `docker stop`.**
    `backend/Dockerfile` has no init, and only the worker handles SIGTERM. Bun runs as
    PID 1, so SIGTERM is ignored, and Docker kills each one after 10 s (exit 137). Every
@@ -78,5 +78,6 @@ accepted rather than passed (R2.5, W1), so SP.8 refuses this journal for product
    the gap and failed R6.7a. It did not repeat in the passing run, where the api
    peaked at 174 MiB with 5.4 GB free. The resume overwrote R6.7a's logs, so no
    evidence is left. Cause unknown; the kernel log is not readable as `stage-server`.
-10. **Open, small: `docker inspect` receipts are not valid JSON.** The redaction of
-    the token bind mount (`…/run/rm-token:***`) drops the closing quote.
+10. **Fixed: `docker inspect` receipts were not valid JSON.** The scrubber matched the
+    key `token` in the rm-token bind mount and swallowed the closing quote. It now keeps
+    the quote.

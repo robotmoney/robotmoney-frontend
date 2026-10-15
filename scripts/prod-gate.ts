@@ -30,7 +30,8 @@
 //   judge         swarm_judge_config is `enforce`
 //   jobs          dead jobs in the window, each last_error classified with the
 //                 same rules as the logs; after a release any dead job fails
-//   sessions      baseline: no session stuck past --stuck-after; post-release:
+//   sessions      baseline: no session --stuck-after minutes past its own
+//                 deadline (window close or judging deadline); post-release:
 //                 every subject publishes --min-sessions judged, attended
 //                 sessions in the window, and sessions have not stopped. A
 //                 session that published unjudged (not_judged, no model
@@ -48,7 +49,7 @@ import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type InventoryMode } from "./lib/gate/log-inventory.ts";
 import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
-import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
+import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 import { CLASSIFICATIONS_PATH, toSessionRow } from "./twin-gate.ts";
 
@@ -74,7 +75,7 @@ export interface ProdGateArgs {
 }
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
-  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, release: "v0.6.0", livenessHours: 12 };
+  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: DEFAULT_STUCK_AFTER_MIN, release: "v0.6.0", livenessHours: 12 };
   // `--sessions graded|deferred` is the value form of `--defer-sessions`: the
   // release run renders it from target data (`watchSessions`), so one step
   // template grades on production and defers on stage (D61 rule 2).
@@ -244,6 +245,7 @@ async function main(): Promise<number> {
   const raw = dbQuery<Parameters<typeof toSessionRow>[0]>(api,
     `SELECT s.id, s.subject_id AS subject, s.state, s.judging_outcome AS outcome,
             coalesce(extract(epoch FROM now() - s.convened_at) / 60, 0)::text AS age,
+            (extract(epoch FROM now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue,
             (extract(epoch FROM s.published_at) * 1000)::text AS pub,
             (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
             EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged,
@@ -264,7 +266,7 @@ async function main(): Promise<number> {
       [...v.failures, ...v.warnings, `${rows.filter((r) => r.state === "published").length} session(s) published in the window`, [...v.goodBySubject].map(([s, n]) => `${s}: ${n} good`).join("; "), `active analysts ${active}`]);
   } else {
     const v = evaluateSessions(rows, subjects, active, { ...args, minSessions: 0, nowMs: Date.parse(now) });
-    add("sessions", `No session is stuck unpublished for more than ${args.stuckAfterMin} min, and none published unjudged`, v.failures.length ? "FAIL" : "PASS",
+    add("sessions", `No session is open more than ${args.stuckAfterMin} min past its own deadline, and none published unjudged`, v.failures.length ? "FAIL" : "PASS",
       [...v.failures, `${rows.length} session(s) in or open during the window`]);
   }
 
