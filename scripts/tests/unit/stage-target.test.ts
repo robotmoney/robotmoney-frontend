@@ -93,7 +93,7 @@ describe("the stage target's ~/.env", () => {
     expect(keys).not.toContain("doadmin");
   });
 
-  test("it carries the extras the env rewrite (R6.2) must move aside", () => {
+  test("it carries the extras the env rewrite (C07-env-rewrite) must move aside", () => {
     const keys = envKeyNames(composeStageHomeEnv(VALUES));
     expect(keys).toContain("SWARM_SCHEDULES_ENABLED");
     expect(keys).toContain("OPENCODE_API_KEY");

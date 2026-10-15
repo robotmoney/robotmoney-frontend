@@ -7,23 +7,23 @@ release: v0.6.2
 template: kitchen-sink
 notes: |
   Identity. From v0.6.1 (bca5186e, /root/rm-061, instance rm_prod, ledger through 0119;
-  R1.2 reads it from the database). To v0.6.2 at the commit the rc tag names, in a new
+  P07-baseline reads it from the database). To v0.6.2 at the commit the rc tag names, in a new
   checkout (/root/rm-062), the same instance. Tracking: release v0.6.2 (1305). Before the
   run, the target files' `release` reads v0.6.2 and prod's `checkout` names the new folder.
 
-  Migrations (R6.3, under the running v0.6.1; all compat: additive, which R2.3 checks):
+  Migrations (C05-migrate, under the running v0.6.1; all compat: additive, which P07-baseline checks):
   - 0120_maintenance_windows: the maintenance-window event log (issue 1220), insert-only
     for rm_app.
   - 0121_subject_closes_six_hours_apart: the four anchors' times of day become exactly
     21600 s apart on vault's grid; woon, allocation and treasury move 6, 8 and 12 minutes
-    earlier. Epochs stay 24 h. R7.4a asserts the spacing. The one transition window per
+    earlier. Epochs stay 24 h. C22-schedule-parity asserts the spacing. The one transition window per
     moved subject is 23 h 54 m (woon), 23 h 52 m (allocation), 23 h 48 m (treasury); the
     post-release session report confirms them.
   - 0122_swarm_dormancy_baseline: a singleton counted_from for consecutive missed-session
     counts (issue 1269); removes no seat.
 
   Website. website-server/nginx.conf changed since v0.6.1 (the maintenance fallback). Its
-  compose configuration did not, so R6.7a ships it by graceful reload into the running
+  compose configuration did not, so C10-rolling-boot ships it by graceful reload into the running
   container (SC.5); the site never goes down.
 
   Member notice. The notice to woon, shodai, zyfai and dualmint about the new close times
@@ -31,18 +31,29 @@ notes: |
   word. It is not a step.
 recovery: |
   All three migrations are compat: additive and take no grant from a runtime role.
-  - Before R6.3 (preflight, baseline, backup): nothing has changed; fix on a new QA branch
+  - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
     and cut v0.6.2-rc.(N+1).
-  - A failed R6.3: resume at R6.3; v0.6.1 keeps serving, and the website stays up.
-  - After R6.3: fix forward on v0.6.3, or restore the R2.1 dump with the write loss it
-    implies. v0.6.2 is tagged at C1 either way (D70).
+  - A failed C05-migrate: resume at C05-migrate; v0.6.1 keeps serving, and the website stays up.
+  - After C05-migrate: fix forward on v0.6.3, or restore the C01-backup dump with the write loss it
+    implies. v0.6.2 is tagged at C06-version-tag either way (D70).
 steps:
-  # ── S stage preparation: stage only, run by `--until S2` before the preflight ─
-  # Stage rebuilds its target from a production dump (SR.0). Production skips
-  # these steps: it takes its own backup (R2.1) and holds its own credentials.
-  - id: "S0"
+  # ── QA: stage only, as often as needed. Builds the stage target; then the
+  # preflight and cutover sections run exactly as production runs them.
+  - id: "Q01-lockfile"
+    standing: ["SP.9"]
+    host: "control"
+    phase: "qa"
+    description: "Fresh lockfile: every committed bun.lock equals a fresh resolve at the QA commit, so the rc carries one (owner, 2026-10-14); hosts then install it frozen"
+    cmds:
+      - ["bun", "scripts/release/lockfile.ts", "check", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q02-dump"
     standing: ["SR.0"]
     host: "control"
+    phase: "qa"
     description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
     cmds:
       - ["bun", "scripts/release/stage-target.ts", "dump"]
@@ -51,10 +62,11 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 30
-  - id: "S1"
+  - id: "Q03-stage-up"
     standing: ["SR.0"]
     host: "control"
-    description: "Stage target: replace it with a production-shaped copy restored from that dump, running the version production runs (the running tag, its ledger, its grants); the release checkout is made by R1.1"
+    phase: "qa"
+    description: "Stage target: replace it with a production-shaped copy restored from that dump, running the version production runs (the running tag, its ledger, its grants); the release checkout is made by P01-checkout"
     cmds:
       - ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"]
     expectExit: 0
@@ -62,9 +74,10 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 60
-  - id: "S2"
+  - id: "Q04-role-passwords"
     standing: ["SR.1"]
     host: "control"
+    phase: "qa"
     description: "Stage's role passwords: the stage database sets its own doadmin password and role-passwords writes the roles' passwords to the stage host's ~/.env, so the rest of the list reads stage exactly as it reads production (doadmin stays in no file)"
     cmds:
       - ["bash", "-c", "set -o pipefail && bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target {target} --doadmin-stdin"]
@@ -73,11 +86,13 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 10
-
-  # ── R1 release identity, on both hosts ────────────────────────────────────
-  - id: "R1.1"
+  # ── Preflight: read-only gates on the target, once per rc, at most 60 minutes
+  # before the cutover (production; stage runs it as part of QA). Nothing a
+  # running service uses changes.
+  - id: "P01-checkout"
     standing: ["SP.1"]
     host: "target"
+    phase: "preflight"
     description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)"
     cmds:
       - ["git", "fetch", "--tags", "origin"]
@@ -86,29 +101,32 @@ steps:
     receipts: []
     irreversible: false
     cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
-  - id: "R1.2"
+  - id: "P02-identity"
     standing: ["SP.1"]
     host: "target"
-    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its ledger reconciles with backend/migrations and the bytes at the version the running stack reports (no recorded name the repository lacks, no applied file whose bytes differ from the tag's; never a count or a number order), its identity is absent or matches RM_ENV; before R6.3, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no release step reads doadmin"
+    phase: "preflight"
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its identity is absent or matches RM_ENV, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no production step reads doadmin. The ledger reconciliation is P07-baseline's"
     cmds:
-      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--origin", "{publicOrigin}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
     irreversible: false
-  - id: "R1.3"
+  - id: "P03-install"
     standing: ["SP.1"]
     host: "target"
-    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree R1.2 proved clean)"
+    phase: "preflight"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree P02-identity proved clean)"
     cmds:
       - ["bun", "install", "--frozen-lockfile"]
       - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "R1.4"
+  - id: "P04-capture-checkout"
     standing: ["SP.1"]
     host: "capture"
+    phase: "preflight"
     description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref"
     cmds:
       - ["git", "fetch", "--tags", "origin"]
@@ -117,9 +135,10 @@ steps:
     receipts: []
     irreversible: false
     cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
-  - id: "R1.5"
+  - id: "P05-capture-identity"
     standing: ["SP.1"]
     host: "capture"
+    phase: "preflight"
     description: "Capture identity: HEAD is the commit and the tree is clean"
     cmds:
       - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -127,9 +146,10 @@ steps:
     receipts:
       - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
     irreversible: false
-  - id: "R1.6"
+  - id: "P06-capture-install"
     standing: ["SP.1"]
     host: "capture"
+    phase: "preflight"
     description: "Capture install: bun install --frozen-lockfile, root and backend"
     cmds:
       - ["bun", "install", "--frozen-lockfile"]
@@ -137,43 +157,10 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-
-  # ── R2 baseline and backup ────────────────────────────────────────────────
-  - id: "R2.1"
-    standing: ["SP.2"]
-    host: "capture"
-    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)"
-    cmds:
-      - ["bun", "run", "smoke:capture", "--out", "{captureHome}/rm-backup-{target}-{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
-    irreversible: false
-    maxMinutes: 30
-  - id: "R2.2"
-    standing: ["SP.2"]
-    host: "capture"
-    description: "Record the sha256 of the encrypted dump files beside the manifest"
-    cmds:
-      - ["sh", "-c", "cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "SHA256SUMS", "required": true}
-    irreversible: false
-  - id: "R2.4r"
-    standing: ["SP.2"]
-    host: "capture"
-    description: "Restore proof: restore the R2.1 dump into a throwaway local Postgres container, record the restore time, drop the container"
-    cmds:
-      - ["bun", "scripts/release/restore-proof.ts", "--dump", "{captureHome}/rm-backup-{target}-{runTs}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "restore-proof.json", "required": true}
-    irreversible: false
-    maxMinutes: 20
-  - id: "R2.3"
+  - id: "P07-baseline"
     standing: ["SP.3", "SP.6"]
     host: "target"
+    phase: "preflight"
     description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size"
     cmds:
       - ["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]
@@ -181,9 +168,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "baseline*", "required": true}
     irreversible: false
-  - id: "R2.5"
+  - id: "P08-log-baseline"
     standing: ["SP.5"]
     host: "target"
+    phase: "preflight"
     description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md"]
@@ -192,22 +180,58 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-baseline.*", "required": true}
     irreversible: false
     triage: true
-
-
-  # ── C/R6 cutover: a rolling upgrade; the website never goes down ─────────
-  - id: "C0"
+  # ── Cutover: the release as it happens. Backup and restore proof, then a
+  # rolling upgrade; the website never goes down.
+  - id: "C01-backup"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)"
+    cmds:
+      - ["bun", "run", "smoke:capture", "--out", "{captureHome}/rm-backup-{target}-{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
+    irreversible: false
+    maxMinutes: 30
+  - id: "C02-backup-sums"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Record the sha256 of the encrypted dump files beside the manifest"
+    cmds:
+      - ["sh", "-c", "cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "SHA256SUMS", "required": true}
+    irreversible: false
+  - id: "C03-restore-proof"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Restore proof: restore the C01-backup dump into a throwaway local Postgres container, record the restore time, drop the container"
+    cmds:
+      - ["bun", "scripts/release/restore-proof.ts", "--dump", "{captureHome}/rm-backup-{target}-{runTs}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "restore-proof.json", "required": true}
+    irreversible: false
+    maxMinutes: 20
+  - id: "C04-probe-start"
     standing: ["SC.4"]
     host: "control"
-    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until C9 grades it"
+    phase: "cutover"
+    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until C13-probe-grade grades it"
     cmds:
       - ["bun", "scripts/release/probe.ts", "start", "--origin", "{publicOrigin}", "--target", "{target}", "--run", "{runTs}"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "R6.3"
+  - id: "C05-migrate"
     standing: ["SC.5"]
     host: "target"
-    description: "Migrate every pending file while the previous release serves (R2.3 refused any pending file that is not compat: additive). The cutover's first irreversible step"
+    phase: "cutover"
+    description: "Migrate every pending file while the previous release serves (P07-baseline refused any pending file that is not compat: additive). The cutover's first irreversible step"
     cmds:
       - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
     expectExit: 0
@@ -215,9 +239,10 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
     irreversible: true
-  - id: "C1"
+  - id: "C06-version-tag"
     standing: ["SW.3"]
     host: "control"
+    phase: "cutover"
     description: "The cutover has started: tag the rc's commit with the version tag and push it (prod only, D70). A later failed check or a rollback never withholds or moves it"
     cmds:
       - ["bun", "scripts/release/tag.ts", "final", "--release", "{release}", "--commit", "{commit}"]
@@ -225,9 +250,10 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
-  - id: "R6.2"
+  - id: "C07-env-rewrite"
     standing: ["SV.6"]
     host: "target"
+    phase: "cutover"
     description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only"
     cmds:
       - ["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -235,9 +261,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "env-rewrite.json", "required": true}
     irreversible: false
-  - id: "R6.4"
+  - id: "C08-identity"
     standing: []
     host: "target"
+    phase: "cutover"
     description: "Report the deployment identity the migrate wrote (prod-init set-identity)"
     cmds:
       - ["bun", "scripts/prod-init.ts", "set-identity", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
@@ -245,9 +272,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "set-identity-*.json", "required": true}
     irreversible: false
-  - id: "R6.5"
+  - id: "C09-tokens"
     standing: ["SC.5"]
     host: "target"
+    phase: "cutover"
     description: "Service tokens (prod-init provision-tokens): keep every holder whose file still holds its current token, provision only a missing or stale one, so the running holders keep authenticating"
     cmds:
       - ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
@@ -255,9 +283,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "provision-tokens-*.json", "required": true}
     irreversible: false
-  - id: "R6.7a"
+  - id: "C10-rolling-boot"
     standing: ["SP.4", "SC.5"]
     host: "target"
+    phase: "cutover"
     description: "The rolling boot: bun smoke --static-port replaces api, worker-analytics, system-scheduler and analytics-producer one at a time, each healthy before the next; website-server is never recreated (the boot refuses if it would be)"
     cmds:
       - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
@@ -267,38 +296,41 @@ steps:
     receipts: []
     irreversible: false
     maxMinutes: 30
-  - id: "R6.9"
+  - id: "C11-ready"
     standing: ["SV.2"]
     host: "target"
+    phase: "cutover"
     description: "Status after the rolling boot: preflight and readiness green. Its end is READY, the soak's start"
     cmds:
       - ["bun", "run", "smoke:status", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "R6.10"
+  - id: "C12-site"
     standing: ["SC.5"]
     host: "target"
+    phase: "cutover"
     description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
     cmds:
       - ["bun", "run", "smoke:web", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "C9"
+  - id: "C13-probe-grade"
     standing: ["SC.4"]
     host: "control"
-    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from C0 to now, or the release fails"
+    phase: "cutover"
+    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from C04-probe-start to now, or the release fails"
     cmds:
       - ["bun", "scripts/release/probe.ts", "grade", "--target", "{target}", "--run", "{runTs}"]
     expectExit: 0
     receipts: []
     irreversible: false
-
-  # ── R7 postflight ─────────────────────────────────────────────────────────
-  - id: "R7.1"
+  # ── Cutover, verification after READY ─────────────────────────────────────
+  - id: "C14-verify-version"
     standing: ["SV.1"]
     host: "target"
+    phase: "cutover"
     description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
     cmds:
       - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -306,18 +338,20 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
     irreversible: false
-  - id: "R7.3"
+  - id: "C15-verify-product"
     standing: ["SV.3"]
     host: "target"
+    phase: "cutover"
     description: "Product verification, readonly tier"
     cmds:
       - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "R7.3a"
+  - id: "C16-log-verdict"
     standing: ["SV.4"]
     host: "target"
+    phase: "cutover"
     description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
@@ -325,10 +359,11 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
-  - id: "R7.3b"
+  - id: "C17-soak-record"
     standing: ["SW.2"]
     host: "target"
-    description: "Standing soak checks at READY: record the baseline the soak's end (W2) compares with"
+    phase: "cutover"
+    description: "Standing soak checks at READY: record the baseline the soak's end (C21-soak-checks) compares with"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md"]
     expectExit: 0
@@ -336,19 +371,21 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-record.*", "required": true}
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "soak-baseline.json", "required": false}
     irreversible: false
-  - id: "R7.5"
+  - id: "C18-compare-baseline"
     standing: ["SV.5"]
     host: "target"
-    description: "Compare with the R2.3 baseline: row counts only grow, database size within the bound"
+    phase: "cutover"
+    description: "Compare with the P07-baseline baseline: row counts only grow, database size within the bound"
     cmds:
       - ["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "compare-baseline.json", "required": true}
     irreversible: false
-  - id: "R7.7"
+  - id: "C19-host-guards"
     standing: ["SV.6"]
     host: "target"
+    phase: "cutover"
     description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password"
     cmds:
       - ["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -356,11 +393,11 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-guards.json", "required": true}
     irreversible: false
-
-  # ── W soak: 30 minutes after READY, then every log ────────────────────────
-  - id: "W1"
+  # ── Cutover, soak: 30 minutes after READY, then every log ──────────────────
+  - id: "C20-soak-gate"
     standing: ["SW.1"]
     host: "target"
+    phase: "cutover"
     description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
@@ -368,32 +405,35 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
     irreversible: false
-    notBefore: {"afterStep": "R6.9", "hours": "watchHours"}
-  - id: "W2"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C21-soak-checks"
     standing: ["SW.2"]
     host: "target"
-    description: "Standing soak checks over the soak window, against the READY baseline R7.3b recorded"
+    phase: "cutover"
+    description: "Standing soak checks over the soak window, against the READY baseline C17-soak-record recorded"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--since", "{readyIso}", "--full", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-full.*", "required": true}
     irreversible: false
-    notBefore: {"afterStep": "R6.9", "hours": "watchHours"}
-  - id: "R7.4a"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C22-schedule-parity"
     standing: ["SW.1"]
     host: "target"
-    description: "Schedule parity: 24 h epochs and the four anchors 21600 s apart, every session in flight at R2.3 still present with its close unmoved (graded: published on it), the regime run at :30, the last parity sweep's duration"
+    phase: "cutover"
+    description: "Schedule parity: 24 h epochs and the four anchors 21600 s apart, every session in flight at P07-baseline still present with its close unmoved (graded: published on it), the regime run at :30, the last parity sweep's duration"
     cmds:
       - ["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "schedule-parity.json", "required": true}
     irreversible: false
-    notBefore: {"afterStep": "R6.9", "hours": "watchHours"}
-  - id: "W3"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C23-collect-logs"
     standing: ["SW.4"]
     host: "target"
+    phase: "cutover"
     description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
     cmds:
       - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -402,4 +442,4 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "collect-logs.json", "required": true}
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
     irreversible: false
-    notBefore: {"afterStep": "R6.9", "hours": "watchHours"}
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}

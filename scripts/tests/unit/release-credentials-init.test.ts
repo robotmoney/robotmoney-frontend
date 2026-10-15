@@ -66,7 +66,7 @@ describe("the file it writes", () => {
     expect(plan.action === "write" && plan.appendEnv).toBe(true);
   });
 
-  test("red: no OPENCODE_API_KEY and no file refuses (R6.2a must run before R6.2)", () => {
+  test("red: no OPENCODE_API_KEY and no file refuses (R6.2a must run before C07-env-rewrite)", () => {
     const plan = planInit(input({ homeEnv: { host: "h", database: "d" } }));
     expect(plan.action).toBe("refuse");
   });

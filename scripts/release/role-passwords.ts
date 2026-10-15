@@ -21,9 +21,9 @@
 // the same `env -i` environment every release step runs with
 // (scripts/release/steps.ts BASE_ENV), and the flags.
 //
-// It runs from the target's release checkout, the one R1.1 fetches and
+// It runs from the target's release checkout, the one P01-checkout fetches and
 // detaches later: provisioning precedes the run, so the wrapper clones and
-// installs that checkout when it is missing, as R1.1 and R1.3 would. It never
+// installs that checkout when it is missing, as P01-checkout and P03-install would. It never
 // names the running stack's checkout: a target holds no such fact (issue 1272).
 //
 // The target comes from the same files `release:run` reads

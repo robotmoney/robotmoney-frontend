@@ -44,15 +44,15 @@ import {
   acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
-import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
+import { checkAfterPreflight, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
   CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 import { loadReleaseRunbook } from "./runbook.ts";
 
-/** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
-const READY_STEP = "R6.9";
+/** The step whose end is READY: the watch steps count their window from it, and C20-soak-gate grades sessions since it. */
+const READY_STEP = "C11-ready";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
 export { receiptPathsInOutput, type RunnerDeps } from "./step-exec.ts";
@@ -67,8 +67,6 @@ export interface RunArgs {
   preflight: boolean;
   from?: string;
   only?: string;
-  /** Stop after this step passed; the run stays resumable (`--run`). Stage's preparation ends at S2. */
-  until?: string;
   run?: string;
   stageJournal?: string;
   journalRoot?: string;
@@ -86,7 +84,7 @@ export interface RunArgs {
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
   const out: RunArgs = { preflight: false };
   const valued: Record<string, keyof RunArgs> = {
-    "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--until": "until", "--run": "run",
+    "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
     "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
     "--after-preflight": "afterPreflight", "--abandon": "abandon", "--accept": "accept", "--reason": "reason", "--issue": "issue",
   };
@@ -105,7 +103,6 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   if (out.from !== undefined && out.run === undefined) return { error: "--from resumes a run: name it with --run <run-ts> (the failed run prints the command)" };
   if (out.from !== undefined && out.only !== undefined) return { error: "--from and --only cannot be combined" };
   if (out.preflight && (out.run !== undefined || out.only !== undefined)) return { error: "--preflight checks a run before it starts: it takes no --run, --from or --only" };
-  if (out.until !== undefined && (out.only !== undefined || out.preflight || out.afterPreflight !== undefined || out.abandon !== undefined || out.accept !== undefined)) return { error: "--until stops a run after a step: it takes only --target, --go, --run, --from and --stage-journal" };
   if (out.afterPreflight !== undefined && (out.run !== undefined || out.only !== undefined || out.preflight)) return { error: "--after-preflight starts a new run from a green preflight: it takes no --run, --from, --only or --preflight" };
   if (out.abandon !== undefined && !RUN_TS_RE.test(out.abandon)) return { error: `--abandon takes a run stamp like 20261008T142233Z, got "${out.abandon}"` };
   if (out.abandon !== undefined && (out.go !== undefined || out.run !== undefined || out.preflight || out.afterPreflight !== undefined)) return { error: "--abandon takes only --target and the run stamp" };
@@ -234,6 +231,10 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const hash = stepListHash(steps);
   const root = args.journalRoot ?? journalRoot(deps.home);
   if (args.preflight) {
+    if (target.rmEnv !== "prod") {
+      deps.error(`[${NAME}] refusing --preflight on ${target.name}: a preflight is production's gate before its cutover. A stage run is QA: run it whole with --go (D70 as amended 2026-10-15).`);
+      return 2;
+    }
     return runPreflight({
       target, go, goPath: args.go, stageJournal: args.stageJournal ? resolve(args.stageJournal) : undefined, triage: args.triage,
       steps, ids, hash, root, runTs: runStamp(deps.now()), renderPlan: (c, r) => renderPlan(target, c, hash, r),
@@ -264,15 +265,22 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 2;
   }
 
+  // Production's cutover starts only from a green preflight of the same rc and step list, at most
+  // 60 minutes old (D70 as amended 2026-10-15). A resume of a run that did so (--run) needs none.
+  if (target.rmEnv === "prod" && args.afterPreflight === undefined && args.run === undefined) {
+    deps.error(`[${NAME}] refusing: production's cutover continues from a green preflight. Run --preflight --go <file> first, then --go <file> --after-preflight <its journal> within ${PREFLIGHT_MAX_AGE_MS / 60_000} minutes.`);
+    return 2;
+  }
+
   // A run within an hour of a green preflight continues from it: same run stamp,
-  // so every path the preflight's steps wrote ({runTs}) is this run's, and R1.1
-  // to R2.5 are its records. Policy 4.3 holds: the dump is this run's.
+  // so every path the preflight's steps wrote ({runTs}) is this run's, and P01-checkout
+  // to P08-log-baseline are its records. Policy 4.3 holds: the dump is this run's.
   let preflight: PreflightReport | undefined;
   if (args.afterPreflight !== undefined) {
     const path = join(resolve(args.afterPreflight), "preflight.json");
     const text = deps.readText(path);
     try { preflight = text === undefined ? undefined : JSON.parse(text) as PreflightReport; } catch { preflight = undefined; }
-    const refusals = checkAfterPreflight(preflight, { target: target.name, commit, stepListHash: hash, stepIds: ids }, deps.now());
+    const refusals = checkAfterPreflight(preflight, { target: target.name, commit, stepListHash: hash, stepIds: ids, preflightIds: preflightSteps(steps).map((s) => s.id) }, deps.now());
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing --after-preflight ${args.afterPreflight}:\n  - ${refusals.join("\n  - ")}`);
       return 2;
@@ -280,10 +288,6 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   const runTs = args.run ?? preflight?.runTs ?? runStamp(deps.now());
   const values = templateValues(target, commit, runTs, READY_PENDING, go.ref);
-  if (args.until !== undefined && !ids.includes(args.until)) {
-    deps.error(`[${NAME}] --until ${args.until}: no such step (steps: ${ids.join(", ")})`);
-    return 2;
-  }
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
@@ -356,18 +360,11 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
-  // `--until <step>`: stop once that step is ok or skipped. The journal reads incomplete, not running,
-  // so the preflight's P.busy lets a check through; `--run` continues at the next step.
-  const stopAfter = (id: string): number => {
-    journal.status = runStatus(journal, ids);
-    writeJournal(runDir, journal);
-    const next = ids[ids.indexOf(id) + 1];
-    deps.log(`\n[${NAME}] stopped after ${id} as asked (--until). Run ${runTs} is ${journal.status}.`);
-    if (next !== undefined) deps.log(`[${NAME}] continue with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: next, stageJournal: args.stageJournal })}`);
-    return 0;
-  };
+  // The preflight steps a green preflight already ran are carried, never run again.
+  const carried = new Set(journal.afterPreflight === undefined ? [] : preflightSteps(steps).map((s) => s.id).filter((id) => journal.steps[id]?.status === "ok"));
 
   for (const id of selected) {
+    if (carried.has(id)) continue;
     const template = steps[ids.indexOf(id)]!;
     const stepDir = join(runDir, id);
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
@@ -384,7 +381,6 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       journal.status = runStatus(journal, ids);
       writeJournal(runDir, journal);
       deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
-      if (args.until === id) return stopAfter(id);
       continue;
     }
 
@@ -433,13 +429,12 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 1;
     }
     deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);
-    if (args.until === id) return stopAfter(id);
   }
 
   journal.status = runStatus(journal, ids);
   journal.cutoverSeconds = cutoverSeconds(journal);
   writeJournal(runDir, journal);
-  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window R6.3 to READY (R6.9): ${journal.cutoverSeconds} s; the website stayed up (C9)`);
+  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window C05-migrate to READY (C11-ready): ${journal.cutoverSeconds} s; the website stayed up (C13-probe-grade)`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
@@ -466,9 +461,9 @@ export function skipReason(step: StepTemplate, target: ReleaseTarget): string | 
 }
 
 /** The cutover's first irreversible step: the migrate under the running release. */
-const CUTOVER_STEP = "R6.3";
+const CUTOVER_STEP = "C05-migrate";
 
-/** PURE. The cutover window: R6.3's start to READY (R6.9's end), in seconds, once both are ok. The website stays up through it (C9). */
+/** PURE. The cutover window: C05-migrate's start to READY (C11-ready's end), in seconds, once both are ok. The website stays up through it (C13-probe-grade). */
 export function cutoverSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
   const a = journal.steps[CUTOVER_STEP];
   const b = journal.steps[READY_STEP];

@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-// scripts/release/compare-baseline.ts — release step R7.5, run ON THE TARGET HOST.
+// scripts/release/compare-baseline.ts — release step C18-compare-baseline, run ON THE TARGET HOST.
 // Standing check SV.5.
 //
 //   bun scripts/release/compare-baseline.ts --instance <name> --run <run-ts> --max-size-ratio <r>
 //
-// Reads the R2.3 record (baseline.json, ./baseline.ts) of the same run, reads
+// Reads the P07-baseline record (baseline.json, ./baseline.ts) of the same run, reads
 // the same row counts and the database size again through the read-only
 // session (./db-read.ts), and compares: every count only grows (nothing
 // shrank, nothing vanished), and the size is at most --max-size-ratio times
@@ -54,7 +54,7 @@ async function main(): Promise<number> {
   try {
     before = JSON.parse(readFileSync(join(dir, "baseline.json"), "utf8")) as BaselineFigures;
   } catch (error) {
-    console.error(`[compare-baseline] REFUSE: no R2.3 baseline for run ${run} in ${dir} (${error instanceof Error ? error.message : String(error)})`);
+    console.error(`[compare-baseline] REFUSE: no P07-baseline baseline for run ${run} in ${dir} (${error instanceof Error ? error.message : String(error)})`);
     return 1;
   }
   const db = await openReadOnly();
@@ -67,7 +67,7 @@ async function main(): Promise<number> {
   const problems = compareBaseline(before, after, ratio);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = join(dir, "compare-baseline.json");
-  writeFileSync(file, `${JSON.stringify({ step: "R7.5", instance, run, maxSizeRatio: ratio, before, after, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "C18-compare-baseline", instance, run, maxSizeRatio: ratio, before, after, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   for (const [t, n] of Object.entries(after.counts)) console.log(`[compare-baseline] ${t}: ${before.counts[t]} → ${n}`);
   console.log(`[compare-baseline] size: ${before.databaseSizeBytes} → ${after.databaseSizeBytes} bytes (bound ${ratio}x)`);
   console.log(`[compare-baseline] receipt: ${file}`);

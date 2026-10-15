@@ -37,7 +37,7 @@ v0.6.0. This document owns the release gates, phases, evidence and approval.
 rolling upgrade (§4.7). No step stops the whole stack. No tmux session drives or holds any process.
 
 **Every production data change ships as a migration** ([D66](../decisions.md#d66), owner
-2026-10-09). No admin-route write, no SQL by hand, no one-off script. R6.3 is the one step that
+2026-10-09). No admin-route write, no SQL by hand, no one-off script. C05-migrate is the one step that
 writes production data.
 
 A check with no tool is a `gap`. A gap blocks the release until it is built or the owner records an
@@ -80,8 +80,8 @@ The cycle (D70):
    consumes no rc number.
 2. **Refresh the lockfiles.** Every rc carries a freshly resolved lockfile (owner, 2026-10-14): run
    `bun scripts/release/lockfile.ts refresh` on the QA branch and commit the result before the
-   stage run. Stage's preflight check `P.lockfile` refuses a commit whose lockfiles differ from a
-   fresh resolve. Hosts install with `--frozen-lockfile`.
+   stage run. QA step Q01-lockfile refuses a commit whose lockfiles differ from a fresh resolve.
+   Hosts install with `--frozen-lockfile`.
 3. **The runbook passes on stage.** Record the commit and its tree hash.
 4. **Squash the QA branch onto the release branch.** The release branch must not have moved since
    the QA branch was cut, and the squash tree must equal the stage-passed tree.
@@ -90,10 +90,10 @@ The cycle (D70):
    It refuses a commit whose tree is not the stage run's tree, and pushes the tag.
 6. **Production runs only by that rc tag.** SP.8 refuses a tag whose tree differs from the
    stage-passed tree.
-7. **A failure before the cutover** (preflight, baseline, backup, or any step before R6.3) means the
+7. **A failure before the cutover** (any preflight step, or C01-backup to C04-probe-start) means the
    rc never reaches production. Fix it on a new QA branch, rerun stage, squash again and cut
    `vA.B.C-rc.(N+1)`.
-8. **The cutover starts (R6.3)** → step C1 tags `vA.B.C` at the rc's commit at once. A later failed
+8. **The cutover starts (C05-migrate)** → step C06-version-tag tags `vA.B.C` at the rc's commit at once. A later failed
    check, a known defect or a rollback never withholds or moves it. Every defect found after the
    cutover is an issue against `vA.B.(C+1)`, whose first rc is `vA.B.(C+1)-rc.0`.
 
@@ -110,49 +110,66 @@ Consequences, stated because each looks like a mistake and none is:
 Each gate blocks. A failed gate stops the release until it passes or the owner records an
 exception in the release's YAML.
 
+**Three phases (owner, 2026-10-15).** Every step of a runbook belongs to one phase, its id names it,
+and the phases run in this order:
+
+| Phase | Ids | Where and when | What it does |
+|---|---|---|---|
+| **QA** | `Q01`… | Stage only, as often as needed, on a QA branch commit | Checks the lockfile, picks or captures the dump, builds the stage target, sets its role passwords. A stage run then runs the preflight and cutover steps exactly as production does |
+| **Preflight** | `P01`… | Production, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
+| **Cutover** | `C01`… | Production, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, verification, the soak |
+
+Stage has no preflight: the stage pass earns the rc, and nothing reruns on stage for it.
+Production's cutover refuses without a green preflight of the same rc and step list from the last
+60 minutes, and carries the preflight steps' records instead of running them again. Preflights are
+cheap: run a new one rather than stretch an old one.
+
 ### 4.1. Code readiness
 
 Every Phase and feature issue linked from the tracking issue's Phases tasklist is closed, and the
 objective is stated (§6). Every commit expected to ship is on the release branch by §2 route (a).
 The tracking issue itself stays open until §4.9.
 
-### 4.2. Baseline
+### 4.2. Preflight
 
-Before anything changes, R2.3 records production's state through `rm_readonly`: the ledger and its
-reconciliation with `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts,
-the sessions in flight and the database size. R2.3 refuses any pending migration that is not
-`compat: additive` (§4.7). R2.5 grades the running stack's logs; each finding there is triaged by
-the owner before the cutover (`--triage <file>`).
+`bun run release:run --target prod --preflight --go <go>` checks, on the control machine, the rc
+tag, CI on its commit (`P.ci`), a passed stage run of the same tree and step list (`P.stage`), the
+recovery decision (`P.recovery`) and that no run is in flight. It then runs the preflight steps on
+the hosts. P01-checkout to P06-capture-install put the release and capture checkouts at the rc and
+install them frozen. P02-identity proves the host, `~/.env` and the rm_owner login. P07-baseline
+records production's state through `rm_readonly`: the ledger and its reconciliation with
+`backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
+flight and the database size. It refuses any pending migration that is not `compat: additive`
+(§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
+owner (`--triage <file>`).
 
 ### 4.3. Backup, restore proof and dumps
 
-R2.1 always captures production's backup new, from the read replica, right before the cutover. R2.4r
-restores it into a throwaway container and records the restore time.
+C01-backup captures production's backup new, from the read replica, as the cutover's first step.
+C03-restore-proof restores it into a throwaway container and records the restore time, before the
+first irreversible step (C05-migrate).
 
 **Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
 from the newest production dump already on the capture host if it is at most 24 hours old
-(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`). Step S0
-does this; step S1 restores the dump it left.
-Never restore a dump older than 24 hours. Never point rehearsal preparation at the production
-database.
+(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
+Step Q02-dump does this; step Q03-stage-up restores the dump it left. Never restore a dump older
+than 24 hours. Never point rehearsal preparation at the production database.
 
-### 4.4. Stage rehearsal
+### 4.4. Stage QA
 
-The cutover rehearsal runs the release's YAML unmodified with `bun run release:run --target stage`
-against the production-shaped stage target ([stage-target.md](../runbooks/stage-target.md)): a
-remote Postgres restored from a production dump, with the previous release running against it the
-way production runs it. The stage sequence:
+QA runs the release's YAML unmodified against the production-shaped stage target
+([stage-target.md](../runbooks/stage-target.md)), as one run:
 
-1. `bun run release:run --target stage --go <stage go> --until S2`: S0 picks or captures the dump, S1
-   rebuilds the target from it, S2 sets the role passwords through the stage database
-   (doadmin is a disposable stage credential, passed on a pipe and stored in no file; the D61
-   rule on doadmin is production's);
-2. `bun run release:run --target stage --preflight --go <stage go>`;
-3. `bun run release:run --target stage --go <stage go> --run <the run stamp step 1 printed>`.
+```bash
+bun run release:run --target stage --go <stage go>
+```
 
-Steps S0 to S2 are `onlyFor: stage`: production records them skipped, and the step-list hash is the
-same for both (SP.8). `--until <step>` stops a run after that step passed, leaves it incomplete and
-resumable, and prints the command that continues it.
+Q01-lockfile to Q04-role-passwords build the target (`onlyFor: stage`; production records them
+skipped, and the step-list hash is the same for both, SP.8). Q04-role-passwords sets the role
+passwords through the stage database: its doadmin is a disposable stage credential, passed on a
+pipe and stored in no file, so the D61 rule on doadmin, which is production's, is kept. The
+preflight and cutover steps then run as production runs them. A failed step resumes with
+`--run <ts> --from <step>`. QA runs as many times as the fixes need.
 
 Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
 `bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
@@ -173,8 +190,8 @@ step 7).
 
 ### 4.7. Production execution: a rolling upgrade
 
-The owner writes the go once the production preflight is green apart from the go, a stage run of the
-same step list passed on the same tree (SP.8), and the tracking issue's phases are closed:
+The owner writes the go once a stage run of the same step list passed on the same tree (SP.8) and
+the tracking issue's phases are closed:
 
 ```text
 tag: vA.B.C-rc.N
@@ -186,35 +203,41 @@ A stage go names `commit:` (the QA commit) instead of `tag:`. The go names nothi
 2026-10-14): the release comes from the target file and the rc tag, the target from `--target`, and
 the recovery decision from the release's YAML (`recovery:`, SC.1). The runner refuses a stage commit
 that is not on a QA branch of the release line, a production tag that is not an rc of the release
-on `releases-A.B.x`, and stops at the first failed step.
+on `releases-A.B.x`, and stops at the first failed step. With the go, run the preflight (§4.2), then
+within 60 minutes:
 
-The cutover never takes the website down:
+```bash
+bun run release:run --target prod --go <go> --after-preflight <the preflight's journal>
+```
 
-1. **C0** starts the website probe on the control machine: the public origin's `/` and
+The cutover backs up and proves the restore (C01-backup to C03-restore-proof), then never takes the
+website down:
+
+1. **C04-probe-start** starts the website probe on the control machine: the public origin's `/` and
    `/version.json` every 2 s.
-2. **R6.3** migrates while the previous release still serves. Only `compat: additive` migrations
-   may run this way; R2.3 refused anything else. A breaking migration needs its own plan.
-3. **C1** tags `vA.B.C` (production only).
-4. **R6.5** keeps every valid service token. A running holder keeps authenticating, and only a
+2. **C05-migrate** migrates while the previous release still serves. Only `compat: additive` migrations
+   may run this way; P07-baseline refused anything else. A breaking migration needs its own plan.
+3. **C06-version-tag** tags `vA.B.C` (production only).
+4. **C09-tokens** keeps every valid service token. A running holder keeps authenticating, and only a
    missing or stale token is minted.
-5. **R6.7a**, the rolling boot (`bun smoke --static-port`), replaces api, worker-analytics,
+5. **C10-rolling-boot**, the rolling boot (`bun smoke --static-port`), replaces api, worker-analytics,
    system-scheduler and analytics-producer one at a time, each healthy before the next.
    website-server is never recreated, and the boot refuses before replacing anything if compose's
    dry run says it would be. While the api swaps, nginx keeps serving the site and answers `/api/`
    from its maintenance fallback.
-6. **R6.10** switches the site atomically and reloads nginx gracefully (`bun smoke:web`).
-7. **C9** stops the probe and fails the release on any answer that is not 200, or on any gap.
+6. **C12-site** switches the site atomically and reloads nginx gracefully (`bun smoke:web`).
+7. **C13-probe-grade** stops the probe and fails the release on any answer that is not 200, or on any gap.
 
 The privileged credential `rm_owner` is a line in the host's `~/.env`. `doadmin` is stored in no
-file: the admin types it into `bun run role-passwords` before the run, and no release step reads it
+file: the admin types it into `bun run role-passwords` before the run, and no production step reads it
 ([D61's amendment](../decisions.md#d61-amendment-1272)). A write names its target with
 `--confirm-target`. No container receives a privileged credential, and no receipt, journal or log
 line prints one.
 
-**Postflight and soak.** R7.1 to R7.7 verify identity, product (readonly tier), logs, the baseline
-comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): W1 grades logs since
-READY, W2 runs the standing invariants against the READY baseline, R7.4a checks schedule parity, and
-W3 copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+**Postflight and soak.** C14-verify-version to C19-host-guards verify identity, product (readonly tier), logs, the baseline
+comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): C20-soak-gate grades logs since
+READY, C21-soak-checks runs the standing invariants against the READY baseline, C22-schedule-parity checks schedule parity, and
+C23-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
@@ -237,8 +260,8 @@ distinct error in every log must match a classification in
 
 The recovery decision is the release YAML's `recovery:` text (SC.1). The preflight's `P.recovery`
 refuses a release without one, and the run journals its sha256.
-Before R6.3, fix and resume: nothing has changed. A failed R6.3 resumes at R6.3 while the previous
-release keeps serving. After R6.3, fix forward on the next patch version, or restore the R2.1 dump
+Before C05-migrate, fix and resume: nothing has changed. A failed C05-migrate resumes at C05-migrate while the previous
+release keeps serving. After C05-migrate, fix forward on the next patch version, or restore the C01-backup dump
 with the write loss it implies. The version tag stays either way (§3 step 8). Do not assume a
 deployment tool rolls back by itself.
 
@@ -287,7 +310,7 @@ Schema identity, manifest integrity, migration metadata and code/schema compatib
 [smoke production spec §§8–9](./smoke-production-spec.md#8-schema). "Additive" means older supported
 code keeps its query behavior, data meaning, bootstrap assumptions and required grants; adding a
 column alone does not establish it. A rolling release depends on it: the previous release serves
-against the new schema between R6.3 and R6.7a. API changes stay additive where possible, and the
+against the new schema between C05-migrate and C10-rolling-boot. API changes stay additive where possible, and the
 site served during an API change must accept both API versions (`apiRange`).
 
 ## 9. Standing check IDs
@@ -297,30 +320,31 @@ recorded owner decision.
 
 | ID | Check | Steps |
 |---|---|---|
-| SP.1 | Position: which release, which commit, which phase; clean checkouts | R1.1–R1.6 |
-| SP.2 | Backup taken and restore proven, with the restore time | R2.1, R2.2, R2.4r |
-| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | R1.2, R2.3 |
-| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | R6.7a |
-| SP.5 | Log baseline, triaged before the cutover | R2.5 |
-| SP.6 | Product baseline: row counts and database size | R2.3 |
+| SP.1 | Position: which release, which commit, which phase; clean checkouts | P01-checkout to P06-capture-install |
+| SP.2 | Backup taken and restore proven, with the restore time | C01-backup, C02-backup-sums, C03-restore-proof |
+| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | P07-baseline |
+| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | C10-rolling-boot |
+| SP.5 | Log baseline, triaged before the cutover | P08-log-baseline |
+| SP.6 | Product baseline: row counts and database size | P07-baseline |
 | SP.7 | CI green on the commit | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
-| SR.0 | Stage's starting dump at most 24 hours old | S0, S1 |
-| SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | S2 |
+| SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
+| SR.0 | Stage's starting dump at most 24 hours old | Q02-dump, Q03-stage-up |
+| SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
 | SC.3 | The operator's go is recorded before the run | `--go` |
-| SC.4 | The website never goes down: every probe answer 200, no gap | C0, C9 |
-| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | R2.3, R6.3, R6.5, R6.7a, R6.10 |
-| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | R7.1 |
-| SV.2 | Smoke status: preflight and readiness green | R6.9 |
-| SV.3 | Product verification, readonly tier | R7.3 |
-| SV.4 | Log verdict after the release | R7.3a |
-| SV.5 | Row counts only grow; the database did not balloon | R7.5 |
-| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | R6.2, R7.7 |
-| SW.1 | The soak: logs since READY graded, schedule parity | W1, R7.4a |
-| SW.2 | The standing invariants over the soak (§10) | R7.3b, W2 |
-| SW.3 | The version tag at the cutover's start | C1 |
-| SW.4 | Every container's logs and inspect since READY in the journal | W3 |
+| SC.4 | The website never goes down: every probe answer 200, no gap | C04-probe-start, C13-probe-grade |
+| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | P07-baseline, C05-migrate, C09-tokens, C10-rolling-boot, C12-site |
+| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | C14-verify-version |
+| SV.2 | Smoke status: preflight and readiness green | C11-ready |
+| SV.3 | Product verification, readonly tier | C15-verify-product |
+| SV.4 | Log verdict after the release | C16-log-verdict |
+| SV.5 | Row counts only grow; the database did not balloon | C18-compare-baseline |
+| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, C19-host-guards |
+| SW.1 | The soak: logs since READY graded, schedule parity | C20-soak-gate, C22-schedule-parity |
+| SW.2 | The standing invariants over the soak (§10) | C17-soak-record, C21-soak-checks |
+| SW.3 | The version tag at the cutover's start | C06-version-tag |
+| SW.4 | Every container's logs and inspect since READY in the journal | C23-collect-logs |
 
 Retired: SC.2 (2026-10-08, replaced by the go, D61).
 
@@ -334,7 +358,7 @@ read-only session, reads container logs and `docker inspect`, and holds no admin
 superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
 with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
 R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
-a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at R7.3b and runs the full check over the soak at W2.
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at C17-soak-record and runs the full check over the soak at C21-soak-checks.
 
 | Id | Invariant | Status | Note |
 |---|---|---|---|
