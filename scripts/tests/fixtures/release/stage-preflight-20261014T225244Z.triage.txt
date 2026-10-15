@@ -1,0 +1,7 @@
+# Stage practice run of the runbook overhaul (1355), 2026-10-14. Owner: override red
+# findings for this session only. These are production's state in the 20261014T151849Z
+# dump, not v0.6.2 defects; they still need real triage before the production run.
+sessions | stuck in 'judging' | practice-run override (owner, 2026-10-14); prod data in the dump; issue 1355
+sessions | stuck in 'collecting' | practice-run override (owner, 2026-10-14); prod data in the dump; issue 1355
+sessions | in or open during the window | practice-run override (owner, 2026-10-14); issue 1355
+inventory | projects.fetch_vaults | practice-run override (owner, 2026-10-14); vault extractor degraded upstream; issue 1355
