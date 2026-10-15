@@ -6,6 +6,11 @@
 // every placeholder address each cron. The rules excuse exactly those
 // placeholder addresses. RED CONTROL: the same lines naming a real 40-hex
 // address stay unclassified and fail the gate.
+//
+// Issue 1275 removed the fixture-wallet rule: refresh_wallets now skips any
+// wallet that is not chain base with a 0x plus 40-hex address before reading
+// it, so a placeholder 0xwallet0… address never logs that error line again.
+// The fixture-wallet line is therefore unclassified like any other.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +45,6 @@ test("the fixture addresses are the dataset's own placeholder addresses", () => 
 
 describe("each logged fixture-address line is known issue 1208", () => {
   const cases: Array<[string, string]> = [
-    ...FIXTURE_WALLETS.map((a) => [wallet(a), "known-projects-fixture-wallet-live-read"] as [string, string]),
     [vaultExtractor(FIXTURE_VAULT), "known-projects-fixture-vault-extractor"],
     [vaultJob(FIXTURE_VAULT), "known-projects-fixture-vault-job-degraded"],
     [vaultJobExhausted(FIXTURE_VAULT), "known-projects-fixture-vault-job-degraded"],
@@ -76,6 +80,8 @@ describe("each logged fixture-address line is known issue 1208", () => {
 describe("RED CONTROL: the same failure on a real address stays unclassified and fails", () => {
   for (const line of [
     wallet(REAL),
+    // Issue 1275: no rule excuses the fixture wallets any more (the handler skips them).
+    ...FIXTURE_WALLETS.map(wallet),
     vaultExtractor(REAL),
     vaultJob(REAL),
     vaultJobExhausted(REAL),

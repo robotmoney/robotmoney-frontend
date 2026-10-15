@@ -337,6 +337,125 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
   }
 });
 
+// ── Issue 1275: wallets with no live read path are skipped, not failed ──────
+// Production carries roster wallets on Ethereum/Solana and non-EVM addresses.
+// The live source has no read path for them, so each run used to log one
+// error per wallet and end degraded, which retried the job 5 times every slot.
+// refreshWallets now asks supportsWallet first and skips them quietly, while a
+// Base wallet whose read really fails still logs an error and degrades the run.
+//
+// refreshWallets scans every active wallet in the shared DB, so each test
+// parks the other active wallets for its run and restores them after, which
+// keeps the counts exact.
+async function withOnlyWallets<T>(ids: string[], run: () => Promise<T>): Promise<T> {
+  const parked = await fixtureDb<{ id: string }[]>`
+    UPDATE tracked_wallets SET is_active = false WHERE is_active = true AND id NOT IN ${sql(ids)} RETURNING id`;
+  try {
+    return await run();
+  } finally {
+    if (parked.length) await fixtureDb`UPDATE tracked_wallets SET is_active = true WHERE id IN ${sql(parked.map((r) => r.id))}`;
+  }
+}
+
+async function seedUnsupportedWallets(tag: string, base: { label: string; address: string }) {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkunsup_${tag}`}, 'Unsupported Wallets', 'active') RETURNING id`;
+  const rows = await fixtureDb<{ id: string; label: string }[]>`
+    INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd) VALUES
+      (${projectId}, 'eth-treasury', 'ethereum', ${"0x" + "ee".repeat(20)}, true, 500),
+      (${projectId}, 'solana-on-base', 'base', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', true, 600),
+      (${projectId}, ${base.label}, 'base', ${base.address}, true, 700)
+    RETURNING id, label`;
+  const byLabel = Object.fromEntries(rows.map((r) => [r.label, r.id]));
+  return { projectId, ids: rows.map((r) => r.id), byLabel };
+}
+
+function liveRuleSource(read: (address: string) => Promise<number>, calls: string[]): ProjectsDataSource {
+  return {
+    ...uniqueSlugSource("wkunsup"),
+    supportsWallet: liveProjectsDataSource.supportsWallet,
+    async walletBalanceUsd(address: string) {
+      calls.push(address);
+      return read(address);
+    },
+  };
+}
+
+function captureConsole() {
+  const errors: string[] = [];
+  const infos: string[] = [];
+  const origError = console.error;
+  const origLog = console.log;
+  console.error = (...a: unknown[]) => void errors.push(a.map(String).join(" "));
+  console.log = (...a: unknown[]) => void infos.push(a.map(String).join(" "));
+  return { errors, infos, restore: () => ((console.error = origError), (console.log = origLog)) };
+}
+
+test("refreshWallets skips a non-base wallet and a non-EVM-address wallet without reading them, keeps their balance, and stays ok", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const goodAddress = "0x" + "ab".repeat(20);
+  const { projectId, ids, byLabel } = await seedUnsupportedWallets(tag, { label: "base-good", address: goodAddress });
+  const calls: string[] = [];
+  const src = liveRuleSource(async () => 1234, calls);
+  const con = captureConsole();
+  try {
+    const res = await withOnlyWallets(ids, () => refreshWallets({}, src));
+    con.restore();
+
+    expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 0, unsupported: 2 });
+    // Only the Base wallet with a real address was read.
+    expect(calls).toEqual([goodAddress]);
+    // No error line for a wallet that has no live path; one info summary.
+    expect(con.errors).toEqual([]);
+    const summary = con.infos.filter((l) => l.includes("[projects.refresh_wallets]"));
+    expect(summary.length).toBe(1);
+    expect(summary[0]).toContain("skipped 2 of 3 wallet(s)");
+
+    const rows = await sql<{ id: string; balance_usd: string; refreshed_at: Date | null }[]>`
+      SELECT id, balance_usd, refreshed_at FROM tracked_wallets WHERE id IN ${sql(ids)}`;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(Number(byId[byLabel["eth-treasury"]].balance_usd)).toBe(500);
+    expect(byId[byLabel["eth-treasury"]].refreshed_at).toBeNull();
+    expect(Number(byId[byLabel["solana-on-base"]].balance_usd)).toBe(600);
+    expect(byId[byLabel["solana-on-base"]].refreshed_at).toBeNull();
+    expect(Number(byId[byLabel["base-good"]].balance_usd)).toBe(1234);
+    expect(byId[byLabel["base-good"]].refreshed_at).not.toBeNull();
+  } finally {
+    con.restore();
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets still logs an error and degrades for a base wallet whose read throws, with none for the skipped wallets", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const badAddress = "0x" + "bc".repeat(20);
+  const { projectId, ids, byLabel } = await seedUnsupportedWallets(tag, { label: "base-broken", address: badAddress });
+  const calls: string[] = [];
+  const src = liveRuleSource(async () => {
+    throw new Error("Base RPC: forced read failure");
+  }, calls);
+  const con = captureConsole();
+  try {
+    const res = await withOnlyWallets(ids, () => refreshWallets({}, src));
+    con.restore();
+
+    expect(res).toEqual({ ok: false, status: "degraded", updated: 0, failed: 1, unsupported: 2 });
+    expect(calls).toEqual([badAddress]);
+    // Exactly one error line, and it names the Base wallet, not a skipped one.
+    expect(con.errors.length).toBe(1);
+    expect(con.errors[0]).toContain(`wallet ${byLabel["base-broken"]} live read failed`);
+    expect(con.errors[0]).not.toContain(byLabel["eth-treasury"]);
+    expect(con.errors[0]).not.toContain(byLabel["solana-on-base"]);
+
+    const [{ balance_usd }] = await sql<{ balance_usd: string }[]>`
+      SELECT balance_usd FROM tracked_wallets WHERE id = ${byLabel["base-broken"]}`;
+    expect(Number(balance_usd)).toBe(700);
+  } finally {
+    con.restore();
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
 // ── Issue #95: live-fetch timeout ────────────────────────────────────────────
 // A stalled (not errored) provider socket must abort at the hard timeout so the
 // handler fails FAST and degrades to last-persisted — never hangs, pinning the

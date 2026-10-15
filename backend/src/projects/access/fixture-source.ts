@@ -35,6 +35,12 @@ export const fixtureProjectsDataSource: ProjectsDataSource = {
     return read;
   },
 
+  // The hermetic fixture serves its own placeholder addresses, so it reads
+  // every wallet; a missing fixture key throws in walletBalanceUsd instead.
+  supportsWallet(): boolean {
+    return true;
+  },
+
   async walletBalanceUsd(address: string): Promise<number> {
     const bal = WALLET_BALANCES[address.toLowerCase()];
     if (bal == null) throw new Error(`fixture wallet balance missing for ${address}`);
