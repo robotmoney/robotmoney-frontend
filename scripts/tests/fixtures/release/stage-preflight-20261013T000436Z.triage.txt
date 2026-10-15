@@ -1,7 +1,0 @@
-# check | fragment of the gate's detail line | reason, issue or decision
-# Stage preflight for issue 1272: the stage world is a production dump restored minutes ago and booted on stage-2. Every finding is the restored world's, not this release's.
-jobs | projects.refresh_wallets | the first wallet refresh after the boot was reaped on lock expiry on stage-2's slower RPC path; the job re-enqueues on its cron; stage-only
-sessions | stuck in 'collecting' | sessions open in the production dump at capture time; the stage stack booted minutes ago and their windows close on production's 24 h epochs; stage-only
-inventory | totalAssets() failed | the live vault extractor hits stage-2's public RPC rate limit; the job keeps last-persisted rows; stage-only
-jobs | dead job(s) in the window | the count line of the one reaped refresh_wallets job above; stage-only
-sessions | session(s) in or open during the window | the count line of the two collecting sessions above; stage-only

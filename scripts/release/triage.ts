@@ -1,5 +1,5 @@
 // scripts/release/triage.ts — the owner's recorded triage of a baseline gate's
-// failures (runbook R2.5, standing check SP.5).
+// failures (runbook P08-log-baseline, standing check SP.5).
 //
 // A baseline gate grades production BEFORE anything changes. A failure there is
 // what is already broken, and the runbook's rule is that every one is a decision
@@ -11,7 +11,7 @@
 //
 //   jobs | model_unavailable:judge model responded 402 | Zen balance empty until the 2026-10-08 top-up; issue 1225
 //
-// A step marked `triage` (R2.5) whose gate exits non-zero passes only when its
+// A step marked `triage` (P08-log-baseline) whose gate exits non-zero passes only when its
 // JSON report names no failed check outside the file: every detail line of
 // every FAIL check contains the fragment of an entry for that check. The runner
 // journals the file's sha256 and the entries it used. A finding the file does

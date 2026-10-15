@@ -15,7 +15,7 @@ import { loadTarget } from "../../release/target.ts";
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const template = loadTemplate();
 const added = (id: string, release = "v9.9.9"): RunbookStep => ({
-  id, added: release, standing: [], description: `check ${id}`, host: "target", irreversible: false, expectExit: 0, receipts: [],
+  id, added: release, standing: [], description: `check ${id}`, host: "target", phase: "cutover", irreversible: false, expectExit: 0, receipts: [],
   cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}"]],
 });
 const runbook = (steps: readonly RunbookStep[], release = "v9.9.9"): ReleaseRunbook => ({ release, template: "kitchen-sink", recovery: "fix forward", steps });
@@ -38,10 +38,27 @@ describe("the kitchen-sink template", () => {
 
   test("refuses an unknown key, a missing field, an added step and a duplicate id", () => {
     const text = readFileSync(templatePath("kitchen-sink"), "utf8");
-    expect(() => parseTemplate(text.replace('  - id: "R1.3"\n', '  - id: "R1.3"\n    bogus: 1\n'), "kitchen-sink")).toThrow("unknown key bogus");
-    expect(() => parseTemplate(text.replace('  - id: "R1.3"\n', '  - id: "R1.3"\n    added: "v0.6.2"\n'), "kitchen-sink")).toThrow("carries no added");
-    expect(() => parseTemplate(text.replace('  - id: "R1.3"', '  - id: "R1.2"'), "kitchen-sink")).toThrow("R1.2 appears twice");
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"\n', '  - id: "P03-install"\n    bogus: 1\n'), "kitchen-sink")).toThrow("unknown key bogus");
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"\n', '  - id: "P03-install"\n    added: "v0.6.2"\n'), "kitchen-sink")).toThrow("carries no added");
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"', '  - id: "P02-identity"'), "kitchen-sink")).toThrow("P02-identity appears twice");
     expect(() => parseTemplate(text.replace(/\n    irreversible: true\n/, "\n"), "kitchen-sink")).toThrow("irreversible is a boolean");
+ 
+  });
+
+  test("the phases (D70 as amended 2026-10-15): every step names one, its id says which, and they run qa, preflight, cutover", () => {
+    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+    expect(template.steps.map((s) => s.phase)).toEqual([...template.steps.map((s) => s.phase)].sort((a, b) => ["qa", "preflight", "cutover"].indexOf(a) - ["qa", "preflight", "cutover"].indexOf(b)));
+    // red: a missing or unknown phase.
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n    phase: "preflight"\n', '  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n'), "kitchen-sink")).toThrow("phase is one of qa, preflight, cutover");
+    expect(() => parseTemplate(text.replace('    phase: "preflight"\n', '    phase: "warmup"\n'), "kitchen-sink")).toThrow("phase is one of");
+    // red: an id whose letter is not its phase's.
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"', '  - id: "C99-install"'), "kitchen-sink")).toThrow("a preflight step's id starts with P");
+    // red: a cutover step moved before a preflight one.
+    const p08 = text.indexOf('  - id: "P08-log-baseline"');
+    const c01 = text.indexOf('  - id: "C01-backup"');
+    const c02 = text.indexOf('  - id: "C02-backup-sums"');
+    const moved = text.slice(0, p08) + text.slice(c01, c02) + text.slice(p08, c01) + text.slice(c02);
+    expect(() => parseTemplate(moved, "kitchen-sink")).toThrow("P08-log-baseline (preflight) comes after C01-backup (cutover)");
   });
 });
 
@@ -57,19 +74,19 @@ describe("a release runbook only adds", () => {
   });
 
   test("red controls: a deletion, an edit, a reorder, and a step without its added mark each refuse", () => {
-    const deleted = template.steps.filter((s) => s.id !== "R2.5");
-    expect(checkAddOnly(template, runbook(deleted)).join()).toContain("template step R2.5 is missing");
-    const edited = template.steps.map((s) => (s.id === "R6.3" ? { ...s, cmds: [[...s.cmds[0]!, "--skip-identity"]] } : s));
-    expect(checkAddOnly(template, runbook(edited)).join()).toContain("R6.3 differs from the template's step");
-    const softened = template.steps.map((s) => (s.id === "R6.3" ? { ...s, irreversible: false } : s));
-    expect(checkAddOnly(template, runbook(softened)).join()).toContain("R6.3 differs");
+    const deleted = template.steps.filter((s) => s.id !== "P08-log-baseline");
+    expect(checkAddOnly(template, runbook(deleted)).join()).toContain("template step P08-log-baseline is missing");
+    const edited = template.steps.map((s) => (s.id === "C05-migrate" ? { ...s, cmds: [[...s.cmds[0]!, "--skip-identity"]] } : s));
+    expect(checkAddOnly(template, runbook(edited)).join()).toContain("C05-migrate differs from the template's step");
+    const softened = template.steps.map((s) => (s.id === "C05-migrate" ? { ...s, irreversible: false } : s));
+    expect(checkAddOnly(template, runbook(softened)).join()).toContain("C05-migrate differs");
     const reordered = [template.steps[1]!, template.steps[0]!, ...template.steps.slice(2)];
     expect(checkAddOnly(template, runbook(reordered)).join()).toContain("out of the template's order");
     const { added: _a, ...unmarked } = added("X1");
     expect(checkAddOnly(template, runbook([...template.steps, unmarked])).join()).toContain("carries added: v9.9.9");
     expect(checkAddOnly(template, runbook([...template.steps, added("X1", "v0.0.1")])).join()).toContain("carries added: v9.9.9");
-    const marked = template.steps.map((s) => (s.id === "W1" ? { ...s, added: "v9.9.9" } : s));
-    expect(checkAddOnly(template, runbook(marked)).join()).toContain("W1 is a template step, so it carries no added");
+    const marked = template.steps.map((s) => (s.id === "C20-soak-gate" ? { ...s, added: "v9.9.9" } : s));
+    expect(checkAddOnly(template, runbook(marked)).join()).toContain("C20-soak-gate is a template step, so it carries no added");
   });
 
   test("the key order a file writes never matters; the content does", () => {
@@ -95,10 +112,10 @@ describe("a release runbook only adds", () => {
     const steps = text.slice(text.indexOf("\nsteps:") + 1);
     writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\ntemplate: kitchen-sink\n${steps}`);
     expect(loadReleaseRunbook("v9.9.9", dir).steps.map((s) => s.id)).toEqual(ids);
-    const r25 = steps.indexOf('  - id: "R2.5"');
-    const r61 = steps.indexOf("\n  # ── C/R6 cutover");
-    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\n${steps.slice(0, r25)}${steps.slice(r61 + 1)}`);
-    expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step R2.5 is missing");
+    const r25 = steps.indexOf('  - id: "P08-log-baseline"');
+    const c01 = steps.indexOf('  - id: "C01-backup"');
+    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\n${steps.slice(0, r25)}${steps.slice(c01)}`);
+    expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step P08-log-baseline is missing");
   });
 });
 

@@ -55,7 +55,7 @@
 //   set-identity      §9.1 step 4. Confirms the identity the policy names and
 //                     receipts it: `production` under RM_ENV=prod, `rehearsal`
 //                     under RM_ENV=stage (D61 rule 2: the stage rehearsal runs
-//                     step R6.4 unmodified). The first migrate already wrote
+//                     step C08-identity unmodified). The first migrate already wrote
 //                     the row, in the transaction that created the table
 //                     (D55 (9), D61), so this command reads it through rm_owner
 //                     inside the §2 fence and REPORTS it, unchanged
@@ -338,7 +338,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
       refuse((error as Error).message.replace(/^Refusing: /, "").replace(/ Nothing was changed\.$/, ""));
     }
     // A MISSING role line means "generate one". An EMPTY one is a mistake to
-    // report, never a password to replace (R1.2 refuses an empty rm_owner too).
+    // report, never a password to replace (P02-identity refuses an empty rm_owner too).
     if (command === "role-passwords") {
       const empty = passwordRoles.filter((role) => Object.hasOwn(homeEnv!, role) && homeEnv![role] === "");
       if (empty.length > 0) {

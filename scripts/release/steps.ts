@@ -33,9 +33,20 @@ import type { ReleaseTarget } from "./target.ts";
 
 /**
  * Where a step runs: the target host, the capture host, or the control
- * machine itself (the release tag, W3).
+ * machine itself (the release tag, C23-collect-logs).
  */
 export type StepHost = "target" | "capture" | "control";
+
+/**
+ * Which part of a release a step belongs to (D70 as amended 2026-10-15):
+ *   - `qa`: stage only, as often as needed. It builds the stage target; a stage
+ *     run then runs the preflight and cutover steps exactly as production does.
+ *   - `preflight`: read-only gates on the target. Production runs them once per
+ *     rc with `--preflight`, at most 60 minutes before the cutover, and the
+ *     cutover carries their records instead of running them again.
+ *   - `cutover`: the release as it happens, backup and restore proof first.
+ */
+export type StepPhase = "qa" | "preflight" | "cutover";
 
 /** The runner's host name for a control-machine step; never an ssh alias. */
 export const CONTROL_HOST = "(control)";
@@ -43,7 +54,7 @@ export const CONTROL_HOST = "(control)";
 /**
  * The one PATH every remote command runs with (`env -i`), the same on every
  * host. It finds bun in either host user's ~/.bun/bin, and docker and git
- * in the system directories. R1.2 and R1.5 prove each tool resolves under it
+ * in the system directories. P02-identity and P05-capture-identity prove each tool resolves under it
  * and record where.
  */
 export const REMOTE_PATH = "/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -64,6 +75,7 @@ export interface StepTemplate {
   readonly standing: readonly string[];
   readonly description: string;
   readonly host: StepHost;
+  readonly phase: StepPhase;
   /** Commands as argv templates; they run in order joined by `&&`. */
   readonly cmds: readonly (readonly string[])[];
   /** Extra non-secret environment for every command, templated. */
@@ -77,10 +89,10 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. The release tag (W3) is prod's: a stage run tags nothing. The rc is
+   * target. The release tag (C23-collect-logs) is prod's: a stage run tags nothing. The rc is
    * no step (D64): it is cut after the stage run passes, before the production
-   * go names it (`bun scripts/release/tag.ts rc`). Stage's preparation (S0 to
-   * S2: the dump, the target, its role passwords) is stage's: production has
+   * go names it (`bun scripts/release/tag.ts rc`). Stage's preparation (Q02-dump to
+   * Q04-role-passwords: the dump, the target, its role passwords) is stage's: production has
    * its own backup and credentials, so it skips them.
    */
   readonly onlyFor?: "prod" | "stage";
@@ -93,7 +105,7 @@ export interface StepTemplate {
   readonly notBefore?: NotBeforeTemplate;
   /**
    * A baseline gate: a non-zero exit passes when `--triage <file>` covers every
-   * failed finding of its JSON report (scripts/release/triage.ts). Only R2.5.
+   * failed finding of its JSON report (scripts/release/triage.ts). Only P08-log-baseline.
    */
   readonly triage?: boolean;
   /**
@@ -105,10 +117,10 @@ export interface StepTemplate {
   /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
-   * R1.1 sets it: every release names a new release checkout on the host
+   * P01-checkout sets it: every release names a new release checkout on the host
    * (`/root/rm-060`, `/root/rm-061`), and the v0.6.1 production preflight's
-   * R1.1 failed with `cd: /root/rm-061: No such file or directory`
-   * (2026-10-10). R1.4 sets it: the capture checkout is the release runner's
+   * P01-checkout failed with `cd: /root/rm-061: No such file or directory`
+   * (2026-10-10). P04-capture-checkout sets it: the capture checkout is the release runner's
    * own folder (CAPTURE_CHECKOUT, ./target.ts), so a fresh capture host or a
    * deleted folder heals instead of failing. A folder that exists without
    * `.git` is never touched: the clone refuses a non-empty directory, and the
@@ -126,7 +138,7 @@ export interface StepTemplate {
   readonly gateAbsent?: string;
 }
 
-/** The repository every checkout fetches from; R1.1 and R1.4 clone a missing checkout from it. */
+/** The repository every checkout fetches from; P01-checkout and P04-capture-checkout clone a missing checkout from it. */
 export const RELEASE_REPO_URL = "git@github.com:robotmoney/robotmoney-frontend.git";
 
 /** The time a step may take unless it names its own `maxMinutes`. */
@@ -177,8 +189,8 @@ export interface TemplateValues {
 
 /**
  * The template values of one run of one target. `ref` is what the go wrote
- * (the rc tag on prod, the commit on stage, D64); R1.1 and R1.4 detach at it,
- * R7.1 checks it. It defaults to the commit.
+ * (the rc tag on prod, the commit on stage, D64); P01-checkout and P04-capture-checkout detach at it,
+ * C14-verify-version checks it. It defaults to the commit.
  */
 export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
   return {
@@ -263,7 +275,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;
   const commands = step.cmds.map(envCmd);
-  // A step that owns its checkout clones it first when it is missing (R1.1, R1.4).
+  // A step that owns its checkout clones it first when it is missing (P01-checkout, P04-capture-checkout).
   const clone = step.cloneFrom === undefined ? []
     : [`{ test -e ${shellQuote(`${checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", step.cloneFrom, checkout])}; }`];
   // A one-time step runs only while its gate file is absent: its own receipt proves the one-time action ran.
@@ -280,7 +292,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
  */
 export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): string {
   const canonical = steps.map((s) => ({
-    id: s.id, standing: s.standing, description: s.description, host: s.host, cmds: s.cmds,
+    id: s.id, standing: s.standing, description: s.description, host: s.host, phase: s.phase, cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
     onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
   }));

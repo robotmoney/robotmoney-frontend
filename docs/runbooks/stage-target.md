@@ -10,9 +10,10 @@
 
 The stage target is a copy of production as it stands before the next patch. It lives on
 `rm-frontend-stage-2`. The release runner runs the production step list against it with
-`bun run release:run --target stage`. The list's first three steps, S0 to S2, are stage's own
-preparation (the dump, this target, its role passwords): production skips them, and the step-list
-hash is the same for both. Every other step takes the same path on both.
+`bun run release:run --target stage`. The list's QA steps, Q01-lockfile to Q04-role-passwords, are
+stage's own preparation (the lockfile, the dump, this target, its role passwords): production skips
+them, and the step-list hash is the same for both. Every preflight and cutover step takes the same
+path on both.
 
 The tool holds no past-upgrade fact (issue 1272). The tag and commit come from production's
 `/api/version`; the ledger comes from the dump itself; the stack is booted the production way
@@ -42,7 +43,7 @@ It builds these pieces, in order:
    the tag. A body with `+dirty` or `+unknown` refuses.
 2. **The running checkout.** `rm-stage-running`, detached at that tag (else that commit),
    with `bun install` in root and backend. It never creates the release checkout:
-   R1.1 clones that one.
+   P01-checkout clones that one.
 3. **The database.** One Postgres 18 container, `rm-stage-target-pg`. It listens on
    `172.17.0.1:25060`. Its data lives in the named volume `rm-stage-target-pgdata`.
    It restarts with Docker.
@@ -85,7 +86,7 @@ It builds these pieces, in order:
     stage_target`, the rebind of the in-house members onto the stage keys (the dump holds
     production's), and a second boot. Docker keeps the stack running, as on production.
     The boot writes the instance's smoke state under `HOME`, which the release's rolling boot
-    (R6.7a) replaces one service at a time.
+    (C10-rolling-boot) replaces one service at a time.
     The site answers on `:48787`, and `/api/version` reports the tag and commit.
 
 `bun scripts/release/stage-target.ts status` reports each piece.
@@ -101,33 +102,30 @@ no such command: there the admin types the doadmin password.
 Since the v0.6.0 cutover (2026-10-08) production's stack is the one `bun smoke --static-port
 --instance rm_prod` booted from the release checkout of the running version, with `HOME=/root`.
 Docker keeps it running. Its smoke state lives under `/root/.local/state/robotmoney-smoke/rm_prod/`;
-A release never stops it: R6.7a replaces its services one at a time and keeps website-server up
+A release never stops it: C10-rolling-boot replaces its services one at a time and keeps website-server up
 (release policy §4.7).
 `/api/version` reports the commit and, for a boot at a tag, the tag. No tmux session drives it.
 
 ## Rebuild it for each rehearsal
 
-The release runbook's first steps rebuild the target, so the rehearsal needs no typed command
-beyond the runner's (policy section 4.4):
+The release runbook's QA steps rebuild the target, so QA is one command (policy section 4.4):
 
 ```bash
-bun run release:run --target stage --go <stage go> --until S2   # S0 dump, S1 up, S2 role passwords
-bun run release:run --target stage --preflight --go <stage go>
-bun run release:run --target stage --go <stage go> --run <run-ts printed by the first command>
+bun run release:run --target stage --go <stage go>
 ```
 
-- **S0** (`stage-target dump`) uses the newest production dump already on stage-2
+- **Q02-dump** (`stage-target dump`) uses the newest production dump already on stage-2
   (`~/rm-backup-prod-*`) if it is at most 24 hours old (owner, 2026-10-08). Otherwise it captures
   one from production's read replica as `rm_readonly`, with the capture checkout's
-  `bun smoke:capture`. The release's own R2.1 still captures a new backup during the run.
-- **S1** (`stage-target up --dump newest --replace`) rebuilds the target from that dump.
-- **S2** (`stage-target doadmin | bun run role-passwords --target stage --doadmin-stdin`) sets
+  `bun smoke:capture`. The release's own C01-backup still captures a new backup during the run.
+- **Q03-stage-up** (`stage-target up --dump newest --replace`) rebuilds the target from that dump.
+- **Q04-role-passwords** (`stage-target doadmin | bun run role-passwords --target stage --doadmin-stdin`) sets
   the role passwords, the same precondition production runs before its release. It keeps the
   working runtime lines, makes `rm_owner` LOGIN, generates its password and writes the
   `rm_owner` line into the stage `~/.env`. A rerun keeps every role.
 
-`--until S2` leaves the run incomplete and resumable, so the preflight sees no run in flight.
-Read `status` between steps when something looks wrong.
+Stage has no preflight: the same run goes on to the preflight and cutover steps. Read
+`bun scripts/release/stage-target.ts status` when something looks wrong.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
 unless `--replace` is given. `--replace` runs `down` first. `down` stops the instance's
@@ -136,7 +134,7 @@ Postgres container, the volume, the running checkout `rm-stage-running`, the rel
 `rm-stage-target` and the target `HOME`. It never touches stage-2's own `~/.env`, `~/rm-060`,
 the capture checkout `/home/stage-server/rm-capture`, other checkouts or the dump directories.
 
-The capture checkout belongs to the release runner, for both targets. Its R1.4
+The capture checkout belongs to the release runner, for both targets. Its P04-capture-checkout
 clones it when it is missing. `up` never creates it. `down` refuses to remove it, or
 any folder holding it (`removalRefusal` in `stage-target-lib.ts`). See
 the capture checkout convention (`CAPTURE_CHECKOUT` in `scripts/release/target.ts`).

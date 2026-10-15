@@ -2,7 +2,7 @@
 // The stage target: a production-shaped target on stage-2 for unmodified
 // rehearsals (D61 rule 2, docs/runbooks/stage-target.md).
 //
-//   bun scripts/release/stage-target.ts dump      (S0: reuse the newest dump at most 24 h old, else capture one)
+//   bun scripts/release/stage-target.ts dump      (Q02-dump: reuse the newest dump at most 24 h old, else capture one)
 //   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down
@@ -32,15 +32,17 @@
 //   8. the stack, booted the production way from the running checkout:
 //      credential file, env rewrite, service tokens, boot, the in-house
 //      members rebound onto the stage keys, boot again. Docker keeps it
-//      running, as on production. The release checkout is not made here: R1.1
+//      running, as on production. The release checkout is not made here: P01-checkout
 //      clones it.
 //
 // doadmin is stored in no file (D61, owner 2026-10-08). The stage sequence is
-// the release runbook's own first steps (S0 `dump`, S1 `up --dump newest`, S2
+// the release runbook's own QA steps, run by `release:run --target stage`:
+// Q02-dump (`dump`), Q03-stage-up (`up --dump newest --replace`) and
+// Q04-role-passwords:
 //
 //   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
 //
-// ), run by `release:run --target stage --until S2`. `doadmin` gives the stage doadmin a fresh password
+// `doadmin` gives the stage doadmin a fresh password
 // through the container's local superuser socket and prints it to stdout, for
 // that pipe and nothing else. It exists because this is a disposable stage
 // database; production has no such command (its doadmin is typed by the admin).
@@ -511,9 +513,9 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
 }
 
 /**
- * S0 (SR.0, owner 2026-10-08): the newest production dump on this host that is
+ * Q02-dump (SR.0, owner 2026-10-08): the newest production dump on this host that is
  * at most 24 hours old, else a new capture from production's read replica by the
- * capture checkout (the same `bun smoke:capture` R2.1 runs). Never a stale dump.
+ * capture checkout (the same `bun smoke:capture` C01-backup runs). Never a stale dump.
  */
 async function remoteDump(): Promise<number> {
   const fresh = newestFreshDump(listDumps(), new Date());
@@ -535,7 +537,7 @@ async function remoteUp(args: string[]): Promise<number> {
   const dumpArg = dumpIdx >= 0 ? args[dumpIdx + 1] : undefined;
   if (!dumpArg) throw new Refusal("up needs --dump <dir on the stage host | newest>");
   const dumpDir = dumpArg === "newest" ? newestFreshDump(listDumps(), new Date()) : dumpArg;
-  if (!dumpDir) throw new Refusal(`--dump newest: no dump on this host is at most ${T.maxDumpAgeHours} h old; run \`stage-target dump\` first (S0)`);
+  if (!dumpDir) throw new Refusal(`--dump newest: no dump on this host is at most ${T.maxDumpAgeHours} h old; run \`stage-target dump\` first (Q02-dump)`);
   const replace = args.includes("--replace");
   const backup = readDumpPreflight(dumpDir);
   const running = await readRunningVersion();

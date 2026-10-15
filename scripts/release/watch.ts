@@ -1,14 +1,14 @@
-// scripts/release/watch.ts — how long the release soak (W1, W2, R7.4a) waits after READY.
+// scripts/release/watch.ts — how long the release soak (C20-soak-gate, C21-soak-checks, C22-schedule-parity) waits after READY.
 //
 // THE SOAK (owner, 2026-10-14). Every target soaks SOAK_HOURS (30 minutes)
 // after READY, with sessions deferred, then collects every container's logs
-// (W2). The release no longer waits for a session to publish: the version tag
+// (C21-soak-checks). The release no longer waits for a session to publish: the version tag
 // is cut at the cutover (D70), so a session outcome cannot change the release,
 // and a 37 h wait only delayed the evidence. Sessions are graded afterwards, as
 // a report, by the same gate with `--sessions graded` once DEFAULT_WATCH_HOURS
 // have passed (docs/technical/release-runbooks.md §4.7). The text below derives that bound.
 //
-// W1 runs `prod:gate --mode post-release --since READY`. Its check 7 needs
+// C20-soak-gate runs `prod:gate --mode post-release --since READY`. Its check 7 needs
 // every subject to publish one good (judged, receipted, attended) session in
 // the window (scripts/lib/gate/grade.ts, per-subject `minSessions`). The owner
 // decided on 2026-10-08 to keep that per-subject rule and make the watch long
@@ -19,9 +19,9 @@
 // gives it a FIRST epoch (docs/technical/system-scheduler-spec.md §2.2): it
 // closes on the first grid instant at least half a duration after now, so the
 // window lasts up to one and a half epochs. Then judging may take up to the
-// subject's judging duration, and R7.4a allows a publish grace after that.
+// subject's judging duration, and C22-schedule-parity allows a publish grace after that.
 // Every subject runs 24 h epochs (owner decision 2026-10-09: one session per
-// subject per day, as production ran before v0.6.0; checked by R7.4a), so:
+// subject per day, as production ran before v0.6.0; checked by C22-schedule-parity), so:
 //
 //   1.5 × 24 h + 900 s judging + 1800 s grace = 36.75 h, rounded up to 37 h.
 //
@@ -29,7 +29,7 @@
 // (24 h), well inside that bound.
 //
 // A target that grades sessions in its soak must wait that long. The default
-// soak defers them: W1 runs prod:gate --sessions deferred and R7.4a skips the
+// soak defers them: C20-soak-gate runs prod:gate --sessions deferred and C22-schedule-parity skips the
 // in-flight publish check, because no 24 h epoch can close in 30 minutes.
 // The target file sets both (./target.ts); the step list never changes.
 //
@@ -41,7 +41,7 @@ export const PRODUCTION_EPOCH_SECONDS = 86400;
 export const SUBJECT_CLOSE_SPACING_SECONDS = 21600;
 /** The default judging wait a subject carries (migration 0090). */
 export const DEFAULT_JUDGING_SECONDS = 900;
-/** Slack after close + judging before a publish counts as late (R7.4a). */
+/** Slack after close + judging before a publish counts as late (C22-schedule-parity). */
 export const PUBLISH_GRACE_SECONDS = 1800;
 
 /** The longest a first epoch's window lasts, as a share of the epoch (scheduler spec §2.2). */

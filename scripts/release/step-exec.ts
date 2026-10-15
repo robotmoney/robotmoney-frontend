@@ -3,7 +3,7 @@
 //
 // One step: run its command over ssh (or on the control machine), scrub its
 // output, write stdout.log and stderr.log, copy back the receipts it wrote,
-// and decide ok or failed. A baseline gate (R2.5) that exits non-zero is ok
+// and decide ok or failed. A baseline gate (P08-log-baseline) that exits non-zero is ok
 // only when the owner's triage file covers every failed finding. The run and
 // the preflight share this code, so a step the preflight saw green is judged
 // by the same rule in the run.
@@ -143,7 +143,7 @@ export async function executeStep(
   return ok;
 }
 
-/** R2.5: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
+/** P08-log-baseline: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
 export function triageStep(stepDir: string, triagePath: string | undefined, deps: RunnerDeps):
   { accepted: true; record: NonNullable<StepRecord["triage"]> } | { accepted: false; message?: string } {
   const reportPath = join(stepDir, "receipts", "prod-gate-baseline.json");

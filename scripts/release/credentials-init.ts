@@ -5,7 +5,7 @@
 // it builds the stage world (scripts/release/stage-target.ts up), and a release
 // that needs it again declares a delta step gated on this file's absence.
 // Originally
-// before R6.2 moves OPENCODE_API_KEY out of ~/.env. D61 rule 3: the old runbook
+// before C07-env-rewrite moves OPENCODE_API_KEY out of ~/.env. D61 rule 3: the old runbook
 // left "credential.json exists at RM_CREDENTIALS with the in-house roster" as an
 // operator preparation; this is that preparation, scripted.
 //
@@ -34,7 +34,7 @@
 //
 // IDEMPOTENT. An existing file (at RM_CREDENTIALS, or at the default path) with
 // the same roster and the same member ids is verified and kept; nothing is
-// rewritten, so a resume after R6.2 needs no model key. A different roster
+// rewritten, so a resume after C07-env-rewrite needs no model key. A different roster
 // refuses. It prints key names and handles, never a value.
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -43,13 +43,13 @@ import { homeEnvFilePath, loadEnvFile } from "../lib/env-role.ts";
 import { loadCredentialFile, parseCredentialFile, type CredentialEntry, type CredentialFile } from "../lib/swarm/credential-file.ts";
 import { openReadOnly } from "./db-read.ts";
 
-/** The in-house roster (runbook R6.2, R6.7): who the credential file seats. */
+/** The in-house roster (runbook C07-env-rewrite, R6.7): who the credential file seats. */
 export const IN_HOUSE_ROSTER = Object.freeze({
   agents: Object.freeze(["athena", "noop-analyst", "robot-money"]),
   judges: Object.freeze(["themis"]),
 });
 
-/** The model key's line in ~/.env before R6.2 moves it out. */
+/** The model key's line in ~/.env before C07-env-rewrite moves it out. */
 export const INFERENCE_KEY_LINE = "OPENCODE_API_KEY";
 
 /** The prefix of a bearer rebind-members has not written yet. */
@@ -157,7 +157,7 @@ export function planInit(input: InitInput, identity = freshIdentity): InitPlan {
   }
   if (configured !== "") return { action: "refuse", path, problems: [`RM_CREDENTIALS names ${path}, which does not exist; it is never created at a path the operator named`] };
   const modelKey = (input.homeEnv[INFERENCE_KEY_LINE] ?? "").trim();
-  if (modelKey === "") return { action: "refuse", path, problems: [`~/.env has no ${INFERENCE_KEY_LINE} line, so no entry has a model key (run R6.2a before R6.2)`] };
+  if (modelKey === "") return { action: "refuse", path, problems: [`~/.env has no ${INFERENCE_KEY_LINE} line, so no entry has a model key (run R6.2a before C07-env-rewrite)`] };
   return { action: "write", path, file: buildCredentialFile(roster.ids, modelKey, identity), appendEnv };
 }
 

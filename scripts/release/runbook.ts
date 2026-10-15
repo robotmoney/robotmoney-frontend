@@ -16,7 +16,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { NotBeforeTemplate, ReceiptSpec, StepHost, StepTemplate } from "./steps.ts";
+import type { NotBeforeTemplate, ReceiptSpec, StepHost, StepPhase, StepTemplate } from "./steps.ts";
 
 /** Where the templates and the release runbooks live. */
 export const RUNBOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), "runbooks");
@@ -53,10 +53,14 @@ export interface ReleaseRunbook {
 }
 
 const STEP_KEYS = new Set([
-  "id", "standing", "description", "host", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
+  "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
   "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
+/** The three phases, in the order they run (D70 as amended 2026-10-15). */
+export const PHASES: readonly StepPhase[] = ["qa", "preflight", "cutover"];
+/** A step's id names its phase: Q01-dump, P02-identity, C10-rolling-boot. */
+export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({ qa: "Q", preflight: "P", cutover: "C" });
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -71,6 +75,8 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (!isStringArray(raw.standing)) errors.push(`${at}: standing is a list of standing check ids`);
   if (typeof raw.description !== "string" || raw.description === "") errors.push(`${at}: description is a non-empty string`);
   if (!HOSTS.includes(raw.host as StepHost)) errors.push(`${at}: host is one of ${HOSTS.join(", ")}`);
+  if (!PHASES.includes(raw.phase as StepPhase)) errors.push(`${at}: phase is one of ${PHASES.join(", ")}`);
+  else if (typeof raw.id === "string" && !raw.id.startsWith(PHASE_PREFIX[raw.phase as StepPhase])) errors.push(`${at}: a ${raw.phase as string} step's id starts with ${PHASE_PREFIX[raw.phase as StepPhase]}`);
   if (!Array.isArray(raw.cmds) || raw.cmds.length === 0 || !raw.cmds.every((c) => isStringArray(c) && c.length > 0)) {
     errors.push(`${at}: cmds is a non-empty list of argv lists`);
   }
@@ -95,7 +101,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
 
   // Fixed key order inside receipts and notBefore: the hash sees them as the code wrote them before the YAML did.
   const step: Record<string, unknown> = {
-    id: raw.id, standing: raw.standing, description: raw.description, host: raw.host, cmds: raw.cmds,
+    id: raw.id, standing: raw.standing, description: raw.description, host: raw.host, phase: raw.phase, cmds: raw.cmds,
     expectExit: raw.expectExit,
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
@@ -121,6 +127,10 @@ function parseSteps(raw: unknown, where: string, errors: string[]): RunbookStep[
   const ids = steps.map((s) => s.id);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup !== undefined) errors.push(`${where}: step id ${dup} appears twice`);
+  // The phases run in order: QA (stage), then preflight, then cutover. A step out of its phase's place refuses.
+  for (let i = 1; i < steps.length; i++) {
+    if (PHASES.indexOf(steps[i]!.phase) < PHASES.indexOf(steps[i - 1]!.phase)) errors.push(`${where}: ${steps[i]!.id} (${steps[i]!.phase}) comes after ${steps[i - 1]!.id} (${steps[i - 1]!.phase}); the phases run qa, preflight, cutover`);
+  }
   return steps;
 }
 

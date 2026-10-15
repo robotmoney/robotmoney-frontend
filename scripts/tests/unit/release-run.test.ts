@@ -27,11 +27,11 @@
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
-import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
+import { checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
@@ -92,7 +92,7 @@ describe("target schema", () => {
   });
 
   test("red: a capture checkout that is the stage target's checkout or the target's own refuses, with the rule", () => {
-    // prod: the stage target's checkout on stage-2 (the 2026-10-08 R1.4 failure).
+    // prod: the stage target's checkout on stage-2 (the 2026-10-08 P04-capture-checkout failure).
     const p = prodRaw();
     (p.capture as Record<string, unknown>).checkout = STAGE_TARGET.checkout;
     const rp = validateTarget("prod", p);
@@ -167,33 +167,33 @@ describe("one step list for every target (D61 rule 2)", () => {
   const prod = loadTarget(join(targetsDir, "prod.json"));
   const stage = loadTarget(join(targetsDir, "stage.json"));
 
-  test("R1.1 and R1.4 detach at the go's ref: the rc tag on prod, the commit on stage; one template, one hash (D64)", () => {
-    for (const id of ["R1.1", "R1.4"]) {
+  test("P01-checkout and P04-capture-checkout detach at the go's ref: the rc tag on prod, the commit on stage; one template, one hash (D64)", () => {
+    for (const id of ["P01-checkout", "P04-capture-checkout"]) {
       const step = RELEASE_STEPS.find((s) => s.id === id)!;
       expect(step.cmds).toEqual([["git", "fetch", "--tags", "origin"], ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]]);
       expect(renderStep(step, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`checkout --detach ${TAG}`);
       expect(renderStep(step, stage, templateValues(stage, SHA, "20261008T000000Z", READY_PENDING, SHA)).remote).toContain(`checkout --detach ${SHA}`);
     }
     // The tag fetch precedes the detach, so the host holds the rc tag the boot reports as RM_BUILD_TAG.
-    const r11 = renderStep(RELEASE_STEPS.find((s) => s.id === "R1.1")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote;
+    const r11 = renderStep(RELEASE_STEPS.find((s) => s.id === "P01-checkout")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote;
     expect(r11.indexOf("git fetch --tags origin")).toBeLessThan(r11.indexOf(`checkout --detach ${TAG}`));
     // red control: the ref defaults to the commit, and never to anything a target names.
     expect(templateValues(prod, SHA, "20261008T000000Z").ref).toBe(SHA);
-    // R7.1 checks the ref: a production boot must serve the rc tag.
-    expect(renderStep(RELEASE_STEPS.find((s) => s.id === "R7.1")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`--commit ${SHA} --ref ${TAG}`);
+    // C14-verify-version checks the ref: a production boot must serve the rc tag.
+    expect(renderStep(RELEASE_STEPS.find((s) => s.id === "C14-verify-version")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`--commit ${SHA} --ref ${TAG}`);
   });
 
-  test("R1.4 clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
-    const r14 = RELEASE_STEPS.find((s) => s.id === "R1.4")!;
+  test("P04-capture-checkout clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
+    const r14 = RELEASE_STEPS.find((s) => s.id === "P04-capture-checkout")!;
     expect(r14.cloneFrom).toBe(RELEASE_REPO_URL);
-    expect(RELEASE_STEPS.filter((s) => s.cloneFrom).map((s) => s.id)).toEqual(["R1.1", "R1.4"]);
+    expect(RELEASE_STEPS.filter((s) => s.cloneFrom).map((s) => s.id)).toEqual(["P01-checkout", "P04-capture-checkout"]);
     const env = `env -i HOME=/home/stage-server PATH=${REMOTE_PATH} LANG=C.UTF-8`;
     const render = (t: typeof prod) => renderStep(r14, t, templateValues(t, SHA, "20261008T000000Z"));
     const rp = render(prod);
     expect(rp.host).toBe("rm-frontend-stage-2");
     expect(rp.remote).toBe([
       "mkdir -p /home/stage-server/.local/state/robotmoney-release/prod/20261008T000000Z",
-      "touch /home/stage-server/.local/state/robotmoney-release/prod/20261008T000000Z/.step-R1.4",
+      "touch /home/stage-server/.local/state/robotmoney-release/prod/20261008T000000Z/.step-P04-capture-checkout",
       `{ test -e /home/stage-server/rm-capture/.git || ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git /home/stage-server/rm-capture; }`,
       "cd /home/stage-server/rm-capture",
       `${env} git fetch --tags origin`,
@@ -205,8 +205,8 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(rp.remote.indexOf("test -e")).toBeLessThan(rp.remote.indexOf("cd /home/stage-server/rm-capture"));
   });
 
-  test("R1.1 clones the release checkout when it is missing, then fetches and detaches (the v0.6.1 preflight: cd /root/rm-061 failed, 2026-10-10)", () => {
-    const r11 = RELEASE_STEPS.find((s) => s.id === "R1.1")!;
+  test("P01-checkout clones the release checkout when it is missing, then fetches and detaches (the v0.6.1 preflight: cd /root/rm-061 failed, 2026-10-10)", () => {
+    const r11 = RELEASE_STEPS.find((s) => s.id === "P01-checkout")!;
     expect(r11.cloneFrom).toBe(RELEASE_REPO_URL);
     const render = (t: typeof prod) => renderStep(r11, t, templateValues(t, SHA, "20261008T000000Z"));
     const rp = render(prod);
@@ -214,7 +214,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     const envp = `env -i HOME=${prod.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=prod`;
     expect(rp.remote).toBe([
       `mkdir -p ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z`,
-      `touch ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z/.step-R1.1`,
+      `touch ${prod.home}/.local/state/robotmoney-release/prod/20261008T000000Z/.step-P01-checkout`,
       `{ test -e ${prod.checkout}/.git || ${envp} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${prod.checkout}; }`,
       `cd ${prod.checkout}`,
       `${envp} git fetch --tags origin`,
@@ -229,7 +229,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   });
 
   test("the clone source is part of the step-list hash", () => {
-    const without = RELEASE_STEPS.map((s) => (s.id === "R1.4" ? { ...s, cloneFrom: undefined } : s));
+    const without = RELEASE_STEPS.map((s) => (s.id === "P04-capture-checkout" ? { ...s, cloneFrom: undefined } : s));
     expect(stepListHash(without)).not.toBe(stepListHash());
   });
 
@@ -264,10 +264,10 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(RELEASE_STEPS.some((s) => s.gateAbsent !== undefined)).toBe(false);
     const prod = loadTarget(join(targetsDir, "prod.json"));
     const oneTime: RunbookStep = {
-      id: "D6.2a", added: "v0.7.0", standing: [], description: "one-time credential file", host: "target", irreversible: false, expectExit: 0, receipts: [],
+      id: "D6.2a", added: "v0.7.0", standing: [], description: "one-time credential file", host: "target", phase: "cutover", irreversible: false, expectExit: 0, receipts: [],
       gateAbsent: "{home}/.config/robotmoney/credential.json", cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", "{home}/r"]],
     };
-    const at = RELEASE_STEPS.findIndex((s) => s.id === "R6.2") + 1;
+    const at = RELEASE_STEPS.findIndex((s) => s.id === "C07-env-rewrite") + 1;
     const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
     expect(checkAddOnly(loadTemplate(), runbook)).toEqual([]);
     expect(stepListHash(runbook.steps)).not.toBe(stepListHash());
@@ -288,12 +288,12 @@ describe("one step list for every target (D61 rule 2)", () => {
     };
     expect(shape(prod)).toEqual(shape(stage));
     // red control: a list that adds one flag for one target is caught.
-    const forked = RELEASE_STEPS.map((s) => (s.id === "R6.3" ? { ...s, cmds: [[...s.cmds[0]!, "--skip-identity"]] } : s));
+    const forked = RELEASE_STEPS.map((s) => (s.id === "C05-migrate" ? { ...s, cmds: [[...s.cmds[0]!, "--skip-identity"]] } : s));
     expect(shape(prod, forked)).not.toEqual(shape(stage));
   });
 
   test("red: changing the list changes the hash; an unknown placeholder throws", () => {
-    const dropped = RELEASE_STEPS.filter((s) => s.id !== "R2.5");
+    const dropped = RELEASE_STEPS.filter((s) => s.id !== "P08-log-baseline");
     expect(stepListHash(dropped)).not.toBe(stepListHash());
     const reordered = [RELEASE_STEPS[1]!, RELEASE_STEPS[0]!, ...RELEASE_STEPS.slice(2)];
     expect(stepListHash(reordered)).not.toBe(stepListHash());
@@ -316,7 +316,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   });
 
   test("a rendered command never inherits DATABASE_*: run it under a polluted environment", () => {
-    const step: StepTemplate = { id: "X", standing: [], description: "x", host: "target", cmds: [["sh", "-c", "env"]], expectExit: 0, receipts: [], irreversible: false };
+    const step: StepTemplate = { id: "X", standing: [], description: "x", host: "target", phase: "cutover", cmds: [["sh", "-c", "env"]], expectExit: 0, receipts: [], irreversible: false };
     const scratch = mkdtempSync(join(tmpdir(), "release-env-"));
     const t = { ...prod, home: scratch, checkout: scratch };
     const r = renderStep(step, t, templateValues(t, SHA, "20261008T000000Z"));
@@ -333,28 +333,30 @@ describe("one step list for every target (D61 rule 2)", () => {
 
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
-    expect(tags).toEqual(["C1"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["S0", "S1", "S2", "C0", "C1", "C9"]);
+    expect(tags).toEqual(["C06-version-tag"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "C04-probe-start", "C06-version-tag", "C13-probe-grade"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
-    const unmarked = RELEASE_STEPS.map((s) => (s.id === "C1" ? { ...s, onlyFor: undefined } : s));
+    const unmarked = RELEASE_STEPS.map((s) => (s.id === "C06-version-tag" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
     const ids = stepIds();
-    expect(ids.indexOf("R2.5")).toBe(ids.indexOf("C0") - 1);
-    expect(ids.indexOf("R2.4r")).toBe(ids.indexOf("R2.2") + 1);
-    expect(ids.slice(-4)).toEqual(["W1", "W2", "R7.4a", "W3"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["W1", "R6.9", "watchHours"], ["W2", "R6.9", "watchHours"], ["R7.4a", "R6.9", "watchHours"], ["W3", "R6.9", "watchHours"]]);
-    // red control: W1 never hard-codes deferral; the target's watchSessions decides, since READY.
-    const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!.cmds[0]!;
+    // The preflight ends where the cutover's backup starts; the probe starts once the restore is proven.
+    expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
+    expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
+    expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
+    expect(ids.slice(-4)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-schedule-parity", "C23-collect-logs"]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-schedule-parity", "C11-ready", "watchHours"], ["C23-collect-logs", "C11-ready", "watchHours"]]);
+    // red control: C20-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
+    const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
     expect(w1.join(" ")).toContain("--sessions {watchSessions}");
     expect(w1).toContain("{readyIso}");
   });
 });
 
-describe("R2.5 grades the running stack from the release checkout; every target step runs there", () => {
-  test("R2.5 runs prod:gate --mode baseline for the instance from the release checkout, under RM_ENV, on both targets", () => {
+describe("P08-log-baseline grades the running stack from the release checkout; every target step runs there", () => {
+  test("P08-log-baseline runs prod:gate --mode baseline for the instance from the release checkout, under RM_ENV, on both targets", () => {
     for (const t of [loadTarget(join(targetsDir, "prod.json")), loadTarget(join(targetsDir, "stage.json"))]) {
-      const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R2.5")!, t, templateValues(t, SHA, "20261008T000000Z"));
+      const r = renderStep(RELEASE_STEPS.find((s) => s.id === "P08-log-baseline")!, t, templateValues(t, SHA, "20261008T000000Z"));
       expect(r.remote).toContain(`cd ${t.checkout} && env -i HOME=${t.home} PATH=${REMOTE_PATH} LANG=C.UTF-8 RM_ENV=${t.rmEnv} bun run prod:gate --mode baseline --instance ${t.instance}`);
     }
   });
@@ -370,9 +372,9 @@ describe("R2.5 grades the running stack from the release checkout; every target 
 // The ledger is reconciled with backend/migrations and the bytes at the tag the
 // running stack reports (D67; issues 1272, 1273): a 116-row ledger passes, an
 // unknown name refuses by name, an edited applied file refuses with both
-// hashes, a count never decides, and neither does the number order. R1.2 and
-// R2.3 share one helper; precondition.ts stays pure over its receipt.
-describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name refuses, the bytes are pinned, no number order", () => {
+// hashes, a count never decides, and neither does the number order. P02-identity and
+// P07-baseline share one helper; precondition.ts stays pure over its receipt.
+describe("the ledger reconciliation (P02-identity, P07-baseline): 116 rows pass, an unknown name refuses, the bytes are pinned, no number order", () => {
   const repo = repoMigrations();
   /** A 116-row ledger: the first 116 repository files, as production held after v0.6.0. */
   const ledger116 = repo.slice(0, 116);
@@ -396,27 +398,26 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
     expect(ledger116).toContain(IDENTITY_MIGRATION);
   });
 
-  test("a 116-row ledger passes R1.2 and R2.3 against the tag; the pending set is the rest of the repository", () => {
+  test("a 116-row ledger passes P07-baseline against the tag, and P02-identity checks only the identity; the pending set is the rest of the repository", () => {
     const receipt = at(ledger116, "v0.6.0");
     expect(receipt.verdict).toBe("ok");
     expect(receipt.pinCommit).toBe(TAG_COMMIT);
     expect(receipt.perFile).toHaveLength(116);
     expect(receipt.pending).toEqual(repo.slice(116));
     expect(ledgerProblems(receipt)).toEqual([]);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production", reconcile: receipt })).toEqual([]);
-    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "rehearsal", reconcile: receipt })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production" })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "rehearsal" })).toEqual([]);
     expect(baselineProblems(receipt, [])).toEqual([]);
     // The whole repository recorded: nothing pending. A shorter ledger passes too: the count never decides.
     expect(at(repo, "v0.6.0").pending).toEqual([]);
     expect(at(repo.slice(0, 76), "v0.6.0").verdict).toBe("ok");
   });
 
-  test("red: one filename backend/migrations lacks refuses, naming it (R1.2 and R2.3)", () => {
+  test("red: one filename backend/migrations lacks refuses, naming it (P07-baseline, the one ledger check)", () => {
     const withUnknown = [...ledger116, UNKNOWN];
     const receipt = at(withUnknown, "v0.6.0");
     expect(receipt.verdict).toBe("ledger-not-subset");
     expect(ledgerProblems(receipt).join()).toContain(UNKNOWN);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: withUnknown, identity: "production", reconcile: receipt }).join()).toContain(UNKNOWN);
     expect(baselineProblems(receipt, []).join()).toContain(UNKNOWN);
     expect(ledgerNotInRepo(withUnknown, repo)).toEqual([UNKNOWN]);
     // green control: an empty ledger reconciles; the identity rules still apply.
@@ -456,7 +457,6 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
     const unresolved = at(ledger116, "v9.9.9");
     expect(unresolved.verdict).toBe("pin-ref-unresolved");
     expect({ pinCommit: unresolved.pinCommit, perFile: unresolved.perFile }).toEqual({ pinCommit: null, perFile: [] });
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "production", reconcile: unresolved }).join()).toContain("pin-ref-unresolved");
     const unpinned = at(ledger116);
     expect({ verdict: unpinned.verdict, pinRef: unpinned.pinRef, perFile: unpinned.perFile }).toEqual({ verdict: "ok", pinRef: null, perFile: [] });
   });
@@ -469,22 +469,21 @@ describe("the ledger reconciliation (R1.2, R2.3): 116 rows pass, an unknown name
     expect("error" in parsed ? parsed : runningPinRef(parsed)).toBe("v0.6.0");
     expect(parseRunningVersion(null)).toHaveProperty("error");
     expect(parseRunningVersion(JSON.stringify({ commit: `${sha}+dirty` }))).toHaveProperty("error");
-    // R1.2 and R2.3 hand the running stack's origin to their scripts.
-    for (const id of ["R1.2", "R2.3"]) {
-      const cmd = RELEASE_STEPS.find((s) => s.id === id)!.cmds[0]!;
-      expect(cmd[cmd.indexOf("--origin") + 1]).toBe("{publicOrigin}");
-    }
+    // P07-baseline hands the running stack's origin to its script; P02-identity no longer reads the ledger, so it takes none.
+    const baseline = RELEASE_STEPS.find((s) => s.id === "P07-baseline")!.cmds[0]!;
+    expect(baseline[baseline.indexOf("--origin") + 1]).toBe("{publicOrigin}");
+    expect(RELEASE_STEPS.find((s) => s.id === "P02-identity")!.cmds[0]).not.toContain("--origin");
   });
 
   test("red: the wrong identity, 0081 without a row, no RM_ENV", () => {
     const receipt = at(ledger116, "v0.6.0");
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "rehearsal", reconcile: receipt }).join()).toContain("rehearsal");
-    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "production", reconcile: receipt }).join()).toContain("production");
-    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: null, reconcile: receipt }).join()).toContain(`${IDENTITY_MIGRATION} but deployment_identity has no row`);
-    expect(preconditionProblems({ rmEnv: undefined, ledger: ledger116, identity: null, reconcile: receipt }).length).toBe(1);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: "rehearsal" }).join()).toContain("rehearsal");
+    expect(preconditionProblems({ rmEnv: "stage", ledger: ledger116, identity: "production" }).join()).toContain("production");
+    expect(preconditionProblems({ rmEnv: "prod", ledger: ledger116, identity: null }).join()).toContain(`${IDENTITY_MIGRATION} but deployment_identity has no row`);
+    expect(preconditionProblems({ rmEnv: undefined, ledger: ledger116, identity: null }).length).toBe(1);
     // A pre-identity ledger with no row passes: the first migrate writes the row.
     const before81 = repo.filter((n) => n < IDENTITY_MIGRATION);
-    expect(preconditionProblems({ rmEnv: "prod", ledger: before81, identity: null, reconcile: at(before81, "v0.6.0") })).toEqual([]);
+    expect(preconditionProblems({ rmEnv: "prod", ledger: before81, identity: null })).toEqual([]);
   });
 });
 
@@ -543,7 +542,7 @@ describe("the go file (D61 rule 1, D70): the ref, the operator, the date", () =>
       const r = validateGo(`${good}${key}\n`, expected);
       expect("errors" in r && r.errors.join(), key).toContain(where);
     }
-    expect("errors" in validateGo(`${good}skip: R2.5\n`, expected)).toBe(true);
+    expect("errors" in validateGo(`${good}skip: P08-log-baseline\n`, expected)).toBe(true);
     expect("errors" in validateGo(good.replace(SHA, "a502de30"), expected)).toBe(true);
     expect(validateGo(good.replace(/operator: .*\n/, ""), expected)).toEqual({ errors: ["the go names no operator"] });
     expect(validateGo(good.replace(/date: .*\n/, ""), expected)).toEqual({ errors: ["the go names no date"] });
@@ -576,11 +575,11 @@ describe("SP.8: prod runs only what stage passed", () => {
     expect(checkStageJournal(journal({ tree: OTHER_TREE }), expected).join()).toContain("tree");
     expect(checkStageJournal(journal({ tree: undefined }), expected).join()).toContain("records no tree");
     const failed = journal();
-    failed.steps["R6.3"]!.status = "failed";
+    failed.steps["C05-migrate"]!.status = "failed";
     expect(checkStageJournal(failed, expected).join()).toContain("did not pass");
     const missingStep = journal();
-    delete missingStep.steps["R7.7"];
-    expect(checkStageJournal(missingStep, expected).join()).toContain("R7.7");
+    delete missingStep.steps["C19-host-guards"];
+    expect(checkStageJournal(missingStep, expected).join()).toContain("C19-host-guards");
     expect(checkStageJournal(journal({ rmEnv: "prod" }), expected).join()).toContain("not a stage run");
   });
 });
@@ -595,25 +594,25 @@ describe("step selection and resume rules", () => {
   });
   test("red: a resume that skips a step that is not ok refuses", () => {
     const j = journal();
-    j.steps["R2.3"]!.status = "failed";
+    j.steps["P07-baseline"]!.status = "failed";
     const exp = { target: "stage", commit: SHA, stepListHash: stepListHash(), goSha256: "g", stepIds: stepIds() };
-    expect(checkResume(j, exp, { from: "R2.3" })).toEqual([]);
-    expect(checkResume(j, exp, { from: "R2.5" }).join()).toContain("R2.3");
-    expect(checkResume(j, { ...exp, goSha256: "other" }, { from: "R2.3" }).join()).toContain("go");
+    expect(checkResume(j, exp, { from: "P07-baseline" })).toEqual([]);
+    expect(checkResume(j, exp, { from: "P08-log-baseline" }).join()).toContain("P07-baseline");
+    expect(checkResume(j, { ...exp, goSha256: "other" }, { from: "P07-baseline" }).join()).toContain("go");
     expect(runStatus(j, stepIds())).toBe("failed");
   });
   test("--from needs --run", () => {
-    expect(parseArgs(["--target", "stage", "--from", "R6.3"])).toHaveProperty("error");
-    expect(parseArgs(["--target", "stage", "--from", "R6.3", "--run", "20261008T000000Z"])).not.toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--from", "C05-migrate"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--from", "C05-migrate", "--run", "20261008T000000Z"])).not.toHaveProperty("error");
   });
 });
 
 // ── the runner, end to end, against an injected exec ──────────────────────────
 const TINY: StepTemplate[] = [
-  { id: "T1", standing: [], description: "one", host: "target", cmds: [["echo", "{instance}"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "T2", standing: [], description: "two", host: "target", cmds: [["echo", "two"]], expectExit: 0,
+  { id: "T1", standing: [], description: "one", host: "target", phase: "preflight", cmds: [["echo", "{instance}"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "T2", standing: [], description: "two", host: "target", phase: "cutover", cmds: [["echo", "two"]], expectExit: 0,
     receipts: [{ dir: "{home}/r", pattern: "receipt.json", required: true }], irreversible: true },
-  { id: "T3", standing: [], description: "three", host: "capture", cmds: [["echo", "three"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "T3", standing: [], description: "three", host: "capture", phase: "cutover", cmds: [["echo", "three"]], expectExit: 0, receipts: [], irreversible: false },
 ];
 
 function fixture(rmEnv: "stage" | "prod" = "stage", overrides: Record<string, unknown> = {}) {
@@ -650,7 +649,7 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
   const logs: string[] = [];
   const deps: RunnerDeps = {
     async exec(_host, remote, onStdout) {
-      const id = (/\.step-([A-Za-z0-9.]+)/.exec(remote) ?? /echo ([A-Za-z0-9.]+)$/.exec(remote))![1]!;
+      const id = (/\.step-([A-Za-z0-9.-]+)/.exec(remote) ?? /echo ([A-Za-z0-9.-]+)$/.exec(remote))![1]!;
       ran.push(id);
       if (opts.out) {
         onStdout(opts.out.slice(0, 7));
@@ -680,6 +679,28 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
   return { deps, ran, logs };
 }
 
+/**
+ * A green production preflight of `steps` in f's journal root, as production's cutover requires
+ * (D70 as amended 2026-10-15). Returns its journal directory, for --after-preflight.
+ */
+async function greenPreflight(f: ReturnType<typeof fixture>, steps: readonly StepTemplate[], stageJournal: string, at = "2026-10-08T12:00:00Z"): Promise<string> {
+  const d = fakeDeps({ receipt: "{}" });
+  d.deps.now = () => new Date(at);
+  const code = await runRelease(["--target", f.targetFile, "--preflight", "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", stageJournal], d.deps, [...steps]);
+  if (code !== 0) throw new Error(`preflight not green:\n${d.logs.join("\n")}`);
+  return join(f.journalRoot, "prod", `preflight-${runStamp(new Date(at))}`);
+}
+
+/** A passed stage QA run of `steps` at SHA; returns its journal directory. */
+async function passedStage(steps: readonly StepTemplate[], journalRoot?: string): Promise<string> {
+  const s = fixture("stage");
+  const root = journalRoot ?? s.journalRoot;
+  const st = fakeDeps({ receipt: "{}" });
+  const code = await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", root], st.deps, [...steps]);
+  if (code !== 0) throw new Error(`stage run did not pass:\n${st.logs.join("\n")}`);
+  return join(root, "stage", "20261008T120000Z");
+}
+
 describe("runRelease", () => {
   test("refuses without a go file, and with a production go on stage; --preflight needs none", async () => {
     const f = fixture();
@@ -691,29 +712,56 @@ describe("runRelease", () => {
     const b = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], b.deps, TINY)).toBe(2);
     expect(b.ran).toEqual([]);
+    // Stage has no preflight: its QA run is one run.
     const c = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--preflight", "--journal-root", f.journalRoot], c.deps, TINY)).toBe(0);
-    expect(c.ran).toEqual(["T1"]);
-    expect(c.logs.join("\n")).toMatch(/PENDING\s+P\.go/);
+    expect(await runRelease(["--target", f.targetFile, "--preflight", "--journal-root", f.journalRoot], c.deps, TINY)).toBe(2);
+    expect(c.ran).toEqual([]);
+    expect(c.logs.join("\n")).toContain("refusing --preflight on stage");
+    // Production's preflight needs no go, and runs only the preflight steps.
+    const p = fixture("prod");
+    const stageDir = await passedStage(TINY);
+    const d = fakeDeps();
+    expect(await runRelease(["--target", p.targetFile, "--preflight", "--journal-root", p.journalRoot, "--stage-journal", stageDir], d.deps, TINY)).toBe(0);
+    expect(d.ran).toEqual(["T1"]);
+    expect(d.logs.join("\n")).toMatch(/PENDING\s+P\.go/);
+  });
+
+  test("production's cutover refuses without a green preflight, and skips the preflight steps it carries", async () => {
+    const p = fixture("prod");
+    const stageDir = await passedStage(TINY);
+    const none = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], none.deps, TINY)).toBe(2);
+    expect(none.ran).toEqual([]);
+    expect(none.logs.join("\n")).toContain("continues from a green preflight");
+    const preDir = await greenPreflight(p, TINY, stageDir);
+    const run = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], run.deps, TINY)).toBe(0);
+    // T1 ran in the preflight; the cutover never runs it again.
+    expect(run.ran).toEqual(["T2", "T3"]);
+    const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.status).toBe("passed");
+    expect(j.steps.T1!.status).toBe("ok");
   });
 
   test("the go's commit is rendered into every {commit}; a preflight without a go uses the control checkout's HEAD", async () => {
     const CHECKOUT: StepTemplate[] = [
-      { id: "C1", standing: [], description: "detach", host: "target", cmds: [["checkout", "--detach", "{commit}"]], expectExit: 0, receipts: [], irreversible: false },
+      { id: "P1", standing: [], description: "detach", host: "target", phase: "preflight", cmds: [["checkout", "--detach", "{commit}"]], expectExit: 0, receipts: [], irreversible: false },
     ];
-    const f = fixture();
+    const p = fixture("prod");
+    const stageDir = await passedStage(CHECKOUT);
     const seen: string[] = [];
     const a = fakeDeps();
     const exec = a.deps.exec;
     a.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
-    expect(await runRelease(["--target", f.targetFile, "--dry-run", "--journal-root", f.journalRoot], a.deps, CHECKOUT)).toBe(0);
+    expect(await runRelease(["--target", p.targetFile, "--dry-run", "--journal-root", p.journalRoot, "--stage-journal", stageDir], a.deps, CHECKOUT)).toBe(0);
     expect(seen.join()).toContain(`--detach ${SHA}`);
-    writeFileSync(f.goFile, `commit: ${OTHER_SHA}\noperator: lucas\ndate: 2026-10-14\n`);
-    // A go naming another commit than the control checkout's HEAD is red: the printed step list is not that commit's.
-    const b = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--preflight", "--journal-root", f.journalRoot], b.deps, CHECKOUT)).toBe(2);
+    // A go whose rc names another commit than the control checkout's HEAD is red: the printed step list is not that commit's.
+    const b = fakeDeps({ answers: { [`git rev-parse --verify --quiet '${TAG}^{commit}'`]: { code: 0, stdout: `${OTHER_SHA}\n` } } });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--preflight", "--journal-root", p.journalRoot, "--stage-journal", stageDir], b.deps, CHECKOUT)).toBe(2);
     expect(b.logs.join("\n")).toMatch(/RED\s+P\.commit/);
-    // A live run journals the go's commit.
+    // A live stage run journals the go's commit.
+    const f = fixture();
+    writeFileSync(f.goFile, `commit: ${OTHER_SHA}\noperator: lucas\ndate: 2026-10-14\n`);
     const c = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], c.deps, CHECKOUT)).toBe(0);
     const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
@@ -788,23 +836,21 @@ describe("runRelease", () => {
 
   test("SP.8 through the runner: prod refuses without a stage journal, then starts with a passed one", async () => {
     const f = fixture("prod");
+    // A passed stage run of the same tiny list at the same commit, and a green preflight of it.
+    const stageDir = await passedStage(TINY);
+    const preDir = await greenPreflight(f, TINY, stageDir);
     const a = fakeDeps({ receipt: "{}" });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--after-preflight", preDir], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("SP.8");
 
-    // A passed stage run of the same tiny list at the same commit.
-    const s = fixture("stage");
-    const st = fakeDeps({ receipt: "{}" });
-    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], st.deps, TINY)).toBe(0);
-    const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");
     const b = fakeDeps({ receipt: "{}" });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", stageDir], b.deps, TINY)).toBe(0);
-    expect(b.ran).toEqual(["T1", "T2", "T3"]);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], b.deps, TINY)).toBe(0);
+    expect(b.ran).toEqual(["T2", "T3"]);
 
     // red control: the same stage journal does not authorize a different list.
     const c = fakeDeps({ receipt: "{}" });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--stage-journal", stageDir], c.deps, TINY.slice(0, 2))).toBe(2);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--stage-journal", stageDir, "--after-preflight", preDir], c.deps, TINY.slice(0, 2))).toBe(2);
     expect(c.ran).toEqual([]);
 
     // red control: a prod go naming an rc at another commit than the stage run passed at refuses (SP.8).
@@ -813,9 +859,10 @@ describe("runRelease", () => {
       [`git rev-parse --verify --quiet '${RELEASE}-rc.1^{commit}'`]: { code: 0, stdout: `${OTHER_SHA}\n` },
       [`${OTHER_SHA}^{tree}`]: { code: 0, stdout: `${OTHER_TREE}\n` },
     } });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir], d.deps, TINY)).toBe(2);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j3"), "--stage-journal", stageDir, "--after-preflight", preDir], d.deps, TINY)).toBe(2);
     expect(d.ran).toEqual([]);
-    expect(d.logs.join("\n")).toContain("commit");
+    // That rc is not the commit the preflight (and the stage run) checked.
+    expect(d.logs.join("\n")).toContain(`the preflight was at ${SHA}, the go names ${OTHER_SHA}`);
   });
 
   test("D64: a production go's tag resolves on the control machine; a tag origin lacks refuses before any step", async () => {
@@ -851,13 +898,14 @@ describe("runRelease", () => {
     expect((JSON.parse(readFileSync(join(stageDir, "run.json"), "utf8")) as RunJournal).tag).toBeUndefined();
     const p = fixture("prod");
     const pOff = fakeDeps({ receipt: "{}", answers: { "git branch -r --contains": { code: 0, stdout: "  origin/main\n" } } });
-    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], pOff.deps, TINY)).toBe(2);
+    const preDir = await greenPreflight(p, TINY, stageDir);
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], pOff.deps, TINY)).toBe(2);
     expect(pOff.ran).toEqual([]);
     const seen: string[] = [];
     const pr = fakeDeps({ receipt: "{}" });
     const exec = pr.deps.exec;
     pr.deps.exec = async (h, r, o, e) => { seen.push(r); return exec(h, r, o, e); };
-    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir], pr.deps, TINY)).toBe(0);
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], pr.deps, TINY)).toBe(0);
     const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
     expect(j.commit).toBe(SHA);
     expect(j.tree).toBe(TREE);
@@ -906,7 +954,7 @@ describe("secret scrubbing", () => {
   });
 });
 
-describe("env rewrite key partition (R6.2)", () => {
+describe("env rewrite key partition (C07-env-rewrite)", () => {
   const text = [
     "# connection",
     "host = db.example.com",
@@ -936,7 +984,7 @@ describe("env rewrite key partition (R6.2)", () => {
     expect(p.missingRequired).toEqual(["rm_owner", "RM_CREDENTIALS"]);
     expect(partitionEnv("host=h\ndatabase=d\nrm_owner=o\nRM_CREDENTIALS=/c\n").missingRequired).toEqual([]);
   });
-  test("the rm_owner line stays through R6.2, so R6.3 (the migrate) still finds it", () => {
+  test("the rm_owner line stays through C07-env-rewrite, so C05-migrate (the migrate) still finds it", () => {
     const p = partitionEnv("host=h\ndatabase=d\nrm_owner=o\nRM_CREDENTIALS=/c\n");
     expect(p.keptKeys).toContain("rm_owner");
     expect(p.retiredKeys).toEqual([]);
@@ -953,7 +1001,7 @@ describe("env rewrite key partition (R6.2)", () => {
   });
 });
 
-describe("baseline and comparison (R2.3, R7.5)", () => {
+describe("baseline and comparison (P07-baseline, C18-compare-baseline)", () => {
   const before = { counts: { swarm_sessions: 10, swarm_recommendations: 5, gone_later: 1, absent: null }, databaseSizeBytes: 1000 };
   test("growth within the size bound passes", () => {
     expect(compareBaseline(before, { counts: { swarm_sessions: 12, swarm_recommendations: 5, gone_later: 1, absent: 3 }, databaseSizeBytes: 1400 }, 1.5)).toEqual([]);
@@ -974,7 +1022,7 @@ describe("baseline and comparison (R2.3, R7.5)", () => {
   });
 });
 
-describe("host guards, the rolling cutover and identity (R6.3, R7.1, R7.7)", () => {
+describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify-version, C19-host-guards)", () => {
   test("a container mounting the Docker socket is named; a clean one is not", () => {
     expect(socketMounts([
       { Name: "/rm_prod-api-1", Mounts: [{ Source: "/data", Destination: "/data" }] },
@@ -992,18 +1040,18 @@ describe("host guards, the rolling cutover and identity (R6.3, R7.1, R7.7)", () 
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/smoke:down|stop-legacy|compose down|\bdown\b/);
     }
     expect(ids).not.toContain("R6.1");
-    expect(RELEASE_STEPS.find((s) => s.irreversible)?.id).toBe("R6.3");
-    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["R6.3"]);
+    expect(RELEASE_STEPS.find((s) => s.irreversible)?.id).toBe("C05-migrate");
+    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["C05-migrate"]);
     // The probe starts before the first irreversible step and is graded after the site switch.
-    expect(ids.indexOf("C0")).toBeLessThan(ids.indexOf("R6.3"));
-    expect(ids.indexOf("C9")).toBeGreaterThan(ids.indexOf("R6.10"));
-    expect(ids.indexOf("C9")).toBeGreaterThan(ids.indexOf("R6.7a"));
+    expect(ids.indexOf("C04-probe-start")).toBeLessThan(ids.indexOf("C05-migrate"));
+    expect(ids.indexOf("C13-probe-grade")).toBeGreaterThan(ids.indexOf("C12-site"));
+    expect(ids.indexOf("C13-probe-grade")).toBeGreaterThan(ids.indexOf("C10-rolling-boot"));
     // The version tag is cut as soon as the cutover starts (D70), on prod only.
-    expect(ids.indexOf("C1")).toBe(ids.indexOf("R6.3") + 1);
-    expect(RELEASE_STEPS.find((s) => s.id === "C1")!.onlyFor).toBe("prod");
+    expect(ids.indexOf("C06-version-tag")).toBe(ids.indexOf("C05-migrate") + 1);
+    expect(RELEASE_STEPS.find((s) => s.id === "C06-version-tag")!.onlyFor).toBe("prod");
     for (const name of ["prod", "stage"]) {
       const t = loadTarget(join(targetsDir, `${name}.json`));
-      const boot = renderStep(RELEASE_STEPS.find((s) => s.id === "R6.7a")!, t, templateValues(t, SHA, "20261008T000000Z")).remote;
+      const boot = renderStep(RELEASE_STEPS.find((s) => s.id === "C10-rolling-boot")!, t, templateValues(t, SHA, "20261008T000000Z")).remote;
       expect(boot).toContain(`bun run smoke --static-port --instance ${t.instance}`);
     }
   });
@@ -1027,63 +1075,36 @@ describe("host guards, the rolling cutover and identity (R6.3, R7.1, R7.7)", () 
   });
 });
 
-// ── stage preparation: S0 to S2 are steps of the runbook, run by `--until S2` ──
-const PREPARED: StepTemplate[] = [
-  { id: "S0", standing: [], description: "dump", host: "control", onlyFor: "stage", cmds: [["echo", "S0"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "S1", standing: [], description: "up", host: "control", onlyFor: "stage", cmds: [["echo", "S1"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "R1.1", standing: [], description: "checkout", host: "target", cmds: [["echo", "R1.1"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "R1.2", standing: [], description: "identity", host: "target", cmds: [["echo", "R1.2"]], expectExit: 0, receipts: [], irreversible: false },
-];
-
-describe("stage preparation is part of the runbook (S0 to S2)", () => {
-  test("the template leads with the stage-only preparation, and every release copy carries it", () => {
+// ── the three phases: QA (stage), preflight, cutover (D70 as amended 2026-10-15) ──
+describe("the phases: QA on stage, production's preflight, the cutover", () => {
+  test("the template runs qa, then preflight, then cutover; each id names its phase", () => {
+    const phases = RELEASE_STEPS.map((s) => s.phase);
+    expect(phases.indexOf("preflight")).toBeGreaterThan(phases.lastIndexOf("qa"));
+    expect(phases.indexOf("cutover")).toBeGreaterThan(phases.lastIndexOf("preflight"));
+    for (const s of RELEASE_STEPS) expect(s.id[0], s.id).toBe({ qa: "Q", preflight: "P", cutover: "C" }[s.phase]);
+    const qa = RELEASE_STEPS.filter((s) => s.phase === "qa");
+    expect(qa.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["Q01-lockfile", "control", "stage"], ["Q02-dump", "control", "stage"], ["Q03-stage-up", "control", "stage"], ["Q04-role-passwords", "control", "stage"]]);
+    expect(qa.map((s) => s.standing)).toEqual([["SP.9"], ["SR.0"], ["SR.0"], ["SR.1"]]);
+    expect(qa.every((s) => s.irreversible === false && s.expectExit === 0)).toBe(true);
+    expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-baseline", "P08-log-baseline"]);
+    // The backup and its restore proof are the cutover's first steps, before the first irreversible one.
     const ids = stepIds();
-    expect(ids.slice(0, 4)).toEqual(["S0", "S1", "S2", "R1.1"]);
-    const prep = RELEASE_STEPS.filter((s) => s.id.startsWith("S"));
-    expect(prep.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["S0", "control", "stage"], ["S1", "control", "stage"], ["S2", "control", "stage"]]);
-    expect(prep.flatMap((s) => s.standing)).toEqual(["SR.0", "SR.0", "SR.1"]);
-    expect(prep.every((s) => s.irreversible === false && s.expectExit === 0)).toBe(true);
+    expect(ids.slice(ids.indexOf("C01-backup"), ids.indexOf("C01-backup") + 5)).toEqual(["C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate"]);
+    expect(RELEASE_STEPS.filter((s) => s.phase !== "cutover").some((s) => s.irreversible)).toBe(false);
   });
 
-  test("production skips them, stage runs them, and the hash is the same for both", () => {
-    const s0 = RELEASE_STEPS.find((s) => s.id === "S0")!;
-    expect(skipReason(s0, { rmEnv: "prod" } as ReleaseTarget)).toBe("prod");
-    expect(skipReason(s0, { rmEnv: "stage" } as ReleaseTarget)).toBeUndefined();
+  test("production skips the QA steps, stage runs them, and the hash is the same for both", () => {
+    const q = RELEASE_STEPS.find((s) => s.id === "Q02-dump")!;
+    expect(skipReason(q, { rmEnv: "prod" } as ReleaseTarget)).toBe("prod");
+    expect(skipReason(q, { rmEnv: "stage" } as ReleaseTarget)).toBeUndefined();
     // red control: onlyFor is part of the hash, so dropping it from the list changes it.
-    expect(stepListHash(RELEASE_STEPS.map((s) => (s.id === "S0" ? { ...s, onlyFor: undefined } : s)))).not.toBe(stepListHash());
+    expect(stepListHash(RELEASE_STEPS.map((s) => (s.id === "Q02-dump" ? { ...s, onlyFor: undefined } : s)))).not.toBe(stepListHash());
+    // and so is the phase.
+    expect(stepListHash(RELEASE_STEPS.map((s) => (s.id === "C01-backup" ? { ...s, phase: "preflight" as const } : s)))).not.toBe(stepListHash());
   });
 
-  test("--until stops after a step, leaves the run incomplete and resumable, and --run continues at the next step", async () => {
-    const f = fixture("stage");
-    const first = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--until", "S1"], first.deps, PREPARED)).toBe(0);
-    expect(first.ran).toEqual(["S0", "S1"]);
-    expect(first.logs.join("\n")).toContain("stopped after S1 as asked");
-    expect(first.logs.join("\n")).toContain("--from R1.1");
-    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
-    expect(j.status).toBe("incomplete");
-    expect(runsInFlight(f.journalRoot, "stage")).toEqual([]);
-    const rest = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], rest.deps, PREPARED)).toBe(0);
-    expect(rest.ran).toEqual(["R1.1", "R1.2"]);
-    const done = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
-    expect(done.status).toBe("passed");
-  });
-
-  test("--until: production still refuses without a passed stage journal (SP.8); a step not in the list refuses; it takes no --only or --preflight", async () => {
-    const p = fixture("prod");
-    const skipped = fakeDeps();
-    const argv = ["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--until", "S1", "--stage-journal", "/nonexistent"];
-    // production still needs a passed stage journal (SP.8): the refusal comes before any step.
-    expect(await runRelease(argv, skipped.deps, PREPARED)).toBe(2);
-    expect(skipped.ran).toEqual([]);
-    const f = fixture("stage");
-    const bad = fakeDeps();
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--until", "NOPE"], bad.deps, PREPARED)).toBe(2);
-    expect(bad.logs.join("\n")).toContain("--until NOPE: no such step");
-    expect(parseArgs(["--target", "stage", "--until", "S2", "--only", "S0"])).toHaveProperty("error");
-    expect(parseArgs(["--target", "stage", "--until", "S2", "--preflight"])).toHaveProperty("error");
-    expect(parseArgs(["--target", "stage", "--until", "S2", "--go", "g.txt"])).toMatchObject({ until: "S2" });
+  test("--until is gone: a stage QA run is one run", () => {
+    expect(parseArgs(["--target", "stage", "--until", "Q04-role-passwords", "--go", "g.txt"])).toHaveProperty("error");
   });
 });
 
@@ -1105,9 +1126,9 @@ describe("stage's starting dump (SR.0): the newest one at most 24 h old", () => 
 
 // ── the scripted watch, tags, recovery and the host guard ─────────────────────
 const WATCHED: StepTemplate[] = [
-  { id: "R6.9", standing: [], description: "ready", host: "target", cmds: [["echo", "ready"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "W1", standing: [], description: "watch", host: "target", notBefore: { afterStep: "R6.9", hours: 6 }, cmds: [["echo", "{readyIso}"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "W3", standing: [], description: "tag", host: "control", onlyFor: "prod", cmds: [["echo", "W3"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "C11-ready", standing: [], description: "ready", host: "target", phase: "cutover", cmds: [["echo", "ready"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "C20-soak-gate", standing: [], description: "watch", host: "target", phase: "cutover", notBefore: { afterStep: "C11-ready", hours: 6 }, cmds: [["echo", "{readyIso}"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "C23-collect-logs", standing: [], description: "tag", host: "control", phase: "cutover", onlyFor: "prod", cmds: [["echo", "C23-collect-logs"]], expectExit: 0, receipts: [], irreversible: false },
 ];
 
 describe("watch steps, prod-only steps and the recovery decision", () => {
@@ -1115,8 +1136,8 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const f = fixture("stage");
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, WATCHED)).toBe(3);
-    expect(early.ran).toEqual(["R6.9"]);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T18:00:00.000Z");
+    expect(early.ran).toEqual(["C11-ready"]);
+    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-08T18:00:00.000Z");
     // red control: still early, a resume does not run it either.
     const again = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], again.deps, WATCHED)).toBe(3);
@@ -1130,8 +1151,8 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     expect(seen[0]).toContain("2026-10-08T12:00:00.000Z");
     const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
     expect(j.status).toBe("passed");
-    expect(j.steps.W3!.status).toBe("skipped");
-    expect(j.steps.W3!.skipped).toBe("stage");
+    expect(j.steps["C23-collect-logs"]!.status).toBe("skipped");
+    expect(j.steps["C23-collect-logs"]!.skipped).toBe("stage");
     expect(j.recovery?.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -1143,24 +1164,26 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const st2 = fakeDeps();
     st2.deps.now = () => new Date("2026-10-08T19:00:00Z");
     expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot, "--run", "20261008T120000Z"], st2.deps, WATCHED)).toBe(0);
-    expect(st2.ran).toEqual(["W1"]);
+    expect(st2.ran).toEqual(["C20-soak-gate"]);
     const p = fixture("prod");
+    const preDir = await greenPreflight(p, WATCHED, join(s.journalRoot, "stage", "20261008T120000Z"), "2026-10-08T19:00:00Z");
     const pr = fakeDeps();
-    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z")], pr.deps, WATCHED)).toBe(3);
-    expect(pr.ran).toEqual(["R6.9"]);
+    pr.deps.now = () => new Date("2026-10-08T19:00:00Z");
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--after-preflight", preDir], pr.deps, WATCHED)).toBe(3);
+    expect(pr.ran).toEqual(["C11-ready"]);
     const pr2 = fakeDeps();
-    pr2.deps.now = () => new Date("2026-10-08T19:00:00Z");
-    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--run", "20261008T120000Z"], pr2.deps, WATCHED)).toBe(0);
-    expect(pr2.ran).toEqual(["W1", "W3"]);
+    pr2.deps.now = () => new Date("2026-10-09T02:00:00Z");
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--run", "20261008T190000Z"], pr2.deps, WATCHED)).toBe(0);
+    expect(pr2.ran).toEqual(["C20-soak-gate", "C23-collect-logs"]);
   });
 
   test("a watchHours wait takes the target's watch length: READY + 37 h, not + 6 h", async () => {
-    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "C20-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
     // A graded watch at the derived length, as production runs it.
     const f = fixture("stage", { watchHours: 37, watchSessions: "graded" });
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-10T01:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-10T01:00:00.000Z");
     expect(early.logs.join("\n")).toContain("+ 37 h");
     // red control: READY + 6 h is no longer enough.
     const six = fakeDeps();
@@ -1170,15 +1193,15 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const later = fakeDeps();
     later.deps.now = () => new Date("2026-10-10T01:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
-    expect(later.ran).toEqual(["W1"]);
+    expect(later.ran).toEqual(["C20-soak-gate"]);
   });
 
   test("the committed stage target soaks 30 minutes (owner, 2026-10-14)", async () => {
-    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "W1" ? { ...s, notBefore: { afterStep: "R6.9", hours: "watchHours" } } : s));
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "C20-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
     const f = fixture("stage");
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("W1 becomes runnable at 2026-10-08T12:30:00.000Z");
+    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-08T12:30:00.000Z");
     // red control: one second before READY + 30 min nothing runs.
     const before = fakeDeps();
     before.deps.now = () => new Date("2026-10-08T12:29:59Z");
@@ -1187,7 +1210,7 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const later = fakeDeps();
     later.deps.now = () => new Date("2026-10-08T12:30:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
-    expect(later.ran).toEqual(["W1"]);
+    expect(later.ran).toEqual(["C20-soak-gate"]);
   });
 
   test("red: a release runbook with no recovery decision refuses before anything runs (SC.1)", async () => {
@@ -1199,7 +1222,7 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
   });
 });
 
-describe("release tags (tag.ts rc after stage, C1)", () => {
+describe("release tags (tag.ts rc after stage, C06-version-tag)", () => {
   test("rc: the stage journal must have passed, for this release, on the squash commit's tree (D70)", () => {
     expect(rcStageProblems(journal(), "v0.6.0", TREE)).toEqual([]);
     expect(rcStageProblems(undefined, "v0.6.0", TREE).join()).toContain("no stage run journal");
@@ -1208,7 +1231,7 @@ describe("release tags (tag.ts rc after stage, C1)", () => {
     expect(rcStageProblems(journal({ rmEnv: "prod" }), "v0.6.0", TREE).join()).toContain("not a stage run");
     expect(rcStageProblems(journal(), "v0.6.1", TREE).join()).toContain("not v0.6.1");
     const failed = journal();
-    failed.steps["R6.3"]!.status = "failed";
+    failed.steps["C05-migrate"]!.status = "failed";
     expect(rcStageProblems(failed, "v0.6.0", TREE).join()).toContain("did not pass");
   });
 
@@ -1221,7 +1244,7 @@ describe("release tags (tag.ts rc after stage, C1)", () => {
   });
 });
 
-describe("schedule parity (R7.4a)", () => {
+describe("schedule parity (C22-schedule-parity)", () => {
   const close = "2026-10-08T12:00:00.000Z";
   const base = [{ id: "s1", subject: "eth", state: "collecting", window_closes_at: close }];
   test("24 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
@@ -1258,10 +1281,10 @@ describe("schedule parity (R7.4a)", () => {
   });
 });
 
-describe("the postgres URL guard (R7.7)", () => {
-  test("R7.7 scans the home only: no retired checkout, no legacy argument", () => {
+describe("the postgres URL guard (C19-host-guards)", () => {
+  test("C19-host-guards scans the home only: no retired checkout, no legacy argument", () => {
     const t = loadTarget(join(targetsDir, "prod.json"));
-    const r = renderStep(RELEASE_STEPS.find((s) => s.id === "R7.7")!, t, templateValues(t, SHA, "20261008T000000Z"));
+    const r = renderStep(RELEASE_STEPS.find((s) => s.id === "C19-host-guards")!, t, templateValues(t, SHA, "20261008T000000Z"));
     expect(r.remote).toContain(`bun scripts/release/host-guards.ts --instance ${t.instance} --receipt-dir`);
     expect(r.remote).not.toMatch(/--legacy-retired|-retired/);
   });
@@ -1291,9 +1314,9 @@ describe("the postgres URL guard (R7.7)", () => {
   });
 });
 
-describe("W1's attendance threshold is target data, not a template change", () => {
+describe("C20-soak-gate's attendance threshold is target data, not a template change", () => {
   const targetsDir = join(import.meta.dir, "../../release/targets");
-  const w1 = RELEASE_STEPS.find((s) => s.id === "W1")!;
+  const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!;
   const render = (name: string) => {
     const t = loadTarget(join(targetsDir, `${name}.json`));
     return renderStep(w1, t, templateValues(t, "a".repeat(40), "20261008T000000Z", "2026-10-08T00:00:00.000Z")).remote;
@@ -1313,11 +1336,11 @@ describe("W1's attendance threshold is target data, not a template change", () =
 });
 
 
-// R1.2 proves every ~/.env key the cutover needs before R6.3 starts it:
+// P02-identity proves every ~/.env key the cutover needs before C05-migrate starts it:
 // production's /root/.env once lacked rm_owner, and a run that migrated and
-// then refused at R6.2 would have stopped mid-cutover. The runbook uses
+// then refused at C07-env-rewrite would have stopped mid-cutover. The runbook uses
 // rm_owner only; no release step reads doadmin (D61 amendment, owner, 2026-10-08).
-describe("the cutover's ~/.env keys are proven at R1.2, before the first irreversible step", () => {
+describe("the cutover's ~/.env keys are proven at P02-identity, before the first irreversible step", () => {
   const ENV_PATH = "/root/.env";
   const SECRET = "Sup3r-s3cret-value";
 
@@ -1343,11 +1366,11 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
 
   test("no release step reads doadmin, and R6.2b (enable-owner-login) is gone", () => {
     expect(stepIds()).not.toContain("R6.2b");
-    // Stage's own preparation (S2) sets the stage database's roles through its disposable doadmin; production skips it.
+    // Stage's own preparation (Q04-role-passwords) sets the stage database's roles through its disposable doadmin; production skips it.
     for (const s of RELEASE_STEPS.filter((x) => x.onlyFor !== "stage")) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/doadmin|enable-owner-login|role-passwords/);
     }
-    expect(RELEASE_STEPS.filter((s) => s.cmds.some((c) => /doadmin|role-passwords/.test(c.join(" ")))).map((s) => [s.id, s.onlyFor])).toEqual([["S2", "stage"]]);
+    expect(RELEASE_STEPS.filter((s) => s.cmds.some((c) => /doadmin|role-passwords/.test(c.join(" ")))).map((s) => [s.id, s.onlyFor])).toEqual([["Q04-role-passwords", "stage"]]);
     const ids = stepIds();
     for (const [key, writer] of Object.entries(RUN_WRITTEN_KEYS)) expect(ids, key).toContain(writer);
   });
@@ -1361,25 +1384,25 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
     return check >= 0 && check < firstIrreversible(steps);
   };
 
-  test("every precondition check precedes the first irreversible step (R6.3)", () => {
-    expect(RELEASE_STEPS[keyCheckIndex(RELEASE_STEPS)]?.id).toBe("R1.2");
-    expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("R6.3");
+  test("every precondition check precedes the first irreversible step (C05-migrate)", () => {
+    expect(RELEASE_STEPS[keyCheckIndex(RELEASE_STEPS)]?.id).toBe("P02-identity");
+    expect(RELEASE_STEPS[firstIrreversible(RELEASE_STEPS)]?.id).toBe("C05-migrate");
     expect(keysCheckedFirst(RELEASE_STEPS)).toBe(true);
-    // R6.2, the defence-in-depth check, needs only keys R1.2 checked or the run wrote.
+    // C07-env-rewrite, the defence-in-depth check, needs only keys P02-identity checked or the run wrote.
     for (const key of D61_REQUIRED_KEYS) expect(PRE_CUTOVER_REQUIRED_KEYS.includes(key) || key in RUN_WRITTEN_KEYS, key).toBe(true);
-    const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
+    const r12 = RELEASE_STEPS.find((s) => s.id === "P02-identity")!;
     expect(r12.description).toContain("rm_owner logs in");
     expect(r12.description).toContain("RM_CREDENTIALS");
     expect(r12.description).not.toContain("R6.2a");
   });
 
-  test("red: R1.2 moved after R6.3, or R1.2 without --confirm-target, fails the order check", () => {
-    const r12 = RELEASE_STEPS.find((s) => s.id === "R1.2")!;
-    const without = RELEASE_STEPS.filter((s) => s.id !== "R1.2");
-    const r61 = without.findIndex((s) => s.id === "R6.3");
+  test("red: P02-identity moved after C05-migrate, or P02-identity without --confirm-target, fails the order check", () => {
+    const r12 = RELEASE_STEPS.find((s) => s.id === "P02-identity")!;
+    const without = RELEASE_STEPS.filter((s) => s.id !== "P02-identity");
+    const r61 = without.findIndex((s) => s.id === "C05-migrate");
     expect(keysCheckedFirst([...without.slice(0, r61 + 1), r12, ...without.slice(r61 + 1)])).toBe(false);
     const noConfirm = { ...r12, cmds: [r12.cmds[0]!.filter((a, i, all) => a !== "--confirm-target" && all[i - 1] !== "--confirm-target")] };
-    expect(keysCheckedFirst(RELEASE_STEPS.map((s) => (s.id === "R1.2" ? noConfirm : s)))).toBe(false);
+    expect(keysCheckedFirst(RELEASE_STEPS.map((s) => (s.id === "P02-identity" ? noConfirm : s)))).toBe(false);
   });
 
   // The real script, end to end, against an unreachable database: the key
@@ -1441,42 +1464,62 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
 // ── the preflight (--preflight, alias --dry-run): every check green, nothing live changes ──
 describe("preflight", () => {
   const LANES: StepTemplate[] = [
-    { id: "A1", standing: [], description: "target one", host: "target", cmds: [["echo", "A1"]], expectExit: 0, receipts: [], irreversible: false },
-    { id: "A2", standing: [], description: "target two", host: "target", cmds: [["echo", "A2"]], expectExit: 0, receipts: [], irreversible: false },
-    { id: "B1", standing: [], description: "capture", host: "capture", cmds: [["echo", "B1"]], expectExit: 0, receipts: [], irreversible: false },
-    { id: "K1", standing: [], description: "tag", host: "control", cmds: [["echo", "K1"]], expectExit: 0, receipts: [], irreversible: false },
-    { id: "X1", standing: [], description: "cutover", host: "target", cmds: [["echo", "X1"]], expectExit: 0, receipts: [], irreversible: true },
-    { id: "A3", standing: [], description: "after", host: "target", cmds: [["echo", "A3"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "A1", standing: [], description: "target one", host: "target", phase: "preflight", cmds: [["echo", "A1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "A2", standing: [], description: "target two", host: "target", phase: "preflight", cmds: [["echo", "A2"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "B1", standing: [], description: "capture", host: "capture", phase: "preflight", cmds: [["echo", "B1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "K1", standing: [], description: "tag", host: "control", phase: "cutover", cmds: [["echo", "K1"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "X1", standing: [], description: "cutover", host: "target", phase: "cutover", cmds: [["echo", "X1"]], expectExit: 0, receipts: [], irreversible: true },
+    { id: "A3", standing: [], description: "after", host: "target", phase: "cutover", cmds: [["echo", "A3"]], expectExit: 0, receipts: [], irreversible: false },
   ];
+  // A preflight is production's (D70 as amended 2026-10-15): every test here runs on the prod
+  // fixture, with a passed stage run of the same list in the same journal root (P.stage green).
+  const prodWithStage = async (steps: readonly StepTemplate[] = LANES) => {
+    const f = fixture("prod");
+    await passedStage(steps, f.journalRoot);
+    return f;
+  };
   const preflight = (f: ReturnType<typeof fixture>, deps: RunnerDeps, extra: string[] = [], steps = LANES) =>
     runRelease(["--target", f.targetFile, "--preflight", "--journal-root", f.journalRoot, ...extra], deps, steps);
-  const report = (f: ReturnType<typeof fixture>, target = "stage") =>
+  const report = (f: ReturnType<typeof fixture>, target = "prod") =>
     JSON.parse(readFileSync(join(f.journalRoot, target, "preflight-20261008T120000Z", "preflight.json"), "utf8")) as { exit: number; checks: { id: string; status: string; detail: string }[] };
   const status = (r: ReturnType<typeof report>, id: string) => r.checks.find((c) => c.id === id)?.status;
 
-  test("the real step list: the preflight runs R1.1 to R2.5, never R6.3 or anything after", () => {
+  test("the real step list: the preflight runs P01-checkout to P08-log-baseline, never the backup, the restore proof or anything after", () => {
     const ids = preflightSteps(RELEASE_STEPS).map((s) => s.id);
-    expect(ids).toEqual(["R1.1", "R1.2", "R1.3", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r", "R2.3", "R2.5"]);
+    expect(ids).toEqual(["P01-checkout", "P02-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-baseline", "P08-log-baseline"]);
     expect(preflightSteps(RELEASE_STEPS).some((s) => s.irreversible || s.host === "control")).toBe(false);
+    // red control: the cutover's backup is never a preflight step.
+    expect(ids).not.toContain("C01-backup");
+    expect(ids).not.toContain("C03-restore-proof");
   });
 
-  test("without a go: runs only the remote steps before the first irreversible one, the go is pending, exit 0, no run journal", async () => {
-    const f = fixture();
+  test("stage has no preflight: --preflight refuses on stage before any check or step", async () => {
+    const f = fixture("stage");
+    const a = fakeDeps();
+    expect(await preflight(f, a.deps)).toBe(2);
+    expect(a.ran).toEqual([]);
+    expect(a.logs.join("\n")).toContain("refusing --preflight on stage");
+    expect(existsSync(join(f.journalRoot, "stage"))).toBe(false);
+  });
+
+  test("without a go: runs only the preflight steps, the go is pending, exit 0, no run journal", async () => {
+    const f = await prodWithStage();
     const a = fakeDeps();
     expect(await preflight(f, a.deps)).toBe(0);
-    // The target lane first, then the capture lane, in the run's order.
+    // The target lane first, then the capture lane, in the run's order; never a cutover step.
     expect(a.ran).toEqual(["A1", "A2", "B1"]);
     const r = report(f);
     expect(status(r, "P.go")).toBe("pending");
     expect(status(r, "P.recovery")).toBe("green");
     expect(status(r, "P.commit")).toBe("green");
     expect(status(r, "P.ci")).toBe("green");
-    expect(r.checks.find((c) => c.id === "P.stage")).toBeUndefined();
-    expect(readdirSync(join(f.journalRoot, "stage"))).toEqual(["preflight-20261008T120000Z"]);
+    expect(status(r, "P.stage")).toBe("green");
+    expect(r.checks.find((c) => c.id === "P.lockfile")).toBeUndefined();
+    expect(readdirSync(join(f.journalRoot, "prod"))).toEqual(["preflight-20261008T120000Z"]);
   });
 
   test("with a valid go: the go and the recovery decision are green", async () => {
-    const f = fixture();
+    const f = await prodWithStage();
     const a = fakeDeps();
     expect(await preflight(f, a.deps, ["--go", f.goFile])).toBe(0);
     expect(status(report(f), "P.go")).toBe("green");
@@ -1484,13 +1527,13 @@ describe("preflight", () => {
   });
 
   test("red: a release runbook with no recovery decision", async () => {
-    const f = fixture();
+    const f = await prodWithStage();
     expect(await preflight(f, fakeDeps({ recovery: null }).deps, ["--go", f.goFile])).toBe(2);
     expect(status(report(f), "P.recovery")).toBe("red");
   });
 
   test("red: no CI on the commit, a commit on no origin branch, a dirty control checkout", async () => {
-    const f = fixture();
+    const f = await prodWithStage();
     const a = fakeDeps({ answers: { "gh api": { code: 0, stdout: "" }, "git branch -r --contains": { code: 0, stdout: "" }, "git status --porcelain": { code: 0, stdout: " M x.ts\n" } } });
     expect(await preflight(f, a.deps)).toBe(2);
     const r = report(f);
@@ -1500,7 +1543,7 @@ describe("preflight", () => {
   });
 
   test("red: a live release checkout blocks its steps on that host", async () => {
-    const f = fixture();
+    const f = await prodWithStage();
     const a = fakeDeps({ answers: { "docker ps -q": { code: 0, stdout: "3\n" } } });
     expect(await preflight(f, a.deps)).toBe(2);
     expect(a.ran).toEqual([]);
@@ -1519,17 +1562,16 @@ describe("preflight", () => {
   });
 
   test("red: a run of the same target in flight blocks every remote step", async () => {
-    const f = fixture();
-    // A run that stops before its watch window stays incomplete; one killed mid-step reads running.
-    const r = fakeDeps({ fail: new Set(["T2"]), receipt: "{}" });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], r.deps, TINY)).toBe(1);
-    const runFile = join(f.journalRoot, "stage", "20261008T120000Z", "run.json");
-    writeFileSync(runFile, JSON.stringify({ ...JSON.parse(readFileSync(runFile, "utf8")), status: "running" }));
+    const f = await prodWithStage();
+    // A production run killed mid-step reads running.
+    const runDir = join(f.journalRoot, "prod", "20261008T110000Z");
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "run.json"), JSON.stringify({ version: 1, target: "prod", runTs: "20261008T110000Z", status: "running", updatedAt: "2026-10-08T11:30:00Z", steps: {} }));
     const a = fakeDeps();
     a.deps.now = () => new Date("2026-10-08T12:00:01Z");
     expect(await preflight(f, a.deps)).toBe(2);
     expect(a.ran).toEqual([]);
-    const rep = JSON.parse(readFileSync(join(f.journalRoot, "stage", "preflight-20261008T120001Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
+    const rep = JSON.parse(readFileSync(join(f.journalRoot, "prod", "preflight-20261008T120001Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
     expect(status(rep, "P.busy")).toBe("red");
     expect(status(rep, "A1")).toBe("blocked");
     expect(status(rep, "B1")).toBe("blocked");
@@ -1553,35 +1595,35 @@ describe("preflight", () => {
     expect(laneOf({ host: "target" }, prod)).not.toBe(laneOf({ host: "capture" }, prod));
     expect(laneOf({ host: "capture" }, stage)).toBe(laneOf({ host: "capture" }, prod));
     expect(laneOf({ host: "target" }, prod)).toBe(`${prod.host}:${prod.checkout}`);
-    // Stage rehearses prod's preflight order exactly: the target lane, then the capture lane.
-    const order = ["R1.1", "R1.2", "R1.3", "R2.3", "R2.5", "R1.4", "R1.5", "R1.6", "R2.1", "R2.2", "R2.4r"];
+    // The preflight order: the target lane, then the capture lane (its checkout and install only; the backup is the cutover's).
+    const order = ["P01-checkout", "P02-identity", "P03-install", "P07-baseline", "P08-log-baseline", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install"];
     expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(order);
     expect(preflightOrder(RELEASE_STEPS, stage).map((s) => s.id)).toEqual(order);
   });
 
-  test("the capture checkout steps R1.4 to R1.6 run on stage as on prod: no step is skipped for a shared checkout", async () => {
+  test("the capture checkout steps P04-capture-checkout to P06-capture-install run on stage as on prod: no step is skipped for a shared checkout", async () => {
     const stage = loadTarget(join(targetsDir, "stage.json"));
     const prod = loadTarget(join(targetsDir, "prod.json"));
-    for (const id of ["R1.4", "R1.5", "R1.6"]) {
+    for (const id of ["P04-capture-checkout", "P05-capture-identity", "P06-capture-install"]) {
       const step = RELEASE_STEPS.find((s) => s.id === id)!;
       expect(skipReason(step, stage)).toBeUndefined();
       expect(skipReason(step, prod)).toBeUndefined();
     }
     // Through the runner: a stage run runs its capture step.
     const SPLIT: StepTemplate[] = [
-      { id: "T1", standing: [], description: "target", host: "target", cmds: [["echo", "T1"]], expectExit: 0, receipts: [], irreversible: false },
-      { id: "C1", standing: [], description: "capture", host: "capture", cmds: [["echo", "C1"]], expectExit: 0, receipts: [], irreversible: false },
+      { id: "T1", standing: [], description: "target", host: "target", phase: "cutover", cmds: [["echo", "T1"]], expectExit: 0, receipts: [], irreversible: false },
+      { id: "C06-version-tag", standing: [], description: "capture", host: "capture", phase: "cutover", cmds: [["echo", "C06-version-tag"]], expectExit: 0, receipts: [], irreversible: false },
     ];
     const f = fixture("stage");
     const a = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SPLIT)).toBe(0);
-    expect(a.ran).toEqual(["T1", "C1"]);
+    expect(a.ran).toEqual(["T1", "C06-version-tag"]);
   });
 
   test("a step that runs past its bound is failed as timed out; the bound is in the rendered step", async () => {
     expect(maxMillisOf({})).toBe(DEFAULT_MAX_MINUTES * 60_000);
     expect(maxMillisOf({ maxMinutes: 30 })).toBe(30 * 60_000);
-    expect(RELEASE_STEPS.find((s) => s.id === "R2.1")!.maxMinutes).toBe(30);
+    expect(RELEASE_STEPS.find((s) => s.id === "C01-backup")!.maxMinutes).toBe(30);
     const f = fixture();
     const a = fakeDeps();
     const bounds: (number | undefined)[] = [];
@@ -1608,9 +1650,8 @@ describe("preflight", () => {
     expect(j.steps.T2!.status).toBe("failed");
     expect(j.steps.T2!.error).toContain("abandoned");
     expect(await runRelease(["--target", f.targetFile, "--journal-root", f.journalRoot, "--abandon", "20261008T120000Z"], fakeDeps().deps, TINY)).toBe(2);
-    const b = fakeDeps();
-    b.deps.now = () => new Date("2026-10-08T12:00:01Z");
-    expect(await preflight(f, b.deps, [], TINY)).toBe(0);
+    // The abandoned run is no longer in flight, so a later run of the target is not blocked.
+    expect(runsInFlight(f.journalRoot, "stage")).toEqual([]);
     expect(parseArgs(["--target", "stage", "--abandon", "20261008T120000Z", "--go", "x"])).toHaveProperty("error");
     expect(parseArgs(["--target", "stage", "--abandon", "nope"])).toHaveProperty("error");
   });
@@ -1681,38 +1722,42 @@ describe("preflight", () => {
 
   test("SP.8: a stage run with an accepted step does not authorize production", () => {
     const j = journal();
-    j.steps["R7.3a"]!.status = "accepted";
+    j.steps["C16-log-verdict"]!.status = "accepted";
     const refusals = checkStageJournal(j, { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() });
     expect(refusals.join("\n")).toContain("accepted a failure");
-    expect(refusals.join("\n")).toContain("R7.3a");
+    expect(refusals.join("\n")).toContain("C16-log-verdict");
     expect(runStatus(j, stepIds())).toBe("passed");
   });
 
-  test("--after-preflight continues a run from a green preflight within the hour: same run stamp, R-steps carried, nothing repeated", async () => {
-    const f = fixture();
+  test("--after-preflight continues a run from a green preflight within the hour: same run stamp, preflight steps carried, nothing repeated", async () => {
     const BEFORE_AND_AFTER: StepTemplate[] = [...TINY.slice(0, 1), { ...TINY[1]!, receipts: [] }, TINY[2]!];
+    const f = await prodWithStage(BEFORE_AND_AFTER);
     const pre = fakeDeps();
     expect(await preflight(f, pre.deps, [], BEFORE_AND_AFTER)).toBe(0);
     expect(pre.ran).toEqual(["T1"]);
-    const preDir = join(f.journalRoot, "stage", "preflight-20261008T120000Z");
+    const preDir = join(f.journalRoot, "prod", "preflight-20261008T120000Z");
     const run = fakeDeps();
     run.deps.now = () => new Date("2026-10-08T12:30:00Z");
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--after-preflight", preDir], run.deps, BEFORE_AND_AFTER)).toBe(0);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", join(f.journalRoot, "stage", "20261008T120000Z"), "--after-preflight", preDir], run.deps, BEFORE_AND_AFTER)).toBe(0);
     expect(run.ran).toEqual(["T2", "T3"]);
-    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
     expect(j.runTs).toBe("20261008T120000Z");
     expect(j.status).toBe("passed");
     expect(j.steps.T1!.status).toBe("ok");
     expect(j.afterPreflight?.runTs).toBe("20261008T120000Z");
     // red controls: too old, another commit, another list, a red preflight.
     const rep = JSON.parse(readFileSync(join(preDir, "preflight.json"), "utf8")) as PreflightReport;
-    const exp = { target: "stage", commit: SHA, stepListHash: rep.stepListHash, stepIds: ["T1", "T2", "T3"] };
+    const exp = { target: "prod", commit: SHA, stepListHash: rep.stepListHash, stepIds: ["T1", "T2", "T3"], preflightIds: ["T1"] };
     expect(checkAfterPreflight(rep, exp, new Date("2026-10-08T12:59:00Z"))).toEqual([]);
     expect(checkAfterPreflight(rep, exp, new Date("2026-10-08T13:01:00Z")).join()).toContain("more than 60 min");
     expect(checkAfterPreflight(rep, { ...exp, commit: OTHER_SHA }, new Date("2026-10-08T12:30:00Z")).join()).toContain("the go names");
     expect(checkAfterPreflight(rep, { ...exp, stepListHash: "0".repeat(64) }, new Date("2026-10-08T12:30:00Z")).join()).toContain("step list");
     expect(checkAfterPreflight({ ...rep, checks: [{ id: "P.ci", status: "red", detail: "" }] }, exp, new Date("2026-10-08T12:30:00Z")).join()).toContain("not green: P.ci");
     expect(checkAfterPreflight(undefined, exp, new Date()).join()).toContain("no preflight.json");
+    // red control: a preflight that lacks one of the list's preflight steps does not carry the cutover.
+    const { T1: _t1, ...withoutT1 } = rep.steps;
+    expect(checkAfterPreflight({ ...rep, steps: withoutT1 }, exp, new Date("2026-10-08T12:30:00Z")).join()).toContain("preflight step T1 is missing");
+    expect(checkAfterPreflight({ ...rep, steps: { ...rep.steps, T1: { ...rep.steps.T1!, status: "failed" } } }, exp, new Date("2026-10-08T12:30:00Z")).join()).toContain("preflight step T1 is failed");
     const late = fakeDeps();
     late.deps.now = () => new Date("2026-10-08T14:00:00Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", join(f.dir, "j2"), "--after-preflight", preDir], late.deps, BEFORE_AND_AFTER)).toBe(2);
@@ -1720,10 +1765,10 @@ describe("preflight", () => {
     expect(parseArgs(["--target", "stage", "--after-preflight", "x", "--run", "20261008T000000Z"])).toHaveProperty("error");
   });
 
-  test("the cutover window is R6.3's start to R6.9's end, journaled once both passed", () => {
+  test("the cutover window is C05-migrate's start to C11-ready's end, journaled once both passed", () => {
     const ok = (startedAt: string, endedAt: string) => ({ id: "x", status: "ok" as const, exit: 0, expectExit: 0, startedAt, endedAt, receipts: [], attempt: 1 });
-    expect(cutoverSeconds({ steps: { "R6.3": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z"), "R6.9": ok("2026-10-08T12:02:26Z", "2026-10-08T12:02:29Z") } })).toBe(149);
-    expect(cutoverSeconds({ steps: { "R6.3": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z") } })).toBeUndefined();
+    expect(cutoverSeconds({ steps: { "C05-migrate": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z"), "C11-ready": ok("2026-10-08T12:02:26Z", "2026-10-08T12:02:29Z") } })).toBe(149);
+    expect(cutoverSeconds({ steps: { "C05-migrate": ok("2026-10-08T12:00:00Z", "2026-10-08T12:00:27Z") } })).toBeUndefined();
   });
 
   test("prod: P.stage is red without a passed stage run, green when one exists under the journal root", async () => {
@@ -1743,19 +1788,20 @@ describe("preflight", () => {
   });
 
   test("a preflight journal is never a stage run: SP.8 refuses it", async () => {
-    const s = fixture("stage");
-    expect(await preflight(s, fakeDeps({ receipt: "{}" }).deps, [], TINY)).toBe(0);
-    const f = fixture("prod");
+    const f = await prodWithStage(TINY);
+    expect(await preflight(f, fakeDeps({ receipt: "{}" }).deps, [], TINY)).toBe(0);
+    const preDir = join(f.journalRoot, "prod", "preflight-20261008T120000Z");
     const a = fakeDeps({ receipt: "{}" });
-    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "preflight-20261008T120000Z")], a.deps, TINY)).toBe(2);
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--stage-journal", preDir, "--after-preflight", preDir], a.deps, TINY)).toBe(2);
     expect(a.ran).toEqual([]);
+    expect(a.logs.join("\n")).toContain("SP.8");
   });
 
   test("--preflight and --dry-run are one flag; neither takes --run or --only", () => {
     expect(parseArgs(["--target", "stage", "--dry-run"])).toMatchObject({ preflight: true });
     expect(parseArgs(["--target", "stage", "--preflight"])).toMatchObject({ preflight: true });
     expect(parseArgs(["--target", "stage", "--preflight", "--run", "20261008T000000Z"])).toHaveProperty("error");
-    expect(parseArgs(["--target", "stage", "--preflight", "--only", "R1.2"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--preflight", "--only", "P02-identity"])).toHaveProperty("error");
   });
 
   test("ciProblems: green, a missing required workflow, a failure, a run still in progress", () => {

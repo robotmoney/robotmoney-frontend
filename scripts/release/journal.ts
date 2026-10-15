@@ -45,7 +45,7 @@ export interface StepRecord {
   error?: string;
   /** Why a step did not run on this target: `stage` for a prod-only step. */
   skipped?: string;
-  /** A baseline gate's failures accepted by the owner's triage file (R2.5). */
+  /** A baseline gate's failures accepted by the owner's triage file (P08-log-baseline). */
   triage?: { file: string; sha256: string; used: { check: string; fragment: string; reason: string }[] };
   /** The owner's recorded acceptance of this step's failure (`--accept`): why, the issue, and when. */
   accepted?: { reason: string; issue: number; at: string };
@@ -73,7 +73,7 @@ export interface RunJournal {
   stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string; tree?: string };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
-  /** R6.3's start to R6.9's end, once both passed: the cutover window. The website stays up through it (C9). */
+  /** C05-migrate's start to C11-ready's end, once both passed: the cutover window. The website stays up through it (C13-probe-grade). */
   cutoverSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };

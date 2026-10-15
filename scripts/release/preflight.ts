@@ -1,9 +1,10 @@
 // scripts/release/preflight.ts — `bun run release:run --preflight` (`--dry-run`
-// is the same flag): every check the run needs green, before the go.
+// is the same flag): production's gates, once per rc, before the cutover
+// (D70 as amended 2026-10-15). Stage has no preflight: its QA run is one run,
+// and the stage pass is what earns the rc this checks.
 //
-// A preflight changes nothing a running service uses, on any host, and needs
-// no go file. It reports each check green, red or pending, and exits 0 only
-// when none is red:
+// A preflight changes nothing a running service uses, on any host. It reports
+// each check green, red or pending, and exits 0 only when none is red:
 //
 //   local, on the control machine
 //     P.target     confirmTarget is filled in (the run refuses the placeholder)
@@ -11,36 +12,31 @@
 //     P.recovery   the release's runbook YAML records its recovery decision (SC.1)
 //     P.commit     the commit (the go's, else the control checkout's HEAD) is the
 //                  control checkout's clean HEAD, so the printed step list is that commit's
-//     P.origin     the commit is on a QA branch of the release line (stage) or on releases-A.B.x (prod) (D70)
+//     P.origin     the commit is on releases-A.B.x (D70)
 //     P.ci         CI on the commit: every check run completed and green, and each
-//                  required workflow present (runbook R0, standing SP.7)
-//     P.lockfile   stage only: a fresh resolve of the commit gives its committed
-//                  lockfiles (./lockfile.ts; every rc carries a new lockfile)
-//     P.stage      prod only: a passed stage journal of this step list on this
-//                  commit's tree exists (SP.8, D70). Its path is what --stage-journal takes
+//                  required workflow present (standing SP.7)
+//     P.stage      a passed stage journal of this step list on this commit's tree
+//                  exists (SP.8, D70). Its path is what --stage-journal takes
 //     P.live       the release checkout on each host is not the one a running
 //                  compose project was started from
-//     P.busy       no run of this target is in flight in the journal root: its
-//                  steps share the checkouts, the capture directory and the
-//                  restore container a preflight would use
+//     P.busy       no run of this target is in flight in the journal root
 //
-//   remote, the steps before the first irreversible one (R1.1 to R2.5)
-//     Each runs exactly as the run runs it, through ./step-exec.ts: the same
+//   remote, the preflight steps (phase `preflight`: P01-checkout to P08-log-baseline)
+//     Each runs exactly as the run would, through ./step-exec.ts: the same
 //     command, receipts, bound and triage rule. None stops a service or writes
-//     a database: a checkout and an install in the release checkout, a dump
-//     from the read replica into a new directory, a restore into a throwaway
-//     container, and read-only queries and log reads. A control-machine step
-//     (the rc tag push) is not run. The steps run lane by lane, a lane being
-//     one host and one checkout path: the target lane first, the capture lane
-//     with its 10 min dump last, so a red target step shows in seconds.
-//     Within a lane the run's order holds.
-//     After a failed step, the rest of its lane is reported blocked.
+//     a database: checkouts and installs in the release and capture checkouts,
+//     and read-only queries and log reads. The backup and its restore proof are
+//     cutover steps (C01-backup to C03-restore-proof), never a preflight's. The
+//     steps run lane by lane, a lane being one host and one checkout path: the
+//     target lane first. Within a lane the run's order holds. After a failed
+//     step, the rest of its lane is reported blocked.
 //
 // The journal is `<journal root>/<target>/preflight-<ts>/`: preflight.json
 // (the checks and every step's record), the full plan, and each step's logs
 // and receipts. It is never a run journal, so neither SP.8 nor a resume can
-// take it for one. A run started within an hour with `--after-preflight <dir>`
-// continues from it instead of repeating R1.1 to R2.5 (./run.ts).
+// take it for one. The cutover starts within 60 minutes with
+// `--after-preflight <dir>` and carries the preflight steps' records instead of
+// running them again (./run.ts); production's cutover refuses without one.
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { originProblems, type ResolvedGo } from "./go.ts";
@@ -80,13 +76,9 @@ export function ciProblems(lines: readonly string[]): string[] {
   return [...new Set(out)];
 }
 
-/**
- * The steps a preflight runs: every remote step before the first irreversible
- * one. PURE.
- */
+/** The steps a preflight runs: the preflight phase's. PURE. */
 export function preflightSteps(steps: readonly StepTemplate[]): StepTemplate[] {
-  const first = steps.findIndex((s) => s.irreversible);
-  return steps.slice(0, first < 0 ? steps.length : first).filter((s) => s.host !== "control");
+  return steps.filter((s) => s.phase === "preflight");
 }
 
 /** PURE. A step's lane: the host and the checkout path it runs in. */
@@ -136,7 +128,7 @@ export const PREFLIGHT_MAX_AGE_MS = 60 * 60_000;
 /** PURE. Every reason a run may not continue from this preflight. */
 export function checkAfterPreflight(
   report: PreflightReport | undefined,
-  expected: { target: string; commit: string; stepListHash: string; stepIds: readonly string[] },
+  expected: { target: string; commit: string; stepListHash: string; stepIds: readonly string[]; preflightIds?: readonly string[] },
   now: Date,
 ): string[] {
   if (report === undefined || report.kind !== "preflight") return ["no preflight.json was found there"];
@@ -148,7 +140,10 @@ export function checkAfterPreflight(
   if (!(age >= 0 && age <= PREFLIGHT_MAX_AGE_MS)) out.push(`the preflight ended ${report.at}, more than ${PREFLIGHT_MAX_AGE_MS / 60_000} min ago (policy 4.3: a fresh dump per run)`);
   const notGreen = report.checks.filter((c) => c.status === "red" || c.status === "blocked").map((c) => c.id);
   if (notGreen.length > 0) out.push(`the preflight was not green: ${notGreen.join(", ")}`);
+  // Every preflight step must be in it, ok: the cutover runs none of them again.
+  for (const id of expected.preflightIds ?? []) if (report.steps[id]?.status !== "ok") out.push(`preflight step ${id} is ${report.steps[id]?.status ?? "missing"}`);
   for (const id of expected.stepIds) {
+    if (expected.preflightIds?.includes(id)) continue;
     const r = report.steps[id];
     if (r === undefined) continue;
     if (r.status !== "ok" && r.status !== "skipped") out.push(`preflight step ${id} is ${r.status}`);
@@ -232,10 +227,6 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     else {
       const problems = ciProblems(lines(ci.stdout));
       add("P.ci", problems.length === 0 ? "green" : "red", problems.length === 0 ? `${lines(ci.stdout).length} check runs green, ${REQUIRED_CI.join(", ")} present` : problems.join("; "));
-    }
-    if (target.rmEnv === "stage") {
-      const lock = await deps.collect(CONTROL_HOST, inRepo(`bun scripts/release/lockfile.ts check ${commit} 2>&1`));
-      add("P.lockfile", lock.code === 0 ? "green" : "red", lock.code === 0 ? "every committed bun.lock equals a fresh resolve" : lock.stdout.trim() || "lockfile.ts check failed");
     }
     if (target.rmEnv === "prod") {
       const tree = (await deps.collect(CONTROL_HOST, inRepo(`git rev-parse ${commit}^{tree}`))).stdout.trim();

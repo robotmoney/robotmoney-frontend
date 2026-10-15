@@ -10,8 +10,8 @@
 // `check` on the control machine: it resolves the commit afresh in a throwaway
 // worktree and refuses when any lockfile differs, so the rc a stage run passes
 // carries the lockfile a fresh resolve gives. The hosts then install with
-// `--frozen-lockfile` (R1.3, R1.6): an install never rewrites the tree that
-// R1.2 proved clean. Production inherits the lockfile by tree equality (D70).
+// `--frozen-lockfile` (P03-install, P06-capture-install): an install never rewrites the tree that
+// P02-identity proved clean. Production inherits the lockfile by tree equality (D70).
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // scripts/release/tag.ts — the rc tag after a passed stage run, and release
-// step C1, run ON THE CONTROL MACHINE. Standing check SW.3 (C1). Policy §3 and
+// step C06-version-tag, run ON THE CONTROL MACHINE. Standing check SW.3 (C06-version-tag). Policy §3 and
 // D70: stage runs a QA commit; once it passes, the QA branch is squashed onto
 // the release branch and the rc is cut at the squash commit, whose tree must
 // be the tree stage passed; production runs only by that rc tag; the version
@@ -15,7 +15,7 @@
 // commit, it records that tag and changes nothing. Otherwise it tags the next
 // free N (0 when none exists) and pushes it. It is no step of the run.
 // final: if `<release>` exists it must point at the commit (anything else
-// refuses); otherwise it tags the commit and pushes it. C1 is a prod-only step
+// refuses); otherwise it tags the commit and pushes it. C06-version-tag is a prod-only step
 // (`onlyFor: "prod"`): a stage run records it skipped and tags nothing.
 import { spawnSync } from "node:child_process";
 import { originProblems } from "./go.ts";

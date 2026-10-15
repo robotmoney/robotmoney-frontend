@@ -1,4 +1,4 @@
-// The owner's triage of a baseline gate's failures (scripts/release/triage.ts, runbook R2.5).
+// The owner's triage of a baseline gate's failures (scripts/release/triage.ts, runbook P08-log-baseline).
 import { describe, expect, test } from "bun:test";
 import { RELEASE_STEPS } from "../../release/steps.ts";
 import { applyTriage, failedFindings, parseTriage } from "../../release/triage.ts";
@@ -67,7 +67,7 @@ describe("applying a triage to a gate report", () => {
 });
 
 describe("which steps read a triage", () => {
-  test("only R2.5, the baseline gate, is a triage step", () => {
-    expect(RELEASE_STEPS.filter((s) => s.triage).map((s) => s.id)).toEqual(["R2.5"]);
+  test("only P08-log-baseline, the baseline gate, is a triage step", () => {
+    expect(RELEASE_STEPS.filter((s) => s.triage).map((s) => s.id)).toEqual(["P08-log-baseline"]);
   });
 });
