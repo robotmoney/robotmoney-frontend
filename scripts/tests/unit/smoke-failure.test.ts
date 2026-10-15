@@ -2,7 +2,7 @@
 // split rule): which services a failed boot stops, what it recovers out of the
 // log as a cause, and that the pane says whether the database is still moving.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_WRITER_SERVICES, selectFailureDetail, writerQuiesceLine } from "../../lib/smoke-failure.ts";
@@ -43,9 +43,20 @@ describe("writerQuiesceLine — states whether the database stopped changing", (
   });
 
   test("every state renders a non-empty line (no silent gap in the report)", () => {
-    for (const w of ["stopped", "failed", "none"] as const) {
+    for (const w of ["stopped", "failed", "none", "kept"] as const) {
       expect(plain(writerQuiesceLine(w)).trim().length).toBeGreaterThan(0);
     }
+  });
+
+  test("a failed rolling boot keeps the serving stack running and says so", () => {
+    const line = plain(writerQuiesceLine("kept"));
+    expect(line).toContain("KEPT running");
+    expect(line).toContain("never stops the serving stack");
+  });
+
+  test("smoke-main never quiesces the writers of a rolling (--static-port) boot", () => {
+    const src = readFileSync(join(import.meta.dir, "../../lib/smoke-main.ts"), "utf8");
+    expect(src).toContain(`const writers = !dockerEnv ? "none" : staticPortMode ? "kept" : quiesceWriters();`);
   });
 });
 

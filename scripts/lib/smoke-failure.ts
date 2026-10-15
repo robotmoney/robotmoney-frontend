@@ -86,7 +86,8 @@ export function selectFailureDetail(logText: string, logFile: string): string[] 
 }
 
 /** Whether a failed boot stopped the database writers (DB_WRITER_SERVICES). */
-export type WriterQuiesce = "stopped" | "failed" | "none";
+/** `kept`: a rolling boot (--static-port) failed; the serving stack keeps running, because stopping the api takes the live site's API down. */
+export type WriterQuiesce = "stopped" | "failed" | "none" | "kept";
 
 /**
  * One line stating, plainly, whether the database is still being written to.
@@ -100,5 +101,6 @@ export function writerQuiesceLine(w: WriterQuiesce): string {
     case "stopped": return "database writers: stopped — nothing is still writing";
     case "none": return "database writers: none were running";
     case "failed": return "database writers: could NOT stop them — they may STILL be writing; run `bun smoke:down`";
+    case "kept": return "database writers: KEPT running — a rolling boot never stops the serving stack; the release runbook's recovery decides what follows";
   }
 }

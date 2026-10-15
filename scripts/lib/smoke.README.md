@@ -147,8 +147,7 @@ startup, against their own credential; `system-scheduler` and
 | Restart a local database from a saved volume | `bun smoke --local volume` |
 | Rehearse against a copy of real data, full committee | `bun smoke --local dump --credentials rehearsal-creds.json --spoof-keys` |
 | Bring up production | `bun smoke --static-port` |
-| Upgrade production's schema, additive release | `bun run migrate`, then `bun smoke --static-port` |
-| Upgrade production's schema, breaking release | `bun smoke:down`, `bun run migrate`, then `bun smoke --static-port` |
+| Upgrade production (a release) | `bun run release:run --target prod` (a rolling upgrade: additive migrations only, website never down; [release policy](../../docs/technical/release-runbooks.md) §4.7) |
 
 For the full design — the plan/lock/journal model, the schema snapshot,
 target enrollment, and every acceptance case — see the

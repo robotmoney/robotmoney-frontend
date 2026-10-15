@@ -63,7 +63,18 @@ describe("evaluateSessions", () => {
 
   test("a session open past --stuck-after fails; a young one is still in flight", () => {
     const rows = [good("1", "a"), good("2", "b"), good("3", "a", { state: "collecting", outcome: null, ageMin: 800 }), good("4", "b", { state: "collecting", outcome: null, ageMin: 5 })];
-    expect(evaluateSessions(rows, subjects, 8, opts).failures).toEqual(["session 3 (a) stuck in 'collecting' for 800 min"]);
+    expect(evaluateSessions(rows, subjects, 8, opts).failures).toEqual(["session 3 (a) stuck in 'collecting' for 800 min (no deadline stored)"]);
+  });
+
+  test("a session is graded against its own deadline, not its age (24 h epochs, migration 0117)", () => {
+    const o = { ...opts, stuckAfterMin: 120 };
+    // The dump of 2026-10-14: a 24 h epoch 23 h in, its window closing in an hour.
+    const healthy = good("3", "a", { state: "collecting", outcome: null, ageMin: 1380, overdueMin: -60 });
+    expect(evaluateSessions([good("1", "a"), good("2", "b"), healthy], subjects, 8, o).failures).toEqual([]);
+    const judging = good("4", "b", { state: "judging", outcome: null, ageMin: 1500, overdueMin: 30 });
+    expect(evaluateSessions([good("1", "a"), good("2", "b"), judging], subjects, 8, o).failures).toEqual([]);
+    const late = good("5", "a", { state: "window_closed", outcome: null, ageMin: 1600, overdueMin: 160 });
+    expect(evaluateSessions([good("1", "a"), good("2", "b"), late], subjects, 8, o).failures).toEqual(["session 5 (a) stuck in 'window_closed' 160 min past its deadline"]);
   });
 
   test("--sessions N counts good sessions across subjects", () => {

@@ -75,7 +75,7 @@ describe("bun run role-passwords", () => {
     expect(remote).toBe(
       `{ test -e ${STAGE.checkout}/.git || ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${STAGE.checkout}; } && ` +
         `cd ${STAGE.checkout} && ` +
-        `{ test -e node_modules -a -e backend/node_modules || { ${env} bun install --force && ${env} bun install --force --cwd backend; }; } && ` +
+        `{ test -e node_modules -a -e backend/node_modules || { ${env} bun install --frozen-lockfile && ${env} bun install --frozen-lockfile --cwd backend; }; } && ` +
         `${env} bun scripts/prod-init.ts role-passwords --instance stage_target --confirm-target 172.17.0.1:25060/defaultdb --doadmin-stdin ` +
         "--roles rm_owner,rm_app --rotate rm_app",
     );

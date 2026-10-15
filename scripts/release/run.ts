@@ -44,14 +44,15 @@ import {
   acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
-import { checkAfterPreflight, runPreflight, type PreflightReport } from "./preflight.ts";
+import { checkAfterPreflight, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, stepsFor, templateValues, type RenderedStep, type StepTemplate,
+  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
+import { loadReleaseRunbook } from "./runbook.ts";
 
-/** The step whose end is READY: the watch steps count their window from it, and W1 grades sessions since it. */
-const READY_STEP = "R6.9";
+/** The step whose end is READY: the watch steps count their window from it, and S07-soak-gate grades sessions since it. */
+const READY_STEP = "C11-ready";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
 export { receiptPathsInOutput, type RunnerDeps } from "./step-exec.ts";
@@ -128,7 +129,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
     `  target        ${target.name} (RM_ENV=${target.rmEnv}, instance ${target.instance})`,
     `  host          ${target.host}  checkout ${target.checkout}  HOME ${target.home}`,
     `  capture host  ${target.capture.host}  checkout ${target.capture.checkout}  HOME ${target.capture.home}`,
-    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (R6.1 stops it with bun run smoke:down)`,
+    `  running stack whatever ${target.host}'s smoke state names for instance ${target.instance} (the rolling boot replaces it one service at a time; website-server is kept)`,
     `  release       ${target.release} at ${commit}`,
     `  confirm       ${target.confirmTarget}`,
     `  step list     ${hash}`,
@@ -145,9 +146,10 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
 }
 
 /**
- * The whole run. Returns the process exit code. `stepList` is the generic
- * list; the release's delta steps (RELEASE_DELTAS) join it once the target
- * names the release.
+ * The whole run. Returns the process exit code. The steps are the release's
+ * own runbook (runbooks/releases/<release>.yaml, ./runbook.ts), which only
+ * adds to its template; a missing runbook or one that drops a template step
+ * refuses. `stepList` replaces it in tests.
  */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
   const args = parseArgs(argv);
@@ -159,7 +161,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let steps: readonly StepTemplate[];
   try {
     target = loadTarget(targetPath(args.target!));
-    steps = stepsFor(target.release, stepList);
+    steps = stepList ?? loadReleaseRunbook(target.release).steps;
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
@@ -229,6 +231,10 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const hash = stepListHash(steps);
   const root = args.journalRoot ?? journalRoot(deps.home);
   if (args.preflight) {
+    if (target.rmEnv !== "prod") {
+      deps.error(`[${NAME}] refusing --preflight on ${target.name}: a preflight is production's gate before its cutover. A stage run is QA: run it whole with --go (D70 as amended 2026-10-15).`);
+      return 2;
+    }
     return runPreflight({
       target, go, goPath: args.go, stageJournal: args.stageJournal ? resolve(args.stageJournal) : undefined, triage: args.triage,
       steps, ids, hash, root, runTs: runStamp(deps.now()), renderPlan: (c, r) => renderPlan(target, c, hash, r),
@@ -237,11 +243,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   if (go === undefined) return 2;
   const commit = go.commit;
 
-  // D64: the commit is on the release branch, whatever the go wrote (a tag resolves there too).
+  // D70: stage runs a QA branch commit; production the release branch's rc (a tag resolves there).
   const branches = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git fetch -q origin && git branch -r --contains ${commit}`);
-  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout) : [`git could not list the origin branches containing ${commit}`];
+  const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
   if (origin.length > 0) {
     deps.error(`[${NAME}] refusing: ${origin.join("; ")}.`);
+    return 2;
+  }
+  // The commit's tree: what SP.8 compares between the stage QA commit and the production squash commit (D70).
+  const tree = (await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && git rev-parse ${commit}^{tree}`)).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(tree)) {
+    deps.error(`[${NAME}] refusing: the tree of ${commit} cannot be read on the control machine.`);
     return 2;
   }
 
@@ -253,15 +265,22 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 2;
   }
 
+  // Production's cutover starts only from a green preflight of the same rc and step list, at most
+  // 60 minutes old (D70 as amended 2026-10-15). A resume of a run that did so (--run) needs none.
+  if (target.rmEnv === "prod" && args.afterPreflight === undefined && args.run === undefined) {
+    deps.error(`[${NAME}] refusing: production's cutover continues from a green preflight. Run --preflight --go <file> first, then --go <file> --after-preflight <its journal> within ${PREFLIGHT_MAX_AGE_MS / 60_000} minutes.`);
+    return 2;
+  }
+
   // A run within an hour of a green preflight continues from it: same run stamp,
-  // so every path the preflight's steps wrote ({runTs}) is this run's, and R1.1
-  // to R2.5 are its records. Policy 4.3 holds: the dump is this run's.
+  // so every path the preflight's steps wrote ({runTs}) is this run's, and P01-checkout
+  // to P08-log-baseline are its records. Policy 4.3 holds: the dump is this run's.
   let preflight: PreflightReport | undefined;
   if (args.afterPreflight !== undefined) {
     const path = join(resolve(args.afterPreflight), "preflight.json");
     const text = deps.readText(path);
     try { preflight = text === undefined ? undefined : JSON.parse(text) as PreflightReport; } catch { preflight = undefined; }
-    const refusals = checkAfterPreflight(preflight, { target: target.name, commit, stepListHash: hash, stepIds: ids }, deps.now());
+    const refusals = checkAfterPreflight(preflight, { target: target.name, commit, stepListHash: hash, stepIds: ids, preflightIds: preflightSteps(steps).map((s) => s.id) }, deps.now());
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing --after-preflight ${args.afterPreflight}:\n  - ${refusals.join("\n  - ")}`);
       return 2;
@@ -272,8 +291,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
-  // SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled.
-  const recovery = readRecovery(go, deps);
+  // SC.1: the recovery decision in the release's runbook YAML; its sha256 is journaled.
+  const recovery = readRecovery(target.release, deps);
   if ("error" in recovery) {
     deps.error(`[${NAME}] refusing: ${recovery.error}.`);
     return 2;
@@ -288,12 +307,12 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let stageRecord: RunJournal["stageJournal"];
   if (target.rmEnv === "prod") {
     const stage = args.stageJournal ? readJournal(resolve(args.stageJournal)) : undefined;
-    const refusals = checkStageJournal(stage, { stepListHash: hash, commit, stepIds: ids });
+    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids });
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
     }
-    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit };
+    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit, tree: stage!.tree };
   }
 
   const runDir = join(root, target.name, runTs);
@@ -337,10 +356,15 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
+  journal.tree = tree;
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
+  // The preflight steps a green preflight already ran are carried, never run again.
+  const carried = new Set(journal.afterPreflight === undefined ? [] : preflightSteps(steps).map((s) => s.id).filter((id) => journal.steps[id]?.status === "ok"));
+
   for (const id of selected) {
+    if (carried.has(id)) continue;
     const template = steps[ids.indexOf(id)]!;
     const stepDir = join(runDir, id);
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
@@ -408,9 +432,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   journal.status = runStatus(journal, ids);
-  journal.downtimeSeconds = downtimeSeconds(journal);
+  journal.cutoverSeconds = cutoverSeconds(journal);
   writeJournal(runDir, journal);
-  if (journal.downtimeSeconds !== undefined) deps.log(`[${NAME}] downtime window R6.1 to R6.9: ${journal.downtimeSeconds} s`);
+  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window C05-migrate to READY (C11-ready): ${journal.cutoverSeconds} s; the website stayed up (C13-probe-grade)`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
@@ -436,9 +460,12 @@ export function skipReason(step: StepTemplate, target: ReleaseTarget): string | 
   return undefined;
 }
 
-/** PURE. The downtime window: R6.1's start to R6.9's end, in seconds, once both are ok. */
-export function downtimeSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
-  const a = journal.steps["R6.1"];
+/** The cutover's first irreversible step: the migrate under the running release. */
+const CUTOVER_STEP = "C05-migrate";
+
+/** PURE. The cutover window: C05-migrate's start to READY (C11-ready's end), in seconds, once both are ok. The website stays up through it (C13-probe-grade). */
+export function cutoverSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
+  const a = journal.steps[CUTOVER_STEP];
   const b = journal.steps[READY_STEP];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);

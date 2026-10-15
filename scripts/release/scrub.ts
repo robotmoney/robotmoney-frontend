@@ -44,15 +44,26 @@ const URL_PASSWORD = /\b(postgres(?:ql)?:\/\/[^:\/\s@]+):[^@\s]+@/gi;
 const BEARER = /\b(Bearer)\s+[A-Za-z0-9._~+\/=-]+/gi;
 const AUTH_HEADER = /\b(Authorization)\s*:\s*\S.*$/gim;
 
+// An unquoted value that runs into the closing quote of the string around it,
+// as `"/s/tokens/x:/run/rm-token:ro"` in a docker inspect bind does. The quote
+// and any brackets after it are kept, or the scrubbed receipt is no longer
+// JSON (stage practice run 2026-10-14). A quote inside the value is not this
+// shape, and the whole value is still scrubbed.
+const CLOSING_QUOTE = /["'][\])]*$/;
+
 /** Scrub one block of text. Idempotent. */
 export function scrubSecrets(text: string): string {
   return text
     .replace(URL_PASSWORD, "$1:***@")
     .replace(BEARER, "$1 ***")
     .replace(AUTH_HEADER, "$1: ***")
-    .replace(KEY_VALUE, (_m, pre: string, q: string, key: string, sep: string, value: string) =>
-      value === "***" || value === '"***"' ? `${pre}${q}${key}${q}${sep}${value}` : `${pre}${q}${key}${q}${sep}${value.startsWith('"') ? '"***"' : "***"}`,
-    );
+    .replace(KEY_VALUE, (_m, pre: string, q: string, key: string, sep: string, value: string) => {
+      const head = `${pre}${q}${key}${q}${sep}`;
+      if (value === "***" || value === '"***"') return head + value;
+      if (value.startsWith('"') || value.startsWith("'")) return head + (value.startsWith('"') ? '"***"' : "***");
+      const close = CLOSING_QUOTE.exec(value)?.[0] ?? "";
+      return value.length > close.length ? `${head}***${close}` : head + value;
+    });
 }
 
 /**

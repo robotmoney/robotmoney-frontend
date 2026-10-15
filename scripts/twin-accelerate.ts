@@ -39,7 +39,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Buffer } from "node:buffer";
 import { ROUTES, path as routePath } from "@robotmoney/contract";
-import { resolveGateStack } from "./lib/gate/stack.ts";
+import { resolveGateStack, liveApiBase } from "./lib/gate/stack.ts";
 import { serviceContainer, sh } from "./lib/gate/io.ts";
 import { readServiceToken } from "./lib/smoke-secret.ts";
 
@@ -126,7 +126,11 @@ async function main(argv: string[]): Promise<number> {
   }
   const twin = stack.record.smokeTwinContainer;
   if (!twin) { console.error(`[${NAME}] Refusing: the stack record names no smoke-twin container.`); return 2; }
-  const base = `http://127.0.0.1:${stack.record.apiPort}`;
+  let base: string;
+  try { base = liveApiBase(stack); } catch (err) {
+    console.error(`[${NAME}] ${(err as Error).message}`);
+    return 2;
+  }
   const token = readServiceToken(stack.paths, "operator");
   const headers = { "X-Automation-Token": token };
 

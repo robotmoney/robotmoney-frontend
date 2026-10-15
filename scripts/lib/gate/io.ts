@@ -65,6 +65,31 @@ export function serviceContainer(project: string, service: string): string | nul
   return r.out.split("\n").filter(Boolean)[0] ?? null;
 }
 
+/**
+ * PURE. The host port `docker port <container> <port>/tcp` prints, or null.
+ * Docker prints one line per address family (`0.0.0.0:32977`, `[::]:32977`);
+ * every published line names the same port.
+ */
+export function parseDockerPort(out: string): number | null {
+  for (const line of out.split("\n")) {
+    const m = /:(\d+)\s*$/.exec(line.trim());
+    if (m) return Number(m[1]);
+  }
+  return null;
+}
+
+/**
+ * The host port a container publishes for `containerPort`, asked of the daemon
+ * now. The stack record's ports are history (scripts/lib/smoke-state.ts): a
+ * restarted container is given a NEW ephemeral host port, so a tool that trusts
+ * the record after an api restart talks to nothing (stage QA run of 2026-10-15:
+ * the api restarted twice, its port moved from 32975 to 32977, and the soak's
+ * /health check read "unreachable" from a healthy api).
+ */
+export function liveHostPort(container: string, containerPort: number): number | null {
+  return parseDockerPort(sh(["docker", "port", container, `${containerPort}/tcp`]).out);
+}
+
 /** `docker logs --timestamps --since` as raw lines (stdout and stderr), timestamp split off. */
 export function containerLogs(name: string, since: string): RawLine[] {
   return sh(["docker", "logs", "--timestamps", "--since", since, name]).out.split("\n").filter(Boolean).map((l) => {

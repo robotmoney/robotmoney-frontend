@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/schedule-parity.ts — release step R7.4a, run ON THE TARGET HOST
+// scripts/release/schedule-parity.ts — release step V01-subject-spacing, run ON THE TARGET HOST
 // the watch length after READY (./watch.ts). Owner rule (v0-6-0-rollout.md section 0): an
 // upgrade does not change usual schedules.
 //
@@ -10,7 +10,7 @@
 //   1. every active subject reads epoch_duration_seconds = 86400 (owner decision 2026-10-09),
 //      and the four production subjects' epoch_anchor times of day are exactly
 //      21600 s apart in the order vault, woon, allocation, treasury (migration 0121);
-//   2. every session in flight at R2.3 (baseline.json `inFlight`) published,
+//   2. every session in flight at P07-baseline (baseline.json `inFlight`) published,
 //      its window close unmoved, within its judging duration plus a grace
 //      after that close;
 //   3. the regime run lands at :30 (the analytics-producer container's
@@ -201,7 +201,7 @@ async function main(): Promise<number> {
   try {
     baseline = (JSON.parse(readFileSync(join(releaseStateDir(instance, run), "baseline.json"), "utf8")) as { inFlight?: BaselineSession[] }).inFlight ?? [];
   } catch (error) {
-    console.error(`[schedule-parity] REFUSE: no R2.3 baseline for run ${run} (${error instanceof Error ? error.message : String(error)})`);
+    console.error(`[schedule-parity] REFUSE: no P07-baseline baseline for run ${run} (${error instanceof Error ? error.message : String(error)})`);
     return 1;
   }
   const safeIds = baseline.map((b) => b.id).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
@@ -248,9 +248,9 @@ async function main(): Promise<number> {
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "schedule-parity.json");
   writeFileSync(file, `${JSON.stringify({
-    step: "R7.4a", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
+    step: "V01-subject-spacing", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 });
-  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at R2.3 (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
+  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at P07-baseline (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
   console.log(`[schedule-parity] receipt: ${file}`);
   for (const p of problems) console.error(`[schedule-parity] FAIL: ${p}`);
   return problems.length === 0 ? 0 : 1;

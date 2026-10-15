@@ -108,6 +108,8 @@ describe("1. no runtime module reads RM_ENV (issue #973)", () => {
 describe("2. RM_ALLOW_INSECURE, config.env and allowInsecure exist nowhere a process, compose file or workflow reads", () => {
   /** The one refusal that names the retired variable so a stale shell export is explained, not ignored. */
   const NAMING_REFUSAL = ["scripts/stack/config.ts"];
+  /** v0.6.2's version check V09-rm-env-retired names the retired variables to prove no running container holds them. */
+  const RETIREMENT_PROOF = ["scripts/release/version-checks/v0.6.2/rm-env-retired.ts"];
 
   test("backend/src, backend/scripts and scripts/ (tests excluded) mention none of them", () => {
     const files = [
@@ -115,7 +117,7 @@ describe("2. RM_ALLOW_INSECURE, config.env and allowInsecure exist nowhere a pro
       ...walk(join(repoRoot, "backend", "scripts"), isTs),
       ...walk(join(repoRoot, "scripts"), isTs).filter((f) => !f.includes(`${join("scripts", "tests")}/`)),
     ];
-    expect(hits(files, retiredMentions, NAMING_REFUSAL)).toEqual([]);
+    expect(hits(files, retiredMentions, [...NAMING_REFUSAL, ...RETIREMENT_PROOF])).toEqual([]);
     // The refusal is the only thing that file says about it.
     const config = readFileSync(join(repoRoot, "scripts", "stack", "config.ts"), "utf8");
     expect(retiredMentions(config)).toEqual(["RM_ALLOW_INSECURE", "RM_ALLOW_INSECURE"]);
@@ -144,6 +146,7 @@ describe("2. RM_ALLOW_INSECURE, config.env and allowInsecure exist nowhere a pro
       "scripts/tests/unit/smoke-compose-env.test.ts", // proves the compose env has no such key
       "scripts/tests/integration/smoke-compose-config.test.ts", // proves no service receives it
       "scripts/tests/integration/smoke-stage-vs-production-identity.test.ts", // names the retired flag as absent
+      "scripts/tests/unit/version-checks-v062-b.test.ts", // V09-rm-env-retired's red control plants the retired names in a container env
       relative(repoRoot, import.meta.path),
     ];
     expect(hits(files, retiredMentions, allow)).toEqual([]);
