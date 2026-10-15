@@ -2,7 +2,8 @@
 // The stage target: a production-shaped target on stage-2 for unmodified
 // rehearsals (D61 rule 2, docs/runbooks/stage-target.md).
 //
-//   bun scripts/release/stage-target.ts up --dump <dir on stage-2> [--replace]
+//   bun scripts/release/stage-target.ts dump      (S0: reuse the newest dump at most 24 h old, else capture one)
+//   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down
 //   bun scripts/release/stage-target.ts doadmin   (stage only: a fresh doadmin password on stdout, for a pipe)
@@ -34,12 +35,12 @@
 //      running, as on production. The release checkout is not made here: R1.1
 //      clones it.
 //
-// doadmin is stored in no file (D61, owner 2026-10-08). After `up`, the stage
-// sequence is production's: `up`, then
+// doadmin is stored in no file (D61, owner 2026-10-08). The stage sequence is
+// the release runbook's own first steps (S0 `dump`, S1 `up --dump newest`, S2
 //
 //   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
 //
-// then `release:run`. `doadmin` gives the stage doadmin a fresh password
+// ), run by `release:run --target stage --until S2`. `doadmin` gives the stage doadmin a fresh password
 // through the container's local superuser socket and prints it to stdout, for
 // that pipe and nothing else. It exists because this is a disposable stage
 // database; production has no such command (its doadmin is typed by the admin).
@@ -68,6 +69,7 @@ import {
   grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
+  newestFreshDump,
   LEDGER_TABLE_SQL,
   parseKeyValues,
   parseRunningVersion,
@@ -491,10 +493,49 @@ function servedVersion(): string {
   return run(["curl", "-s", "--max-time", "5", `http://127.0.0.1:${T.webPort}/api/version`]).stdout.trim() || "(no answer)";
 }
 
+/** The production dumps on this host, with the `capturedAt` their manifests carry. */
+function listDumps(): { dir: string; capturedAt?: string }[] {
+  const home = process.env.HOME ?? "";
+  const out: { dir: string; capturedAt?: string }[] = [];
+  for (const name of readdirSync(home)) {
+    if (!name.startsWith("rm-backup-prod-")) continue;
+    const dir = join(home, name);
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as { capturedAt?: string };
+      out.push({ dir, capturedAt: manifest.capturedAt });
+    } catch {
+      out.push({ dir });
+    }
+  }
+  return out;
+}
+
+/**
+ * S0 (SR.0, owner 2026-10-08): the newest production dump on this host that is
+ * at most 24 hours old, else a new capture from production's read replica by the
+ * capture checkout (the same `bun smoke:capture` R2.1 runs). Never a stale dump.
+ */
+async function remoteDump(): Promise<number> {
+  const fresh = newestFreshDump(listDumps(), new Date());
+  if (fresh) {
+    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old`);
+    return 0;
+  }
+  const checkout = CAPTURE_CHECKOUT.checkout;
+  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`no dump is at most ${T.maxDumpAgeHours} h old, and the capture checkout ${checkout} is absent: clone it, then run this again`);
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const out = join(process.env.HOME ?? "", `rm-backup-prod-${stamp}`);
+  log(`no dump is at most ${T.maxDumpAgeHours} h old: capturing ${out} from production's read replica`);
+  await stream(["bun", "run", "smoke:capture", "--out", out], "smoke:capture", { cwd: checkout, env: { RM_ENV: "stage" } });
+  return 0;
+}
+
 async function remoteUp(args: string[]): Promise<number> {
   const dumpIdx = args.indexOf("--dump");
-  const dumpDir = dumpIdx >= 0 ? args[dumpIdx + 1] : undefined;
-  if (!dumpDir) throw new Refusal("up needs --dump <dir on the stage host>");
+  const dumpArg = dumpIdx >= 0 ? args[dumpIdx + 1] : undefined;
+  if (!dumpArg) throw new Refusal("up needs --dump <dir on the stage host | newest>");
+  const dumpDir = dumpArg === "newest" ? newestFreshDump(listDumps(), new Date()) : dumpArg;
+  if (!dumpDir) throw new Refusal(`--dump newest: no dump on this host is at most ${T.maxDumpAgeHours} h old; run \`stage-target dump\` first (S0)`);
   const replace = args.includes("--replace");
   const backup = readDumpPreflight(dumpDir);
   const running = await readRunningVersion();
@@ -692,13 +733,14 @@ async function control(command: string, args: string[]): Promise<number> {
   return await p.exited;
 }
 
-const USAGE = `usage: bun scripts/release/stage-target.ts up --dump <dir on ${T.host}> [--replace] | status | down | doadmin`;
+const USAGE = `usage: bun scripts/release/stage-target.ts dump | up --dump <dir on ${T.host} | newest> [--replace] | status | down | doadmin`;
 
 async function main(argv: string[]): Promise<number> {
   const [first, ...rest] = argv;
   try {
     if (first === "remote") {
       const [command, ...args] = rest;
+      if (command === "dump") return await remoteDump();
       if (command === "up") return await remoteUp(args);
       if (command === "down") return await remoteDown();
       if (command === "status") return await remoteStatus();
@@ -706,7 +748,7 @@ async function main(argv: string[]): Promise<number> {
       console.error(USAGE);
       return 2;
     }
-    if (first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
+    if (first === "dump" || first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
     console.error(USAGE);
     return 2;
   } catch (e) {

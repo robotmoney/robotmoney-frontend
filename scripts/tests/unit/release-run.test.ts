@@ -35,9 +35,10 @@ import { checkResume, checkStageJournal, runStatus, selectSteps, type RunJournal
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
-import { STAGE_TARGET } from "../../release/stage-target-lib.ts";
+import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
-import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, type PreflightReport } from "../../release/preflight.ts";
+import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
+import type { ReleaseTarget } from "../../release/target.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
 import { cutoverSeconds, skipReason } from "../../release/run.ts";
 import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
@@ -334,7 +335,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
     expect(tags).toEqual(["C1"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["C0", "C1", "C9"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["S0", "S1", "S2", "C0", "C1", "C9"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
     const unmarked = RELEASE_STEPS.map((s) => (s.id === "C1" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
@@ -1027,6 +1028,82 @@ describe("host guards, the rolling cutover and identity (R6.3, R7.1, R7.7)", () 
   });
 });
 
+// ── stage preparation: S0 to S2 are steps of the runbook, run by `--until S2` ──
+const PREPARED: StepTemplate[] = [
+  { id: "S0", standing: [], description: "dump", host: "control", onlyFor: "stage", cmds: [["echo", "S0"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "S1", standing: [], description: "up", host: "control", onlyFor: "stage", cmds: [["echo", "S1"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "R1.1", standing: [], description: "checkout", host: "target", cmds: [["echo", "R1.1"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "R1.2", standing: [], description: "identity", host: "target", cmds: [["echo", "R1.2"]], expectExit: 0, receipts: [], irreversible: false },
+];
+
+describe("stage preparation is part of the runbook (S0 to S2)", () => {
+  test("the template leads with the stage-only preparation, and every release copy carries it", () => {
+    const ids = stepIds();
+    expect(ids.slice(0, 4)).toEqual(["S0", "S1", "S2", "R1.1"]);
+    const prep = RELEASE_STEPS.filter((s) => s.id.startsWith("S"));
+    expect(prep.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["S0", "control", "stage"], ["S1", "control", "stage"], ["S2", "control", "stage"]]);
+    expect(prep.flatMap((s) => s.standing)).toEqual(["SR.0", "SR.0", "SR.1"]);
+    expect(prep.every((s) => s.irreversible === false && s.expectExit === 0)).toBe(true);
+  });
+
+  test("production skips them, stage runs them, and the hash is the same for both", () => {
+    const s0 = RELEASE_STEPS.find((s) => s.id === "S0")!;
+    expect(skipReason(s0, { rmEnv: "prod" } as ReleaseTarget)).toBe("prod");
+    expect(skipReason(s0, { rmEnv: "stage" } as ReleaseTarget)).toBeUndefined();
+    // red control: onlyFor is part of the hash, so dropping it from the list changes it.
+    expect(stepListHash(RELEASE_STEPS.map((s) => (s.id === "S0" ? { ...s, onlyFor: undefined } : s)))).not.toBe(stepListHash());
+  });
+
+  test("--until stops after a step, leaves the run incomplete and resumable, and --run continues at the next step", async () => {
+    const f = fixture("stage");
+    const first = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--until", "S1"], first.deps, PREPARED)).toBe(0);
+    expect(first.ran).toEqual(["S0", "S1"]);
+    expect(first.logs.join("\n")).toContain("stopped after S1 as asked");
+    expect(first.logs.join("\n")).toContain("--from R1.1");
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.status).toBe("incomplete");
+    expect(runsInFlight(f.journalRoot, "stage")).toEqual([]);
+    const rest = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], rest.deps, PREPARED)).toBe(0);
+    expect(rest.ran).toEqual(["R1.1", "R1.2"]);
+    const done = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(done.status).toBe("passed");
+  });
+
+  test("--until: production still refuses without a passed stage journal (SP.8); a step not in the list refuses; it takes no --only or --preflight", async () => {
+    const p = fixture("prod");
+    const skipped = fakeDeps();
+    const argv = ["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--until", "S1", "--stage-journal", "/nonexistent"];
+    // production still needs a passed stage journal (SP.8): the refusal comes before any step.
+    expect(await runRelease(argv, skipped.deps, PREPARED)).toBe(2);
+    expect(skipped.ran).toEqual([]);
+    const f = fixture("stage");
+    const bad = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--until", "NOPE"], bad.deps, PREPARED)).toBe(2);
+    expect(bad.logs.join("\n")).toContain("--until NOPE: no such step");
+    expect(parseArgs(["--target", "stage", "--until", "S2", "--only", "S0"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--until", "S2", "--preflight"])).toHaveProperty("error");
+    expect(parseArgs(["--target", "stage", "--until", "S2", "--go", "g.txt"])).toMatchObject({ until: "S2" });
+  });
+});
+
+describe("stage's starting dump (SR.0): the newest one at most 24 h old", () => {
+  const now = new Date("2026-10-15T20:00:00Z");
+  const d = (dir: string, capturedAt?: string) => ({ dir, capturedAt });
+  test("picks the newest fresh dump, never a stale or undated one", () => {
+    expect(newestFreshDump([d("a", "2026-10-15T01:00:00Z"), d("b", "2026-10-15T19:13:00Z"), d("c", "2026-10-14T15:18:00Z")], now)).toBe("b");
+    expect(newestFreshDump([d("a", "2026-10-14T15:18:00Z")], now)).toBeNull();
+    expect(newestFreshDump([d("a"), d("b", "not a date")], now)).toBeNull();
+    expect(newestFreshDump([], now)).toBeNull();
+  });
+  test("red: the 24 h edge, and a dump dated in the future, do not slip through", () => {
+    expect(newestFreshDump([d("edge", "2026-10-14T20:00:00Z")], now)).toBe("edge");
+    expect(newestFreshDump([d("old", "2026-10-14T19:59:59Z")], now)).toBeNull();
+    expect(newestFreshDump([d("future", "2026-10-15T21:00:00Z")], now)).toBeNull();
+  });
+});
+
 // ── the scripted watch, tags, recovery and the host guard ─────────────────────
 const WATCHED: StepTemplate[] = [
   { id: "R6.9", standing: [], description: "ready", host: "target", cmds: [["echo", "ready"]], expectExit: 0, receipts: [], irreversible: false },
@@ -1267,9 +1344,11 @@ describe("the cutover's ~/.env keys are proven at R1.2, before the first irrever
 
   test("no release step reads doadmin, and R6.2b (enable-owner-login) is gone", () => {
     expect(stepIds()).not.toContain("R6.2b");
-    for (const s of RELEASE_STEPS) {
+    // Stage's own preparation (S2) sets the stage database's roles through its disposable doadmin; production skips it.
+    for (const s of RELEASE_STEPS.filter((x) => x.onlyFor !== "stage")) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/doadmin|enable-owner-login|role-passwords/);
     }
+    expect(RELEASE_STEPS.filter((s) => s.cmds.some((c) => /doadmin|role-passwords/.test(c.join(" ")))).map((s) => [s.id, s.onlyFor])).toEqual([["S2", "stage"]]);
     const ids = stepIds();
     for (const [key, writer] of Object.entries(RUN_WRITTEN_KEYS)) expect(ids, key).toContain(writer);
   });

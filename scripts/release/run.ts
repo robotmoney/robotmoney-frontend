@@ -67,6 +67,8 @@ export interface RunArgs {
   preflight: boolean;
   from?: string;
   only?: string;
+  /** Stop after this step passed; the run stays resumable (`--run`). Stage's preparation ends at S2. */
+  until?: string;
   run?: string;
   stageJournal?: string;
   journalRoot?: string;
@@ -84,7 +86,7 @@ export interface RunArgs {
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
   const out: RunArgs = { preflight: false };
   const valued: Record<string, keyof RunArgs> = {
-    "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--run": "run",
+    "--target": "target", "--go": "go", "--from": "from", "--only": "only", "--until": "until", "--run": "run",
     "--stage-journal": "stageJournal", "--journal-root": "journalRoot", "--triage": "triage",
     "--after-preflight": "afterPreflight", "--abandon": "abandon", "--accept": "accept", "--reason": "reason", "--issue": "issue",
   };
@@ -103,6 +105,7 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   if (out.from !== undefined && out.run === undefined) return { error: "--from resumes a run: name it with --run <run-ts> (the failed run prints the command)" };
   if (out.from !== undefined && out.only !== undefined) return { error: "--from and --only cannot be combined" };
   if (out.preflight && (out.run !== undefined || out.only !== undefined)) return { error: "--preflight checks a run before it starts: it takes no --run, --from or --only" };
+  if (out.until !== undefined && (out.only !== undefined || out.preflight || out.afterPreflight !== undefined || out.abandon !== undefined || out.accept !== undefined)) return { error: "--until stops a run after a step: it takes only --target, --go, --run, --from and --stage-journal" };
   if (out.afterPreflight !== undefined && (out.run !== undefined || out.only !== undefined || out.preflight)) return { error: "--after-preflight starts a new run from a green preflight: it takes no --run, --from, --only or --preflight" };
   if (out.abandon !== undefined && !RUN_TS_RE.test(out.abandon)) return { error: `--abandon takes a run stamp like 20261008T142233Z, got "${out.abandon}"` };
   if (out.abandon !== undefined && (out.go !== undefined || out.run !== undefined || out.preflight || out.afterPreflight !== undefined)) return { error: "--abandon takes only --target and the run stamp" };
@@ -277,6 +280,10 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   const runTs = args.run ?? preflight?.runTs ?? runStamp(deps.now());
   const values = templateValues(target, commit, runTs, READY_PENDING, go.ref);
+  if (args.until !== undefined && !ids.includes(args.until)) {
+    deps.error(`[${NAME}] --until ${args.until}: no such step (steps: ${ids.join(", ")})`);
+    return 2;
+  }
   const rendered = steps.map((s) => renderStep(s, target, values));
   deps.log(renderPlan(target, commit, hash, rendered));
 
@@ -349,6 +356,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
+  // `--until <step>`: stop once that step is ok or skipped. The journal reads incomplete, not running,
+  // so the preflight's P.busy lets a check through; `--run` continues at the next step.
+  const stopAfter = (id: string): number => {
+    journal.status = runStatus(journal, ids);
+    writeJournal(runDir, journal);
+    const next = ids[ids.indexOf(id) + 1];
+    deps.log(`\n[${NAME}] stopped after ${id} as asked (--until). Run ${runTs} is ${journal.status}.`);
+    if (next !== undefined) deps.log(`[${NAME}] continue with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: next, stageJournal: args.stageJournal })}`);
+    return 0;
+  };
+
   for (const id of selected) {
     const template = steps[ids.indexOf(id)]!;
     const stepDir = join(runDir, id);
@@ -366,6 +384,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       journal.status = runStatus(journal, ids);
       writeJournal(runDir, journal);
       deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
+      if (args.until === id) return stopAfter(id);
       continue;
     }
 
@@ -414,6 +433,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 1;
     }
     deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);
+    if (args.until === id) return stopAfter(id);
   }
 
   journal.status = runStatus(journal, ids);

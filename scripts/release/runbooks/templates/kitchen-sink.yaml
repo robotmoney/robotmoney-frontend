@@ -15,6 +15,43 @@
 # (docs/technical/release-runbooks.md §9).
 template: kitchen-sink
 steps:
+  # ── S stage preparation: stage only, run by `--until S2` before the preflight ─
+  # Stage rebuilds its target from a production dump (SR.0). Production skips
+  # these steps: it takes its own backup (R2.1) and holds its own credentials.
+  - id: "S0"
+    standing: ["SR.0"]
+    host: "control"
+    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "dump"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "S1"
+    standing: ["SR.0"]
+    host: "control"
+    description: "Stage target: replace it with a production-shaped copy restored from that dump, running the version production runs (the running tag, its ledger, its grants); the release checkout is made by R1.1"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 60
+  - id: "S2"
+    standing: ["SR.1"]
+    host: "control"
+    description: "Stage's role passwords: the stage database sets its own doadmin password and role-passwords writes the roles' passwords to the stage host's ~/.env, so the rest of the list reads stage exactly as it reads production (doadmin stays in no file)"
+    cmds:
+      - ["bash", "-c", "set -o pipefail && bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target {target} --doadmin-stdin"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 10
+
   # ── R1 release identity, on both hosts ────────────────────────────────────
   - id: "R1.1"
     standing: ["SP.1"]

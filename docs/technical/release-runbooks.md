@@ -131,7 +131,8 @@ restores it into a throwaway container and records the restore time.
 
 **Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
 from the newest production dump already on the capture host if it is at most 24 hours old
-(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
+(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`). Step S0
+does this; step S1 restores the dump it left.
 Never restore a dump older than 24 hours. Never point rehearsal preparation at the production
 database.
 
@@ -142,9 +143,16 @@ against the production-shaped stage target ([stage-target.md](../runbooks/stage-
 remote Postgres restored from a production dump, with the previous release running against it the
 way production runs it. The stage sequence:
 
-1. `bun scripts/release/stage-target.ts up --dump <dir>`;
-2. `bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin`;
-3. `bun run release:run --target stage --preflight`, then `--go <stage go>`.
+1. `bun run release:run --target stage --go <stage go> --until S2`: S0 picks or captures the dump, S1
+   rebuilds the target from it, S2 sets the role passwords through the stage database
+   (doadmin is a disposable stage credential, passed on a pipe and stored in no file; the D61
+   rule on doadmin is production's);
+2. `bun run release:run --target stage --preflight --go <stage go>`;
+3. `bun run release:run --target stage --go <stage go> --run <the run stamp step 1 printed>`.
+
+Steps S0 to S2 are `onlyFor: stage`: production records them skipped, and the step-list hash is the
+same for both (SP.8). `--until <step>` stops a run after that step passed, leaves it incomplete and
+resumable, and prints the command that continues it.
 
 Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
 `bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
@@ -297,7 +305,8 @@ recorded owner decision.
 | SP.6 | Product baseline: row counts and database size | R2.3 |
 | SP.7 | CI green on the commit | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
-| SR.0 | Stage's starting dump at most 24 hours old | `stage-target up` |
+| SR.0 | Stage's starting dump at most 24 hours old | S0, S1 |
+| SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | S2 |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
 | SC.3 | The operator's go is recorded before the run | `--go` |
 | SC.4 | The website never goes down: every probe answer 200, no gap | C0, C9 |

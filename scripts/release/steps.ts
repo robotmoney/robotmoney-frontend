@@ -77,11 +77,13 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. Only the release tag (W3) uses it: a stage run tags nothing. The
-   * rc is no step (D64): it is cut after the stage run passes, before the
-   * production go names it (`bun scripts/release/tag.ts rc`).
+   * target. The release tag (W3) is prod's: a stage run tags nothing. The rc is
+   * no step (D64): it is cut after the stage run passes, before the production
+   * go names it (`bun scripts/release/tag.ts rc`). Stage's preparation (S0 to
+   * S2: the dump, the target, its role passwords) is stage's: production has
+   * its own backup and credentials, so it skips them.
    */
-  readonly onlyFor?: "prod";
+  readonly onlyFor?: "prod" | "stage";
   /**
    * The step may not start before `afterStep` ended plus `hours`. The runner
    * stops there, prints when it becomes runnable, and `--run <ts>` resumes it.
@@ -226,7 +228,7 @@ export interface RenderedStep {
   /** The marker file the step touches first; receipts newer than it are this step's. */
   readonly marker: string;
   readonly receipts: readonly ReceiptSpec[];
-  readonly onlyFor?: "prod";
+  readonly onlyFor?: "prod" | "stage";
   readonly notBefore?: NotBefore;
   readonly maxMillis: number;
 }
