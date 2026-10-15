@@ -586,8 +586,41 @@ describe("main() executed against a stub API", () => {
     await Bun.sleep(300);
     expect(child.exitCode).toBeNull();
 
+    // Steady state (issue 1378): the clock is running its reconnect loop; a
+    // stop ends its timers and exits 0.
     child.kill("SIGTERM");
     expect(await child.exited).toBe(0);
+  }, 30_000);
+
+  // Issue 1378: the handler used to be registered only after the startup probe
+  // and runtime.start(), so a `docker stop` while the probe still waited on
+  // the api was ignored and the container was SIGKILLed (exit 137). The stub
+  // below never answers, so the probe is still in flight when the signal lands.
+  test("SIGTERM during startup, with the probe still waiting on the API, exits 0", async () => {
+    let probed!: () => void;
+    const probing = new Promise<void>((resolve) => { probed = resolve; });
+    const stub = Bun.serve({
+      port: 0,
+      fetch() {
+        probed();
+        return new Promise<Response>(() => {}); // never answers
+      },
+    });
+    cleanups.push(() => stub.stop(true));
+
+    const child = spawnScheduler({
+      SCHEDULER_API_URL: `http://127.0.0.1:${stub.port}`,
+      SCHEDULER_TOKEN_FILE: tokenFile("rmat_fine"),
+      SCHEDULER_HEALTH_PORT: "0",
+    });
+    const stdout = watchStdout(child.stdout);
+    await stdout.waitFor(/health on :(\d+)\/health/);
+    await probing;
+    expect(child.exitCode).toBeNull();
+
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(0);
+    await stdout.waitFor(/SIGTERM: stopping/);
   }, 30_000);
 
   test("a missing token file exits 2 before serving anything, naming the file", async () => {

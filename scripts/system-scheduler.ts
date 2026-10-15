@@ -142,6 +142,21 @@ export async function main(env: Record<string, string | undefined> = process.env
   const health = serveHealth(cfg.healthPort, () => clock.health);
   log(`health on :${health.port}/health`);
 
+  // SIGNALS BEFORE ANYTHING CAN BLOCK (issue 1378). The handler used to be
+  // registered only after the startup probe and runtime.start(), so a
+  // `docker stop` during a boot that was still waiting on the api was ignored
+  // and the container was SIGKILLed (exit 137). Registered here, a stop in
+  // startup or in steady state stops the clock's timers, the stream and the
+  // health surface, and exits 0. runtime.stop() is safe before start().
+  const shutdown = (signal: string): void => {
+    log(`${signal}: stopping`);
+    runtime.stop();
+    health.stop();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+
   // ───────────────────────────────────────────────────────────────────────────
   // The startup check, and why its two failures end differently
   // ───────────────────────────────────────────────────────────────────────────
@@ -183,15 +198,6 @@ export async function main(env: Record<string, string | undefined> = process.env
   // scheduler does follows from an event or a timer; there is no ad-hoc job
   // kind for the API to push, ack or redeliver."
   await runtime.start();
-
-  const shutdown = (signal: string): void => {
-    log(`${signal}: stopping`);
-    runtime.stop();
-    health.stop();
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
 
   // Nothing further. The process is now driven by its timers and its socket.
   await new Promise<void>(() => {});

@@ -44,6 +44,7 @@ import { join } from "node:path";
 import {
   assertNoDockerSocket,
   defaultDockerSocketProbes,
+  diagnoseUntilAnswered,
   mountPointsOf,
   pollForWork,
   readParticipantConfig,
@@ -495,6 +496,32 @@ describe("runStartupDiagnostic — three HTTP questions, and no database questio
     expect(d.tokenValid).toBe(false);
   });
 
+  // Issue 1378: the agent's poll loop waits through this helper too.
+  test("diagnoseUntilAnswered retries a refused connection and a 5xx with a doubling, capped wait, then returns the answer", async () => {
+    let calls = 0;
+    api(() => {
+      calls++;
+      if (calls === 1) throw new Error("ECONNREFUSED api:8787");
+      if (calls === 2) return new Response("starting", { status: 503 });
+      return new Response(JSON.stringify({ memberId: "m-athena" }), { status: 200 });
+    });
+    const waits: number[] = [];
+    const d = await diagnoseUntilAnswered(config(), runStartupDiagnostic, undefined, {
+      baseMs: 1_000, maxMs: 1_500, wait: async (ms) => void waits.push(ms),
+    });
+    expect(d).toEqual({ apiReachable: true, tokenValid: true, serverMemberId: "m-athena", identityMatchesRoster: true });
+    expect(waits).toEqual([1_000, 1_500]);
+  });
+
+  test("diagnoseUntilAnswered returns a 401 at once: a rejected token is an answer, not a race", async () => {
+    let calls = 0;
+    api(() => { calls++; return new Response("no", { status: 401 }); });
+    const d = await diagnoseUntilAnswered(config(), runStartupDiagnostic, undefined, { wait: async () => { throw new Error("must not wait"); } });
+    expect(calls).toBe(1);
+    expect(d.apiReachable).toBe(true);
+    expect(d.tokenValid).toBe(false);
+  });
+
   test("an IDENTITY MISMATCH is reported, and the server's answer is NOT adopted", async () => {
     // Authenticating as somebody else means the wrong key was handed over.
     api(() => new Response(JSON.stringify({ memberId: "m-robot-money" }), { status: 200 }));
@@ -728,6 +755,38 @@ describe("runParticipant — the namespace decides the loop", () => {
     await expect(
       runParticipant({ ...JUDGE_ENV, DATABASE_URL: "postgres://rm_app:x@db/robotmoney" }, { loops, read: { dockerSocketProbePaths: [] } }),
     ).rejects.toThrow(/DATABASE_URL/);
+    expect(ran).toEqual([]);
+  });
+
+  // Issue 1378: an api that is not up yet (a boot race, or a rolling boot
+  // restarting it) is retried with a capped backoff instead of exit 1; the
+  // loop starts once it answers. A 401/403 still refuses at once.
+  test("a judge whose api is unreachable at startup retries and subscribes once the api answers", async () => {
+    const UNREACHABLE: StartupDiagnostic = { apiReachable: false, tokenValid: false, serverMemberId: null, identityMatchesRoster: false };
+    const answers = [UNREACHABLE, UNREACHABLE, GREEN];
+    const { ran, loops } = recordingLoops();
+    let asked = 0;
+    loops.diagnose = async () => answers[Math.min(asked++, answers.length - 1)]!;
+    expect(await runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] }, startupRetry: { baseMs: 1, maxMs: 4 } })).toBe("judge");
+    expect(asked).toBe(3);
+    expect(ran.map((r) => r.loop)).toEqual(["judge"]);
+  });
+
+  test("a judge whose token is refused (401) still refuses at once, without retrying", async () => {
+    const { ran, loops } = recordingLoops({ apiReachable: true, tokenValid: false, serverMemberId: null, identityMatchesRoster: false });
+    let asked = 0;
+    const inner = loops.diagnose;
+    loops.diagnose = async (c) => { asked++; return inner(c); };
+    await expect(runParticipant(JUDGE_ENV, { loops, read: { dockerSocketProbePaths: [] }, startupRetry: { baseMs: 1 } })).rejects.toThrow(/refuses to subscribe/);
+    expect(asked).toBe(1);
+    expect(ran).toEqual([]);
+  });
+
+  test("a stop while the api is still unreachable ends the wait without refusing", async () => {
+    const { ran, loops } = recordingLoops({ apiReachable: false, tokenValid: false, serverMemberId: null, identityMatchesRoster: false });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 20);
+    expect(await runParticipant(JUDGE_ENV, { loops, signal: controller.signal, read: { dockerSocketProbePaths: [] }, startupRetry: { baseMs: 5, maxMs: 5 } })).toBe("judge");
     expect(ran).toEqual([]);
   });
 

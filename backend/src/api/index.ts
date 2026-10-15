@@ -5,7 +5,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { withRequestTiming } from "./request-timing.ts";
-import { isDatabaseUnavailable } from "../db/client.ts";
+import { closeDb, isDatabaseUnavailable } from "../db/client.ts";
 import { databaseAnswers } from "../db/connection-check.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
@@ -23,7 +23,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
-import { schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
+import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
 
@@ -444,3 +444,34 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 }
 
 console.log(`api listening on :${server.port}`);
+
+// SIGTERM DRAIN (issue 1378). bun runs as PID 1's child under `init: true`
+// (docker-compose.yml), so `docker stop` now reaches this process. Without a
+// handler it was ignored and the api was SIGKILLed after Docker's grace (exit
+// 137) mid-request. The drain stops accepting, closes the scheduler stream
+// sockets (system-scheduler reconnects and rebuilds, scheduler spec §6), lets
+// in-flight requests finish, closes the pool and exits 0. A drain that has not
+// finished inside API_SHUTDOWN_GRACE_MS (default 25 s, under the compose
+// stop_grace_period of 30 s) force-closes what is left and exits 1, so a stuck
+// request is named in the log rather than hidden by a SIGKILL.
+const shutdownGraceMs = Number(process.env.API_SHUTDOWN_GRACE_MS ?? 25_000);
+let draining = false;
+async function drain(signal: string): Promise<void> {
+  if (draining) return;
+  draining = true;
+  console.log(`api ${signal} received: draining (grace ${shutdownGraceMs}ms)`);
+  const force = setTimeout(() => {
+    console.error(`api drain exceeded ${shutdownGraceMs}ms: closing the remaining connections`);
+    void server.stop(true);
+    process.exit(1);
+  }, shutdownGraceMs);
+  const sockets = closeSchedulerStreamSockets();
+  await server.stop(false);
+  await closeDb().catch((err) => console.error("api drain: closing the database pool failed:", err));
+  clearTimeout(force);
+  console.log(`api drained (${sockets} stream socket(s) closed); exiting 0`);
+  process.exit(0);
+}
+process.on("SIGTERM", () => void drain("SIGTERM"));
+process.on("SIGINT", () => void drain("SIGINT"));
+

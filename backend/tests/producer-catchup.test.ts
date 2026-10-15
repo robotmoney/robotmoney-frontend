@@ -11,6 +11,7 @@ import {
   catchUpMissedResearchDays,
   catchUpMissedIndicatorDays,
   startProducerSchedules,
+  bootCatchUpDelayMs,
 } from "../src/producer/index.ts";
 import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 import { writeTokenFile } from "./support/automation-auth.ts";
@@ -184,6 +185,47 @@ test("startProducerSchedules: runs catch-up before arming the daily crons", asyn
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
   });
   expect(order).toEqual(["ready", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
+});
+
+// Issue 1378: the boot catch-up starts no earlier than
+// PRODUCER_BOOT_CATCHUP_DELAY_MS after readiness, so it does not overlap the
+// worker's post-boot drain. The clock is a fake: `sleep` advances it.
+test("startProducerSchedules: the boot catch-up waits its delay after readiness, and a boot record covers the wait", async () => {
+  let clock = 0;
+  const order: string[] = [];
+  let readyAt = -1;
+  let catchUpAt = -1;
+  const beats: { phase: string; staleAfterMs: number }[] = [];
+  await startProducerSchedules({
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
+    bootCatchUpDelayMs: 75_000,
+    sleep: async (ms) => { order.push(`sleep:${ms}`); clock += ms; },
+    beat: async (rec) => { beats.push({ phase: rec.phase, staleAfterMs: rec.staleAfterMs }); },
+    waitUntilReady: async () => { readyAt = clock; order.push("ready"); },
+    catchUp: async () => { catchUpAt = clock; order.push("catchup"); },
+    catchUpIndicators: async () => { order.push("catchupIndicators"); },
+    scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleDayRoll: () => {},
+  });
+  expect(order).toEqual(["ready", "sleep:75000", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
+  expect(catchUpAt - readyAt).toBeGreaterThanOrEqual(75_000);
+  // The record written before the wait outlives it.
+  expect(beats.at(-1)!.phase).toBe("boot");
+  expect(beats.at(-1)!.staleAfterMs).toBeGreaterThan(75_000);
+});
+
+test("bootCatchUpDelayMs: the delay is the configured base plus a jitter inside its bound, defaults 60 s + up to 30 s", () => {
+  expect(bootCatchUpDelayMs({}, () => 0)).toBe(60_000);
+  expect(bootCatchUpDelayMs({}, () => 0.999)).toBe(60_000 + 29_970);
+  const env = { PRODUCER_BOOT_CATCHUP_DELAY_MS: "5000", PRODUCER_BOOT_CATCHUP_JITTER_MS: "1000" };
+  for (const r of [0, 0.25, 0.5, 0.999]) {
+    const d = bootCatchUpDelayMs(env, () => r);
+    expect(d).toBeGreaterThanOrEqual(5_000);
+    expect(d).toBeLessThan(6_000);
+  }
+  // Bounded: an absurd value is clamped, a junk value falls back.
+  expect(bootCatchUpDelayMs({ PRODUCER_BOOT_CATCHUP_DELAY_MS: "99999999", PRODUCER_BOOT_CATCHUP_JITTER_MS: "0" }, () => 0)).toBe(600_000);
+  expect(bootCatchUpDelayMs({ PRODUCER_BOOT_CATCHUP_DELAY_MS: "nope", PRODUCER_BOOT_CATCHUP_JITTER_MS: "0" }, () => 0)).toBe(60_000);
 });
 
 test("missing-day indicator repair persists an acquisition independent of an analytics run", async () => {
