@@ -180,8 +180,8 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(r11.indexOf("git fetch --tags origin")).toBeLessThan(r11.indexOf(`checkout --detach ${TAG}`));
     // red control: the ref defaults to the commit, and never to anything a target names.
     expect(templateValues(prod, SHA, "20261008T000000Z").ref).toBe(SHA);
-    // C14-verify-version checks the ref: a production boot must serve the rc tag.
-    expect(renderStep(RELEASE_STEPS.find((s) => s.id === "C14-verify-version")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`--commit ${SHA} --ref ${TAG}`);
+    // S01-verify-version checks the ref: a production boot must serve the rc tag.
+    expect(renderStep(RELEASE_STEPS.find((s) => s.id === "S01-verify-version")!, prod, templateValues(prod, SHA, "20261008T000000Z", READY_PENDING, TAG)).remote).toContain(`--commit ${SHA} --ref ${TAG}`);
   });
 
   test("P04-capture-checkout clones the capture checkout when it is missing, then fetches and detaches; the same command on both targets", () => {
@@ -269,7 +269,7 @@ describe("one step list for every target (D61 rule 2)", () => {
       gateAbsent: "{home}/.config/robotmoney/credential.json", cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", "{home}/r"]],
     };
     const at = RELEASE_STEPS.findIndex((s) => s.id === "C07-env-rewrite") + 1;
-    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
+    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", scope: [], steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
     expect(checkAddOnly(loadTemplate(), runbook)).toEqual([]);
     expect(stepListHash(runbook.steps)).not.toBe(stepListHash());
     const r = renderStep(oneTime, prod, templateValues(prod, SHA, "20261008T000000Z"));
@@ -335,7 +335,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
     expect(tags).toEqual(["C06-version-tag"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "C04-probe-start", "C06-version-tag", "C13-probe-grade"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "C04-probe-start", "C06-version-tag", "C13-probe-grade"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
     const unmarked = RELEASE_STEPS.map((s) => (s.id === "C06-version-tag" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
@@ -344,10 +344,10 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
-    expect(ids.slice(-4)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-schedule-parity", "C23-collect-logs"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-schedule-parity", "C11-ready", "watchHours"], ["C23-collect-logs", "C11-ready", "watchHours"]]);
-    // red control: C20-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
-    const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!.cmds[0]!;
+    expect(ids.slice(-3)).toEqual(["S07-soak-gate", "S08-soak-checks", "S09-collect-logs"]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"]]);
+    // red control: S07-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
+    const w1 = RELEASE_STEPS.find((s) => s.id === "S07-soak-gate")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
     expect(w1.join(" ")).toContain("--sessions {watchSessions}");
     expect(w1).toContain("{readyIso}");
@@ -579,8 +579,8 @@ describe("SP.8: prod runs only what stage passed", () => {
     failed.steps["C05-migrate"]!.status = "failed";
     expect(checkStageJournal(failed, expected).join()).toContain("did not pass");
     const missingStep = journal();
-    delete missingStep.steps["C19-host-guards"];
-    expect(checkStageJournal(missingStep, expected).join()).toContain("C19-host-guards");
+    delete missingStep.steps["S06-host-guards"];
+    expect(checkStageJournal(missingStep, expected).join()).toContain("S06-host-guards");
     expect(checkStageJournal(journal({ rmEnv: "prod" }), expected).join()).toContain("not a stage run");
   });
 });
@@ -1002,7 +1002,7 @@ describe("env rewrite key partition (C07-env-rewrite)", () => {
   });
 });
 
-describe("baseline and comparison (P07-baseline, C18-compare-baseline)", () => {
+describe("baseline and comparison (P07-baseline, S05-compare-baseline)", () => {
   const before = { counts: { swarm_sessions: 10, swarm_recommendations: 5, gone_later: 1, absent: null }, databaseSizeBytes: 1000 };
   test("growth within the size bound passes", () => {
     expect(compareBaseline(before, { counts: { swarm_sessions: 12, swarm_recommendations: 5, gone_later: 1, absent: 3 }, databaseSizeBytes: 1400 }, 1.5)).toEqual([]);
@@ -1023,7 +1023,7 @@ describe("baseline and comparison (P07-baseline, C18-compare-baseline)", () => {
   });
 });
 
-describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify-version, C19-host-guards)", () => {
+describe("host guards, the rolling cutover and identity (C05-migrate, S01-verify-version, S06-host-guards)", () => {
   test("a container mounting the Docker socket is named; a clean one is not", () => {
     expect(socketMounts([
       { Name: "/rm_prod-api-1", Mounts: [{ Source: "/data", Destination: "/data" }] },
@@ -1078,14 +1078,17 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
 
 // ── the three phases: QA (stage), preflight, cutover (D70 as amended 2026-10-15) ──
 describe("the phases: QA on stage, production's preflight, the cutover", () => {
-  test("the template runs qa, then preflight, then cutover; each id names its phase", () => {
+  test("the template runs qa, preflight, cutover, then soak, and has no version checks; each id names its phase", () => {
     const phases = RELEASE_STEPS.map((s) => s.phase);
     expect(phases.indexOf("preflight")).toBeGreaterThan(phases.lastIndexOf("qa"));
     expect(phases.indexOf("cutover")).toBeGreaterThan(phases.lastIndexOf("preflight"));
-    for (const s of RELEASE_STEPS) expect(s.id[0], s.id).toBe({ qa: "Q", preflight: "P", cutover: "C" }[s.phase]);
+    expect(phases.indexOf("soak")).toBeGreaterThan(phases.lastIndexOf("cutover"));
+    expect(phases).not.toContain("version");
+    for (const s of RELEASE_STEPS) expect(s.id[0], s.id).toBe(({ qa: "Q", preflight: "P", cutover: "C", soak: "S", version: "V" } as const)[s.phase]);
+    expect(RELEASE_STEPS.filter((s) => s.phase === "soak").map((s) => s.id)).toEqual(["S01-verify-version", "S02-verify-product", "S03-log-verdict", "S04-soak-record", "S05-compare-baseline", "S06-host-guards", "S07-soak-gate", "S08-soak-checks", "S09-collect-logs"]);
     const qa = RELEASE_STEPS.filter((s) => s.phase === "qa");
-    expect(qa.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["Q01-lockfile", "control", "stage"], ["Q02-dump", "control", "stage"], ["Q03-stage-up", "control", "stage"], ["Q04-role-passwords", "control", "stage"]]);
-    expect(qa.map((s) => s.standing)).toEqual([["SP.9"], ["SR.0"], ["SR.0"], ["SR.1"]]);
+    expect(qa.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["Q01-lockfile", "control", "stage"], ["Q02-dump", "control", "stage"], ["Q03-stage-up", "control", "stage"], ["Q04-role-passwords", "control", "stage"], ["Q05-scope", "control", "stage"]]);
+    expect(qa.map((s) => s.standing)).toEqual([["SP.9"], ["SR.0"], ["SR.0"], ["SR.1"], ["SR.2"]]);
     expect(qa.every((s) => s.irreversible === false && s.expectExit === 0)).toBe(true);
     expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-baseline", "P08-log-baseline"]);
     // The backup and its restore proof are the cutover's first steps, before the first irreversible one.
@@ -1128,8 +1131,8 @@ describe("stage's starting dump (SR.0): the newest one at most 24 h old", () => 
 // ── the scripted watch, tags, recovery and the host guard ─────────────────────
 const WATCHED: StepTemplate[] = [
   { id: "C11-ready", standing: [], description: "ready", host: "target", phase: "cutover", cmds: [["echo", "ready"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "C20-soak-gate", standing: [], description: "watch", host: "target", phase: "cutover", notBefore: { afterStep: "C11-ready", hours: 6 }, cmds: [["echo", "{readyIso}"]], expectExit: 0, receipts: [], irreversible: false },
-  { id: "C23-collect-logs", standing: [], description: "tag", host: "control", phase: "cutover", onlyFor: "prod", cmds: [["echo", "C23-collect-logs"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "S07-soak-gate", standing: [], description: "watch", host: "target", phase: "cutover", notBefore: { afterStep: "C11-ready", hours: 6 }, cmds: [["echo", "{readyIso}"]], expectExit: 0, receipts: [], irreversible: false },
+  { id: "S09-collect-logs", standing: [], description: "tag", host: "control", phase: "cutover", onlyFor: "prod", cmds: [["echo", "S09-collect-logs"]], expectExit: 0, receipts: [], irreversible: false },
 ];
 
 describe("watch steps, prod-only steps and the recovery decision", () => {
@@ -1138,7 +1141,7 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, WATCHED)).toBe(3);
     expect(early.ran).toEqual(["C11-ready"]);
-    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-08T18:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("S07-soak-gate becomes runnable at 2026-10-08T18:00:00.000Z");
     // red control: still early, a resume does not run it either.
     const again = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], again.deps, WATCHED)).toBe(3);
@@ -1152,8 +1155,8 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     expect(seen[0]).toContain("2026-10-08T12:00:00.000Z");
     const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
     expect(j.status).toBe("passed");
-    expect(j.steps["C23-collect-logs"]!.status).toBe("skipped");
-    expect(j.steps["C23-collect-logs"]!.skipped).toBe("stage");
+    expect(j.steps["S09-collect-logs"]!.status).toBe("skipped");
+    expect(j.steps["S09-collect-logs"]!.skipped).toBe("stage");
     expect(j.recovery?.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -1165,7 +1168,7 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const st2 = fakeDeps();
     st2.deps.now = () => new Date("2026-10-08T19:00:00Z");
     expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot, "--run", "20261008T120000Z"], st2.deps, WATCHED)).toBe(0);
-    expect(st2.ran).toEqual(["C20-soak-gate"]);
+    expect(st2.ran).toEqual(["S07-soak-gate"]);
     const p = fixture("prod");
     const preDir = await greenPreflight(p, WATCHED, join(s.journalRoot, "stage", "20261008T120000Z"), "2026-10-08T19:00:00Z");
     const pr = fakeDeps();
@@ -1175,16 +1178,16 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const pr2 = fakeDeps();
     pr2.deps.now = () => new Date("2026-10-09T02:00:00Z");
     expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", join(s.journalRoot, "stage", "20261008T120000Z"), "--run", "20261008T190000Z"], pr2.deps, WATCHED)).toBe(0);
-    expect(pr2.ran).toEqual(["C20-soak-gate", "C23-collect-logs"]);
+    expect(pr2.ran).toEqual(["S07-soak-gate", "S09-collect-logs"]);
   });
 
   test("a watchHours wait takes the target's watch length: READY + 37 h, not + 6 h", async () => {
-    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "C20-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "S07-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
     // A graded watch at the derived length, as production runs it.
     const f = fixture("stage", { watchHours: 37, watchSessions: "graded" });
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-10T01:00:00.000Z");
+    expect(early.logs.join("\n")).toContain("S07-soak-gate becomes runnable at 2026-10-10T01:00:00.000Z");
     expect(early.logs.join("\n")).toContain("+ 37 h");
     // red control: READY + 6 h is no longer enough.
     const six = fakeDeps();
@@ -1194,15 +1197,15 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const later = fakeDeps();
     later.deps.now = () => new Date("2026-10-10T01:00:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
-    expect(later.ran).toEqual(["C20-soak-gate"]);
+    expect(later.ran).toEqual(["S07-soak-gate"]);
   });
 
   test("the committed stage target soaks 30 minutes (owner, 2026-10-14)", async () => {
-    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "C20-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
+    const steps: StepTemplate[] = WATCHED.map((s) => (s.id === "S07-soak-gate" ? { ...s, notBefore: { afterStep: "C11-ready", hours: "watchHours" } } : s));
     const f = fixture("stage");
     const early = fakeDeps();
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, steps)).toBe(3);
-    expect(early.logs.join("\n")).toContain("C20-soak-gate becomes runnable at 2026-10-08T12:30:00.000Z");
+    expect(early.logs.join("\n")).toContain("S07-soak-gate becomes runnable at 2026-10-08T12:30:00.000Z");
     // red control: one second before READY + 30 min nothing runs.
     const before = fakeDeps();
     before.deps.now = () => new Date("2026-10-08T12:29:59Z");
@@ -1211,7 +1214,7 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     const later = fakeDeps();
     later.deps.now = () => new Date("2026-10-08T12:30:01Z");
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, steps)).toBe(0);
-    expect(later.ran).toEqual(["C20-soak-gate"]);
+    expect(later.ran).toEqual(["S07-soak-gate"]);
   });
 
   test("red: a release runbook with no recovery decision refuses before anything runs (SC.1)", async () => {
@@ -1245,7 +1248,7 @@ describe("release tags (tag.ts rc after stage, C06-version-tag)", () => {
   });
 });
 
-describe("schedule parity (C22-schedule-parity)", () => {
+describe("schedule parity (V01-subject-spacing)", () => {
   const close = "2026-10-08T12:00:00.000Z";
   const base = [{ id: "s1", subject: "eth", state: "collecting", window_closes_at: close }];
   test("24 h epochs, an on-time publish, a :30 regime cron and a live sweep pass", () => {
@@ -1282,10 +1285,10 @@ describe("schedule parity (C22-schedule-parity)", () => {
   });
 });
 
-describe("the postgres URL guard (C19-host-guards)", () => {
-  test("C19-host-guards scans the home only: no retired checkout, no legacy argument", () => {
+describe("the postgres URL guard (S06-host-guards)", () => {
+  test("S06-host-guards scans the home only: no retired checkout, no legacy argument", () => {
     const t = loadTarget(join(targetsDir, "prod.json"));
-    const r = renderStep(RELEASE_STEPS.find((s) => s.id === "C19-host-guards")!, t, templateValues(t, SHA, "20261008T000000Z"));
+    const r = renderStep(RELEASE_STEPS.find((s) => s.id === "S06-host-guards")!, t, templateValues(t, SHA, "20261008T000000Z"));
     expect(r.remote).toContain(`bun scripts/release/host-guards.ts --instance ${t.instance} --receipt-dir`);
     expect(r.remote).not.toMatch(/--legacy-retired|-retired/);
   });
@@ -1315,9 +1318,9 @@ describe("the postgres URL guard (C19-host-guards)", () => {
   });
 });
 
-describe("C20-soak-gate's attendance threshold is target data, not a template change", () => {
+describe("S07-soak-gate's attendance threshold is target data, not a template change", () => {
   const targetsDir = join(import.meta.dir, "../../release/targets");
-  const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!;
+  const w1 = RELEASE_STEPS.find((s) => s.id === "S07-soak-gate")!;
   const render = (name: string) => {
     const t = loadTarget(join(targetsDir, `${name}.json`));
     return renderStep(w1, t, templateValues(t, "a".repeat(40), "20261008T000000Z", "2026-10-08T00:00:00.000Z")).remote;
@@ -1723,10 +1726,10 @@ describe("preflight", () => {
 
   test("SP.8: a stage run with an accepted step does not authorize production", () => {
     const j = journal();
-    j.steps["C16-log-verdict"]!.status = "accepted";
+    j.steps["S03-log-verdict"]!.status = "accepted";
     const refusals = checkStageJournal(j, { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() });
     expect(refusals.join("\n")).toContain("accepted a failure");
-    expect(refusals.join("\n")).toContain("C16-log-verdict");
+    expect(refusals.join("\n")).toContain("S03-log-verdict");
     expect(runStatus(j, stepIds())).toBe("passed");
   });
 

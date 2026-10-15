@@ -83,25 +83,25 @@ export interface ReleaseTarget {
   /** HOME on the host for every command. Its `.env` is the target's credential file. */
   readonly home: string;
   readonly instance: string;
-  /** The public origin, for the identity check (C14-verify-version). */
+  /** The public origin, for the identity check (S01-verify-version). */
   readonly publicOrigin: string;
   /**
-   * C20-soak-gate's `prod:gate --min-attendance`: the share of active members a good session needs.
+   * S07-soak-gate's `prod:gate --min-attendance`: the share of active members a good session needs.
    * Default 0.5, the gate's own default. A target where some active members cannot file
    * (stage: the external members run against production, never the stage database)
    * sets it lower in its file, with the reason in `$comment`.
    */
   readonly watchMinAttendance: number;
   /**
-   * Hours after READY (C11-ready's end) before the soak steps C20-soak-gate, C21-soak-checks and C22-schedule-parity
+   * Hours after READY (C11-ready's end) before the soak steps S07-soak-gate, S08-soak-checks and V01-subject-spacing
    * run. Default SOAK_HOURS (./watch.ts): 30 minutes on every target (owner,
    * 2026-10-14). A target that grades sessions in the soak must wait at least
    * DEFAULT_WATCH_HOURS, the slowest subject's first publish.
    */
   readonly watchHours: number;
   /**
-   * Whether the watch grades sessions (C20-soak-gate check 7, C22-schedule-parity's in-flight publish
-   * check) or defers them. Rendered into C20-soak-gate and C22-schedule-parity as
+   * Whether the watch grades sessions (S07-soak-gate check 7, V01-subject-spacing's in-flight publish
+   * check) or defers them. Rendered into S07-soak-gate and V01-subject-spacing as
    * `--sessions {watchSessions}`, so the step list stays one list. Default
    * "deferred" on every target: a 30-minute soak cannot see a 24 h epoch
    * close, and sessions are graded afterwards as a report (owner, 2026-10-14).

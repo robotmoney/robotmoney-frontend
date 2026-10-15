@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/compare-baseline.ts — release step C18-compare-baseline, run ON THE TARGET HOST.
+// scripts/release/compare-baseline.ts — release step S05-compare-baseline, run ON THE TARGET HOST.
 // Standing check SV.5.
 //
 //   bun scripts/release/compare-baseline.ts --instance <name> --run <run-ts> --max-size-ratio <r>
@@ -67,7 +67,7 @@ async function main(): Promise<number> {
   const problems = compareBaseline(before, after, ratio);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = join(dir, "compare-baseline.json");
-  writeFileSync(file, `${JSON.stringify({ step: "C18-compare-baseline", instance, run, maxSizeRatio: ratio, before, after, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "S05-compare-baseline", instance, run, maxSizeRatio: ratio, before, after, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   for (const [t, n] of Object.entries(after.counts)) console.log(`[compare-baseline] ${t}: ${before.counts[t]} → ${n}`);
   console.log(`[compare-baseline] size: ${before.databaseSizeBytes} → ${after.databaseSizeBytes} bytes (bound ${ratio}x)`);
   console.log(`[compare-baseline] receipt: ${file}`);

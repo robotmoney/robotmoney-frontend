@@ -64,6 +64,17 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 10
+  - id: "Q05-scope"
+    standing: ["SR.2"]
+    host: "control"
+    phase: "qa"
+    description: "Scope: every PR between the version the target runs (on stage, production's tag, which Q03-stage-up booted) and the QA commit is in the release runbook's scope, each with the step that checks it or a reason none does; and nothing the scope lists is missing from the range"
+    cmds:
+      - ["bun", "scripts/release/scope.ts", "--release", "{release}", "--commit", "{commit}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
   # ── Preflight: read-only gates on the target, once per rc, at most 60 minutes
   # before the cutover (production; stage runs it as part of QA). Nothing a
   # running service uses changes.
@@ -304,11 +315,12 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-  # ── Cutover, verification after READY ─────────────────────────────────────
-  - id: "C14-verify-version"
+  # ── Soak, general: every release, on stage (QA) and on production. Checks at
+  # READY, then the 30-minute soak after it, then every container's log.
+  - id: "S01-verify-version"
     standing: ["SV.1"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
     cmds:
       - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -316,20 +328,20 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
     irreversible: false
-  - id: "C15-verify-product"
+  - id: "S02-verify-product"
     standing: ["SV.3"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Product verification, readonly tier"
     cmds:
       - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "C16-log-verdict"
+  - id: "S03-log-verdict"
     standing: ["SV.4"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
@@ -337,11 +349,11 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
-  - id: "C17-soak-record"
+  - id: "S04-soak-record"
     standing: ["SW.2"]
     host: "target"
-    phase: "cutover"
-    description: "Standing soak checks at READY: record the baseline the soak's end (C21-soak-checks) compares with"
+    phase: "soak"
+    description: "Standing soak checks at READY: record the baseline the soak's end (S08-soak-checks) compares with"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md"]
     expectExit: 0
@@ -349,10 +361,10 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-record.*", "required": true}
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "soak-baseline.json", "required": false}
     irreversible: false
-  - id: "C18-compare-baseline"
+  - id: "S05-compare-baseline"
     standing: ["SV.5"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Compare with the P07-baseline baseline: row counts only grow, database size within the bound"
     cmds:
       - ["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]
@@ -360,10 +372,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "compare-baseline.json", "required": true}
     irreversible: false
-  - id: "C19-host-guards"
+  - id: "S06-host-guards"
     standing: ["SV.6"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password"
     cmds:
       - ["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -371,11 +383,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-guards.json", "required": true}
     irreversible: false
-  # ── Cutover, soak: 30 minutes after READY, then every log ──────────────────
-  - id: "C20-soak-gate"
+  - id: "S07-soak-gate"
     standing: ["SW.1"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
@@ -384,11 +395,11 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C21-soak-checks"
+  - id: "S08-soak-checks"
     standing: ["SW.2"]
     host: "target"
-    phase: "cutover"
-    description: "Standing soak checks over the soak window, against the READY baseline C17-soak-record recorded"
+    phase: "soak"
+    description: "Standing soak checks over the soak window, against the READY baseline S04-soak-record recorded"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--since", "{readyIso}", "--full", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md"]
     expectExit: 0
@@ -396,22 +407,10 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-full.*", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C22-schedule-parity"
-    standing: ["SW.1"]
-    host: "target"
-    phase: "cutover"
-    description: "Schedule parity: 24 h epochs and the four anchors 21600 s apart, every session in flight at P07-baseline still present with its close unmoved (graded: published on it), the regime run at :30, the last parity sweep's duration"
-    cmds:
-      - ["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "schedule-parity.json", "required": true}
-    irreversible: false
-    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C23-collect-logs"
+  - id: "S09-collect-logs"
     standing: ["SW.4"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
     cmds:
       - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]

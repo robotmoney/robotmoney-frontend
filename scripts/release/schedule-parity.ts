@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/schedule-parity.ts — release step C22-schedule-parity, run ON THE TARGET HOST
+// scripts/release/schedule-parity.ts — release step V01-subject-spacing, run ON THE TARGET HOST
 // the watch length after READY (./watch.ts). Owner rule (v0-6-0-rollout.md section 0): an
 // upgrade does not change usual schedules.
 //
@@ -231,7 +231,7 @@ async function main(): Promise<number> {
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "schedule-parity.json");
   writeFileSync(file, `${JSON.stringify({
-    step: "C22-schedule-parity", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
+    step: "V01-subject-spacing", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at P07-baseline (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
   console.log(`[schedule-parity] receipt: ${file}`);

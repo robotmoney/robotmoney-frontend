@@ -1,5 +1,5 @@
 // scripts/release/db-read.ts — the read-only database session the release
-// baseline (P07-baseline) and the comparison (C18-compare-baseline) share.
+// baseline (P07-baseline) and the comparison (S05-compare-baseline) share.
 //
 // It connects as `rm_readonly` from `$HOME/.env` (scripts/lib/env-role.ts),
 // sets the session read-only and PROVES it with `SHOW transaction_read_only`

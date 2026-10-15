@@ -16,7 +16,7 @@ notes: |
     for rm_app.
   - 0121_subject_closes_six_hours_apart: the four anchors' times of day become exactly
     21600 s apart on vault's grid; woon, allocation and treasury move 6, 8 and 12 minutes
-    earlier. Epochs stay 24 h. C22-schedule-parity asserts the spacing. The one transition window per
+    earlier. Epochs stay 24 h. V01-subject-spacing asserts the spacing. The one transition window per
     moved subject is 23 h 54 m (woon), 23 h 52 m (allocation), 23 h 48 m (treasury); the
     post-release session report confirms them.
   - 0122_swarm_dormancy_baseline: a singleton counted_from for consecutive missed-session
@@ -36,6 +36,38 @@ recovery: |
   - A failed C05-migrate: resume at C05-migrate; v0.6.1 keeps serving, and the website stays up.
   - After C05-migrate: fix forward on v0.6.3, or restore the C01-backup dump with the write loss it
     implies. v0.6.2 is tagged at C06-version-tag either way (D70).
+scope:
+  # Every PR v0.6.2 ships (v0.6.1..the QA commit), each with its check or why none
+  # (Q05-scope proves the list complete). General checks are the soak's (S01 to S09).
+  - {pr: 1277, what: "release tooling starts from production's v0.6.0 baseline", none: "release tooling: the run itself exercises it"}
+  - {pr: 1281, what: "docs: a release that reached production gets its version tag", none: "docs only"}
+  - {pr: 1285, what: "docs: production runs only by the rc tag", none: "docs only"}
+  - {pr: 1292, what: "docs: the v0.6.0 post-mortem", none: "docs only"}
+  - {pr: 1293, what: "rollouts keep the website up: maintenance mode and an off-host fallback page", check: "V02-maintenance-fallback"}
+  - {pr: 1294, what: "the gate describes a container's last stop", none: "gate tooling: P08-log-baseline and S07-soak-gate run it"}
+  - {pr: 1296, what: "CI: the member-agent Docker build", none: "CI only"}
+  - {pr: 1297, what: "the fixture dataset never reaches a deployed database", check: "V10-fixture-guard"}
+  - {pr: 1300, what: "delete four unreferenced one-shot scripts", none: "repository housekeeping; nothing runs them"}
+  - {pr: 1306, what: "the release checkout is cloned when missing", none: "release tooling: P01-checkout exercises it"}
+  - {pr: 1307, what: "prod:gate fails a release on a boot-time connect retry", none: "gate rule: S03-log-verdict and S07-soak-gate apply it"}
+  - {pr: 1308, what: "subject windows close exactly 6 h apart (migration 0121)", check: "V01-subject-spacing"}
+  - {pr: 1309, what: "a failed post-release gate blocks the soak", none: "release tooling: the run itself exercises it"}
+  - {pr: 1313, what: "the production go names the rc tag", none: "release tooling: the go is checked by the runner"}
+  - {pr: 1314, what: "the runner holds no past-upgrade facts", none: "release tooling: the run itself exercises it"}
+  - {pr: 1315, what: "the migration ledger reconciles with the files", none: "release tooling: P07-baseline runs it"}
+  - {pr: 1316, what: "prod:gate classifies scanner probes and judge reconnects", none: "gate rule: P08-log-baseline and S07-soak-gate apply it"}
+  - {pr: 1324, what: "docs: release runbooks use v0.6.0 as the baseline", none: "docs only"}
+  - {pr: 1325, what: "retire RM_ENV and RM_ALLOW_INSECURE from runtime", check: "V09-rm-env-retired"}
+  - {pr: 1329, what: "docs: scheduling columns change by migration", none: "docs only"}
+  - {pr: 1330, what: "schedule parity checks the 6 h spacing", check: "V01-subject-spacing"}
+  - {pr: 1334, what: "the starter agent files to every collecting session", check: "V05-starter-takes"}
+  - {pr: 1338, what: "a take naming a closed session is refused", check: "V04-closed-session-take"}
+  - {pr: 1340, what: "the swarm skill and docs carry every take refusal rule", check: "V11-take-rules"}
+  - {pr: 1341, what: "a member can dry-run a take", check: "V06-dry-run-take"}
+  - {pr: 1342, what: "retire RM_ENV from the compose environment", check: "V09-rm-env-retired"}
+  - {pr: 1343, what: "count a seat's consecutive missed sessions (migration 0122)", check: "V03-missed-sessions"}
+  - {pr: 1344, what: "Animoca's and DualMint's brand marks", check: "V07-brand-marks"}
+  - {pr: 1349, what: "the HTTP fetch cache evicts", check: "V08-fetch-cache"}
 steps:
   # ── QA: stage only, as often as needed. Builds the stage target; then the
   # preflight and cutover sections run exactly as production runs them.
@@ -86,6 +118,17 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 10
+  - id: "Q05-scope"
+    standing: ["SR.2"]
+    host: "control"
+    phase: "qa"
+    description: "Scope: every PR between the version the target runs (on stage, production's tag, which Q03-stage-up booted) and the QA commit is in the release runbook's scope, each with the step that checks it or a reason none does; and nothing the scope lists is missing from the range"
+    cmds:
+      - ["bun", "scripts/release/scope.ts", "--release", "{release}", "--commit", "{commit}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
   # ── Preflight: read-only gates on the target, once per rc, at most 60 minutes
   # before the cutover (production; stage runs it as part of QA). Nothing a
   # running service uses changes.
@@ -326,11 +369,12 @@ steps:
     expectExit: 0
     receipts: []
     irreversible: false
-  # ── Cutover, verification after READY ─────────────────────────────────────
-  - id: "C14-verify-version"
+  # ── Soak, general: every release, on stage (QA) and on production. Checks at
+  # READY, then the 30-minute soak after it, then every container's log.
+  - id: "S01-verify-version"
     standing: ["SV.1"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
     cmds:
       - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -338,20 +382,20 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
     irreversible: false
-  - id: "C15-verify-product"
+  - id: "S02-verify-product"
     standing: ["SV.3"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Product verification, readonly tier"
     cmds:
       - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
     expectExit: 0
     receipts: []
     irreversible: false
-  - id: "C16-log-verdict"
+  - id: "S03-log-verdict"
     standing: ["SV.4"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
@@ -359,11 +403,11 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
-  - id: "C17-soak-record"
+  - id: "S04-soak-record"
     standing: ["SW.2"]
     host: "target"
-    phase: "cutover"
-    description: "Standing soak checks at READY: record the baseline the soak's end (C21-soak-checks) compares with"
+    phase: "soak"
+    description: "Standing soak checks at READY: record the baseline the soak's end (S08-soak-checks) compares with"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md"]
     expectExit: 0
@@ -371,10 +415,10 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-record.*", "required": true}
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "soak-baseline.json", "required": false}
     irreversible: false
-  - id: "C18-compare-baseline"
+  - id: "S05-compare-baseline"
     standing: ["SV.5"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Compare with the P07-baseline baseline: row counts only grow, database size within the bound"
     cmds:
       - ["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]
@@ -382,10 +426,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "compare-baseline.json", "required": true}
     irreversible: false
-  - id: "C19-host-guards"
+  - id: "S06-host-guards"
     standing: ["SV.6"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password"
     cmds:
       - ["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -393,11 +437,10 @@ steps:
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-guards.json", "required": true}
     irreversible: false
-  # ── Cutover, soak: 30 minutes after READY, then every log ──────────────────
-  - id: "C20-soak-gate"
+  - id: "S07-soak-gate"
     standing: ["SW.1"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
     description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
     cmds:
       - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
@@ -406,11 +449,11 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C21-soak-checks"
+  - id: "S08-soak-checks"
     standing: ["SW.2"]
     host: "target"
-    phase: "cutover"
-    description: "Standing soak checks over the soak window, against the READY baseline C17-soak-record recorded"
+    phase: "soak"
+    description: "Standing soak checks over the soak window, against the READY baseline S04-soak-record recorded"
     cmds:
       - ["bun", "run", "soak:checks", "--instance", "{instance}", "--since", "{readyIso}", "--full", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md"]
     expectExit: 0
@@ -418,10 +461,27 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-full.*", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C22-schedule-parity"
-    standing: ["SW.1"]
+  - id: "S09-collect-logs"
+    standing: ["SW.4"]
     host: "target"
-    phase: "cutover"
+    phase: "soak"
+    description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
+    cmds:
+      - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "collect-logs.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  # ── Version checks: this release's own, one per change in its scope (added
+  # steps only; a template has none). They run after the soak, on stage and
+  # production alike unless a step says onlyFor.
+  - id: "V01-subject-spacing"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
     description: "Schedule parity: 24 h epochs and the four anchors 21600 s apart, every session in flight at P07-baseline still present with its close unmoved (graded: published on it), the regime run at :30, the last parity sweep's duration"
     cmds:
       - ["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}", "--run", "{runTs}", "--sessions", "{watchSessions}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
@@ -430,16 +490,135 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "schedule-parity.json", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-  - id: "C23-collect-logs"
-    standing: ["SW.4"]
+  - id: "V02-maintenance-fallback"
+    standing: ["SV.7"]
     host: "target"
-    phase: "cutover"
-    description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
+    phase: "version"
+    added: "v0.6.2"
+    description: "Maintenance mode (1293, migration 0120): the served nginx.conf answers /api/ from the maintenance fallback when the api is down, the off-host fallback page is in place, and maintenance_windows exists and is insert-only for rm_app"
     cmds:
-      - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "maintenance-fallback", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
     receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "collect-logs.json", "required": true}
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-maintenance-fallback.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V03-missed-sessions"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "Missed-session count (1343, migration 0122): the dormancy baseline row exists with its counted_from, and a member page reports the seat's consecutive missed sessions"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "missed-sessions", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-missed-sessions.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V04-closed-session-take"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "A take that names a closed session is refused, never filed into the next session (1338): a signed take for a published session answers the refusal and no row is written (stage only: it submits a take)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "closed-session-take", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-closed-session-take.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V05-starter-takes"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "The starter agent files to every collecting session (1334): /api/swarm/open-sessions returns exactly the sessions the database holds as collecting, and the served API reference and participation pages say to poll open-sessions"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "starter-takes", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-starter-takes.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V06-dry-run-take"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "A member can dry-run a take (1341): the dry-run route refuses no bearer, answers an in-house agent's dry run with its verdict, and stores nothing (stage only: it reads an agent's bearer)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "dry-run-take", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-dry-run-take.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V07-brand-marks"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "Brand marks (1344): the served member-logos module maps Minds by Animoca Brands to Animoca's mark and DualMint's new seat to DualMint's, both images answer, and both handles exist"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "brand-marks", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-brand-marks.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V08-fetch-cache"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "The HTTP fetch cache evicts (1349): every container's fetch cache directory is under its size bound"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "fetch-cache", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-fetch-cache.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V09-rm-env-retired"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "RM_ENV and RM_ALLOW_INSECURE are retired from the runtime (1325, 1342): no running service container's environment holds either"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "rm-env-retired", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-rm-env-retired.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V10-fixture-guard"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "The fixture dataset never reaches a deployed database (1297): no project, tracked wallet or vault carries a fixture address or slug (migration 0118 purged them; the selector and import guard keep them out)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "fixture-guard", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-fixture-guard.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V11-take-rules"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "The swarm skill and docs carry every rule a take is refused for (1340): the served SKILL.md and the API reference name each refusal"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "take-rules", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-take-rules.json", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}

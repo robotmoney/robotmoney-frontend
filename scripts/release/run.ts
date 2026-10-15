@@ -51,7 +51,7 @@ import {
 } from "./steps.ts";
 import { loadReleaseRunbook } from "./runbook.ts";
 
-/** The step whose end is READY: the watch steps count their window from it, and C20-soak-gate grades sessions since it. */
+/** The step whose end is READY: the watch steps count their window from it, and S07-soak-gate grades sessions since it. */
 const READY_STEP = "C11-ready";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 

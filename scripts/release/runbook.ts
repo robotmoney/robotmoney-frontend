@@ -49,7 +49,44 @@ export interface ReleaseRunbook {
   readonly notes?: string;
   /** The recovery decision (SC.1): what to do before, at and after the first irreversible step. Required; the runner journals its sha256. */
   readonly recovery: string;
+  /** Every PR the release ships, each with the step that checks it or why none does (Q05-scope proves the list complete). */
+  readonly scope: readonly ScopeEntry[];
   readonly steps: readonly RunbookStep[];
+}
+
+/**
+ * One change a release ships: its PR, in a few words, and either the step that
+ * checks it landed (`check`, a step id of this runbook) or the reason no step
+ * does (`none`: docs only, CI only, release tooling the run itself exercises).
+ */
+export interface ScopeEntry {
+  readonly pr: number;
+  readonly what: string;
+  readonly check?: string;
+  readonly none?: string;
+}
+
+/** PURE. Why a release's scope list is not one: every entry a PR with a check step of this runbook or a reason. */
+export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, "id">[], where: string): string[] {
+  if (!Array.isArray(scope) || scope.length === 0) return [`${where}: scope lists every PR the release ships, each with check: <step> or none: <reason>`];
+  const out: string[] = [];
+  const ids = new Set(steps.map((s) => s.id));
+  const seen = new Set<number>();
+  for (const e of scope) {
+    if (!isObject(e) || !Number.isInteger(e.pr) || (e.pr as number) <= 0 || typeof e.what !== "string" || e.what.trim() === "") {
+      out.push(`${where}: a scope entry is {pr, what, check | none}; got ${JSON.stringify(e)}`);
+      continue;
+    }
+    const at = `${where}: scope PR ${e.pr as number}`;
+    for (const k of Object.keys(e)) if (!["pr", "what", "check", "none"].includes(k)) out.push(`${at}: unknown key ${k}`);
+    if (seen.has(e.pr as number)) out.push(`${at} appears twice`);
+    seen.add(e.pr as number);
+    const hasCheck = typeof e.check === "string" && e.check !== "";
+    const hasNone = typeof e.none === "string" && e.none.trim() !== "";
+    if (hasCheck === hasNone) out.push(`${at}: names exactly one of check: <step> or none: <reason>`);
+    if (hasCheck && !ids.has(e.check as string)) out.push(`${at}: check ${e.check as string} is no step of this runbook`);
+  }
+  return out;
 }
 
 const STEP_KEYS = new Set([
@@ -58,9 +95,9 @@ const STEP_KEYS = new Set([
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
 /** The three phases, in the order they run (D70 as amended 2026-10-15). */
-export const PHASES: readonly StepPhase[] = ["qa", "preflight", "cutover"];
-/** A step's id names its phase: Q01-dump, P02-identity, C10-rolling-boot. */
-export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({ qa: "Q", preflight: "P", cutover: "C" });
+export const PHASES: readonly StepPhase[] = ["qa", "preflight", "cutover", "soak", "version"];
+/** A step's id names its phase: Q02-dump, P02-identity, C10-rolling-boot, S07-soak-gate, V01-subject-spacing. */
+export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({ qa: "Q", preflight: "P", cutover: "C", soak: "S", version: "V" });
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -129,7 +166,7 @@ function parseSteps(raw: unknown, where: string, errors: string[]): RunbookStep[
   if (dup !== undefined) errors.push(`${where}: step id ${dup} appears twice`);
   // The phases run in order: QA (stage), then preflight, then cutover. A step out of its phase's place refuses.
   for (let i = 1; i < steps.length; i++) {
-    if (PHASES.indexOf(steps[i]!.phase) < PHASES.indexOf(steps[i - 1]!.phase)) errors.push(`${where}: ${steps[i]!.id} (${steps[i]!.phase}) comes after ${steps[i - 1]!.id} (${steps[i - 1]!.phase}); the phases run qa, preflight, cutover`);
+    if (PHASES.indexOf(steps[i]!.phase) < PHASES.indexOf(steps[i - 1]!.phase)) errors.push(`${where}: ${steps[i]!.id} (${steps[i]!.phase}) comes after ${steps[i - 1]!.id} (${steps[i - 1]!.phase}); the phases run ${PHASES.join(", ")}`);
   }
   return steps;
 }
@@ -146,6 +183,7 @@ export function parseTemplate(text: string, name: TemplateName): Template {
   if (doc.template !== name) errors.push(`${where}: names itself ${String(doc.template)}`);
   const steps = parseSteps(doc.steps, where, errors);
   for (const s of steps) if (s.added !== undefined) errors.push(`${where} ${s.id}: a template step carries no added`);
+  for (const s of steps) if (s.phase === "version") errors.push(`${where} ${s.id}: a template has no version checks; a release runbook adds its own`);
   if (errors.length > 0) throw new Error(errors.join("\n"));
   return { name, steps: deepFreeze(steps) };
 }
@@ -156,15 +194,17 @@ export function parseReleaseRunbook(text: string, release: string): ReleaseRunbo
   const where = `runbook ${release}`;
   const errors: string[] = [];
   if (!isObject(doc)) throw new Error(`${where}: not a mapping`);
-  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
+  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "scope", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
   if (typeof doc.recovery !== "string" || doc.recovery.trim() === "") errors.push(`${where}: recovery is the release's recovery decision, as text (SC.1)`);
   if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (doc.release !== release) errors.push(`${where}: names release ${String(doc.release)}`);
   const template = doc.template ?? DEFAULT_TEMPLATE;
   if (!isTemplateName(template)) errors.push(`${where}: template ${String(template)} is not one of ${TEMPLATE_NAMES.join(", ")}`);
   const steps = parseSteps(doc.steps, where, errors);
+  errors.push(...scopeProblems(doc.scope, steps, where));
   if (errors.length > 0) throw new Error(errors.join("\n"));
-  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), recovery: doc.recovery as string, steps: deepFreeze(steps) };
+  const scope = (doc.scope as Record<string, unknown>[]).map((e) => ({ pr: e.pr as number, what: e.what as string, ...(typeof e.check === "string" ? { check: e.check } : {}), ...(typeof e.none === "string" ? { none: e.none } : {}) }));
+  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), recovery: doc.recovery as string, scope: deepFreeze(scope), steps: deepFreeze(steps) };
 }
 
 /** PURE. The recovery decision a release runbook's YAML text holds, or undefined. Reads that one key only. */
