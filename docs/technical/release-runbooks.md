@@ -122,6 +122,10 @@ and the phases run in this order:
 | **Soak** | `S01`… | Every release, on stage (QA) and on production | The general checks: identity, product (readonly tier), logs, the baseline comparison, host guards, then 30 minutes after READY the log gate and the standing invariants (no crashed container, no pipeline errors), then every container's log |
 | **Version** | `V01`… | Every release, on stage (QA) and on production, after the soak | The release's own checks, one per change it ships: a feature landed, a bug is fixed, a feature retired. Only a release runbook adds them; a template has none. A check that must write runs on stage only |
 
+**Words.** "The cutover" means the production run (§4.7). The runbook's C steps and phase name are
+the same steps on both targets, so a stage run executes them too. Say "the stage run of the C
+steps" for that, and "the cutover" only for production. A stage run is never a cutover.
+
 A stage run is QA: it builds stage, then runs the preflight, cutover, soak and version steps exactly
 as production will, so production's checks have passed on stage before production runs them. Stage has
 no separate preflight: the stage pass earns the rc, and nothing reruns on stage for it.
@@ -182,9 +186,8 @@ running with nothing attached. Kill that remote step (`stage-target.js remote`, 
 resuming, and match processes by an exact name: a `pkill -f` pattern that appears in your own command
 line kills your own shell.
 
-**A bounded run.** The runner has no stop-after option. To run QA through a phase only, which the
-owner may ask for (2026-10-16: stop after the preflight, run no cutover step), run the steps one at
-a time with `--only`, in order, and stop at the first failure or the last step wanted:
+**A bounded run.** The runner has no stop-after option. To run QA through a phase only, run the
+steps one at a time with `--only`, in order, and stop at the first failure or the last step wanted:
 
 ```bash
 for s in Q03-stage-up Q04-role-passwords Q05-scope P01-checkout … P08-log-baseline; do

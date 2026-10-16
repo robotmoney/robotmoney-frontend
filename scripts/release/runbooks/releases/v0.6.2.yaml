@@ -31,10 +31,10 @@ notes: |
   compose configuration did not, so C10-rolling-boot ships it by graceful reload into the running
   container (SC.5); the site never goes down.
 
-  QA session 2026-10-16 (branch qa/0.6.x-2026-10-16). Owner decision: the stage run stops after
-  the preflight (P08-log-baseline). No cutover, soak or version step runs on stage in this session,
-  so the session is not a pass for SP.8. The scope list matches the PRs v0.6.1..the QA commit
-  (nine were added on this branch, with V12-bankr-token-rows for 0124).
+  QA session 2026-10-16 (branch qa/0.6.x-2026-10-16). Fixes made on the branch: nine PRs added to
+  scope (the range v0.6.1..the QA commit carries 38), with V12-bankr-token-rows for 0124; and two
+  external log classifications for a DexScreener HTTP 429 in projects.sync_revenue, which the
+  P08-log-baseline gate read in production's v0.6.1 stack on stage and failed as unclassified.
 
   Member notice. The notice to woon, shodai, zyfai and dualmint about the new close times
   (vault 00:52, woon 06:52, allocation 12:52, treasury 18:52 UTC) waits on the owner's
