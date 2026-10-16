@@ -146,12 +146,12 @@
 .hm-ring { position: relative; width: 100%; max-width: 22rem; }
 .hm-ring .sv__wdonut {
   display: block; width: 100%; height: auto; aspect-ratio: 1;
-  transform-origin: center; transition: transform 400ms var(--ease-out-expo);
+  transform-origin: center; transition: transform 220ms var(--ease-out-expo);
 }
 .hm-ring.is-hot .sv__wdonut { transform: scale(1.06); }
 .hm-ring circle[data-sleeve] {
   cursor: pointer;
-  transition: opacity 240ms var(--ease-out-expo), stroke-width 400ms var(--ease-out-expo);
+  transition: opacity 140ms var(--ease-out-expo), stroke-width 220ms var(--ease-out-expo);
 }
 .hm-ring circle.is-muted { opacity: 0.22; }
 .hm-ring.is-hot circle[data-sleeve]:not(.is-muted) { stroke-width: 5.75; }
@@ -178,7 +178,7 @@
   display: grid; grid-template-columns: 0.625rem minmax(0, 1fr) auto; grid-template-areas: "sw name pct" ". assets assets";
   gap: 0.25rem 0.875rem; align-items: baseline; width: 100%; margin: 0; padding: 1rem 0;
   background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
-  transition: opacity 240ms var(--ease-out-expo);
+  transition: opacity 140ms var(--ease-out-expo);
 }
 .hm-keys li:first-child .hm-keys__row { padding-top: 0; }
 .hm-keys__row.is-dim { opacity: 0.4; }

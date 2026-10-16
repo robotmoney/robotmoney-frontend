@@ -206,7 +206,7 @@ const META = {
   },
   "/changelog": {
     title: "Changelog | Robot Money",
-    description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the allocation and the regime classifier behind it.",
+    description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the model portfolio and the regime classifier behind it.",
   },
   "/docs": {
     title: "Robot Money Docs: Vault, Swarm & Agent Skill",

@@ -22,7 +22,7 @@ Fast paths for the three questions people ask most, with the real response size 
 
 This site publishes **two different datasets** and they are easy to confuse:
 
-1. **Robot Money's own treasury.** The rmUSDC vault, the protocol wallets, the allocation, the buybacks, the regime classifier, the swarm. This is the product.
+1. **Robot Money's own treasury.** The rmUSDC vault, the protocol wallets, the model portfolio, the buybacks, the regime classifier, the swarm. This is the product.
 2. **A directory of the third-party agent economy Robot Money tracks** as analytics: outside agents, coins, vaults, wallets and projects. These are observations of other people's assets.
 
 The endpoints under `/api/dashboards/entities`, `/overview`, `/agents`, `/coins`, `/vaults`, `/wallets`, `/leaderboard` and `/api/projects` are all dataset 2. In particular `overview.vaultTvlUsd` is the sum of the tracked third-party vaults and is not Robot Money's vault. For "how much is in the Robot Money vault" the answer is `tvlUsd` from `/api/dashboards/vault-economics`, and today the two numbers differ by more than four orders of magnitude.
