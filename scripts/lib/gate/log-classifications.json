@@ -418,15 +418,15 @@
     "match": "\\[projects\\.fetch_vaults\\] extractor failed — keeping last-persisted rows \\(degraded\\): live-source: totalAssets\\(\\) failed for 0x7689006F6C3A3473449E42b628544E60D0bCCb07$",
     "class": "known-issue",
     "issue": "1291",
-    "reason": "projects.fetch_vaults reads every active vault as ERC-4626 inside one try block. The v0 roster's Bankr Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type lp-fees) is not an ERC-4626 vault: totalAssets() reverts on Base, and the whole run degrades with updated: 0, so no vault's TVL has updated in production since v0.6.0 (production capture of 2026-10-14). Seen on the v0.6.2 stage QA run, 2026-10-15.",
-    "tolerateAfterRelease": "Pre-existing since v0.6.0 and not fixed by v0.6.2: issue 1291 (phase 1374) isolates each vault so one revert no longer aborts the run. The match is this one vault address only; the same failure on any other vault stays unclassified and fails."
+    "reason": "projects.fetch_vaults reads every active vault as ERC-4626 inside one try block. The v0 roster's Bankr Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type lp-fees) is not an ERC-4626 vault: totalAssets() reverts on Base, and the whole run degrades with updated: 0, so no vault's TVL has updated in production since v0.6.0 (production capture of 2026-10-14). Seen on the v0.6.2 stage QA run, 2026-10-15. Fixed in v0.6.2: issue 1291 reads each vault on its own, so this whole-run line no longer occurs, and issue 1382 (migration 0124) deactivates both Bankr lp-fees rows, which are ERC-20 tokens and not vaults, so fetch_vaults no longer reads them. The rule stays to classify production logs from a release before v0.6.2 in a baseline; after v0.6.2 the line fails.",
+    "fixedIn": "0.6.2"
   },
   {
     "id": "known-projects-bankr-lp-vault-job-degraded",
     "match": "job \\S+ \\(projects\\.fetch_vaults\\) DEGRADED — kept last-persisted[^:]*: live-source: totalAssets\\(\\) failed for 0x7689006F6C3A3473449E42b628544E60D0bCCb07$",
     "class": "known-issue",
     "issue": "1291",
-    "reason": "projects.fetch_vaults reads every active vault as ERC-4626 inside one try block. The v0 roster's Bankr Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type lp-fees) is not an ERC-4626 vault: totalAssets() reverts on Base, and the whole run degrades with updated: 0, so no vault's TVL has updated in production since v0.6.0 (production capture of 2026-10-14). Seen on the v0.6.2 stage QA run, 2026-10-15. The worker loop's summary line for the same degradation (backend/src/worker/loop.ts).",
-    "tolerateAfterRelease": "Pre-existing since v0.6.0 and not fixed by v0.6.2: issue 1291 (phase 1374) isolates each vault so one revert no longer aborts the run. The match is this one vault address only; the same failure on any other vault stays unclassified and fails."
+    "reason": "projects.fetch_vaults reads every active vault as ERC-4626 inside one try block. The v0 roster's Bankr Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type lp-fees) is not an ERC-4626 vault: totalAssets() reverts on Base, and the whole run degrades with updated: 0, so no vault's TVL has updated in production since v0.6.0 (production capture of 2026-10-14). Seen on the v0.6.2 stage QA run, 2026-10-15. The worker loop's summary line for the same degradation (backend/src/worker/loop.ts). Fixed in v0.6.2: issue 1291 reads each vault on its own, so this whole-run line no longer occurs, and issue 1382 (migration 0124) deactivates both Bankr lp-fees rows, which are ERC-20 tokens and not vaults, so fetch_vaults no longer reads them. The rule stays to classify production logs from a release before v0.6.2 in a baseline; after v0.6.2 the line fails.",
+    "fixedIn": "0.6.2"
   }
 ]
