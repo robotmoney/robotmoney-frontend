@@ -13,9 +13,10 @@ own execution status.
 ## 1. Goals, meaning and boundaries
 
 A depositor can identify the member or team channel that referred them, attach
-that choice to a deposit they authorize, and obtain an explainable attribution
-record reconstructed from verifiable evidence. Administrators can inspect code
-state and operators can reproduce a historical report.
+that choice to a deposit they authorize. Administrators can inspect code state.
+Operators can reproduce a historical report and, on request, explain any one
+wallet's or transaction's result from verifiable evidence. No self-serve
+attribution view exists for depositors or members.
 
 **Attribution** means associating one wallet with one referral code. It creates
 no payment, fee rebate, reward entitlement or promise of yield. There is no
@@ -34,10 +35,9 @@ coverage. Attribution identity is the depositing wallet address, not a natural
 person or an account across wallets. Members and team channels may receive
 codes. A **team channel** is a named source the Robot Money team uses to track
 where depositors come from, such as `site`. It is a short name in the registry,
-not a swarm member, table or identity, and it accepts no terms. Known
-member-controlled wallets cannot use that member's code; this is an auditable
-declared-address check, not a claim to detect common control or prevent Sybil
-behavior. Team channels follow the same declared-control rule for team wallets.
+not a swarm member, table or identity, and it accepts no terms. There is no
+self-referral check: a member's own wallet may use that member's code, and no
+list of member-controlled wallets is kept (owner, 2026-10-16).
 
 Referrals must work for deposits through the router as well as direct vault
 deposits. The signer has no effect: an EOA, a Safe or other multisig, a smart
@@ -159,14 +159,16 @@ operator issues a code by a reviewed change to that configuration, and the code
 reaches production only in a release. Each record contains normalized code,
 immutable beneficiary kind and ID (a member ID, or a team channel name),
 display snapshot, terms version, activation time,
-disabling time, and declared controlled wallets. Launch block and deployment
-manifest are versioned alongside the rules. No environment variable grants
+and disabling time. Times are ISO 8601 UTC strings, compared as Unix seconds
+against block timestamps. One global launch block and the deployment manifest
+are versioned alongside the rules. No environment variable grants
 attribution or changes policy silently.
 
 States at timestamp `t` are `draft` (no activation), `scheduled` (activation is
 future), `active` (`enabledAt <= t` and no disable or `t < disabledAt`), and
-`disabled` (`disabledAt <= t`). A member code's terms acceptance is evidenced before activation; a team channel
-code has no terms version.
+`disabled` (`disabledAt <= t`). A member code needs a terms version before activation; the reviewed change that
+records it is the evidence of acceptance. A team channel code has no terms
+version.
 Code strings are globally unique and never reassigned, including after deletion
 of a beneficiary. Activation intervals are half-open and may not overlap for
 the same beneficiary; a replacement may start exactly when the old one stops.
@@ -210,11 +212,11 @@ shared normalizer above applies. Exact success bodies are:
 ```
 
 Unknown, malformed, draft, scheduled, disabled, deactivated-member and
-missing-member codes return 404 with identical `{ "error": "not_found" }`
+missing-member codes return 404 with identical `{ "error": "not found" }`
 bodies. No list, prefix search or wildcard route exists. 200 and 404 use
 `Cache-Control: public, max-age=60`; responses must not depend on cookies or
 authorization. Per trusted client IP, allow 100 requests per 60-second window,
-then 429 `{ "error": "rate_limited" }` with integer `Retry-After` seconds and
+then 429 `{ "error": "rate limit exceeded" }` with integer `Retry-After` seconds and
 `Cache-Control: no-store`. The window is the existing sliding-window
 `createRateLimiter` (`backend/src/api/rate-limit.ts`) with its own instance for
 this route: per process, in memory, `Retry-After` until the oldest request in
@@ -222,17 +224,20 @@ the window ages out. It matches the public analytics routes' 100-per-minute
 precedent (`backend/src/api/routes/public-analytics.ts`). Use the existing
 trusted-proxy/IP boundary (`backend/src/api/client-ip.ts`); clients cannot
 select their identity through arbitrary forwarding headers. Dependency failures
-return 503 `{ "error": "unavailable" }`, `Cache-Control: no-store`. These
-bodies use the API's existing `{ "error": "<string>" }` envelope
-(`backend/src/api/index.ts`); the values are stable machine codes.
+return 503 `{ "error": "service unavailable" }`, `Cache-Control: no-store`.
+These bodies use the API's existing `{ "error": "<string>" }` envelope
+(`backend/src/api/index.ts`) and the same strings as the public analytics
+routes.
 
 The lookup identifies a currently active code. It says nothing about wallet
 eligibility, launch status, supported execution, future activity, or earned
-credit. Cached success can outlive disabling by 60 seconds. Codes and member
+credit. The 60-second cache delays both directions: a cached success can
+outlive disabling, and a cached 404 can hide a newly activated code, each by up
+to 60 seconds. Codes and member
 identity may be discoverable through predictable strings, calldata and public
 lookup. No bulk listing and uniform misses do **not** promise secrecy or prevent
 enumeration. Use synthetic codes in goldens; do not publish private report data
-or controlled-wallet lists in public API responses.
+in public API responses.
 
 Admin member DTO adds `referral: null | { code, state, enabled, termsVersion,
 enabledAt, disabledAt }`, with `enabled` exactly `state === "active"`. The admin
@@ -267,6 +272,8 @@ ABI/bytecode version, deployment/start/end blocks, and legacy relationships.
 Historical entries survive replacement of current vault addresses. The legacy
 entry is the v0 rmUSDC vault in `config.vault` (`backend/src/config.ts`), read
 as ERC-4626 ([vault-and-wallet §10](../architecture/vault-and-wallet.md)).
+The closed reporting PR (1386) started its scan at deployment 2's first block
+and skipped v0; this specification counts v0 history.
 The candidate current entries are core's deployment 2 on Base: the router plus
 rmUSDC, rmPROTO, rmAGENT and rmRWA, as listed in #1356. Resolve v0 and
 four-vault coverage against actual deployments before launch; #1356 and #1090
@@ -306,12 +313,15 @@ revisions, registry digest, evidence digest, per-range coverage, completeness,
 errors, and run time. Rows carry wallet, beneficiary/code or null, first
 qualifying deposit, chosen event identity, binding status, candidate outcomes
 and reasons. Reasons include `bound`, `already_bound`, `uncoded`, `late`,
-`before_launch`, `code_inactive`, `self_referral`, `gift`, `invalid_code`, and
+`before_launch`, `code_inactive`, `gift`, `invalid_code`, and
 `evidence_unavailable`. Observations can be known
 while final eligibility remains unknown; do not collapse those dimensions.
 CSV exports carry a manifest identifier and accompanying JSON provenance file.
-Optional holdings use raw integer quantities and explicit decimals; rounded
-presentation is not an attribution input.
+Optional holdings read each vault's `balanceOf` and then `convertToAssets` at
+the pinned block, as raw integer quantities with explicit decimals; rounded
+presentation is not an attribution input. The report has a per-wallet and a
+per-transaction explain mode, which is how an operator answers a depositor's or
+member's question.
 
 For the same cutoff/hash, manifest, evidence, registry and rules, attribution and
 valuation payloads must match byte-for-byte after canonical serialization.
@@ -392,7 +402,7 @@ registry inputs and expected explanations, not just isolated parser outputs.
 | ` RM_ALICE ` versus `rm_a lice` | First normalizes to `rm_alice`; second fails unchanged. Public, skill and report share fixtures. |
 | Active code but late, pre-launch, or already bound | Lookup succeeds; reporting explains actual eligibility independently; existing binding persists. |
 | Legacy v0 holder migrates; deployment addresses replaced | First qualifying historical deposit retained; no new clock. Missing legacy coverage blocks final report. |
-| Member-controlled wallet, team channel, transferred shares | Declared self-referral rejected; eligible team code works; holdings are descriptive, not qualified capital. |
+| Member's own wallet, team channel, transferred shares | A member's own wallet may bind to that member's code; eligible team code works; holdings are descriptive, not qualified capital. |
 | Repeated legs, duplicate logs, interrupted scans | Stable deduplication and ordering; no duplicate attribution; checkpoint resumes under identical revisions/hash. |
 | Public lookup/admin/public member DTOs | Exact shapes and errors; rate/cache behavior; no bulk route, private wallet list or public member referral field. |
 
@@ -429,7 +439,7 @@ The product owner accepting #1358 must expressly accept or amend these proposals
 | Supported launch paths | **Accepted by the owner, 2026-10-16.** Direct and router deposits; the signer and wallet vendor have no effect. |
 | Encoding | **Owned by `robotmoney-core`; pending.** This repository waits for core's carrier and pins only the code format (§3). |
 | Manual/correction policy | No manual awards or discretionary overrides; evidence corrections preserve supersession history. |
-| Identity and lifecycle | Wallet identity, declared-control exclusion, immutable code ownership and prospective reviewed lifecycle. |
+| Identity and lifecycle | Wallet identity, no self-referral check (**accepted by the owner, 2026-10-16**), immutable code ownership and prospective reviewed lifecycle. |
 | Experience and disclosure | Requested code blocks submission on failure; codes are discoverable; admin projection includes explicit state. |
 | Report authority | One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
 
