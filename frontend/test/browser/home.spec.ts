@@ -225,7 +225,13 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   expect(order.slice(0, 3)).toEqual(["header", "problem", "model"]);
   const problem = page.locator("#problem");
   await expect(problem.locator("h2")).toHaveText(/On-chain treasuries\s*are still run by hand\./);
-  await expect(problem.locator(".hm-figs dt")).toHaveText(["$5.1B", "2\u00d7", "3.6%"]);
+  await expect(problem.locator(".hm-figs dt")).toHaveText(["$5.1B", "3\u00d7", "3.6%"]);
+  // Every figure is sourced to a page that shows it.
+  const sources = problem.locator(".hm-sources a");
+  await expect(sources).toHaveCount(5);
+  for (const host of ["galaxy.com", "defillama.com", "rwa.xyz", "circle.com", "morningstar.com"]) {
+    await expect(problem.locator(`.hm-sources a[href*="${host}"]`)).toHaveAttribute("target", "_blank");
+  }
   await expect(problem.locator(".hm-answer__h")).toHaveText(/\$934B of US assets tracks a model portfolio\.\s*Crypto has none\./);
   await expect(problem.locator(".hm-answer__p")).toContainText("every treasury improvises its own.");
 
