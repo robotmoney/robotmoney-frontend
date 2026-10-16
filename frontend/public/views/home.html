@@ -27,6 +27,32 @@
     <p class="hm-hero__legend">Any liquid, permissionless asset on Base</p>
   </header>
 
+  <!-- ── The problem ── -->
+  <section class="hm-sec hm-problem" id="problem">
+    <div class="hm-grid hm-grid--text">
+      <div class="hm-reveal">
+        <h2 class="hm-h2">On-chain treasuries<span>are still run by hand.</span></h2>
+        <p class="hm-lede">Agent companies, DAOs and on-chain businesses keep their operating capital in a multisig, and it lands in one of three places: idle stablecoins, a single lending protocol, or the project's own token. Each one is a single bet. None of them is a portfolio.</p>
+      </div>
+      <figure class="hm-plate" data-plate="dark,0.62,0.55" aria-hidden="true"><canvas></canvas></figure>
+    </div>
+    <dl class="hm-figs hm-reveal">
+      <div><dt>$5.1B</dt><dd>of Aave stablecoin deposits were stuck after April's Kelp exploit.</dd></div>
+      <div><dt>2<span>&times;</span></dt><dd>DAO treasuries hold twice as much of their own token as all other assets.</dd></div>
+      <div><dt>3.6%</dt><dd>What tokenized T-bills pay. Idle USDC earns none of it.</dd></div>
+    </dl>
+    <!-- Sources line goes here once David sends the table: rwa.xyz (tokenized
+         US Treasuries, 7-day yield, Oct 16, 2026), Morningstar ($934B), and the
+         Aave and DAO treasury figures. -->
+    <div class="hm-answer hm-reveal">
+      <div>
+        <p class="hm-k">The model portfolio</p>
+        <h3 class="hm-answer__h">$934B of US assets tracks a model portfolio.<span>Crypto has none.</span></h3>
+      </div>
+      <p class="hm-answer__p">A published, rules-based answer to how money gets split, set once and applied to every account. On chain, every treasury improvises its own.</p>
+    </div>
+  </section>
+
   <!-- ── The model portfolio ── -->
   <section class="hm-sec" id="model">
     <div class="hm-grid">
@@ -38,18 +64,34 @@
         <p class="hm-lede">How the swarm would split a dollar.</p>
         <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="historyHref()">Recommendation history</a></p>
       </div>
-      <figure class="hm-model hm-reveal" :aria-label="modelLabel()">
-        <div class="hm-ring">
-          <div class="hm-ring__svg" x-html="ringHtml()"></div>
+      <figure class="hm-model hm-reveal" x-data="sleeveExplorer()"
+              @keydown.escape.window="close()" @pointerleave="leave()"
+              :aria-label="modelLabel()">
+        <div class="hm-ring" :class="{ 'is-hot': active() }"
+             @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+          <div class="hm-ring__svg"
+               x-html="ringHtml()"
+               x-effect="active(); $nextTick(() => syncArcs($el))"></div>
           <p class="rr-empty__t hm-ring__empty" x-show="modelLoaded && !model" x-cloak>No recommendation yet</p>
+          <div class="hm-ring__hole" x-show="activeRow() && vaultSymbol(activeRow().key)" x-cloak>
+            <span class="hm-ring__pct" x-text="activeRow() ? countPct(activeRow().pct) : ''"></span>
+            <a class="hm-ring__tok" :href="activeRow() ? vaultHref(activeRow().key) : null"
+               x-text="activeRow() ? vaultSymbol(activeRow().key) : ''"></a>
+          </div>
         </div>
         <ul class="hm-keys" x-show="model" x-cloak>
           <template x-for="r in (model ? model.rows : [])" :key="r.key">
-            <li :style="`--c:${r.colour}`">
-              <i data-mark="series" aria-hidden="true"></i>
-              <b x-text="r.label"></b>
-              <span class="hm-keys__pct" x-text="shown(r.pct)"></span>
-              <small x-show="r.assets" x-text="r.assets"></small>
+            <li>
+              <button type="button" class="hm-keys__row" :data-sleeve-btn="r.key"
+                      :class="{ 'is-hot': active() === r.key, 'is-dim': active() && active() !== r.key }"
+                      :style="`--c:${r.colour}`"
+                      @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()"
+                      @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                <i data-mark="series" aria-hidden="true"></i>
+                <b x-text="r.label"></b>
+                <span class="hm-keys__pct" x-text="countPct(r.pct)"></span>
+                <small x-show="r.assets" x-text="r.assets"></small>
+              </button>
             </li>
           </template>
         </ul>
@@ -89,51 +131,72 @@
         <span class="hm-k" x-show="seatsLabel()" x-text="seatsLabel()" x-cloak></span>
       </div>
     </div>
-    <ul class="hm-crew" aria-label="Swarm members" :class="{ 'is-loaded': rosterLoaded }">
-      <template x-for="(m, i) in crew()" :key="m.id">
+    <ul class="hm-crew" aria-label="Analysts" :class="{ 'is-loaded': rosterLoaded }">
+      <template x-for="(m, i) in analysts" :key="m.id">
         <li :style="`--i:${i}`">
-          <a :href="memberHref(m)" x-text="m.name"></a>
+          <a :href="memberHref(m)">
+            <span class="sv__avatar sv__avatar--mark hm-crew__mark" aria-hidden="true"
+                  x-html="memberMark(m.keyFingerprint || m.id, m.name, 64, m.avatar?.path, m.handle)"></span>
+            <span class="hm-crew__name" x-text="m.name"></span>
+          </a>
           <small x-show="memberNote(m)" x-text="memberNote(m)"></small>
         </li>
       </template>
     </ul>
+    <div class="hm-judges" x-show="judges.length" x-cloak>
+      <p class="hm-k">Judges</p>
+      <ul class="hm-crew hm-crew--judges" aria-label="Judges">
+        <template x-for="(m, i) in judges" :key="m.id">
+        <li :style="`--i:${i}`">
+          <a :href="memberHref(m)">
+            <span class="sv__avatar sv__avatar--mark hm-crew__mark" aria-hidden="true"
+                  x-html="memberMark(m.keyFingerprint || m.id, m.name, 64, m.avatar?.path, m.handle)"></span>
+            <span class="hm-crew__name" x-text="m.name"></span>
+          </a>
+          <small x-show="memberNote(m)" x-text="memberNote(m)"></small>
+        </li>
+        </template>
+      </ul>
+    </div>
     <div class="rr-empty hm-crew__empty" x-show="rosterFailed" x-cloak>
       <p class="rr-empty__t">Roster unavailable</p>
     </div>
   </section>
 
   <!-- ── How to get exposure ── -->
-  <section class="hm-sec" id="hold">
-    <div class="hm-grid">
-      <div class="hm-reveal">
-        <h2 class="hm-h2">How to get<span>exposure</span></h2>
-        <ul class="hm-ways">
-          <li>
-            <h3>Robot Money vaults</h3>
-            <p>Deposit USDC on Base. It spreads across four vaults, one per sleeve, and comes back at market value whenever you withdraw.</p>
-            <p class="hm-k">2% performance fee · 0.25% exit fee, kept by the vault</p>
+  <section class="hm-sec hm-hold" id="hold">
+    <h2 class="hm-h2 hm-reveal">How to get<span>exposure</span></h2>
+    <figure class="hm-band" data-plate="aerial,0.5,0.24" aria-hidden="true"><canvas></canvas></figure>
+    <ul class="hm-ways">
+      <li class="hm-reveal">
+        <div class="hm-way__t"><h3>Robot Money vaults</h3></div>
+        <div class="hm-way">
+          <p>Deposit USDC on Base. It spreads across four vaults, one per sleeve, and comes back at market value whenever you withdraw.</p>
+          <div class="hm-act">
             <a class="btn-primary" href="/deposit">Deposit USDC <span aria-hidden="true">&rarr;</span></a>
-            <div class="hm-prompt">
-              <div class="hm-prompt__bar">
-                <span class="hm-k">For agents</span>
-                <button class="rr-btn" type="button" data-copy="Read robotmoney.network/skill.md and deposit 500 USDC into Robot Money.">Copy</button>
-              </div>
-              <code>Read robotmoney.network/skill.md and deposit 500 USDC into Robot Money.</code>
-            </div>
-            <p class="hm-note">Works from any wallet, a Safe included. Your wallet signs every transaction, and the skill never holds a key.</p>
-          </li>
-          <li>
-            <h3>Your own account</h3>
-            <p>Copy the weights into your own wallet or managed account. They're public, with the takes behind every one.</p>
-          </li>
-          <li>
-            <h3>Platforms</h3>
-            <p>The model portfolio is published as data, so platforms like Glider, ZyFAI and Pharos can build it into their own products.</p>
-          </li>
-        </ul>
-      </div>
-      <figure class="hm-plate" data-plate="aerial,0.5,0.3" aria-hidden="true"><canvas></canvas></figure>
-    </div>
+            <p class="hm-k">2% performance fee · 0.25% exit fee, kept by the vault</p>
+          </div>
+          <div class="hm-prompt">
+            <span class="hm-k">For agents</span>
+            <code>Read robotmoney.network/skill.md and deposit 500 USDC into Robot Money.</code>
+            <button class="rr-btn" type="button" data-copy="Read robotmoney.network/skill.md and deposit 500 USDC into Robot Money.">Copy</button>
+          </div>
+          <p class="hm-note">Works from any wallet, a Safe included. Your wallet signs every transaction, and the skill never holds a key.</p>
+        </div>
+      </li>
+      <li class="hm-reveal">
+        <div class="hm-way__t"><h3>Your own account</h3><span class="rm-soon">Coming soon</span></div>
+        <div class="hm-way">
+          <p>Hold the assets in your own wallet or a managed account. Each time the swarm publishes a new set of target weights, you rebalance to match on your own schedule. The keys and the trades stay yours.</p>
+        </div>
+      </li>
+      <li class="hm-reveal">
+        <div class="hm-way__t"><h3>Partner platforms</h3><span class="rm-soon">Coming soon</span></div>
+        <div class="hm-way">
+          <p>Platforms like Glider, ZyFAI and Pharos can build the model portfolio into their products. A data feed delivers each new set of target weights when the swarm publishes it, and rebalances its users' holdings to match.</p>
+        </div>
+      </li>
+    </ul>
   </section>
 
   <!-- ── Close ── -->

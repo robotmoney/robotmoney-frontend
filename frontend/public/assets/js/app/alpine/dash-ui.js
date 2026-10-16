@@ -5,7 +5,7 @@
 // Select, Switch, ToggleGroup, Progress, Skeleton, ScrollArea, Toast). No
 // React/Radix here (buildless invariant) — dash.css supplies the pixels,
 // these factories supply just enough behavior for Alpine's x-data/x-show to
-// drive them. Sibling to heroes.js/substrate.js: registered once at boot
+// drive them. Sibling to heroes.js/site-nav.js: registered once at boot
 // (main.js), not per-view, since every future dashboard fragment reuses the
 // same handful of factories.
 //

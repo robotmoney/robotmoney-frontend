@@ -17,6 +17,7 @@
 // Members are named from the roster; the faint lines stand for no count.
 
 const TAU = Math.PI * 2;
+const NAV_CLEAR = 104;
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 export const ease = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : 1 - Math.pow(1 - t, 3));
 const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -91,7 +92,13 @@ export function createOverlay(ctx) {
     const x0 = narrow ? W * 0.08 : Math.max(copyRight + 60, W * 0.45), x1 = W * 0.97;
     lines = members.slice(0, 20).map((m, i) => ({
       member: m, x: x0 + ((x1 - x0) * (i + 0.5)) / members.length + (rnd() - 0.5) * 40,
-      y: H * (narrow ? 0.08 : 0.07) + rnd() * H * (narrow ? 0.14 : 0.2), order: i / Math.max(1, members.length), strong: true,
+      // Named lines start below the site nav (4rem, plus room for the label
+      // above the point), never under it.
+      // Neighbours sit on staggered heights (three, four on a phone, where the
+      // lines are packed tighter), so two names on screen together never print
+      // over each other.
+      y: Math.max(NAV_CLEAR, H * (narrow ? 0.08 : 0.07)) + (i % (narrow ? 4 : 3)) * Math.max(34, H * (narrow ? 0.065 : 0.075)) + rnd() * H * 0.025,
+      order: i / Math.max(1, members.length), strong: true,
     }));
     const faint = narrow ? 14 : 30;
     for (let i = 0; i < faint; i++) {
@@ -101,18 +108,20 @@ export function createOverlay(ctx) {
     }
   }
 
-  const LABEL_FONT = '500 10px "JetBrains Mono", ui-monospace, monospace';
-  const LENS_FONT = '400 11px "Space Grotesk", ui-sans-serif, system-ui';
+  const LABEL_FONT = '500 11px "JetBrains Mono", ui-monospace, monospace';
+  const LENS_FONT = '400 12px "Space Grotesk", ui-sans-serif, system-ui';
+  // Mono caps are tracked out; words in the sans are set as written.
+  const track = (font) => (font.includes("Mono") ? "0.14em" : "0px");
   const measure = (text, font = LABEL_FONT) => {
     ctx.font = font;
-    try { ctx.letterSpacing = "0.14em"; } catch { /* older canvas */ }
+    try { ctx.letterSpacing = track(font); } catch { /* older canvas */ }
     const w = ctx.measureText(text).width;
     try { ctx.letterSpacing = "0px"; } catch { /* */ }
     return w;
   };
   const label = (text, x, y, align, color, font) => {
     ctx.font = font || LABEL_FONT;
-    try { ctx.letterSpacing = "0.14em"; } catch { /* older canvas */ }
+    try { ctx.letterSpacing = track(font || LABEL_FONT); } catch { /* older canvas */ }
     ctx.textAlign = align; ctx.fillStyle = color; ctx.fillText(text, x, y);
     try { ctx.letterSpacing = "0px"; } catch { /* */ }
   };
@@ -156,8 +165,8 @@ export function createOverlay(ctx) {
           const room = W - 16 - (l.x + 8);
           const flip = Math.max(measure(l.member.name.toUpperCase()), lens ? measure(lens, LENS_FONT) : 0) > room;
           const lx = flip ? l.x - 8 : l.x + 8, al = flip ? "right" : "left";
-          label(l.member.name.toUpperCase(), lx, l.y - 8, al, `rgba(237,239,241,${0.9 * na})`);
-          if (lens) label(lens, lx, l.y + 6, al, `rgba(237,239,241,${0.5 * na})`, LENS_FONT);
+          label(l.member.name.toUpperCase(), lx, l.y - 9, al, `rgba(242,244,249,${0.97 * na})`);
+          if (lens) label(lens, lx, l.y + 7, al, `rgba(194,201,216,${0.82 * na})`, LENS_FONT);
         }
       }
     }

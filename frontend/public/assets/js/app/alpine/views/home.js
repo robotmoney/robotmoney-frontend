@@ -17,6 +17,8 @@ import { allocationFramework } from "../../lib/allocation-framework.js";
 import { isJudge } from "../../lib/judgements.js";
 import { sessionSummary } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
+import { memberLogo } from "../../lib/member-logos.js";
+import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { fmtDate, vaultForBucket } from "../../lib/vault-data.js";
 import { loadLatestRecommendation } from "../../lib/vault-source.js";
 import { createMonument } from "../../home/scene.js";
@@ -125,12 +127,28 @@ export function registerHomeView(Alpine) {
     // ── the model portfolio ────────────────────────────────────────────────
     ringHtml() { return this.model ? this.model.ringHtml : EMPTY_RING; },
     /** @param {number} v */
-    shown(v) { return pctText(v * this.countK); },
+    countPct(v) { return pctText(v * this.countK); },
     modelLabel() {
       if (!this.model) return "The model portfolio";
       return `The model portfolio: ${this.model.rows.map((r) => `${r.label} ${pctText(r.pct)}`).join(", ")}`;
     },
     historyHref() { return `/swarm/subjects/${ALLOCATION_SUBJECT_ID}`; },
+    // The sleeve explorer reads these by name (lib/sleeve-explorer.js). Hue
+    // follows the published order, the same index the ring already paints.
+    explorerRows() {
+      return (this.model?.rows || []).map((r) => ({
+        key: r.key, label: r.label, hue: r.colour, pct: r.pct,
+      }));
+    },
+    explorerSvg() { return this.ringHtml(); },
+    explorerCenter() { return { value: "", label: "" }; },
+    /** @param {string | null | undefined} key */
+    vaultHref(key) {
+      const v = vaultForBucket(key);
+      return v ? `/vault/${v.slug}` : null;
+    },
+    /** @param {string | null | undefined} key */
+    vaultSymbol(key) { return vaultForBucket(key)?.symbol ?? ""; },
     /** @param {string} bucket */
     _assetsFor(bucket) {
       const b = (this.allocationFw?.buckets || []).find((/** @type {any} */ x) => vaultForBucket(x?.key ?? x?.label)?.bucket === bucket);
@@ -148,12 +166,28 @@ export function registerHomeView(Alpine) {
     },
 
     // ── the members ────────────────────────────────────────────────────────
-    // Analysts first, then the judges, each labelled as one.
-    crew() { return [...this.analysts, ...this.judges]; },
     /** @param {any} m */
     memberHref(m) { return `/swarm/members/${encodeURIComponent(m?.handle || m?.id || "")}`; },
     /** @param {any} m */
-    memberNote(m) { return isJudge(m) ? "Judge" : (m?.lens || ""); },
+    // Judges sit under their own label, so only an analyst's lens is noted.
+    memberNote(m) { return isJudge(m) ? "" : (m?.lens || ""); },
+    /** @param {string} name */
+    initials(name) {
+      return String(name || "")
+        .split(/\s+/)
+        .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((s) => s[0].toUpperCase())
+        .join("") || "SW";
+    },
+    // Same precedence as /swarm: curated logo, then avatar.path, then the
+    // derived mark. x-html is safe: memberAvatarMarkup never interpolates
+    // the seed, and initials() is already stripped to letters and digits.
+    memberMark(seed, name, size = 64, avatarPath, handle) {
+      const src = memberLogo({ handle }) || avatarPath || null;
+      return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
+    },
     seatsLabel() {
       if (this.seatsAvailable === null) return "";
       return this.seatsAvailable > 0

@@ -1452,12 +1452,17 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 }
 .sv__input:focus { outline: none; border-color: var(--color-accent); }
 .sv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
-/* The primary button, as .btn-primary draws it. */
+/* The primary button, as .btn-primary draws it: the plane and its Beam seam. */
 .sv__submit {
+  position: relative;
   align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: var(--radius);
-  color: var(--color-void); background: var(--color-accent); border: none;
+  color: var(--color-void); background: var(--color-text); border: none;
   transition: background-color 0.3s;
+}
+.sv__submit::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 2px;
+  background: var(--color-accent); pointer-events: none;
 }
 .sv__submit:hover:not(:disabled) { background: #fff; }
 .sv__submit:disabled { opacity: 0.5; cursor: default; }

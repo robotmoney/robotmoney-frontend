@@ -98,15 +98,15 @@
          then components. No @import; each file linked individually. -->
     <link rel="stylesheet" href="/assets/css/tokens.css?v=17e6f08f" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=948a4f51" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=83423dee" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
     <link rel="stylesheet" href="/assets/css/sections/footer.css?v=745051ec" />
-    <link rel="stylesheet" href="/assets/css/sections/home.css?v=219e3b10" />
+    <link rel="stylesheet" href="/assets/css/sections/home.css?v=1a09f8ea" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css?v=63da4127" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=1ad9532d" />
     <link rel="stylesheet" href="/assets/css/docs-shell.css?v=3b5cd222" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
@@ -145,7 +145,7 @@
          ANALYTICS is deliberately absent: it pointed at
          https://analytics.robotmoney.net/projects, which does not serve, and a
          nav item that 404s is worse than no nav item. -->
-    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav" :class="{ 'nav--open': open }"
+    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav" :class="{ 'nav--open': open, 'nav--over-hero': overHero }" :style="overHero ? `--nav-veil:${veil.toFixed(3)}` : ''"
          @keydown.escape="onEscape()" @focusout="onFocusOut($event)" @click="onClick($event)">
       <div class="nav__inner">
         <div class="nav__row">
