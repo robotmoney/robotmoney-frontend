@@ -63,7 +63,8 @@ branch, never on `main` or a QA branch.
 
 **QA branches (owner, 2026-10-06 and 2026-10-07).** A QA session cuts one
 `qa/A.B.x-<YYYY-MM-DD>` branch from the release branch tip and pushes it. Every patch of the
-session, runbook corrections included, merges there by PR. A pushed QA branch is never rewritten:
+session, runbook corrections included, is committed straight to that branch and pushed as a
+fast-forward (owner, 2026-10-16). No pull request opens into a QA branch. A pushed QA branch is never rewritten:
 no force push, reset or rebase. A new base means a new branch, `qa/A.B.x-<YYYY-MM-DD>-2`, and the
 session report names which branch each piece of evidence ran on. Every CI workflow runs on a push
 to `qa/**`, so the commit stage runs carries its own green CI (SP.7).
@@ -167,6 +168,32 @@ QA runs the release's YAML unmodified against the production-shaped stage target
 ```bash
 bun run release:run --target stage --go <stage go>
 ```
+
+**Before the run.** Run the scope check on the control machine against the QA commit, so a PR
+missing from the release YAML's `scope:` is fixed before the stage run, not found by it:
+`bun scripts/release/scope.ts --release vA.B.C --commit <QA commit> --origin <production origin>`.
+Commit any scope or runbook fix to the QA branch first. Every commit after a stage run changes the
+tree that run passed, so the run to count is the one at the final QA tip (§3 step 3).
+
+**Running it.** A run lasts longer than one tool or terminal session. Start it detached from the
+shell that launches it (`setsid nohup <script> </dev/null &`) and write its output to a log. A
+run started inside a session that ends is killed with it, and the remote step it was driving keeps
+running with nothing attached. Kill that remote step (`stage-target.js remote`, `pg_restore`) before
+resuming, and match processes by an exact name: a `pkill -f` pattern that appears in your own command
+line kills your own shell.
+
+**A bounded run.** The runner has no stop-after option. To run QA through a phase only, which the
+owner may ask for (2026-10-16: stop after the preflight, run no cutover step), run the steps one at
+a time with `--only`, in order, and stop at the first failure or the last step wanted:
+
+```bash
+for s in Q03-stage-up Q04-role-passwords Q05-scope P01-checkout … P08-log-baseline; do
+  bun run release:run --target stage --go <stage go> --run <ts> --only "$s" || break
+done
+```
+
+Run Q01-lockfile and Q02-dump first with the plain command, or take their records from an earlier
+`--run <ts>`. A bounded run is not a pass: SP.8 needs every step ok at the final QA tip.
 
 Q01-lockfile to Q04-role-passwords build the target (`onlyFor: stage`; production records them
 skipped, and the step-list hash is the same for both, SP.8). Q04-role-passwords sets the role
