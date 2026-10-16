@@ -407,6 +407,12 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # Issue 1378: bun is PID 1 without an init, so docker stop's SIGTERM went
+    # unanswered and the container was SIGKILLed after 10 s (exit 137).
+    # init: true puts tini in front; the process drains on SIGTERM and exits 0
+    # inside this grace period.
+    init: true
+    stop_grace_period: 30s
     logging: *default-logging
     # Docker-side health for the ONE service that can answer a meaningful
     # question about itself. /health probes the database (`SELECT 1`), so this
@@ -478,6 +484,19 @@ services:
       ANALYTICS_TOKEN_FILE: /run/rm-token/token
     volumes:
       - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/analytics-producer:/run/rm-token:ro
+    # Issue 1378. The rolling boot starts services with --no-deps, so this
+    # gate alone does not hold there; the worker also waits for the api's
+    # /health in process before its first claim (src/worker/runtime.ts).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    # Issue 1378: the worker releases its claimed job within 30 s of SIGTERM
+    # (WORKER_SHUTDOWN_TIMEOUT_MS). Docker's 10 s default killed it first and
+    # left a 'running' row for the reaper. 45 s covers the release window.
+    init: true
+    stop_grace_period: 45s
 
   # THE CLOCK (issue #1026). One long-running container that holds one timer per
   # active subject, fires each subject's epoch boundary, drives settlement and
@@ -575,6 +594,12 @@ services:
       # connection. Gating the start on api health would hide that.
       - api
     restart: unless-stopped
+    # Issue 1378: bun is PID 1 without an init, so docker stop's SIGTERM went
+    # unanswered and the container was SIGKILLed after 10 s (exit 137).
+    # init: true puts tini in front; the process drains on SIGTERM and exits 0
+    # inside this grace period.
+    init: true
+    stop_grace_period: 30s
     logging: *default-logging
     # Spec §6.3 of smoke-production defines scheduler readiness — authenticated,
     # stream synchronized, initial rebuild complete, every active subject
@@ -631,6 +656,12 @@ services:
     depends_on:
       - api
     restart: unless-stopped
+    # Issue 1378: bun is PID 1 without an init, so docker stop's SIGTERM went
+    # unanswered and the container was SIGKILLed after 10 s (exit 137).
+    # init: true puts tini in front; the process drains on SIGTERM and exits 0
+    # inside this grace period.
+    init: true
+    stop_grace_period: 30s
     logging: *default-logging
     # Same file, same comparator as the lanes — but this process has no drain
     # loop to speak for it (it owns two daily crons and an otherwise idle event

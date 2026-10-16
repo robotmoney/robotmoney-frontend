@@ -165,7 +165,7 @@ test("up() deletes MIGRATE_DATABASE_URL after migrate() runs, however it got set
   }
 });
 
-test("a deferred provider service starts after initialization and waits for health", async () => {
+test("a deferred provider service is stopped before initialization, then starts after it and waits for health", async () => {
   const rec: Recorded = { events: [], probes: 0 };
   const composeCalls: string[][] = [];
   const fullConfig: StackConfig = {
@@ -192,6 +192,10 @@ test("a deferred provider service starts after initialization and waits for heal
   );
   expect(init).toBeGreaterThan(-1);
   expect(producer).toBeGreaterThan(init);
+  // Issue 1378: the old producer is stopped before the seed one-shot runs.
+  const stop = composeCalls.findIndex((a) => a.includes("stop") && a.includes("analytics-producer"));
+  expect(stop).toBeGreaterThan(-1);
+  expect(stop).toBeLessThan(init);
   const primaryStart = composeCalls.find((a) => a.includes("up") && a.includes("api"));
   expect(primaryStart).not.toContain("analytics-producer");
 });

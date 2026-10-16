@@ -55,7 +55,11 @@ if (!startup.passed) {
 }
 for (const line of startup.lines) console.log(line);
 
-const worker = startWorker({ lane });
+// Issue 1378: no claim before the api answers /health. In-process, because a
+// rolling boot starts this service with `--no-deps`, which compose's
+// depends_on cannot gate.
+const { resolveApiHealthUrl } = await import("./boot.ts");
+const worker = startWorker({ lane, apiHealthUrl: resolveApiHealthUrl() });
 
 let shutdownStarted = false;
 async function shutdown(signal: string): Promise<void> {
