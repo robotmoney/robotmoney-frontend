@@ -243,8 +243,8 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await expect(page.locator("#hold li").filter({ hasText: "Partner platforms" }).locator(".rm-soon")).toHaveText("Coming soon");
   await expect(page.locator("#hold li").filter({ hasText: "Robot Money vaults" }).locator(".rm-soon")).toHaveCount(0);
   const prose = await page.locator(".hm").evaluate((el) => {
-    const c = /** @type {HTMLElement} */ (el.cloneNode(true));
-    c.querySelectorAll(".rm-soon").forEach((n) => n.remove());
+    const c = el.cloneNode(true) as HTMLElement;
+    c.querySelectorAll(".rm-soon").forEach((n: Element) => n.remove());
     return c.innerText;
   });
   expect(prose).not.toMatch(/coming soon/i);

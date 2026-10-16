@@ -17,7 +17,7 @@
 // runs from the repo root whatever directory it is invoked from.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { staticSpecs } from "./static-specs.ts";
+import { staticSpecFiles } from "./static-specs.ts";
 import { repoRoot } from "./version.ts";
 
 const FIXTURE_SPECS = ["preview-smoke", "api-unreachable", "api-range-mismatch", "preview-routes"];
@@ -75,7 +75,7 @@ async function runStatic(extra: string[]): Promise<number> {
         reject(new Error("static site server exited before printing its URL"));
       })();
     });
-    const specs = staticSpecs();
+    const specs = staticSpecFiles();
     console.log(`web-client browser check: api=static url=${url} specs=${specs.length}`);
     const proc = Bun.spawn(["bunx", "playwright", "test", ...specs, ...extra], {
       cwd: repoRoot,
