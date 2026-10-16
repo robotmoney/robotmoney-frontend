@@ -61,3 +61,5 @@ scripts/tests/unit/swarm-archive-index.test.ts
 scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts
 scripts/tests/unit/swarm-session-take-key.test.ts
 scripts/tests/unit/relative-time-left.test.ts
+
+scripts/tests/unit/zaraz-analytics.test.ts

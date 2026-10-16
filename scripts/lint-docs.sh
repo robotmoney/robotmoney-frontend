@@ -81,7 +81,9 @@ if [ -f "$decisions_doc" ]; then
   anchors="$(grep -o '<a id="[^"]*"></a>' "$decisions_doc" | sed 's/<a id="\([^"]*\)"><\/a>/\1/')"
   headings="$(grep -E '^#{1,6} ' "$decisions_doc" | sed -E 's/^#+ //' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g')"
   for ref in $(grep -o '](#[^)]*)' "$decisions_doc" | sed 's/](#\(.*\))/\1/' | sort -u); do
-    if ! printf '%s\n' "$anchors" | grep -qx "$ref" && ! printf '%s\n' "$headings" | grep -q "^$ref"; then
+    # grep -q may close its input early. Here-strings avoid a printf SIGPIPE
+    # being mistaken for a missing anchor under the script's pipefail setting.
+    if ! grep -qx "$ref" <<<"$anchors" && ! grep -q "^$ref" <<<"$headings"; then
       err "$decisions_doc links to #$ref, which no anchor or heading provides"
     fi
   done

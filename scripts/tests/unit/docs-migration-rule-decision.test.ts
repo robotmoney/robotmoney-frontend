@@ -100,6 +100,19 @@ describe("D66 records the 2026-10-09 migration rule and the scheduler docs agree
     expect(exitCode).toBe(0);
   });
 
+  test("anchor matching remains correct when heading output exceeds the pipe buffer", () => {
+    const root = fixtureRepo((r) => {
+      const path = join(r, DECISIONS);
+      const text = readFileSync(path, "utf8");
+      // grep -q exits at an early matching heading. A printf writer feeding
+      // it can then receive SIGPIPE under pipefail; matching is still valid.
+      writeFileSync(path, text + "\n" + ("## Heading inventory filler " + "x".repeat(100) + "\n").repeat(10000));
+    });
+    const { exitCode, stderr } = lintDocs(root);
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+  });
+
   test("green control: an unplanted copy passes both checks", () => {
     const root = fixtureRepo(() => {});
     expect(hasDecision(root)).toBe(true);
