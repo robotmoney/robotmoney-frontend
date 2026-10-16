@@ -431,6 +431,33 @@ export interface ProducerServeDeps {
   catchUpIndicators?: (persistence: AnalyticsPersistence) => Promise<unknown>;
   /** Test seam: override the heartbeat writer so tests never touch /tmp. */
   beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
+  /** How long after api readiness the boot catch-up waits (issue 1378). The
+   *  serve entry passes bootCatchUpDelayMs(env); omitted, there is no wait. */
+  bootCatchUpDelayMs?: number;
+  /** Test seam: the wait itself. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+// BOOT CATCH-UP DELAY (issue 1378). On the v0.6.2 stage QA run of 2026-10-15
+// the producer's 14-day boot catch-up started the moment the api answered,
+// on top of the worker's post-boot drain, and POST /api/analytics/vintages took
+// 5.3 s, past the 5 s request rule. The catch-up is not urgent (the crons are
+// hours away and every day it repairs is idempotent), so it now starts
+// PRODUCER_BOOT_CATCHUP_DELAY_MS (default 60 s) plus a random jitter of up to
+// PRODUCER_BOOT_CATCHUP_JITTER_MS (default 30 s) after readiness. Both are
+// bounded: a value above BOOT_CATCHUP_MAX_MS is clamped to it.
+const BOOT_CATCHUP_MAX_MS = 600_000;
+export function bootCatchUpDelayMs(
+  env: Record<string, string | undefined> = process.env,
+  random: () => number = Math.random,
+): number {
+  const read = (name: string, fallback: number): number => {
+    const v = Number(env[name] ?? fallback);
+    return Number.isFinite(v) && v >= 0 ? Math.min(v, BOOT_CATCHUP_MAX_MS) : fallback;
+  };
+  const base = read("PRODUCER_BOOT_CATCHUP_DELAY_MS", 60_000);
+  const jitter = read("PRODUCER_BOOT_CATCHUP_JITTER_MS", 30_000);
+  return base + Math.floor(random() * jitter);
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -449,6 +476,19 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
     detail: "waiting for the analytics API before arming crons",
   });
   await (deps.waitUntilReady ?? waitForApi)(cfg);
+  const delayMs = deps.bootCatchUpDelayMs ?? 0;
+  if (delayMs > 0) {
+    // A boot record whose budget spans the wait, so the container stays green
+    // while it waits (issue 1378).
+    await (deps.beat ?? writeHeartbeat)({
+      phase: "boot",
+      staleAfterMs: delayMs + 180_000,
+      writer: PRODUCER_WRITER,
+      detail: `api ready; boot catch-up starts in ${delayMs}ms`,
+    });
+    console.log(`[analytics-producer] api ready; boot catch-up starts in ${delayMs}ms`);
+    await (deps.sleep ?? ((ms: number) => Bun.sleep(ms)))(delayMs);
+  }
   // issue #614 AC4 ("on boot/tick"): repair any research day missed while
   // this process was down BEFORE arming today's crons — a restarted producer
   // must not wait for the next scheduled tick to notice a gap it could close
@@ -635,7 +675,20 @@ async function main(): Promise<void> {
     return;
   }
   if (command !== "serve") throw new Error(`usage: producer <serve|seed|regime|research> [YYYY-MM-DD]`);
-  const cfg = await startProducerSchedules();
+  // SIGTERM (issue 1378). The producer registered no handler, and bun ran as
+  // PID 1, so `docker stop` was ignored and the container was SIGKILLed after
+  // Docker's grace (exit 137). Registered before the api wait, a stop in
+  // startup or in steady state clears the cron and day-roll timers and exits 0.
+  // Nothing is lost: every run and catch-up day is idempotent, and the next
+  // boot's catch-up repairs a day a stop interrupted.
+  const stop = (signal: string): void => {
+    console.log(`[analytics-producer] ${signal}: stopping the crons`);
+    resetProducerSchedules();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  process.on("SIGINT", () => stop("SIGINT"));
+  const cfg = await startProducerSchedules({ bootCatchUpDelayMs: bootCatchUpDelayMs() });
   // Replaces a bare `new Promise<never>(() => {})`: the process still parks
   // here forever, but now it parks doing the liveness work above.
   await runProducerLiveness(cfg);

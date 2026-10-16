@@ -3,6 +3,7 @@ import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
+import { LANES } from "../src/worker/lanes.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
@@ -208,6 +209,53 @@ test("scheduler: 'collapse-per-bucket' still gives each missed UTC day its own c
   const uniqueDays = new Set(days);
   expect(rows.length).toBe(uniqueDays.size); // exactly one job per distinct UTC day — no same-day duplicates
   expect(rows.length).toBeGreaterThan(1); // 50h of hourly backlog spans multiple days
+});
+
+// Issue 1378: 'latest-only' folds a whole backlog, across days, into exactly
+// one job at the newest due slot — the six heavy kinds recompute current state,
+// so an older slot is the same run repeated.
+test("scheduler: 'latest-only' catch-up policy enqueues exactly one job, at the newest due slot, for N missed slots", async () => {
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','0 * * * *', true, 'latest-only')`;
+  expect(await tickScheduler()).toBe(0); // seed only, no stale fire
+  // 50 hours of hourly backlog: 50 missed slots across at least two UTC days.
+  await fixtureDb`UPDATE job_schedules SET next_run_at = date_trunc('hour', now()) - interval '49 hours' WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBe(1);
+  const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok'`;
+  expect(rows.length).toBe(1);
+  // The newest due slot is the top of the current hour.
+  const newest = new Date();
+  newest.setUTCMinutes(0, 0, 0);
+  expect(rows[0].payload.slotAt).toBe(newest.toISOString());
+  const [sched] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  expect(new Date(sched.next_run_at).getTime()).toBe(newest.getTime() + 3_600_000);
+  expect(await tickScheduler()).toBe(0); // fully caught up, idempotent
+});
+
+// Issue 1378: the parity sweep against an api that refuses connections settles
+// a 'degraded' run and a pending retry — the attempt is not spent as a hard
+// failure, as it was on the v0.6.2 stage boot (21:07:29.76, 'Unable to connect').
+test("analytics.parity_sweep against a refusing api settles 'degraded' and a pending retry, never 'failed' on the first attempt", async () => {
+  // A port nothing listens on: bind one, read its number, close it.
+  const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
+  const port = probe.port;
+  probe.stop(true);
+  const prev = { url: process.env.ANALYTICS_API_URL, file: process.env.ANALYTICS_TOKEN_FILE };
+  process.env.ANALYTICS_API_URL = `http://127.0.0.1:${port}`;
+  delete process.env.ANALYTICS_TOKEN_FILE;
+  try {
+    const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('analytics.parity_sweep','{}', 5) RETURNING id`;
+    expect(await processOneJob({ lane: LANES.analytics })).toBe(true);
+    const [job] = await sql`SELECT status, attempts, run_after, last_error FROM jobs WHERE id=${id}`;
+    expect(job.status).toBe("pending");
+    expect(job.attempts).toBe(1);
+    expect(new Date(job.run_after).getTime()).toBeGreaterThan(Date.now());
+    expect(job.last_error).toContain("unreachable");
+    const runs = await sql`SELECT status FROM job_runs WHERE job_id=${id}`;
+    expect(runs.map((r) => r.status)).toEqual(["degraded"]);
+  } finally {
+    if (prev.url === undefined) delete process.env.ANALYTICS_API_URL; else process.env.ANALYTICS_API_URL = prev.url;
+    if (prev.file !== undefined) process.env.ANALYTICS_TOKEN_FILE = prev.file;
+  }
 });
 
 test("reaper: stuck running job is requeued with backoff; exhausted → dead", async () => {

@@ -15,7 +15,7 @@ import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
 // analytics-api-boundary transitive-reachability test). triggerParitySweep()
 // is the authenticated-HTTP call to the API process instead, the same
 // worker→API pattern analyticsApiClient() already uses for #977/#978.
-import { triggerParitySweep } from "../../analytics/api-client.ts";
+import { AnalyticsApiUnreachableError, triggerParitySweep } from "../../analytics/api-client.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -104,7 +104,21 @@ export const handlers: Record<string, JobHandler> = {
   // authenticated HTTP boundary the retained analytics handlers above use; the
   // api runs that domain's one set-based statement in Postgres. This handler
   // never touches Postgres itself.
-  "analytics.parity_sweep": () => triggerParitySweep(),
+  //
+  // AN UNREADY API DEGRADES, IT DOES NOT FAIL (issue 1378). On the v0.6.2
+  // stage boot of 2026-10-15 the lane claimed a sweep at 21:07:29.62, before
+  // the api listened (21:07:30.47), and spent the attempt as a hard failure
+  // ('Unable to connect'). A refused connection or a gateway 502/504 now returns
+  // { ok: false }, which loop.ts records as a 'degraded' run and retries after
+  // its backoff. Any other error (a 4xx, a bad answer) still fails the job.
+  "analytics.parity_sweep": async () => {
+    try {
+      return await triggerParitySweep();
+    } catch (err) {
+      if (err instanceof AnalyticsApiUnreachableError) return { ok: false, error: err.message };
+      throw err;
+    }
+  },
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
   // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue

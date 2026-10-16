@@ -125,7 +125,8 @@
     "0121_subject_closes_six_hours_apart.sql",
     "0122_swarm_dormancy_baseline.sql",
     "0123_analytics_parity_sweep_daily.sql",
-    "0124_deactivate_bankr_token_vaults.sql"
+    "0124_deactivate_bankr_token_vaults.sql",
+    "0125_job_schedules_latest_only_catchup.sql"
   ],
   "exclusions": {
     "roles": [
@@ -137,7 +138,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "662932e8243ed9cf0506a5747f8c58d9da83d5af94edb78f59040119a00eb9a8",
+  "contentHash": "39020a40d8831c0a9088312244043dd29e8fb73de1ecc5ddcb91c2e54722a8f4",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4274,7 +4275,7 @@
       "definition": "PRIMARY KEY (id)"
     },
     "constraint public.job_schedules.job_schedules_catchup_policy_check": {
-      "definition": "CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text])))"
+      "definition": "CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text, 'latest-only'::text])))"
     },
     "constraint public.job_schedules.job_schedules_pkey": {
       "definition": "PRIMARY KEY (id)"

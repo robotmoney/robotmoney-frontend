@@ -5,7 +5,7 @@
 import { ROUTES } from "@robotmoney/contract";
 import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { withRequestTiming } from "./request-timing.ts";
-import { isDatabaseUnavailable } from "../db/client.ts";
+import { closeDb, isDatabaseUnavailable } from "../db/client.ts";
 import { databaseAnswers } from "../db/connection-check.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
@@ -23,7 +23,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
-import { schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
+import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
 
@@ -127,6 +127,9 @@ await assertAnalyticsLedgerGuardArmed();
   if (!startup.passed) process.exit(1);
 }
 
+// Requests being answered right now; the SIGTERM drain waits for zero.
+let inFlight = 0;
+
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
   // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
@@ -135,6 +138,10 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
   // WebSocket this process serves; routes/swarm-stream.ts owns its handler.
   websocket: schedulerStreamWebSocket,
   async fetch(req, server) {
+    // Counted for the SIGTERM drain below (issue 1378).
+    inFlight++;
+    try {
+      return await (async () => {
     const url = new URL(req.url);
     const { pathname } = url;
 
@@ -181,6 +188,10 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
       }
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
+    }
+      })();
+    } finally {
+      inFlight--;
     }
   },
 });
@@ -444,3 +455,45 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 }
 
 console.log(`api listening on :${server.port}`);
+
+// SIGTERM DRAIN (issue 1378). bun runs as PID 1's child under `init: true`
+// (docker-compose.yml), so `docker stop` now reaches this process. Without a
+// handler it was ignored and the api was SIGKILLed after Docker's grace (exit
+// 137) mid-request. The drain stops accepting, closes the scheduler stream
+// sockets (system-scheduler reconnects and rebuilds, scheduler spec §6), lets
+// in-flight requests finish, closes the pool and exits 0. A drain that has not
+// finished inside API_SHUTDOWN_GRACE_MS (default 25 s, under the compose
+// stop_grace_period of 30 s) force-closes what is left and exits 1, so a stuck
+// request is named in the log rather than hidden by a SIGKILL.
+const shutdownGraceMs = Number(process.env.API_SHUTDOWN_GRACE_MS ?? 25_000);
+let draining = false;
+async function drain(signal: string): Promise<void> {
+  if (draining) return;
+  draining = true;
+  console.log(`api ${signal} received: draining (grace ${shutdownGraceMs}ms)`);
+  const force = setTimeout(() => {
+    console.error(`api drain exceeded ${shutdownGraceMs}ms: closing the remaining connections`);
+    void server.stop(true);
+    process.exit(1);
+  }, shutdownGraceMs);
+  const sockets = closeSchedulerStreamSockets();
+  // Stop accepting, then wait for the requests being answered. An idle
+  // keep-alive connection is not a request: once none is in flight the
+  // remaining connections are closed, rather than held for their idle timeout.
+  void server.stop(false);
+  while (inFlight > 0) await Bun.sleep(25);
+  await server.stop(true);
+  // Every request is answered by now, so the pool holds only background work
+  // (a stream's polling). closeDb() waits up to 5 s for it, and on a database
+  // that has stopped answering it waits all 5: give it one second, then exit.
+  await Promise.race([
+    closeDb().catch((err) => console.error("api drain: closing the database pool failed:", err)),
+    Bun.sleep(1_000),
+  ]);
+  clearTimeout(force);
+  console.log(`api drained (${sockets} stream socket(s) closed); exiting 0`);
+  process.exit(0);
+}
+process.on("SIGTERM", () => void drain("SIGTERM"));
+process.on("SIGINT", () => void drain("SIGINT"));
+

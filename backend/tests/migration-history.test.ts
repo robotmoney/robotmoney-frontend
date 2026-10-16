@@ -160,6 +160,7 @@ const NOT_IN_PRODUCTION = [
   "0122_swarm_dormancy_baseline.sql",
   "0123_analytics_parity_sweep_daily.sql",
   "0124_deactivate_bankr_token_vaults.sql",
+  "0125_job_schedules_latest_only_catchup.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -237,6 +238,7 @@ async function schemaOf(db: Db): Promise<Record<string, string[]>> {
 let upgraded: Db;
 let fresh: Db;
 let appliedOnUpgrade: string[] = [];
+let upgradedPoliciesBeforeSeed: { kind: string; catchup_policy: string }[] = [];
 
 beforeAll(async () => {
   admin = adminConnection("postgres");
@@ -253,7 +255,20 @@ beforeAll(async () => {
   await upgraded`
     INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, next_run_at)
     VALUES ('analytics.parity_sweep', '20 * * * *', '{}', 'UTC', true, now() + interval '20 minutes')`;
+  // Production's heavy kinds as every release before issue 1378 seeded them:
+  // policy 'all' (migration 0125 moves them to 'latest-only').
+  await upgraded`
+    INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
+    VALUES ('projects.refresh_wallets', '20 */6 * * *', '{}', 'UTC', true),
+           ('projects.fetch_vaults', '30 */6 * * *', '{}', 'UTC', true),
+           ('projects.refresh_coins', '10 * * * *', '{}', 'UTC', true),
+           ('ops.repair_gaps', '*/5 * * * *', '{}', 'UTC', true),
+           ('ops.backfill_asset_prices', '*/15 * * * *', '{}', 'UTC', true),
+           ('buybacks.refresh', '15 */6 * * *', '{}', 'UTC', true)`;
   appliedOnUpgrade = await migrateRemaining(upgraded);
+  // Read before any test seeds: what the migration itself did to all six rows.
+  upgradedPoliciesBeforeSeed = await upgraded<{ kind: string; catchup_policy: string }[]>`
+    SELECT kind, catchup_policy FROM job_schedules ORDER BY kind`;
 
   fresh = await freshDatabase("fresh");
   await migrateRemaining(fresh);
@@ -327,6 +342,52 @@ describe("the parity sweep's schedule and indexes after every migration", () => 
            AND indexname IN ('analytics_output_snapshots_natural_keys_idx', 'swarm_brief_revisions_session_newest_idx')
          ORDER BY indexname`).map((r) => r.indexname);
       expect(names).toEqual(["analytics_output_snapshots_natural_keys_idx", "swarm_brief_revisions_session_newest_idx"]);
+    }
+  });
+});
+
+// Issue 1378: the six heavy kinds catch up 'latest-only', whichever path the
+// database took, and the CHECK accepts exactly the three policies.
+describe("the heavy kinds' catch-up policy after every migration", () => {
+  const HEAVY = [
+    "analytics.parity_sweep",
+    "ops.backfill_asset_prices",
+    "ops.repair_gaps",
+    "projects.fetch_vaults",
+    "projects.refresh_coins",
+    "projects.refresh_wallets",
+  ];
+
+  test("the migration itself moves all six heavy rows of an upgraded database to 'latest-only' and leaves an 'all' kind alone", () => {
+    const policy = new Map(upgradedPoliciesBeforeSeed.map((r) => [r.kind, r.catchup_policy]));
+    for (const kind of HEAVY) expect({ kind, policy: policy.get(kind) }).toEqual({ kind, policy: "latest-only" });
+    expect(policy.get("buybacks.refresh")).toBe("all");
+  });
+
+  test("the six heavy kinds hold 'latest-only' on the upgraded and on the blank database, and every other kind keeps its policy", async () => {
+    for (const db of [upgraded, fresh]) {
+      await seedJobSchedules(db as never);
+      const rows = await db<{ kind: string; catchup_policy: string }[]>`
+        SELECT kind, catchup_policy FROM job_schedules WHERE enabled ORDER BY kind, cron`;
+      const heavy = rows.filter((r) => HEAVY.includes(r.kind));
+      expect([...new Set(heavy.map((r) => r.kind))].sort()).toEqual(HEAVY);
+      for (const r of heavy) expect(r).toEqual({ kind: r.kind, catchup_policy: "latest-only" });
+      // Untouched: an 'all' kind stays 'all', the samplers stay collapse-per-bucket.
+      expect(rows.find((r) => r.kind === "buybacks.refresh")!.catchup_policy).toBe("all");
+      expect(rows.find((r) => r.kind === "wallet.sample_balances")!.catchup_policy).toBe("collapse-per-bucket");
+    }
+  });
+
+  test("the CHECK accepts exactly 'all', 'collapse-per-bucket' and 'latest-only' on both databases", async () => {
+    for (const db of [upgraded, fresh]) {
+      const [{ def }] = await db<{ def: string }[]>`
+        SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'job_schedules_catchup_policy_check'`;
+      expect([...def.matchAll(/'([a-z-]+)'::text/g)].map((m) => m[1])).toEqual(["all", "collapse-per-bucket", "latest-only"]);
+      const refused = await db`UPDATE job_schedules SET catchup_policy = 'newest' WHERE kind = 'ops.repair_gaps'`.then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(String(refused)).toContain("job_schedules_catchup_policy_check");
     }
   });
 });
