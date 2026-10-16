@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NOT_STATIC, allSpecs, staticSpecs } from "../../web-client/static-specs.ts";
+import { NOT_STATIC, allSpecs, staticSpecFiles, staticSpecs } from "../../web-client/static-specs.ts";
 
 describe("web-client static spec selection", () => {
   test("every NOT_STATIC entry names a spec that exists", () => {
@@ -39,5 +39,11 @@ describe("web-client static spec selection", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the gate names each spec by its path, so a name cannot match a CI directory", () => {
+    const files = staticSpecFiles();
+    expect(files).toContain("frontend/test/browser/home.spec.ts");
+    expect(files.every((f) => f.startsWith("frontend/test/browser/") && f.endsWith(".spec.ts"))).toBe(true);
   });
 });

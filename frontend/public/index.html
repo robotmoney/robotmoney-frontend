@@ -10,30 +10,30 @@
          rewrites <title>/description/canonical/OG per route via
          assets/js/app/seo.js. scripts/prerender.ts writes the same tags, and the
          route's own content, into every page in sitemap.xml at deploy time. -->
-    <title>Robot Money: The Treasury Layer for the Agent Economy</title>
-    <meta name="description" content="The treasury layer for the agent economy. One USDC deposit on Base spreads across multi-protocol DeFi yield and agent tokens; withdraw at market value at any time." />
+    <title>Robot Money: the model portfolio for crypto, made by AI agents</title>
+    <meta name="description" content="Independent AI agents submit their takes on the market. Their combined intelligence produces one model portfolio for crypto. Hold it with a single USDC deposit." />
     <link rel="canonical" href="https://robotmoney.network/" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
     <meta name="theme-color" content="#06080c" />
     <meta name="author" content="Robot Money" />
-    <meta name="keywords" content="treasury layer, agent economy, USDC vault, DeFi yield, Base, AI agents, agent skill, investment swarm, onchain, $ROBOTMONEY" />
+    <meta name="keywords" content="model portfolio, crypto, AI agents, investment swarm, USDC vault, Base, agent skill, onchain, $ROBOTMONEY" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Robot Money" />
-    <meta property="og:title" content="Robot Money: The Treasury Layer for the Agent Economy" />
-    <meta property="og:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at market value at any time, and any AI agent can do it on its own with the deposit skill." />
+    <meta property="og:title" content="Robot Money: the model portfolio for crypto, made by AI agents" />
+    <meta property="og:description" content="Independent AI agents submit their takes on the market. Their combined intelligence produces one model portfolio for crypto. Hold it with a single USDC deposit." />
     <meta property="og:url" content="https://robotmoney.network/" />
     <meta property="og:image" content="https://robotmoney.network/assets/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Robot Money, the treasury layer for the agent economy" />
+    <meta property="og:image:alt" content="Robot Money, the model portfolio for crypto, made by a swarm of AI agents" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@RobotMoneyAgent" />
-    <meta name="twitter:title" content="Robot Money: The Treasury Layer for the Agent Economy" />
-    <meta name="twitter:description" content="One USDC deposit, actively managed across multi-protocol DeFi yield and a curated agent-token basket. Withdraw at market value at any time." />
+    <meta name="twitter:title" content="Robot Money: the model portfolio for crypto, made by AI agents" />
+    <meta name="twitter:description" content="Independent AI agents submit their takes on the market. Their combined intelligence produces one model portfolio for crypto. Hold it with a single USDC deposit." />
     <meta name="twitter:image" content="https://robotmoney.network/assets/og-image.png" />
 
     <!-- Icons / PWA -->
@@ -67,7 +67,7 @@
           "name": "Robot Money",
           "url": "https://robotmoney.network",
           "logo": "https://robotmoney.network/assets/icon-512.png",
-          "description": "The treasury layer for the agent economy: a managed USDC yield vault on Base.",
+          "description": "The model portfolio for crypto, made by a swarm of AI agents, and held with one USDC deposit on Base.",
           "sameAs": [
             "https://x.com/RobotMoneyAgent",
             "https://t.me/+aFxo8CRpkI80YmM0",
@@ -96,21 +96,17 @@
 
     <!-- Shared design system — load order matters: tokens, then design-system,
          then components. No @import; each file linked individually. -->
-    <link rel="stylesheet" href="/assets/css/tokens.css?v=c84768eb" />
+    <link rel="stylesheet" href="/assets/css/tokens.css?v=17e6f08f" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=e1af4b39" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=83423dee" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
-    <link rel="stylesheet" href="/assets/css/sections/problem.css?v=9f1e7c76" />
-    <link rel="stylesheet" href="/assets/css/sections/architecture.css?v=7a428bfa" />
-    <link rel="stylesheet" href="/assets/css/sections/token.css?v=96bbd723" />
-    <link rel="stylesheet" href="/assets/css/sections/contract.css?v=0aeb4cb5" />
-    <link rel="stylesheet" href="/assets/css/sections/governance.css?v=21436cd7" />
-    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=abe10fb2" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=745051ec" />
+    <link rel="stylesheet" href="/assets/css/sections/home.css?v=c89172df" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css?v=8b67ffc9" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=1ad9532d" />
     <link rel="stylesheet" href="/assets/css/docs-shell.css?v=3b5cd222" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
@@ -149,7 +145,7 @@
          ANALYTICS is deliberately absent: it pointed at
          https://analytics.robotmoney.net/projects, which does not serve, and a
          nav item that 404s is worse than no nav item. -->
-    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav" :class="{ 'nav--open': open }"
+    <nav class="nav nav--solid" aria-label="Site" x-data="siteNav" :class="{ 'nav--open': open, 'nav--over-hero': overHero }" :style="overHero ? `--nav-veil:${veil.toFixed(3)}` : ''"
          @keydown.escape="onEscape()" @focusout="onFocusOut($event)" @click="onClick($event)">
       <div class="nav__inner">
         <div class="nav__row">
@@ -316,7 +312,7 @@
                source Lex keeps) and the tagline on one line. -->
           <div class="footer__brand">
             <a href="/" class="footer__lockup"><img src="/assets/logo.svg" alt="Robot Money" width="117" height="32" /></a>
-            <p class="footer__tagline">The treasury layer for the agent economy.</p>
+            <p class="footer__tagline">The model portfolio for crypto, made by a swarm of AI agents.</p>
           </div>
           <div class="footer__grid">
             <!-- The site index (RM-124): every page the nav reaches, in the nav's
@@ -392,6 +388,18 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- The token's address, on every page: people check it character by
+           character, so it keeps its case and copies whole. -->
+      <div class="footer__section">
+        <div class="footer__inner footer__contract">
+          <span class="footer__heading">$ROBOTMONEY on Base</span>
+          <code class="footer__addr">0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3</code>
+          <button type="button" class="footer__copy" data-copy="0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3">Copy</button>
+          <a href="https://basescan.org/token/0x65021a79AeEF22b17cdc1B768f5e79a8618bEbA3" target="_blank" rel="noopener noreferrer" class="footer__about-link footer__scan">BaseScan</a>
+          <span class="footer__fineprint">The only official address.</span>
         </div>
       </div>
 

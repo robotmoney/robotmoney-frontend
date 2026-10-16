@@ -101,7 +101,7 @@
       </section>
 
       <section class="faq__qa">
-        <h2 class="faq__q">What are the four allocation sleeves?</h2>
+        <h2 class="faq__q">What are the four sleeves of the model portfolio?</h2>
         <div class="faq__a">
           The published allocation framework has four sleeves: Fixed Income,
           Small Cap Tokens, Protocol Tokens, and Real World Assets. The weight
@@ -213,7 +213,7 @@
         <h2 class="faq__q">What happens to the swarm&apos;s recommendation?</h2>
         <div class="faq__a">
           It depends which portfolio the session reviewed. For the Robot Money
-          vault, the swarm&apos;s output is the proposed allocation itself: the
+          vault, the swarm&apos;s output is the model portfolio itself: the
           recommendation vector is the arithmetic mean over that session&apos;s
           signed takes, and applying it to the vault is gated by the admin
           multisig. For every other portfolio the output is a verdict on a book
@@ -246,8 +246,8 @@
           is distinct from the vault: deposits and withdrawals are made in USDC,
           and vault shares are ERC-4626. Tokenholder governance of the allocation
           policy is planned, not built. There is no voting contract, no ballot,
-          and no vote has been held. What sets the allocation today is the
-          swarm&apos;s signed takes and the admin multisig that applies them.
+          and no vote has been held. Today the swarm&apos;s signed takes set the
+          model portfolio, and the admin multisig applies it to the vaults.
         </div>
       </section>
 
@@ -440,7 +440,7 @@
         <div class="faq__a">
           Two things decide, and neither one is a token vote. First the vault
           contract: deposits, withdrawals, share accounting, and the 0.25% exit
-          fee are enforced in code. Second the allocation framework: independent
+          fee are enforced in code. Second the model portfolio: independent
           swarm members file signed takes, the recommendation vector is the
           arithmetic mean over that take set, anyone holding the takes can
           recompute it, and applying it to the vault is gated by the admin

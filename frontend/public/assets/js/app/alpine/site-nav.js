@@ -37,6 +37,10 @@ export function registerSiteNav(Alpine) {
     sheet: false,   // the phone sheet
     wide: true,
     vaultFigures: null, // { total, rmusdc, ... } once a live read lands
+    // Over the home monument the bar's veil follows the scroll (veil, 0 to 1);
+    // everywhere else it is the full glass.
+    overHero: typeof location !== "undefined" && location.pathname === "/",
+    veil: 0,
     _intent: 0,
     _grace: 0,
     _figuresAsked: false,
@@ -60,6 +64,11 @@ export function registerSiteNav(Alpine) {
         this.close();
         this.setSheet(false);
       });
+      const syncVeil = () => this.syncOverHero();
+      window.addEventListener("scroll", syncVeil, { passive: true });
+      window.addEventListener("resize", syncVeil);
+      window.addEventListener("rm:view-changed", syncVeil);
+      this.syncOverHero();
       document.addEventListener("pointerdown", (e) => {
         this._pressInside = this.$root.contains(e.target);
         if (this.open && !this._pressInside) this.close();
@@ -73,6 +82,26 @@ export function registerSiteNav(Alpine) {
       });
       this.$watch("open", (key) => { if (key === "vaults") this.loadVaultFigures(); });
       this.$root.classList.add("nav--js");
+    },
+
+    syncOverHero() {
+      const stage = document.querySelector(".hm-hero__stage");
+      if (!stage) {
+        // Home's fragment has not landed yet: keep the bar clear so the
+        // monument is not covered by a flash of glass.
+        this.overHero = location.pathname === "/";
+        this.veil = 0;
+        return;
+      }
+      const navH = this.$root.getBoundingClientRect().height;
+      this.overHero = stage.getBoundingClientRect().bottom > navH;
+      // The veil deepens with the scroll, not at a threshold: clear at the top,
+      // full just as the headline's first line meets the bar, so the logo and
+      // the labels never sit over it (David, 2026-10-16). Eased at both ends.
+      const h = document.querySelector(".hm-hero__h");
+      const meet = h ? h.getBoundingClientRect().top + window.scrollY - navH + 48 : 320;
+      const t = Math.min(1, Math.max(0, window.scrollY / Math.max(160, meet)));
+      this.veil = t * t * (3 - 2 * t);
     },
 
     async loadVaultFigures() {
