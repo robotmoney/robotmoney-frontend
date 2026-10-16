@@ -196,11 +196,24 @@ function sinkOf(ws: ServerWebSocket<SchedulerStreamSocketData>): stream.StreamSi
  * purpose: the loop, not the server, decides to close, so the subscriber is
  * sent `resync` first rather than being cut with nothing.
  */
+// Every open stream socket, so a SIGTERM drain (api/index.ts, issue 1378) can
+// close them: a held socket would keep Bun's server.stop() waiting until the
+// grace timer fires, and the api would be killed instead of exiting 0.
+const openSockets = new Set<ServerWebSocket<SchedulerStreamSocketData>>();
+
+/** Close every open scheduler stream socket (1001 going away); returns how many. */
+export function closeSchedulerStreamSockets(): number {
+  const n = openSockets.size;
+  for (const ws of [...openSockets]) ws.close(1001, "api shutting down");
+  return n;
+}
+
 export const schedulerStreamWebSocket: WebSocketHandler<SchedulerStreamSocketData> = {
   sendPings: true,
   idleTimeout: 30,
   closeOnBackpressureLimit: false,
   open(ws) {
+    openSockets.add(ws);
     const { cursor, token, timing } = ws.data;
     ws.data.handle = stream.serveSchedulerStream(cursor, sinkOf(ws), {
       ...timing,
@@ -215,6 +228,7 @@ export const schedulerStreamWebSocket: WebSocketHandler<SchedulerStreamSocketDat
     // never reach here. Anything else is ignored: the stream is one-way.
   },
   close(ws) {
+    openSockets.delete(ws);
     ws.data.handle?.stop();
   },
 };

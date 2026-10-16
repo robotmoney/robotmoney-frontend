@@ -59,6 +59,16 @@ export function resolveAnalyticsApiConfig(
   };
 }
 
+/**
+ * The api did not answer: the connection failed, or a gateway answered 502 or
+ * 504 for it. A 503 is the api's own answer (database unavailable) and still
+ * fails the job, as issue 1375 left it. Not a refusal of the request, so a caller that can
+ * wait (the parity sweep, issue 1378) degrades and retries instead of failing.
+ */
+export class AnalyticsApiUnreachableError extends Error {
+  override name = "AnalyticsApiUnreachableError";
+}
+
 // The one authenticated-HTTP call shape every analytics-boundary caller in
 // this codebase shares: analyticsApiClient() below (the producer/updater's
 // AnalyticsPersistence port) AND triggerParitySweep() (the worker's #979-fix
@@ -72,11 +82,20 @@ async function analyticsApiCall<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
-  const res = await fetch(`${cfg.baseUrl}${route}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}${route}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new AnalyticsApiUnreachableError(`analytics API ${method} ${route} unreachable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (res.status === 502 || res.status === 504) {
+    const detail = await res.text().catch(() => "");
+    throw new AnalyticsApiUnreachableError(`analytics API ${method} ${route} not ready: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
+  }
   if (!res.ok) {
     // Surface the server's error text but NEVER the credential.
     const detail = await res.text().catch(() => "");
@@ -194,7 +213,10 @@ export async function triggerParitySweep(
     try {
       summary = await analyticsApiCall<ParityDomainSummary>(cfg, "POST", ROUTES.analytics.paritySweep, { domain });
     } catch (err) {
-      throw new Error(`parity sweep failed on domain ${domain}: ${err instanceof Error ? err.message : String(err)}`);
+      const message = `parity sweep failed on domain ${domain}: ${err instanceof Error ? err.message : String(err)}`;
+      // Keep the class: the handler degrades on an unready api (issue 1378).
+      if (err instanceof AnalyticsApiUnreachableError) throw new AnalyticsApiUnreachableError(message);
+      throw new Error(message);
     }
     log(
       `[parity-sweep] domain=${domain} matched=${summary.matched} legacy=${summary.legacyRowCount} ` +

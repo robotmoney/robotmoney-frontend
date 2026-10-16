@@ -1715,7 +1715,7 @@ CREATE TABLE public.job_schedules (
     last_enqueued_at timestamp with time zone,
     next_run_at timestamp with time zone,
     catchup_policy text DEFAULT 'all'::text NOT NULL,
-    CONSTRAINT job_schedules_catchup_policy_check CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text])))
+    CONSTRAINT job_schedules_catchup_policy_check CHECK ((catchup_policy = ANY (ARRAY['all'::text, 'collapse-per-bucket'::text, 'latest-only'::text])))
 );
 
 

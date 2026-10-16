@@ -645,7 +645,8 @@ export async function runParticipantLoop(
   config: ParticipantConfig,
   signal?: AbortSignal,
 ): Promise<void> {
-  const diagnostic = await runStartupDiagnostic(config);
+  const diagnostic = await diagnoseUntilAnswered(config, runStartupDiagnostic, signal);
+  if (signal?.aborted && !diagnostic.apiReachable) return;
   if (!diagnostic.apiReachable || !diagnostic.tokenValid || !diagnostic.identityMatchesRoster) {
     throw new Error(
       `participant ${config.kind} ${config.name} refuses to poll: `
@@ -720,6 +721,39 @@ export function takeRetryPolicy(outcome: { submission: string | null }, priorFai
   return { kind: "retry", delayMs: Math.min(TAKE_RETRY_MAX_MS, pollIntervalMs * 2 ** Math.min(priorFailures, 30)) };
 }
 
+/** The first wait after an unreachable api at startup; it doubles per attempt. */
+export const STARTUP_RETRY_BASE_MS = 1_000;
+/** The longest wait between two startup attempts. */
+export const STARTUP_RETRY_MAX_MS = 30_000;
+
+/**
+ * Run the startup diagnostic until the api ANSWERS (issue 1378). An
+ * unreachable api, a 5xx or a non-answer is the ordinary boot race with the
+ * api, and a rolling boot restarts the api under running participants: exiting
+ * on it turned that race into a crash loop. So it retries with a doubling,
+ * capped backoff and returns the first answer: valid, or a 401/403, which the
+ * caller still refuses on (exit 1). A stop (`signal`) ends the wait and returns
+ * the last, unanswered result.
+ */
+export async function diagnoseUntilAnswered(
+  config: ParticipantConfig,
+  diagnose: (config: ParticipantConfig) => Promise<StartupDiagnostic>,
+  signal?: AbortSignal,
+  retry: { baseMs?: number; maxMs?: number; wait?: (ms: number, signal?: AbortSignal) => Promise<void> } = {},
+): Promise<StartupDiagnostic> {
+  const baseMs = retry.baseMs ?? STARTUP_RETRY_BASE_MS;
+  const maxMs = retry.maxMs ?? STARTUP_RETRY_MAX_MS;
+  const wait = retry.wait ?? sleep;
+  for (let attempt = 0; ; attempt++) {
+    const diagnostic = await diagnose(config);
+    if (diagnostic.apiReachable || signal?.aborted) return diagnostic;
+    const delayMs = Math.min(maxMs, baseMs * 2 ** Math.min(attempt, 30));
+    console.warn(`[${config.kind}:${config.name}] api ${config.apiUrl} did not answer the startup check; retrying in ${delayMs}ms`);
+    await wait(delayMs, signal);
+    if (signal?.aborted) return diagnostic;
+  }
+}
+
 /** Sleep, but wake immediately when `docker stop` sends its SIGTERM. */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -762,7 +796,13 @@ const DEFAULT_LOOPS: ParticipantLoops = {
  */
 export async function runParticipant(
   env: Record<string, string | undefined>,
-  options: { signal?: AbortSignal; loops?: ParticipantLoops; read?: ReadParticipantConfigOptions } = {},
+  options: {
+    signal?: AbortSignal;
+    loops?: ParticipantLoops;
+    read?: ReadParticipantConfigOptions;
+    /** The startup retry's timing (diagnoseUntilAnswered); tests shorten it. */
+    startupRetry?: { baseMs?: number; maxMs?: number };
+  } = {},
 ): Promise<ParticipantKind> {
   const { signal } = options;
   const loops = options.loops ?? DEFAULT_LOOPS;
@@ -774,7 +814,8 @@ export async function runParticipant(
   // Refused before the diagnostic: a judge with no usable model is a crash
   // loop an operator reads at once, not a subscription that refuses every item.
   const judgeConfig = readJudgeClientConfig(env);
-  const diagnostic = await loops.diagnose(config);
+  const diagnostic = await diagnoseUntilAnswered(config, loops.diagnose, signal, options.startupRetry);
+  if (signal?.aborted && !diagnostic.apiReachable) return "judge";
   if (!diagnostic.apiReachable || !diagnostic.tokenValid || !diagnostic.identityMatchesRoster) {
     throw new Error(
       `participant judge ${config.name} refuses to subscribe: `

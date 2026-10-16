@@ -1480,10 +1480,11 @@ describe("participant services: N agents and M judges render exactly N+M, each h
         expect(info.HostConfig.RestartPolicy.Name).toBe("unless-stopped");
       }
       // The entrypoint really runs in the image, for BOTH kinds: with no API on
-      // this project each one reaches its HTTP startup diagnostic and refuses
-      // there (an agent to poll, a judge to subscribe) — never a missing module.
+      // this project each one reaches its HTTP startup diagnostic and, finding
+      // the api unreachable, retries it (issue 1378: an unreachable api is the
+      // boot race, not a refusal) — never a missing module.
       for (const p of running1) {
-        const expected = p.kind === "agent" ? "refuses to poll" : "refuses to subscribe";
+        const expected = "did not answer the startup check; retrying";
         let logs = "";
         const deadline = Date.now() + 60_000;
         while (!logs.includes(expected) && Date.now() < deadline) {
