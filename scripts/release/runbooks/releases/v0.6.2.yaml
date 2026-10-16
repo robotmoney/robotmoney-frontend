@@ -21,6 +21,11 @@ notes: |
     post-release session report confirms them.
   - 0122_swarm_dormancy_baseline: a singleton counted_from for consecutive missed-session
     counts (issue 1269); removes no seat.
+  - 0123_analytics_parity_sweep_daily: the parity sweep runs once a day at 04:47 UTC
+    (issue 1375). V01-subject-spacing asserts the schedule.
+  - 0124_deactivate_bankr_token_vaults: deactivates the two Bankr lp-fees rows, which are
+    tokens and not vaults (issue 1382, owner 2026-10-16); deletes nothing. V12-bankr-token-rows
+    asserts none is active.
 
   Website. website-server/nginx.conf changed since v0.6.1 (the maintenance fallback). Its
   compose configuration did not, so C10-rolling-boot ships it by graceful reload into the running
@@ -30,7 +35,7 @@ notes: |
   (vault 00:52, woon 06:52, allocation 12:52, treasury 18:52 UTC) waits on the owner's
   word. It is not a step.
 recovery: |
-  All three migrations are compat: additive and take no grant from a runtime role.
+  All five migrations (0120 to 0124) are compat: additive and take no grant from a runtime role.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
     and cut v0.6.2-rc.(N+1).
   - A failed C05-migrate: resume at C05-migrate; v0.6.1 keeps serving, and the website stays up.
@@ -68,6 +73,15 @@ scope:
   - {pr: 1343, what: "count a seat's consecutive missed sessions (migration 0122)", check: "V03-missed-sessions"}
   - {pr: 1344, what: "Animoca's and DualMint's brand marks", check: "V07-brand-marks"}
   - {pr: 1349, what: "the HTTP fetch cache evicts", check: "V08-fetch-cache"}
+  - {pr: 1351, what: "consent-gated GA4 through Cloudflare Zaraz", none: "site change: the consent flow is held by its browser spec (zaraz-consent.spec.ts) in CI, and C12-site ships the files"}
+  - {pr: 1355, what: "the release runbook overhaul: five phases, scope, rolling upgrade, short soak", none: "release tooling: the run itself exercises it"}
+  - {pr: 1357, what: "admin approval chooses member or judge and records the operator", none: "admin screen: held by its browser spec (admin-view.spec.ts) in CI; no production write belongs in a check"}
+  - {pr: 1368, what: "the skill names where an agent reads the takes it has filed", none: "skill wording: V11-take-rules fetches the same served SKILL.md, but no step asserts this line"}
+  - {pr: 1376, what: "refresh_wallets skips wallets it cannot read live", none: "log rule: the unclassified error it removed fails S03-log-verdict and S07-soak-gate if it returns"}
+  - {pr: 1377, what: "the parity sweep compares in Postgres, once a day (migration 0123)", check: "V01-subject-spacing"}
+  - {pr: 1379, what: "refresh_wallets reads every Base wallet in a few Multicall3 calls", none: "worker behavior: a failed read logs an error that S03-log-verdict and S07-soak-gate fail on"}
+  - {pr: 1380, what: "fetch_vaults isolates each vault", none: "worker behavior: an aborted run logs an error that S03-log-verdict and S07-soak-gate fail on"}
+  - {pr: 1383, what: "the two Bankr lp-fees token rows are deactivated (migration 0124)", check: "V12-bankr-token-rows"}
 steps:
   # ── QA: stage only, as often as needed. Builds the stage target; then the
   # preflight and cutover sections run exactly as production runs them.
@@ -620,5 +634,18 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-take-rules.json", "required": true}
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "V12-bankr-token-rows"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "version"
+    added: "v0.6.2"
+    description: "The two Bankr lp-fees roster rows, which are tokens and not vaults, are inactive (1383, migration 0124): no active lp-fees row at either address"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "bankr-token-rows", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-bankr-token-rows.json", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}

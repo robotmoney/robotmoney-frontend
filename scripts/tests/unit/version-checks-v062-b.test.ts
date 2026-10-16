@@ -1,9 +1,10 @@
-// v0.6.2's version checks V07 to V11 (scripts/release/version-checks/v0.6.2/):
+// v0.6.2's version checks V07 to V12 (scripts/release/version-checks/v0.6.2/):
 // each check's pure decision, with a red control, against what the shipped
 // files actually hold.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { BANKR_ROWS_SQL, BANKR_TOKEN_ADDRESSES, bankrTokenRowsProblems } from "../../release/version-checks/v0.6.2/bankr-token-rows.ts";
 import { brandMarkProblems, EXPECTED_MARKS, looksLikeImage, MEMBER_LOGOS_PATH, parseMemberLogos } from "../../release/version-checks/v0.6.2/brand-marks.ts";
 import { cacheEnvOf, DEFAULT_CONTAINER_CACHE_DIR, fetchCacheProblems, parseDu } from "../../release/version-checks/v0.6.2/fetch-cache.ts";
 import { FIXTURE_COUNTS_SQL, FIXTURE_PROJECTS, FIXTURE_VAULTS, FIXTURE_WALLETS, fixtureProblems } from "../../release/version-checks/v0.6.2/fixture-guard.ts";
@@ -139,5 +140,22 @@ describe("V11-take-rules (1340)", () => {
       "/views/docs/investment-swarm/api-reference.html does not document reportSnapshotId",
     ]);
     expect(takeRulesProblems({ status: 404, text: "" }, apiReference)).toEqual(["/skills/swarm-onboarding/SKILL.md answered 404"]);
+  });
+});
+
+describe("V12-bankr-token-rows (1383, issue 1382)", () => {
+  const migration = read("backend/migrations/0124_deactivate_bankr_token_vaults.sql");
+
+  test("the check's addresses are migration 0124's own, and the query reads only lp-fees rows at them", () => {
+    for (const a of BANKR_TOKEN_ADDRESSES) expect(migration.toLowerCase()).toContain(a);
+    expect(BANKR_ROWS_SQL).toContain("strategy_type = 'lp-fees'");
+    for (const a of BANKR_TOKEN_ADDRESSES) expect(BANKR_ROWS_SQL).toContain(a);
+    expect(BANKR_ROWS_SQL).not.toMatch(/\b(update|delete|insert)\b/i);
+  });
+
+  test("no active row passes, including a database that never held the rows; red: an active row fails", () => {
+    expect(bankrTokenRowsProblems({ rows: 0, active: 0 })).toEqual([]);
+    expect(bankrTokenRowsProblems({ rows: 2, active: 0 })).toEqual([]);
+    expect(bankrTokenRowsProblems({ rows: 2, active: 1 })[0]).toContain("1 of 2 Bankr lp-fees token row(s) are still active");
   });
 });
