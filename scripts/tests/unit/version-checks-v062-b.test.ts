@@ -14,7 +14,7 @@ import { API_REFERENCE_FIELDS, SKILL_REFUSALS, takeRulesProblems } from "../../r
 const repo = join(import.meta.dir, "..", "..", "..");
 const read = (p: string) => readFileSync(join(repo, p), "utf8");
 
-describe("V07-brand-marks (1344)", () => {
+describe("C27-brand-marks (1344)", () => {
   const shipped = read(`frontend/public${MEMBER_LOGOS_PATH}`);
   const handles = new Set(Object.keys(EXPECTED_MARKS));
   const goodAssets = Object.values(EXPECTED_MARKS).map((path) => ({ path, ok: true, status: 200 }));
@@ -46,7 +46,7 @@ describe("V07-brand-marks (1344)", () => {
   });
 });
 
-describe("V08-fetch-cache (1349)", () => {
+describe("C28-fetch-cache (1349)", () => {
   test("a container's cache directory and bound resolve as fetch-cache.ts resolves them", () => {
     expect(cacheEnvOf(["PATH=/bin", "HTTP_FETCH_CACHE_TTL_MS=", "HTTP_FETCH_CACHE_MAX_BYTES="])).toEqual({ dir: DEFAULT_CONTAINER_CACHE_DIR, maxBytes: 256 * 1024 * 1024, maxRaw: "" });
     expect(cacheEnvOf(["FETCH_CACHE_DIR=/data/cache", "HTTP_FETCH_CACHE_MAX_BYTES=1000"])).toEqual({ dir: "/data/cache", maxBytes: 1000, maxRaw: "1000" });
@@ -77,7 +77,7 @@ describe("V08-fetch-cache (1349)", () => {
   });
 });
 
-describe("V09-rm-env-retired (1325, 1342)", () => {
+describe("C29-rm-env-retired (1325, 1342)", () => {
   test("names only, never values; set to anything counts", () => {
     expect(retiredNamesIn(["PATH=/bin", "RM_ENVIRONMENT=x", "DATABASE_URL=postgres://u:secret@h/d"])).toEqual([]);
     expect(retiredNamesIn(["RM_ENV=prod", "RM_ALLOW_INSECURE="])).toEqual(["RM_ENV", "RM_ALLOW_INSECURE"]);
@@ -97,7 +97,7 @@ describe("V09-rm-env-retired (1325, 1342)", () => {
   });
 });
 
-describe("V10-fixture-guard (1297, issue 1208)", () => {
+describe("C30-fixture-guard (1297, issue 1208)", () => {
   const migration = read("backend/migrations/0118_purge_projects_fixture_rows.sql");
 
   test("the identities are migration 0118's own: every wallet, vault and slug/logo pair", () => {
@@ -121,7 +121,7 @@ describe("V10-fixture-guard (1297, issue 1208)", () => {
   });
 });
 
-describe("V11-take-rules (1340)", () => {
+describe("C31-take-rules (1340)", () => {
   const skill = { status: 200, text: read("frontend/public/skills/swarm-onboarding/SKILL.md") };
   const apiReference = { status: 200, text: read("frontend/public/views/docs/investment-swarm/api-reference.html") };
 
@@ -143,7 +143,7 @@ describe("V11-take-rules (1340)", () => {
   });
 });
 
-describe("V12-bankr-token-rows (1383, issue 1382)", () => {
+describe("C32-bankr-token-rows (1383, issue 1382)", () => {
   const migration = read("backend/migrations/0124_deactivate_bankr_token_vaults.sql");
 
   test("the check's addresses are migration 0124's own, and the query reads only lp-fees rows at them", () => {

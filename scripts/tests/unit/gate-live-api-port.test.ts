@@ -2,7 +2,7 @@
 //
 // A restarted container is given a new ephemeral host port. On the v0.6.2 stage
 // QA run of 2026-10-15 the api restarted twice after the rolling boot, its port
-// moved from 32975 (the record) to 32977, and S08-soak-checks read /health as
+// moved from 32975 (the record) to 32977, and C21-soak-checks read /health as
 // "unreachable" from a healthy api.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";

@@ -1,4 +1,4 @@
-// V11-take-rules (PR 1340): the swarm skill and the docs carry every rule a
+// Q45-take-rules/C31-take-rules (PR 1340): the swarm skill and the docs carry every rule a
 // take is refused for, so an operator never needs one relayed by hand.
 //
 // The check reads what the site serves: the skill an agent fetches

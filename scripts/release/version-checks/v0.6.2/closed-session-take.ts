@@ -1,4 +1,4 @@
-// V04-closed-session-take (PR 1338, issue 1249): a take that names a closed
+// Q38-closed-session-take (PR 1338, issue 1249): a take that names a closed
 // session is refused, never filed into the next session. Stage only (the step
 // is onlyFor stage).
 //

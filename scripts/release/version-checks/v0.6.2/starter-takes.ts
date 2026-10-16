@@ -1,4 +1,4 @@
-// V05-starter-takes (PR 1334, issue 1268): the starter agent submits a take to
+// Q39-starter-takes/C26-starter-takes (PR 1334, issue 1268): the starter agent submits a take to
 // every collecting session, not only the newest one.
 //
 // What 1334 shipped is the starter agent script (scripts/starter-swarm-agent.ts,

@@ -1,6 +1,6 @@
-// scripts/tests/unit/release-watch.test.ts — how long the soak (S07-soak-gate, S08-soak-checks, V01-subject-spacing, S09-collect-logs) waits after READY.
+// scripts/tests/unit/release-watch.test.ts — how long the soak (C20-soak-gate, C21-soak-checks, C23-subject-spacing, C22-collect-logs) waits after READY.
 //
-// Stage run 20261008T042158Z failed S07-soak-gate check 7 at READY + 6 h: robotmoney-treasury
+// Stage run 20261008T042158Z failed C20-soak-gate check 7 at READY + 6 h: robotmoney-treasury
 // and woon had no open window at boot, so the scheduler gave each a first epoch
 // that lasts up to 1.5 epochs (system-scheduler-spec §2.2), and both were still
 // `collecting`. The watch now derives from that bound (scripts/release/watch.ts).
@@ -42,12 +42,15 @@ describe("watchHoursFor: the slowest subject's first publish after READY", () =>
 });
 
 describe("the soak length is target data; the step list stays one list (owner, 2026-10-14)", () => {
-  test("S07-soak-gate, S08-soak-checks and S09-collect-logs wait C11-ready + watchHours in the template, and nothing else waits; a release's version checks wait too", () => {
+  test("the soak gate, the soak checks and the log collection wait READY + watchHours: Q32 to Q34 after Q23-ready on stage, C20 to C22 after C11-ready on production; a release's version checks wait too", () => {
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours]))
-      .toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"]]);
-    const versionChecks = V062.filter((s) => s.phase === "version");
+      .toEqual([
+        ["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"],
+        ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"],
+      ]);
+    const versionChecks = V062.filter((s) => s.added === "v0.6.2");
     expect(versionChecks.length).toBeGreaterThan(0);
-    for (const s of versionChecks) expect([s.id, s.notBefore]).toEqual([s.id, { afterStep: "C11-ready", hours: "watchHours" }]);
+    for (const s of versionChecks) expect([s.id, s.notBefore]).toEqual([s.id, { afterStep: s.phase === "qa" ? "Q23-ready" : "C11-ready", hours: "watchHours" }]);
   });
   test("prod and stage both soak 30 minutes with sessions deferred", () => {
     expect(SOAK_HOURS).toBe(0.5);
@@ -55,23 +58,24 @@ describe("the soak length is target data; the step list stays one list (owner, 2
       const t = loadTarget(join(targetsDir, `${name}.json`));
       expect(t.watchHours).toBe(SOAK_HOURS);
       expect(t.watchSessions).toBe("deferred");
-      for (const id of ["S07-soak-gate", "S08-soak-checks", "V01-subject-spacing", "S09-collect-logs"]) {
+      const [ready, ids] = name === "prod" ? ["C11-ready", ["C20-soak-gate", "C21-soak-checks", "C23-subject-spacing", "C22-collect-logs"]] as const : ["Q23-ready", ["Q32-soak-gate", "Q33-soak-checks", "Q35-subject-spacing", "Q34-collect-logs"]] as const;
+      for (const id of ids) {
         const step = V062.find((s) => s.id === id)!;
-        expect(notBeforeOf(step, t)).toEqual({ afterStep: "C11-ready", hours: SOAK_HOURS });
-        expect(renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).notBefore).toEqual({ afterStep: "C11-ready", hours: SOAK_HOURS });
+        expect(notBeforeOf(step, t)).toEqual({ afterStep: ready, hours: SOAK_HOURS });
+        expect(renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).notBefore).toEqual({ afterStep: ready, hours: SOAK_HOURS });
       }
     }
   });
-  test("S07-soak-gate and V01-subject-spacing render --sessions from the target: deferred on both by default", () => {
+  test("the soak gate and the subject-spacing check render --sessions from the target: deferred on both by default", () => {
     const rendered = (name: string, id: string) => {
       const t = loadTarget(join(targetsDir, `${name}.json`));
       return renderStep(V062.find((s) => s.id === id)!, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).remote;
     };
-    for (const id of ["S07-soak-gate", "V01-subject-spacing"]) for (const name of ["prod", "stage"]) expect(rendered(name, id)).toContain(" --sessions deferred ");
-    expect(rendered("prod", "S07-soak-gate")).toContain("bun run prod:gate --mode post-release");
-    expect(rendered("prod", "S07-soak-gate")).not.toContain("--defer-sessions");
-    expect(rendered("prod", "S08-soak-checks")).toContain("bun run soak:checks --instance rm_prod --since READY-ISO-FROM-R6.9 --full");
-    expect(rendered("prod", "S09-collect-logs")).toContain("bun scripts/release/collect-logs.ts --instance rm_prod --since READY-ISO-FROM-R6.9");
+    for (const [name, ids] of [["prod", ["C20-soak-gate", "C23-subject-spacing"]], ["stage", ["Q32-soak-gate", "Q35-subject-spacing"]]] as const) for (const id of ids) expect(rendered(name, id)).toContain(" --sessions deferred ");
+    expect(rendered("prod", "C20-soak-gate")).toContain("bun run prod:gate --mode post-release");
+    expect(rendered("prod", "C20-soak-gate")).not.toContain("--defer-sessions");
+    expect(rendered("prod", "C21-soak-checks")).toContain("bun run soak:checks --instance rm_prod --since READY-ISO-FROM-R6.9 --full");
+    expect(rendered("prod", "C22-collect-logs")).toContain("bun scripts/release/collect-logs.ts --instance rm_prod --since READY-ISO-FROM-R6.9");
   });
   test("the step-list hash is the same for both targets: the templates carry {watchSessions}, never its value", () => {
     for (const s of RELEASE_STEPS) {
@@ -85,7 +89,7 @@ describe("the soak length is target data; the step list stays one list (owner, 2
       for (const s of RELEASE_STEPS) renderStep(s, t, templateValues(t, "a".repeat(40), "20261008T000000Z"));
     }
     expect(stepListHash()).toBe(before);
-    const forked = RELEASE_STEPS.map((s) => (s.id === "S07-soak-gate" ? { ...s, cmds: [s.cmds[0]!.map((a) => (a === "{watchSessions}" ? "deferred" : a))] } : s));
+    const forked = RELEASE_STEPS.map((s) => (s.id === "C20-soak-gate" ? { ...s, cmds: [s.cmds[0]!.map((a) => (a === "{watchSessions}" ? "deferred" : a))] } : s));
     expect(stepListHash(forked)).not.toBe(before);
   });
   test("a fixed-hours wait resolves to itself; a step without a wait resolves to none", () => {

@@ -1,4 +1,4 @@
-// V09-rm-env-retired (PRs 1325, 1342): RM_ENV and RM_ALLOW_INSECURE are no
+// Q43-rm-env-retired/C29-rm-env-retired (PRs 1325, 1342): RM_ENV and RM_ALLOW_INSECURE are no
 // runtime input. 1325 retired both from every container's runtime config and
 // removed the insecure knob; 1342 removed RM_ENV from docker-compose.yml, the
 // stack composefiles and the participant env, so no container receives it.

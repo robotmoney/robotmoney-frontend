@@ -1,4 +1,4 @@
-// V02-maintenance-fallback (PR 1293, migration 0120): rollouts keep the website
+// Q36-maintenance-fallback/C24-maintenance-fallback (PR 1293, migration 0120): rollouts keep the website
 // up. Reads, on the target host:
 //   - the website-server container's LOADED nginx config (`nginx -T`): /api/
 //     answers @maintenance_body on 502/503/504, /api/status/maintenance falls

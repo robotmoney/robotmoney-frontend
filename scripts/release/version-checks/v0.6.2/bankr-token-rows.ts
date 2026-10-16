@@ -1,4 +1,4 @@
-// V12-bankr-token-rows (PR 1383, issue 1382, migration 0124): the two Bankr
+// Q46-bankr-token-rows/C32-bankr-token-rows (PR 1383, issue 1382, migration 0124): the two Bankr
 // "lp-fees" roster rows, which are ERC-20 tokens and not vaults, are inactive.
 //
 // Migration 0124 sets is_active = false on agent_vaults rows whose
