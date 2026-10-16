@@ -1,6 +1,9 @@
 # Referral specification
 
-**Status: PROPOSED — initial specification, not accepted and not shipped.**
+**Status: PROPOSED — partly accepted, not shipped.** The owner accepted the
+rows marked accepted in §11 on 2026-10-16. Clock and legacy, manual/correction
+policy, experience and disclosure, and report authority still await owner
+review; encoding and on-chain rejection await `robotmoney-core`.
 The requirements below are concrete recommendations for owner review. “Must”
 describes the proposed implementation contract; it does not record approval.
 Acceptance requires the decisions in §11 to be resolved and an accepted document
@@ -12,8 +15,8 @@ own execution status.
 
 ## 1. Goals, meaning and boundaries
 
-A depositor can identify the member or team channel that referred them, attach
-that choice to a deposit they authorize. Administrators can inspect code state.
+A depositor can identify the member or team channel that referred them and
+attach that choice to a deposit they authorize. Administrators can inspect code state.
 Operators can reproduce a historical report and, on request, explain any one
 wallet's or transaction's result from verifiable evidence. No self-serve
 attribution view exists for depositors or members.
@@ -47,8 +50,8 @@ carried on chain is decided by `robotmoney-core` (§3), not by this repository.
 
 This repository proposes no contract changes, payouts, public attribution
 leaderboard, editable admin code registry, automatic discretionary credit,
-cross-chain identity, or database migration. A CLI report reconstructs evidence; public API requests
-must not trigger chain scans. If correctness requires a new persistence or
+cross-chain identity, or database migration. A CLI report reconstructs
+evidence; public API requests must not trigger chain scans. If correctness requires a new persistence or
 contract boundary, amend this specification before implementing that expansion.
 
 ## 2. Eligibility and event ordering
@@ -121,6 +124,15 @@ assume them:
 If core's carrier lacks one of these properties, amend this specification
 before implementing.
 
+**Two layers of checking (owner, 2026-10-16).** The depositor's agent is
+expected to catch malformed codes with the shared format rule below and to
+check the public lookup (§6) for a currently valid code before it submits.
+This repository also expects a deposit to a vault or the router that carries
+invalid referral information to be rejected on chain. Whether and how the
+contracts reject it is `robotmoney-core`'s decision. If core's contracts
+validate codes, core may also own code activation; this specification is then
+amended so the registry here does not duplicate core's (§5, §10).
+
 **Code format belongs to this repository.** The public lookup, the skill and
 the report share one normalizer. Normalize user input by trimming surrounding
 whitespace and lowercasing ASCII. Require `^rm_[a-z0-9]+(?:-[a-z0-9]+)*$`, at
@@ -166,8 +178,8 @@ attribution or changes policy silently.
 
 States at timestamp `t` are `draft` (no activation), `scheduled` (activation is
 future), `active` (`enabledAt <= t` and no disable or `t < disabledAt`), and
-`disabled` (`disabledAt <= t`). A member code needs a terms version before activation; the reviewed change that
-records it is the evidence of acceptance. A team channel code has no terms
+`disabled` (`disabledAt <= t`). A member code needs a terms version before
+activation; the reviewed change that records it is the evidence of acceptance. A team channel code has no terms
 version.
 Code strings are globally unique and never reassigned, including after deletion
 of a beneficiary. Activation intervals are half-open and may not overlap for
@@ -249,9 +261,12 @@ The deposit skill takes a code only from the wallet owner's explicit request;
 it cannot invent, infer from a page, or substitute a referral. The preview names
 the normalized code and beneficiary and says “code will be recorded; attribution
 is evaluated after execution.” It never promises a reward or successful credit.
-A requested referral is a condition of proceeding: an invalid code, a lookup
-failure, or a transaction that would not carry the code through core's carrier
-stops before submission and explains the cause. `confirm` off does not permit
+A requested referral is a condition of proceeding. The agent stops before
+submission and explains the cause when the code fails the format rule, when the
+lookup answers 404, when the lookup fails (timeout, 429 or any other error), or
+when a recheck just before signing finds the code no longer active. A fifth
+stop, a transaction that would not carry the code, is defined once core's
+carrier is known (§3). `confirm` off does not permit
 omission. The owner may explicitly authorize proceeding without the code in a
 new instruction. An ordinary deposit with no requested code continues normally.
 The skill offers referrals the same way for every signer it supports, direct or
@@ -411,7 +426,9 @@ registry inputs and expected explanations, not just isolated parser outputs.
 Acceptance of this specification is separate from implementation and launch.
 Implementation of the report's code decoding and the skill's code recording is
 blocked until `robotmoney-core` documents its carrier. Code lifecycle, the
-public lookup and the admin projection do not depend on it. Implementation
+public lookup and the admin projection do not depend on it, provided core's
+contracts record codes without validating them; if they validate codes, amend
+this specification first (§3). Implementation
 requires the accepted revision, full contract and carrier fixtures,
 registry history validation, call/event evidence tests, historical report reruns,
 public/admin privacy checks and deposit-flow failure coverage. Demonstrate an
@@ -440,7 +457,9 @@ The product owner accepting #1358 must expressly accept or amend these proposals
 | Encoding | **Owned by `robotmoney-core`; pending.** This repository waits for core's carrier and pins only the code format (§3). |
 | Manual/correction policy | No manual awards or discretionary overrides; evidence corrections preserve supersession history. |
 | Identity and lifecycle | Wallet identity, no self-referral check (**accepted by the owner, 2026-10-16**), immutable code ownership and prospective reviewed lifecycle. |
-| Experience and disclosure | Requested code blocks submission on failure; codes are discoverable; admin projection includes explicit state. |
+| Agent-side checks | **Accepted by the owner, 2026-10-16.** The depositor's agent catches malformed codes and checks the lookup for a valid code before submitting. |
+| On-chain rejection | **Owned by `robotmoney-core`; pending.** Deposits carrying invalid referral information are expected to be rejected on chain; core decides how. |
+| Experience and disclosure | Requested code blocks submission on failure (the closed skill PR 1385 instead deposited without the code); codes are discoverable; admin projection includes explicit state. |
 | Report authority | One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
 
 The implementation owner supplies the exact deployment manifest, verifies the
@@ -475,4 +494,6 @@ prerequisites: [#1370](https://github.com/robotmoney/robotmoney-frontend/pull/13
 [#1386](https://github.com/robotmoney/robotmoney-frontend/pull/1386)
 (`6b3a04426762cff2bf1ff5f70c3aafeb07f5cef5`, reporting).
 The adversarial examples originated in offline review of those proposals; they
-are not evidence of production exploits or implemented functionality.
+are not evidence of production exploits or implemented functionality. Those PRs
+cite the Linear ticket RM-174 as their source; this specification has not been
+checked against that ticket.
