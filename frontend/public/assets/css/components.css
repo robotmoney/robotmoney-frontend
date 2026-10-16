@@ -1184,6 +1184,7 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
 .sv__detail-title, .ap-hero__title, .alh__title,
 .blog-idx__title, .ri__title, .stub__title, .rs__title {
   font-family: var(--font-display) !important;
+  font-stretch: var(--font-display-stretch);
   font-weight: 700 !important;
   font-size: clamp(2.5rem, 4.2vw, 3.75rem) !important;
   line-height: 1.05 !important;

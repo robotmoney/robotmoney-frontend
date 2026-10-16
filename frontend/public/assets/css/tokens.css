@@ -8,12 +8,19 @@
    (docs/bot-analytics-ui-port/inventory-original.md §4). Purely additive: no
    existing rule references these weights, so no other page's rendering
    changes. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+/* Archivo is the display face (RM-175): one variable file across width
+   62..125 and weight 500..900, so a headline condenses with font-stretch
+   rather than falling through a list of system condensed faces that half
+   the readers do not have. */
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..900&family=Space+Grotesk:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 
 :root {
   /* fonts (were Tailwind @theme vars) */
   --font-sans: 'Space Grotesk', system-ui, sans-serif;
-  --font-display: "Helvetica Neue Condensed", "Arial Narrow", "Avenir Next Condensed", 'Space Grotesk', system-ui, sans-serif;
+  --font-display: 'Archivo', "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
+  /* The width page headlines are set at. Smaller display type (a card title,
+     a figure) keeps Archivo's normal width, where 62% stops reading. */
+  --font-display-stretch: 62%;
   --font-serif: 'Instrument Serif', Georgia, serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
