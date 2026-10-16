@@ -462,6 +462,18 @@ The product owner accepting #1358 must expressly accept or amend these proposals
 | Experience and disclosure | Requested code blocks submission on failure (the closed skill PR 1385 instead deposited without the code); codes are discoverable; admin projection includes explicit state. |
 | Report authority | One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
 
+Review on 2026-10-16 found these open items beyond the table above. Each must
+be resolved or explicitly deferred before acceptance:
+
+| Open item | Gap and proposed resolution |
+|---|---|
+| On-chain rejection versus successful deposit | §3 expects core to reject deposits carrying invalid referral information, yet §6 and §9 say a code disabled after signing still deposits successfully. The registry lives in this repository, so core cannot know code activity. Define “invalid” on chain as format only, or move activation to core and amend §5, §6 and §9. |
+| Payer evidence for every signer | §2 requires proof of payer and executed call. Safe, ERC-4337 and router deposits hide the payer inside internal calls, and the shared RPC transport has no trace reads. Add a fourth carrier property in §3: core emits an event naming payer, receiver, amount and code. |
+| Deployment time of registry revisions | §5 requires a revision to be deployed before its activation or disable time. Nothing records deployment time, so validation and the report cannot enforce it. Record the release tag time as a report input, or reject effective times earlier than that tag. |
+| Missing report reasons | §9 expects explained outcomes for conflicting codes on one deposit and for a well-formed code absent from the registry. §7 lists no reason for either. Add `conflicting_codes` and `unknown_code`. |
+| Deposit authorization key | §7 deduplicates by `(chainId, transactionHash, logIndex)`, but a router deposit emits one Deposit log per leg. Define the key that groups legs into one authorization, ideally supplied by core's carrier event. |
+| Source ticket | §12 notes this specification was never checked against the Linear ticket RM-174. Reconcile it before acceptance. |
+
 The implementation owner supplies the exact deployment manifest, verifies the
 carrier against core's documentation and the deployed contracts, and proposes
 the measured scan budget. These are acceptance/launch inputs, not facts inferred from
