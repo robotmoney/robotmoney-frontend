@@ -218,7 +218,21 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   // Issue 1378 (boot.ts): before the first claim, wait for the api, enqueue
   // this boot's own newest slots, then cancel every older slot they supersede.
   // Returns false when stop() came first: the worker then claims nothing.
+  //
+  // The boot tick below is this process's FIRST scheduler tick: schedulerLoop
+  // waits on bootSettled before its own. Were both to tick at once, SKIP LOCKED
+  // would let the loop's tick commit this boot's newest slots after the sweep
+  // had already run, and a restored dump's older row would survive beside them.
+  let settleBoot!: () => void;
+  const bootSettled = new Promise<void>((resolve) => { settleBoot = resolve; });
   async function beforeFirstClaim(): Promise<boolean> {
+    try {
+      return await bootSteps();
+    } finally {
+      settleBoot();
+    }
+  }
+  async function bootSteps(): Promise<boolean> {
     if (opts.apiHealthUrl) {
       console.log(`[${workerId}] waiting for the api at ${opts.apiHealthUrl} before the first claim`);
       const ready = await waitForApiReady(opts.apiHealthUrl, {
@@ -273,6 +287,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
 
   async function schedulerLoop(): Promise<void> {
     await schedulerBeat("boot");
+    await bootSettled; // the boot tick and sweep go first (beforeFirstClaim)
     let faulted = false;
     while (running) {
       try {
@@ -307,6 +322,7 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   async function doStop(): Promise<void> {
     running = false;
     stopped.abort();
+    settleBoot(); // a drain loop that never reached its boot step must not hold the scheduler loop
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = await Promise.race([
       Promise.allSettled(loops).then(() => false as const),

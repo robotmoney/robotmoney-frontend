@@ -125,7 +125,9 @@ export async function tickScheduler(): Promise<number> {
       // same-day backlog) never needs.
       //
       // Under 'latest-only' (issue 1378) the bucket is the whole backlog: only
-      // the newest due slot is inserted. The six heavy kinds recompute current
+      // the newest due slot of this tick's batch is inserted. A backlog wider
+      // than MAX_SLOTS_PER_TICK yields one more job per extra tick, which the
+      // worker-start sweep (boot.ts) cancels on the next boot. The six heavy kinds recompute current
       // state from scratch, so an older slot is the same run repeated (migration
       // 0125's header).
       let pendingBucket: string | null = null;

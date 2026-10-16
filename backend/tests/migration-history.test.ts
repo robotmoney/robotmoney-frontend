@@ -238,6 +238,7 @@ async function schemaOf(db: Db): Promise<Record<string, string[]>> {
 let upgraded: Db;
 let fresh: Db;
 let appliedOnUpgrade: string[] = [];
+let upgradedPoliciesBeforeSeed: { kind: string; catchup_policy: string }[] = [];
 
 beforeAll(async () => {
   admin = adminConnection("postgres");
@@ -259,9 +260,15 @@ beforeAll(async () => {
   await upgraded`
     INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
     VALUES ('projects.refresh_wallets', '20 */6 * * *', '{}', 'UTC', true),
+           ('projects.fetch_vaults', '30 */6 * * *', '{}', 'UTC', true),
+           ('projects.refresh_coins', '10 * * * *', '{}', 'UTC', true),
            ('ops.repair_gaps', '*/5 * * * *', '{}', 'UTC', true),
+           ('ops.backfill_asset_prices', '*/15 * * * *', '{}', 'UTC', true),
            ('buybacks.refresh', '15 */6 * * *', '{}', 'UTC', true)`;
   appliedOnUpgrade = await migrateRemaining(upgraded);
+  // Read before any test seeds: what the migration itself did to all six rows.
+  upgradedPoliciesBeforeSeed = await upgraded<{ kind: string; catchup_policy: string }[]>`
+    SELECT kind, catchup_policy FROM job_schedules ORDER BY kind`;
 
   fresh = await freshDatabase("fresh");
   await migrateRemaining(fresh);
@@ -350,6 +357,12 @@ describe("the heavy kinds' catch-up policy after every migration", () => {
     "projects.refresh_coins",
     "projects.refresh_wallets",
   ];
+
+  test("the migration itself moves all six heavy rows of an upgraded database to 'latest-only' and leaves an 'all' kind alone", () => {
+    const policy = new Map(upgradedPoliciesBeforeSeed.map((r) => [r.kind, r.catchup_policy]));
+    for (const kind of HEAVY) expect({ kind, policy: policy.get(kind) }).toEqual({ kind, policy: "latest-only" });
+    expect(policy.get("buybacks.refresh")).toBe("all");
+  });
 
   test("the six heavy kinds hold 'latest-only' on the upgraded and on the blank database, and every other kind keeps its policy", async () => {
     for (const db of [upgraded, fresh]) {

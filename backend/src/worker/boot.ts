@@ -128,9 +128,10 @@ export interface ApiReadyOptions {
 
 /**
  * Resolve once `healthUrl` answers 200, retrying with capped backoff forever
- * (a lane without its api has nothing useful to do; the heartbeat the caller
- * writes per attempt keeps the container honest about it). Returns false only
- * when `signal` aborts first.
+ * (a lane without its api has nothing useful to do). No heartbeat is written
+ * while it waits, so the one boot record ages out after the idle budget (about
+ * 60 s) and the container shows unhealthy, never a false healthy. Returns false
+ * only when `signal` aborts first.
  */
 export async function waitForApiReady(healthUrl: string, opts: ApiReadyOptions = {}): Promise<boolean> {
   let delay = opts.initialDelayMs ?? 500;

@@ -239,3 +239,49 @@ test("a stale backlog leaves at most one live row per heavy kind, cancels the re
   }
   expect(claims.filter((c) => c.kind === ALL_KIND)).toHaveLength(2);
 }, 40_000);
+
+// The reliability review's race (PR 1381): with the schedules DUE at boot, the
+// scheduler loop's own first tick must not commit this boot's newest slot after
+// the sweep ran, or a dump's older row would survive beside it. The loop ticks
+// every 25 ms here, so an unserialized boot would race on every run.
+test("schedules due at boot: the boot tick and the sweep run before the scheduler loop ticks, leaving one live row per heavy kind", async () => {
+  // Every heavy schedule last fired long ago: its next run is 30 hours back.
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '30 hours'
+                   WHERE kind = ANY(${[...HEAVY]})`;
+  // The dump's older rows, one per heavy kind, at a slot 40 hours back.
+  const stale = new Map<string, number>();
+  for (const kind of HEAVY) stale.set(kind, await plant(kind, iso(40 * HOUR)));
+
+  const w = startWorker({
+    lane: LANES.analytics,
+    workerId: "boot-burst-due",
+    idlePollMs: 25,
+    schedulerTickMs: 25,
+    reaperTickMs: 60_000,
+    shutdownTimeoutMs: 5_000,
+    heartbeatFile: join(dir, "hb-due"),
+    schedulerHeartbeatFile: join(dir, "hb-due.scheduler"),
+  });
+  started.push(w);
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const [{ n }] = await sql`SELECT count(*)::int AS n FROM jobs WHERE status IN ('pending', 'running') AND kind = ANY(${[...HEAVY]})`;
+    const [{ ran }] = await sql`SELECT count(*)::int AS ran FROM jobs WHERE status = 'succeeded' AND kind = ANY(${[...HEAVY]})`;
+    if ((n === 0 && ran >= HEAVY.length) || Date.now() > deadline) break;
+    await sleep(50);
+  }
+  await w.stop();
+
+  for (const kind of HEAVY) {
+    const rows = await sql<{ id: string; status: string; last_error: string | null; slot: string }[]>`
+      SELECT id, status, last_error, payload->>'slotAt' AS slot FROM jobs WHERE kind = ${kind} ORDER BY id`;
+    const live = rows.filter((r) => r.status !== "cancelled");
+    // One live row, this boot's newest slot (not the dump's), and it ran once.
+    expect({ kind, live: live.length }).toEqual({ kind, live: 1 });
+    expect(Number(live[0]!.id)).not.toBe(stale.get(kind));
+    expect(Date.now() - Date.parse(live[0]!.slot)).toBeLessThan(24 * HOUR);
+    const old = rows.find((r) => Number(r.id) === stale.get(kind))!;
+    expect({ kind, status: old.status, reason: old.last_error }).toEqual({ kind, status: "cancelled", reason: SUPERSEDED_REASON });
+    expect(claims.filter((c) => c.kind === kind)).toHaveLength(1);
+  }
+}, 40_000);
