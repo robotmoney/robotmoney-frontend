@@ -30,7 +30,7 @@ describe("classifyLog", () => {
 
 describe("parseGateArgs", () => {
   test("defaults grade release v0.6.0 with the scheduler-era stuck bar", () => {
-    expect(parseGateArgs([])).toEqual({ minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, waitMin: 0, waive: [], release: "v0.6.0" });
+    expect(parseGateArgs([])).toEqual({ minSessions: 1, minAttendance: 0.5, stuckAfterMin: 120, waitMin: 0, waive: [], release: "v0.6.0" });
   });
 
   test("--instance is accepted (resolveGateStack reads it); the host driver's --driver-log is gone", () => {
@@ -70,6 +70,10 @@ describe("the sessions query", () => {
     expect(q).toContain("s.judging_outcome AS outcome");
   });
 
+  test("a session's lateness is measured from its own deadline: judging deadline, else window close", () => {
+    expect(sessionsQuery("2026-10-03T00:00:00.000Z")).toContain("now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue");
+  });
+
   test("judged means an applied model judgement in enforce mode, not any judgement row", () => {
     const q = sessionsQuery("2026-10-03T00:00:00.000Z");
     expect(q).toContain("AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged");
@@ -77,8 +81,9 @@ describe("the sessions query", () => {
 
   test("a database row becomes a SessionRow", () => {
     expect(toSessionRow({ id: "s", subject: "a", state: "published", outcome: "judged", age: "12.5", pub: "1759500000000", takes: "4", judged: true, receipt: false })).toEqual({
-      id: "s", subject: "a", state: "published", outcome: "judged", ageMin: 12.5, publishedAtMs: 1759500000000, takes: 4, judged: true, receipt: false,
+      id: "s", subject: "a", state: "published", outcome: "judged", ageMin: 12.5, overdueMin: null, publishedAtMs: 1759500000000, takes: 4, judged: true, receipt: false,
     });
+    expect(toSessionRow({ id: "s", subject: "a", state: "collecting", outcome: null, age: "1380", overdue: "-60", pub: null, takes: "5", judged: false, receipt: false }).overdueMin).toBe(-60);
     expect(toSessionRow({ id: "s", subject: "a", state: "collecting", outcome: null, age: "1", pub: null, takes: "0", judged: false, receipt: false }).publishedAtMs).toBeNull();
   });
 });

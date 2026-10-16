@@ -8,7 +8,7 @@
 // (scripts/tests/unit/standing-soak.test.ts).
 //
 // RULE. The checks are cumulative: a release adds checks and never drops one without a recorded
-// owner decision (docs/runbooks/release-standing-runbook.md section 6).
+// owner decision (docs/technical/release-runbooks.md §9, §10).
 //
 // Exit rule for every check: a WARN is not a pass, and a check with nothing to assert is
 // unverified (WARN or FAIL), never PASS.

@@ -384,6 +384,19 @@ const updateVault = registerQuery({
   },
 });
 
+const markVaultFailed = registerQuery({
+  role: "rm_worker",
+  object: "agent_vaults",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/handlers/projects:fetchVaults.markFailed",
+  purpose: "Mark a vault whose live read failed, keeping its last-persisted TVL.",
+  callers: HANDLER,
+  probe: {
+    statement: `UPDATE agent_vaults SET last_refresh_status = 'failed' WHERE id = $1::uuid`,
+    params: ["00000000-0000-0000-0000-000000000000"],
+  },
+});
+
 const upsertVaultTvl = registerQuery({
   role: "rm_worker",
   object: "daily_tvl_snapshots",
@@ -526,7 +539,12 @@ const updateCoverage = registerQuery({
 
 import { declineReplayedSlot, isReplayedSlot } from "./slot.ts";
 import { selectProjectsDataSource } from "../../projects/access/select.ts";
-import type { DiscoveredProject, ProjectsDataSource, WalletBalanceRead } from "../../projects/access/data-source.ts";
+import {
+  PermanentVaultReadError,
+  type DiscoveredProject,
+  type ProjectsDataSource,
+  type WalletBalanceRead,
+} from "../../projects/access/data-source.ts";
 import {
   coinGeckoFields,
   computeCoverage,
@@ -1042,16 +1060,27 @@ export async function fetchVaults(
   const vaults = await on(sql, selectLiveVaults)<{ id: string; vault_address: string | null; chain: string | null; strategy_type: string | null; protocol: string | null }>`
     SELECT id, vault_address, chain, strategy_type, protocol FROM agent_vaults
     WHERE is_active = true AND data_source = 'live' AND vault_address IS NOT NULL`;
-  if (!vaults.length) return { ok: true, status: "ok", updated: 0 };
+  if (!vaults.length) return { ok: true, status: "ok", updated: 0, failed: 0 };
 
+  // Issue 1291: each vault is read and validated on its own. One vault that
+  // throws (production: the Bankr LP rows, which are not ERC-4626 and revert
+  // totalAssets()) used to abort the whole run with updated: 0, so no vault's
+  // TVL was refreshed. A failing vault now keeps its last-persisted TVL and is
+  // marked last_refresh_status = 'failed'; the others still update.
   const updates: { id: string; tvl: number }[] = [];
-  try {
-    for (const v of vaults) {
+  const failures: { id: string; error: Error }[] = [];
+  for (const v of vaults) {
+    try {
       const read = await source.vaultErc4626Read(v.vault_address as string, v.chain ?? "base");
       updates.push({ id: v.id, tvl: vaultTvlErc4626(read) });
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      failures.push({ id: v.id, error });
+      console.error(
+        `[projects.fetch_vaults] vault ${v.id} live read failed, keeping last-persisted TVL (degraded):`,
+        error.message,
+      );
     }
-  } catch (err) {
-    return degraded("fetch_vaults", err, { updated: 0 });
   }
 
   await sql.begin(async (tx) => {
@@ -1062,8 +1091,19 @@ export async function fetchVaults(
         VALUES (${u.id}, ${day}, ${u.tvl})
         ON CONFLICT (vault_id, snapshot_date) DO UPDATE SET tvl_usd = EXCLUDED.tvl_usd`;
     }
+    for (const f of failures) {
+      await on(tx, markVaultFailed)`UPDATE agent_vaults SET last_refresh_status = 'failed' WHERE id = ${f.id}`;
+    }
   });
-  return { ok: true, status: "ok", updated: updates.length };
+
+  const failed = failures.length;
+  if (updates.length > 0) return { ok: true, status: "ok", updated: updates.length, failed };
+  // Every vault failed. The run is degraded. When every failure is permanent
+  // (a revert, an uncallable address) no retry can change the answer, so the
+  // job settles at once (terminal) instead of retrying on the 2 s, 4 s backoff.
+  const terminal = failures.every((f) => f.error instanceof PermanentVaultReadError);
+  const error = `${failed} of ${vaults.length} vault read(s) failed; first: ${failures[0]!.error.message}`;
+  return { ok: false, status: "degraded", error, updated: 0, failed, ...(terminal ? { terminal: true } : {}) };
 }
 
 // ── Identity resolution + coverage scoring (no network) ──────────────────────

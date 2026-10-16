@@ -861,6 +861,16 @@ describe("decideResume rule 3 — §1.3, state changed by another operation refu
     expect(reason).toContain(`expects ${DIGEST_A}`);
   });
 
+  test("a service on the image this plan's project built resumes: a failed rolling phase's own replacement", async () => {
+    const built = "sha256:8888888888888888888888888888888888888888888888888888888888888888";
+    const paths = freshPaths();
+    const journal = await journalWithCommittedPreparation(paths);
+    const observed = afterPreparation({ services: { api: built, worker: DIGEST_A } });
+    expect(decideResume(journal, journal.planId, observed, { api: built }).kind).toBe("resume");
+    // red control: another service's build does not account for it.
+    expect(decideResume(journal, journal.planId, observed, { worker: built }).kind).toBe("refuse");
+  });
+
   test("an expected service that is no longer running refuses — absence is a change too", async () => {
     const reason = await refusal(afterPreparation({ services: { api: DIGEST_A } }));
     expect(reason).toContain("service worker is not running");

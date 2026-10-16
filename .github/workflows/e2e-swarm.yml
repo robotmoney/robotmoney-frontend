@@ -15,7 +15,7 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   schedule:
     - cron: "17 4 * * *"
   pull_request:

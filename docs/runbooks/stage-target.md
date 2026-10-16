@@ -10,7 +10,10 @@
 
 The stage target is a copy of production as it stands before the next patch. It lives on
 `rm-frontend-stage-2`. The release runner runs the production step list against it with
-`bun run release:run --target stage`. No step takes a stage-only path.
+`bun run release:run --target stage`. The list's QA steps, Q01-lockfile to Q04-role-passwords, are
+stage's own preparation (the lockfile, the dump, this target, its role passwords): production skips
+them, and the step-list hash is the same for both. Every preflight and cutover step takes the same
+path on both.
 
 The tool holds no past-upgrade fact (issue 1272). The tag and commit come from production's
 `/api/version`; the ledger comes from the dump itself; the stack is booted the production way
@@ -40,7 +43,7 @@ It builds these pieces, in order:
    the tag. A body with `+dirty` or `+unknown` refuses.
 2. **The running checkout.** `rm-stage-running`, detached at that tag (else that commit),
    with `bun install` in root and backend. It never creates the release checkout:
-   R1.1 clones that one.
+   P01-checkout clones that one.
 3. **The database.** One Postgres 18 container, `rm-stage-target-pg`. It listens on
    `172.17.0.1:25060`. Its data lives in the named volume `rm-stage-target-pgdata`.
    It restarts with Docker.
@@ -82,7 +85,8 @@ It builds these pieces, in order:
     to `~/.env`), the env rewrite, the service tokens, `bun smoke --static-port --instance
     stage_target`, the rebind of the in-house members onto the stage keys (the dump holds
     production's), and a second boot. Docker keeps the stack running, as on production.
-    The boot writes the instance's smoke state under `HOME`, which is what R6.1 stops.
+    The boot writes the instance's smoke state under `HOME`, which the release's rolling boot
+    (C10-rolling-boot) replaces one service at a time.
     The site answers on `:48787`, and `/api/version` reports the tag and commit.
 
 `bun scripts/release/stage-target.ts status` reports each piece.
@@ -98,38 +102,30 @@ no such command: there the admin types the doadmin password.
 Since the v0.6.0 cutover (2026-10-08) production's stack is the one `bun smoke --static-port
 --instance rm_prod` booted from the release checkout of the running version, with `HOME=/root`.
 Docker keeps it running. Its smoke state lives under `/root/.local/state/robotmoney-smoke/rm_prod/`;
-`bun run smoke:down --instance rm_prod` is the one way to stop it, and R6.1 runs exactly that.
+A release never stops it: C10-rolling-boot replaces its services one at a time and keeps website-server up
+(release policy §4.7).
 `/api/version` reports the commit and, for a boot at a tag, the tag. No tmux session drives it.
 
 ## Rebuild it for each rehearsal
 
-Each rehearsal rebuilds the target. By default it restores the newest production dump
-already on stage-2 (`ls -d ~/rm-backup-prod-*`), if it is under 24 hours old (owner, 2026-10-08).
-The release's own R2.1 still captures a new backup during the run.
+The release runbook's QA steps rebuild the target, so QA is one command (policy section 4.4):
 
-1. Only when no dump on stage-2 is under 24 hours old, capture one. It reads production's replica as `rm_readonly`:
+```bash
+bun run release:run --target stage --go <stage go>
+```
 
-   ```bash
-   ssh rm-frontend-stage-2 'cd ~/rm-060 && RM_ENV=stage bun smoke:capture --out ~/rm-backup-prod-$(date -u +%Y%m%dT%H%M%SZ)' </dev/null
-   ```
+- **Q02-dump** (`stage-target dump`) uses the newest production dump already on stage-2
+  (`~/rm-backup-prod-*`) if it is at most 24 hours old (owner, 2026-10-08). Otherwise it captures
+  one from production's read replica as `rm_readonly`, with the capture checkout's
+  `bun smoke:capture`. The release's own C01-backup still captures a new backup during the run.
+- **Q03-stage-up** (`stage-target up --dump newest --replace`) rebuilds the target from that dump.
+- **Q04-role-passwords** (`stage-target doadmin | bun run role-passwords --target stage --doadmin-stdin`) sets
+  the role passwords, the same precondition production runs before its release. It keeps the
+  working runtime lines, makes `rm_owner` LOGIN, generates its password and writes the
+  `rm_owner` line into the stage `~/.env`. A rerun keeps every role.
 
-2. Rebuild the target from the control machine:
-
-   ```bash
-   bun scripts/release/stage-target.ts up --dump /home/stage-server/rm-backup-prod-<stamp> --replace
-   ```
-
-3. Set the role passwords, the same precondition production runs before its release:
-
-   ```bash
-   bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target stage --doadmin-stdin
-   ```
-
-   It keeps the working runtime lines, makes `rm_owner` LOGIN, generates its
-   password and writes the `rm_owner` line into the stage `~/.env`. A rerun keeps
-   every role.
-
-4. Read `status`. Then run the release runner against the target.
+Stage has no preflight: the same run goes on to the preflight and cutover steps. Read
+`bun scripts/release/stage-target.ts status` when something looks wrong.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,
 unless `--replace` is given. `--replace` runs `down` first. `down` stops the instance's
@@ -138,10 +134,10 @@ Postgres container, the volume, the running checkout `rm-stage-running`, the rel
 `rm-stage-target` and the target `HOME`. It never touches stage-2's own `~/.env`, `~/rm-060`,
 the capture checkout `/home/stage-server/rm-capture`, other checkouts or the dump directories.
 
-The capture checkout belongs to the release runner, for both targets. Its R1.4
+The capture checkout belongs to the release runner, for both targets. Its P04-capture-checkout
 clones it when it is missing. `up` never creates it. `down` refuses to remove it, or
 any folder holding it (`removalRefusal` in `stage-target-lib.ts`). See
-[the capture checkout convention](release-run.md#capture-checkout-convention).
+the capture checkout convention (`CAPTURE_CHECKOUT` in `scripts/release/target.ts`).
 
 A full `up` takes about 15 minutes. The restore takes about 3. The image build and the
 two boots take most of the rest.

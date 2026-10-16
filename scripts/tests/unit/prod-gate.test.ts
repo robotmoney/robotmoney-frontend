@@ -30,7 +30,7 @@ describe("evaluateCapacity (report-only)", () => {
 
 describe("parseProdGateArgs", () => {
   test("defaults to a 24 h baseline graded as v0.6.0", () => {
-    expect(parseProdGateArgs([])).toMatchObject({ mode: "baseline", windowHours: 24, stuckAfterMin: 780, release: "v0.6.0" });
+    expect(parseProdGateArgs([])).toMatchObject({ mode: "baseline", windowHours: 24, stuckAfterMin: 120, release: "v0.6.0" });
   });
 
   test("rejects an unknown mode, a bad capacity and a non-markdown report", () => {

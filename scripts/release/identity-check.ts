@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/identity-check.ts — release step R7.1, run ON THE TARGET HOST.
+// scripts/release/identity-check.ts — release step S01-verify-version, run ON THE TARGET HOST.
 // Standing check SV.1.
 //
 //   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] --receipt-dir <dir>
@@ -8,7 +8,7 @@
 // <origin>/version.json must name it too. Neither may say `+dirty` or
 // `+unknown`. When `--ref` is the rc tag the go named (a production run,
 // D64), /api/version must carry it as `tag`: the boot's RM_BUILD_TAG, from
-// the tag R1.1 fetched. Writes identity-check.json to --receipt-dir.
+// the tag P01-checkout fetched. Writes identity-check.json to --receipt-dir.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -67,7 +67,7 @@ async function main(): Promise<number> {
   const problems = identityProblems(apiText, siteText, commit, ref);
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
-  writeFileSync(file, `${JSON.stringify({ step: "R7.1", origin, commit, ref, api: apiText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "S01-verify-version", origin, commit, ref, api: apiText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[identity-check] ${origin}/api/version: ${apiText ?? "(no answer)"}`);
   console.log(`[identity-check] receipt: ${file}`);
   for (const p of problems) console.error(`[identity-check] FAIL: ${p}`);

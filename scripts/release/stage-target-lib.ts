@@ -28,7 +28,7 @@ export const STAGE_TARGET = {
   user: "stage-server",
   /** `$HOME` for every release tool on this target. Production's is `/root`. */
   home: "/home/stage-server/stage-target",
-  /** The release checkout: R1.1 clones it at the go's ref. `up` never creates it; `down` removes it. */
+  /** The release checkout: P01-checkout clones it at the go's ref. `up` never creates it; `down` removes it. */
   checkout: "/home/stage-server/rm-stage-target",
   /**
    * The checkout the running stack boots from, at the tag and commit
@@ -124,7 +124,7 @@ export function upPlan(manifest: DumpManifest, repo: readonly string[]): UpPlan 
 /**
  * PURE. The folders the stage target owns: `up` creates the home and the
  * running checkout, `down` (and `up --replace`) removes them and the release
- * checkout R1.1 made. The release runner's capture checkout (CAPTURE_CHECKOUT,
+ * checkout P01-checkout made. The release runner's capture checkout (CAPTURE_CHECKOUT,
  * ./target.ts) is never one of them.
  */
 export function stageTargetDirs(): string[] {
@@ -146,7 +146,7 @@ export function removalRefusal(dir: string, keep: readonly string[]): string | u
 
 /**
  * The key names of production's `~/.env` (`/root/.env`), in file order, read
- * from the prod host on 2026-10-08 with `cut -d= -f1`. The env rewrite (R6.2)
+ * from the prod host on 2026-10-08 with `cut -d= -f1`. The env rewrite (C07-env-rewrite)
  * moves `SWARM_SCHEDULES_ENABLED` and `OPENCODE_API_KEY` aside, so the stage
  * file carries them too and the rehearsal exercises that move.
  */
@@ -696,6 +696,19 @@ export function restoredProblems(state: Record<string, string>, ledger: readonly
 /** Single-quote a word for a POSIX shell. */
 export function shellQuote(word: string): string {
   return `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * The newest dump (by `capturedAt`) that is at most `maxDumpAgeHours` old, or
+ * null (SR.0, owner 2026-10-08). A dump with no readable `capturedAt`, or one
+ * dated in the future, never qualifies. PURE.
+ */
+export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date): string | null {
+  const fresh = dumps
+    .map((d) => ({ dir: d.dir, at: Date.parse(d.capturedAt ?? ""), age: dumpAgeHours({ capturedAt: d.capturedAt }, now) }))
+    .filter((d) => d.age !== null && d.age >= 0 && d.age <= STAGE_TARGET.maxDumpAgeHours)
+    .sort((a, b) => b.at - a.at);
+  return fresh[0]?.dir ?? null;
 }
 
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */
