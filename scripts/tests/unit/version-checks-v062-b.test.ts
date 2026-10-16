@@ -1,10 +1,11 @@
-// v0.6.2's version checks V07 to V12 (scripts/release/version-checks/v0.6.2/):
+// v0.6.2's version checks Q41 to Q47 (scripts/release/version-checks/v0.6.2/):
 // each check's pure decision, with a red control, against what the shipped
 // files actually hold.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BANKR_ROWS_SQL, BANKR_TOKEN_ADDRESSES, bankrTokenRowsProblems } from "../../release/version-checks/v0.6.2/bankr-token-rows.ts";
+import { CATCHUP_SQL, LATEST_ONLY_KINDS, latestOnlyProblems } from "../../release/version-checks/v0.6.2/latest-only-catchup.ts";
 import { brandMarkProblems, EXPECTED_MARKS, looksLikeImage, MEMBER_LOGOS_PATH, parseMemberLogos } from "../../release/version-checks/v0.6.2/brand-marks.ts";
 import { cacheEnvOf, DEFAULT_CONTAINER_CACHE_DIR, fetchCacheProblems, parseDu } from "../../release/version-checks/v0.6.2/fetch-cache.ts";
 import { FIXTURE_COUNTS_SQL, FIXTURE_PROJECTS, FIXTURE_VAULTS, FIXTURE_WALLETS, fixtureProblems } from "../../release/version-checks/v0.6.2/fixture-guard.ts";
@@ -157,5 +158,23 @@ describe("C32-bankr-token-rows (1383, issue 1382)", () => {
     expect(bankrTokenRowsProblems({ rows: 0, active: 0 })).toEqual([]);
     expect(bankrTokenRowsProblems({ rows: 2, active: 0 })).toEqual([]);
     expect(bankrTokenRowsProblems({ rows: 2, active: 1 })[0]).toContain("1 of 2 Bankr lp-fees token row(s) are still active");
+  });
+});
+
+describe("Q47-latest-only-catchup (1381, issue 1378)", () => {
+  const migration = read("backend/migrations/0125_job_schedules_latest_only_catchup.sql");
+
+  test("the check's kinds are migration 0125's own, and the query only reads", () => {
+    for (const kind of LATEST_ONLY_KINDS) expect(migration).toContain(`'${kind}'`);
+    expect(LATEST_ONLY_KINDS).toHaveLength(6);
+    for (const kind of LATEST_ONLY_KINDS) expect(CATCHUP_SQL).toContain(`'${kind}'`);
+    expect(CATCHUP_SQL).not.toMatch(/\b(update|delete|insert)\b/i);
+  });
+
+  test("all six kinds on latest-only pass; red: a missing row or another policy fails", () => {
+    const all = LATEST_ONLY_KINDS.map((kind) => ({ kind, catchup_policy: "latest-only" }));
+    expect(latestOnlyProblems(all)).toEqual([]);
+    expect(latestOnlyProblems(all.slice(1))).toEqual([`${LATEST_ONLY_KINDS[0]} has no job_schedules row`]);
+    expect(latestOnlyProblems(all.map((r, i) => (i === 2 ? { ...r, catchup_policy: "all" } : r)))).toEqual([`${LATEST_ONLY_KINDS[2]} catches up with 'all', not 'latest-only'`]);
   });
 });

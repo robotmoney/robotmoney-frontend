@@ -27,6 +27,9 @@ notes: |
   - 0124_deactivate_bankr_token_vaults: deactivates the two Bankr lp-fees rows, which are
     tokens and not vaults (issue 1382, owner 2026-10-16); deletes nothing. C32-bankr-token-rows
     asserts none is active.
+  - 0125_job_schedules_latest_only_catchup: the CHECK accepts 'latest-only' and the six heavy
+    kinds move to it, so a start or a rolling boot enqueues one job per kind (issue 1378). An older
+    image reads it as 'all', so it is additive. Q47-latest-only-catchup asserts the six rows.
 
   Website. website-server/nginx.conf changed since v0.6.1 (the maintenance fallback). Its
   compose configuration did not, so C10-rolling-boot ships it by graceful reload into the running
@@ -41,7 +44,7 @@ notes: |
   (vault 00:52, woon 06:52, allocation 12:52, treasury 18:52 UTC) waits on the owner's
   word. It is not a step.
 recovery: |
-  All five migrations (0120 to 0124) are compat: additive and take no grant from a runtime role.
+  All six migrations (0120 to 0125) are compat: additive and take no grant from a runtime role.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
     and cut v0.6.2-rc.(N+1).
   - A failed C05-migrate: resume at C05-migrate; v0.6.1 keeps serving, and the website stays up.
@@ -88,6 +91,7 @@ scope:
   - {pr: 1379, what: "refresh_wallets reads every Base wallet in a few Multicall3 calls", none: "worker behavior: a failed read logs an error that C16-log-verdict and C20-soak-gate fail on"}
   - {pr: 1380, what: "fetch_vaults isolates each vault", none: "worker behavior: an aborted run logs an error that C16-log-verdict and C20-soak-gate fail on"}
   - {pr: 1383, what: "the two Bankr lp-fees token rows are deactivated (migration 0124)", check: "Q46-bankr-token-rows"}
+  - {pr: 1381, what: "a start or a rolling boot releases no job burst and orphans no job (migration 0125)", check: "Q47-latest-only-catchup"}
 steps:
   # ── QA: stage only, as often as needed. Every step here runs on the stage target and
   # on no other: stage's preparation (Q01 to Q05), then the whole upgrade (checkout, install,
@@ -679,6 +683,22 @@ steps:
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
+  - id: "Q47-latest-only-catchup"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.6.2"
+    description: "The six heavy scheduled kinds catch up with latest-only (1381, issue 1378, migration 0125): analytics.parity_sweep, projects.refresh_wallets, projects.fetch_vaults, projects.refresh_coins, ops.repair_gaps and ops.backfill_asset_prices each have a schedule row whose catchup_policy is latest-only"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "latest-only-catchup", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-latest-only-catchup.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
+  # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
     standing: ["SP.1"]
     host: "target"
@@ -1185,6 +1205,20 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-bankr-token-rows.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C33-latest-only-catchup"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.6.2"
+    description: "The six heavy scheduled kinds catch up with latest-only (1381, issue 1378, migration 0125): analytics.parity_sweep, projects.refresh_wallets, projects.fetch_vaults, projects.refresh_coins, ops.repair_gaps and ops.backfill_asset_prices each have a schedule row whose catchup_policy is latest-only"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "latest-only-catchup", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-latest-only-catchup.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
