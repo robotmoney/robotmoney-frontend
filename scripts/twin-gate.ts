@@ -21,8 +21,9 @@
 //                   judgement, a consensus receipt and enough takes. A session
 //                   that published unjudged FAILS; one that published
 //                   `no_consensus` is an acceptable outcome (a warning, never
-//                   counted as good). A session open longer than
-//                   --stuck-after minutes is stuck.
+//                   counted as good). A session open more than
+//                   --stuck-after minutes past its own deadline (window close,
+//                   or judging deadline) is stuck.
 //   2. participants At least one judge and one agent participant container is
 //                   running and has never restarted.
 //   3. judge        swarm_judge_config is `enforce`.
@@ -48,7 +49,7 @@ import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type RawLine } from "./lib/gate/log-inventory.ts";
 import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
-import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
+import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 
 export type { CheckRecord, SessionRow } from "./lib/gate/grade.ts";
@@ -94,7 +95,7 @@ export interface GateArgs {
 }
 
 export function parseGateArgs(argv: readonly string[]): GateArgs | { error: string } {
-  const out: GateArgs = { minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, waitMin: 0, waive: [], release: "v0.6.0" };
+  const out: GateArgs = { minSessions: 1, minAttendance: 0.5, stuckAfterMin: DEFAULT_STUCK_AFTER_MIN, waitMin: 0, waive: [], release: "v0.6.0" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     const v = argv[i + 1];
@@ -205,6 +206,7 @@ export function classifyLog(lines: readonly string[], waive: readonly string[]):
 export function sessionsQuery(t0: string): string {
   return `SELECT s.id, s.subject_id AS subject, s.state, s.judging_outcome AS outcome,
             coalesce(extract(epoch FROM now() - s.convened_at) / 60, 0)::text AS age,
+            (extract(epoch FROM now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue,
             (extract(epoch FROM s.published_at) * 1000)::text AS pub,
             (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
             EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id
@@ -217,12 +219,13 @@ export function sessionsQuery(t0: string): string {
       ORDER BY s.convened_at`;
 }
 
-interface SessionRaw { id: string; subject: string; state: string; outcome: string | null; age: string; pub: string | null; takes: string; judged: boolean; receipt: boolean }
+interface SessionRaw { id: string; subject: string; state: string; outcome: string | null; age: string; overdue?: string | null; pub: string | null; takes: string; judged: boolean; receipt: boolean }
 
 /** PURE. A database row as a SessionRow. */
 export function toSessionRow(r: SessionRaw): SessionRow {
   return {
     id: r.id, subject: r.subject, state: r.state, outcome: r.outcome, ageMin: Number(r.age),
+    overdueMin: r.overdue == null ? null : Number(r.overdue),
     publishedAtMs: r.pub ? Number(r.pub) : null, takes: Number(r.takes), judged: r.judged, receipt: r.receipt,
   };
 }
@@ -308,7 +311,7 @@ export function renderReport(r: GateReport): string {
   out.push(`| | |`, `|---|---|`);
   out.push(`| Commit | \`${r.commit}\` |`, `| Host | ${r.host} |`, `| Instance | \`${r.instance}\` |`, `| Compose project | \`${r.project}\` |`);
   out.push(`| T0 (api started) | ${r.t0} |`, `| Finished | ${r.finishedAt} |`);
-  out.push(`| Thresholds | ${r.args.totalSessions !== undefined ? `sessions in total ${r.args.totalSessions}` : `min sessions/subject ${r.args.minSessions}`}, min attendance ${r.args.minAttendance}, stuck after ${r.args.stuckAfterMin} min, waited up to ${r.args.waitMin} min, release ${r.args.release} |`);
+  out.push(`| Thresholds | ${r.args.totalSessions !== undefined ? `sessions in total ${r.args.totalSessions}` : `min sessions/subject ${r.args.minSessions}`}, min attendance ${r.args.minAttendance}, stuck ${r.args.stuckAfterMin} min past a session's deadline, waited up to ${r.args.waitMin} min, release ${r.args.release} |`);
   out.push(`| Waivers | ${r.args.waive.length ? r.args.waive.map((w) => `\`${w}\``).join(", ") : "none"} |`, "");
   out.push(`## Checks`, "", `| # | Check | Result | Detail |`, `|---|---|---|---|`);
   r.checks.forEach((c, i) => out.push(`| ${i + 1} | ${c.title} | **${c.status}** | ${c.detail.join("<br>").replace(/\|/g, "\\|") || "—"} |`));

@@ -22,6 +22,7 @@ import type {
 import type { RunLifecycleEvent } from "./run-ledger.ts";
 import type { TerminalRunPackageInput } from "./output-snapshots.ts";
 import { readFileSync } from "node:fs";
+import { ALL_PARITY_DOMAINS, type ParityDomain } from "./cutover/parity-domains.ts";
 
 export interface AnalyticsApiConfig {
   baseUrl: string; // e.g. http://api:8787 (compose) / http://localhost:8787
@@ -152,21 +153,59 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
   };
 }
 
+/** What POST A.paritySweep answers for one domain (api/routes/analytics.ts). */
+export interface ParityDomainSummary {
+  domain: ParityDomain;
+  matched: boolean;
+  legacyRowCount: number;
+  ledgerRowCount: number;
+  mismatchCount: number;
+  /** Time the api spent on the domain: its statement plus the observation insert. */
+  durationMs: number;
+}
+
+/** The analytics.parity_sweep job's output: one entry per domain, in sweep order. */
 export interface ParitySweepSummary {
-  domains: number;
-  matched: string[];
-  mismatched: string[];
+  domains: ParityDomainSummary[];
+  matched: ParityDomain[];
+  mismatched: ParityDomain[];
 }
 
 // Issue #979 fix: the worker's ONLY legitimate way to run the dual-write
-// parity sweep. runParitySweep() (analytics/cutover/parity.ts) reads/writes
-// Postgres directly through db/client.ts's rm_app-credentialed pool, which
-// worker/** must never import — even transitively (that was exactly the
-// regression this fixes: worker/handlers/index.ts importing parity.ts
-// directly, which pulled db/client.ts into every worker container). This
-// goes over the SAME authenticated HTTP boundary as analyticsApiClient()
-// above, POSTing to A.paritySweep, which runs the sweep INSIDE the API
-// process instead.
-export async function triggerParitySweep(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<ParitySweepSummary> {
-  return await analyticsApiCall<ParitySweepSummary>(cfg, "POST", ROUTES.analytics.paritySweep);
+// parity sweep. analytics/cutover/parity.ts reads/writes Postgres directly
+// through db/client.ts's rm_app-credentialed pool, which worker/** must never
+// import — even transitively. This goes over the SAME authenticated HTTP
+// boundary as analyticsApiClient() above, POSTing to A.paritySweep, which runs
+// the comparison INSIDE the API process instead.
+//
+// ONE REQUEST PER DOMAIN (issue 1375), in ALL_PARITY_DOMAINS order, so each
+// request is one bounded statement in Postgres and none comes near the api's
+// request limit. One log line per domain. A failed domain call fails the job
+// and names the domain; the domains before it have already recorded their
+// observations, which are evidence in their own right.
+export async function triggerParitySweep(
+  cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig(),
+  log: (line: string) => void = console.log,
+): Promise<ParitySweepSummary> {
+  const domains: ParityDomainSummary[] = [];
+  for (const domain of ALL_PARITY_DOMAINS) {
+    const started = performance.now();
+    let summary: ParityDomainSummary;
+    try {
+      summary = await analyticsApiCall<ParityDomainSummary>(cfg, "POST", ROUTES.analytics.paritySweep, { domain });
+    } catch (err) {
+      throw new Error(`parity sweep failed on domain ${domain}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    log(
+      `[parity-sweep] domain=${domain} matched=${summary.matched} legacy=${summary.legacyRowCount} ` +
+        `ledger=${summary.ledgerRowCount} mismatches=${summary.mismatchCount} durationMs=${summary.durationMs} ` +
+        `requestMs=${Math.round(performance.now() - started)}`,
+    );
+    domains.push(summary);
+  }
+  return {
+    domains,
+    matched: domains.filter((d) => d.matched).map((d) => d.domain),
+    mismatched: domains.filter((d) => !d.matched).map((d) => d.domain),
+  };
 }

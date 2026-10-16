@@ -1,6 +1,6 @@
 # Website rollout, continuity and independent deployment
 
-Supporting procedure for [v0.6.2](./v0-6-2-rollout.md), verified against `a0c8457d`.
+Supporting procedure for [v0.6.2](../../scripts/release/runbooks/releases/v0.6.2.yaml), verified against `a0c8457d`.
 The release delta inherits the standing runbook; this guide supplies the website
 execution requirements. It does not waive gates or add a runner mode.
 

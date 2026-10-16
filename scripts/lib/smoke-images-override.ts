@@ -54,3 +54,14 @@ export function decideImagesOverride(
     ],
   };
 }
+
+/** The image id this compose project's tag (`<project>-<service>`) names, per service: what a resume may take as the plan's own build (smoke-journal.ts decideResume). */
+export function projectImageIds(project: string, services: readonly string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const service of services) {
+    const r = Bun.spawnSync(["docker", "image", "inspect", "--format", "{{.Id}}", `${project}-${service}`], { stdout: "pipe", stderr: "pipe" });
+    const id = r.stdout.toString().trim();
+    if (r.exitCode === 0 && id.startsWith("sha256:")) out[service] = id;
+  }
+  return out;
+}

@@ -279,7 +279,8 @@ describe("§9.1 step 5 — `prod-init provision-tokens` writes the three holders
       identityBefore: "production",
       lockHolder: "prod-init:provision-tokens",
       outcome: "completed",
-      detail: { holders: [...SERVICE_TOKEN_HOLDERS] },
+      // A fresh store holds no token, so every holder is provisioned and none is kept.
+      detail: { provisioned: [...SERVICE_TOKEN_HOLDERS], kept: [] },
     });
     for (const holder of SERVICE_TOKEN_HOLDERS) expect(JSON.stringify(receipt)).not.toContain(readFileSync(paths().tokenFiles[holder], "utf8").trim());
   }, 120_000);

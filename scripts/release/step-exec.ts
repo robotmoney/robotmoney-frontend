@@ -3,14 +3,14 @@
 //
 // One step: run its command over ssh (or on the control machine), scrub its
 // output, write stdout.log and stderr.log, copy back the receipts it wrote,
-// and decide ok or failed. A baseline gate (R2.5) that exits non-zero is ok
+// and decide ok or failed. A baseline gate (P08-log-baseline) that exits non-zero is ok
 // only when the owner's triage file covers every failed finding. The run and
 // the preflight share this code, so a step the preflight saw green is judged
 // by the same rule in the run.
 import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import type { GoRecord } from "./go.ts";
+import { recoveryOf, releaseRunbookPath } from "./runbook.ts";
 import type { ReceiptRecord, StepRecord } from "./journal.ts";
 import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
 import { shellQuote, type RenderedStep } from "./steps.ts";
@@ -79,14 +79,15 @@ export async function pullReceipts(
   return { receipts, missingRequired };
 }
 
-/** SC.1: the signed recovery matrix the go names. A path must be readable; its sha256 is journaled. */
-export function readRecovery(go: GoRecord, deps: Pick<RunnerDeps, "readText" | "home">):
+/** SC.1: the recovery decision in the release's runbook YAML (`recovery:`). Its path and the sha256 of the decision are journaled. */
+export function readRecovery(release: string, deps: Pick<RunnerDeps, "readText">):
   { ref: string; sha256: string | null } | { error: string } {
-  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(go.recovery)) return { ref: go.recovery, sha256: null };
-  const path = go.recovery.startsWith("~/") ? join(deps.home, go.recovery.slice(2)) : resolve(go.recovery);
+  const path = releaseRunbookPath(release);
   const text = deps.readText(path);
-  if (text === undefined) return { error: `the go names the recovery matrix ${go.recovery}, which cannot be read (SC.1)` };
-  return { ref: path, sha256: createHash("sha256").update(text).digest("hex") };
+  if (text === undefined) return { error: `release ${release} has no runbook at ${path}, so no recovery decision (SC.1)` };
+  const recovery = recoveryOf(text);
+  if (recovery === undefined) return { error: `${path} records no recovery decision (recovery:, SC.1)` };
+  return { ref: `${path}#recovery`, sha256: createHash("sha256").update(recovery).digest("hex") };
 }
 
 /**
@@ -142,7 +143,7 @@ export async function executeStep(
   return ok;
 }
 
-/** R2.5: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
+/** P08-log-baseline: read the step's pulled gate report and the owner's triage file; accept only full coverage. */
 export function triageStep(stepDir: string, triagePath: string | undefined, deps: RunnerDeps):
   { accepted: true; record: NonNullable<StepRecord["triage"]> } | { accepted: false; message?: string } {
   const reportPath = join(stepDir, "receipts", "prod-gate-baseline.json");

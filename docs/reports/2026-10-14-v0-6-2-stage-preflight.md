@@ -6,7 +6,7 @@
 
 - Candidate: `5cb1baa502f9b3e68eefcb143763793c0b864a2d` on `releases-0.6.x`.
 - Main merged: `a0c8457d` through merge commit `01bf7c87`.
-- Runbook: [v0.6.2 delta](../runbooks/v0-6-2-rollout.md).
+- Runbook: [v0.6.2 runbook](../../scripts/release/runbooks/releases/v0.6.2.yaml).
 - SSH alias: `rm-frontend-stage-2`, using the control machine's existing SSH configuration.
 - Candidate checkout: `/home/stage-server/rm-stage-target-v062`.
 - Stage instance: `stage_target`, HOME `/home/stage-server/stage-target`.

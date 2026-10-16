@@ -12,7 +12,7 @@
 // can pipe it), then runs on the target host
 //
 //   ssh -T -o BatchMode=yes <host> '{ test -e <checkout>/.git || git clone <repo> <checkout>; } && cd <checkout> \
-//     && { test -e node_modules || bun install --force ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
+//     && { test -e node_modules || bun install --frozen-lockfile ...; } && env -i HOME=<home> PATH=<path> LANG=C.UTF-8 RM_ENV=<env> \
 //     bun scripts/prod-init.ts role-passwords --instance <i> --confirm-target <T> --doadmin-stdin [...]'
 //
 // and writes the password, with one newline, to that ssh process's stdin and
@@ -21,9 +21,9 @@
 // the same `env -i` environment every release step runs with
 // (scripts/release/steps.ts BASE_ENV), and the flags.
 //
-// It runs from the target's release checkout, the one R1.1 fetches and
+// It runs from the target's release checkout, the one P01-checkout fetches and
 // detaches later: provisioning precedes the run, so the wrapper clones and
-// installs that checkout when it is missing, as R1.1 and R1.3 would. It never
+// installs that checkout when it is missing, as P01-checkout and P03-install would. It never
 // names the running stack's checkout: a target holds no such fact (issue 1272).
 //
 // The target comes from the same files `release:run` reads
@@ -85,7 +85,7 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
   return [
     `{ test -e ${shellQuote(`${target.checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])}; }`,
     `cd ${checkout}`,
-    `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--force"])} && ${envCmd(["bun", "install", "--force", "--cwd", "backend"])}; }; }`,
+    `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--frozen-lockfile"])} && ${envCmd(["bun", "install", "--frozen-lockfile", "--cwd", "backend"])}; }; }`,
     envCmd(argv),
   ].join(" && ");
 }

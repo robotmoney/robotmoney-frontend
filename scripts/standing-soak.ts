@@ -30,7 +30,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { containerEnv, containerLogs, dbQuery, projectContainers, serviceContainer, sh } from "./lib/gate/io.ts";
-import { resolveGateStack } from "./lib/gate/stack.ts";
+import { liveApiBase, resolveGateStack } from "./lib/gate/stack.ts";
 import {
   CHAIN_STATE_TABLES, LEDGER_GUARDS, evalApiLogs, evalBuyback, evalCadence, evalConnections, evalDisk, evalDiskGrowth, evalErrorLike, evalGecko, evalGrowth, evalGrants,
   evalGuards, evalHealth, evalJudgeConfig, evalLedgerNoise, evalMigrations, evalOpenedAt, evalParity, evalPayloadsGone, evalProducerFailures, evalQuorum,
@@ -342,7 +342,11 @@ function main(): Promise<number> {
     if (existsSync(baselinePath)) {
       try { baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as Baseline; } catch { console.error(`[${NAME}] ${baselinePath} is malformed: delete it and re-run with --record.`); return 2; }
     }
-    const baseUrl = args.baseUrl ?? `http://127.0.0.1:${stack.record.apiPort}`;
+    let baseUrl: string;
+    try { baseUrl = args.baseUrl ?? liveApiBase(stack); } catch (e) {
+      console.error(`[${NAME}] ${e instanceof Error ? e.message : String(e)}`);
+      return 2;
+    }
     console.log(`[${NAME}] instance ${stack.instance}, project ${stack.project}, db ${stack.record.db}, T0 ${since}${args.record ? ", RECORDING the baseline" : ""}`);
     const now = new Date();
     const checks = await runStandingChecks(realIo(stack.project, stack.api, baseUrl, "/", since), {

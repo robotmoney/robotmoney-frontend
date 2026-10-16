@@ -33,7 +33,7 @@ import {
   type AdmissionRecord,
   type OnboardingEvalResult,
 } from "./onboarding-eval.ts";
-import { decideImagesOverride } from "./smoke-images-override.ts";
+import { decideImagesOverride, projectImageIds } from "./smoke-images-override.ts";
 import { credentialFileModelKey, preflightInferenceOrExit } from "./smoke-inference-preflight.ts";
 import { adoptRestoredRoster, credentialHandlesOf, resolveSeatAllRestored, scenarioPlan } from "./smoke-mode.ts";
 import {
@@ -1274,7 +1274,7 @@ async function main(): Promise<void> {
   let recheckSchema = journalExpects;
   /** Set when THIS run restored the dump: the restore, not the old journal, defines the schema. */
   let restoredThisRun = false;
-  const decision = decideResume(onDisk, planId, lastExpectations);
+  const decision = decideResume(onDisk, planId, lastExpectations, projectImageIds(project, Object.keys(lastExpectations.services)));
   if (decision.kind === "refuse") fatal(`the journal for instance ${instance.name} refuses this run: ${decision.reason}`);
   if (decision.kind === "supersede") log(decision.report);
   if (decision.kind === "resume") log(`resuming the journal for plan ${planId} (it continues at ${decision.nextPhase})`);
@@ -1660,6 +1660,9 @@ async function main(): Promise<void> {
     migrate: false,
     initialize: producerSeed, deferredServices: ["analytics-producer"],
     beforeStep,
+    // A standing stack (stage and prod, --static-port) is upgraded rolling: one
+    // service at a time, website-server never recreated (owner, 2026-10-14).
+    rolling: staticPortMode,
   }));
 
   // ── Readiness (§6.3) and the receipt (§1.4) ─────────────────────────────
@@ -1968,7 +1971,8 @@ main().catch(async (err) => {
   // LOCAL: the stack stays up for inspection, so the writers must be stopped
   // EXPLICITLY — leaving them running is what let a failed boot go on mutating
   // the database (a remote one, that no teardown can roll back).
-  const writers = dockerEnv ? quiesceWriters() : "none";
+  // Except a rolling (--static-port) boot: stopping its api takes the live site's API down (smoke-failure.ts `kept`).
+  const writers = !dockerEnv ? "none" : staticPortMode ? "kept" : quiesceWriters();
   // Failure may have happened before readiness wrote the stack record, yet the
   // containers can already be up. Write it best-effort so `smoke:down` can find
   // and tear them down. Never auto-teardown locally.

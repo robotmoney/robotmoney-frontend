@@ -16,23 +16,23 @@
 // a second pin that drifts from the go with every QA fix. It never names the
 // running stack either: no `legacy` block, no previous commit, no tmux session,
 // no driver log. The running stack is what the host's smoke state names
-// (scripts/lib/smoke-state.ts) and what /api/version reports; R6.1 stops that.
+// (scripts/lib/smoke-state.ts) and what /api/version reports; the rolling boot replaces it.
 //
 // Pure apart from loadTarget's one readFileSync, so every refusal is a unit
 // test (scripts/tests/unit/release-run.test.ts).
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { STAGE_TARGET } from "./stage-target-lib.ts";
-import { DEFAULT_WATCH_HOURS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
+import { DEFAULT_WATCH_HOURS, SOAK_HOURS, WATCH_SESSIONS, type WatchSessions } from "./watch.ts";
 
 /**
  * The capture checkout convention (owner decision 2026-10-08). The capture
- * checkout is a dedicated folder the release runner owns: R1.4 clones it when
+ * checkout is a dedicated folder the release runner owns: P04-capture-checkout clones it when
  * it is missing, then fetches and detaches it at the commit. It is the same
  * folder for every target. It is never a release checkout: the stage target
  * (./stage-target.ts) removes its own checkout on every `down`, and a capture
  * checkout that was the stage checkout vanished with it (the v0.6.0 production
- * preflight's R1.4 failure, 2026-10-08). stage-target never creates or removes
+ * preflight's P04-capture-checkout failure, 2026-10-08). stage-target never creates or removes
  * this folder.
  */
 export const CAPTURE_CHECKOUT = Object.freeze({ host: "rm-frontend-stage-2", checkout: "/home/stage-server/rm-capture" });
@@ -64,7 +64,7 @@ export interface CaptureHost {
   /** HOME on the capture host: its `~/.env` holds `rm_readonly` against production's replica. */
   readonly home: string;
   /**
-   * The runner-owned checkout on the capture host (CAPTURE_CHECKOUT). R1.4
+   * The runner-owned checkout on the capture host (CAPTURE_CHECKOUT). P04-capture-checkout
    * clones it when missing. Never the stage target's checkout, never this
    * target's own checkout on the same host.
    */
@@ -78,35 +78,33 @@ export interface ReleaseTarget {
   readonly rmEnv: "stage" | "prod";
   /** The ssh host alias. */
   readonly host: string;
-  /** The release checkout on the host. Every release names a new one; R1.1 clones it when missing. */
+  /** The release checkout on the host. Every release names a new one; P01-checkout clones it when missing. */
   readonly checkout: string;
   /** HOME on the host for every command. Its `.env` is the target's credential file. */
   readonly home: string;
   readonly instance: string;
-  /** The public origin, for the identity check (R7.1). */
+  /** The public origin, for the identity check (S01-verify-version). */
   readonly publicOrigin: string;
   /**
-   * W1's `prod:gate --min-attendance`: the share of active members a good session needs.
+   * S07-soak-gate's `prod:gate --min-attendance`: the share of active members a good session needs.
    * Default 0.5, the gate's own default. A target where some active members cannot file
    * (stage: the external members run against production, never the stage database)
    * sets it lower in its file, with the reason in `$comment`.
    */
   readonly watchMinAttendance: number;
   /**
-   * Hours after READY (R6.9's end) before the watch steps W1 and R7.4a run.
-   * Default DEFAULT_WATCH_HOURS (./watch.ts): the longest first epoch plus its
-   * judging and publish grace, so every subject can publish once. Production,
-   * and any target that grades sessions, may set it longer, never shorter. A
-   * stage target that defers sessions may set any positive value (owner
-   * decision 2026-10-08: stage watches 15 minutes).
+   * Hours after READY (C11-ready's end) before the soak steps S07-soak-gate, S08-soak-checks and V01-subject-spacing
+   * run. Default SOAK_HOURS (./watch.ts): 30 minutes on every target (owner,
+   * 2026-10-14). A target that grades sessions in the soak must wait at least
+   * DEFAULT_WATCH_HOURS, the slowest subject's first publish.
    */
   readonly watchHours: number;
   /**
-   * Whether the watch grades sessions (W1 check 7, R7.4a's in-flight publish
-   * check) or defers them. Rendered into W1 and R7.4a as
+   * Whether the watch grades sessions (S07-soak-gate check 7, V01-subject-spacing's in-flight publish
+   * check) or defers them. Rendered into S07-soak-gate and V01-subject-spacing as
    * `--sessions {watchSessions}`, so the step list stays one list. Default
-   * "graded"; production is always graded. Stage sets "deferred": a 15-minute
-   * watch cannot see a 24 h epoch close.
+   * "deferred" on every target: a 30-minute soak cannot see a 24 h epoch
+   * close, and sessions are graded afterwards as a report (owner, 2026-10-14).
    */
   readonly watchSessions: WatchSessions;
   readonly capture: CaptureHost;
@@ -124,7 +122,7 @@ const CAPTURE_KEYS = ["host", "home", "checkout"];
 export const PAST_FACT_KEYS: Readonly<Record<string, string>> = Object.freeze({
   commit: "the release commit comes from the go file's commit: line",
   tag: "the rc tag comes from the go file's tag: line",
-  legacy: "the running stack is what the host's smoke state names; R6.1 stops it with bun run smoke:down",
+  legacy: "the running stack is what the host's smoke state names; the rolling boot replaces it",
   tmuxSession: "no release step drives or stops a tmux session",
 });
 
@@ -188,24 +186,22 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
     if (typeof v !== "number" || !(v > 0 && v <= 1)) errors.push(`${name}.watchMinAttendance must be a number in (0, 1]`);
     else watchMinAttendance = v;
   }
-  let watchSessions: WatchSessions = "graded";
+  let watchSessions: WatchSessions = "deferred";
   if (raw.watchSessions !== undefined) {
     const v = raw.watchSessions;
     if (typeof v !== "string" || !(WATCH_SESSIONS as readonly string[]).includes(v)) errors.push(`${name}.watchSessions must be ${WATCH_SESSIONS.join(" or ")}`);
     else watchSessions = v as WatchSessions;
   }
-  if (rmEnv === "prod" && watchSessions !== "graded") errors.push(`${name}: production grades sessions in its watch (watchSessions must be graded)`);
-  let watchHours = DEFAULT_WATCH_HOURS;
+  let watchHours = SOAK_HOURS;
   if (raw.watchHours !== undefined) {
     const v = raw.watchHours;
     if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) errors.push(`${name}.watchHours must be a positive number of hours`);
     else watchHours = v;
   }
-  // A graded watch must last until the slowest subject's first publish after
-  // READY. Production is always graded, so production never watches less than
-  // the derived bound. Only a deferred (stage) watch may be shorter.
-  if (watchHours < DEFAULT_WATCH_HOURS && (rmEnv === "prod" || watchSessions === "graded")) {
-    errors.push(`${name}.watchHours must be at least ${DEFAULT_WATCH_HOURS} (the slowest subject's first publish after READY) on ${rmEnv === "prod" ? "production" : "a target that grades sessions"}`);
+  // A soak that grades sessions must last until the slowest subject's first
+  // publish after READY. A deferred soak (the default) may be any length.
+  if (watchHours < DEFAULT_WATCH_HOURS && watchSessions === "graded") {
+    errors.push(`${name}.watchHours must be at least ${DEFAULT_WATCH_HOURS} (the slowest subject's first publish after READY) on a target that grades sessions`);
   }
   const bootEnv: Record<string, string> = {};
   if (raw.bootEnv !== undefined) {
@@ -233,7 +229,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
  * PURE. The capture checkout rule: the capture checkout is the release
  * runner's own folder. It may not be the stage target's checkout on the stage
  * host (`stage-target down` removes that folder), and it may not be this
- * target's own `checkout` on the same host (R1.1 and R1.4 would share one
+ * target's own `checkout` on the same host (P01-checkout and P04-capture-checkout would share one
  * folder, so stage would never rehearse the capture checkout steps).
  */
 export function captureCheckoutProblems(name: string, capture: CaptureHost, host: string | undefined, checkout: string | undefined): string[] {

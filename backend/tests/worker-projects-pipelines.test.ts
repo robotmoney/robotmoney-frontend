@@ -21,8 +21,17 @@ import {
   snapshotDaily,
   syncRevenue,
 } from "../src/worker/handlers/projects.ts";
-import type { ProjectsDataSource } from "../src/projects/access/data-source.ts";
+import type { DiscoveredVault, ProjectsDataSource } from "../src/projects/access/data-source.ts";
+import { loadV0RosterWithManifest } from "../src/projects/seed/roster-seed.ts";
 import { failingSource, uniqueSlugSource } from "./support/projects-fixture-source.ts";
+import {
+  _resetRpcConcurrencyForTests,
+  decodeAggregate3Calls,
+  encodeAggregate3Result,
+  MULTICALL3_ADDRESS,
+  type Aggregate3Result,
+} from "../src/chain/base-rpc-client.ts";
+import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 
 const KINDS = [
   "projects.discover",
@@ -337,6 +346,274 @@ test("processOneJob routes a partial-wallet-failure refresh_wallets run to job_r
   }
 });
 
+// ── Issue 1275: wallets with no live read path are skipped, not failed ──────
+// Production carries roster wallets on Ethereum/Solana and non-EVM addresses.
+// The live source has no read path for them, so each run used to log one
+// error per wallet and end degraded, which retried the job 5 times every slot.
+// refreshWallets now asks supportsWallet first and skips them quietly, while a
+// Base wallet whose read really fails still logs an error and degrades the run.
+//
+// refreshWallets scans every active wallet in the shared DB, so each test
+// parks the other active wallets for its run and restores them after, which
+// keeps the counts exact.
+async function withOnlyWallets<T>(ids: string[], run: () => Promise<T>): Promise<T> {
+  const parked = await fixtureDb<{ id: string }[]>`
+    UPDATE tracked_wallets SET is_active = false WHERE is_active = true AND id NOT IN ${sql(ids)} RETURNING id`;
+  try {
+    return await run();
+  } finally {
+    if (parked.length) await fixtureDb`UPDATE tracked_wallets SET is_active = true WHERE id IN ${sql(parked.map((r) => r.id))}`;
+  }
+}
+
+async function seedUnsupportedWallets(tag: string, base: { label: string; address: string }) {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkunsup_${tag}`}, 'Unsupported Wallets', 'active') RETURNING id`;
+  const rows = await fixtureDb<{ id: string; label: string }[]>`
+    INSERT INTO tracked_wallets (project_id, label, chain, address, is_active, balance_usd) VALUES
+      (${projectId}, 'eth-treasury', 'ethereum', ${"0x" + "ee".repeat(20)}, true, 500),
+      (${projectId}, 'solana-on-base', 'base', '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', true, 600),
+      (${projectId}, ${base.label}, 'base', ${base.address}, true, 700)
+    RETURNING id, label`;
+  const byLabel = Object.fromEntries(rows.map((r) => [r.label, r.id]));
+  return { projectId, ids: rows.map((r) => r.id), byLabel };
+}
+
+function liveRuleSource(read: (address: string) => Promise<number>, calls: string[]): ProjectsDataSource {
+  return {
+    ...uniqueSlugSource("wkunsup"),
+    supportsWallet: liveProjectsDataSource.supportsWallet,
+    async walletBalanceUsd(address: string) {
+      calls.push(address);
+      return read(address);
+    },
+  };
+}
+
+function captureConsole() {
+  const errors: string[] = [];
+  const infos: string[] = [];
+  const origError = console.error;
+  const origLog = console.log;
+  console.error = (...a: unknown[]) => void errors.push(a.map(String).join(" "));
+  console.log = (...a: unknown[]) => void infos.push(a.map(String).join(" "));
+  return { errors, infos, restore: () => ((console.error = origError), (console.log = origLog)) };
+}
+
+test("refreshWallets skips a non-base wallet and a non-EVM-address wallet without reading them, keeps their balance, and stays ok", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const goodAddress = "0x" + "ab".repeat(20);
+  const { projectId, ids, byLabel } = await seedUnsupportedWallets(tag, { label: "base-good", address: goodAddress });
+  const calls: string[] = [];
+  const src = liveRuleSource(async () => 1234, calls);
+  const con = captureConsole();
+  try {
+    const res = await withOnlyWallets(ids, () => refreshWallets({}, src));
+    con.restore();
+
+    expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 0, unsupported: 2 });
+    // Only the Base wallet with a real address was read.
+    expect(calls).toEqual([goodAddress]);
+    // No error line for a wallet that has no live path; one info summary.
+    expect(con.errors).toEqual([]);
+    const summary = con.infos.filter((l) => l.includes("[projects.refresh_wallets]"));
+    expect(summary.length).toBe(1);
+    expect(summary[0]).toContain("skipped 2 of 3 wallet(s)");
+
+    const rows = await sql<{ id: string; balance_usd: string; refreshed_at: Date | null }[]>`
+      SELECT id, balance_usd, refreshed_at FROM tracked_wallets WHERE id IN ${sql(ids)}`;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(Number(byId[byLabel["eth-treasury"]].balance_usd)).toBe(500);
+    expect(byId[byLabel["eth-treasury"]].refreshed_at).toBeNull();
+    expect(Number(byId[byLabel["solana-on-base"]].balance_usd)).toBe(600);
+    expect(byId[byLabel["solana-on-base"]].refreshed_at).toBeNull();
+    expect(Number(byId[byLabel["base-good"]].balance_usd)).toBe(1234);
+    expect(byId[byLabel["base-good"]].refreshed_at).not.toBeNull();
+  } finally {
+    con.restore();
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets still logs an error and degrades for a base wallet whose read throws, with none for the skipped wallets", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const badAddress = "0x" + "bc".repeat(20);
+  const { projectId, ids, byLabel } = await seedUnsupportedWallets(tag, { label: "base-broken", address: badAddress });
+  const calls: string[] = [];
+  const src = liveRuleSource(async () => {
+    throw new Error("Base RPC: forced read failure");
+  }, calls);
+  const con = captureConsole();
+  try {
+    const res = await withOnlyWallets(ids, () => refreshWallets({}, src));
+    con.restore();
+
+    expect(res).toEqual({ ok: false, status: "degraded", updated: 0, failed: 1, unsupported: 2 });
+    expect(calls).toEqual([badAddress]);
+    // Exactly one error line, and it names the Base wallet, not a skipped one.
+    expect(con.errors.length).toBe(1);
+    expect(con.errors[0]).toContain(`wallet ${byLabel["base-broken"]} live read failed`);
+    expect(con.errors[0]).not.toContain(byLabel["eth-treasury"]);
+    expect(con.errors[0]).not.toContain(byLabel["solana-on-base"]);
+
+    const [{ balance_usd }] = await sql<{ balance_usd: string }[]>`
+      SELECT balance_usd FROM tracked_wallets WHERE id = ${byLabel["base-broken"]}`;
+    expect(Number(balance_usd)).toBe(700);
+  } finally {
+    con.restore();
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+// ── Issue 1373: one refresh reads every Base wallet in a few Multicall3 POSTs ─
+// Production (2026-10-14) refreshed 793 wallets one Multicall3 POST each through
+// the shared 0.25 calls/s Base RPC bucket: 52 min per attempt. These tests run
+// the REAL live source and transport over 785 Base wallets, with fetch mocked
+// only at the process boundary, and count what goes on the wire.
+const PROD_BASE_WALLETS = 785;
+const GET_ETH_BALANCE = "0x4d2301cc";
+
+interface CountingTransport {
+  posts: string[][]; // the wallets each Base RPC POST asked for
+  priceReads: number;
+}
+
+function countingTransport(opts: { revert?: string; failPostWith?: string } = {}): CountingTransport {
+  const t: CountingTransport = { posts: [], priceReads: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      t.priceReads += 1;
+      const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
+      const token_prices = Object.fromEntries(addrs.map((a) => [a, "2000"]));
+      return new Response(JSON.stringify({ data: { attributes: { token_prices } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: [{ to: string; data: string }, string] };
+    expect(body.method).toBe("eth_call");
+    expect(body.params[0].to).toBe(MULTICALL3_ADDRESS);
+    const calls = decodeAggregate3Calls(body.params[0].data);
+    for (const c of calls) expect(c.callData.slice(0, 10)).toBe(GET_ETH_BALANCE);
+    const wallets = calls.map((c) => "0x" + c.callData.slice(-40));
+    t.posts.push(wallets);
+    if (opts.failPostWith && wallets.includes(opts.failPostWith)) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, error: { code: -32000, message: "forced chunk failure" } }), { status: 200 });
+    }
+    const results: Aggregate3Result[] = wallets.map((w) =>
+      w === opts.revert ? { success: false, returnData: "0x" } : { success: true, returnData: "0x" + (10n ** 18n).toString(16).padStart(64, "0") },
+    );
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  return t;
+}
+
+// 785 Base wallets at a stale $5 balance, under one throwaway project.
+async function seedBaseWallets(tag: string): Promise<{ projectId: string; rows: { id: string; address: string }[] }> {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkbatch_${tag}`}, 'Batched Wallets', 'active') RETURNING id`;
+  const values = Array.from({ length: PROD_BASE_WALLETS }, (_, i) => ({
+    project_id: projectId,
+    label: `w${i}`,
+    chain: "base",
+    address: "0x" + tag + i.toString(16).padStart(32, "0"),
+    is_active: true,
+    balance_usd: 5,
+  }));
+  const rows = await fixtureDb<{ id: string; address: string }[]>`
+    INSERT INTO tracked_wallets ${sql(values)}
+    RETURNING id, address`;
+  return { projectId, rows };
+}
+
+async function balancesById(ids: string[]): Promise<Map<string, { balance: number; refreshed: boolean }>> {
+  const rows = await sql<{ id: string; balance_usd: string; refreshed_at: Date | null }[]>`
+    SELECT id, balance_usd, refreshed_at FROM tracked_wallets WHERE id IN ${sql(ids)}`;
+  return new Map(rows.map((r) => [r.id, { balance: Number(r.balance_usd), refreshed: r.refreshed_at !== null }]));
+}
+
+async function withLiveTransport<T>(run: () => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  _resetRpcConcurrencyForTests();
+  _resetTokenPriceCacheForTests();
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.BASE_RPC_MAX_RETRIES;
+    _resetRpcConcurrencyForTests();
+    _resetTokenPriceCacheForTests();
+  }
+}
+
+test("refreshWallets over 785 Base wallets issues at most 10 Base RPC POSTs and one ETH price read, and updates every wallet", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport();
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      expect(res).toEqual({ ok: true, status: "ok", updated: PROD_BASE_WALLETS, failed: 0, unsupported: 0 });
+      expect(t.posts.length).toBeLessThanOrEqual(10);
+      expect(t.priceReads).toBe(1);
+      expect(t.posts.flat().length).toBe(PROD_BASE_WALLETS); // every wallet asked for once
+      const after = await balancesById(ids);
+      for (const id of ids) expect(after.get(id)).toEqual({ balance: 2000, refreshed: true });
+    });
+  } finally {
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets: a wallet whose getEthBalance sub-call fails keeps its balance and counts as failed; the rest of its chunk updates", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  const reverted = rows[7]!;
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport({ revert: reverted.address });
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      expect(res).toEqual({ ok: false, status: "degraded", updated: PROD_BASE_WALLETS - 1, failed: 1, unsupported: 0 });
+      const chunk = new Set(t.posts.find((p) => p.includes(reverted.address))!);
+      expect(chunk.size).toBeGreaterThan(1);
+      const after = await balancesById(ids);
+      expect(after.get(reverted.id)).toEqual({ balance: 5, refreshed: false });
+      for (const r of rows) {
+        if (r.id !== reverted.id) expect(after.get(r.id)).toEqual({ balance: 2000, refreshed: true });
+      }
+    });
+  } finally {
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
+test("refreshWallets: a chunk whose POST throws fails only that chunk's wallets; wallets in other chunks update", async () => {
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+  const { projectId, rows } = await seedBaseWallets(tag);
+  const ids = rows.map((r) => r.id);
+  const inBrokenChunk = rows[400]!.address;
+  process.env.BASE_RPC_MAX_RETRIES = "0";
+  try {
+    await withLiveTransport(async () => {
+      const t = countingTransport({ failPostWith: inBrokenChunk });
+      const res = await withOnlyWallets(ids, () => refreshWallets({}, liveProjectsDataSource));
+
+      const broken = new Set(t.posts.find((p) => p.includes(inBrokenChunk))!);
+      expect(broken.size).toBeGreaterThan(0);
+      expect(broken.size).toBeLessThan(PROD_BASE_WALLETS);
+      expect(res).toEqual({ ok: false, status: "degraded", updated: PROD_BASE_WALLETS - broken.size, failed: broken.size, unsupported: 0 });
+      const after = await balancesById(ids);
+      for (const r of rows) {
+        expect(after.get(r.id)).toEqual(broken.has(r.address) ? { balance: 5, refreshed: false } : { balance: 2000, refreshed: true });
+      }
+    });
+  } finally {
+    await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+  }
+});
+
 // ── Issue #95: live-fetch timeout ────────────────────────────────────────────
 // A stalled (not errored) provider socket must abort at the hard timeout so the
 // handler fails FAST and degrades to last-persisted — never hangs, pinning the
@@ -356,15 +633,18 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
       INSERT INTO projects (slug, display_name, status) VALUES (${slug}, 'Stall Vault', 'active') RETURNING id`;
     projectId = id;
     const vaultAddr = "0x" + "ab".repeat(20);
-    await fixtureDb`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
-              VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424)`;
+    const [{ id: vaultId }] = await fixtureDb<{ id: string }[]>`INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd)
+              VALUES (${projectId}, 'stall', ${vaultAddr}, 'base', 'erc4626', 'live', true, 42424) RETURNING id`;
 
+    // Issue 1291: fetchVaults now reads every vault even after one fails, so
+    // the other tests' live vaults are parked to keep this run to one read.
     const started = Date.now();
-    const res = await fetchVaults({}, liveProjectsDataSource);
+    const res = await withOnlyVaults([vaultId], () => fetchVaults({}, liveProjectsDataSource));
     const elapsed = Date.now() - started;
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe("degraded"); // stalled fetch → degrade-to-persisted
+    expect(res.terminal).toBeUndefined(); // a timeout is transient: the loop retries it
     expect(elapsed).toBeLessThan(5000); // aborted at ~200ms, never hung the slot
 
     const [{ tvl }] = await sql<{ tvl: number }[]>`
@@ -382,6 +662,195 @@ test("a stalled live provider fetch aborts at the timeout and fetchVaults degrad
     }
   }
 }, 15_000);
+
+// ── Issue 1291: fetchVaults isolates each vault ──────────────────────────────
+// Production 2026-10-14 and the v0.6.2 stage QA run 2026-10-15: the Bankr
+// Agent Token LP (0x7689006F6C3A3473449E42b628544E60D0bCCb07, strategy_type
+// lp-fees) is not an ERC-4626 vault, so totalAssets() reverts on Base. The
+// handler read every vault in one try block, so that one revert ended the run
+// with updated: 0 and no vault's TVL updated. These tests drive the REAL live
+// source over a mocked Base RPC: one vault reverts totalAssets() and asset()
+// the way the Bankr LP does, the other answers like Robot Money USDC.
+const BANKR_LP = "0x7689006F6C3A3473449E42b628544E60D0bCCb07";
+const USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+const SEL_TOTAL_ASSETS = "0x01e1d114";
+const SEL_ASSET = "0x38d52e0f";
+const SEL_DECIMALS = "0x313ce567";
+const word = (n: bigint) => "0x" + n.toString(16).padStart(64, "0");
+
+// fetchVaults reads every active live vault in the shared DB, so each test
+// parks the others for its run and restores them after.
+async function withOnlyVaults<T>(ids: string[], run: () => Promise<T>): Promise<T> {
+  const parked = await fixtureDb<{ id: string }[]>`
+    UPDATE agent_vaults SET is_active = false
+    WHERE is_active = true AND data_source = 'live' AND id NOT IN ${sql(ids)} RETURNING id`;
+  try {
+    return await run();
+  } finally {
+    if (parked.length) await fixtureDb`UPDATE agent_vaults SET is_active = true WHERE id IN ${sql(parked.map((r) => r.id))}`;
+  }
+}
+
+// Answers each Multicall3 sub-call: a vault in `reverting` reverts every call,
+// any other vault holds 1234.5 USDC. USDC answers decimals() = 6.
+function vaultTransport(reverting: Set<string>): { posts: number } {
+  const t = { posts: 0 };
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    t.posts += 1;
+    const body = JSON.parse(String(init?.body)) as { id?: number; params: [{ to: string; data: string }, string] };
+    const { to, data } = body.params[0];
+    const reply = (result: string) => new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result }), { status: 200 });
+    if (to.toLowerCase() === USDC_BASE && data.startsWith(SEL_DECIMALS)) return reply(word(6n));
+    expect(to).toBe(MULTICALL3_ADDRESS);
+    const results: Aggregate3Result[] = decodeAggregate3Calls(data).map((c) => {
+      if (reverting.has(c.target.toLowerCase())) return { success: false, returnData: "0x" };
+      if (c.callData.startsWith(SEL_TOTAL_ASSETS)) return { success: true, returnData: word(1_234_500_000n) };
+      if (c.callData.startsWith(SEL_ASSET)) return { success: true, returnData: word(BigInt(USDC_BASE)) };
+      throw new Error(`unexpected sub-call ${c.callData}`);
+    });
+    return reply(encodeAggregate3Result(results));
+  }) as unknown as typeof fetch;
+  return t;
+}
+
+async function seedVaults(tag: string, rows: { name: string; address: string; tvl: number | null }[]) {
+  const [{ id: projectId }] = await fixtureDb<{ id: string }[]>`
+    INSERT INTO projects (slug, display_name, status) VALUES (${`wkvault_${tag}`}, 'Vault Isolation', 'active') RETURNING id`;
+  const byName: Record<string, string> = {};
+  for (const r of rows) {
+    const [{ id }] = await fixtureDb<{ id: string }[]>`
+      INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, data_source, is_active, tvl_usd, last_refresh_status)
+      VALUES (${projectId}, ${r.name}, ${r.address}, 'base', 'erc4626', 'live', true, ${r.tvl}, 'ok') RETURNING id`;
+    byName[r.name] = id;
+  }
+  return { projectId, byName, ids: Object.values(byName) };
+}
+
+async function vaultRow(id: string) {
+  const [r] = await sql<{ tvl: number | null; status: string | null; refreshed_at: Date | null }[]>`
+    SELECT tvl_usd::float8 AS tvl, last_refresh_status AS status, refreshed_at FROM agent_vaults WHERE id = ${id}`;
+  return r!;
+}
+
+async function dropProject(projectId: string) {
+  await fixtureDb`DELETE FROM daily_tvl_snapshots WHERE vault_id IN (SELECT id FROM agent_vaults WHERE project_id = ${projectId})`;
+  await fixtureDb`DELETE FROM agent_vaults WHERE project_id = ${projectId}`;
+  await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;
+}
+
+test("fetchVaults: a vault whose totalAssets() reverts keeps its TVL and is marked failed; the valid vault still updates", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "rmusdc", address: "0x" + "4f".repeat(20), tvl: 1 },
+  ]);
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase()]));
+      const res = await withOnlyVaults(ids, () => fetchVaults({}, liveProjectsDataSource));
+      con.restore();
+
+      expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 1 });
+
+      const good = await vaultRow(byName["rmusdc"]!);
+      expect(good.tvl).toBe(1234.5);
+      expect(good.status).toBe("ok");
+      expect(good.refreshed_at).not.toBeNull();
+
+      const bad = await vaultRow(byName["bankr-lp"]!);
+      expect(bad.tvl).toBe(999); // last-persisted TVL kept, never zeroed
+      expect(bad.status).toBe("failed");
+      expect(bad.refreshed_at).toBeNull(); // not refreshed: no new TVL was read
+
+      // One line for the failing vault, naming it, and no whole-run line.
+      expect(con.errors).toEqual([
+        `[projects.fetch_vaults] vault ${byName["bankr-lp"]} live read failed, keeping last-persisted TVL (degraded): live-source: totalAssets() failed for ${BANKR_LP}`,
+      ]);
+    });
+  } finally {
+    con.restore();
+    await dropProject(projectId);
+  }
+});
+
+test("fetchVaults: when every vault fails the run is ok:false, status degraded, and every TVL is kept", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const other = "0x" + "22".repeat(20);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "bnkr-pool", address: other, tvl: 555 },
+  ]);
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase(), other]));
+      const res = await withOnlyVaults(ids, () => fetchVaults({}, liveProjectsDataSource));
+      con.restore();
+
+      expect(res.ok).toBe(false);
+      expect(res.status).toBe("degraded");
+      expect(res.updated).toBe(0);
+      expect(res.failed).toBe(2);
+      // Both are reverts: no retry can change the answer.
+      expect(res.terminal).toBe(true);
+      expect(con.errors.length).toBe(2);
+      expect((await vaultRow(byName["bankr-lp"]!)).tvl).toBe(999);
+      expect((await vaultRow(byName["bnkr-pool"]!)).tvl).toBe(555);
+      expect((await vaultRow(byName["bankr-lp"]!)).status).toBe("failed");
+      expect((await vaultRow(byName["bnkr-pool"]!)).status).toBe("failed");
+    });
+  } finally {
+    con.restore();
+    await dropProject(projectId);
+  }
+});
+
+test("processOneJob: a totalAssets() revert never requeues projects.fetch_vaults on the 2 s backoff", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const { projectId, ids: mixedIds } = await seedVaults(tag, [
+    { name: "bankr-lp", address: BANKR_LP, tvl: 999 },
+    { name: "rmusdc", address: "0x" + "4f".repeat(20), tvl: 1 },
+  ]);
+  const onlyBankr = [mixedIds[0]!];
+  const kind = "projects.fetch_vaults";
+  const original = handlers[kind];
+  const jobIds: number[] = [];
+  const con = captureConsole();
+  try {
+    await withLiveTransport(async () => {
+      vaultTransport(new Set([BANKR_LP.toLowerCase()]));
+      // Mixed run (production today): the revert is counted and the job succeeds.
+      // Only revert(s) left: the job settles at once, never 'pending' with a backoff.
+      for (const [scope, expected] of [
+        [mixedIds, { job: "succeeded", run: "succeeded" }],
+        [onlyBankr, { job: "failed", run: "failed" }],
+      ] as const) {
+        handlers[kind] = (payload) => withOnlyVaults([...scope], () => fetchVaults(payload, liveProjectsDataSource));
+        const [{ id: jobId }] = await fixtureDb<{ id: number }[]>`
+          INSERT INTO jobs (kind, priority, max_attempts) VALUES (${kind}, 1000000, 5) RETURNING id`;
+        jobIds.push(jobId);
+        expect(await processOneJob()).toBe(true);
+
+        const [job] = await sql<{ status: string; attempts: number }[]>`SELECT status, attempts FROM jobs WHERE id = ${jobId}`;
+        expect(job.status).toBe(expected.job);
+        expect(job.status).not.toBe("pending");
+        expect(job.attempts).toBe(1);
+        const [run] = await sql<{ status: string }[]>`
+          SELECT status FROM job_runs WHERE job_id = ${jobId} ORDER BY id DESC LIMIT 1`;
+        expect(run.status).toBe(expected.run);
+      }
+    });
+  } finally {
+    con.restore();
+    handlers[kind] = original;
+    if (jobIds.length) {
+      await fixtureDb`DELETE FROM job_runs WHERE job_id IN ${sql(jobIds)}`;
+      await fixtureDb`DELETE FROM jobs WHERE id IN ${sql(jobIds)}`;
+    }
+    await dropProject(projectId);
+  }
+});
 
 // ── Issue #95: honest degraded-run signalling in the worker loop ─────────────
 // A handler that returns { ok:false } (degraded) must NOT be recorded as
@@ -528,4 +997,93 @@ test("discovery degrades rather than persisting rows under an unparseable declar
   expect(d.ok).toBe(false);
   expect(d.status).toBe("degraded");
   expect(await projectIds(prefix)).toEqual([]); // nothing written under a fabricated fallback
+});
+
+// ── Issue 1382: the two Bankr lp-fees rows are tokens, not vaults ────────────
+// Owner decision 2026-10-16: deactivate both rows (migration 0124), no LP
+// valuation. The roster seed no longer lists them, and the discover upsert never
+// sets is_active, so neither an existing database nor a fresh one brings them
+// back; fetchVaults reads only active rows, so it never reads either address.
+const BANKR_TOKEN_VAULTS = [
+  { name: "Bankr Agent Token LP", vault_address: "0x7689006F6C3A3473449E42b628544E60D0bCCb07" },
+  { name: "Bankr BNKR LP Pool", vault_address: "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b" },
+];
+const BANKR_TOKEN_ADDRESSES = BANKR_TOKEN_VAULTS.map((v) => v.vault_address.toLowerCase());
+const BANKR_SEED_SLUG = "bankr-agent-614b56";
+
+// A source serving the committed roster seed's Bankr project (loaded through the
+// checksum-validating loader) under a unique slug, optionally with extra vaults.
+async function bankrSeedSource(prefix: string, extraVaults: DiscoveredVault[] = []): Promise<ProjectsDataSource> {
+  const { projects } = await loadV0RosterWithManifest();
+  const bankr = projects.find((p) => p.slug === BANKR_SEED_SLUG);
+  if (!bankr) throw new Error(`roster seed has no ${BANKR_SEED_SLUG}`);
+  const project = { ...structuredClone(bankr), slug: `${prefix}-${BANKR_SEED_SLUG}` };
+  project.vaults.push(...extraVaults);
+  return { ...uniqueSlugSource(prefix), async discoverProjects() { return [structuredClone(project)]; } };
+}
+
+async function bankrVaults(prefix: string): Promise<{ name: string; vault_address: string; is_active: boolean }[]> {
+  return [...await sql<{ name: string; vault_address: string; is_active: boolean }[]>`
+    SELECT v.name, v.vault_address, v.is_active FROM agent_vaults v JOIN projects p ON p.id = v.project_id
+     WHERE p.slug = ${`${prefix}-${BANKR_SEED_SLUG}`} ORDER BY v.name`];
+}
+
+test("the roster seed lists neither Bankr token address as a vault, and its manifest checksum validates", async () => {
+  const { projects, manifest } = await loadV0RosterWithManifest(); // throws on a checksum mismatch
+  const vaultAddresses = projects.flatMap((p) => p.vaults.map((v) => (v.vault_address ?? "").toLowerCase()));
+  for (const a of BANKR_TOKEN_ADDRESSES) expect(vaultAddresses).not.toContain(a);
+  expect(manifest.vaultCount).toBe(vaultAddresses.length);
+  // The Bankr project and its BNKR coin stay; only the two vault rows went.
+  const bankr = projects.find((p) => p.slug === BANKR_SEED_SLUG)!;
+  expect(bankr.vaults).toEqual([]);
+  expect(bankr.coins.map((c) => c.ticker)).toEqual(["BNKR"]);
+});
+
+test("discover with the regenerated seed inserts no Bankr token vault on an empty database and never reactivates the deactivated rows", async () => {
+  const prefix = `wkbankr_${crypto.randomUUID().slice(0, 8)}`;
+  // Fresh database for this project: the seed creates the project, no vault row.
+  expect((await discover({}, await bankrSeedSource(prefix))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual([]);
+
+  // An upgraded database: the two rows exist and migration 0124 left them inactive.
+  const [{ id: projectId }] = await sql<{ id: string }[]>`SELECT id FROM projects WHERE slug = ${`${prefix}-${BANKR_SEED_SLUG}`}`;
+  for (const v of BANKR_TOKEN_VAULTS) {
+    await fixtureDb`
+      INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, protocol, data_source, is_active, tvl_usd)
+      VALUES (${projectId}, ${v.name}, ${v.vault_address}, 'base', 'lp-fees', 'bankr', 'live', false, 1)`;
+  }
+  const inactive = BANKR_TOKEN_VAULTS.map((v) => ({ ...v, is_active: false }));
+  expect((await discover({}, await bankrSeedSource(prefix))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual(inactive);
+
+  // Even a roster that still listed them would not flip is_active back.
+  const old: DiscoveredVault[] = BANKR_TOKEN_VAULTS.map((v) => ({ ...v, chain: "base", strategy_type: "lp-fees", protocol: "bankr", data_source: "live" }));
+  expect((await discover({}, await bankrSeedSource(prefix, old))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual(inactive);
+});
+
+test("fetchVaults issues no read for an inactive vault row", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const good = "0x" + "4f".repeat(20);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-token", address: BANKR_TOKEN_VAULTS[0]!.vault_address, tvl: 999 },
+    { name: "rmusdc", address: good, tvl: 1 },
+  ]);
+  await fixtureDb`UPDATE agent_vaults SET is_active = false WHERE id = ${byName["bankr-token"]!}`;
+  const reads: string[] = [];
+  const spy: ProjectsDataSource = {
+    ...uniqueSlugSource(tag),
+    async vaultErc4626Read(address: string) {
+      reads.push(address.toLowerCase());
+      return { totalAssetsRaw: "1234500000", decimals: 6, assetPriceUsd: 1 };
+    },
+  };
+  try {
+    const res = await withOnlyVaults(ids, () => fetchVaults({}, spy));
+    expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 0 });
+    expect(reads).toEqual([good]);
+    expect((await vaultRow(byName["bankr-token"]!)).tvl).toBe(999);
+  } finally {
+    await dropProject(projectId);
+  }
 });

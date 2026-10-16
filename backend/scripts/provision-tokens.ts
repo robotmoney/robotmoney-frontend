@@ -16,6 +16,13 @@
 // this transaction to end. The runtime roles hold SELECT on the table and nothing
 // else (migration 0087), so only this path can write it.
 //
+// A RELEASE KEEPS A VALID TOKEN (owner, 2026-10-14). With `keep`, a holder
+// whose token file still matches its row and rights is left as it is: no new
+// secret, no write, no restart owed. A release is a rolling upgrade, so the
+// running holders go on authenticating while the services are replaced one at
+// a time. Only a missing, unreadable or stale token is provisioned. Without
+// `keep` every named holder rotates, as below.
+//
 // RE-PROVISIONING REPLACES IN PLACE (D55 (6)). The row is keyed on (instance,
 // holder) and the write is an upsert: a holder's new hash overwrites its old one
 // in the same statement, no row is ever deleted, and every other holder's row —
@@ -90,6 +97,8 @@ export interface ProvisionOptions {
   readonly holders?: readonly ServiceTokenHolder[];
   /** A lock the caller holds; proven held immediately before the fenced write. */
   readonly lock?: HeldTargetLock;
+  /** Keep a holder whose file still holds its current token; provision only the rest. */
+  readonly keep?: boolean;
 }
 
 /**
@@ -103,7 +112,7 @@ export interface ProvisionOptions {
  * failure of the transaction (nothing is renamed, the staged files are removed,
  * and every holder keeps its old row and file).
  */
-export async function provisionServiceTokens(options: ProvisionOptions): Promise<{ instance: string; holders: ServiceTokenHolder[]; files: Record<string, string> }> {
+export async function provisionServiceTokens(options: ProvisionOptions): Promise<{ instance: string; holders: ServiceTokenHolder[]; kept: ServiceTokenHolder[]; files: Record<string, string> }> {
   const holders = [...(options.holders ?? SERVICE_TOKEN_HOLDERS)];
   for (const holder of holders) {
     if (!(SERVICE_TOKEN_HOLDERS as readonly string[]).includes(holder)) {
@@ -111,13 +120,21 @@ export async function provisionServiceTokens(options: ProvisionOptions): Promise
     }
   }
   const { assertStillHeld, withMutationFence } = await import("../src/db/target-lock.ts");
-  const { HOLDER_RIGHTS, provisionAutomationToken } = await import("../src/db/automation-tokens.ts");
+  const { HOLDER_RIGHTS, holdsCurrentToken, provisionAutomationToken } = await import("../src/db/automation-tokens.ts");
   if (options.lock) await assertStillHeld(options.lock, "prepare tokens");
 
   const staged = new Map<ServiceTokenHolder, string>();
+  const kept: ServiceTokenHolder[] = [];
   try {
     await withMutationFence({ databaseUrl: options.ownerUrl, label: "tokens" }, async (tx) => {
       for (const holder of holders) {
+        if (options.keep) {
+          const current = readTokenFile(options.tokenFiles[holder]);
+          if (current !== undefined && (await holdsCurrentToken(options.instance, holder, current, { db: tx }))) {
+            kept.push(holder);
+            continue;
+          }
+        }
         const { token } = await provisionAutomationToken(options.instance, [...HOLDER_RIGHTS[holder]], { holder, db: tx });
         staged.set(holder, stageSecret(options.tokenFiles[holder], token));
       }
@@ -128,10 +145,20 @@ export async function provisionServiceTokens(options: ProvisionOptions): Promise
   }
   const files: Record<string, string> = {};
   for (const holder of holders) {
-    renameSync(staged.get(holder)!, options.tokenFiles[holder]);
+    const temp = staged.get(holder);
+    if (temp !== undefined) renameSync(temp, options.tokenFiles[holder]);
     files[holder] = options.tokenFiles[holder];
   }
-  return { instance: options.instance, holders, files };
+  return { instance: options.instance, holders: holders.filter((h) => !kept.includes(h)), kept, files };
+}
+
+/** A holder's token file, or undefined when it is missing or unreadable. The secret never leaves this module. */
+function readTokenFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

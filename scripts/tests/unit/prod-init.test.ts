@@ -63,6 +63,8 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
     homeEnv: HOME_ENV,
     homeEnvPath: "/home/operator/.env",
     stateRoot: root,
+    // The daemon's answer for the test's compose project "p": the api publishes 41234 now.
+    liveApiPort: (project) => (project === "p" ? 41234 : null),
     readTarget: async () => {
       calls.push("readTarget");
       return { identity: over.identity ?? "production", ledger: over.ledger ?? BASELINE_LEDGER, manifestHash: "sha256:x" };
@@ -86,8 +88,8 @@ function fake(over: Partial<ProdInitDeps> & { identity?: TargetState["identity"]
       };
     },
     provisionTokens: async (options) => {
-      calls.push(`provisionTokens:${options.instance}`);
-      return { holders: ["system-scheduler", "analytics-producer", "operator"], files: options.tokenFiles };
+      calls.push(`provisionTokens:${options.instance}${options.keep ? ":keep" : ""}`);
+      return { holders: ["system-scheduler", "analytics-producer", "operator"], kept: [], files: options.tokenFiles };
     },
     rotateKey: async (_api, _token, memberId) => {
       calls.push(`rotateKey:${memberId}`);
@@ -216,10 +218,10 @@ describe("each command writes inside the lock and records a receipt, never a sec
   test("provision-tokens under prod provisions the instance's three holders inside the lock", async () => {
     const rec = fake();
     const receipt = await runProdInit(["provision-tokens", ...CONFIRM], rec.deps);
-    expect(rec.calls).toContain("provisionTokens:rm_prod");
-    expect(rec.calls.indexOf("provisionTokens:rm_prod")).toBeGreaterThan(rec.calls.indexOf("acquireLock:prod-init:provision-tokens"));
+    expect(rec.calls).toContain("provisionTokens:rm_prod:keep");
+    expect(rec.calls.indexOf("provisionTokens:rm_prod:keep")).toBeGreaterThan(rec.calls.indexOf("acquireLock:prod-init:provision-tokens"));
     expect(rec.calls.at(-1)).toBe("release");
-    expect(receipt.detail).toMatchObject({ holders: ["system-scheduler", "analytics-producer", "operator"] });
+    expect(receipt.detail).toMatchObject({ provisioned: ["system-scheduler", "analytics-producer", "operator"], kept: [] });
     receiptOf(rec, "provision-tokens");
   });
 
@@ -262,7 +264,7 @@ describe("a remote rehearsal target's tokens come only from the explicit command
   test("the explicit command provisions a rehearsal target under RM_ENV=stage, receipted", async () => {
     const rec = fake({ env: { RM_ENV: "stage" }, identity: "rehearsal" });
     const receipt = await runProdInit(["provision-tokens", "--instance", "rm_remote_rehearsal", ...CONFIRM], rec.deps);
-    expect(rec.calls).toContain("provisionTokens:rm_remote_rehearsal");
+    expect(rec.calls).toContain("provisionTokens:rm_remote_rehearsal:keep");
     expect(receipt).toMatchObject({ rmEnv: "stage", instance: "rm_remote_rehearsal", identityBefore: "rehearsal", outcome: "completed" });
     expect(existsSync(join(rec.root, "rm_remote_rehearsal", "prod-init"))).toBe(true);
   });
@@ -347,6 +349,24 @@ describe("rebind-members writes each returned bearer back into its credential.js
     };
     await runProdInit(["rebind-members", "--credentials", credentialPath, ...CONFIRM], rec.deps);
     expect(new Set(seen)).toEqual(new Set(["http://127.0.0.1:41234"]));
+  });
+
+  test("red: after an api restart the live port wins over the record's (stage QA 2026-10-15: 32975 recorded, 32977 live)", async () => {
+    const rec = fake({ env: { RM_ENV: "prod" }, liveApiPort: () => 32977 });
+    const { credentialPath } = setup(rec);
+    const paths = instancePaths(rec.root, "rm_prod");
+    writeStackState(paths, {
+      instance: "rm_prod", project: "p", apiPort: 32975, webPort: 41235, pgPort: null, stage: true, envClass: "local", envHash: "h",
+      composeFiles: "docker-compose.yml", db: "external", externalPg: true, databaseUrl: "", dbUser: "", dbPassword: "", dbName: "",
+      logFile: paths.logFile, createdAt: "now",
+    });
+    const seen: string[] = [];
+    rec.deps.rotateKey = async (api, _t, memberId) => {
+      seen.push(api);
+      return { status: 200, token: `tok_${memberId}_new` };
+    };
+    await runProdInit(["rebind-members", "--credentials", credentialPath, ...CONFIRM], rec.deps);
+    expect(new Set(seen)).toEqual(new Set(["http://127.0.0.1:32977"]));
   });
 });
 

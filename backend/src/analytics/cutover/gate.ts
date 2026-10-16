@@ -40,11 +40,14 @@ export interface CutoverGateConfig {
 // code change; every default is generous enough that a real production
 // rollout, not merely a test, could rely on it. Tests override every field
 // explicitly rather than relying on these.
+//
+// The staleness budget is 26 h because the sweep runs once a day (issue 1375):
+// a day plus two hours of slack for a late or retried run.
 export function defaultCutoverGateConfig(): CutoverGateConfig {
   return {
     minWindowMs: Number(process.env.ANALYTICS_CUTOVER_MIN_WINDOW_MS ?? 24 * 60 * 60 * 1000),
     minObservations: Number(process.env.ANALYTICS_CUTOVER_MIN_OBSERVATIONS ?? 12),
-    maxStalenessMs: Number(process.env.ANALYTICS_CUTOVER_MAX_STALENESS_MS ?? 2 * 60 * 60 * 1000),
+    maxStalenessMs: Number(process.env.ANALYTICS_CUTOVER_MAX_STALENESS_MS ?? 26 * 60 * 60 * 1000),
   };
 }
 

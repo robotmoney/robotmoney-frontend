@@ -1,10 +1,11 @@
-// scripts/tests/unit/schedule-parity.test.ts — R7.4a check 1's spacing
+// scripts/tests/unit/schedule-parity.test.ts — V01-subject-spacing check 1's spacing
 // assertion (issue 1310): the four production subjects' anchor times of day are
 // exactly 21600 s apart in the order vault, woon, allocation, treasury
 // (migration 0121, scheduler spec §2.2). The drifted pre-0121 grid fails, the
 // 0121 grid parsed from the migration itself passes, and the stage target runs
 // the same command as prod.
 import { describe, expect, test } from "bun:test";
+import { loadReleaseRunbook } from "../../release/runbook.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SUBJECT_CLOSE_ORDER, SUBJECT_CLOSE_SPACING_SECONDS, closeSpacingProblems } from "../../release/schedule-parity.ts";
@@ -30,7 +31,7 @@ const PRE_0121 = [
   { id: "robotmoney-treasury", epoch_anchor: "2026-10-10T19:03:59.504Z" },
 ];
 
-describe("R7.4a close spacing (issue 1310)", () => {
+describe("V01-subject-spacing close spacing (issue 1310)", () => {
   test("the spacing is a quarter of the epoch, in the order vault, woon, allocation, treasury", () => {
     expect(SUBJECT_CLOSE_SPACING_SECONDS * 4).toBe(PRODUCTION_EPOCH_SECONDS);
     expect([...SUBJECT_CLOSE_ORDER]).toEqual(["robotmoney-vault", "woon", "robotmoney-allocation", "robotmoney-treasury"]);
@@ -69,7 +70,7 @@ describe("R7.4a close spacing (issue 1310)", () => {
 
   test("the stage target runs the check unchanged: the same command as prod, only --sessions differs", () => {
     const targetsDir = join(root, "scripts", "release", "targets");
-    const step = RELEASE_STEPS.find((s) => s.id === "R7.4a")!;
+    const step = loadReleaseRunbook("v0.6.2").steps.find((s) => s.id === "V01-subject-spacing")!;
     const cmd = (name: string) => {
       const t = loadTarget(join(targetsDir, `${name}.json`));
       const remote = renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).remote;
@@ -77,7 +78,8 @@ describe("R7.4a close spacing (issue 1310)", () => {
       return remote.slice(remote.indexOf("bun scripts/release/schedule-parity.ts")).replace(/--instance \S+/, "--instance X").replace(/--receipt-dir \S+/, "--receipt-dir X");
     };
     expect(cmd("stage")).toBe("bun scripts/release/schedule-parity.ts --instance X --run 20261008T000000Z --sessions deferred --receipt-dir X");
-    expect(cmd("stage").replace("--sessions deferred", "--sessions graded")).toBe(cmd("prod"));
+    // Both targets defer sessions in the 30-minute soak (owner, 2026-10-14): the same command.
+    expect(cmd("prod")).toBe(cmd("stage"));
     // The spacing check takes the subjects only: no sessions mode can gate it.
     expect(closeSpacingProblems.length).toBe(1);
   });

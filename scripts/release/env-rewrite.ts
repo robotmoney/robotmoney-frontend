@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/env-rewrite.ts — release step R6.2, run ON THE TARGET HOST.
+// scripts/release/env-rewrite.ts — release step C07-env-rewrite, run ON THE TARGET HOST.
 //
 //   bun scripts/release/env-rewrite.ts --run <run-ts> --receipt-dir <dir>
 //
@@ -7,7 +7,7 @@
 // key is outside the list moves, unchanged, to `$HOME/.env.retired-<run-ts>`
 // (mode 0600, created exclusively, never overwritten); the rest stays, in
 // order, comments included. Moving aside rather than deleting is runbook
-// R6.2's rule. It refuses, changing nothing, when `rm_owner` or
+// C07-env-rewrite's rule. It refuses, changing nothing, when `rm_owner` or
 // `RM_CREDENTIALS` is missing: the cutover's writes would stop halfway.
 // `doadmin` is off the list (D61 amendment, owner, 2026-10-08), so a stray
 // `doadmin` line moves out like any other key: no release step uses it.

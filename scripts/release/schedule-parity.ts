@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/schedule-parity.ts — release step R7.4a, run ON THE TARGET HOST
+// scripts/release/schedule-parity.ts — release step V01-subject-spacing, run ON THE TARGET HOST
 // the watch length after READY (./watch.ts). Owner rule (v0-6-0-rollout.md section 0): an
 // upgrade does not change usual schedules.
 //
@@ -10,12 +10,14 @@
 //   1. every active subject reads epoch_duration_seconds = 86400 (owner decision 2026-10-09),
 //      and the four production subjects' epoch_anchor times of day are exactly
 //      21600 s apart in the order vault, woon, allocation, treasury (migration 0121);
-//   2. every session in flight at R2.3 (baseline.json `inFlight`) published,
+//   2. every session in flight at P07-baseline (baseline.json `inFlight`) published,
 //      its window close unmoved, within its judging duration plus a grace
 //      after that close;
 //   3. the regime run lands at :30 (the analytics-producer container's
 //      PRODUCER_REGIME_CRON, or the compose default, has minute 30);
-//   4. it REPORTS the last parity sweep's duration, and fails a dead one.
+//   4. it REPORTS the last parity sweep's duration, and fails a dead one; and
+//      the sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375,
+//      migration 0123): the one schedule this upgrade intends to move.
 // The stage target runs it unchanged: it is not accelerated.
 //
 // `--sessions` comes from the target's `watchSessions` (./target.ts). With
@@ -149,6 +151,16 @@ export function regimeCronProblems(cron: string): string[] {
   return minute === "30" ? [] : [`the regime cron "${cron}" runs at minute ${minute ?? "?"}, not :30`];
 }
 
+/** The parity sweep's one schedule (db/seed.ts, migration 0123), clear of every data-acquisition job. */
+export const PARITY_SWEEP_CRON = "47 4 * * *";
+
+/** PURE. The enabled analytics.parity_sweep crons must be exactly the one daily row. */
+export function paritySweepScheduleProblems(crons: readonly string[]): string[] {
+  return crons.length === 1 && crons[0] === PARITY_SWEEP_CRON
+    ? []
+    : [`analytics.parity_sweep is scheduled as [${crons.join(", ")}], not once at "${PARITY_SWEEP_CRON}"`];
+}
+
 /** PURE. The last parity sweep, for the report; a dead one fails. */
 export function paritySweep(last: { status: string; secs: number | null } | undefined): { problems: string[]; detail: string } {
   if (!last) return { problems: [], detail: "no parity sweep has run" };
@@ -189,7 +201,7 @@ async function main(): Promise<number> {
   try {
     baseline = (JSON.parse(readFileSync(join(releaseStateDir(instance, run), "baseline.json"), "utf8")) as { inFlight?: BaselineSession[] }).inFlight ?? [];
   } catch (error) {
-    console.error(`[schedule-parity] REFUSE: no R2.3 baseline for run ${run} (${error instanceof Error ? error.message : String(error)})`);
+    console.error(`[schedule-parity] REFUSE: no P07-baseline baseline for run ${run} (${error instanceof Error ? error.message : String(error)})`);
     return 1;
   }
   const safeIds = baseline.map((b) => b.id).filter((id) => /^[A-Za-z0-9_-]+$/.test(id));
@@ -197,6 +209,7 @@ async function main(): Promise<number> {
   let subjects: ({ id: string; epoch_duration_seconds: number } & AnchoredSubject)[];
   let current: CurrentSession[] = [];
   let last: { status: string; secs: number | null } | undefined;
+  let sweepCrons: string[] = [];
   try {
     subjects = (await db.query<{ id: string; epoch_duration_seconds: number; epoch_anchor: string | Date | null }>(
       "SELECT id::text AS id, epoch_duration_seconds, epoch_anchor FROM swarm_subjects WHERE status = 'active' ORDER BY id",
@@ -216,6 +229,9 @@ async function main(): Promise<number> {
     last = (await db.query<{ status: string; secs: number | null }>(
       "SELECT status, extract(epoch FROM updated_at - created_at)::float8 AS secs FROM jobs WHERE kind = 'analytics.parity_sweep' ORDER BY created_at DESC LIMIT 1",
     ))[0];
+    sweepCrons = (await db.query<{ cron: string }>(
+      "SELECT cron FROM job_schedules WHERE kind = 'analytics.parity_sweep' AND enabled ORDER BY cron",
+    )).map((r) => r.cron);
   } finally {
     await db.close();
   }
@@ -227,13 +243,14 @@ async function main(): Promise<number> {
     ...inFlightProblemsFor(sessions, baseline, current),
     ...("error" in cron ? [cron.error] : regimeCronProblems(cron.cron)),
     ...sweep.problems,
+    ...paritySweepScheduleProblems(sweepCrons),
   ];
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "schedule-parity.json");
   writeFileSync(file, `${JSON.stringify({
-    step: "R7.4a", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
+    step: "V01-subject-spacing", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 });
-  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at R2.3 (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
+  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at P07-baseline (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
   console.log(`[schedule-parity] receipt: ${file}`);
   for (const p of problems) console.error(`[schedule-parity] FAIL: ${p}`);
   return problems.length === 0 ? 0 : 1;

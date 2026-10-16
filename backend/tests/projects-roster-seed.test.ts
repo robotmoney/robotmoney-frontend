@@ -240,11 +240,12 @@ test("liveProjectsDataSource.discoveredAsOf() reports the committed manifest's g
 
 // ── (e) counts are manifest-derived and floor-checked (MEDIUM-6) ────────────
 
-// Floor for the COMMITTED artifact, well below the 1,037/909/61/793/4 it
+// Floor for the COMMITTED artifact, well below the 1,037/909/61/793/2 it
 // currently carries but far above anything a truncating regeneration would
-// leave behind. Deliberately a hard number: a floor derived from the manifest
+// leave behind. Vaults dropped from 4 to 2 when issue 1382 removed the two Bankr
+// lp-fees rows, which are tokens and not vaults. Deliberately a hard number: a floor derived from the manifest
 // under test could not detect the manifest shrinking with the data.
-const COMMITTED_ROSTER_FLOOR = { projects: 900, agents: 800, coins: 50, wallets: 700, vaults: 4 };
+const COMMITTED_ROSTER_FLOOR = { projects: 900, agents: 800, coins: 50, wallets: 700, vaults: 2 };
 
 test("the committed roster's row counts match its manifest and clear the regression floor", async () => {
   const { projects, manifest } = await loadV0RosterWithManifest();

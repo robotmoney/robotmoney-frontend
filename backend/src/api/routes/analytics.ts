@@ -57,11 +57,11 @@ import type {
 } from "../../analytics/output-snapshots.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
-// Issue #979 fix: runParitySweep() touches Postgres directly (db/client.ts's
-// rm_app pool) via analytics/cutover/parity.ts. It may only ever be called
+// Issue #979 fix: the parity checks touch Postgres directly (db/client.ts's
+// rm_app pool) via analytics/cutover/parity.ts. They may only ever be called
 // from HERE — the API process — never from worker/**, even transitively.
 // See POST A.paritySweep below.
-import { runParitySweep } from "../../analytics/cutover/parity.ts";
+import { checkDomainParity, isParityDomain, recordParityObservation, ALL_PARITY_DOMAINS } from "../../analytics/cutover/parity.ts";
 import type {
   TelemetryArtifact,
   TelemetryRunStatus,
@@ -862,14 +862,31 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
   // analytics/cutover/parity.ts (and therefore db/client.ts) itself — the
   // API process is the only runtime component allowed to hold the
   // rm_app-credentialed pool.
+  //
+  // ONE DOMAIN PER REQUEST (issue 1375). The body names the domain; this runs
+  // that domain's one set-based statement in Postgres, appends its
+  // observation and answers with the verdict, the counts and how long it took.
+  // Nothing proportional to the data is held here, and the request stays well
+  // inside the api's 10 s request limit. A missing or unknown domain is a 400
+  // and records nothing.
   if (m === "POST" && p === A.paritySweep) {
-    const results = await runParitySweep();
+    const body = (await req.json().catch(() => null)) as { domain?: unknown } | null;
+    const domain = body?.domain;
+    if (!isParityDomain(domain)) {
+      return { status: 400, body: { error: `body.domain must be one of: ${ALL_PARITY_DOMAINS.join(", ")}` } };
+    }
+    const started = performance.now();
+    const result = await checkDomainParity(domain);
+    await recordParityObservation(result);
     return {
       status: 200,
       body: {
-        domains: results.length,
-        matched: results.filter((r) => r.matched).map((r) => r.domain),
-        mismatched: results.filter((r) => !r.matched).map((r) => r.domain),
+        domain,
+        matched: result.matched,
+        legacyRowCount: result.legacyRowCount,
+        ledgerRowCount: result.ledgerRowCount,
+        mismatchCount: result.mismatchCount,
+        durationMs: Math.round(performance.now() - started),
       },
     };
   }

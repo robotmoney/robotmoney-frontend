@@ -4983,6 +4983,52 @@ the fixed writers, relabels included) and
 `backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
 becomes one chain; guards armed; tables smaller on disk).
 
+### Amendment (issue 1375, 2026-10-15) — the parity check runs in Postgres, once a day, one domain per request
+
+**Status:** proposed
+
+**Why.** The parity sweep loaded both sides of all four domains into the api.
+Stage QA on 2026-10-15, with that day's production dump, saw one sweep take
+the api from 71 MiB to 5.9 GiB in 30 s on a 7.75 GiB host and hold 2.5 GiB
+after; an in-flight sweep killed the stage api at 20:27:06Z. Production failed
+17 sweeps from 2026-10-09 with "socket connection closed unexpectedly". The
+owner set three requirements: smarter set-based queries with supporting
+indexes; no parity computation in the api process, which only runs SQL and
+relays small results; and once a day, never overlapping data acquisition.
+
+**What changes.** The comparison rules above, and the observation table, do
+not.
+
+- Each domain is one set-based statement (`analytics/cutover/parity.ts`). It
+  returns both row counts, a sha256 over each side's ordered canonical rows,
+  the mismatch count and at most 20 mismatching keys. Raw history still
+  matches within `withinTolerance()`'s per-source tolerance, written in SQL
+  `double precision`, else after rounding at 1e-9.
+- What the comparison needs from an immutable payload is stored when the row
+  is written (migration 0123): `analytics_output_snapshots.natural_keys` (a
+  regime element's date; a research element's date, key and payload hash) and
+  `swarm_brief_revisions.body_hash`, with a GIN index and a covering index. A
+  research payload or brief body matches when the two `jsonb_hash_extended`
+  values match. A 64-bit collision is the one way a real difference could read
+  as a match.
+- `POST /api/analytics/parity-sweep` takes `{ "domain": ... }` and keeps the
+  api's 10 s limit; the 240 s exemption is gone. The worker posts the four
+  domains in turn and logs one line per domain.
+- The sweep runs at 04:47 UTC daily. The gate's default staleness budget is
+  26 h, so a daily sweep keeps it fresh; the 12-observation minimum now takes
+  12 days.
+
+**Evidence.** On the 2026-10-15 production dump, restored into a throwaway
+local Postgres 18: raw history 0.32 s, regime 0.06 s, research 0.19 s, briefs
+0.22 s, all matched, with the old in-process comparison reaching the same
+verdicts and counts (its regime check alone grew the process by 2.1 GiB).
+`backend/tests/analytics-parity-sql-equivalence.test.ts` holds the SQL to that
+comparison on every planted mismatch kind;
+`backend/tests/analytics-parity-sweep-memory.test.ts` bounds time and memory
+on a production-sized fixture;
+`scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
+every producer run, projects job and buyback refresh by 15 minutes.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
@@ -5359,7 +5405,7 @@ per-release code edit (owner, 2026-10-09, during the v0.6.1 QA session).
 
 ## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
 
-**Status.** Accepted 2026-10-09.
+**Status.** Accepted 2026-10-09. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5383,7 +5429,7 @@ either already on `main` or has a named reason it cannot be.
 
 ## D63 — A release that reached production gets its version tag unless it was rolled back; failed checks are ticketed against the next patch version (refines policy §3; owner, 2026-10-10)
 
-**Status.** Accepted 2026-10-10.
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5404,7 +5450,7 @@ could not reach W3.
 
 ## D64 — Stage runs a release-branch commit; once it passes, the rc tag is cut there, and production runs only by that rc tag (refines policy §3 and D61; owner, 2026-10-10)
 
-**Status.** Accepted 2026-10-10.
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
 
 **Decision.**
 
@@ -5664,3 +5710,46 @@ default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
 persisted fixture projects (issue 1208). Tests take their isolation from an
 ephemeral Postgres and injected credentials; they do not need the server to
 fail open, and a seam armed in one process is a claim the process can verify.
+
+---
+
+<a id="d70"></a>
+## D70 — Stage runs a QA branch; the stage-passed QA branch is squash-merged onto the release branch and the rc is cut there; production runs only by rc tags; the version tag is cut as soon as the cutover starts (supersedes D62 (1)–(2), D63 (3)–(4) and D64 (1)–(2) and (4); owner, 2026-10-14)
+
+**Status.** Accepted 2026-10-14. Implemented by the release runbook overhaul: stage
+takes a QA commit, SP.8 and `tag.ts rc` compare trees, and step C1 tags at the cutover's
+start. The same change made the cutover rolling, the soak 30 minutes, the go only the
+ref, operator and date, and the recovery decision part of the release YAML.
+
+**Decision.**
+
+1. **Stage runs on a QA branch.** Each stage session cuts
+   `qa/A.B.x-<YYYY-MM-DD>` from the `releases-A.B.x` tip. Stage runs a clean,
+   pushed commit of that branch, never a PR head or a fix branch. A pushed QA
+   branch is never rewritten; a new base means a new QA branch.
+2. **Squash after stage passes.** Only after the runbook passes on stage is the
+   QA branch squash-merged onto `releases-A.B.x`. The release branch must not
+   have moved since the QA branch was cut. The squash commit's tree must equal
+   the stage-passed tree.
+3. **The rc is cut at the squash commit.** `vA.B.C-rc.N` names a commit whose
+   tree passed stage. SP.8 and `tag.ts rc` compare tree hashes, not commit
+   hashes.
+4. **Production runs only by rc tags.** The production go names the rc tag.
+5. **A production failure belongs before the cutover.** An rc that fails in
+   production before R6.1 never reaches production. Its fix goes to a new QA
+   branch, stage runs again, and the next rc is `vA.B.C-rc.(N+1)`.
+6. **The cutover makes the version.** As soon as R6.1 starts on production, the
+   rc's commit gets `vA.B.C`. A later failed check, a known defect or a
+   rollback does not withhold or move it. Every defect found after the cutover
+   is an issue against `vA.B.(C+1)`.
+7. **Scope still comes from `main`.** Before a QA session, the release's scope
+   reaches `releases-A.B.x` from `main` by merge or cherry-pick. QA fixes reach
+   `main` afterwards by a separate PR from the QA branch.
+
+**Why.** QA commits are noisy, so the release branch takes one squash per
+stage-passed session. A squash re-hashes the commit, so identity is the tree.
+D64's failure (v0.6.1, 2026-10-10) came from fixes reaching `main` and the
+release branch by different squashes; comparing trees removes that failure
+without forbidding the squash. Tagging at the cutover keeps production from
+ever running a commit no version names, and makes every pre-cutover check the
+place a release can still stop.

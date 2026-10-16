@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
 import { applyMigrationFile } from "../src/db/migrate.ts";
+import { seedJobSchedules } from "../src/db/seed.ts";
 import { adminConnection, adminUrl } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
@@ -157,6 +158,8 @@ const NOT_IN_PRODUCTION = [
   "0120_maintenance_windows.sql",
   "0121_subject_closes_six_hours_apart.sql",
   "0122_swarm_dormancy_baseline.sql",
+  "0123_analytics_parity_sweep_daily.sql",
+  "0124_deactivate_bankr_token_vaults.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -245,6 +248,11 @@ beforeAll(async () => {
   upgraded = await freshDatabase("prod");
   for (const file of production) await applyMigrationFile(upgraded, file);
   await upgraded`UPDATE swarm_judge_config SET mode = 'enforce', model = 'opencode/deepseek-v4-flash' WHERE id = 1`;
+  // Production's seeded hourly parity sweep, as the seed of every release
+  // before issue 1375 left it (migration 0123 moves it).
+  await upgraded`
+    INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, next_run_at)
+    VALUES ('analytics.parity_sweep', '20 * * * *', '{}', 'UTC', true, now() + interval '20 minutes')`;
   appliedOnUpgrade = await migrateRemaining(upgraded);
 
   fresh = await freshDatabase("fresh");
@@ -291,5 +299,34 @@ describe("production's migration history meets the files it has not recorded", (
     expect(u).toEqual({ mode: "enforce", model: "deepseek-v4.1-flash" });
     const [f] = await fresh`SELECT model FROM swarm_judge_config WHERE id = 1`;
     expect(f!.model).toBe("deepseek-v4.1-flash");
+  });
+});
+
+// Issue 1375: the sweep runs once a day at 04:47 UTC, and its two supporting
+// indexes exist, whichever path the database took.
+describe("the parity sweep's schedule and indexes after every migration", () => {
+  test("exactly one analytics.parity_sweep row, at 47 4 * * *, on the upgraded and on the blank database, and the seed adds no second one", async () => {
+    for (const db of [upgraded, fresh]) {
+      await seedJobSchedules(db as never);
+      const rows = await db<{ cron: string; next_run_at: Date | null }[]>`
+        SELECT cron, next_run_at FROM job_schedules WHERE kind = 'analytics.parity_sweep'`;
+      expect(rows.map((r) => r.cron)).toEqual(["47 4 * * *"]);
+    }
+    // The moved row never fires a slot of the old hourly cron: the scheduler
+    // seeds its next 04:47 from NULL.
+    const [moved] = await upgraded<{ next_run_at: Date | null }[]>`
+      SELECT next_run_at FROM job_schedules WHERE kind = 'analytics.parity_sweep'`;
+    expect(moved!.next_run_at).toBeNull();
+  });
+
+  test("both supporting indexes exist on both databases", async () => {
+    for (const db of [upgraded, fresh]) {
+      const names = (await db<{ indexname: string }[]>`
+        SELECT indexname FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND indexname IN ('analytics_output_snapshots_natural_keys_idx', 'swarm_brief_revisions_session_newest_idx')
+         ORDER BY indexname`).map((r) => r.indexname);
+      expect(names).toEqual(["analytics_output_snapshots_natural_keys_idx", "swarm_brief_revisions_session_newest_idx"]);
+    }
   });
 });

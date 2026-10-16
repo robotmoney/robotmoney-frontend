@@ -89,25 +89,21 @@ export const handlers: Record<string, JobHandler> = {
   // already-covered day is never re-selected, so a caught-up deployment's
   // run is just the anti-join query.
   "ops.backfill_asset_prices": () => backfillAssetPricesForCleanDays(),
-  // Issue #979 AC2: the dual-write parity sweep. recordParityObservation()/
-  // runParitySweep() (analytics/cutover/parity.ts) are the ONLY thing that
-  // populates analytics_parity_observations, which is the evidence
+  // Issue #979 AC2: the dual-write parity sweep. recordParityObservation()
+  // (analytics/cutover/parity.ts) is the ONLY thing that populates
+  // analytics_parity_observations, which is the evidence
   // analytics-ledger-cutover-gate.ts later reads — that CLI only evaluates
   // existing observations and flips analytics_read_mode, it never records
   // one. Without a real recurring caller here, that table stays permanently
-  // empty and ledger-mode reads can never be armed. Same
-  // self-healing-means-scheduled shape as `ops.backfill_asset_prices` above:
-  // every domain's check both re-derives its own row counts/checksums from
-  // Postgres AND inserts a fresh observation row each tick, so this is cheap
-  // and safe to run often — hourly is far more than the gate's default
-  // 12-observation / 24h window needs, which lets the window close in about
-  // half a day instead of waiting on a slower cadence.
+  // empty and ledger-mode reads can never be armed.
   //
-  // WIRING (issue #979 fix): this handler never touches Postgres itself. It
-  // calls POST /api/analytics/parity-sweep (triggerParitySweep(),
-  // analytics/api-client.ts) over the SAME authenticated HTTP boundary the
-  // retained analytics handlers above already use — runParitySweep() runs
-  // INSIDE the API process, which legitimately holds the rm_app pool.
+  // ONCE A DAY, ONE REQUEST PER DOMAIN (issue 1375). The schedule row
+  // (db/seed.ts, migration 0123) fires at 04:47 UTC, when no producer run,
+  // projects job or buyback refresh is due. triggerParitySweep()
+  // (analytics/api-client.ts) posts each domain in turn over the SAME
+  // authenticated HTTP boundary the retained analytics handlers above use; the
+  // api runs that domain's one set-based statement in Postgres. This handler
+  // never touches Postgres itself.
   "analytics.parity_sweep": () => triggerParitySweep(),
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,

@@ -55,7 +55,7 @@
 //   set-identity      §9.1 step 4. Confirms the identity the policy names and
 //                     receipts it: `production` under RM_ENV=prod, `rehearsal`
 //                     under RM_ENV=stage (D61 rule 2: the stage rehearsal runs
-//                     step R6.4 unmodified). The first migrate already wrote
+//                     step C08-identity unmodified). The first migrate already wrote
 //                     the row, in the transaction that created the table
 //                     (D55 (9), D61), so this command reads it through rm_owner
 //                     inside the §2 fence and REPORTS it, unchanged
@@ -100,6 +100,8 @@
 // lock and, for a database write, inside the fence. The receipt — what ran,
 // against what, by whom, and what it changed; never a secret — is written
 // under the instance's state directory.
+import { liveHostPort, serviceContainer } from "./lib/gate/io.ts";
+import { API_CONTAINER_PORT } from "./lib/gate/stack.ts";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -139,8 +141,10 @@ export interface ProdInitDeps {
   readTarget(readerUrl: string): Promise<TargetState>;
   acquireLock(readerUrl: string, holder: Omit<LockHolder, "acquiredAt">, expected: TargetState): Promise<{ lock: HeldTargetLock; release(): Promise<void> } | { refusal: string }>;
   setIdentity(options: SetIdentityOptions): Promise<SetIdentityResult>;
-  provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; files: Record<string, string> }>;
+  provisionTokens(options: ProvisionOptions & { readonly readerUrl: string; readonly rmEnv: string }): Promise<{ holders: string[]; kept: string[]; files: Record<string, string> }>;
   rotateKey(apiUrl: string, operatorToken: string, memberId: string, publicKey: string): Promise<{ status: number; token?: string; error?: string }>;
+  /** The host port a compose project's api publishes now, or null (the stack record's port is history). */
+  liveApiPort(project: string): number | null;
   /** role-passwords' database half: the ONLY dep that receives a doadmin URL. */
   rolePasswords(options: RolePasswordsOptions): Promise<RolePasswordsResult>;
   now(): Date;
@@ -324,7 +328,9 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
         return null;
       }
     })();
-    apiUrl = flag(rest, "--api") ?? (recorded?.apiPort ? `http://127.0.0.1:${recorded.apiPort}` : undefined);
+    // The live port, never the record's: a restarted api container gets a new host port (scripts/lib/gate/io.ts liveHostPort).
+    const livePort = recorded?.project ? deps.liveApiPort(recorded.project) : null;
+    apiUrl = flag(rest, "--api") ?? (livePort !== null ? `http://127.0.0.1:${livePort}` : undefined);
     if (!apiUrl) refuse(`no api address: instance ${instanceName} records no running stack; pass --api <url>.`);
   } else {
     if (!homeEnv) refuse(`the remote connection must be in ${deps.homeEnvPath} (§3).`);
@@ -338,7 +344,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
       refuse((error as Error).message.replace(/^Refusing: /, "").replace(/ Nothing was changed\.$/, ""));
     }
     // A MISSING role line means "generate one". An EMPTY one is a mistake to
-    // report, never a password to replace (R1.2 refuses an empty rm_owner too).
+    // report, never a password to replace (P02-identity refuses an empty rm_owner too).
     if (command === "role-passwords") {
       const empty = passwordRoles.filter((role) => Object.hasOwn(homeEnv!, role) && homeEnv![role] === "");
       if (empty.length > 0) {
@@ -361,7 +367,7 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
       (rotateRoles.length > 0 ? `, and rotate ${rotateRoles.join(", ")} (the old lines retired)` : "") +
       (passwordRoles.includes("rm_owner") ? "; rm_owner also becomes LOGIN" : ""),
     "set-identity": `confirm and receipt ${target}'s \`${expected}\` enrollment (it is read, never rewritten)`,
-    "provision-tokens": `provision the three service tokens for instance ${instanceName} on ${target} (a re-run rotates them; restart the holders after)`,
+    "provision-tokens": `provision the service tokens for instance ${instanceName} on ${target}: keep every holder whose file still holds its current token, provision the rest`,
     "rebind-members": `rotate ${roster.length} member key(s) from ${credentialPath} through ${apiUrl} and write each new bearer into its entry`,
   }[command];
   deps.log(`about to ${what}`);
@@ -455,8 +461,12 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
           lock: acquired.lock,
           readerUrl: readerUrl!,
           rmEnv: policy,
+          keep: true,
         });
-        detail = { holders: result.holders, files: result.files, note: "restart system-scheduler and analytics-producer to load the new tokens (§3)" };
+        detail = {
+          provisioned: result.holders, kept: result.kept, files: result.files,
+          note: result.holders.length > 0 ? `restart ${result.holders.join(", ")} to load the new tokens (§3)` : "every token kept; no restart owed",
+        };
         break;
       }
       case "rebind-members": {
@@ -564,6 +574,10 @@ export function realDeps(env: Record<string, string | undefined> = process.env):
     homeEnvPath,
     readDoadmin: (argv) => readDoadminPassword(argv, process.stdin, process.stderr),
     stateRoot: resolveStateRoot(env),
+    liveApiPort(project) {
+      const api = serviceContainer(project, "api");
+      return api ? liveHostPort(api, API_CONTAINER_PORT) : null;
+    },
     async rolePasswords(options) {
       const { rolePasswords } = await import("../backend/scripts/role-passwords.ts");
       return rolePasswords(options);

@@ -926,6 +926,13 @@ export function decideResume(
   journal: Journal | null,
   planId: PlanId,
   observed: StateExpectations,
+  /**
+   * The image this compose project's tag names for each service, built from
+   * this plan's sources (the plan id is the same, so the sources are). A
+   * service a failed phase moved onto it (a rolling boot that failed after a
+   * replacement, stage practice run 2026-10-14) is the plan's own work.
+   */
+  built: Readonly<Record<string, string>> = {},
 ): ResumeDecision {
   if (journal === null) return { kind: "fresh-start", reason: "no journal for this instance" };
   if (journal.closedAt !== null) {
@@ -993,6 +1000,7 @@ export function decideResume(
   for (const [service, digest] of Object.entries(observed.services)) {
     if (expected.services[service] === digest) continue;
     if (journal.plan.images[service]?.digest === digest) continue;
+    if (built[service] === digest) continue;
     const want = expected.services[service] ?? "not running";
     const planned = journal.plan.images[service]?.digest ?? "none";
     return refuse(

@@ -50,11 +50,56 @@ from this repo's own tables and pipelines instead of Supabase.
     (`backend/src/projects/fixtures/dataset.ts`), not the legacy 1963-line
     autonomous multi-source crawler — a tracked follow-up. Wallet balance is
     live ONLY for `chain === "base"`; the discovery roster's handful of
-    Ethereum/Solana treasuries have no RPC/pricing path in this codebase yet,
-    so that ONE wallet's read throws (never a fabricated number) while every
-    other wallet in the same `projects.refresh_wallets` run still updates
-    (issue #346 also fixed a bug where one bad wallet used to abort the whole
-    run instead of degrading alone).
+    Ethereum/Solana treasuries have no RPC/pricing path in this codebase yet.
+    `refreshWallets` asks the source's `supportsWallet(address, chain)` before
+    each read (issue 1275): a wallet on another chain, or whose address is not
+    `0x` plus 40 hex, is skipped with no read and no error line, keeps its
+    last-persisted `balance_usd`, and is counted in the run's `unsupported`
+    total with one info-level summary line per run. A supported Base wallet
+    whose read throws still logs an error and degrades the run (never a
+    fabricated number), while every other wallet in the same
+    `projects.refresh_wallets` run still updates (issue #346 also fixed a bug
+    where one bad wallet used to abort the whole run instead of degrading
+    alone).
+  - **Refresh cost per run** (issue 1373): `refreshWallets` reads every
+    supported wallet through ONE batched source call,
+    `walletBalancesUsd(addresses, chain)`. The live source builds one
+    Multicall3 `getEthBalance` sub-call per wallet through
+    `readChainAmountsBatched`, and `multicall3Aggregate3` sends them in POSTs
+    of at most `MULTICALL3_MAX_SUBCALLS_PER_POST` (100) sub-calls
+    (`backend/src/chain/base-rpc-client.ts`). The ETH USD price is read once
+    per run. So the 785 production Base wallets cost 8 Base RPC POSTs and one
+    price read: at most 32 s against the shared 0.25 calls/s budget even from
+    an empty bucket (about 12 s from a full burst of 5),
+    where one POST per wallet took 52 min per attempt (production capture
+    2026-10-14). A reverted sub-call fails only its wallet. A chunk whose POST
+    throws fails only that chunk's wallets. Each failed wallet keeps its
+    last-persisted `balance_usd` and degrades the run as above.
+  - **Per-vault isolation** (issue 1291): `fetchVaults` reads each active
+    live vault on its own. A vault whose read throws logs one error line,
+    keeps its last-persisted `tvl_usd`, and gets `last_refresh_status =
+    'failed'`; the other vaults still update and the run returns `ok: true`
+    with a `failed` count. Only a run in which every vault failed returns
+    `{ ok: false, status: "degraded" }`. A failure no retry can change
+    (`PermanentVaultReadError`: `totalAssets()` or `asset()` reverts, or the
+    address is not `0x` plus 40 hex) does not enter the loop's 2 s, 4 s
+    retry: when every failure is permanent the result carries
+    `terminal: true`. Production's two Bankr LP rows (strategy_type
+    `lp-fees`) are not ERC-4626 and revert `totalAssets()` on Base, which
+    used to abort every run with `updated: 0` (production capture
+    2026-10-14).
+  - **Bankr token rows deactivated** (issue 1382): neither Bankr `lp-fees`
+    address is a vault or a pool. `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`
+    is the BankrCoin (BNKR) ERC-20, already the project's BNKR coin;
+    `0x7689006F6C3A3473449E42b628544E60D0bCCb07` is a plain ERC-20 named
+    'Bankr' with no Base pair (eth_call on Base, 2026-10-16). Owner decision
+    2026-10-16: deactivate both rows, no LP valuation. Migration 0124 sets
+    `is_active = false` on exactly those two rows (D66) and keeps their
+    `tvl_usd`, `last_refresh_status` and `daily_tvl_snapshots` history.
+    `fetchVaults` reads only active rows, so it no longer reads either
+    address. The roster seed no longer lists either vault, and the discover
+    upsert never sets `is_active`, so no discovery run brings them back. The
+    Bankr project keeps its BNKR coin and its wallet.
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
     (`backend/src/projects/access/select.ts`) serves the hermetic fixture

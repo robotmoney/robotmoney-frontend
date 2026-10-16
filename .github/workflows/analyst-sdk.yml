@@ -20,7 +20,7 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373); see unit.yml.
   schedule:
     - cron: "15 4 * * *"

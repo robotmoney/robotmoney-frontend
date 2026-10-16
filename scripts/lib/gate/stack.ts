@@ -8,7 +8,10 @@
 // `--db` flag, and it never composes a container name by hand.
 
 import { instanceFlag, readStackState, selectExistingInstance, stateRoot, type InstancePaths, type StackStateRecord } from "../smoke-state.ts";
-import { serviceContainer } from "./io.ts";
+import { liveHostPort, serviceContainer } from "./io.ts";
+
+/** The port the api listens on inside its container (docker-compose.yml). */
+export const API_CONTAINER_PORT = 8787;
 
 export interface GateStack {
   instance: string;
@@ -50,4 +53,15 @@ export function resolveGateStack(
   const api = (deps.serviceContainer ?? serviceContainer)(record.project, "api");
   if (!api) throw new Error(`Refusing: compose project ${record.project} has no api container.`);
   return { instance: record.instance ?? paths.dir, project: record.project, paths, record, api };
+}
+
+/**
+ * The api's base URL on this host, from the port its container publishes NOW,
+ * never the stack record's (a record is history; a restarted container gets a
+ * new host port). Throws naming the container when it publishes none.
+ */
+export function liveApiBase(stack: Pick<GateStack, "api">, deps: { liveHostPort?: (container: string, port: number) => number | null } = {}): string {
+  const port = (deps.liveHostPort ?? liveHostPort)(stack.api, API_CONTAINER_PORT);
+  if (port === null) throw new Error(`Refusing: the api container ${stack.api} publishes no host port for ${API_CONTAINER_PORT}; is it running?`);
+  return `http://127.0.0.1:${port}`;
 }
