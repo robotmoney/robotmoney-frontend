@@ -399,7 +399,8 @@ test("the hero is full-bleed, and a phone swaps every diagram", async ({ page })
 test("the home CTA and the FAQ no longer advertise a roadmap", async ({ page }) => {
   await page.goto(`${baseUrl}/`);
   const home = page.frameLocator("#frame");
-  await expect(home.locator(".hero__cta .btn-primary")).toContainText("CHANGELOG", { timeout: 15_000 });
+  await expect(home.locator(".hm-hero__cta .btn-primary")).toContainText("Deposit USDC", { timeout: 15_000 });
+  await expect(home.locator(".hm")).not.toContainText(/roadmap/i);
 
   await page.evaluate(() => {
     const win = (document.querySelector("#frame") as HTMLIFrameElement).contentWindow!;
