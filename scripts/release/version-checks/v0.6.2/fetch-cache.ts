@@ -1,4 +1,4 @@
-// V08-fetch-cache (PR 1349): the HTTP fetch cache evicts, so it can no longer
+// Q42-fetch-cache/C28-fetch-cache (PR 1349): the HTTP fetch cache evicts, so it can no longer
 // fill the host's disk.
 //
 // backend/src/analytics/extract/fetch-cache.ts keeps its entries in

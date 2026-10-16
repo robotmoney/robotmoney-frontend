@@ -1,4 +1,4 @@
-// scripts/tests/unit/schedule-parity.test.ts — V01-subject-spacing check 1's spacing
+// scripts/tests/unit/schedule-parity.test.ts — C23-subject-spacing check 1's spacing
 // assertion (issue 1310): the four production subjects' anchor times of day are
 // exactly 21600 s apart in the order vault, woon, allocation, treasury
 // (migration 0121, scheduler spec §2.2). The drifted pre-0121 grid fails, the
@@ -31,7 +31,7 @@ const PRE_0121 = [
   { id: "robotmoney-treasury", epoch_anchor: "2026-10-10T19:03:59.504Z" },
 ];
 
-describe("V01-subject-spacing close spacing (issue 1310)", () => {
+describe("C23-subject-spacing close spacing (issue 1310)", () => {
   test("the spacing is a quarter of the epoch, in the order vault, woon, allocation, treasury", () => {
     expect(SUBJECT_CLOSE_SPACING_SECONDS * 4).toBe(PRODUCTION_EPOCH_SECONDS);
     expect([...SUBJECT_CLOSE_ORDER]).toEqual(["robotmoney-vault", "woon", "robotmoney-allocation", "robotmoney-treasury"]);
@@ -70,7 +70,7 @@ describe("V01-subject-spacing close spacing (issue 1310)", () => {
 
   test("the stage target runs the check unchanged: the same command as prod, only --sessions differs", () => {
     const targetsDir = join(root, "scripts", "release", "targets");
-    const step = loadReleaseRunbook("v0.6.2").steps.find((s) => s.id === "V01-subject-spacing")!;
+    const step = loadReleaseRunbook("v0.6.2").steps.find((s) => s.id === "C23-subject-spacing")!;
     const cmd = (name: string) => {
       const t = loadTarget(join(targetsDir, `${name}.json`));
       const remote = renderStep(step, t, templateValues(t, "a".repeat(40), "20261008T000000Z")).remote;

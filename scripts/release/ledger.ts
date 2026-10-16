@@ -1,4 +1,4 @@
-// scripts/release/ledger.ts — the ledger judgement P02-identity and P07-baseline share: the
+// scripts/release/ledger.ts — the ledger judgement Q07-host-identity/P02-host-identity and Q12-state-baseline/P07-state-baseline share: the
 // database's `schema_migrations` reconciled with backend/migrations and the
 // bytes at the tag the running stack reports (D67; issues 1272, 1273).
 //
@@ -19,10 +19,10 @@
 // (`runningPinRef`). A stack that reports no version leaves nothing to pin
 // the applied bytes to, and the caller refuses; nothing is assumed in its
 // place. The ref is resolved with `git rev-parse --verify` in the release
-// checkout (P01-checkout fetched the tags), and an unresolvable ref is
+// checkout (Q06-checkout/P01-checkout fetched the tags), and an unresolvable ref is
 // `pin-ref-unresolved`.
 //
-// Only node built-ins and Bun globals at runtime: P02-identity runs before
+// Only node built-ins and Bun globals at runtime: Q07-host-identity/P02-host-identity runs before
 // `bun install` (the backend module imports the registry, which imports
 // `postgres` as a type only).
 import { readdirSync } from "node:fs";
@@ -51,7 +51,7 @@ export function repoMigrations(dir: string = MIGRATIONS_DIR): string[] {
 /**
  * The three checks over a ledger already read, against `migrationsDir` and,
  * with `pinRef`, the bytes at that ref. Synchronous: the directory, the
- * hashes and git. The one SELECT is the caller's (P02-identity and P07-baseline read the
+ * hashes and git. The one SELECT is the caller's (Q07-host-identity/P02-host-identity and Q12-state-baseline/P07-state-baseline read the
  * ledger on their proven read-only session).
  */
 export function reconcileLedger(

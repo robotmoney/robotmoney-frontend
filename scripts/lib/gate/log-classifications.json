@@ -160,6 +160,18 @@
     "reason": "GeckoTerminal rate limiting; the code retries, then degrades to last-persisted data."
   },
   {
+    "id": "external-dexscreener-rate-limit-extractor",
+    "match": "\\[projects\\.sync_revenue\\] extractor failed — keeping last-persisted rows \\(degraded\\): dexscreener 429$",
+    "class": "external",
+    "reason": "DexScreener answered HTTP 429 (rate limit) to projects.sync_revenue. The handler keeps the last-persisted revenue rows, marks the run degraded and retries the job (backend/src/worker/handlers/projects.ts); nothing synthetic is written. Seen on stage-2 at the v0.6.2 QA baseline, 2026-10-16, against production's v0.6.1 stack. Only status 429 is classified: any other DexScreener status stays unclassified and fails."
+  },
+  {
+    "id": "external-dexscreener-rate-limit-job-degraded",
+    "match": "job \\S+ \\(projects\\.sync_revenue\\) DEGRADED — kept last-persisted[^:]*: dexscreener 429$",
+    "class": "external",
+    "reason": "The job-level line for the same DexScreener HTTP 429: the job kept the last-persisted rows and was rescheduled with a backoff. See external-dexscreener-rate-limit-extractor."
+  },
+  {
     "id": "external-wallet-balances-live-read-degraded",
     "match": "wallet-balances: [\\w<>-]+ live read failed, degrading to last-persisted sample",
     "class": "external",
@@ -198,9 +210,9 @@
   },
   {
     "id": "external-base-rpc",
-    "match": "Base RPC HTTP|buyback-logs: live index failed",
+    "match": "Base RPC HTTP|Base RPC rate limited|buyback-logs: live index failed",
     "class": "external",
-    "reason": "The Base chain RPC endpoint failing; buyback indexing keeps its persisted rows."
+    "reason": "The Base chain RPC endpoint failing or rate limiting; the client backs off and retries a rate limit on its own schedule (5 s, 10 s, 20 s, 30 s), and buyback indexing keeps its persisted rows if it still fails."
   },
   {
     "id": "external-token-metrics",

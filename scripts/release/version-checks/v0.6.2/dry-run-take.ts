@@ -1,4 +1,4 @@
-// V06-dry-run-take (PR 1341, RM-178): a member can dry-run a take before its
+// Q40-dry-run-take (PR 1341, RM-178): a member can dry-run a take before its
 // first session. Reads:
 //   - POST /api/swarm/submit/dry-run with no bearer: 401 (the route is there,
 //     and refuses a caller with no credential as submit does);

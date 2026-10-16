@@ -1,4 +1,4 @@
-// V07-brand-marks (PR 1344): Minds by Animoca Brands wears Animoca's mark, and
+// Q41-brand-marks/C27-brand-marks (PR 1344): Minds by Animoca Brands wears Animoca's mark, and
 // DualMint's new seat keeps DualMint's.
 //
 // The marks are the site's own: frontend/public/assets/js/app/lib/member-logos.js

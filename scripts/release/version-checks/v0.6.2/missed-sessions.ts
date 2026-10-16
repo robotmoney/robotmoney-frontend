@@ -1,4 +1,4 @@
-// V03-missed-sessions (PR 1343, migration 0122): a seat's consecutive missed
+// Q37-missed-sessions/C25-missed-sessions (PR 1343, migration 0122): a seat's consecutive missed
 // sessions are counted from the upgrade and shown on its member page. Reads:
 //   - swarm_dormancy_baseline: exactly one row, with counted_from set (the
 //     instant migration 0122 ran; the count starts there);
