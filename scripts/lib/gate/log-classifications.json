@@ -210,9 +210,9 @@
   },
   {
     "id": "external-base-rpc",
-    "match": "Base RPC HTTP|buyback-logs: live index failed",
+    "match": "Base RPC HTTP|Base RPC rate limited|buyback-logs: live index failed",
     "class": "external",
-    "reason": "The Base chain RPC endpoint failing; buyback indexing keeps its persisted rows."
+    "reason": "The Base chain RPC endpoint failing or rate limiting; the client backs off and retries a rate limit on its own schedule (5 s, 10 s, 20 s, 30 s), and buyback indexing keeps its persisted rows if it still fails."
   },
   {
     "id": "external-token-metrics",
