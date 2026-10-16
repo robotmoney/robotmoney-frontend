@@ -4048,24 +4048,7 @@
         "address": "0x7c3d3c9ea0f11b162a4261a849033030b4cd3064"
       }
     ],
-    "vaults": [
-      {
-        "name": "Bankr Agent Token LP",
-        "vault_address": "0x7689006F6C3A3473449E42b628544E60D0bCCb07",
-        "chain": "base",
-        "strategy_type": "lp-fees",
-        "protocol": "bankr",
-        "data_source": "live"
-      },
-      {
-        "name": "Bankr BNKR LP Pool",
-        "vault_address": "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b",
-        "chain": "base",
-        "strategy_type": "lp-fees",
-        "protocol": "bankr",
-        "data_source": "live"
-      }
-    ]
+    "vaults": []
   },
   {
     "slug": "bankr-router-base-a7925d",

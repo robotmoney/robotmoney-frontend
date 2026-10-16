@@ -159,7 +159,8 @@ const NOT_IN_PRODUCTION = [
   "0121_subject_closes_six_hours_apart.sql",
   "0122_swarm_dormancy_baseline.sql",
   "0123_analytics_parity_sweep_daily.sql",
-  "0124_job_schedules_latest_only_catchup.sql",
+  "0124_deactivate_bankr_token_vaults.sql",
+  "0125_job_schedules_latest_only_catchup.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -254,7 +255,7 @@ beforeAll(async () => {
     INSERT INTO job_schedules (kind, cron, payload, timezone, enabled, next_run_at)
     VALUES ('analytics.parity_sweep', '20 * * * *', '{}', 'UTC', true, now() + interval '20 minutes')`;
   // Production's heavy kinds as every release before issue 1378 seeded them:
-  // policy 'all' (migration 0124 moves them to 'latest-only').
+  // policy 'all' (migration 0125 moves them to 'latest-only').
   await upgraded`
     INSERT INTO job_schedules (kind, cron, payload, timezone, enabled)
     VALUES ('projects.refresh_wallets', '20 */6 * * *', '{}', 'UTC', true),

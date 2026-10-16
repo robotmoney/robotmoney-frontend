@@ -1038,3 +1038,21 @@ inspect every accepted member datapoint, see every lifecycle transition the
 scheduler made, and explain every mutation from the audit log.
 
 ---
+
+
+### Public analytics and privileged document boundaries (#1350)
+
+Admin and public pages retain one origin. Production navigation crossing the
+public/privileged route boundary loads a fresh document (including history),
+so a public Zaraz instance is discarded before the admin gate renders.
+`frontend/public/assets/js/app/analytics-policy.js` centralizes the exclusions,
+including router `gated` metadata. Admin-to-public navigation also replaces the
+document. Same-origin script privileges and sessionStorage access remain;
+this is not origin isolation or a redesign of admin authentication.
+
+Public GA4 uses consent-gated, manually loaded same-origin Cloudflare Zaraz,
+with an inactive default configuration. The adapter reports completed renders,
+strips all query/hash values and reloads on withdrawal after loading code.
+The strict self script/connect CSP remains. The activation, consent mapping,
+ambient context redaction and rollback contract is
+[docs/ops/zaraz-analytics.md](../ops/zaraz-analytics.md).

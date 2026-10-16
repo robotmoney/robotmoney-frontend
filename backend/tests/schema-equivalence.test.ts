@@ -192,7 +192,7 @@ describe("blank + all migrations = the snapshot (spec §8.4)", () => {
     expect(differingKeys(diff)).toEqual([]);
   });
 
-  // Issue 1378 (migration 0124): the catch-up policy CHECK accepts exactly
+  // Issue 1378 (migration 0125): the catch-up policy CHECK accepts exactly
   // 'all', 'collapse-per-bucket' and 'latest-only' on both sides.
   test("job_schedules' catch-up policy CHECK accepts exactly 'all', 'collapse-per-bucket' and 'latest-only', on both sides", () => {
     const key = "constraint public.job_schedules.job_schedules_catchup_policy_check";

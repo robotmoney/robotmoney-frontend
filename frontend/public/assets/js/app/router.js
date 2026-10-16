@@ -6,6 +6,7 @@
 // Known routes map a pathname to a view file. Unknown same-origin paths fall
 // back to the home view so internal links never 404 during early development.
 
+import { isProduction, isPrivilegedRoute } from "./analytics-policy.js";
 import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
 import { isCurrentLink, navSectionFor } from "./lib/site-nav.js";
@@ -60,8 +61,17 @@ let activeRender = null;
 // The path the mounted view was rendered for. A popstate that leaves it
 // unchanged moved only the fragment (see onPopState).
 let renderedPath = null;
+const documentPrivileged = isPrivilegedRoute(location.pathname);
+
+function needsDocument(pathname) {
+  return isProduction(location) && isPrivilegedRoute(pathname) !== documentPrivileged;
+}
 
 async function render(pathname) {
+  if (needsDocument(pathname)) {
+    location.reload();
+    return;
+  }
   // Bare /vault is the four vaults on /allocation. The address moves there,
   // query kept (the vault data switch rides on it), so the page, its canonical
   // and its #vaults section all agree on where the reader is.
@@ -275,6 +285,7 @@ function onClick(e) {
   if (/\.(?!html$)[a-z0-9]+$/i.test(url.pathname)) return;
   if (url.hash && url.pathname === location.pathname) return; // in-page anchor
 
+  if (needsDocument(url.pathname)) return; // Browser loads a clean document.
   e.preventDefault();
   if (url.pathname !== location.pathname || url.search !== location.search) {
     history.pushState({}, "", url.pathname + url.search + url.hash);

@@ -262,7 +262,7 @@ interface SeedSchedule {
   // Issue #651: defaults to 'all' (every missed slot gets its own catch-up
   // job — current behaviour) when omitted. Only the wallet samplers below
   // opt into 'collapse-per-bucket' — see migration 0034's header for why.
-  // The six heavy kinds use 'latest-only' (issue 1378, migration 0124): a boot
+  // The six heavy kinds use 'latest-only' (issue 1378, migration 0125): a boot
   // after downtime enqueues one job for each, at its newest due slot.
   catchupPolicy?: CatchupPolicy;
 }

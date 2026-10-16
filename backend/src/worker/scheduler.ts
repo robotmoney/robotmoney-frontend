@@ -127,7 +127,7 @@ export async function tickScheduler(): Promise<number> {
       // Under 'latest-only' (issue 1378) the bucket is the whole backlog: only
       // the newest due slot is inserted. The six heavy kinds recompute current
       // state from scratch, so an older slot is the same run repeated (migration
-      // 0124's header).
+      // 0125's header).
       let pendingBucket: string | null = null;
       let pendingSlotDate: Date | null = null;
       const insertSlot = async (slotDate: Date) => {
