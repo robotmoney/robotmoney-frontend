@@ -124,7 +124,8 @@
     "0120_maintenance_windows.sql",
     "0121_subject_closes_six_hours_apart.sql",
     "0122_swarm_dormancy_baseline.sql",
-    "0123_analytics_parity_sweep_daily.sql"
+    "0123_analytics_parity_sweep_daily.sql",
+    "0124_deactivate_bankr_token_vaults.sql"
   ],
   "exclusions": {
     "roles": [
@@ -136,7 +137,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "374e24d3c4e9d42821dfb77f55a9669697b943ad0ed19c420fa3a8d6f5f8ec43",
+  "contentHash": "662932e8243ed9cf0506a5747f8c58d9da83d5af94edb78f59040119a00eb9a8",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

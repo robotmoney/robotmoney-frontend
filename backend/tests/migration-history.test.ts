@@ -159,6 +159,7 @@ const NOT_IN_PRODUCTION = [
   "0121_subject_closes_six_hours_apart.sql",
   "0122_swarm_dormancy_baseline.sql",
   "0123_analytics_parity_sweep_daily.sql",
+  "0124_deactivate_bankr_token_vaults.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

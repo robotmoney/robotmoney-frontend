@@ -21,7 +21,8 @@ import {
   snapshotDaily,
   syncRevenue,
 } from "../src/worker/handlers/projects.ts";
-import type { ProjectsDataSource } from "../src/projects/access/data-source.ts";
+import type { DiscoveredVault, ProjectsDataSource } from "../src/projects/access/data-source.ts";
+import { loadV0RosterWithManifest } from "../src/projects/seed/roster-seed.ts";
 import { failingSource, uniqueSlugSource } from "./support/projects-fixture-source.ts";
 import {
   _resetRpcConcurrencyForTests,
@@ -996,4 +997,93 @@ test("discovery degrades rather than persisting rows under an unparseable declar
   expect(d.ok).toBe(false);
   expect(d.status).toBe("degraded");
   expect(await projectIds(prefix)).toEqual([]); // nothing written under a fabricated fallback
+});
+
+// ── Issue 1382: the two Bankr lp-fees rows are tokens, not vaults ────────────
+// Owner decision 2026-10-16: deactivate both rows (migration 0124), no LP
+// valuation. The roster seed no longer lists them, and the discover upsert never
+// sets is_active, so neither an existing database nor a fresh one brings them
+// back; fetchVaults reads only active rows, so it never reads either address.
+const BANKR_TOKEN_VAULTS = [
+  { name: "Bankr Agent Token LP", vault_address: "0x7689006F6C3A3473449E42b628544E60D0bCCb07" },
+  { name: "Bankr BNKR LP Pool", vault_address: "0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b" },
+];
+const BANKR_TOKEN_ADDRESSES = BANKR_TOKEN_VAULTS.map((v) => v.vault_address.toLowerCase());
+const BANKR_SEED_SLUG = "bankr-agent-614b56";
+
+// A source serving the committed roster seed's Bankr project (loaded through the
+// checksum-validating loader) under a unique slug, optionally with extra vaults.
+async function bankrSeedSource(prefix: string, extraVaults: DiscoveredVault[] = []): Promise<ProjectsDataSource> {
+  const { projects } = await loadV0RosterWithManifest();
+  const bankr = projects.find((p) => p.slug === BANKR_SEED_SLUG);
+  if (!bankr) throw new Error(`roster seed has no ${BANKR_SEED_SLUG}`);
+  const project = { ...structuredClone(bankr), slug: `${prefix}-${BANKR_SEED_SLUG}` };
+  project.vaults.push(...extraVaults);
+  return { ...uniqueSlugSource(prefix), async discoverProjects() { return [structuredClone(project)]; } };
+}
+
+async function bankrVaults(prefix: string): Promise<{ name: string; vault_address: string; is_active: boolean }[]> {
+  return [...await sql<{ name: string; vault_address: string; is_active: boolean }[]>`
+    SELECT v.name, v.vault_address, v.is_active FROM agent_vaults v JOIN projects p ON p.id = v.project_id
+     WHERE p.slug = ${`${prefix}-${BANKR_SEED_SLUG}`} ORDER BY v.name`];
+}
+
+test("the roster seed lists neither Bankr token address as a vault, and its manifest checksum validates", async () => {
+  const { projects, manifest } = await loadV0RosterWithManifest(); // throws on a checksum mismatch
+  const vaultAddresses = projects.flatMap((p) => p.vaults.map((v) => (v.vault_address ?? "").toLowerCase()));
+  for (const a of BANKR_TOKEN_ADDRESSES) expect(vaultAddresses).not.toContain(a);
+  expect(manifest.vaultCount).toBe(vaultAddresses.length);
+  // The Bankr project and its BNKR coin stay; only the two vault rows went.
+  const bankr = projects.find((p) => p.slug === BANKR_SEED_SLUG)!;
+  expect(bankr.vaults).toEqual([]);
+  expect(bankr.coins.map((c) => c.ticker)).toEqual(["BNKR"]);
+});
+
+test("discover with the regenerated seed inserts no Bankr token vault on an empty database and never reactivates the deactivated rows", async () => {
+  const prefix = `wkbankr_${crypto.randomUUID().slice(0, 8)}`;
+  // Fresh database for this project: the seed creates the project, no vault row.
+  expect((await discover({}, await bankrSeedSource(prefix))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual([]);
+
+  // An upgraded database: the two rows exist and migration 0124 left them inactive.
+  const [{ id: projectId }] = await sql<{ id: string }[]>`SELECT id FROM projects WHERE slug = ${`${prefix}-${BANKR_SEED_SLUG}`}`;
+  for (const v of BANKR_TOKEN_VAULTS) {
+    await fixtureDb`
+      INSERT INTO agent_vaults (project_id, name, vault_address, chain, strategy_type, protocol, data_source, is_active, tvl_usd)
+      VALUES (${projectId}, ${v.name}, ${v.vault_address}, 'base', 'lp-fees', 'bankr', 'live', false, 1)`;
+  }
+  const inactive = BANKR_TOKEN_VAULTS.map((v) => ({ ...v, is_active: false }));
+  expect((await discover({}, await bankrSeedSource(prefix))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual(inactive);
+
+  // Even a roster that still listed them would not flip is_active back.
+  const old: DiscoveredVault[] = BANKR_TOKEN_VAULTS.map((v) => ({ ...v, chain: "base", strategy_type: "lp-fees", protocol: "bankr", data_source: "live" }));
+  expect((await discover({}, await bankrSeedSource(prefix, old))).ok).toBe(true);
+  expect(await bankrVaults(prefix)).toEqual(inactive);
+});
+
+test("fetchVaults issues no read for an inactive vault row", async () => {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const good = "0x" + "4f".repeat(20);
+  const { projectId, byName, ids } = await seedVaults(tag, [
+    { name: "bankr-token", address: BANKR_TOKEN_VAULTS[0]!.vault_address, tvl: 999 },
+    { name: "rmusdc", address: good, tvl: 1 },
+  ]);
+  await fixtureDb`UPDATE agent_vaults SET is_active = false WHERE id = ${byName["bankr-token"]!}`;
+  const reads: string[] = [];
+  const spy: ProjectsDataSource = {
+    ...uniqueSlugSource(tag),
+    async vaultErc4626Read(address: string) {
+      reads.push(address.toLowerCase());
+      return { totalAssetsRaw: "1234500000", decimals: 6, assetPriceUsd: 1 };
+    },
+  };
+  try {
+    const res = await withOnlyVaults(ids, () => fetchVaults({}, spy));
+    expect(res).toEqual({ ok: true, status: "ok", updated: 1, failed: 0 });
+    expect(reads).toEqual([good]);
+    expect((await vaultRow(byName["bankr-token"]!)).tvl).toBe(999);
+  } finally {
+    await dropProject(projectId);
+  }
 });

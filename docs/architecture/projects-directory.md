@@ -87,7 +87,19 @@ from this repo's own tables and pipelines instead of Supabase.
     `terminal: true`. Production's two Bankr LP rows (strategy_type
     `lp-fees`) are not ERC-4626 and revert `totalAssets()` on Base, which
     used to abort every run with `updated: 0` (production capture
-    2026-10-14). Which vaults belong in the roster is a separate decision.
+    2026-10-14).
+  - **Bankr token rows deactivated** (issue 1382): neither Bankr `lp-fees`
+    address is a vault or a pool. `0x22aF33FE49fD1Fa80c7149773dDe5890D3c76F3b`
+    is the BankrCoin (BNKR) ERC-20, already the project's BNKR coin;
+    `0x7689006F6C3A3473449E42b628544E60D0bCCb07` is a plain ERC-20 named
+    'Bankr' with no Base pair (eth_call on Base, 2026-10-16). Owner decision
+    2026-10-16: deactivate both rows, no LP valuation. Migration 0124 sets
+    `is_active = false` on exactly those two rows (D66) and keeps their
+    `tvl_usd`, `last_refresh_status` and `daily_tvl_snapshots` history.
+    `fetchVaults` reads only active rows, so it no longer reads either
+    address. The roster seed no longer lists either vault, and the discover
+    upsert never sets `is_active`, so no discovery run brings them back. The
+    Bankr project keeps its BNKR coin and its wallet.
   - A fresh deploy with no `PROJECTS_SOURCE=live` opt-in serves an empty
     directory (`{ projects: [] }`), not synthetic data — `selectProjectsDataSource()`
     (`backend/src/projects/access/select.ts`) serves the hermetic fixture
