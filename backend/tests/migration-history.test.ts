@@ -369,7 +369,11 @@ describe("the heavy kinds' catch-up policy after every migration", () => {
       const [{ def }] = await db<{ def: string }[]>`
         SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'job_schedules_catchup_policy_check'`;
       expect([...def.matchAll(/'([a-z-]+)'::text/g)].map((m) => m[1])).toEqual(["all", "collapse-per-bucket", "latest-only"]);
-      await expect(db`UPDATE job_schedules SET catchup_policy = 'newest' WHERE kind = 'ops.repair_gaps'`).rejects.toThrow(/job_schedules_catchup_policy_check/);
+      const refused = await db`UPDATE job_schedules SET catchup_policy = 'newest' WHERE kind = 'ops.repair_gaps'`.then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(String(refused)).toContain("job_schedules_catchup_policy_check");
     }
   });
 });
