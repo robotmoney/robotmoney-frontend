@@ -308,11 +308,14 @@ async function archiveRecommendation() {
 // With a recommendation it also answers the session behind it (`session`) and
 // the newest allocation session of all (`latest`): when they differ, the
 // newer ones published no weights and held the target.
+//
+// `takes: false` skips the take rows (one more read of the session's detail)
+// for a caller that shows the weights and not the tally, as the home page does.
 /**
- * @param {{ hostname?: string }} [opts]
+ * @param {{ hostname?: string, takes?: boolean }} [opts]
  * @returns {Promise<{ rec: ReturnType<typeof recommendationFromSession>, error: boolean, session?: any, latest?: any }>}
  */
-export async function loadLatestRecommendation({ hostname = currentHostname() } = {}) {
+export async function loadLatestRecommendation({ hostname = currentHostname(), takes: withTakes = true } = {}) {
   let failed = false;
   let fullReads = 0;
   /** @type {any} */
@@ -357,7 +360,7 @@ export async function loadLatestRecommendation({ hostname = currentHostname() } 
         }
       }
       const rec = recommendationFromSession(full);
-      if (rec) return { rec, error: false, session: await withTakeRows(full, takes), latest };
+      if (rec) return { rec, error: false, session: withTakes ? await withTakeRows(full, takes) : full, latest };
     }
     cursor = res?.nextCursor || null;
     if (!cursor) break;

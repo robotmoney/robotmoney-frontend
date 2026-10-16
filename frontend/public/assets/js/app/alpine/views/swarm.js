@@ -79,7 +79,7 @@ const SESSIONS_SHOWN_STEP = 20;
 // vault address, and a paragraph of flywheel; this page has a chart and a
 // link for those. Nothing else here depends on the map.
 const ROW_BLURBS = {
-  "Robot Money Vault": "Depositor capital in the ERC-4626 vault. One implementation of the Robot Money Allocation.",
+  "Robot Money Vault": "Depositor capital in the ERC-4626 vault. One implementation of the model portfolio.",
   "RM Protocol Labs Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "RM Protocol Treasury": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",
   "Robot Money protocol wallets": "Protocol-owned capital: the ROBOTMONEY primary wallet and two stablecoin strategy wallets.",

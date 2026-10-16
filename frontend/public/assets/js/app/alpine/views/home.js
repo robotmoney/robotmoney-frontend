@@ -94,7 +94,8 @@ export function registerHomeView(Alpine) {
 
     async load() {
       const [rec, , roster] = await Promise.allSettled([
-        loadLatestRecommendation(),
+        // The weights, not the tally: no read of the session's takes.
+        loadLatestRecommendation({ takes: false }),
         this.loadAllocationFw(),
         api.get(ROUTES.swarm.members),
       ]);
