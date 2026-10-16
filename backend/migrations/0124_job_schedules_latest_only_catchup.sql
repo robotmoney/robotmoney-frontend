@@ -20,18 +20,32 @@
 -- anything other than 'collapse-per-bucket', which is its 'all' branch: it
 -- enqueues every missed slot, exactly what it did before this file. No row is
 -- removed and no grant changes.
-ALTER TABLE job_schedules DROP CONSTRAINT IF EXISTS job_schedules_catchup_policy_check;
-ALTER TABLE job_schedules
-  ADD CONSTRAINT job_schedules_catchup_policy_check
-  CHECK (catchup_policy IN ('all', 'collapse-per-bucket', 'latest-only'));
+-- Guarded on the column 0034 adds. Every real database took 0034 first, so the
+-- guard always holds there. tests/preflight-0-3-0-append-only-safety.test.ts
+-- replays every file after v0.3.0's onto a v0.2.2 baseline that lacks 0034,
+-- and its clean-targets check forbids creating 0034's column early, so this
+-- file does nothing on that baseline.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'job_schedules' AND column_name = 'catchup_policy'
+  ) THEN
+    ALTER TABLE job_schedules DROP CONSTRAINT IF EXISTS job_schedules_catchup_policy_check;
+    ALTER TABLE job_schedules
+      ADD CONSTRAINT job_schedules_catchup_policy_check
+      CHECK (catchup_policy IN ('all', 'collapse-per-bucket', 'latest-only'));
 
-UPDATE job_schedules
-   SET catchup_policy = 'latest-only'
- WHERE kind IN (
-   'analytics.parity_sweep',
-   'projects.refresh_wallets',
-   'projects.fetch_vaults',
-   'projects.refresh_coins',
-   'ops.repair_gaps',
-   'ops.backfill_asset_prices'
- );
+    UPDATE job_schedules
+       SET catchup_policy = 'latest-only'
+     WHERE kind IN (
+       'analytics.parity_sweep',
+       'projects.refresh_wallets',
+       'projects.fetch_vaults',
+       'projects.refresh_coins',
+       'ops.repair_gaps',
+       'ops.backfill_asset_prices'
+     );
+  END IF;
+END
+$$;
