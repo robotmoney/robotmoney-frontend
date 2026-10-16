@@ -657,6 +657,31 @@ export function resolveSwarmPublicBaseUrl(
 export const REFERRAL_CODES: readonly ReferralCodeEntry[] = Object.freeze([]);
 export const REFERRAL_MANUAL_CREDITS: readonly ReferralManualCredit[] = Object.freeze([]);
 
+// What the referral report reads (backend/src/referrals/report.ts). The router
+// and the four vaults of core's Deploy 2 on Base, lowercase. These duplicate the
+// four-vault config that RM-176 brings to main as ROBOTMONEY_VAULTS; once that
+// lands, the report reads it and this block goes. When the final deployment
+// replaces Deploy 2, its vaults are ADDED here, not swapped in: credit belongs
+// to a wallet, so a wallet bound on the Deploy 2 vaults stays bound.
+//
+// `fromBlock` is where the scan starts: block 52,484,136 created rmUSDC, the
+// first Deploy 2 contract, so the report sees every wallet's first deposit,
+// which starts its 30-day window to add a code.
+export const REFERRAL_DEPOSIT_CONTRACTS = Object.freeze({
+  router: "0xb3a8e66d9e2980b54ac0e70e0e236486d1dcb356",
+  vaults: Object.freeze([
+    "0x28bf6e6edad526191e8652ee631b56ead4ce7435", // rmUSDC
+    "0x22bd48c56c34a2c1c1bac77bd7c4e636a6f10d57", // rmAGENT
+    "0x28c5ca4df0107679bfcc9b0ad4c2f3f209b8f797", // rmPROTO
+    "0x37be372bd32f9e63a94c7db3ab415996658bcd50", // rmRWA
+  ]),
+  fromBlock: 52_484_136,
+});
+
+// The block referral codes start counting from: set by PR on the day the first
+// code is switched on. Until then the report needs `--launch-block`.
+export const REFERRAL_LAUNCH_BLOCK: number | null = null;
+
 // No environment value, and no insecure flag, opens a privileged route:
 // every service credential is a row in the API's automation-token store
 // (smoke-production-spec.md §3, D52 (1)), validated in backend/src/api/auth.ts

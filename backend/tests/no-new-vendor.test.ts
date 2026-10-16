@@ -22,6 +22,11 @@ const NEW_FILES = [
   "src/chain/block-resolver.ts",
   "src/ops/wallet-backfill.ts",
   "src/worker/handlers/repair.ts",
+  // The referral credit report (Linear RM-174) reads deposits, transactions
+  // and receipts through the shared Base RPC transport only. A slow public RPC
+  // must not become the reason an indexer or data vendor stands in for it.
+  "src/referrals/report.ts",
+  "scripts/referrals-report.ts",
 ].map((p) => join(process.cwd(), p));
 
 const FORBIDDEN = ["alchemy", "dexscreener", "coingecko", "dune", "supabase"];
