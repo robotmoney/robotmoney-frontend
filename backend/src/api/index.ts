@@ -127,6 +127,9 @@ await assertAnalyticsLedgerGuardArmed();
   if (!startup.passed) process.exit(1);
 }
 
+// Requests being answered right now; the SIGTERM drain waits for zero.
+let inFlight = 0;
+
 const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
   // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
@@ -135,6 +138,10 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
   // WebSocket this process serves; routes/swarm-stream.ts owns its handler.
   websocket: schedulerStreamWebSocket,
   async fetch(req, server) {
+    // Counted for the SIGTERM drain below (issue 1378).
+    inFlight++;
+    try {
+      return await (async () => {
     const url = new URL(req.url);
     const { pathname } = url;
 
@@ -181,6 +188,10 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
       }
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
+    }
+      })();
+    } finally {
+      inFlight--;
     }
   },
 });
@@ -466,8 +477,19 @@ async function drain(signal: string): Promise<void> {
     process.exit(1);
   }, shutdownGraceMs);
   const sockets = closeSchedulerStreamSockets();
-  await server.stop(false);
-  await closeDb().catch((err) => console.error("api drain: closing the database pool failed:", err));
+  // Stop accepting, then wait for the requests being answered. An idle
+  // keep-alive connection is not a request: once none is in flight the
+  // remaining connections are closed, rather than held for their idle timeout.
+  void server.stop(false);
+  while (inFlight > 0) await Bun.sleep(25);
+  await server.stop(true);
+  // Every request is answered by now, so the pool holds only background work
+  // (a stream's polling). closeDb() waits up to 5 s for it, and on a database
+  // that has stopped answering it waits all 5: give it one second, then exit.
+  await Promise.race([
+    closeDb().catch((err) => console.error("api drain: closing the database pool failed:", err)),
+    Bun.sleep(1_000),
+  ]);
   clearTimeout(force);
   console.log(`api drained (${sockets} stream socket(s) closed); exiting 0`);
   process.exit(0);

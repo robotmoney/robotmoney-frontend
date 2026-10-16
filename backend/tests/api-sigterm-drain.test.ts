@@ -77,6 +77,11 @@ test("SIGTERM: the in-flight request answers 200, new connections are refused, a
   const out = await new Response(proc.stdout as ReadableStream).text();
   expect(code).toBe(0);
   expect(elapsed).toBeLessThan(GRACE_MS);
+  // And no longer than that request: the boot's idle keep-alive connections
+  // (its /health polls) are closed, not held for the 10 s idle timeout. A
+  // harness that SIGTERMs the api and gives it 5 s (scheduler-api-runtime's
+  // afterAll) depends on this.
+  expect(elapsed).toBeLessThan(SLOW_MS + 3_000);
   // It waited for the request rather than exiting at once.
   expect(elapsed).toBeGreaterThanOrEqual(SLOW_MS - 400);
   expect(out).toContain("api SIGTERM received: draining");
