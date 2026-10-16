@@ -22,7 +22,7 @@ export function requireProducerApiConfig(
   const cfg = resolveAnalyticsApiConfig(env);
   if (!cfg.token) {
     throw new Error(
-      "analytics producer requires ANALYTICS_TOKEN or a non-empty ANALYTICS_TOKEN_FILE before startup",
+      "analytics producer requires ANALYTICS_TOKEN_FILE naming its store-issued token file before startup",
     );
   }
   return cfg;
@@ -144,7 +144,7 @@ export async function catchUpMissedResearchDays(deps: ResearchCatchUpDeps = {}):
 // implemented for raw_indicator_history despite the criterion being ticked on
 // the closed #614 (docs/technical/markets-asset-pricing-ingest.md §9's standing warning
 // about exactly this pattern). raw_indicator_history is API-owned (#106): the
-// shared worker where `ops.repair_gaps` runs holds no ANALYTICS_TOKEN by
+// shared worker where `ops.repair_gaps` runs holds no analytics token by
 // design (D25), so — same as Class B's research_signals self-heal above —
 // this belongs in the independent producer, the one process that both
 // computes indicator data and holds the analytics-provider credential.
@@ -331,6 +331,8 @@ export function armedScheduleSnapshot(): ReadonlyMap<ProducerKind, ScheduleState
 /** Test seam: cancel and forget every armed schedule. Without the clearTimeout
  *  a test that arms a real cron would leave a live timer holding the runner. */
 export function resetProducerSchedules(): void {
+  if (dayRollTimer) clearTimeout(dayRollTimer);
+  dayRollTimer = undefined;
   for (const state of armedSchedules.values()) if (state.timer) clearTimeout(state.timer);
   armedSchedules.clear();
 }
@@ -366,10 +368,60 @@ function schedule(kind: ProducerKind, cron: string): void {
   arm();
 }
 
+// ── Day-roll regime refresh (issue 1108) ─────────────────────────────────────
+// Production refreshed today's regime right before each session, so an epoch
+// opening just after 00:00 UTC briefed that day's regime. Main has no such
+// driver, and the brief reads the latest SAVED regime row, so an epoch opened
+// 00:00-00:30 UTC briefed yesterday until the first :30 run. This one extra
+// fire, a few seconds after each UTC midnight, saves the new day's regime
+// before the first epochs of the day open. It is off the api request path
+// (the producer computes, the api only stores), needs no scheduler credential,
+// and writes nothing at boot: the first fire is the next midnight. The
+// regime cron itself is unchanged.
+export const DAY_ROLL_DELAY_MS = 5_000;
+
+/** Pure: ms from `now` to the next UTC midnight plus the settle delay. */
+export function msUntilDayRoll(now: Date): number {
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  return next - now.getTime() + DAY_ROLL_DELAY_MS;
+}
+
+/** Run the regime tool once for the UTC day `now` falls in. Never throws. */
+export async function fireDayRollRegime(
+  now: Date = new Date(),
+  deps: { run?: (kind: ProducerKind, asof: string) => Promise<unknown> } = {},
+): Promise<string> {
+  const asof = now.toISOString().slice(0, 10);
+  try {
+    await (deps.run ?? ((k, d) => runProducerOnce(k, d)))("regime", asof);
+  } catch (err) {
+    console.error(`[analytics-producer] day-roll regime ${asof} failed: ${err instanceof Error ? err.message : err}`);
+  }
+  return asof;
+}
+
+let dayRollTimer: ReturnType<typeof setTimeout> | undefined;
+
+export function armDayRollRegime(): void {
+  const arm = () => {
+    dayRollTimer = setTimeout(async () => {
+      try {
+        await fireDayRollRegime();
+      } finally {
+        arm();
+      }
+    }, msUntilDayRoll(new Date()));
+    dayRollTimer.unref?.();
+  };
+  arm();
+}
+
 export interface ProducerServeDeps {
   env?: Record<string, string | undefined>;
   waitUntilReady?: (cfg: AnalyticsApiConfig) => Promise<void>;
   scheduleKind?: (kind: ProducerKind, cron: string) => void;
+  /** Test seam: replaces arming the UTC day-roll regime fire (issue 1108). */
+  scheduleDayRoll?: () => void;
   /** Test seam: override the boot-time catch-up call. Defaults to the real
    *  catchUpMissedResearchDays against the resolved API config. */
   catchUp?: (persistence: AnalyticsPersistence) => Promise<unknown>;
@@ -379,6 +431,33 @@ export interface ProducerServeDeps {
   catchUpIndicators?: (persistence: AnalyticsPersistence) => Promise<unknown>;
   /** Test seam: override the heartbeat writer so tests never touch /tmp. */
   beat?: (rec: Omit<import("../ops/heartbeat.ts").HeartbeatRecord, "ts">) => Promise<void>;
+  /** How long after api readiness the boot catch-up waits (issue 1378). The
+   *  serve entry passes bootCatchUpDelayMs(env); omitted, there is no wait. */
+  bootCatchUpDelayMs?: number;
+  /** Test seam: the wait itself. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+// BOOT CATCH-UP DELAY (issue 1378). On the v0.6.2 stage QA run of 2026-10-15
+// the producer's 14-day boot catch-up started the moment the api answered,
+// on top of the worker's post-boot drain, and POST /api/analytics/vintages took
+// 5.3 s, past the 5 s request rule. The catch-up is not urgent (the crons are
+// hours away and every day it repairs is idempotent), so it now starts
+// PRODUCER_BOOT_CATCHUP_DELAY_MS (default 60 s) plus a random jitter of up to
+// PRODUCER_BOOT_CATCHUP_JITTER_MS (default 30 s) after readiness. Both are
+// bounded: a value above BOOT_CATCHUP_MAX_MS is clamped to it.
+const BOOT_CATCHUP_MAX_MS = 600_000;
+export function bootCatchUpDelayMs(
+  env: Record<string, string | undefined> = process.env,
+  random: () => number = Math.random,
+): number {
+  const read = (name: string, fallback: number): number => {
+    const v = Number(env[name] ?? fallback);
+    return Number.isFinite(v) && v >= 0 ? Math.min(v, BOOT_CATCHUP_MAX_MS) : fallback;
+  };
+  const base = read("PRODUCER_BOOT_CATCHUP_DELAY_MS", 60_000);
+  const jitter = read("PRODUCER_BOOT_CATCHUP_JITTER_MS", 30_000);
+  return base + Math.floor(random() * jitter);
 }
 
 /** Validate reachability + provider authorization before arming any cron.
@@ -397,6 +476,19 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
     detail: "waiting for the analytics API before arming crons",
   });
   await (deps.waitUntilReady ?? waitForApi)(cfg);
+  const delayMs = deps.bootCatchUpDelayMs ?? 0;
+  if (delayMs > 0) {
+    // A boot record whose budget spans the wait, so the container stays green
+    // while it waits (issue 1378).
+    await (deps.beat ?? writeHeartbeat)({
+      phase: "boot",
+      staleAfterMs: delayMs + 180_000,
+      writer: PRODUCER_WRITER,
+      detail: `api ready; boot catch-up starts in ${delayMs}ms`,
+    });
+    console.log(`[analytics-producer] api ready; boot catch-up starts in ${delayMs}ms`);
+    await (deps.sleep ?? ((ms: number) => Bun.sleep(ms)))(delayMs);
+  }
   // issue #614 AC4 ("on boot/tick"): repair any research day missed while
   // this process was down BEFORE arming today's crons — a restarted producer
   // must not wait for the next scheduled tick to notice a gap it could close
@@ -410,6 +502,7 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
   const scheduleKind = deps.scheduleKind ?? schedule;
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");
+  (deps.scheduleDayRoll ?? armDayRollRegime)();
   return cfg;
 }
 
@@ -582,7 +675,20 @@ async function main(): Promise<void> {
     return;
   }
   if (command !== "serve") throw new Error(`usage: producer <serve|seed|regime|research> [YYYY-MM-DD]`);
-  const cfg = await startProducerSchedules();
+  // SIGTERM (issue 1378). The producer registered no handler, and bun ran as
+  // PID 1, so `docker stop` was ignored and the container was SIGKILLed after
+  // Docker's grace (exit 137). Registered before the api wait, a stop in
+  // startup or in steady state clears the cron and day-roll timers and exits 0.
+  // Nothing is lost: every run and catch-up day is idempotent, and the next
+  // boot's catch-up repairs a day a stop interrupted.
+  const stop = (signal: string): void => {
+    console.log(`[analytics-producer] ${signal}: stopping the crons`);
+    resetProducerSchedules();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  process.on("SIGINT", () => stop("SIGINT"));
+  const cfg = await startProducerSchedules({ bootCatchUpDelayMs: bootCatchUpDelayMs() });
   // Replaces a bare `new Promise<never>(() => {})`: the process still parks
   // here forever, but now it parks doing the liveness work above.
   await runProducerLiveness(cfg);

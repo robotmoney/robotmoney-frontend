@@ -1,73 +1,10 @@
-// Facts about the v0.4.0 -> v0.5.0 upgrade itself, that the GATE SCRIPTS
-// execute against. Same split as every prior release's release.ts: a
-// constant a check reads lives here, a label a human reads lives in the
-// runbook.
-//
-// WHY THIS BOUNDARY, AND NOT ANOTHER ONE. Production, verified directly by a
-// fresh replica capture on 2026-09-11 (a `bun run smoke:twin` boot's own
-// `migrate()` step, which only ever applies what schema_migrations does not
-// already have), is at migration 0048. The ELEVEN files below are exactly what
-// that boot applied — nothing on disk past 0048 was already there.
-//
-// 0057-0059 joined the list during the rc.3 integration cycle: r2/receipt-gap
-// added the judge-policy stamp, r2/fault-lever the fault-injection table and
-// the judgement spend columns. Each branch added its migration and none
-// touched this list, so the release would otherwise have shipped three
-// migrations its own postflight could not see, reporting "all recorded" over
-// a set that excluded them.
-//
-// `backend/scripts/upgrades/0.3.0-to-0.4.0/release.ts` ALSO lists `0053` and
-// `0054` in its own THIS_RELEASE_MIGRATIONS, which looks like an overlap with
-// the list below. It is not a second source of truth to reconcile so much as
-// a leftover of a process gap: `docs/technical/release-runbooks.md` §9
-// documents a rolling `backend/scripts/upgrades/next/` directory for exactly
-// this situation — migrations accumulating on a release branch before the
-// next version number is decided — and that directory was never created for
-// this cycle. Every migration merged after v0.4.0 shipped (0045 through
-// 0055) landed by being appended to the already-tagged 0.3.0-to-0.4.0 folder
-// instead, which is why that folder's list runs past what v0.4.0 actually
-// certified. That folder is left exactly as it stands (an applied migration's
-// upgrade record is a frozen artefact — see its own steps.ts header and
-// smoke-twin-rehearsal.ts) rather than edited after the fact; this file is
-// the first accurate accounting of what is actually still pending, taken
-// from the database production is really running rather than from what an
-// older folder's manifest claims.
-export const THIS_RELEASE_MIGRATIONS = [
-  "0049_swarm_recommendations_signing_key.sql",
-  "0050_swarm_member_keys_append_only.sql",
-  "0051_swarm_vault_recommendation_type_repair.sql",
-  "0052_swarm_judgement_digest_scheme.sql",
-  "0053_database_role_taxonomy.sql",
-  "0054_rm_worker_allowlist.sql",
-  "0055_swarm_recommendations_member_received_idx.sql",
-  "0056_swarm_judge_requires_model.sql",
-  "0057_swarm_judge_policy_stamp.sql",
-  "0058_swarm_judge_fault_injection.sql",
-  "0059_swarm_judgement_completion_usage.sql",
-  // 0061 (checklist B05): granted after 0060 was removed (see the comment on
-  // WORKER_WRITABLE_TABLES below) — declared here for the same reason 0057-0059
-  // were, above: an undeclared migration is invisible to postflight AND, per
-  // preflight-0-3-0-append-only-safety.test.ts's baseline partition (backend
-  // migrations minus every release's OWN THIS_RELEASE_MIGRATIONS = "v0.2.2
-  // baseline"), gets bucketed as pre-v0.3.0 content and replayed before the
-  // v0.3.0-era migration that creates the table it grants on.
-  "0061_rm_worker_wallet_backfill_grant.sql",
-] as const;
+/** Facts unique to the v0.4.0 -> v0.5.0 upgrade. */
+export const TAG_GLOB = "v0.5.0*";
 
-/**
- * The one TABLE this release creates (0058). Every other migration in the list
- * adds columns, an index, a CHECK constraint, or role/grant changes to objects
- * a v0.4.0 database already has.
- */
-export const NEW_TABLE = "swarm_judge_fault_injection";
-
-/**
- * The migrations v0.4.0 actually shipped to production and that this upgrade
- * requires as its starting point — 0.3.0-to-0.4.0's own THIS_RELEASE_MIGRATIONS,
- * TRIMMED to the six files that folder's postflight (postflight-0.4.0)
- * certifies, per the note above: `0053`/`0054` are this release's, not that
- * one's, whatever that folder's own list says.
- */
+/** Schema facts v0.5.0 must preserve unchanged from v0.4.0 — the six migrations
+ *  0.3.0-to-0.4.0's own postflight certifies. The 0.4.1 and 0.4.2 releases these
+ *  gates were first written for were abandoned and never shipped, so v0.4.0 is
+ *  the production baseline v0.5.0 upgrades from. */
 export const PRIOR_RELEASE_MIGRATIONS = [
   "0039_swarm_judge.sql",
   "0040_swarm_judgements_append_only.sql",
@@ -77,51 +14,112 @@ export const PRIOR_RELEASE_MIGRATIONS = [
   "0044_wallet_backfill_leg_terminal.sql",
 ] as const;
 
-/** 0049's new column: the exact `swarm_member_keys` row that verified a take
- *  at submission time (issue #697). Nullable, no backfill by design — every
- *  row written before this migration keeps resolving through the member's
- *  currently-active key (see the migration's own header). */
-export const SIGNING_KEY_COLUMN = { table: "swarm_recommendations", column: "signing_key_id" } as const;
-
-/** 0052's new column: which canonical form produced a judgement's stored
- *  inputs_digest (issue #829, D44). NOT NULL DEFAULT'd, safe because no row
- *  predates it on any deployment that shipped `off` as its default. */
-export const DIGEST_SCHEME_COLUMN = { table: "swarm_session_judgements", column: "digest_scheme" } as const;
-export const DIGEST_SCHEME_DEFAULT = "derivation-v1";
-
-/** The two subjects 0051 self-heals, and the value they must read afterward. */
-export const REPAIRED_SUBJECTS = ["robotmoney-vault", "robotmoney-allocation"] as const;
-export const REPAIRED_RECOMMENDATION_TYPE = "bucket_weights";
-
-/** 0053's new roles. `rm_owner` is NOLOGIN — a role that owns schema objects
- *  but that no persistent process may authenticate as. */
-export const OWNER_ROLE = "rm_owner";
-export const RUNTIME_ROLES = ["rm_app", "rm_worker", "rm_readonly"] as const;
-
-/** 0054's replacement for 0016's broad/default worker grant: the ONLY tables
- *  `rm_worker` may INSERT/UPDATE/DELETE on. Everything else it can only
- *  SELECT — in particular, none of the judge/receipt/append-only tables. */
-export const WORKER_WRITABLE_TABLES = [
-  "jobs", "job_runs", "job_schedules",
-  "vault_share_price_history", "vault_adapter_samples",
-  "wallet_balance_samples", "wallet_sleeve_samples",
-  "projects", "openclaw_agents", "lobster_coins", "tracked_wallets", "agent_vaults",
-  "agent_revenue_daily", "daily_coin_snapshots", "daily_agent_snapshots",
-  "daily_wallet_snapshots", "daily_tvl_snapshots",
-  // 0061: the wallet-backfill repair driver (worker/handlers/repair.ts) writes
-  // these three through the same restricted WORKER_DATABASE_URL connection —
-  // 0054's allow-list dropped them by omission, which read as PASS here while
-  // the live worker got "permission denied" (checklist B05).
-  "chain_day_blocks", "wallet_backfill_state", "chain_address_floors",
+/**
+ * The eighteen additive migration files v0.5.0 ships (0045-0061; 0059 numbers
+ * two files). The set is aligned to this branch's own tree rather than to any
+ * earlier folder's manifest, so it spans every migration the release carries
+ * beyond PRIOR_RELEASE_MIGRATIONS. Note that 0.3.0-to-0.4.0's
+ * THIS_RELEASE_MIGRATIONS also lists 0053 and 0054: that folder is a frozen
+ * artefact of an already-tagged release and is left as it stands, but those two
+ * files are this release's, not v0.4.0's. None touches the v0.4.0 tables above: it
+ * adds the D41 price-series tables and chain address-floor cache (#760/#849,
+ * D41), a one-time subject_name backfill (#779), the judge-config column
+ * (#796), take/key integrity and subject repairs (#697/#780), the judgement
+ * digest scheme (#829, D44), the database role taxonomy and worker
+ * allow-list (#692), a take-lookup index (#782), the Phase A research
+ * integrity ledgers and output/run snapshots (#974/#976/#977/#978), the
+ * framework-subject snapshot cleanup (#960), and the analytics dual-write
+ * parity + cutover switch (#979): the analytics_read_mode operator switch
+ * and its immutable analytics_parity_observations evidence, plus
+ * source_value_versions provenance (#988). All are additive: new tables,
+ * new nullable/defaulted columns, new roles and grants, an append-only guard
+ * on swarm_member_keys, one index, and idempotent one-time data fixes.
+ */
+export const RELEASE_MIGRATIONS = [
+  "0045_chain_address_floors.sql",
+  "0046_asset_prices.sql",
+  "0047_swarm_session_subject_name_backfill.sql",
+  "0048_swarm_judge_third_party_flag.sql",
+  "0049_swarm_recommendations_signing_key.sql",
+  "0050_swarm_member_keys_append_only.sql",
+  "0051_swarm_vault_recommendation_type_repair.sql",
+  "0052_swarm_judgement_digest_scheme.sql",
+  "0053_database_role_taxonomy.sql",
+  "0054_rm_worker_allowlist.sql",
+  "0055_swarm_recommendations_member_received_idx.sql",
+  "0056_analytics_overwrite_events.sql",
+  "0057_source_acquisition_ledger.sql",
+  "0058_analytics_run_ledger.sql",
+  "0059_analytics_output_and_report_snapshots.sql",
+  "0059_swarm_framework_subject_snapshot_cleanup.sql",
+  "0060_analytics_ledger_cutover.sql",
+  "0061_source_value_provenance.sql",
+  // DELIBERATELY NOT EXTENDED BY THE 2026-09-23 main merge, and this is the
+  // rule the merge had to learn. That merge brought in six migrations authored
+  // on the main line while this branch was authoring 0056-0062 of its own:
+  // 0056_swarm_judge_requires_model, 0057_swarm_judge_policy_stamp,
+  // 0058_swarm_judge_fault_injection, 0059_swarm_judgement_completion_usage,
+  // 0061_rm_worker_wallet_backfill_grant and
+  // 0062_rm_worker_analytics_ledger_read_grant. They were briefly added here
+  // and that was WRONG: this list is the frozen record of what v0.5.0 ACTUALLY
+  // SHIPPED to production from this branch, and not one of those six was in it.
+  // `rollout-steps-0-5-1.test.ts` is what catches the falsification, by
+  // requiring v0.5.1's PRIOR set to equal v0.4.0's plus this one exactly.
+  //
+  // Those six are unshipped work and belong to a FUTURE release's manifest,
+  // not to a shipped release's history. Note also that both lines independently
+  // allocated 0056-0062, so several numbers now name two files. That is neither
+  // new nor a defect — the repo already carried eight duplicate-numbered groups
+  // (0014, 0021, 0022, 0023, 0028, 0029, 0032, 0033) before either branch
+  // existed, because the runner sorts and records by FULL FILENAME. It is
+  // exactly why the smoke production spec (§8.1) makes the filename list, never
+  // the number, the schema identity.
 ] as const;
 
-/** 0055's new index — makes getMembers()'s per-member `max(received_at)`
- *  lateral (issue #782, `lastTakeAt`) an index-only walk instead of a scan. */
-export const MEMBER_RECEIVED_INDEX = { table: "swarm_recommendations", index: "swarm_recommendations_member_received_idx" } as const;
+export const REQUIRED_TABLES = [
+  "swarm_judge_config",
+  "swarm_session_judgements",
+  "swarm_consensus_receipts",
+] as const;
 
-/** 0056's pair invariant: an enabled judge always names the model it will try
- * first; transport failures remain eligible for the deterministic fallback. */
-export const JUDGE_MODEL_CONSTRAINT = "swarm_judge_config_mode_requires_model_check";
+/**
+ * Which migration creates each table v0.5.0 adds.
+ *
+ * Attributed per-migration rather than kept as one flat list because the
+ * "must be absent before migrating" rule is only true of a table whose
+ * migration is still PENDING. Production applied 0045-0048 on 2026-09-08
+ * outside this rollout (see the runbook's §0 note), so chain_address_floors,
+ * asset_prices and asset_price_floors legitimately exist there already —
+ * a flat list cannot tell that apart from a wrong target, and graded it as
+ * drift. Derived from the CREATE TABLE statements in backend/migrations/,
+ * not from the runbook's prose table.
+ */
+export const NEW_RELEASE_TABLES_BY_MIGRATION: Readonly<Record<string, readonly string[]>> = {
+  "0045_chain_address_floors.sql": ["chain_address_floors"],
+  "0046_asset_prices.sql": ["asset_prices", "asset_price_floors"],
+  "0056_analytics_overwrite_events.sql": ["analytics_overwrite_events"],
+  "0057_source_acquisition_ledger.sql": [
+    "source_acquisitions",
+    "source_acquisition_events",
+    "source_payloads",
+    "source_fetches",
+    "source_value_versions",
+  ],
+  "0058_analytics_run_ledger.sql": [
+    "analytics_ledger_methodology_versions",
+    "analytics_ledger_runs",
+    "analytics_ledger_run_events",
+    "analytics_data_vintages",
+    "analytics_vintage_members",
+  ],
+  "0059_analytics_output_and_report_snapshots.sql": [
+    "analytics_output_snapshots",
+    "analytics_report_snapshots",
+    "swarm_brief_revisions",
+  ],
+  "0060_analytics_ledger_cutover.sql": ["analytics_read_mode", "analytics_parity_observations"],
+};
 
-/** Selects this release's tags and no others. */
-export const TAG_GLOB = "v0.5.0*";
+/** Every table the v0.5.0 migrations create. Postflight asserts all of these
+ *  are present after the release; preflight checks only the pending subset. */
+export const NEW_RELEASE_TABLES: readonly string[] = Object.values(NEW_RELEASE_TABLES_BY_MIGRATION).flat();

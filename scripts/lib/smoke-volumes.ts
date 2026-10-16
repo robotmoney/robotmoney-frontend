@@ -9,7 +9,7 @@
 // that does it. Everything here is side-effect free at import time (no docker
 // calls run until a function is invoked) so smoke-main.ts can import it safely.
 //
-// Namespacing (docker-compose.smoke.yml): every smoke pgdata volume carries the
+// Namespacing (docker-compose.yml): every smoke pgdata volume carries the
 // label robotmoney.smoke=1 (plus robotmoney.smoke.project=<project> and, since
 // the environment-scoped naming change, robotmoney.env=ci|local +
 // robotmoney.env.hash=<10 hex> — see scripts/stack/naming.ts). We filter by

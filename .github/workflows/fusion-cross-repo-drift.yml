@@ -32,12 +32,12 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
     tags: ["v*"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does. Enforced by scripts/tests/unit/nightly-mirrors-merge-set.test.ts.
-  # Minute staggered against the other ten mirrors.
+  # Minute staggered against the other eleven mirrors.
   schedule:
     - cron: "57 3 * * *"
   pull_request:
@@ -56,6 +56,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
       # No `bun install`: the check imports only node:crypto/fs/path, exactly
       # like the contract package it guards, so it must run on a bare checkout.
       - name: Shared fixtures are byte-identical to robotmoney-core

@@ -7,7 +7,7 @@
 // noise, prefer the live agent's current name, and never fabricate a row on
 // an empty table.
 import { test, expect } from "bun:test";
-import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { fetchActivityLog } from "../../src/projects/activity-log-projections.ts";
 import { getActivityLog } from "../../src/api/routes/dashboards.ts";
 
@@ -15,14 +15,14 @@ const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
 test("fetchActivityLog returns newest-first entries with agent link + live name", async () => {
   const tag = rid("act");
-  const [agent] = await sql`INSERT INTO openclaw_agents ${sql({
+  const [agent] = await fixtureDb`INSERT INTO openclaw_agents ${fixtureDb({
     name: `${tag}-agent-live-name`, is_active: true,
   })} RETURNING id`;
 
   const older = new Date(Date.now() - 60_000).toISOString();
   const newer = new Date().toISOString();
 
-  await sql`INSERT INTO agent_activity_log ${sql([
+  await fixtureDb`INSERT INTO agent_activity_log ${fixtureDb([
     {
       occurred_at: older, agent_id: agent.id, agent_name: `${tag}-agent-stale-name`,
       action_type: "submit_metrics", status: "success", commit_summary: `${tag}-older commit`,
@@ -57,7 +57,7 @@ test("fetchActivityLog returns newest-first entries with agent link + live name"
 
 test("fetchActivityLog filters zero-score rows as noise but keeps null-score rows", async () => {
   const tag = rid("noise");
-  await sql`INSERT INTO agent_activity_log ${sql([
+  await fixtureDb`INSERT INTO agent_activity_log ${fixtureDb([
     { agent_name: `${tag}-a`, action_type: "market_event", status: "success", commit_summary: `${tag}-zero`, score: 0 },
     { agent_name: `${tag}-b`, action_type: "market_event", status: "success", commit_summary: `${tag}-null-score`, score: null },
     { agent_name: `${tag}-c`, action_type: "market_event", status: "success", commit_summary: `${tag}-nonzero`, score: 12.5 },
@@ -72,12 +72,12 @@ test("fetchActivityLog filters zero-score rows as noise but keeps null-score row
 
 test("agent_id survives an ON DELETE SET NULL and the row still carries the denormalized name", async () => {
   const tag = rid("del");
-  const [agent] = await sql`INSERT INTO openclaw_agents ${sql({ name: `${tag}-gone`, is_active: true })} RETURNING id`;
-  await sql`INSERT INTO agent_activity_log ${sql({
+  const [agent] = await fixtureDb`INSERT INTO openclaw_agents ${fixtureDb({ name: `${tag}-gone`, is_active: true })} RETURNING id`;
+  await fixtureDb`INSERT INTO agent_activity_log ${fixtureDb({
     agent_id: agent.id, agent_name: `${tag}-gone`, action_type: "register_agent",
     status: "success", commit_summary: `${tag}-registered`,
   })}`;
-  await sql`DELETE FROM openclaw_agents WHERE id = ${agent.id}`;
+  await fixtureDb`DELETE FROM openclaw_agents WHERE id = ${agent.id}`;
 
   const { entries } = await fetchActivityLog();
   const row = entries.find((e) => e.commitSummary === `${tag}-registered`)!;

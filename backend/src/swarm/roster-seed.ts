@@ -53,8 +53,77 @@
 // and inlining ~10KB of markdown here to serve a field nothing renders would
 // be a maintenance cost with no reader.
 import { sql, jsonValue } from "../db/client.ts";
-import { toMember } from "./projections.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
+
+// The roster statements are registered (smoke-production-spec.md §7.1). Every
+// one runs on the seed's `rm_owner` credential, from the seed one-shot that
+// prod-bootstrap and smoke-prepare both run.
+const ROSTER_CALLERS = ["src/db/seed", "scripts/prod-bootstrap", "scripts/smoke-prepare"];
+
+const findMemberId = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/roster-seed:seedLiveRoster.findId",
+  purpose: "Resolve the id a roster handle already holds, so the upsert proposes the existing row's own id.",
+  callers: ROSTER_CALLERS,
+  probe: { statement: "SELECT id FROM swarm_members WHERE handle = $1", params: ["probe"] },
+});
+
+const upsertMember = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  // SELECT as well: ON CONFLICT (handle) reads the arbiter column.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/swarm/roster-seed:seedLiveRoster.upsert",
+  purpose: "Seat one house member and overwrite its profile copy from the manifest on every run.",
+  callers: ROSTER_CALLERS,
+  probe: {
+    statement:
+      "INSERT INTO swarm_members (id, handle, status, role, name, tagline, lens, mandate, biases, mode, operator, avatar) " +
+      "SELECT $1, $2, 'active', $3, $4, $5, $6, $7, $8, $9, $10, $11 WHERE false " +
+      "ON CONFLICT (handle) DO UPDATE SET status = 'active', name = EXCLUDED.name, tagline = EXCLUDED.tagline, " +
+      "lens = EXCLUDED.lens, mandate = EXCLUDED.mandate, biases = EXCLUDED.biases, mode = EXCLUDED.mode, " +
+      "operator = EXCLUDED.operator, avatar = EXCLUDED.avatar",
+    params: ["i", "h", "member", "n", "t", "l", "m", "[]", "pull", "o", "{}"],
+  },
+});
+
+const retireOffRoster = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/roster-seed:pruneToLiveRoster",
+  purpose: "Deactivate every active member that is not on the live roster.",
+  callers: ROSTER_CALLERS,
+  probe: {
+    statement:
+      "UPDATE swarm_members SET status = 'inactive', version = version + 1, updated_at = now() " +
+      "WHERE status = 'active' AND handle <> ALL($1::text[]) RETURNING id",
+    params: ["{}"],
+  },
+});
+
+const readMembersToBackfill = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/roster-seed:backfillMemberHandles.read",
+  purpose: "Read every member's id, handle and name so the unset handles can be derived.",
+  callers: ROSTER_CALLERS,
+  probe: { statement: "SELECT id, handle, name FROM swarm_members ORDER BY applied_at NULLS FIRST, id" },
+});
+
+const writeMemberHandle = registerQuery({
+  role: "rm_owner",
+  object: "swarm_members",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/swarm/roster-seed:backfillMemberHandles.write",
+  purpose: "Write the derived handle onto a member whose handle was still unset.",
+  callers: ROSTER_CALLERS,
+  probe: { statement: "UPDATE swarm_members SET handle = $1 WHERE id = $2", params: ["h", "i"] },
+});
 
 export interface RosterSeedMember {
   /**
@@ -198,9 +267,9 @@ export async function seedLiveRoster(): Promise<number> {
     //
     // The generated UUID is therefore reached only on the INSERT branch — a
     // member this deployment has not seated before — and is never a literal.
-    const found = (await sql<{ id: string }[]>`SELECT id FROM swarm_members WHERE handle = ${m.handle}`)[0];
+    const found = (await on(sql, findMemberId)<{ id: string }>`SELECT id FROM swarm_members WHERE handle = ${m.handle}`)[0];
     const id = found?.id ?? crypto.randomUUID();
-    await sql`
+    await on(sql, upsertMember)`
       INSERT INTO swarm_members (id, handle, status, role, name, tagline, lens, mandate, biases, mode, operator, avatar)
       VALUES (${id}, ${m.handle}, 'active', ${m.role}, ${m.name}, ${m.tagline}, ${m.lens}, ${m.mandate},
               ${sql.json(jsonValue(m.biases))}, ${m.mode}, ${m.operator}, ${sql.json(jsonValue(m.avatar))})
@@ -246,21 +315,12 @@ export async function seedLiveRoster(): Promise<number> {
 // deliberately, once, when converging a deployment that smoke drivers have
 // populated.
 export async function pruneToLiveRoster(): Promise<string[]> {
-  const retired = await sql<{ id: string }[]>`
+  const retired = await on(sql, retireOffRoster)<{ id: string }>`
     UPDATE swarm_members
        SET status = 'inactive', version = version + 1, updated_at = now()
      WHERE status = 'active' AND handle <> ALL(${[...LIVE_ROSTER_HANDLES]})
      RETURNING id`;
   return retired.map((r) => r.id);
-}
-
-// Convenience read for the seed log line and for tests: the live roster as the
-// API projects it, so a seed run can report what the members endpoint will
-// serve rather than what was written.
-export async function readLiveRoster() {
-  const rows = await sql`
-    SELECT * FROM swarm_members WHERE handle = ANY(${[...LIVE_ROSTER_HANDLES]}) ORDER BY handle`;
-  return rows.map(toMember);
 }
 
 // ── Handle backfill ────────────────────────────────────────────────────────
@@ -296,7 +356,7 @@ export async function readLiveRoster() {
 //
 // Idempotent: returns how many handles it wrote, and 0 on every later run.
 export async function backfillMemberHandles(): Promise<number> {
-  const rows = await sql<{ id: string; handle: string | null; name: string }[]>`
+  const rows = await on(sql, readMembersToBackfill)<{ id: string; handle: string | null; name: string }>`
     SELECT id, handle, name FROM swarm_members ORDER BY applied_at NULLS FIRST, id`;
 
   let written = 0;
@@ -307,7 +367,7 @@ export async function backfillMemberHandles(): Promise<number> {
     // must not both be handed the same stem.
     const handle = await deriveMemberHandle(sql, { memberId: row.id, name: row.name });
     if (handle === row.handle) continue;
-    await sql`UPDATE swarm_members SET handle = ${handle} WHERE id = ${row.id}`;
+    await on(sql, writeMemberHandle)`UPDATE swarm_members SET handle = ${handle} WHERE id = ${row.id}`;
     written += 1;
   }
   return written;

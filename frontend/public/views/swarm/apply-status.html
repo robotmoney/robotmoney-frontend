@@ -89,7 +89,7 @@
             <a :href="liveStatus().url" x-text="liveStatus().linkText"></a>
           </p>
           <p class="ap-note__body" x-show="status.state === 'rejected'">
-            If you think that is a mistake, reach <a href="mailto:hi@robotmoney.net">hi@robotmoney.net</a>.
+            If you think that is a mistake, reach <a href="mailto:david@robotmoney.network">david@robotmoney.network</a>.
           </p>
         </div>
 
@@ -143,8 +143,8 @@
           </template>
         </ol>
 
-        <!-- Where an operator goes from here. Same links the approval email
-             carries, so the two agree. -->
+        <!-- Where an operator goes from here. This page is the ONLY place they
+             are told: no approval email is sent (decision D50). -->
         <nav class="rm-actions" x-show="statusPhase() === 'approved'" x-cloak aria-label="Member links">
           <a :href="profileUrl()" class="rm-actions__do"
              x-text="record.length ? 'See the full record →' : 'See the public profile →'"></a>

@@ -9,7 +9,6 @@ import { createHash } from "node:crypto";
 import { sql } from "../src/db/client.ts";
 import {
   submitTerminalRunPackage,
-  loadOutputSnapshot,
   loadReportSnapshot,
   findPackageByRun,
 } from "../src/analytics/store/output-snapshot-store.ts";
@@ -26,6 +25,20 @@ import * as swarmDomain from "../src/swarm/domain.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
+
+// It was the store's `loadOutputSnapshot` until D55 (13) deleted registered
+// functions with no production caller: only this file read an output artifact
+// back, so the reader lives here, beside the assertions that recompute its hash.
+async function loadOutputSnapshot(
+  runId: string,
+  kind: string,
+): Promise<{ bytes: Uint8Array; checksum: string } | null> {
+  const [row] = await sql`
+    SELECT payload_bytes, checksum FROM analytics_output_snapshots
+    WHERE run_id = ${runId}::bigint AND artifact_kind = ${kind}`;
+  if (!row) return null;
+  return { bytes: new Uint8Array(row.payload_bytes as Buffer), checksum: row.checksum };
+}
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -186,10 +199,10 @@ test("publishBrief binds to the REGIME run's report snapshot, not the later rese
 //   22:30 UTC on day D-1  PRODUCER_REGIME_CRON `30 22 * * *`
 //                         (producer/index.ts:395, docker-compose.yml:423)
 //                         runs with asof = D-1 and freezes report R(D-1).
-//   06:00 UTC on day D    SWARM_OPEN_SESSION_CRON `0 6 * * *`
+//   06:00 UTC on day D    the session's epoch opens
 //                         (config.ts:625, docker-compose.yml:288) convenes a
 //                         session, so swarm_sessions.date = D.
-//   07:00 UTC on day D    SWARM_PUBLISH_BRIEF_CRON `0 7 * * *`
+//   07:00 UTC on day D    its brief is published
 //                         (config.ts:626, docker-compose.yml:289) publishes
 //                         the brief. Day D's own regime run is still 15.5
 //                         hours away and the session closes at 08:00.

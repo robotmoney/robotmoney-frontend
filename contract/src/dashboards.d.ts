@@ -319,6 +319,18 @@ export interface RegimeSnapshot {
 // the full RegimeSnapshot.
 export type RegimeHistoryPoint = Omit<RegimeSnapshot, "backtest" | "correlations" | "indicators" | "percentiles">;
 
+// GET /api/dashboards/regime-snapshots. `source` names the read path that
+// produced the response: `regime_snapshots` (the current-view table) or
+// `ledger` (the immutable run ledger, projections.ts fetchRegimeSnapshots), so
+// an auditor reading the public analytics inputs knows which one they are on.
+export type RegimeReadSource = "regime_snapshots" | "ledger";
+export interface RegimeSnapshotsResponse {
+  latest: RegimeSnapshot | null;
+  history: RegimeHistoryPoint[];
+  staleness: Record<string, unknown>;
+  source: RegimeReadSource;
+}
+
 // One dated point in a research-signal series (value nullable for pre-history/gaps).
 export interface ResearchPoint {
   date: string;

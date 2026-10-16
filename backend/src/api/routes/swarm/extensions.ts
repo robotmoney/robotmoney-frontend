@@ -1,6 +1,8 @@
 import { handleSwarmOnboardingRoutes } from "./onboarding.ts";
 import { handleSwarmReceiptRoutes } from "./receipts.ts";
 import { handleSwarmWaitlistRoutes } from "./waitlist.ts";
+import { handleSchedulerStream } from "../swarm-stream.ts";
+import { handleJudgeParticipant } from "../swarm-judge-participant.ts";
 import type { SwarmRouteExtension } from "./types.ts";
 
 // Register concern-owned stubs once so downstream issues only edit their own
@@ -10,5 +12,16 @@ export const SWARM_ROUTE_EXTENSIONS: readonly SwarmRouteExtension[] = [
   handleSwarmOnboardingRoutes,
   handleSwarmReceiptRoutes,
   handleSwarmWaitlistRoutes,
+  // Both of these can return something other than a {status, body} envelope,
+  // which is why they are extensions rather than branches of swarm-admin.ts:
+  // the judge's subscription is a live event-stream `Response` whose body never
+  // ends and must not be re-wrapped, and the scheduler's subscribe is a
+  // WebSocket upgrade (D55 (11)) that backend/src/api/index.ts takes before
+  // routing, so this path only answers its refusals.
+  // They are two DIFFERENT contracts on two different credentials — the
+  // scheduler's automation token, and a judge's participant bearer — and each
+  // module's header says why they are not one mechanism.
+  (req, url) => handleSchedulerStream(req, url),
+  handleJudgeParticipant,
 ];
 

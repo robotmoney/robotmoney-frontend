@@ -40,7 +40,6 @@ export interface SwarmWaitlistEntry {
   email: string;
   emailNorm: string;
   createdAt: string;
-  notifiedAt: string | null;
   source: string | null;
 }
 
@@ -86,6 +85,21 @@ export interface SwarmMember {
    * read).
    */
   lastTakeAt: string | null;
+  /**
+   * Consecutive missed sessions (issue 1269): the `absent` sessions convened
+   * after the latest of the member's newest take, its activation and the
+   * dormancy baseline (migration 0122), excused sessions not counted. A number
+   * for an active member-role seat on GET /api/swarm/members/:id, null for a
+   * judge, an inactive member, and the roster list, which does not count it.
+   * Display only: nothing deactivates a member on it.
+   */
+  silentSessions: number | null;
+  /**
+   * The count at which the page shows the silent status line:
+   * SWARM_DORMANCY_THRESHOLD_SESSIONS (default 7). Served on every member
+   * projection so the page reads the deployment's value.
+   */
+  silentThreshold: number;
 }
 
 export interface SwarmSubject {
@@ -154,6 +168,48 @@ export interface SwarmTake {
   mode?: string | null;
   model?: string | null;
   generatedAt?: string;
+}
+
+/**
+ * One check POST /api/swarm/submit runs, as POST /api/swarm/submit/dry-run
+ * reports it (RM-178). In submit's order: `fields`, `token`, `nonce`,
+ * `session`, `date`, `window`, `reportSnapshot`, `roster`, `amendmentCap`,
+ * `weights`, `signature`. A check that could not run (no session to check
+ * against, no key to verify with) is left out.
+ */
+export interface SwarmTakeCheck {
+  check:
+    | "fields" | "token" | "nonce" | "session" | "date" | "window"
+    | "reportSnapshot" | "roster" | "amendmentCap" | "weights" | "signature";
+  ok: boolean;
+  /**
+   * The check depends on when the take is sent or whether the member is
+   * seated (the window, the roster, the amendment cap), not on how the take
+   * was built. A failed situational check leaves `setupOk` true.
+   */
+  situational?: true;
+  /** On a failed check: the status and error submit would answer with. */
+  status?: number;
+  error?: string;
+}
+
+/**
+ * POST /api/swarm/submit/dry-run (RM-178): every check submit runs, the
+ * signature included, against the named session or the subject's newest one,
+ * open or closed. Nothing is written: no take, no agent-health event, and the
+ * nonce stays unused.
+ */
+export interface SwarmSubmitDryRunResult {
+  dryRun: true;
+  /** Every check the member controls passed: the same take is right for any session it is seated on. */
+  setupOk: boolean;
+  /** Submit, sent now with this body, would accept it. */
+  wouldAcceptNow: boolean;
+  /** This exact signed take is already on file: submit would answer `alreadySubmitted`. */
+  alreadySubmitted?: true;
+  /** The session the checks ran against, or null when none was found. */
+  sessionId: string | null;
+  checks: SwarmTakeCheck[];
 }
 
 export interface SwarmMemo {
@@ -365,6 +421,8 @@ export interface SwarmJudgement {
   sessionId: string;
   subjectId: string;
   sessionDate: string;
+  /** When the session really opened: the instant of its first brief revision. `sessionDate` is the day its row was created, which can be days earlier. */
+  sessionOpenedAt: string | null;
   /** The judging party: an immutable member id, or `robotmoney-in-house`. */
   judgedBy: string;
   /** The judge's member id when the judge is a seated member, else null. */
@@ -399,8 +457,10 @@ export interface SwarmSession {
   // "cancelled" (issue #152) is reachable via the admin surface's guarded
   // lifecycle transitions (swarm/admin.ts); the pre-#152 smoke/worker path
   // never sets it.
-  state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "judged" | "published" | "cancelled";
+  state: "scheduled" | "collecting" | "window_closed" | "aggregated" | "judging" | "judged" | "published" | "cancelled";
   windowClosesAt: string | null;
+  /** When the brief went out and the window began; null until then. `date` and `generatedAt` are when the row was created, which can be days earlier. */
+  openedAt: string | null;
   publishedAt: string | null;
   regimeSummary: RegimeSummary | null;
   subjectSnapshotTotalValueUsd: number | null;
@@ -432,6 +492,8 @@ export interface SwarmSessionListItem {
   subjectName: string | null;
   state: SwarmSession["state"];
   windowClosesAt: string | null;
+  /** When the brief went out and the window began; null until then. `date` and `generatedAt` are when the row was created, which can be days earlier. */
+  openedAt: string | null;
   publishedAt: string | null;
   regimeSummary: RegimeSummaryListItem | null;
   synthesis: string | null;
@@ -455,11 +517,20 @@ export interface SwarmSessionListResponse {
   /** Opaque cursor for the next page; null once exhausted (always null for ?full=1). */
   nextCursor: string | null;
   /**
-   * Next fire time of the enabled `swarm.open_session` schedule (issue #783),
-   * so a resting-state client can say "opens in 3h" without guessing at an
-   * env-configured cron. Null when no such schedule is enabled — never
-   * omitted, so a caller can tell "not scheduled" apart from "older API".
-   * Present on every page (including `?full=1`), not just the first.
+   * When the next session opens (issue #783), so a resting-state client can
+   * say "opens in 3h". An ISO-8601 instant, the same shape it has always had.
+   *
+   * Answered from the EPOCH model (system-scheduler-spec.md §2.1): epochs run
+   * back to back, and turnover opens N+1 in the transaction that closes N, so
+   * the instant an open window closes IS the instant the next session opens.
+   * The value is the earliest `windowClosesAt` across every `collecting`
+   * session. It is not read from any schedule table — `job_schedules` rows no
+   * longer drive sessions, and a stale `next_run_at` there changes nothing.
+   *
+   * Null when no subject has an open window (a fresh database before the
+   * scheduler's first rebuild, or every subject deactivated) — never omitted,
+   * so a caller can tell "nothing open" apart from "older API". Present on
+   * every page (including `?full=1`), not just the first.
    */
   nextSessionAt: string | null;
 }
@@ -604,7 +675,7 @@ export interface SwarmAgentHealthEvent {
   id: string;
   memberId: string;
   sessionId: string | null;
-  eventType: "absence" | "rejected_signature";
+  eventType: "absence" | "rejected_signature" | "rejected_take";
   reason: string;
   detail: Record<string, unknown> | null;
   occurredAt: string;

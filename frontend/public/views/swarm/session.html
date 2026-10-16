@@ -29,14 +29,14 @@
         <nav class="rr-crumbs" aria-label="Breadcrumb">
           <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
           <a :href="subjectHref()" x-text="subjectTitle()"></a><span aria-hidden="true">/</span>
-          <span aria-current="page" x-text="formatDate(session.date, 'short')"></span>
+          <span aria-current="page" x-text="formatDate(session.openedAt || session.publishedAt || session.date, 'short')"></span>
         </nav>
 
         <header class="rr-head">
           <p class="sv__eyebrow sv__eyebrow--quiet" x-text="`${subjectKindOf(subject)} · session`">portfolio · session</p>
           <h1 class="sv__detail-title session-title" x-text="subjectTitle()"></h1>
           <p class="rr-when">
-            <time :datetime="session.date" x-text="[formatDate(session.date, 'long'), sessionTime()].filter(Boolean).join(' · ')"></time>
+            <time :datetime="session.openedAt || session.publishedAt || session.date" x-text="[formatDate(session.openedAt || session.publishedAt || session.date, 'long'), sessionTime()].filter(Boolean).join(' · ')"></time>
           </p>
         </header>
 
@@ -659,7 +659,7 @@
             <template x-if="takes.length"><div><p class="rr-k rr-sub" x-text="signatureHeadline()"></p></div></template>
             <dl class="rr-dl">
               <template x-if="(session.generatedAt || session.generated_at) && generatedLabel() !== sessionTime()">
-                <div><dt>Record generated</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
+                <div><dt>Row created</dt><dd><time :datetime="session.generatedAt || session.generated_at" x-text="generatedLabel()"></time></dd></div>
               </template>
               <!-- Weights sessions only: a portfolio's targets are in its brief,
                    and this row could only contradict them. -->
@@ -738,9 +738,9 @@
         </section>
 
         <nav class="rr-recnav" aria-label="Session navigation">
-          <span><template x-if="neighbours.older"><a :href="sessionHrefOf(neighbours.older)" x-text="`← ${formatDate(neighbours.older.date, 'short')}`"></a></template></span>
+          <span><template x-if="neighbours.older"><a :href="sessionHrefOf(neighbours.older)" x-text="`← ${formatDate(whenOf(neighbours.older), 'short')}`"></a></template></span>
           <a :href="subjectHref()">All sessions on this subject</a>
-          <span><template x-if="neighbours.newer"><a :href="sessionHrefOf(neighbours.newer)" x-text="`${formatDate(neighbours.newer.date, 'short')} →`"></a></template></span>
+          <span><template x-if="neighbours.newer"><a :href="sessionHrefOf(neighbours.newer)" x-text="`${formatDate(whenOf(neighbours.newer), 'short')} →`"></a></template></span>
         </nav>
       </div>
     </template>

@@ -23,12 +23,12 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
   # have meant, with no required reading. Cron minutes are staggered across the
-  # ten mirrors. The invariant is enforced mechanically by
+  # eleven mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   schedule:
     - cron: "3 3 * * *"
@@ -63,6 +63,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
       # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
       # --list`, which shells out to Playwright's CLI/transform — that runs on
       # Node.js (its bin is `#!/usr/bin/env node`), which `setup-bun` does not

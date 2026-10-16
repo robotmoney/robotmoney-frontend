@@ -15,6 +15,15 @@
 #   4. the IC swarm docs (issue #187) never regress to the legacy
 #      /api/ic/submit design: no reference to /api/ic/submit or the
 #      x-ic-key header, per that issue's own acceptance criterion.
+#   5. no current doc names the retired `rm_migrator` role (issue #1026
+#      criterion 3, D47). The only allowed hits are the D46/D47 history in
+#      docs/decisions.md and the one "There is no rm_migrator" line in
+#      smoke-production-spec.md §3. docs/archive/ is history and is not scanned.
+#      scripts/tests/unit/docs-no-rm-migrator.test.ts holds the same rule and
+#      its red controls.
+#   7. docs/decisions.md records D66 (production data changes only through a
+#      migration, owner 2026-10-09), and no current doc says a subject's
+#      scheduling columns change "only through the admin API" (issue 1312).
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -62,6 +71,73 @@ for f in "${ic_docs[@]}"; do
     err "$f still references the legacy /api/ic/submit endpoint or x-ic-key header (issue #187 AC1)"
   fi
 done
+
+# 4b. Every in-document anchor link in docs/decisions.md resolves: `(#x)` must
+#     name an `<a id="x">` anchor or a heading whose slug is `x`. An amendment
+#     that links to a decision or another amendment fails loudly when the anchor
+#     it names is missing (issue 1272).
+decisions_doc="docs/decisions.md"
+if [ -f "$decisions_doc" ]; then
+  anchors="$(grep -o '<a id="[^"]*"></a>' "$decisions_doc" | sed 's/<a id="\([^"]*\)"><\/a>/\1/')"
+  headings="$(grep -E '^#{1,6} ' "$decisions_doc" | sed -E 's/^#+ //' | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9 _-]//g; s/ /-/g')"
+  for ref in $(grep -o '](#[^)]*)' "$decisions_doc" | sed 's/](#\(.*\))/\1/' | sort -u); do
+    # grep -q may close its input early. Here-strings avoid a printf SIGPIPE
+    # being mistaken for a missing anchor under the script's pipefail setting.
+    if ! grep -qx "$ref" <<<"$anchors" && ! grep -q "^$ref" <<<"$headings"; then
+      err "$decisions_doc links to #$ref, which no anchor or heading provides"
+    fi
+  done
+fi
+
+# 5. `rm_migrator` appears only in D46/D47 history and smoke-production-spec §3.
+#    The allowed ranges are found by anchor and heading, not by line number, so
+#    an edit above them does not move the goalposts. A missing anchor or heading
+#    allows nothing, which fails loudly instead of passing quietly. In §3 only
+#    one line may name the role, and that line must still say "There is no
+#    rm_migrator": a §3 line rewritten to use the role gets no exemption.
+decisions="docs/decisions.md"
+smoke_spec="docs/technical/smoke-production-spec.md"
+d46="$(grep -n '<a id="d46"></a>' "$decisions" 2>/dev/null | head -1 | cut -d: -f1)"
+d48="$(grep -n '<a id="d48"></a>' "$decisions" 2>/dev/null | head -1 | cut -d: -f1)"
+s3="$(grep -n '^## 3\. ' "$smoke_spec" 2>/dev/null | head -1 | cut -d: -f1)"
+s4="$(grep -n '^## 4\. ' "$smoke_spec" 2>/dev/null | head -1 | cut -d: -f1)"
+spec_hits=0
+migrator_hits="$(git grep -n rm_migrator -- docs ':!docs/archive' 2>/dev/null || true)"
+if [ -n "$migrator_hits" ]; then
+  while IFS=: read -r f line text; do
+    if [ "$f" = "$decisions" ] && [ -n "$d46" ] && [ -n "$d48" ] \
+      && [ "$line" -gt "$d46" ] && [ "$line" -lt "$d48" ]; then
+      continue
+    fi
+    if [ "$f" = "$smoke_spec" ] && [ -n "$s3" ] && [ -n "$s4" ] \
+      && [ "$line" -gt "$s3" ] && [ "$line" -lt "$s4" ] && [ "$spec_hits" -eq 0 ] \
+      && printf '%s\n' "$text" | grep -qE 'There is no `?rm_migrator`?'; then
+      spec_hits=1
+      continue
+    fi
+    err "$f:$line names rm_migrator; only D46/D47 history and smoke-production-spec §3 may (issue #1026)"
+  done <<<"$migrator_hits"
+fi
+
+# 7. The 2026-10-09 rule "production data changes only through a migration" is
+#    a recorded decision (D66, issue 1312), and no current doc still says a
+#    subject's scheduling columns change "only through the admin API": that
+#    phrasing predates the rule and was contradicted by migrations 0117 and
+#    0121. docs/archive/ and docs/post-mortems/ are history and are not
+#    scanned. scripts/tests/unit/docs-migration-rule-decision.test.ts holds the
+#    same rule and its red controls.
+if ! grep -qE '^## D66 — Production data changes only through a migration \(owner, 2026-10-09\)' docs/decisions.md 2>/dev/null; then
+  err "docs/decisions.md lacks the D66 entry recording the 2026-10-09 migration rule (issue 1312)"
+fi
+#    The phrase is matched across a line wrap: each file is read with
+#    newlines folded to spaces before the grep, so "only through the admin\n
+#    API" is caught too.
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  if tr '\n' ' ' <"$f" | grep -q -i -E 'only (through|via|by) the +\*{0,2}admin +API'; then
+    err "$f says scheduling columns change only through the admin API; on a deployed stack they change by migration (D66, issue 1312)"
+  fi
+done <<<"$(git ls-files -- 'docs/*.md' 'docs/**/*.md' ':!docs/archive' ':!docs/post-mortems' 2>/dev/null || true)"
 
 if [ "$fail" -ne 0 ]; then
   exit 1

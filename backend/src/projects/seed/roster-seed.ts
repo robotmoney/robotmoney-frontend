@@ -24,7 +24,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { config } from "../../config.ts";
 import type { DiscoveredProject } from "../access/data-source.ts";
 
 export const ROSTER_SEED_FORMAT_VERSION = 1;
@@ -83,31 +82,18 @@ export const DEFAULT_ROSTER_SEED_MANIFEST_PATH = fileURLToPath(
   new URL("./v0-roster-data.manifest.json", import.meta.url),
 );
 
-// ROSTER_SEED_PATH / ROSTER_SEED_MANIFEST_PATH are TEST-ONLY overrides, and in
-// prod they are refused rather than honoured — mirroring access/select.ts's
-// fail-closed PROJECTS_SOURCE handling. An override pointing at a
-// valid-but-different pair (a scratch copy, a leftover bind mount) would not
-// fail any check: it loads, validates, and silently publishes a different
-// roster into the production directory. Explicit arguments (the regenerate CLI,
-// tests passing paths directly) are unaffected.
-function resolveOverride(explicit: string | undefined, envVar: string, fallback: string): string {
-  if (explicit) return explicit;
-  const override = process.env[envVar];
-  if (!override) return fallback;
-  if (config.env === "prod") {
-    throw new Error(
-      `${envVar} is a test-only override and must not be set in prod — refusing to load a roster seed from ` +
-        `${override} instead of the committed artifact at ${fallback}`,
-    );
-  }
-  return override;
-}
-
+// There is NO environment override of the seed path (issue #973 retired the
+// ROSTER_SEED_PATH / ROSTER_SEED_MANIFEST_PATH pair, which used to be honoured
+// outside prod). An override pointing at a valid-but-different pair (a scratch
+// copy, a leftover bind mount) would not fail any check: it loads, validates,
+// and silently publishes a different roster into the directory. Explicit
+// arguments (the regenerate CLI, tests passing paths directly) are the only
+// way to read another file.
 function resolveSeedPath(explicit?: string): string {
-  return resolveOverride(explicit, "ROSTER_SEED_PATH", DEFAULT_ROSTER_SEED_PATH);
+  return explicit || DEFAULT_ROSTER_SEED_PATH;
 }
 function resolveManifestPath(explicit?: string): string {
-  return resolveOverride(explicit, "ROSTER_SEED_MANIFEST_PATH", DEFAULT_ROSTER_SEED_MANIFEST_PATH);
+  return explicit || DEFAULT_ROSTER_SEED_MANIFEST_PATH;
 }
 
 // Deterministic ordering: projects sorted by slug, each project's facets
@@ -318,11 +304,11 @@ export async function loadV0RosterWithManifest(path?: string, manifestPath?: str
 
   const file = Bun.file(p);
   if (!(await file.exists())) {
-    throw new Error(`v0 roster seed not found at ${p} — set ROSTER_SEED_PATH or ship the committed seed`);
+    throw new Error(`v0 roster seed not found at ${p} — ship the committed seed`);
   }
   const manifestFile = Bun.file(mp);
   if (!(await manifestFile.exists())) {
-    throw new Error(`v0 roster seed manifest not found at ${mp} — set ROSTER_SEED_MANIFEST_PATH or ship the committed manifest`);
+    throw new Error(`v0 roster seed manifest not found at ${mp} — ship the committed manifest`);
   }
 
   let projects: DiscoveredProject[];
@@ -361,7 +347,7 @@ export async function loadRosterSeedManifest(manifestPath?: string): Promise<Ros
   const mp = resolveManifestPath(manifestPath);
   const manifestFile = Bun.file(mp);
   if (!(await manifestFile.exists())) {
-    throw new Error(`v0 roster seed manifest not found at ${mp} — set ROSTER_SEED_MANIFEST_PATH or ship the committed manifest`);
+    throw new Error(`v0 roster seed manifest not found at ${mp} — ship the committed manifest`);
   }
   let manifest: RosterSeedManifest;
   try {

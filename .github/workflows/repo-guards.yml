@@ -17,12 +17,12 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
   # have meant, with no required reading. Cron minutes are staggered across the
-  # ten mirrors. The invariant is enforced mechanically by
+  # eleven mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   schedule:
     - cron: "9 3 * * *"
@@ -37,6 +37,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
       - name: Install root tooling
         run: bun install --frozen-lockfile
       - name: Runtime code never imports test or eval code (D23)
@@ -55,9 +56,9 @@ jobs:
       # silently matched nothing.
       - name: Model selection is registry-sourced, not ambient (D22 rule 1 as amended)
         run: bash scripts/checks/check-model-selection.sh
-      - name: AgentMail secret leak guard
-        run: |
-          if git grep -iE 'agentmail.*(key|token|secret).*['"'"'"][a-zA-Z0-9_-]{20,}['"'"'"]' -- '*.ts' '*.js' '*.json' '*.yml' '*.yaml' '*.toml' '*.sh' '*.md' '.env*' '*/.env*'; then
-            echo "AgentMail API key or secret literal found in committed files" >&2
-            exit 1
-          fi
+      # The mail-vendor secret-leak guard that used to sit here was removed with
+      # the swarm email feature itself (issue #1026 W5, decision D50 reversing
+      # D30). There is no mail vendor, no adapter and no API token left to leak,
+      # and scripts/tests/unit/no-swarm-email.test.ts now refuses the feature's
+      # return outright — a strictly stronger guard than scanning for a
+      # credential belonging to a vendor nothing calls.

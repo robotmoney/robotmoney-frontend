@@ -250,7 +250,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
   });
 
   test("RULE A — a raw model id in a COMPOSE file is RED", () => {
-    const root = tree({ "docker-compose.smoke.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
+    const root = tree({ "docker-compose.yml": '      OPENCODE_DEFAULT: "opencode/gpt-5.4"\n' });
     expect(competingSelectionPaths(root).map((f) => f.rule)).toEqual(["model-id-literal"]);
   });
 
@@ -298,7 +298,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
 
   test("prose naming a model id is NOT red — a guard that cries wolf gets deleted", () => {
     const root = tree({
-      "scripts/lib/documented.ts": "// the default is `opencode/deepseek-v4-flash`, resolved via the registry\n",
+      "scripts/lib/documented.ts": "// the default is `opencode/deepseek-v4.1-flash`, resolved via the registry\n",
       ".github/workflows/dl.yml": '      - run: curl -L "https://github.com/anomalyco/opencode/releases/download/v1/x.tar.gz"\n',
     });
     expect(competingSelectionPaths(root)).toEqual([]);

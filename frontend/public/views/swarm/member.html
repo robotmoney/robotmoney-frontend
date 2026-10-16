@@ -44,6 +44,7 @@
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="rm-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
+          <template x-if="statusLine(member)"><span class="rr-meta__i" data-testid="member-status-line" x-text="statusLine(member)"></span></template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>
@@ -153,9 +154,8 @@
              stance is (a Hold or Update badge), how many questions it found
              the takes apart on where a take's confidence is, then for a hold
              its reason, its own account, and the way to the judgement. -->
-        <!-- Left out, not called empty, while judgements are not served
-             (RM-130: a release without #1017). -->
-        <template x-if="isJudge(member) && judgementsServed">
+        <!-- Left out, not called empty, when the judgements could not be read. -->
+        <template x-if="isJudge(member) && judgementsRead">
         <section class="rr-sec" id="record" aria-labelledby="record-h">
           <div class="rr-sec__head">
             <h2 class="rr-sec__h" id="record-h">Track record</h2>
@@ -170,7 +170,7 @@
                 <div class="rr-take__top">
                   <div class="rr-take__what">
                     <a class="rr-take__name" :href="`/swarm/subjects/${encodeURIComponent(j.subjectId)}`" x-text="subjectNames[j.subjectId] || j.subjectId"></a>
-                    <time class="mp-take__date" :datetime="j.sessionDate" x-text="formatDate(j.sessionDate, 'short')"></time>
+                    <time class="mp-take__date" :datetime="j.sessionOpenedAt || j.sessionDate" x-text="formatDate(j.sessionOpenedAt || j.sessionDate, 'short')"></time>
                   </div>
                   <div class="rr-take__stance">
                     <template x-if="adviceCall(j)">

@@ -3,6 +3,8 @@ export function path(template: string, params?: Record<string, string | number>)
 export const ROUTES: {
   health: string;
   version: string;
+  apiVersion: string;
+  status: { maintenance: string };
   comments: { list: string; create: string };
   dashboards: {
     regimeSnapshots: string;
@@ -47,12 +49,13 @@ export const ROUTES: {
     session: string;
     sessionById: string;
     sessionConsensusReceipt: string;
-    sessionConsensusReceiptVerified: string;
+    sessionConsensusReceiptCanonical: string;
     sessionJudgements: string;
     take: string;
     takePermalink: string;
     judgement: string;
     openSession: string;
+    openSessions: string;
     brief: string;
     signingPayload: string;
     memos: string;
@@ -66,6 +69,18 @@ export const ROUTES: {
     register: string;
     regime: string;
     submit: string;
+    submitDryRun: string;
+    scheduler: {
+      fullRead: string;
+      /** A WebSocket upgrade (D55 (11)): `?cursor=N` only; the token only in the `Authorization` header. */
+      subscribe: string;
+    };
+    participants: {
+      pending: string;
+      judgeSubscribe: string;
+      judgement: string;
+      judgeRefusal: string;
+    };
     admin: {
       action: string;
       activate: string;
@@ -73,15 +88,15 @@ export const ROUTES: {
       regime: string;
       subject: string;
       subjectFixtures: string;
-      open: string;
-      brief: string;
-      close: string;
-      aggregate: string;
-      publish: string;
-      enqueueJob: string;
       subjects: string;
       subjectUpdate: string;
       subjectDeactivate: string;
+      subjectActivate: string;
+      epochOpen: string;
+      epochTurnover: string;
+      epochAggregate: string;
+      epochRequestJudging: string;
+      epochFinalize: string;
       members: string;
       applications: string;
       memberReview: string;
@@ -91,22 +106,21 @@ export const ROUTES: {
       memberRotateKey: string;
       memberRole: string;
       memberAvatar: string;
-      sessionCreate: string;
       sessionRoster: string;
       sessionJudgements: string;
       rosterAdd: string;
       rosterExcuse: string;
       rosterRestore: string;
-      sessionCancel: string;
-      sessionClose: string;
-      sessionReopen: string;
-      sessionAggregate: string;
-      sessionPublish: string;
-      sessionJudge: string;
       judgeConfig: string;
       sessionConsensusReceipt: string;
       audit: string;
     };
+  };
+  publicAnalytics: {
+    rawHistory: string;
+    assetPrices: string;
+    vintages: string;
+    overwriteEvents: string;
   };
   analytics: {
     readiness: string;
@@ -136,6 +150,10 @@ export const ROUTES: {
     jobRetry: string;
     runs: string;
     schedule: string;
+    maintenanceSchedule: string;
+    maintenanceStart: string;
+    maintenanceEnd: string;
+    maintenanceCancel: string;
     audit: string;
     researchRuns: string;
     researchRun: string;
@@ -144,3 +162,42 @@ export const ROUTES: {
     researchRerun: string;
   };
 };
+
+/** One item of `GET ROUTES.swarm.participants.pending` (smoke-production-spec.md §6.2). */
+export interface ParticipantPendingWork {
+  sessionId: string;
+  subjectId: string;
+  date: string;
+  windowClosesAt: string | null;
+}
+
+/** The pending route's body: a list, empty when there is no work — never null. */
+export interface ParticipantPendingResponse {
+  pending: ParticipantPendingWork[];
+}
+
+/**
+ * The spend of the model call behind a judgement, as the participant measured
+ * it (D55 decision 3, R19). Every field optional; an absent field is stored as
+ * NULL, never 0. Token counts are whole and non-negative; costUsd is
+ * non-negative. Not covered by the judgement's signature.
+ */
+export interface ParticipantJudgementUsage {
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  costUsd?: number | null;
+}
+
+/** `POST ROUTES.swarm.participants.judgement` body, signed over `canonicalizeJudgement`. */
+export interface ParticipantJudgementBody {
+  sessionId: string;
+  /** The model's raw answer text; the API parses it. */
+  opinion: string;
+  model: string;
+  promptHash: string;
+  inputsDigest: string;
+  nonce: string;
+  signature: string;
+  usage?: ParticipantJudgementUsage;
+}

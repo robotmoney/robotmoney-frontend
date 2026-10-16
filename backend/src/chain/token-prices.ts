@@ -37,8 +37,8 @@ import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
 import { TtlCache } from "./ttl-cache.ts";
 import { serialized, retryAfterMs, sleep } from "./gecko-rate-limit.ts";
+import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree } from "./gecko-endpoint.ts";
 
-const GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2";
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
 // Production defaults to 30s, short enough that the one-minute sampler never
@@ -108,8 +108,18 @@ let geckoOpenBatch: GeckoBatch | null = null;
 // gate exists purely for batch coalescing.
 let batchChain: Promise<void> = Promise.resolve();
 
+// When a whole token_price request last failed (retries exhausted, hard status
+// or timeout), 0 if never. A follow-on reader in the same tick (the worker's
+// token-market sample, worker/handlers/token-market.ts) checks it so a host that
+// just refused the wallet sampler is not asked again a moment later.
+let lastGeckoPriceFailureAt = 0;
+export function lastGeckoPriceFailureAtMs(): number {
+  return lastGeckoPriceFailureAt;
+}
+
 // Test-only cache/gate hygiene. Production callers never reset live prices.
 export function _resetTokenPriceCacheForTests(): void {
+  lastGeckoPriceFailureAt = 0;
   geckoPending.clear();
   geckoPriceCache.reset();
   geckoOpenBatch = null;
@@ -148,16 +158,23 @@ const STUB_PRICES: Record<string, number> = {
 async function geckoFetchJson(url: string, timeoutMs: number, label: string): Promise<unknown> {
   const deadline = Date.now() + timeoutMs;
   const retries = geckoMaxRetries();
+  // The Pro host may refuse a call the plan does not include (401/403); that one request is retried on the free host.
+  let target = url;
   for (let attempt = 0; ; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(`geckoterminal: ${label} timeout`);
     const res = await serialized(() =>
-      fetch(url, {
+      fetch(target, {
         signal: AbortSignal.timeout(remaining),
-        headers: { "user-agent": UA, accept: "application/json" },
+        headers: { "user-agent": UA, accept: "application/json", ...geckoAuthHeaders(target) },
       }),
+      tierOf(target),
     );
     if (res.ok) return await res.json();
+    if (proRefused(target, res.status)) {
+      target = fallBackToFree(target, res.status, label);
+      continue;
+    }
     if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
       throw new Error(`${res.status} ${res.statusText} for ${url}`);
     }
@@ -170,7 +187,7 @@ async function geckoFetchJson(url: string, timeoutMs: number, label: string): Pr
 }
 
 async function fetchGeckoTokenPricesUsdUncached(addresses: string[], timeoutMs: number): Promise<Record<string, string>> {
-  const url = `${GECKOTERMINAL_BASE}/simple/networks/base/token_price/${addresses.join(",")}`;
+  const url = geckoUrl("token_price", `/simple/networks/base/token_price/${addresses.join(",")}`);
   const body = await (withFetchCache("json", url, async () => {
     const j = (await geckoFetchJson(url, timeoutMs, `price for ${addresses.join(",")}`)) as {
       data?: { attributes?: { token_prices?: Record<string, string> } };
@@ -261,9 +278,12 @@ export async function fetchGeckoDailyCloseUsd(
   // cheapest place to say so.
   const token = tokenAddress.toLowerCase();
   const dayStart = Math.floor(atUnixSeconds / DAY_SECONDS) * DAY_SECONDS;
-  const url =
-    `${GECKOTERMINAL_BASE}/networks/base/pools/${pool.toLowerCase()}/ohlcv/day` +
-    `?before_timestamp=${dayStart + DAY_SECONDS - 1}&limit=1&token=${token}&currency=usd`;
+  // OHLCV is not in the Basic plan, so this is always the free host (see chain/gecko-endpoint.ts).
+  const url = geckoUrl(
+    "ohlcv",
+    `/networks/base/pools/${pool.toLowerCase()}/ohlcv/day` +
+      `?before_timestamp=${dayStart + DAY_SECONDS - 1}&limit=1&token=${token}&currency=usd`,
+  );
   const memo = geckoDailyCloseCache.get(url);
   if (memo) return memo;
 
@@ -344,6 +364,7 @@ async function runGeckoBatch(batch: GeckoBatch): Promise<void> {
       }
     }
   } catch (err) {
+    lastGeckoPriceFailureAt = Date.now();
     for (const waiter of batch.waiters.values()) waiter.reject(err);
   } finally {
     release();
@@ -368,6 +389,48 @@ export async function fetchGeckoTokenPriceUsd(address: string, timeoutMs = 8000)
   } finally {
     geckoPending.delete(lc);
   }
+}
+
+// --- One pool's market (RM-156) ---------------------------------------------
+// The token page's liquidity and volume: GeckoTerminal's own reading of ONE
+// pool, from the same keyless vendor, on the same retry budget (geckoFetchJson)
+// and the same on-disk fetch cache as the prices above.
+//   GET /networks/base/pools/{pool}
+//     → data.attributes.reserve_in_usd, data.attributes.volume_usd.h24
+//   GET /networks/base/pools/{pool}/ohlcv/day?aggregate=1&limit=30&currency=usd
+//     → data.attributes.ohlcv_list: [[ts, open, high, low, close, volumeUsd], ...]
+// The last 30 daily candles include today's, still filling, so the 30-day
+// volume reads a little short of thirty full days; callers say "about". A field
+// the vendor leaves out is null, never a zero.
+export interface GeckoPoolStats {
+  liquidityUsd: number | null;
+  volume24hUsd: number | null;
+  volume30dUsd: number | null;
+}
+
+const toNumberOrNull = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+export async function fetchGeckoPoolStatsUsd(pool: string, timeoutMs = 15_000): Promise<GeckoPoolStats> {
+  const id = pool.toLowerCase();
+  const infoUrl = geckoUrl("pool", `/networks/base/pools/${id}`);
+  const candlesUrl = geckoUrl("ohlcv", `/networks/base/pools/${id}/ohlcv/day?aggregate=1&limit=30&currency=usd`);
+  const info = (await withFetchCache("json", infoUrl, () => geckoFetchJson(infoUrl, timeoutMs, `pool ${id}`))) as {
+    data?: { attributes?: { reserve_in_usd?: unknown; volume_usd?: { h24?: unknown } } };
+  };
+  const candles = (await withFetchCache("json", candlesUrl, () => geckoFetchJson(candlesUrl, timeoutMs, `30-day volume for ${id}`))) as {
+    data?: { attributes?: { ohlcv_list?: unknown[] } };
+  };
+  const list = candles?.data?.attributes?.ohlcv_list;
+  const volumes = Array.isArray(list) ? list.map((c) => (Array.isArray(c) ? toNumberOrNull(c[5]) : null)) : [];
+  return {
+    liquidityUsd: toNumberOrNull(info?.data?.attributes?.reserve_in_usd),
+    volume24hUsd: toNumberOrNull(info?.data?.attributes?.volume_usd?.h24),
+    volume30dUsd: volumes.length && volumes.every((v) => v != null) ? volumes.reduce((a: number, v) => a + (v as number), 0) : null,
+  };
 }
 
 // Latest Yahoo close for the SP500 ticker (reuses analytics/extract/yahoo.ts).

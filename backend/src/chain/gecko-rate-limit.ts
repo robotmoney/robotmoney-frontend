@@ -16,6 +16,9 @@
 // the old historical path used 3 000 ms — both could briefly exceed 10/min
 // under concurrent load.  This default leaves a small safety margin.
 const DEFAULT_MIN_INTERVAL_MS = 6_000;
+// The paid CoinGecko plan (Basic: 250 to 300 calls a minute) is served from a different host with its own quota, so it
+// is paced separately: 400 ms is 150 a minute, well inside it (issue 1062).
+const DEFAULT_PRO_MIN_INTERVAL_MS = 400;
 
 function intEnv(name: string, fallback: number, min: number): number {
   const raw = process.env[name];
@@ -30,23 +33,32 @@ export function minIntervalMs(): number {
   return intEnv("GECKO_MIN_INTERVAL_MS", intEnv("GECKO_OHLCV_MIN_INTERVAL_MS", DEFAULT_MIN_INTERVAL_MS, 0), 0);
 }
 
+export function proMinIntervalMs(): number {
+  return intEnv("GECKO_PRO_MIN_INTERVAL_MS", DEFAULT_PRO_MIN_INTERVAL_MS, 0);
+}
+
+export type GeckoTier = "free" | "pro";
+
 let chain: Promise<void> = Promise.resolve();
-let lastRequestAtMs = 0;
+// Per tier: a free request must be 6 s after the previous FREE request, however many Pro requests ran in between, or
+// interleaving the two would push the free host past its 10-a-minute quota.
+const lastRequestAtMs: Record<GeckoTier, number> = { free: 0, pro: 0 };
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Run `fn` serialized behind every other GeckoTerminal request, with at
- *  least `minIntervalMs()` between consecutive requests. */
-export function serialized<T>(fn: () => Promise<T>): Promise<T> {
+ *  least the tier's minimum interval since the previous request of that tier. */
+export function serialized<T>(fn: () => Promise<T>, tier: GeckoTier = "free"): Promise<T> {
   const run = chain.then(async () => {
-    const gap = minIntervalMs() - (Date.now() - lastRequestAtMs);
+    const interval = tier === "pro" ? proMinIntervalMs() : minIntervalMs();
+    const gap = interval - (Date.now() - lastRequestAtMs[tier]);
     if (gap > 0) await sleep(gap);
     try {
       return await fn();
     } finally {
-      lastRequestAtMs = Date.now();
+      lastRequestAtMs[tier] = Date.now();
     }
   });
   chain = run.then(
@@ -70,6 +82,7 @@ export function retryAfterMs(header: string | null, attempt: number, baseMs: num
 
 /** Test-only hygiene. */
 export function _resetRateLimitStateForTests(): void {
-  lastRequestAtMs = 0;
+  lastRequestAtMs.free = 0;
+  lastRequestAtMs.pro = 0;
   chain = Promise.resolve();
 }

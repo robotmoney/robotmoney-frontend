@@ -4,8 +4,8 @@
 // says it plainly: `digest_algorithm` is keccak256, Bun/Node ship SHA3-256
 // (NIST padding 0x06, not Keccak's 0x01), and so "no test in this repo checks a
 // keccak256 value" — the digest that `payloadDigest` anchors was a CONSUMER
-// OBLIGATION parked on robotmoney-core. Decision D10 makes the frontend's
-// public receipt route serve the exact keccak256 PREIMAGE, which means this
+// OBLIGATION parked on robotmoney-core. The canonical receipt route
+// serves the exact keccak256 PREIMAGE, which means this
 // repo now owns the claim "the bytes at payloadUri hash to payloadDigest" and
 // has to be able to check it. Hence ~60 lines of Keccak-f[1600] here, in
 // tests/support and nowhere near src/: it is a checking tool, not a runtime

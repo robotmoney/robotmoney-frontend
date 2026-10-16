@@ -84,7 +84,7 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(37);
+  await expect(frame.locator(".cl__entry")).toHaveCount(41);
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
@@ -96,7 +96,7 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
     return iframe.contentDocument?.title ?? "";
   });
-  expect(title).toBe("Changelog — Robot Money");
+  expect(title).toBe("Changelog | Robot Money");
 
   // The filter factory is `changelogPage()`, not an inline object: arrow
   // functions in an attribute contain `>`, which a naive HTML-to-text strip
@@ -152,7 +152,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   // In the page, not the nav: the nav has a Swarm button of its own (RM-124).
   const swarm = frame.locator("#view").getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("37 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("41 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -169,7 +169,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("37 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("41 releases");
 });
 
 // Merged work that is not in production yet sits in one block on top of the
@@ -196,7 +196,8 @@ test("pending entries read Next release, styled as a date", async ({ page }) => 
   await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
   const also = frame.locator('.cl__also[data-release="pending"]');
   if (await also.count()) await expect(also.locator(".cl__also-h")).toHaveText("Also in the next release");
-  await expect(frame.locator('.cl__updated .cl__pending[data-release="pending"]')).toHaveText("with the next release");
+  // The hero carries no "Updated" line: the top entry's date already says it.
+  await expect(frame.locator(".cl__updated")).toHaveCount(0);
 
   const read = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
@@ -283,7 +284,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
     expect(seen.headings).toBe(0);
     await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
     await button.click();
-    await expect(frame.locator(".cl__count")).toHaveText("37 releases");
+    await expect(frame.locator(".cl__count")).toHaveText("41 releases");
   }
 });
 
@@ -312,7 +313,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
 
   const imgs = frame.locator(".cl__win img");
   const n = await imgs.count();
-  expect(n).toBe(11);
+  expect(n).toBe(13);
   for (let i = 0; i < n; i++) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await expect.poll(async () =>
@@ -398,7 +399,8 @@ test("the hero is full-bleed, and a phone swaps every diagram", async ({ page })
 test("the home CTA and the FAQ no longer advertise a roadmap", async ({ page }) => {
   await page.goto(`${baseUrl}/`);
   const home = page.frameLocator("#frame");
-  await expect(home.locator(".hero__cta .btn-primary")).toContainText("CHANGELOG", { timeout: 15_000 });
+  await expect(home.locator(".hm-hero .hm-hero__cta .btn-primary")).toContainText("Deposit USDC", { timeout: 15_000 });
+  await expect(home.locator(".hm")).not.toContainText(/roadmap/i);
 
   await page.evaluate(() => {
     const win = (document.querySelector("#frame") as HTMLIFrameElement).contentWindow!;

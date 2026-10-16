@@ -70,6 +70,14 @@ export function resolveBackupFiles(backupDirArg?: string): BackupFiles | { error
   return { stamp, dumpEnc, globalsEnc, passphraseFile };
 }
 
+/**
+ * Docker's default /dev/shm is 64 MB. Postgres sizes parallel-query shared
+ * memory there, and the 2026-09-24 stage twin's api died on `could not resize
+ * shared memory segment ... No space left on device` against a 6 GB restore.
+ * Production's managed primary has no such cap.
+ */
+export const SHM_FLAGS = ["--shm-size", "1g"] as const;
+
 export interface RestoredContainer {
   container: string;
   host: string;
@@ -106,6 +114,145 @@ function generateLocalPassword(): string {
 // and which nothing here checks anyway. Allowlist rather than fight it line
 // by line.
 const RESTORE_ROLES = ["rm_readonly", "rm_worker"] as const;
+
+/**
+ * PURE. The twin's schedule for the sessions it restored mid-window.
+ *
+ * A restored dump carries production's open sessions with production's
+ * deadlines, up to six hours out. The driver refuses an epoch whose window
+ * closes beyond the twin's cadence, so the twin sets its OWN schedule on its
+ * OWN copy at boot: any restored `collecting` session whose deadline lies
+ * beyond one twin window now closes one twin window from boot. It only moves a
+ * deadline EARLIER, never later, and it runs against the restored container,
+ * never a deployment's database. (Production's twin did this in v0.5.x.)
+ */
+export function retimeAdoptedWindowsSql(windowMs: number): string {
+  if (!Number.isInteger(windowMs) || windowMs <= 0) throw new Error(`retimeAdoptedWindowsSql needs a positive window, got ${windowMs}`);
+  return `UPDATE swarm_sessions SET window_closes_at = now() + interval '${windowMs} milliseconds'
+ WHERE state = 'collecting' AND window_closes_at > now() + interval '${windowMs} milliseconds'
+ RETURNING id, subject_id, window_closes_at`;
+}
+
+/** Apply retimeAdoptedWindowsSql inside the twin's restore container; logs each re-timed session. */
+export function retimeAdoptedWindows(container: string, windowMs: number, log: (m: string) => void): number {
+  const r = Bun.spawnSync(
+    ["docker", "exec", container, "psql", "-U", LOCAL_USER, "-d", LOCAL_DB, "-X", "-A", "-t", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", retimeAdoptedWindowsSql(windowMs)],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  if (r.exitCode !== 0) throw new Error(`twin: re-timing restored open windows failed: ${r.stderr.toString().trim()}`);
+  const rows = r.stdout.toString().split("\n").filter((l) => /^[0-9a-f-]{36}\t/.test(l));
+  for (const row of rows) {
+    const [id, subject, closes] = row.split("\t");
+    log(`twin: restored session ${id} (${subject}) was mid-window; its window now closes ${closes} (the twin's ${windowMs / 60_000}-min cadence)`);
+  }
+  if (rows.length === 0) log("twin: no restored session was mid-window; nothing to re-time");
+  return rows.length;
+}
+
+/**
+ * The smoke-twin's stand-in for the production primary's bootstrap login.
+ *
+ * WHY THIS EXISTS. The twin restores with `--no-owner --no-privileges` and then
+ * migrates as the container SUPERUSER, so it has no ownership topology to
+ * change and no privilege constraint while changing it. That makes the
+ * rehearsal structurally unable to rehearse the one migration whose entire
+ * purpose is ownership and grants (0053) — three separate defects in that file
+ * were invisible to the twin, to this suite, and to the live preflight, which
+ * audits role STATE read-only and never executes the migration SQL.
+ *
+ * Reshaping the twin to own its objects under a NON-superuser role, and then
+ * pointing MIGRATE_DATABASE_URL at that role, is what makes the boot exercise
+ * the path a production cutover actually takes.
+ */
+export const TWIN_BOOTSTRAP_ROLE = "rm_twin_bootstrap";
+
+/** doadmin's exact production attribute set: rolsuper=false, the rest true. */
+const TWIN_BOOTSTRAP_ATTRS = "LOGIN CREATEROLE CREATEDB BYPASSRLS REPLICATION";
+
+/**
+ * Give a restored twin production's privilege shape and return the URL a
+ * migration run should use.
+ *
+ * Mirrors the production primary before 0053 has ever run: one non-superuser
+ * bootstrap login owning `public` and everything in it, holding ADMIN OPTION on
+ * the roles that predate the taxonomy (doadmin holds exactly that on rm_worker
+ * and rm_readonly). Extension-owned objects are deliberately left alone — they
+ * belong to the extension's lifecycle, and re-owning them fails outright for a
+ * non-superuser.
+ *
+ * Returns the bootstrap URL; the caller sets it as MIGRATE_DATABASE_URL for the
+ * boot. DATABASE_URL is untouched, so the running application is unaffected.
+ */
+// NOT A SMOKE PATH ANY MORE. `bun smoke --local dump` no longer migrates a
+// restored copy through this bootstrap login: after the restore, the copy's
+// superuser creates the four roles and hands every application object to
+// rm_owner (scripts/lib/smoke-database.ts dumpOwnershipSql), rm_owner writes
+// `deployment_identity = rehearsal`, and `--migrate` runs as rm_owner under
+// the boot's target lock (spec §4.2, §8.5). This reshaping remains for the
+// tooling that rehearses 0053 itself (backend/tests/
+// twin-production-privilege-shaping.test.ts pins its shape).
+export function shapeTwinToProductionPrivileges(
+  superuserUrl: string,
+  log: (m: string) => void,
+): { url: string } | { error: string } {
+  const password = `rk_${crypto.randomUUID().replaceAll("-", "")}`;
+  // psql, not a postgres client: `scripts/` cannot import backend's `postgres`
+  // dependency, and every other database step in this module already shells to
+  // psql for exactly that reason.
+  const ddl = `
+    DROP ROLE IF EXISTS ${TWIN_BOOTSTRAP_ROLE};
+    CREATE ROLE ${TWIN_BOOTSTRAP_ROLE} ${TWIN_BOOTSTRAP_ATTRS} PASSWORD '${password}';
+    ${RESTORE_ROLES.map((r) => `GRANT ${r} TO ${TWIN_BOOTSTRAP_ROLE} WITH ADMIN OPTION;`).join("\n    ")}
+    ALTER SCHEMA public OWNER TO ${TWIN_BOOTSTRAP_ROLE};
+    DO $shape$
+    DECLARE r record;
+    BEGIN
+      FOR r IN
+        SELECT c.relkind, c.oid::regclass AS object_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r','p','S','v','m','f')
+          AND (c.relkind <> 'S' OR NOT EXISTS (
+            SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.deptype IN ('a','i')))
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER %s %s OWNER TO ${TWIN_BOOTSTRAP_ROLE}',
+          CASE r.relkind WHEN 'S' THEN 'SEQUENCE' WHEN 'v' THEN 'VIEW'
+                         WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE'
+                         ELSE 'TABLE' END, r.object_name);
+      END LOOP;
+      FOR r IN
+        SELECT p.oid::regprocedure AS object_name
+        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND NOT EXISTS (
+            SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')
+      LOOP
+        EXECUTE format('ALTER FUNCTION %s OWNER TO ${TWIN_BOOTSTRAP_ROLE}', r.object_name);
+      END LOOP;
+    END
+    $shape$;`;
+  const applied = Bun.spawnSync(["psql", "-X", "-v", "ON_ERROR_STOP=1", superuserUrl, "-c", ddl], { stderr: "pipe" });
+  if (applied.exitCode !== 0) {
+    return { error: `twin privilege shaping failed: ${new TextDecoder().decode(applied.stderr).trim()}` };
+  }
+  const counted = Bun.spawnSync(
+    ["psql", "-X", "-Atc",
+      `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname='public' AND c.relkind IN ('r','p')
+         AND pg_get_userbyid(c.relowner) = '${TWIN_BOOTSTRAP_ROLE}'`, superuserUrl],
+    { stderr: "pipe" },
+  );
+  const owned = new TextDecoder().decode(counted.stdout).trim();
+  log(`twin reshaped to production privileges: ${TWIN_BOOTSTRAP_ROLE} (NOT superuser) owns ${owned} public table(s)`);
+  const u = new URL(superuserUrl);
+  u.username = TWIN_BOOTSTRAP_ROLE;
+  u.password = password;
+  return { url: u.toString() };
+}
+
 
 async function run(cmd: string[], opts: { stdin?: ReadableStream | number; log: (m: string) => void }): Promise<number> {
   const proc = Bun.spawn(cmd, { stdin: opts.stdin ?? "ignore", stdout: "inherit", stderr: "pipe" });
@@ -153,8 +300,9 @@ export async function restoreBackupIntoContainer(
      * labels so `smoke:clean` reclaims it by the same label scoping it uses for
      * every other volume a boot creates.
      *
-     * Omitted (restore-check.ts) the data lives in the container's writable
-     * layer and dies with it, which is right for a check that tears down in a
+     * Omitted (restore-check.ts) the data lives in the image's ANONYMOUS
+     * volume and dies with the container only because teardownContainer()
+     * removes it with `-v`, which is right for a check that tears down in a
      * `finally`. A `--db smoke-twin` boot passes one because its contract is the
      * ephemeral-pgdata contract: teardown keeps the data, smoke:clean reclaims it.
      *
@@ -176,7 +324,7 @@ export async function restoreBackupIntoContainer(
   const volumeArgs: string[] = [];
   if (opts.volume) {
     // SMOKE_VOLUME_LABEL ("robotmoney.smoke=1") is what smoke:clean filters on —
-    // docker-compose.smoke.yml stamps it on pgdata, and this is the non-compose
+    // docker-compose.yml stamps it on pgdata, and this is the non-compose
     // equivalent. Without it the volume is unreclaimable by the documented path.
     const created = await run(
       ["docker", "volume", "create", "--label", "robotmoney.smoke=1", ...dockerLabelFlags(labels), opts.volume],
@@ -220,6 +368,7 @@ export async function restoreBackupIntoContainer(
       `POSTGRES_DB=${LOCAL_DB}`,
       "-p",
       `${bindHost}::5432`,
+      ...SHM_FLAGS,
       ...labelFlags,
       ...volumeArgs,
       IMAGE,
@@ -283,15 +432,18 @@ export async function restoreBackupIntoContainer(
   if (globalsExit !== 0) return { error: "globals load failed", container };
 
   log("restoring dump");
-  const gpgDump = Bun.spawn(
-    ["gpg", "--batch", "--yes", "--passphrase-file", backup.passphraseFile, "--decrypt", backup.dumpEnc],
-    { stdout: "pipe", stderr: "inherit" },
-  );
-  const pgRestore = Bun.spawn(
-    ["pg_restore", ...connArgs, `--dbname=${LOCAL_DB}`, "--no-owner", "--no-privileges", "--exit-on-error"],
-    { stdin: gpgDump.stdout, stdout: "inherit", stderr: "inherit", env },
-  );
-  const restoreExit = await pgRestore.exited;
+  // gpg and pg_restore are joined by a kernel pipe inside one bash, so no JS
+  // code copies the archive. Both JS pumps failed on stage-2 (Bun 1.3.14):
+  // Bun.spawn's `stdin: stream` pump threw an unhandled EPIPE after a
+  // successful restore (issue 1178), and node:child_process `.pipe()` into a
+  // slow reader dropped the archive's tail, so pg_restore read "end of file"
+  // after 21 s on every run. The pipeline's exit status is pg_restore's.
+  const pipeline = Bun.spawn(restorePipelineArgv(backup.passphraseFile, backup.dumpEnc, container), {
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const restoreExit = await pipeline.exited;
   log(`pg_restore exit=${restoreExit}`);
   if (restoreExit !== 0) return { error: "pg_restore failed", container };
 
@@ -305,9 +457,137 @@ export async function restoreBackupIntoContainer(
   };
 }
 
+/**
+ * Start a smoke-twin container on a volume a PREVIOUS run restored and kept, with no
+ * restore (`--local dump --reuse`, runbook R3.8, issue 1174).
+ *
+ * The cluster already holds the twin's roles and data, and the postgres image
+ * ignores POSTGRES_PASSWORD for an initialised data directory, so the password the
+ * previous container had is not recoverable from the volume. The restore superuser
+ * connects over the container's own local socket (trust, as the image configures
+ * it), so this sets a NEW password for it and hands that back, exactly the shape
+ * {@link restoreBackupIntoContainer} returns. Never run while another container
+ * still mounts the volume: two postgres servers on one data directory are two
+ * writers on one cluster (the caller adopts a live holder instead).
+ */
+export async function restartKeptTwinContainer(opts: {
+  volume: string;
+  stamp: string;
+  project: string;
+  bindHost: string;
+  log: (m: string) => void;
+}): Promise<RestoredContainer | { error: string; container?: string }> {
+  const { log } = opts;
+  if ((await run(["docker", "volume", "inspect", opts.volume], { log: () => {} })) !== 0) {
+    return { error: `the kept volume ${opts.volume} is gone; drop --reuse to restore the dump fresh` };
+  }
+  const holders = Bun.spawnSync(["docker", "ps", "-q", "--filter", `volume=${opts.volume}`]);
+  if (new TextDecoder().decode(holders.stdout).trim() !== "") {
+    return { error: `the kept volume ${opts.volume} is still mounted by a running container; stop it first (bun smoke:down), never with -v` };
+  }
+  const container = `rm-restore-${opts.stamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const environment = resolveStackEnvironment(process.env);
+  const labels = { ...stackLabels(environment, opts.project), [ROLE_LABEL]: TWIN_ROLE };
+  const password = generateLocalPassword();
+  log(`starting the kept smoke-twin on volume ${opts.volume} (${IMAGE}, no restore)`);
+  const runCode = await run(
+    [
+      "docker", "run", "-d", "--name", container,
+      "-e", `POSTGRES_USER=${LOCAL_USER}`, "-e", `POSTGRES_PASSWORD=${password}`, "-e", `POSTGRES_DB=${LOCAL_DB}`,
+      "-p", `${opts.bindHost}::5432`,
+      ...SHM_FLAGS, ...dockerLabelFlags(labels),
+      "-v", `${opts.volume}:/var/lib/postgresql`,
+      IMAGE,
+    ],
+    { log },
+  );
+  if (runCode !== 0) return { error: "docker run failed" };
+
+  const portOut = Bun.spawnSync(["docker", "inspect", "-f", '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}', container]);
+  const hostPort = new TextDecoder().decode(portOut.stdout).trim();
+  const literal = `'${password.replaceAll("'", "''")}'`;
+  log("waiting for the kept cluster to accept connections");
+  let reset = false;
+  for (let i = 0; i < 90 && !reset; i++) {
+    const r = Bun.spawnSync(["docker", "exec", container, "psql", "-U", LOCAL_USER, "-d", LOCAL_DB, "-X", "-Atc", `ALTER ROLE ${LOCAL_USER} PASSWORD ${literal}`]);
+    if (r.exitCode === 0) reset = true;
+    else await Bun.sleep(1000);
+  }
+  if (!reset) return { error: "the kept cluster never accepted a connection", container };
+  const env = { ...process.env, PGPASSWORD: password };
+  for (let i = 0; i < 30; i++) {
+    const check = Bun.spawnSync(["psql", `--host=${opts.bindHost}`, `--port=${hostPort}`, `--username=${LOCAL_USER}`, `--dbname=${LOCAL_DB}`, "-X", "-Atc", "SELECT 1"], { env });
+    if (check.exitCode === 0) {
+      log(`kept smoke-twin ready on ${opts.bindHost}:${hostPort}`);
+      return { container, host: opts.bindHost, port: Number(hostPort), username: LOCAL_USER, password, database: LOCAL_DB };
+    }
+    await Bun.sleep(1000);
+  }
+  return { error: "the kept smoke-twin never became reachable from the host", container };
+}
+
+/**
+ * The pg_restore that reads the decrypted archive: the RESTORE CONTAINER'S own
+ * client, over its local socket, never the host's.
+ *
+ * A custom-format archive can be read only by a pg_restore at least as new as
+ * the pg_dump that wrote it, and `bun smoke:capture` refuses a pg_dump older
+ * than the server it dumps (its GUARD 3) — so a real backup is written in the
+ * archive format of production's major, and a host whose pg_restore is older
+ * refuses it outright ("unsupported version (1.16) in file header": a host
+ * pg_restore 16 against an 18 archive, the failure
+ * scripts/tests/integration/smoke-dump-lifecycle.test.ts met first). The
+ * restore container runs POSTGRES_IMAGE, the pinned production major, so its
+ * client reads any archive production can produce. Its local socket trusts the
+ * container's own superuser, so no password travels here either.
+ */
+/**
+ * One bash: `gpg --decrypt <dump> | pg_restore ...`. The paths and the
+ * restore argv travel as positional arguments, never spliced into the script.
+ * Without pipefail the status is pg_restore's: gpg meeting a closed pipe after
+ * pg_restore finished is not a failed restore.
+ */
+export function restorePipelineArgv(
+  passphraseFile: string,
+  dumpEnc: string,
+  container: string,
+  user: string = LOCAL_USER,
+  database: string = LOCAL_DB,
+): string[] {
+  return [
+    "bash", "-c", 'gpg --batch --yes --passphrase-file "$1" --decrypt "$2" | "${@:3}"', "restore-pipeline",
+    passphraseFile, dumpEnc, ...restoreDumpArgv(container, user, database),
+  ];
+}
+
+/**
+ * `user` and `database` default to this module's throwaway twin. The stage
+ * target (scripts/release/stage-target.ts) restores the same archive into its
+ * own long-lived container, under its own superuser and into `defaultdb`.
+ */
+export function restoreDumpArgv(container: string, user: string = LOCAL_USER, database: string = LOCAL_DB): string[] {
+  return [
+    "docker", "exec", "-i", container,
+    "pg_restore", `--username=${user}`, `--dbname=${database}`, "--no-owner", "--no-privileges", "--exit-on-error",
+  ];
+}
+
+/**
+ * Remove the restore container AND its anonymous volume. The postgres image
+ * declares its data directory a VOLUME, so a container started without a named
+ * one (restore-check.ts, stage-rehearsal.ts) keeps its cluster — a complete
+ * copy of production — in an anonymous volume that `docker rm -f` alone leaves
+ * behind, unlabelled and invisible to smoke:clean. `-v` never removes a NAMED
+ * volume, so a `--local dump` boot's labelled volume is still kept for
+ * smoke:clean, as its contract says.
+ */
+export function teardownArgv(container: string): string[] {
+  return ["docker", "rm", "-f", "-v", container];
+}
+
 export function teardownContainer(container: string, log: (m: string) => void): void {
-  log(`cleaning up: docker rm -f ${container}`);
-  Bun.spawnSync(["docker", "rm", "-f", container]);
+  log(`cleaning up: docker rm -f -v ${container}`);
+  Bun.spawnSync(teardownArgv(container));
 }
 
 /**

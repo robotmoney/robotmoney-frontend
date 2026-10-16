@@ -117,13 +117,17 @@ no import map are needed. Keeps the runtime dependency to plain static files.
 
 ## D8 — One Postgres, run in Docker (not Supabase)
 
-> **Prod mode refined by D13:** production is a DigitalOcean Managed Postgres HA
-> cluster; the ephemeral (CI) and smoke (Docker) modes are unchanged.
+> **Environment selection superseded by D47.** The one-Postgres principle
+> remains. The old `ephemeral`/`smoke`/`prod` mode selection and volume rules
+> below describe the earlier implementation; use the adopted
+> [smoke production spec](technical/smoke-production-spec.md) for target
+> policy, identity, and local database modes.
 
 **Decision.** Consolidate comments (was Upstash), committee (was GitHub-as-DB),
-and dashboard data (was committed CSV/JSON) into a single self-hosted Postgres in
-Docker. Mode is chosen by `DATABASE_URL` + volume: ephemeral (CI), smoke
-(persistent volume), prod (external/managed URL).
+and dashboard data (was committed CSV/JSON) into a single Postgres owned by the
+backend. CI and local rehearsal may use Docker; production uses a managed
+Postgres cluster. The adopted deployment design defines target selection and
+identity checks.
 
 **Why.** One datastore, owned by the backend, portable across environments. Self-
 hosted fits the single-box deployment (D11). Supabase was rejected to avoid a
@@ -155,21 +159,18 @@ single versioned seam (the contract) that makes the eventual split mechanical.
 
 ## D11 — Single box, no reverse proxy
 
-> **Superseded for production by D13** (vendor-split tiered topology: Cloudflare
-> DNS+observability, DO compute+storage, surfaces on subdomains). The single-box
-> `docker-compose` remains the **CI and smoke** deployment; same-origin/no-CORS is
-> preserved *within* each surface because the Bun `api` co-serves its SPA assets at
-> the subdomain root.
+> **Deployment lifecycle superseded by D47.** D13 records production's
+> vendor-split topology; D29 records the static `website-server` boundary.
+> This entry preserves the no-reverse-proxy decision, not smoke commands or
+> service boot behavior.
 
-**Decision.** Deploy on one box (e.g. a DigitalOcean droplet). The Bun `api`
-process serves both the JSON API and the static frontend (`STATIC_DIR`).
+**Decision.** The application services can run on one host with host-based DNS
+routing and no application-level reverse proxy. API and static frontend assets
+may be separate services while remaining same-origin within each surface.
 
-**Why.** Same origin → no CORS, nothing to run in front of the app. No
-Caddy/nginx, no third-party hosting platform. TLS, if wanted, is terminated on the
-box however preferred.
-
----
-
+**Why.** Avoid adding routing software where the DNS/service boundaries already
+provide the required separation. Production placement is described by D13 and
+current deployment requirements by the [smoke production spec](technical/smoke-production-spec.md).
 ## D12 — Bun for the backend (not Node + a framework)
 
 **Decision.** Run the backend on **Bun** with `Bun.serve` — no HTTP framework. Bun
@@ -186,7 +187,7 @@ static server are unnecessary. Fewer dependencies, one runtime.
 **Decision.** For **production**, deploy `robotmoney.net` with a clean separation
 of concerns across both **tiers** and **vendors**, with **no routing software
 anywhere**. The full map is
-[architecture.md § Network topology](architecture.md#network-topology--dns-origins--vendors):
+[architecture.md § Network topology](architecture/network-topology.md#network-topology--dns-origins--vendors):
 
 - **Cloudflare — DNS + observability only.** Authoritative DNS, proxied TLS/DDoS,
   and monitoring (Health Checks, analytics, Logpush). Configuration, not code — no
@@ -267,8 +268,8 @@ important check is that the **fields** are correct, not the numbers.
 
 **Fidelity caveat.** Preview is for layout/copy/components/navigation; for
 realistic, evolving data run `bun run smoke` (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
-See [architecture.md § Preview mode](architecture.md#preview-mode-goldens-backed-no-backend)
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
+See [architecture.md § Preview mode](architecture/frontend.md#preview-mode-goldens-backed-no-backend)
 for the full design (revised by D19: the replay engine is now the client-side
 wrapper, not a server).
 
@@ -394,7 +395,7 @@ placeholder-form env override still flips an adapter back to
 `configured: false`), and `base-rpc-client.ts` becomes the **single RPC
 transport** for every chain read. The shared endpoint contract the feeds were
 built against (DTOs, provenance fields, degrade rules) is
-[architecture.md § Live-data contract](architecture.md#live-data-contract--4-new-dashboard-endpoints);
+[architecture.md § Live-data contract](architecture/dashboards-live-data.md#live-data-contract--4-new-dashboard-endpoints);
 the frontend binds via
 boot-registered factories in `alpine/views.js` (e.g. `buybackSummary`).
 
@@ -433,11 +434,11 @@ fixed constant — both flagged in #112 for a later pass.
 instead of leaving it undocumented (issue #189): `mcp.staging.robotmoney.net`
 (staging) / `mcp.robotmoney.net` (production), Cloudflare-proxied like
 `committee.`/`app.`
-([architecture.md topology §3.1](architecture.md#31-mcp-hostname-and-port-d18)).
+([architecture.md topology §3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)).
 It is deployed to the **same DO
 droplet** as `committee.` (it is this repo's surface, and the `/health`
 contract already couples IC health to MCP reachability —
-[architecture.md topology §9](architecture.md#9-seamless-without-a-single-origin-and-observability)), but
+[architecture.md topology §9](architecture/network-topology.md#9-seamless-without-a-single-origin-and-observability)), but
 runs as its **own container** (`mcp` service in `docker-compose.yml`) on its
 **own port**, so it cannot share `committee.`'s proxied port `443`. It uses
 Cloudflare's alternate proxied-HTTPS port **`8443`** (one of Cloudflare's
@@ -457,7 +458,7 @@ Worker, no reverse proxy, no new vendor permission" property intact instead
 of reaching for Cloudflare Origin Rules or a second droplet.
 
 **Relationship.** Refines D13 (architecture.md topology
-[§3](architecture.md#3-the-surfaces--subdomain-map)/[§3.1](architecture.md#31-mcp-hostname-and-port-d18)):
+[§3](architecture/network-topology.md#3-the-surfaces--subdomain-map)/[§3.1](architecture/network-topology.md#3-the-surfaces--subdomain-map)):
 the surface table gains a
 fourth row; the "no reverse proxy" and "no routing software" properties are
 unchanged. No code change — `mcp/src/server.ts` and `docker-compose.yml`
@@ -481,6 +482,11 @@ a docs-only, config-value decision.
 ---
 
 ## D19 — Hosted preview URLs on Cloudflare Pages (revises D14 and D13)
+
+> Superseded by D20 before activation. No hosted preview deployment was
+> established; the current preview is local-only under
+> [architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
+> The mechanism below is retained as decision history, not operating guidance.
 
 **Decision.** Ship a **hosted, per-branch preview URL** on Cloudflare Pages
 (via `wrangler pages deploy --branch`) for every push to `preview/**` branches.
@@ -562,7 +568,7 @@ Cloudflare's, not ours; we own none of that subdomain. D13's properties
 **Fidelity caveat.** Unchanged from D14: preview is for layout/copy/components
 /navigation; values are mock/point-in-time. Run `bun run smoke` for realistic
 data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -621,7 +627,7 @@ same PR.
 **Fidelity caveat.** Unchanged from D14/D19: preview is for
 layout/copy/components/navigation; values are mock/point-in-time. Run
 `bun run smoke` for realistic data (see
-[architecture.md § Smoke Specification](architecture.md#smoke-specification)).
+[architecture.md § Smoke Specification](architecture/deployment.md#smoke-specification)).
 
 ---
 
@@ -630,7 +636,7 @@ layout/copy/components/navigation; values are mock/point-in-time. Run
 **Decision.** Abandon the hosted MCP transport (`mcp/`) as a member-facing
 surface. Committee members participate over **REST/JSON only**
 (`ROUTES.committee`, already the "REST sibling" of every MCP tool — see
-[architecture.md §9.5](architecture.md#95-surfaces--one-core-one-transport)).
+[architecture.md §9.5](architecture/investment-swarm.md#95-surfaces--one-core-one-transport)).
 Everywhere the architecture previously described "MCP or REST" as parallel
 transports, REST is now the only one. The new flow has three steps, each
 already backed by something this project maintains or already ships:
@@ -681,7 +687,7 @@ secure.
 
 **Relationship.**
 - **Supersedes D18** in full: the `mcp.` subdomain row leaves the surface map
-  ([architecture.md §3](architecture.md#3-the-surfaces--subdomain-map)); §3.1
+  ([architecture.md §3](architecture/network-topology.md#3-the-surfaces--subdomain-map)); §3.1
   is retired.
 - **Revises architecture.md §9** (IC feature architecture): §9.1 drops the
   `mcp/` layer row and repo-layout entry; §9.2's actor identity mechanism is
@@ -724,8 +730,8 @@ secure.
   nothing requires it.
 - **Wait and see — leave MCP deployed but stop building on it.** Rejected: an
   undeprecated surface with a live subdomain, port, and OAuth server invites
-  new work to target it by default (as the onboarding-ic-workflow plan was
-  about to do in Phase 3) and keeps paying the CI/ops cost with no offsetting
+  new work to target it by default (as the former onboarding plan proposed in
+  Phase 3) and keeps paying the CI/ops cost with no offsetting
   signal that waiting produces a different answer.
 - **Retire the code in the same change as this decision.** Rejected for scope
   control: this entry and the architecture.md/spec edits are reviewable as a
@@ -737,6 +743,10 @@ secure.
 ---
 
 ## D22 — Evals run a registry-selected OpenCode model; the onboarding eval is layered and shares the smoke's stack
+
+> The eval's reuse of local test-stack code is eval architecture only. D47
+> retires the smoke-host onboarding/session driver as a production mechanism;
+> nothing in this decision defines deployment participants or their lifecycle.
 
 **Local suite refinement (2026-07-29).** Development evals are registered as
 native Bun tests under `evals/` and run through the separate `bun run eval`
@@ -781,7 +791,7 @@ selector.
    A single sample is a coin flip reported as a verdict.
 
 Rules 3 and 4 are specified normatively in
-[architecture.md §11.3](architecture.md#113-onboarding-eval-normative) (E3, E4) —
+[architecture.md §11.3](architecture/member-onboarding.md#113-onboarding-eval-normative) (E3, E4) —
 the layer table, the observation mechanism, the outcome classes, and the CI
 placement live there, not here.
 
@@ -904,9 +914,15 @@ exactly this reason.
 > Every eval runs a model resolved from the **versioned registry** in
 > `scripts/lib/model-registry.ts`, selected by the single `AGENT_MODEL` signal
 > and billed to the environment's own `OPENCODE_API_KEY`. The repo default is
-> `opencode/deepseek-v4-flash`. A keyless run remains **available and
+> `opencode/deepseek-v4.1-flash`. A keyless run remains **available and
 > supported** — `AGENT_MODEL=free` selects Zen's no-credential tier — but it is
 > no longer mandatory.
+>
+> *Note, 2026-10-05 (provider rename):* OpenCode Zen renamed the default
+> member from `deepseek-v4-flash` to `deepseek-v4.1-flash`; the old id now
+> answers `Not Found`. The selector (`AGENT_MODEL=deepseek`) is unchanged and
+> the registry maps it to the new id. `deepseek-v4-pro` was not verified as
+> renamed and is left as it was.
 
 Rules 2, 3, and 4 are **unchanged and still binding**: no inference-off mode on
 an eval path, layered not monolithic, scored by sampling.
@@ -1046,7 +1062,7 @@ default, opt-in per PR, nightly for the trend.
 
 Dependency direction is fixed and enforced: tests and evals may import runtime
 and shared code; **runtime must never import test or eval code**. The full target
-layout is [architecture.md §3](architecture.md#test-eval-and-tooling-layout).
+layout is [architecture.md §3](architecture/repository-layout.md#test-eval-and-tooling-layout).
 
 **Migration is incremental and bounded to three moves:** create `evals/`; land
 D22's extractions directly in `stack/` and `agent/` rather than as more flat
@@ -1708,7 +1724,7 @@ correction, since `scripts/tests/unit/test-path-citations.test.ts` scans
 
 ## D29 — The api process (`STATIC_DIR`) is the cutover host for `robotmoney.net`, and its deploy path prerenders per-route HTML (issue #480)
 
-*(Runbook: [deployment.md](./runbooks/deployment.md) §2.1.)*
+*(Deployment authority: [smoke production spec](./technical/smoke-production-spec.md); network topology: [architecture §8](./architecture/deployment.md#8-deployment).)*
 
 **Decision.** Two questions, answered together because the first determines the
 second.
@@ -1716,16 +1732,13 @@ second.
 **1. Which host serves `robotmoney.net` after cutover? The `api` process,
 serving an assembled `STATIC_DIR`.** It is what the cutover origin already
 does — `robotmoney.network` is a `cloudflared` connector onto the single-box
-stack (`docs/runbooks/deployment.md` §3.3), and `docker-compose.yml` sets
+stack (see [`cloudflared.config.example.yml`](../cloudflared.config.example.yml)), and `docker-compose.yml` sets
 `STATIC_DIR: /srv/frontend` so the api co-serves the marketing SPA with no
 reverse proxy (D11, D13). **Cloudflare Pages is not a candidate for
 production**: D13 confines Cloudflare to DNS + observability with no software
-to deploy, `docs/runbooks/deployment.md` §1 disables Cloudflare git integration
-outright, `CF_API_TOKEN` carries no Pages permission, and the one Pages project
-(`robotmoney-preview`, D20) has automatic production deploys **disabled** with
-previews limited to `preview/*`. Pointing production at Pages would reverse
-three decisions to obtain a prerenderer that can equally be run on the host we
-already have.
+to deploy, and D20's hosted-preview proposal was never activated. Pointing
+production at Pages would reverse the vendor split to obtain a prerenderer
+that can equally be run on the host we already have.
 
 **2. The prerender runs in that host's deploy path.** `STATIC_DIR` is now an
 **assembled** directory, not the raw source tree: `scripts/static-assembly.sh`
@@ -1762,16 +1775,17 @@ cannot disagree with the JS path.
 
 **Relationship.** Refines D13's static tier for the cutover: D13 assigns
 marketing on the apex/`www` to a **DO Spaces CDN**, which remains the intended
-end-state tier and is unimplemented in this repo (no upload path, no workflow,
-no credential wiring beyond the inventory in `docs/runbooks/deployment.md` §4).
+end-state tier and is unimplemented in this repo (no upload path or workflow;
+verify current host state at the release commit).
 This decision does not foreclose it — `_static/` is a plain static assembly, so
 the Spaces migration, when it happens, uploads exactly this directory and
-inherits the prerender for free. Supersedes nothing; D20 keeps Cloudflare Pages
-for `preview/*` hosting, unchanged.
+inherits the prerender for free. Supersedes nothing. D20's proposed Pages Git
+hosting was never activated; preview is local-only under
+[architecture §4](./architecture/frontend.md#preview-mode-goldens-backed-no-backend).
 
 **Alternatives rejected.**
-- **Enable production deploys on the Cloudflare Pages project** — reverses D13
-  (Cloudflare = DNS + observability), D20 (`preview/*` only) and the GitOps
+- **Enable production deploys on Cloudflare Pages** — reverses D13
+  (Cloudflare = DNS + observability), the unactivated D20 proposal, and the GitOps
   principle that no vendor watches the repo, and would still leave
   `robotmoney.network`'s api-served origin unfixed.
 - **Prerender into `frontend/public/` in place** — build output in the source
@@ -1802,6 +1816,8 @@ changed either — deleting it removed dead request-time code, not a feature.
 ---
 
 ## D30 — AgentMail for Swarm onboarding email, sent from an isolated subdomain via one-time cross-account NS delegation (issue #549)
+
+> **Superseded by [D50](#d50) on 2026-09-23.** Swarm onboarding email is removed outright, vendor and all. Kept for the history of the DNS delegation this entry authorised.
 
 **Decision.** Two questions, resolved together since the vendor choice drives
 the DNS shape.
@@ -1961,60 +1977,32 @@ and still survives. No credential column and neither `applied_at` nor
 
 ---
 
-## D32 — One-time claim makes the admin credential durable; the per-boot token is superseded, not revoked (issue #553)
+## D32 — One-time claim makes the admin credential durable (issue #553)
 
-**Decision.** The admin credential can be claimed exactly once:
-`POST /api/admin/claim`, authorized by the *current* admin credential (on a
-first-ever boot, the per-boot token the interactive TUI displays), persists
-the sha256 hex of an operator-chosen password (≥ 12 characters) into the new
-one-row `admin_credential` table (migration
-`backend/migrations/0028_admin_credential.sql`). While that row exists,
-`backend/src/api/auth.ts`'s `isPrivileged()` treats the stored hash as the
-durable operator credential: it survives every restart, so `bun run smoke` /
-`bun run smoke:stage` re-boots stop rotating the operator out — the lockout
-this issue is about. A public boolean probe, `GET /api/admin/is-claimed`,
-lets the smoke boot decide whether the TUI may display the per-boot token.
+> **Product/API behavior only.** The old per-boot token display, TUI, and
+> smoke-driver details are implementation history superseded by D47 and the
+> [smoke production spec](technical/smoke-production-spec.md). This entry does
+> not define how a future deployment provisions an admin credential.
 
-**Superseded, not revoked.** After a claim, the per-boot `ADMIN_TOKEN` env
-mint *remains valid* — but only as the stack-internal automation credential,
-and it is never displayed again (the TUI shows the `Admin pass` line only
-once the post-ready probe confirms *unclaimed*). This is deliberate, and is
-the refinement of the issue's "stop minting" sketch: the smoke's own drivers
-(swarm session runner, onboarding driver, e2e children) authenticate against
-`X-Admin-Token`-guarded routes with the per-boot token threaded through
-in-process, and the server holds only a *hash* of the claimed password, so it
-cannot hand the claimed secret to that automation. Revoking the env token on
-claim would kill the standing smoke's core loops on the next boot. The issue's
-test plan anticipates exactly this shape ("or is superseded, per the chosen
-design").
+**Decision.** An admin credential can be claimed once through
+`POST /api/admin/claim`. The API stores a SHA-256 hash in the one-row
+`admin_credential` table (migration `0028_admin_credential.sql`); subsequent
+privileged requests compare credentials against that durable hash. The credential
+is never stored in plaintext in the database. Failure to read the credential
+state fails closed.
 
-**`RM_ALLOW_INSECURE` stops opening the gate once claimed.** A claim is an
-explicit security opt-in; after it, only the claimed password or the current
-boot's own token authorizes — never the insecure-mode bypass.
+The login credential is an application/admin concern, separate from PostgreSQL
+roles and participant keys. The adopted smoke spec governs deployment credentials
+and does not specify the admin credential's provisioning flow. Any future
+provisioning mechanism must be documented in that design before production use.
 
-**Hashing scheme.** sha256 hex via the existing `hashKey()`
-(`backend/src/lib/keys.ts`) — the same never-plaintext posture already used
-for swarm member access keys — compared constant-time (`timingSafeEqual`),
-like every other credential in `auth.ts`. Not argon2/bcrypt: `isPrivileged()`
-runs on every admin/swarm-admin request (the dashboard polls), a KDF per
-request is a hot-path cost, and the credential is bearer-token-shaped
-(`X-Admin-Token`), with the 12-character minimum bounding the offline-crack
-exposure. The migration also `REVOKE`s the queue worker role's default grant
-on the table so a worker-role compromise cannot read the hash at all.
-
-**Fail closed and loud.** A database failure inside `isPrivileged()`
-propagates to the router's sanitized 500 — it never silently falls back to
-the env token while a claim might exist.
-
-**Recovery path.** There is no self-serve reset for the single smoke admin. A
-forgotten claimed password is an explicit operator action against the
-database — `DELETE FROM admin_credential;` (or `bun run smoke:clean` for a
-full wipe) — which re-arms the first-boot one-time-claim state, restoring
-today's "restart shows a fresh TUI token" behaviour.
-
----
+**Scope.** This decision preserves the one-time durable claim and API
+authorization behavior. It does not authorize a TUI, automatic token display,
+a host-side session driver, or direct SQL as a recovery procedure.
 
 ## D33 — A member may amend its take: append-only revisions, latest wins, capped per session (issue #573)
+
+> **Superseded by [D49](#d49) on 2026-09-23, which [D51](#d51) superseded on 2026-09-24.** Amendments are allowed again: each is its own signed row and the newest is marked final. Kept for the history of the revision rows that exist.
 
 **Decision.** A seated swarm member may amend and resubmit its take inside a
 session. Amendment is **append-only**: each revision is its own immutable row in
@@ -2241,14 +2229,13 @@ leaves it on.
 
 **Consequences.**
 
-- `docs/runbooks/deployment.md` §2.1 carries the operator surface: the exact
-  repair statement (one per refusal line, always the holder's handle), how to
-  get a `psql` session in both topologies, the override, the rollback pointer,
-  and the `/health` field.
+- [D34](#d34--the-apis-handleid-namespace-boot-gate-is-fail-closed-bounded-observable-and-overridable-issue-602)
+  records this guard's behavior and controls; implementation is in
+  `backend/src/db/handle-namespace.ts`. The adopted smoke specification owns
+  future deployment preflight and recovery behavior.
 - The guard is a **boot-time snapshot**. There is no periodic re-check, so a
   `pg_restore` into a live database is not re-validated until the api restarts;
-  the runbook and `src/db/handle-namespace.ts` both say so rather than leaving
-  the limit implied.
+  D34 and `src/db/handle-namespace.ts` record that limit.
 
 **Rejected alternatives.**
 
@@ -2290,10 +2277,9 @@ split between them is deliberate rather than unfinished work:
   already locked out or already hitting an API error.
 - **Deploy and ingress subdomains stay `.net`.** `site.`, `swarm.`, `app.` and
   `staging.` are on the `.net` zone under D13's host-based routing, with D29's
-  api process serving the cutover host. The Cloudflare API token is scoped to
-  the `robotmoney.net` zone (`docs/runbooks/deployment.md`). Rewriting these in
-  a runbook produces hostnames that do not resolve, so the runbook and
-  `cloudflared.config.example.yml` keep them.
+  api process serving the cutover host. The tunnel hostname mappings remain in
+  `cloudflared.config.example.yml`; changing the canonical web domain does not
+  rename those ingress hosts.
 
 **Why this needs writing down.** `robotmoney.net` is a strict substring of
 `robotmoney.network`. Two consequences, both of which have already bitten:
@@ -3687,6 +3673,998 @@ intercepting GETs, keeps that guarantee absolute regardless of `?api=`.
 - **Block the merge on the prod/stage sweep too** — rejected above; a live
   host's availability is not a property of the PR's diff.
 
+**Amendment (2026-10-06): the gate now matches the decision.** Two jobs had
+drifted past D45's "a client-only PR never waits on `e2e.yml`'s live smoke
+boot". `e2e.yml` skipped only `**.md`/`**.txt`, so a view, data or image change
+booted the full stack (~18 min), and `integration.yml` selected on all of
+`scripts/**`, so a PR that touched only `scripts/tests/unit/**` ran its ~20 min
+suite. The unit tier and `repo-guards` still run on every PR (they are cheap).
+
+- **e2e is an allowlist of what may skip it, not a list of what runs it.**
+  `e2e.yml`'s `changes` job uses `predicate-quantifier: every` over `**` minus
+  the skip entries: Markdown and text, `docs/`, `brand-assets/`, `goldens/`,
+  `frontend/test/`, the site's copy (`frontend/public/{views,data,skills,blog,
+  avatars,assets/img}`), `scripts/tests/unit/`, and `scripts/web-client/`.
+  Anything else, including a path nobody thought of, runs e2e. A push, the
+  nightly and a dispatch are never filtered, so every suite still runs against
+  `main` and every night (D26).
+- **The view specs moved their PR coverage to web-client.** 41 of the 50
+  browser specs stub `/api/**` themselves and need only a static page, so
+  `bun run --cwd frontend check:static` runs them against the assembled site
+  (`scripts/web-client/static-site-server.ts`, nginx's fallback rule, no api, no
+  Docker). The five that need a real api are named, with a reason each, in
+  `scripts/web-client/static-specs.ts` (`NOT_STATIC`) and run in e2e only. Every
+  other spec joins the web-client gate by default.
+- **Client CODE still selects e2e.** `frontend/public/assets/**` (js, css),
+  `website-server/`, and everything under `backend/`, `contract/`, `packages/`,
+  compose and the lockfiles run the live stack. The five api-backed specs have
+  no other PR-time home, so a copy change skips them and a code change does not.
+  Making them stub their calls, so they can join the web-client gate, is the
+  follow-up that would let client code skip e2e too.
+- **integration drops `scripts/tests/unit/**`.** Its filter lists the `scripts/`
+  directories positively, because a `some` filter cannot subtract.
+  `ci-gate-path-filters.test.ts` fails if a new `scripts/` or `scripts/tests/`
+  directory is neither listed nor named as skipped, so a new directory cannot
+  silently skip the job.
+- `dorny/paths-filter` moves from v3.0.2 to v4.0.3 (every workflow, one pin):
+  `predicate-quantifier` first ships after v3.0.2.
+
+**Alternatives rejected.** A `skip-e2e` label (depends on memory, hides risk).
+Running e2e only after merge (backend and money-path PRs would lose their
+pre-merge bar). A single orchestrator workflow with one filter job (the
+fan-in gate removed after the PR 316 incident, tracked in issue 348). Test
+selection from the import graph (precise, but weeks of work for a gain the
+allowlist already captures).
+
+<a id="d46"></a>
+
+## D46 — Prior smoke migration design (superseded by D47)
+
+> **Historical decision, not current instruction.** D47 supersedes D46's
+> deployment mechanism in full, including its `rm_migrator` credential,
+> external-migration step, phase plan, and smoke environment model.
+
+On 2026-09-21, D46 proposed separating application startup from production
+migration and limiting each tool to one credentialed job. Those goals motivated
+the subsequent design review. Its detailed mechanism and rationale are retained
+in Git history; do not implement any part of D46 as an independent phase.
+
+Recover the original entry with
+`git show 74b22147ddd5cf1bad1db13ca80a8d45f2a53c3c:docs/decisions.md`.
+D47 is the current decision record.
+
+
+<a id="d47"></a>
+
+## D47 — Smoke production spec is the sole adopted deployment design; supersedes D46's mechanism (Lucas, 2026-09-22)
+
+**Status.** Adopted 2026-09-22; recorded 2026-09-23 during documentation
+consolidation. Approved for implementation, not yet shipped. This records the
+accepted design and does not authorize a production cutover.
+
+**Decision.** [Smoke production spec](technical/smoke-production-spec.md) is the
+single source of deployment-design requirements. It replaces D46's credential
+model and tool mechanics, the former upgrade-deployment specification, and its
+engineering plan in full as implementation authority. Their full bodies were
+removed from the documentation tree on 2026-09-23; use Git history when their
+historical rationale is needed. No residual phase remains an active
+implementation instruction.
+
+The adopted design uses `rm_owner LOGIN` for prompted migration access, never a
+new `rm_migrator` role. Production migration and initialization are separate from
+boot. Smoke reconciles a named instance, checks target enrollment and schema
+compatibility, writes a journal and receipt, and exits after readiness. The
+credential file defines standing HTTP participant containers; the host session
+driver, inline judge and Docker-socket participant launcher are not the target.
+The specification owns the exact interfaces, transition and W1/W2/W3 gates.
+
+**Authority.** [Release-runbook policy](technical/release-runbooks.md) remains in
+force for gates, phases, evidence and approval. Standing and per-release runbooks
+retain dated operational evidence but must not override the adopted mechanism or
+be reused as new-design templates. No historical per-release runbook remains in
+the documentation tree; a future one is created only after a release is
+scheduled and its tools exist at the target commit. D48 records the separate
+accepted judge-mode decision and replay prerequisite.
+
+**Not adopted.** The external `bozemanpass/stack` tool, Kubernetes staging plan,
+and associated reconciliation/field guide were not adopted. Their proposal
+bodies were removed from the documentation tree and can be recovered from Git.
+They are distinct from this repo's `scripts/stack/` Compose library.
+
+**Implementation boundary.** Existing code can still implement the old flags and
+credential paths. Adoption does not mean the replacement has shipped. Any
+operation on legacy code must be checked at the exact release SHA. Implementation
+and production cutover must satisfy the adopted specification and standing
+release gates; the deprecated engineering plan does not schedule that work.
+
+
+<a id="d48"></a>
+
+## D48 — Judge mode is `off | enforce`; `shadow` is not a go-forward mode (Lucas, 2026-09-22)
+
+> **Implementation prerequisite waived by [D53](#d53) on 2026-09-24.** The replay makes no judge call, and under D52 the judge is a participant. `shadow` leaves the write path without the soak.
+
+**Status.** Accepted 2026-09-22; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** The go-forward operator choices are only `off` or `enforce`. The
+system must not create new `shadow` judgements. This product decision does not
+change the deployment lifecycle or participant boundary owned by D47 and the
+[smoke production spec](technical/smoke-production-spec.md).
+
+**Historical data.** Existing judgement rows and signed receipts containing
+`shadow` remain readable; history is not rewritten.
+
+**Implementation prerequisite.** Before removing `shadow` from the write path,
+verify that `swarm-judge-replay.ts` covers the real recorded inputs needed for
+the observe-before-enforce soak. The decision remains unimplemented until that
+prerequisite is met. The former long-form specification was removed from the
+documentation tree; recover it from Git only for historical context.
+
+## D49 — One immutable take per member per epoch; supersedes D33's amendments (Lucas, 2026-09-23)
+
+> **Superseded by [D51](#d51) on 2026-09-24.** The product rule (one take counts) was right; the storage rule (one row exists) was not. Amendments return, with an explicit final flag.
+
+**Status.** Accepted 2026-09-23; not yet implemented. This records the target,
+not a claim about the current API behavior.
+
+**Decision.** A member submits exactly one take per session (epoch). Take
+identity is `(session, member)`, unique server-side. A second submission on
+that key returns the existing record and is treated by the participant as
+success; it never creates a second row and never replaces the first. There is
+no amendment, no revision, no cap, and no latest-per-member read. What a
+member said in an epoch is what it said. This is the wording already adopted
+in the [smoke production spec](technical/smoke-production-spec.md) §6.2 under
+"Idempotent submission"; this entry makes it a product decision rather than a
+side effect of that spec.
+
+**Why.** Epochs are short and continuous (scheduler spec §2). A member that
+changes its mind states the new view in the next epoch, on the record, with a
+timestamp. Amendments inside a window bought little once windows became short
+and gave up the simplest possible story for a signed track record: one
+signature, one take, one epoch. The retry story the amendment machinery was
+also serving (a crash after submit, an old/new container overlap) is fully
+served by idempotent `(session, member)` submission.
+
+**What this supersedes.** D33's append-only revisions, the
+`SWARM_TAKE_REVISION_CAP`, and the `UNIQUE (session_id, member_id, revision)`
+key from migration 0028. D33's other statements stand: an accepted take's
+content is never `UPDATE`d, nothing is deleted, no admin endpoint writes
+`swarm_recommendations`.
+
+**Historical data.** Existing rows with `revision > 1` remain readable and
+their permalinks stay valid; history is not rewritten. Reads of a legacy
+session with several revisions for one member keep resolving latest-per-member
+for that session only. New sessions never have more than one row per member.
+
+**Implementation.** Restore server-side `(session_id, member_id)` uniqueness
+for new sessions and make resubmission return the existing record; remove the
+cap and the revision write path; retire `swarm-take-revisions.test.ts` in
+favour of an idempotent-submission test. Tracked under the deployment refactor
+issue (#1026), W3.
+
+## D50 — Swarm onboarding email is removed; reverses D30 (Lucas, 2026-09-23)
+
+**Status.** Accepted 2026-09-23. Implemented in the same change as this entry
+(issue #1026, W5).
+
+**Decision.** The swarm sends no email, to anybody, ever. The whole feature is
+deleted rather than disabled: the notification module, the AgentMail worker
+adapter, the three `swarm.send_*_notification` job kinds, the triggers on apply,
+on activation and on a seat opening, the `SWARM_NOTIFICATION_EMAIL_FROM` /
+`_TRANSPORT_URL` / `_TRANSPORT_TOKEN` settings with their compose and stack
+passthroughs, the outbox table and the waitlist's "notified" stamp. There is no
+flag that turns it back on and no vendor left to bill. Migration
+`0084_drop_swarm_notifications.sql` drops the schema.
+
+**Why.** Three emails were ever sent — an application receipt, an approval
+notice and a seat-open notice to the waitlist — and none of them was the only
+way to learn what it said. The application receipt carried a member id the API
+already returns in the `POST /api/swarm/apply` response body, which is where the
+onboarding skill reads it from; the approval notice announced a `status` the
+applicant's own status page shows; the seat-open notice went to a waitlist an
+operator reads by hand anyway. Against that, the feature was carrying a
+third-party mail vendor, an API token, a Cloudflare Worker deployed outside this
+repository's build, a cross-account NS delegation for `notify.robotmoney.net`,
+a durable outbox holding contact addresses, and three worker job kinds with
+their own retry semantics. The cost was entirely in the parts nobody watches:
+deployment surface, a live credential, and PII at rest. Removing it is the
+larger simplification available to the onboarding path.
+
+**What this reverses.** All of [D30](#d30): the AgentMail vendor selection, the
+isolated-subdomain sending design, and the one-time cross-account NS
+delegation's purpose. The delegation itself is a DNS fact this repository does
+not control and this entry does not undo; D30 stays readable for that history.
+D30's rejected alternatives are moot — there is no sender to choose.
+
+**What stays.** `swarm_waitlist` keeps collecting addresses through
+`POST /api/swarm/waitlist`; the table is not dropped, because an address given
+on purpose is still worth having and an operator invites from it by hand.
+`SWARM_PUBLIC_BASE_URL` and `resolveSwarmPublicBaseUrl()` stay: the applicant
+status page is now the only channel an applicant has, and the origin its links
+are built from matters more, not less.
+
+**Enforcement.** `scripts/tests/unit/no-swarm-email.test.ts` fails if the
+feature returns under any of its old names.
+
+## D51 — A member's newest take is the final one; submitting unsets the prior (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; implemented 2026-09-25 under issue #1026
+(see **Implemented** below). Supersedes [D49](#d49), which was wrong about the
+storage rule. Restores the substance of [D33](#d33) with an explicit marker in
+place of an implicit read, and retires D33's state-keyed amendment gate.
+
+**Decision.** A member may submit more than once while its session's
+submission window is open. Every submission is a new immutable row in
+`swarm_recommendations` with its own content, nonce, signature and permalink.
+Each take carries a **final** flag. Accepting a new take sets that take final
+and unsets the member's previous one, so at every instant a member has exactly
+one final take in a session. Every read that means "the session's takes"
+selects the final ones. When the submission window closes, submissions are
+refused by instant (`system-scheduler-spec.md` §4.2), so whatever was final at
+the close stays final for aggregation, judging and the receipt.
+
+**Why this shape.** The product rule is "one take counts", not "one row
+exists". D49 mistook the second for the first and tried to enforce it with a
+uniqueness constraint, which cannot be added to a table that already holds
+several rows per member and cannot be scoped to new sessions, because a
+partial index can only test the row in front of it. A flag on the take needs
+no such distinction: legacy rows get their newest marked final and the rule
+applies everywhere at once.
+
+**What stays append-only.** A take's content, nonce and signature are never
+`UPDATE`d, nothing is deleted, and no admin endpoint writes the table. The
+final flag is metadata about which row counts, not a rewrite of what a member
+said, and the table's guard triggers block only `DELETE` and `TRUNCATE`, so
+setting it is permitted as written.
+
+**Revisions and the cap.** The `revision` column stays. It is inside the
+signed consensus receipt and hashed into `inputs_digest`, and the published
+contract requires the field, so removing it would be a receipt format change
+for no gain. `SWARM_TAKE_REVISION_CAP` stays at 5 and continues to bound how
+many rows one member can add to one session.
+
+**A live bug this exposes.** Two paths already default `revision` differently,
+`?? 0` in `judge-session.ts` and `?? 1` in `projections.ts` and
+`consensus-receipt.ts`. The same take set can therefore produce two different
+digests. Fix that to a single default as part of this work; it is independent
+of the decision.
+
+**What D49 got right and this keeps.** Idempotent submission: a retry of the
+same submission returns the existing record rather than creating a second row,
+so a crash after submit or an old and new container overlapping during a
+roster change produces at most a redundant request. That is retry
+deduplication, and it is a different thing from an intentional amendment.
+
+**Implementation.** Add the final flag with a migration that backfills each
+legacy session's newest revision per member as final; set and unset it inside
+the accepting transaction; resolve reads and `loadFrozenTakeSet` from the flag
+instead of `ORDER BY revision DESC`; keep `swarm-take-revisions.test.ts` and
+extend it for the flag. Tracked under the deployment refactor issue (#1026),
+W3.
+
+**Implemented.** Migration 0092 added the flag, the backfill, the partial
+unique index `(session_id, member_id) WHERE final`, the `UPDATE (final)`-only
+grant to `rm_app`, and the `BEFORE INSERT` trigger that marks the newest
+revision final and unsets the member's prior one. That trigger is the one
+implementation of the acceptance rule: `submitRecommendation`
+(`backend/src/swarm/domain.ts`) inserts inside a transaction that holds the
+session row `FOR SHARE` and a per-(session, member) advisory lock, so racing
+amendments from overlapping containers are accepted in order and the later one
+is final. Every read that means "the session's takes" selects `WHERE final`:
+`loadFrozenTakeSet`, the session read, the member's record page, the session
+list's take count and the permalink's forward pointer. A resubmitted nonce with
+the same signed bytes returns the existing record with HTTP 200 and
+`alreadySubmitted: true` (smoke spec §6.2); the same nonce under other bytes is
+refused as a replay. One rule freezes every take, first or amendment: the
+session is `collecting` and the database clock is before `window_closes_at`
+(scheduler spec §4.2); D33's `TAKES_AMENDABLE_STATES` allowlist is removed. The
+single `revision` default is `TAKE_REVISION_DEFAULT = 1`, read through
+`takeRevision()` by the judge input, the projection and the receipt. Proved by
+`backend/tests/swarm-take-idempotent.test.ts`, `swarm-take-revisions.test.ts`
+and `consensus-receipt-judge-roundtrip.test.ts`.
+
+<a id="d52"></a>
+
+## D52 — File credentials are final, the smoke spec governs the whole stack, and epochs close on a grid (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from a three-question
+decision session on issue #1026. The specifications carry the detail:
+[`smoke-production-spec.md`](technical/smoke-production-spec.md) §12 and
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13.
+
+**Decision 1: D47's file credentials are the lasting design.** Secrets live in
+files outside every checkout: runtime role passwords in the deploying user's
+`~/.env`, each participant's signing key, bearer token and model key in its
+`credential.json` entry, and the three service tokens (scheduler, analytics
+producer, operator admin) as per-instance files whose hashes and rights sit in
+the API's token store. The `ADMIN_TOKEN` environment variable and the shared
+analytics secret are retired into that one model. No secret or env file lives
+in repository source. This retires the 2026-09-18 in-memory lease direction.
+
+**Decision 2: the smoke spec governs every service in the stack.** That brings
+`analytics-producer` and the pipeline worker into its credentials, bootstrap
+data and readiness. The ban on schedule rows covers sessions only: bootstrap
+data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
+`rm_worker` and runs preflight checks 1-3; the research lane, which serves only
+retired rows, is removed.
+
+**Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
+close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
+windows, downtime skips to the next future grid instant, and a duration change
+re-anchors the grid at the current window's close. The judging duration becomes
+a subject column captured at turnover.
+
+**Defaults taken with these decisions.** Event sequence numbers come from one
+counter row, gapless and in commit order; job
+pushes are cut; every instant comparison uses the database clock; a judge whose
+member operator is `robotmoney` passes the third-party gate; production key
+rotation uses the existing `rotate-key` admin route; a roster role that
+disagrees with the database refuses the boot; the target lock uses one constant
+key over a direct connection.
+
+**Refined the same day, after review.** Five points were tightened before any of
+this was built:
+
+- **The judge of record, not a race.** A session has one judge of record and its
+  judgement is the session's consensus. Today one judge is seated, so it is that
+  judge. With several seated, the judge of record is chosen by member id, never
+  by which judgement arrived first, so nothing wins by being fastest. Other
+  judgements are recorded and change no outcome. Agreement among several judges
+  remains a later amendment.
+- **A first epoch's window has a floor** of half an `epoch_duration`. Without
+  one, a subject activated moments before a grid instant opened a window nobody
+  could submit into, then published a session recording every seated member
+  absent — a permanent record of an artefact of activation timing.
+- **The clock rule is narrowed.** A comparison of the present reads
+  `clock_timestamp()` at the comparison; a derived instant such as the next grid
+  close is read once per transaction and reused, so one transaction never acts
+  on two different presents.
+- **A transition transaction never spans a network or model call.** The event
+  counter therefore serializes only database work. Without this, the counter's
+  row lock and the isolation gate contradicted each other outright.
+- **The event log is retained past the oldest cursor the API may still be asked
+  to serve**, rather than never pruned. Pruning above that point is permitted;
+  below it is forbidden. "Never" foreclosed a retention policy that will be
+  needed.
+
+> **Superseded by [D55](#d55) (12) on 2026-09-25.** The retention bullet above
+> no longer holds. Pruning is a manual, receipted `rm_owner` command with a
+> retention window of at least 7 days. It keeps no cursor bookkeeping, and a
+> cursor below the retained floor gets resync-and-close (`log_truncated`).
+
+
+<a id="d53"></a>
+
+## D53 — Seven owner calls that unblock the deployment refactor (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; not yet implemented. Recorded from the
+verified audit of issue #1026, where each point was a place the criteria, the
+specifications and the earlier decisions disagreed. Each call below names the
+rule that wins, so the implementation waves do not have to guess.
+
+**Decision 1: D48's replay prerequisite is waived.** [D48](#d48) said `shadow`
+could leave the write path only after the judge replay covered the real
+recorded inputs of an observe-before-enforce soak. That coverage does not
+exist: `backend/src/swarm/judge-replay.ts` makes no judge call, so it cannot
+prove anything about a judge. The prerequisite is waived rather than built.
+`shadow` is removed from every write path and the judge-mode `CHECK` tightens
+to `off | enforce`. Existing rows and signed receipts that say `shadow` stay
+readable, as D48 already promised.
+*Why.* Under [D52](#d52) the judge is a participant, not a backend function,
+and `currentJudgeMode` already turns `shadow` into `off` for every new session.
+A soak against the retired backend judge would measure code that no longer
+decides anything.
+
+**Decision 2: D52's retention rule beats migration 0089's triggers.** A forward
+migration drops the `DELETE` and `TRUNCATE` guard triggers on
+`swarm_stream_events`. `DELETE` and `TRUNCATE` stay revoked from `rm_app` and
+`rm_worker`, so only `rm_owner` can prune, and only rows older than the oldest
+cursor the API may still be asked to serve. The table leaves
+`APPEND_ONLY_TABLES`. The criterion that asked for the triggers now reads
+"protected by grant, prunable only by `rm_owner`".
+*Why.* D52 refined "never pruned" into "retained past the oldest servable
+cursor", because a log that can never shrink forecloses a retention policy the
+system will need. A trigger that refuses every `DELETE` makes that policy
+impossible. The grant keeps the part that matters: no runtime role can open a
+gap.
+
+> **Bound superseded by [D55](#d55) (12) on 2026-09-25.** The triggers stay
+> dropped and the grant stays. The bound "only rows older than the oldest
+> cursor the API may still be asked to serve" no longer holds. Only a manual,
+> receipted `rm_owner` command prunes, and it removes only rows older than a
+> retention window of at least 7 days.
+
+**Decision 3: compat headers start after a baseline of 0081.** The migration
+runner refuses a pending migration with no `-- compat: additive` or
+`-- compat: breaking` header, except one numbered at or below the baseline
+constant `0081`, which it accepts as pre-compat. A test proves every migration
+above `0081` carries a header. Files `0001` to `0081` are not backfilled.
+*Why.* Production still runs a release whose pending set includes header-less
+files, so a strict rule would refuse `bun run migrate` and a `--local` dump of
+production outright. Backfilling 63 headers by hand would write compatibility
+claims nobody verified, and a header is a claim the rollout trusts.
+
+**Decision 4: the judge-path criterion moves to the participant.** The Phase 0
+criterion about the judge's direct transport now names the participant path:
+the participant judge-client classifies failures with the D-A7 refusal
+taxonomy on the direct transport, and the salvaged runner works with no
+container or network. The dead backend `judge()`, `judgeSession` and
+`templateOpinion` are deleted with their tests. Coverage from `swarm-judge` and
+`consensus-receipt-judge-roundtrip` that still matters moves into
+`participant-judge-runner` and `no-inline-judge`.
+*Why.* Nothing calls the backend judge any more, and the scheduler spec puts
+judging in a participant. Keeping tests green on a path that never runs proves
+nothing about the path that does. Deleting `templateOpinion` also removes the
+last templated-consensus code, which the no-fake-judge rule forbids anyway.
+
+**Decision 5: `bun smoke:capture` loses `--allow-primary`.** Capture always
+refuses a primary node or a credential that is not `rm_readonly`. There is no
+override.
+*Why.* A dump taken from a primary breaks the read-only rule the capture exists
+to keep, and a replica is always available to capture from. An override that
+is "recorded in the manifest" still takes the dump.
+
+**Decision 6: immutable analytics ledgers count as append-only for preflight.**
+Preflight check 2's rule against `DELETE` and `TRUNCATE` covers the tables in
+`LEDGER_IMMUTABLE_FAMILIES` as well as those in `APPEND_ONLY_TABLES`.
+*Why.* Losing a ledger row is the same harm as losing a history row, and the
+preflight module's own documentation already claimed they counted. This makes
+the check do what its comment says.
+
+**Decision 7: subject columns keep the `_seconds` suffix.**
+`epoch_duration_seconds` already exists and stays. The new columns are
+`epoch_anchor` and `judging_duration_seconds`.
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §2.2 notes
+that duration columns carry the unit suffix.
+*Why.* The spec's bare names were shorthand. Renaming a shipped column would
+break the wire contract for no gain, and a unit in the name stops a reader
+guessing seconds from milliseconds.
+
+**What stays.** D48's decision itself (`off | enforce`, history readable),
+D51's amendments with the `revision` column, and D52's no-fallback judge are
+unchanged. None of these calls adds a judge fallback, a templated consensus or
+a Docker socket.
+
+
+<a id="d54"></a>
+
+## D54 — The static website is its own release unit (Lucas, 2026-09-24)
+
+**Status.** Accepted 2026-09-24; the version contract and the checks are
+implemented, and the deploy tooling (`bun smoke:web`, the compatibility refusal
+in `bun smoke`) is not yet built. The owner approved workstream W7 on issue
+#1026. [`smoke-production-spec.md`](technical/smoke-production-spec.md) §13
+carries the rules below as deployment behavior.
+
+**Decision.** The website ships on its own schedule, separately from the API
+and the workers. Each side names its version, and deploying either side checks
+the other.
+
+- **The site declares the API versions it accepts.** `frontend/package.json`
+  carries an `apiRange`, a semver range such as `^0.2.0`. The site's
+  `/version.json` carries the same range. A manifest with no range publishes
+  `apiRange: null`.
+- **The API reports its version.** The API version is `contract/package.json`'s
+  version. `GET /api/version` answers `{api, commit}`: that version and the
+  image's build commit, or `null` for an image built without one. It needs no
+  credential and touches no database. `website-server` proxies it with the rest
+  of `/api/`. The older `/version` route keeps reporting build identity
+  unchanged.
+- **A route change needs a version bump.** A change to
+  `contract/src/routes.js` needs a greater `contract/package.json` version than
+  the merge base has. `contract.yml` runs
+  `scripts/check-contract-version-bump.ts` to enforce this. `web-client.yml`
+  fails when `apiRange` excludes the contract version built from the same
+  commit, and a contract bump re-runs it.
+- **`bun smoke:web` deploys the site alone.** It builds the site into a
+  versioned directory under the instance state directory. It refuses when the
+  running API's version is outside the new site's range. It switches
+  `website-server` to the new directory atomically with an nginx reload, and it
+  restarts no `api` or worker container. It writes its own journal and receipt
+  under the instance's `web/` directory. `bun smoke:web --rollback` returns to
+  the previous directory.
+- **`bun smoke` checks the live site.** It refuses to start an API whose
+  version is outside the live site's range, unless the same plan deploys a site
+  whose range includes that version. A live site with no declared range counts
+  as outside every range.
+- **The page checks at load.** Before its first API call the page reads its own
+  range from `/version.json` and the API's version from `/api/version`. When the
+  API is outside the range, the page shows a reload notice and makes no other
+  `/api/*` call. When the check cannot be answered, the page loads as it did
+  before this check existed. An API outage stays the job of the existing
+  unreachable-API handling.
+
+**Amends D45.** The web client's merge gate gains one blocking check,
+that `apiRange` admits the contract version. The four D45 checks are unchanged.
+
+**Open question, not decided here (T26).** The API still reads the assembled
+site directory (`_static`) to report the served site's identity at `/version`
+and `/health` (`static`, `matches_image`). Once the site switches on its own,
+that report describes whichever directory the API can see, which may not be
+the one `website-server` serves. Whether the API keeps that report, drops it,
+or reads it from `website-server` is tracked on issue #1026. Until it is
+decided, the report stays as it is.
+
+> **Decided by [D55](#d55) on 2026-09-25.** The API retires the `_static` mount
+> and the `static` identity field. The site reports itself through
+> `/version.json`, the API through `/api/version`. The work lands in wave 6.
+
+**Why.** A site deploy that restarts the API turns every copy fix into an API
+outage. An API deploy that ignores the site can leave readers on a page that
+misreads the new API's data. A version on each side, and a check on each
+deploy, lets either side ship alone without that risk. The contract package is
+the right source of the number because it is what the site depends on: the
+route table and the response shapes.
+
+**Alternatives rejected.**
+- **Deploy the site and the API together** (the status quo). This couples
+  every site change to an API restart, which is the cost this decision exists
+  to remove.
+- **Use `backend/package.json`'s version.** It moves for changes the site cannot
+  see and stays still for contract changes it can see.
+- **Check only in the browser.** A notice after a bad deploy is damage control.
+  The deploy tools refuse the mismatch before any reader sees it.
+
+
+<a id="d55"></a>
+
+## D55 — Thirteen owner calls: version reports, forged operators, judge levers, who drives epochs, the first production migrate, who may delete, 0089's label, the supported baseline, the identity-first pass, the stream transport, the stream prune and object-less statements (Lucas, 2026-09-25)
+
+**Status.** Accepted 2026-09-25; not yet implemented. Recorded from issue
+#1026, where each point was a question the earlier decisions left open or a
+place the specifications allowed something the owner does not want. Each call
+names the wave or package that implements it, so no wave has to guess.
+Amended the same day: decision 4 was corrected, because its first text listed
+deactivation among the scheduler's transitions, and decisions 5 to 8 were
+added. Amended again the same day: decision 8 was corrected to name
+production's observed 73-name ledger rather than v0.5.0 alone, and decisions 9
+to 13 were added. Amended on 2026-09-28: decision 10 records the owner's call
+that no tool turns a pre-0081 production dump into a remote twin (below).
+Amended on 2026-10-03: decision 8's baseline is production's 76-name ledger,
+read on 2026-10-01 (issue 1097, below).
+
+**Corrected on 2026-09-25, after a review of the recorded answers.** A review
+checked every call above against the owner's own words and the code. The owner
+then answered four follow-up questions. The text below carries the result, and
+it wins over any earlier wording of this decision, commit 88a1ced5 included.
+- Decision 4: a deactivation no longer closes the open epoch. The window runs
+  to its close (the owner's answer).
+- Decision 8: the 73-name baseline is the owner's confirmed call. A pure
+  v0.5.0 ledger is refused. Replaced on 2026-10-03 by the 76-name ledger.
+- Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
+  minimum window (the owner's answer). It supersedes [D52](#d52)'s retention
+  bullet and [D53](#d53) (2)'s cursor bound.
+- Decision 10: its remote twin clause was replaced on 2026-09-28 by the
+  owner's call recorded in decision 10.
+- Decisions 5, 9 and 10: the passes that may apply 0081 first are named, each
+  with its own guard, and all share one transaction rule.
+- Decision 2 is narrowed to `robotmoney`. Decisions 3, 6 and 11 gained
+  implementation constraints. Decision 11's reason is recorded as a transport
+  preference.
+
+**Decision 1: the API stops reporting the site's identity (T26).** The API
+retires its `_static` mount and the `static` identity field it reports at
+`/version` and `/health`, with `matches_image`. The site reports itself through
+its own `/version.json`. The API reports itself through `/api/version`.
+Implementation lands in wave 6.
+*Why.* Under [D54](#d54) the site switches on its own, so the directory the API
+can see is not the one `website-server` serves. A report about a directory
+nobody serves is worse than no report, because an operator would trust it.
+D54 already gave each side its own version endpoint, so nothing is lost.
+
+**Decision 2: a forward migration clears forged `robotmoney` operator values.**
+The owner approved clearing one forged value: a self-written `operator` of
+`robotmoney`. The migration clears `operator` on a member row only when all of
+these hold:
+- `lower(trim(operator)) = 'robotmoney'`;
+- a member self-write, through the path issue #925 closed, could have set it;
+- no later admin write named the operator;
+- the member is not an in-house seat. `athena`, `noop-analyst`, `robot-money`
+  and `themis` keep their operator. `noop-analyst` is seated on production
+  without being seeded from the roster, and its `robotmoney` is genuine
+  (issue 1120).
+
+It applies once per database, as every migration does. It changes nothing on a
+database with no such row. Migration 0101 as built clears every self-written
+value, which is wider than the owner approved. If no shared database, stage-2
+included, has recorded 0101, 0101 is corrected in place. If one has, a forward
+migration carries the correction. Criterion 166 is reworded to match.
+Implementation lands in wave 3.
+*Why.* The judge's third-party gate passes a member whose operator is
+`robotmoney` ([D52](#d52)). A member that wrote that value for itself holds a
+standing forgery. Any other self-written value passes no gate, and the owner
+did not approve clearing it. Closing the hole stopped new forgeries and left
+the old ones in place. A migration fixes every database the release reaches,
+where a hand edit would fix only the one it was run on.
+
+**Decision 3: the judge fault-injection lever goes, and judge spend is wired.**
+The test-only judge fault-injection switch (R13) is retired with its route, its
+table, its env flags and its compose lines. A forward migration drops the
+`swarm_judge_fault_injection` table. The `audit_log` rows the lever wrote stay
+readable, and so do the judgements it affected. Criterion 167 names the drop.
+Judge spend (R19) is filled from the usage the participant judge reports with
+its judgement. A later package on issue #1026 implements both.
+*Why.* The lever faulted the backend `judge()`, which [D53](#d53) deleted.
+Nothing in the API forms an opinion any more, so the switch has nothing to
+break and only adds a way to arm a test path in production. The spend fields
+were filled by the deleted model transport. The participant now makes the model
+call, so it is the only process that knows what the call cost. The audit rows
+and the judgements stay because they are history.
+
+**Decision 4: the scheduler drives epochs; only an admin deactivates a
+subject.** The system scheduler is the only caller of the epoch lifecycle
+transitions: open, turnover and settlement (aggregate, request judging,
+finalize). It never deactivates a subject. The `epochs/*` lifecycle routes stay
+scheduler-only. No operator or admin early turnover exists, and no admin or
+operator early close exists either. The operator admin token holds only the
+`admin` right, and every epoch lifecycle route refuses it.
+
+A subject's status is an admin subject edit under the `admin` right, and the
+scheduler's token cannot make it. Only an admin deactivates a subject. The
+owner's call is that the window runs to its close:
+- A deactivation only sets the subject inactive and publishes
+  `subject.changed`. It does not close the open epoch.
+- The open window stays open until its grid boundary. Takes are accepted until
+  then.
+- At that boundary the scheduler turns the epoch over as usual. It closes and
+  settles the epoch. The turnover opens no successor, because the subject is
+  inactive.
+- A reactivation while that window is still open opens nothing, because the
+  subject already has a collecting session.
+
+Activation is also an admin subject edit. It opens no session. When an active
+subject has no collecting session, the scheduler opens its first epoch from the
+`subject.changed` event. The first text said the deactivation closed the open
+epoch in its own transaction. That clause is removed from this decision, from
+the scheduler spec §4.5, and from the code and the tests.
+
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) §13 records
+the edits to the spec. Today the epoch routes still admit the privileged admin
+credential. The refusal lands with the operator admin token's move into the
+token store.
+*Why.* One clock is simpler to prove than a clock plus a manual override. An
+early turnover gave the operator a way to shorten a window members were
+promised, and it made the scheduler's timer depend on an event it did not
+cause. The guarantees that path was tested for still matter for a turnover
+this scheduler did not make, such as one a second scheduler made or one whose
+response was lost. The spec's gates now test those cases instead. Stopping a
+subject is the opposite case. It is an owner's choice, not a clock event, so it
+belongs to the admin. A deactivation that closed the window would be an early
+close. Deactivating and then reactivating would be the banned early turnover in
+two calls. Letting the window run to its close keeps the scheduler the only
+thing that moves the state machine. A scheduler that could deactivate would let
+a clock fault silence a subject, and it would give the one credential that
+drives the clock a right it never needs.
+
+**Decision 5: the first production migrate may run once with no
+`deployment_identity` row.** Production runs v0.5.0, which predates the
+`deployment_identity` table (0081) and the schema manifest (0082). Every
+`bun run migrate` refuses a database with no identity row, and nothing else may
+run a migration. So production cannot reach the release that creates the row.
+One guarded production exception closes the gap. `bun run migrate` accepts a
+database with no `deployment_identity` row, or no table, only when every one of
+these holds:
+- a remote connection;
+- `RM_ENV=prod`;
+- the ledger's filename list is exactly equal to the filename list of one
+  `SUPPORTED_RELEASES` entry (decision 8);
+- the operator types the `rm_owner` password;
+- the operator answers an explicit `y`.
+
+Amended on 2026-10-12 ([D67](#d67)): the exact match against
+`SUPPORTED_RELEASES` is this pass's guard alone. Every other `bun run migrate`
+and the release preflight reconcile the ledger with the migration files and
+the release tag's bytes, and name no per-release constant.
+
+Its receipt records the pre-identity state: that no identity row existed, the
+release the ledger matched, and that ledger's filename list. The pass writes
+`production` with 0081 (decision 9,
+[`smoke-production-spec.md`](technical/smoke-production-spec.md) §9.1). Every
+later run requires the row. Decision 9 names the one rehearsal pass that
+shares this pass's identity-first shape. Decision 10 names the one-off
+operator intervention that takes the same shape for a remote twin. A wave
+package implements the exception.
+*Why.* Without it, the first production upgrade has no legal path: the tool
+that creates the table refuses because the table is missing. A hand-run
+migration would skip the fence, the ledger and the receipt the migrate run
+provides (smoke spec §8.3). An exception keyed on the exact ledger of a known
+release cannot be reached from a partly migrated or hand-edited database. It
+requires a remote connection, `RM_ENV=prod`, a typed owner password and a `y`,
+so no stage tool can take it. The ledger alone cannot tell production from a
+dump of it. So the rehearsal pass of decision 9 is its own exception: it is
+tied to the local container its own run restored, it refuses `RM_ENV=prod`,
+and it writes `rehearsal`, never `production`.
+
+**Decision 6: only `rm_owner` may `DELETE` or `TRUNCATE`.** No runtime role
+(`rm_app`, `rm_worker`, `rm_readonly`) holds `DELETE` or `TRUNCATE` on any
+table, append-only or not. Runtime code that deletes today is redesigned into
+one of three shapes:
+- a tombstone column that every read filters on;
+- a read that filters out expired rows, with pruning left to an `rm_owner` run;
+- an upsert that replaces the row in place.
+
+Security revocations stay immediately effective. A revoked key, token or
+membership is refused on the next request, because the revoking transaction
+writes the tombstone. A later prune never carries the revocation. Preflight's
+denylist widens from append-only tables to every table. A wave package
+implements the redesign and the grant change, under two constraints:
+- **A table that unauthenticated requests write stays bounded with no
+  `rm_owner` run.** WebAuthn challenges use a fixed set of 32 slots. A new
+  challenge overwrites the oldest slot under `CHALLENGE_ISSUE_LOCK`, and a
+  single-use conditional `UPDATE` consumes it. Gate: more than 32
+  unauthenticated option requests leave the row count at 32.
+- **No release ships a tombstone ahead of the revoke.** No release may ship
+  code that writes a revocation or consumption tombstone unless the same
+  release carries the `compat: breaking` migration that revokes runtime
+  `DELETE`. Gate: code built before that migration refuses to boot after it.
+
+*Why.* A runtime credential that can delete can erase history, and a list of
+protected tables is a list that can miss one. One rule with no list needs no
+upkeep. The three shapes keep every current delete's effect while leaving the
+row for audit. A table an unauthenticated caller fills would grow without bound
+if only a manual owner prune removed its rows, so its size is fixed by shape.
+Code built before the tombstone does not read it, so a rollback to that code
+would serve a revoked key again. The breaking label closes that rollback.
+
+**Decision 7: migration 0089 is `compat: breaking`.** 0089's header said
+`additive`. The migration deletes the `swarm.*` `job_schedules` rows and the
+pending `swarm.*` jobs that code built at 0088 seeded and read. The smoke spec
+§8.4 says additive means no bootstrap row old code relies on is removed, so the
+label was wrong. The file's header now says `breaking`. A ledger that already
+recorded 0089 keeps `additive`, because the runner writes a ledger row once, at
+apply, and never rewrites it. On such a database the stale label changes no
+boot decision once 0096 is applied, because 0096, 0097 and 0098 are
+`breaking` and close rollback past 0089 by themselves. Production runs
+v0.5.0, which predates 0081, so it has not applied 0089 and will record the
+corrected label.
+*Why.* The label is a promise to older code. A wrong promise lets code at 0088
+boot and then schedule nothing, with no refusal to explain why.
+
+**Decision 8: production's observed ledger is the only supported upgrade
+source.** Lucas confirmed the first baseline on 2026-09-25 and replaced it on
+2026-10-03 (issue 1097). `SUPPORTED_RELEASES` holds one baseline: the 76
+filenames production's `schema_migrations` recorded when it was read on
+2026-10-01. They are the 72 files of v0.5.0 plus four:
+- `0062_rm_readonly_sequence_select.sql`, which production applied out of band
+  on 2026-09-22 with the SQL of commit c3a68812 (tag
+  `archive/releases-0.5.x-2026-09-24`);
+- `0061_rm_worker_wallet_backfill_grant.sql` and
+  `0063_swarm_judge_model_default.sql`, shipped by v0.5.1 and applied on
+  2026-09-25;
+- `0080_analytics_ledger_compaction.sql`, shipped by v0.5.2 and applied on
+  2026-09-29.
+
+Production has run v0.5.3 and v0.5.4 since, with no new migration. Upgrade
+tests replay the bytes production ran. An upgrade from any other ledger is
+refused: a pure v0.5.0 ledger, the 73-name ledger of 2026-09-25, a ledger with
+one file more or less. Decision 5's ledger match reads this list, so the
+first-migrate exception accepts only the 76-name ledger. Adding a baseline to
+the list takes a new decision. `backend/src/db/supported-releases.ts` holds the
+list, and `backend/tests/fixtures/releases/production-2026-10-01/` pins it.
+
+<a id="d55-8-amendment-1272"></a>
+**Amendment to decision 8 (issue 1272, 2026-10-12).** The release runner no longer
+reads `SUPPORTED_RELEASES`. Steps R1.2 (`scripts/release/precondition.ts`) and R2.3
+(`scripts/release/baseline.ts`) judge the ledger by filename set against
+`backend/migrations` (`scripts/release/ledger.ts`): every recorded name must be a
+repository file and no repository file below the newest recorded one may be
+missing; a count is never judged, and the pending set is the repository minus the
+ledger. Production's 116-row ledger after v0.6.0 passes the same check the 76-row
+ledger passed before it, and the ledger after the next patch will pass it too, with
+no new constant. The list in `backend/src/db/supported-releases.ts` stays what it
+is for the backend's own importers (the migrate's first-migrate exception, the
+upgrade tests, `smoke-prepare`); retiring it there is a later decision. Why: the
+runner was written for one upgrade and refused the system it had to upgrade
+(the v0.6.1 preflight, 2026-10-10: production holds 116 rows, the constant holds
+76). The owner wants the fact removed, not retyped each release (the closed simplify
+attempt pr (1271)). See [D61's amendment](#d61-amendment-1272) for the rest of the
+removal.
+
+Amended again on 2026-10-13 ([D67](#d67)), superseding the gap rule of the 1272 amendment above: this list is the pre-identity baseline
+of decision 5 only, the state a pre-0081 dump restored for a rehearsal pass
+holds. It is not the release preflight's guard and is not extended for later
+releases: production enrolled on 2026-10-08, and from v0.6.0 on the preflight
+and the normal migrate path reconcile the ledger with the files and the
+release tag's bytes, and `scripts/release/ledger.ts`'s "no repository file below the newest recorded one may be missing" rule goes with it, because the checks read no number order. The v0.6.0 entry added on 2026-10-09 is removed.
+
+Production records `0080_analytics_ledger_compaction`, so a pending file
+numbered 0063 to 0079 sorts below the last recorded row and the gap rule
+refuses it as out of band. The owner kept the rule strict and renumbered the
+never-shipped migrations instead. `0063_deployment_identity` to
+`0092_drop_swarm_judge_fault_injection` became 0081 to 0110, in their old
+order, one number each (the identity migration is
+`0081_deployment_identity`). Only five pending files sort below it, the ones
+decision 9 names. A looser rule would also wave through a hand-edited ledger.
+*Why.* Every supported baseline is a fixture, an upgrade test and a ledger the
+first-migrate exception must accept. No database will take a path from an
+older release, so each extra entry would be cost with no user. The first text
+named v0.5.0 alone. No database holds that ledger: production and every dump
+taken from it carry the 0062 row, so a v0.5.0 list would refuse the one
+database the exception exists for. This is the owner's call. It replaces the
+earlier wording that credited the ruling to the owner before he had made it.
+
+**Decision 9: two named passes apply 0081 first and write the identity row
+with it.** Only two tool passes may run against a database with no
+`deployment_identity` row. Each applies `0081_deployment_identity` before any
+other pending migration, out of filename order:
+- **The production first pass** (decision 5), `bun run migrate`. It needs a
+  remote connection, `RM_ENV=prod`, a typed `rm_owner` password and an
+  explicit `y`. It writes `production`.
+- **The `--local dump` preparation** (decision 10), inside `bun smoke`. It runs
+  only on the Postgres container the same run created and restored. `RM_ENV`
+  must not be `prod`, and it uses the owner password smoke generated. It
+  writes `rehearsal`. It checks for itself that its connection is that local
+  container. It refuses any remote connection, whatever `RM_ENV`, password or
+  acknowledgement says.
+
+Both share three rules:
+- 0081's DDL, its `schema_migrations` row and the identity row commit in one
+  fenced transaction (smoke spec §2).
+- Before the pass, the ledger must equal the 76-name baseline of decision 8.
+- No tool applies 0081 out of order outside these two passes.
+
+No tool pass exists for a remote twin. Decision 10's one-off operator
+intervention is a hand step outside every tool, and it keeps the first two
+rules.
+
+The rest of the pending migrations then take the normal path, and the normal
+path accepts the state a pass leaves. It may apply a pending file that sorts
+below a recorded 0081 only when the identity row exists and the rest of the
+ledger equals the baseline plus 0081, plus any files applied after it. Every
+other out-of-order state refuses. Production lacks five files below 0081:
+`0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`,
+`0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage` and
+`0062_rm_worker_analytics_ledger_read_grant` (the first text counted six,
+before production's ledger was read to record `0061`). The normal path applies
+them after 0081.
+
+So an interruption after 0081 commits leaves the row in place. A rerun takes
+the normal path and resumes from the first unapplied migration (smoke spec
+§8.3). An interruption before 0081 commits leaves the ledger on the baseline,
+and a rerun takes the same pass again. This replaces decision 5's first order,
+in which production initialization wrote the row after the whole migrate run.
+
+Criterion 18 gains a process test that kills a migrate between two commits and
+proves the rerun resumes. Each of the two passes gains two kill-and-rerun
+tests. Kill it before 0081 commits: the rerun takes the pass again. Kill it after 0081: the
+rerun resumes through the normal path and applies the five lower files.
+Criterion 170 says the identity row commits in the same transaction as 0081. A
+wave package implements this. It also hardens `transactionIdentityStore` so
+the store carries the connection's remote flag, and the rehearsal guard
+applies on the fenced path too.
+*Why.* Under decision 5's first order, a pass interrupted after its first
+commit left a ledger that matched no supported baseline and no identity row.
+Both the exception and the normal path refused it, so that database had no
+legal way forward. The first text of this decision said the runner already
+resumed the state a pass leaves after 0081. It did not: the normal path
+refused the lower files as a gap. With the row written first, and the
+normal path accepting exactly the state a pass leaves, every interruption
+after 0081 is an ordinary partial migrate. Naming each pass with its own guard
+keeps the exception from spreading. The ledger cannot tell production from a
+dump of it, so the rehearsal pass proves instead that its own run restored
+the local container.
+
+**Decision 10: a production dump from before 0081 becomes a twin through `bun
+smoke --local dump`; a remote twin of it needs a one-off operator
+intervention.** A dump of production restored for rehearsal has no
+`deployment_identity` table, because production has none yet.
+- **A `--local dump`.** When its restored ledger equals the production
+  baseline (decision 8), smoke's preparation takes decision 9's local pass: it
+  applies 0081 first and writes `rehearsal` in the same transaction, before any
+  other pending migration. It needs no `RM_ENV=prod`, typed password or `y`,
+  because smoke owns the container and generated its owner password (smoke
+  spec §5).
+- **A remote twin.** Lucas's call on 2026-09-28: a production dump from before
+  0081 cannot become a remote twin through any tool.
+  - The twin tooling and every stage tool refuse a remote target with no
+    `deployment_identity` table. The refusal changes nothing, and its message
+    names the one-off operator intervention.
+  - That intervention is a receipted `rm_owner` step, run by hand.
+    [`docs/runbooks/pre-identity-remote-twin.md`](runbooks/pre-identity-remote-twin.md)
+    documents it. In one transaction, fenced on the target-lock key (smoke
+    spec §2), it applies 0081, records 0081's ledger row and writes
+    `rehearsal`. The ledger must equal the 76-name baseline before it starts.
+    The operator types the `rm_owner` password, and the receipt is the psql
+    session log.
+  - After it, the database is in the state decision 9's normal path accepts.
+    A stage `bun run migrate` or `--migrate` then applies the five files below
+    0081 and the rest.
+  - Otherwise a twin of such a dump uses `bun smoke --local dump`.
+
+A dump with any other pre-identity ledger refuses. A wave package implements
+the local pass and the remote refusal, and each has its own issue criterion.
+*Why.* The spec already required every restore of a production dump to write
+`rehearsal`, but a production dump has no table to write it to. Taking the
+order production takes makes the local twin a rehearsal of the first
+production upgrade, not of a different path. The text of 2026-09-25 said the
+twin tooling's `--migrate` would carry a remote twin in a changed sequence.
+That was wrong: `bun run smoke:twin` and `bun run smoke:twin:once` both run
+`bun smoke --local dump --migrate` (`scripts/smoke-twin.ts`,
+`scripts/lib/smoke-twin-rehearsal.ts`). They restore into a local container
+and never reach a remote database. So a remote pass would be a new tool that
+writes `rehearsal` onto a remote database full of production data. A remote
+database cannot prove who restored it, and the operator who ran the restore
+can. The owner chose a one-off hand step over that tool. The need ends when
+production applies 0081, because every later dump carries the table.
+
+**Decision 11: the scheduler event stream moves from SSE to WebSocket.** The
+subscription that serves the §6.3 event stream of
+[`system-scheduler-spec.md`](technical/system-scheduler-spec.md) is a
+WebSocket, not a `text/event-stream` response. The API sees the socket's
+buffered amount. When a subscriber stops reading, the API sends one `resync`
+frame and closes the socket. It never drops an event to make room. Cursors,
+gapless sequence numbers, keepalives carrying the head, and resync-and-close
+keep their meaning. The implementation keeps four constraints:
+- The socket re-authorizes the scheduler's token against the token store at
+  every keepalive. It closes when the token is revoked or rotated.
+- The token rides only in the upgrade request's `Authorization` header, never
+  in the URL.
+- The scope is the scheduler stream only. Moving the judge subscription needs
+  its own decision.
+- The `routes.js` change bumps `contract/package.json` ([D54](#d54)). The
+  `routes.js` comments and `docs/architecture/network-topology.md` change with
+  it. An nginx upgrade block is added only if the scheduler connects through
+  `website-server`.
+
+A later package on issue #1026 implements the move, and it has its own issue
+criterion.
+*Why.* This is a transport preference. The SSE path lost no data: a subscriber
+that fell behind already got `resync` and did a full read. A WebSocket gives a
+two-way keepalive and an explicit close code, so a silent failure and the
+reason for a close are both visible in the protocol. It also reports its
+outbound backlog, so the API can bound a slow subscriber's cost directly. A
+token in a URL lands in access logs, and a header does not.
+
+**Decision 12: pruning is a manual, receipted `rm_owner` command with a 7-day
+minimum window.** Pruning is an operator command: a planned root `prune`
+script, run through `bun run`. It takes a typed `rm_owner` password, runs
+fenced under the target lock (smoke spec §2), and writes a receipt. It runs at each upgrade or on a runbook
+cadence. Nothing schedules it. Its retention window is a minimum of 7 days,
+which the owner confirmed. The window is a floor, not a schedule: the command
+never removes a row younger than it. The command lists exactly the tables it
+may prune:
+- `swarm_stream_events` rows older than the window;
+- expired or consumed rows that carry no audit value.
+
+It never prunes a security tombstone or audit history. It keeps no
+per-subscriber cursor bookkeeping. A scheduler whose cursor is below the
+retained floor gets resync-and-close (`log_truncated`), then a full read and a
+rebuild. This supersedes [D52](#d52)'s retention bullet and [D53](#d53) (2)'s
+bound of "only rows older than the oldest cursor the API may still be asked to
+serve". Criteria 93 and 104 are reworded to this rule: time-window retention,
+pruned only by the manual `rm_owner` command, with resync-and-close below the
+floor. A later migration corrects the table comment 0097 wrote, which still
+names the cursor bound. A later package on issue #1026 implements the command,
+and it has its own issue criterion.
+*Why.* The oldest cursor the API may still be asked to serve is not knowable:
+a scheduler that is down holds its cursor in memory, and the API cannot see it.
+A rule keyed on it either never prunes or guesses. A time window is a rule
+anyone can check. Resync-and-close already makes a truncated log safe, because
+a subscriber that missed events rebuilds rather than skipping them. A manual
+command keeps the owner password typed at the terminal, as [D47](#d47)
+requires, where a scheduled prune would need it stored. A missed or late
+prune loses nothing, because the window is only a floor.
+
+**Decision 13: the query registry gains an object-less statement kind, and dead
+registered functions are deleted.** Some statements name no table, such as a
+connection check or an advisory lock. The registry (smoke spec §7.1) gets an
+explicit kind for them. Its allowed statements are a closed list of shapes, and
+a statement matches only when it equals one listed shape exactly. A statement
+that names a relation can never take this kind. Every registered function that
+has no production caller is deleted, with the tests that were its only callers.
+A later package on issue #1026 implements both, and it has its own issue
+criterion.
+*Why.* An object-less statement today either sits on the raw-SQL allowlist or
+declares a table it does not touch, and both weaken the registry. A closed list
+pinned by equality keeps the kind from growing into a bypass. A registered
+function with no production caller still widens check 2's privilege set and
+the execution test's load, and it pins privileges nothing uses.
+
+**What stays.** D54's version contract, D52's third-party gate, D53's deleted
+backend judge, D47's rule that `rm_owner` is typed at the terminal and never
+stored, and the state guard on every transition are unchanged.
+
 ## D56 — The analytics ledger records information, not fetches: a per-source tolerance, no row for a re-observation, run-encoded vintage membership, and no raw response bodies (issue #1035)
 
 **Decision.** A re-acquired point adds a `source_value_versions` row only when it
@@ -3695,14 +4673,12 @@ head for its coordinate:
 
 - no head → `initial`;
 - a value outside the source's tolerance → `revision`;
-- a value within tolerance **and** the same provenance label → **no row at all**;
-- a value within tolerance under a different label → `unchanged`, carrying the
-  head's value and the new label.
+- a value within tolerance → **no row at all**, whatever its provenance label
+  (amended 2026-09-29, below: a label change alone is not a change).
 
 `saveRawIndicatorHistory` applies the same rule to `raw_indicator_history`: a
-point within tolerance under the same label is not rewritten (so migration
-0056's trigger writes no overwrite event), and one within tolerance under a new
-label rewrites only the label. Both writers call one function,
+point within tolerance is not rewritten, whatever its label (so migration
+0056's trigger writes no overwrite event). Both writers call one function,
 `withinTolerance()` in `backend/src/analytics/source-tolerance.ts`, so the
 compatibility table and the ledger cannot drift apart by the noise the rule
 absorbs. The rule is `|next − prior| ≤ relative × max(|next|, |prior|)`; a
@@ -3716,14 +4692,15 @@ the identical id set, and every manifest digest replays unchanged. (0080's
 #1050 repair re-points the vintages that existed before it and recomputes their
 digests; see the amendment below.)
 
-Migration `0080_analytics_ledger_compaction.sql` removes what the old writers
-wrote, under the same rule, drops `source_payloads` (see below), inside its own transaction, and re-arms every guard
-it disarms before that transaction ends. As extended by #1050 (amendment
-below) it keeps only what the fixed writers would have written, re-points every
-vintage and recomputes its digest, and leaves untouched only the coordinates
-whose chain does not follow its own time order. It verifies that every vintage
-keeps its member count and every coordinate keeps one head under the same label,
-and raises (rolling back, guards never observed off) if either would change.
+Migration `0080_analytics_ledger_compaction.sql` adds the run column and drops
+`source_payloads` (see below). Removing what the old writers wrote is a
+one-time repair script, `backend/scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts`
+(amendment of 2026-09-29, below). It keeps only what the fixed writers would
+have written, re-points every vintage and recomputes its digest, re-links every
+coordinate in its own time order, and re-arms every guard it disarms before its
+one transaction ends. It verifies that every vintage keeps its member count and
+every coordinate keeps exactly one chain, and raises (rolling back, guards never
+observed off) if either would change.
 
 **Per-source tolerances.** Every source_key the extractors write:
 
@@ -3736,24 +4713,24 @@ and raises (rolling back, guards never observed off) if either would change.
 | `raw_indicator_history:DXY` | fred | exact |
 | `raw_indicator_history:ICSA` | fred | exact |
 | `raw_indicator_history:VIX` | yahoo | relative 1e-6 |
-| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:COPPER_GOLD` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SPX_TREND` | yahoo | relative 1e-6 |
-| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:IWM_SPY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:DEFI_TVL` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES` | defillama_stables | exact |
 | `raw_indicator_history:BTC_ACTIVE` | blockchain_com | exact |
 | `raw_indicator_history:ETH_ACTIVE` | coinmetrics | exact |
 | `raw_indicator_history:BTC_MVRV` | coinmetrics | exact |
-| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:BTC_ETH` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:ETH_TREND` | yahoo | relative 1e-6 |
 | `raw_indicator_history:NEW_TOKENS` | geckoterminal_newpools | exact |
 | `raw_indicator_history:DEFI_GROWTH` | defillama_tvl | exact |
 | `raw_indicator_history:STABLES_GROWTH` | defillama_stables | exact |
-| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 1e-6 |
-| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 1e-6 |
+| `raw_indicator_history:SPHB_SPLV` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:MTUM_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:IWF_IWD` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 5e-6 |
+| `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
@@ -3911,7 +4888,8 @@ the members are what the fixed writer would have frozen, the digest is what
 - **Digests.** The recompute is TypeScript, not SQL. A canonical-JSON SHA-256
   in plpgsql would have to reproduce JavaScript's number formatting byte for
   byte. The migration runner runs `rebuildVintageManifests`
-  (`store/run-ledger-store.ts`) inside the same transaction, straight after
+  (in `src/db/migrate.ts`, which reads members through the store's registered
+  `resolveVintageMembers`) inside the same transaction, straight after
   0080's SQL (`IN_TRANSACTION_AFTER_MIGRATION` in `src/db/migrate.ts`). It uses
   the same `buildVintageManifest` every freeze and every replay uses. It runs
   once, only in the run that applies 0080, with no manual step. A failure rolls
@@ -3949,3 +4927,829 @@ pre-#1035 writers followed by 0080. It asserts the two ledgers, vintages,
 raw-history rows and overwrite evidence are equal row for row, that every
 repaired digest replays, and that the schema matches the fixed writers'
 database.
+
+### Amendment (2026-09-29) — a label change alone is not a change; irregular chains are re-linked; the repair is a one-time script
+
+**What the stage-2 rehearsal found.** On the full v0.5.1 dump (2026-09-28),
+0080's repair ran as one statement past the api's 5-minute
+`statement_timeout` and was cancelled. The loop was not the slow part: a
+set-based rewrite of it took longer (5 min 17 s against 4 min 27 s). The
+volume was. And the repair would still have left about 4.5M of the 19.4M
+versions, far more than the ~172k points the ledger describes:
+
+- **~1.39M were relabels.** The live fetch stamps `live` and the producer's gap
+  catch-up (`CATCH_UP_PROVENANCE`) stamps `seed` on the SAME points. Each turn
+  was recorded as an `unchanged` version, about 13 per point, with the value
+  never moving (`SPX_TREND`: 185,936 label flips, 20 value changes).
+- **~3.1M sat in 25,295 "irregular" coordinates** whose stored links did not
+  follow their own (knowledge_time, id) order, which the repair left exactly
+  as they were.
+
+**Decisions (owner, 2026-09-29).**
+
+- **Labels are ignored.** A value within tolerance writes nothing, in
+  `saveSourceAcquisition` and in `saveRawIndicatorHistory`, whatever its label.
+  A version keeps the label it was written with; a row's `source` is the label
+  of the write that last changed its value. Both writers still move together,
+  so raw-history parity still matches.
+- **Irregular coordinates are re-linked** in (knowledge_time, id) order, the
+  order the writer's own head lookup uses, and replayed like every other
+  coordinate. The ledger is append-only, so nothing else would ever repair
+  them. This supersedes "Left exactly as they are" above.
+- **The repair is a one-time script, not a migration.** Only production and
+  twins restored from it hold the old writers' rows. As a script it runs once,
+  on purpose, with the writers stopped (runbook `v0-5-2-rollout.md` R4.3h and
+  R6.4c), one series per statement with its progress printed, and leaves a
+  receipt. 0080 keeps only the schema changes. It rebuilds its three tables by
+  `TRUNCATE` and re-insert of the kept rows with their original ids, so the
+  space returns at commit and no `VACUUM FULL` is needed.
+
+- **Ratio series get a tolerance of 5e-6.** A ratio of two Yahoo series
+  carries both series' jitter. On the repaired twin, 102,721 of the ratio
+  series' ~121k kept "revisions" were a relative 1e-6 to 2e-6 off their prior,
+  and only 184 fell between 2e-6 and 1e-5. 5e-6 is above the measured noise and
+  four times below the smallest real revision (2e-5).
+- **Raw-history parity compares values within tolerance and does not compare
+  `source`.** The compatibility table and the ledger are fed at different
+  moments and each holds its value until a change exceeds tolerance, so they
+  can settle on two values the writers call the same observation. The parity
+  check calls the same `withinTolerance()`. `source` was compared since issue
+  #979 AC3; with a label change no longer recorded, the two tables can hold
+  different labels for one value, and no writer would ever reconcile them.
+
+**Evidence.** The same two tests, now running 0080 and then the script:
+`backend/tests/analytics-ledger-vintage-repair.test.ts` (row-for-row equal to
+the fixed writers, relabels included) and
+`backend/tests/analytics-ledger-repair.test.ts` (an irregular coordinate
+becomes one chain; guards armed; tables smaller on disk).
+
+### Amendment (issue 1375, 2026-10-15) — the parity check runs in Postgres, once a day, one domain per request
+
+**Status:** proposed
+
+**Why.** The parity sweep loaded both sides of all four domains into the api.
+Stage QA on 2026-10-15, with that day's production dump, saw one sweep take
+the api from 71 MiB to 5.9 GiB in 30 s on a 7.75 GiB host and hold 2.5 GiB
+after; an in-flight sweep killed the stage api at 20:27:06Z. Production failed
+17 sweeps from 2026-10-09 with "socket connection closed unexpectedly". The
+owner set three requirements: smarter set-based queries with supporting
+indexes; no parity computation in the api process, which only runs SQL and
+relays small results; and once a day, never overlapping data acquisition.
+
+**What changes.** The comparison rules above, and the observation table, do
+not.
+
+- Each domain is one set-based statement (`analytics/cutover/parity.ts`). It
+  returns both row counts, a sha256 over each side's ordered canonical rows,
+  the mismatch count and at most 20 mismatching keys. Raw history still
+  matches within `withinTolerance()`'s per-source tolerance, written in SQL
+  `double precision`, else after rounding at 1e-9.
+- What the comparison needs from an immutable payload is stored when the row
+  is written (migration 0123): `analytics_output_snapshots.natural_keys` (a
+  regime element's date; a research element's date, key and payload hash) and
+  `swarm_brief_revisions.body_hash`, with a GIN index and a covering index. A
+  research payload or brief body matches when the two `jsonb_hash_extended`
+  values match. A 64-bit collision is the one way a real difference could read
+  as a match.
+- `POST /api/analytics/parity-sweep` takes `{ "domain": ... }` and keeps the
+  api's 10 s limit; the 240 s exemption is gone. The worker posts the four
+  domains in turn and logs one line per domain.
+- The sweep runs at 04:47 UTC daily. The gate's default staleness budget is
+  26 h, so a daily sweep keeps it fresh; the 12-observation minimum now takes
+  12 days.
+
+**Evidence.** On the 2026-10-15 production dump, restored into a throwaway
+local Postgres 18: raw history 0.32 s, regime 0.06 s, research 0.19 s, briefs
+0.22 s, all matched, with the old in-process comparison reaching the same
+verdicts and counts (its regime check alone grew the process by 2.1 GiB).
+`backend/tests/analytics-parity-sql-equivalence.test.ts` holds the SQL to that
+comparison on every planted mismatch kind;
+`backend/tests/analytics-parity-sweep-memory.test.ts` bounds time and memory
+on a production-sized fixture;
+`scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
+every producer run, projects job and buyback refresh by 15 minutes.
+
+---
+
+## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
+
+**Decision.** The pure regime compute moves out of `backend/src/analytics/` into
+`packages/analyst-sdk/`, and the backend imports it from there. The package
+holds `analyze/{backtest,compute,correlations,indicators,regime-eq-comparison,
+regime-versions,research,research-signals,weighting-comparison,tool}.ts`,
+`transform/*`, `types.ts` and `access/provider.ts`, plus a loader for a
+raw-indicator-history CSV (`date,indicator,value,source`) or the equivalent
+JSON, and a `bun run regime` entry. `contract/` stays the shared seam for route
+paths and DTO types. `packages/analyst-sdk` is the second, and it is a different
+kind of seam: shared **compute**, not shared types.
+
+- **One source of truth, shims at the old paths.** Each moved file is replaced
+  in `backend/src/analytics/` by a one-line `export * from` into the package.
+  Every existing importer, and the three fidelity tests, keep their import
+  lines. `backend/src/api` imports nothing from `packages/` directly, only
+  through those analytics shims.
+- **The package is pure and installs alone.** No `node:fs`, `postgres`,
+  `bun:sqlite`, no `/db/`, `/chain/`, `/store/` or `/cutover/` path, no
+  `process.env`, no import from `backend/`, and no `file:` dependency. Reading a
+  file is the entry script's job (`bin/regime.ts`), outside `src/`. Its tests run
+  with `globalThis.fetch` replaced by a thrower. Enforced by
+  `scripts/tests/unit/analyst-sdk-purity.test.ts`, which also runs the scanner
+  against planted violations.
+- **`analyze/regime.ts` stays in the backend.** Its own header calls it dead in
+  production, and the claim holds: the only references under `backend/src` are
+  comments, and its importers are the tests `analytics.test.ts`, `store.test.ts`,
+  `report.test.ts` and `regime-thresholds.test.ts`. It imports
+  `@robotmoney/contract` through a `file:` dependency, which would break a
+  standalone checkout. Moving it would also put a second, different classifier in
+  the package an analyst reads to audit the real one (`compute.ts`'s `bucketFn`).
+- **The image copies the package.** `backend/Dockerfile` copies
+  `packages/analyst-sdk` to `/packages/analyst-sdk`, where the shims'
+  `../../../../packages/...` path resolves, the same way `contract/` sits at
+  `/contract`.
+- **CI follows the code.** `backend.yml`'s path filter adds `packages/**`, so a
+  change that touches only the package still runs the backend job. The new
+  `analyst-sdk.yml` runs the package's own tests and a standalone-install check.
+
+**Why.** An analyst or agent auditing the regime calculation had to check out and
+install the whole backend, whose CI filters, Dockerfile and tsconfig all assume
+the compute lives inside it. A package that installs alone and reads a CSV makes
+the calculation auditable without a database or any credential, and the shims keep
+the backend from growing a second copy that could drift.
+
+**Rejected.** Bun workspaces: nothing here uses them, and the root `postinstall`
+installs `backend/` on its own. Publishing the package to npm: out of scope,
+analysts clone it (shallow, see its README). Copying the files instead of moving
+them: two copies of the classifier is the drift D56's fidelity tests exist to
+prevent.
+
+---
+
+## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
+
+**Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
+no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
+(`asset_prices`; the `prices` table from migration 0002 is dead and is not served),
+`vintages` (`analytics_data_vintages` joined to `analytics_ledger_runs` and
+`analytics_ledger_methodology_versions`, with `analytics_vintage_members` id ranges
+expanded) and `overwrite-events` (`analytics_overwrite_events`). Until now these
+were readable only with a store token carrying `analytics_ingestion` (the
+analytics-provider role, D52), or by an admin. That stays true of `/api/analytics/`
+and `/api/admin/`. This decision adds a second, public read path beside them and
+changes nothing about who may write.
+
+- **Its own prefix.** `/api/public/analytics/`, not under `/api/analytics/`: the
+  auth gate for that one is a `startsWith` match in `api/index.ts`, and its CORS
+  prefix in `api/cors.ts` is credentialed. A public route under it would inherit
+  both. GET only; every other method is `405`. A bearer token, if sent, is ignored:
+  the body is the same with or without it. No write route will ever exist under this
+  prefix.
+- **A contract of its own.** `ROUTES.publicAnalytics` in `contract/`, and one JSON
+  schema per route in `contract/src/schemas/`, each requiring `schemaVersion` (1).
+  A breaking change to a body bumps it.
+- **Bounded reads.** Every list route takes `limit` (default 100, cap 1000, a larger
+  value clamped) and an opaque keyset `cursor`. Responses carry
+  `Cache-Control: public, max-age=300` and a weak `ETag` (a matching `If-None-Match`
+  is `304`), and a body over 256 KB is gzip-encoded for a client that accepts it.
+  `overwrite-events` rows carry whole stored rows, so that page is also bounded in SQL
+  by the stored size of the rows it returns (about 1 MiB, at least one row), with a
+  `nextCursor` when it stops short.
+  Vintage members are served one vintage at a time (`include=members` with `run_key`
+  and `tool_id`), because a production vintage has ~170k member ids.
+- **Rate limit.** One sliding window per client ip, shared by the four routes: 100
+  requests a minute, then `429` with `Retry-After`. It lives in the api process's
+  memory, so it is **per process**. One api replica runs today. A second replica
+  would double every client's allowance, and the limiter would move behind a shared
+  store before that happens. Its key map holds at most 10,000 client keys and evicts the
+  oldest-seen first, so a flood of distinct ips cannot grow it without bound.
+- **Client ip.** `resolveClientIp` reads `CF-Connecting-IP` when `TRUST_PROXY=1`
+  and honors `X-Forwarded-For` (last hop) only from a loopback peer. Before this,
+  any peer's `X-Forwarded-For` was trusted whenever `TRUST_PROXY=1`, so a sender
+  that reached the api could pick the identity the limiter saw. Cloudflare (D13)
+  sets `CF-Connecting-IP` on every proxied request and nginx passes it through.
+  A stack with no Cloudflare in front now resolves every client to its proxy's
+  address, so on such a stack (a local smoke) the limiter and the comments and
+  submissions `ip_hash` see one client. That is the safe direction to be wrong in
+  for the no-Cloudflare case only. The api port is unreachable except through the
+  Cloudflare to nginx path, so `CF-Connecting-IP` is always the value Cloudflare
+  wrote and a client cannot choose its own rate-limit bucket or `ip_hash`.
+- **Regime outputs are not duplicated.** They and the correlations stay on
+  `GET /api/dashboards/regime-snapshots?include=backtest`. That response now states
+  `source`, `regime_snapshots` or `ledger`, which says which read path
+  (`report/projections.ts`, `fetchRegimeSnapshots`) produced it.
+- **One grant.** `analytics_overwrite_events` was readable only by `rm_readonly`:
+  migration 0056 revoked ALL from `rm_app`, which took the read with the write.
+  Migration 0112 grants `rm_app` SELECT on it and nothing else, and
+  `schema/grants.sql` re-asserts it on every migrate run. No runtime role gains any
+  write, and `rm_worker` still has no access. The EXPLAIN check
+  (`backend/tests/analytics-public-explain.test.ts`) found every query served by an
+  existing index, so no index migration is needed.
+
+**Yahoo-sourced data is served.** The repo operator, Lucas Geiger, signed off on
+serving Yahoo-sourced data publicly (decision by the repo operator Lucas Geiger,
+2026-10-02). Yahoo-sourced rows are served from `raw-history`, `asset-prices`, the
+vintage members and `overwrite-events` like every other row. No filter, switch or
+denylist withholds any provider.
+
+**Provider terms.** The implementer did not review any provider's terms of use for
+redistribution. The operator accepts responsibility for serving this data.
+
+**Why.** An analyst or agent auditing the regime calculation needs the raw inputs,
+the prices, the frozen vintage a run used and every revision of a stored row, and
+had to be handed a credential meant for the producer to read them. Reading is
+public information about a public product. Writing is not, and stays gated.
+
+**Rejected.** Opening `/api/analytics/` reads to anonymous callers: that prefix
+mixes reads and writes behind one gate, and its CORS is credentialed. Duplicating regime outputs under the public prefix: two copies of
+the classifier's output can disagree, and the dashboards endpoint already serves
+them. A shared rate-limit store now: one replica runs, and a store is a new moving
+part with its own failure mode.
+
+**Enforced by** `backend/tests/api/public-analytics.test.ts` (every route 200
+without a token and valid against its schema, 405 for each non-GET, `limit=1001`
+clamped with a cursor that yields the seeded set once, the
+overwrite event produced by the 0056 trigger, vintage fields and expanded members,
+gzip and `304`, the 101st request a `429`, `*` CORS, and the same over a real api
+process), `backend/tests/api/client-ip.test.ts`,
+`backend/tests/analytics-public-explain.test.ts`, and
+`scripts/tests/unit/analyst-sdk-readme-links.test.ts` (every route the SDK README
+lists exists in `contract/`, and every contract route is listed).
+
+---
+
+<a id="d59"></a>
+## D59 — One orchestration seam: `prepareRegimeInputs` is the only place the axis, alignment, transforms and forward-fill ages are built (refines D57; issue #1095)
+
+**Decision.** `packages/analyst-sdk/src/prepare.ts` exports `prepareRegimeInputs`.
+It is the only place the date axis (start..as-of), per-indicator alignment,
+transforms and forward-fill ages are built. `backend/src/analytics/index.ts`
+(production) and `runRegime` in the SDK both call it, so the two cannot drift.
+The backend reaches it through the shim `backend/src/analytics/prepare.ts`.
+
+**Why.** The audit of run 390 found the shipped `runRegime` (a7dbae26) ended its axis
+at the newest input date instead of the as-of day and passed no forward-fill ages,
+each a second copy of logic production owned. Only the axis end changed current
+figures (through the `MNA` row dated 2026-10-31, which moves the forced weight
+refresh); the missing ages had no effect on current data. The research comparisons
+(`regime-eq-comparison`, `weighting-comparison`) and the goldens regenerator now go
+through the seam too.
+
+**Rejected.** Keeping a second copy of the axis and alignment in `runRegime`
+behind a parity test: the audit found that copy had already drifted (axis end,
+missing ages) while the parity tests it had were green. A seam the backend only
+calls through its shim, with the SDK's copy deleted: that is what was done.
+
+**Enforced by** `backend/tests/regime-sdk-equivalence.test.ts`, which runs both
+paths on one input and compares every day exactly, including a stale series,
+indicator rows dated after the as-of day and extras rows dated after it. The seam
+covers axis, alignment, transforms and ages; backtest extras are cut at the as-of day
+by `cutAtAsof` from the same module in both callers (issue #1162 Part 0, landed in
+PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other call to
+the axis or alignment primitives for regime inputs. Seam internals are pinned by
+`packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
+[`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+<a id="d60"></a>
+
+## D60 — The live-stack e2e gate is one workflow per domain, `e2e-*.yml`, sharing setup through composite actions (refines D26, D45)
+
+> Earlier decisions and the code review notes name `e2e.yml`. That is the
+> workflow this decision replaces, so read those as the four workflows below.
+
+**Decision.** There is no `e2e.yml`. Four workflows replace it, and each is its own
+check with its own live stack:
+
+| Workflow | Domain | What it runs (`scripts/smoke-ci-checks.ts --check …`) |
+|---|---|---|
+| `e2e-lifecycle.yml` | the stack runs itself | `scripts/smoke-e2e.ts --attached --keep`: the scheduler, the participants, one turnover |
+| `e2e-swarm.yml` | the swarm publishes | `swarm-session`, `starter-agent`, `live-smoke`, `verify-live` |
+| `e2e-web.yml` | the web client on a live api | `frontend` (core surfaces), `browser` (the Playwright specs) |
+| `e2e-onboarding.yml` | admission by a live model | `onboarding` (the §11 R8 real-inference sweep), opt-in |
+
+The setup and the teardown are shared, not copied: `.github/actions/e2e-setup`
+(toolchain, host deps, the unattended `bun smoke --local blank --migrate --seed`
+boot, and the resolved project name as an output) and `.github/actions/e2e-teardown`
+(`smoke:down`, the billing diagnostic, the scoped `compose down` plus `smoke-clean`,
+the CI reaper), always called under `if: always()`. Each domain runs one check per
+step, so the red step names the failing check.
+
+**Why.** One job booted one stack and ran every check in one step, 15 of its 17
+minutes. A red `e2e` said nothing about which domain broke, and a reader had to open
+the log and find a `[ci-checks]` line. The boot is about a minute, so a stack per
+domain is cheap: the domains run in parallel and the wall time falls from the sum of
+the domains to the longest one (the Playwright specs, about 10 minutes, against 5 for
+the swarm session driver and 1 for the lifecycle).
+
+**What stays the same.** Every trigger: push to `main`, `releases-*` and `fusion/**`,
+the nightly mirror (D26, one staggered cron each, `e2e-onboarding.yml` keeping the
+`37 4 * * *` slot of the real-inference measurement), and draft deferral. The
+onboarding eval keeps its opt-in (the `real-eval` label, a dispatch, the nightly), its
+`ONBOARDING_REAL_EVAL` expression and its job-summary notice. That job still runs on
+an ordinary PR and push so the notice is written ("DELIBERATELY NOT RUN"), and it
+boots a stack only when the eval was requested. No test was dropped: the checks moved
+between files and each runs exactly once.
+
+**Constraints the split forced.**
+- A composite action cannot read `secrets`, so each workflow passes
+  `OPENCODE_API_KEY` in as an input. It cannot set a step `timeout-minutes`, so each
+  job carries its own ceiling, and the CI reap threshold (6 hours) stays longer than
+  every one (`scripts/tests/unit/smoke-reap.test.ts`). Its `failure()` sees only its
+  own steps, so the billing diagnostic runs under `always()` and writes nothing unless
+  the typed marker is there.
+- Each workflow is its own `GITHUB_WORKFLOW`, so `scripts/stack/naming.ts` derives a
+  different project name for each domain and two domains on one host cannot collide.
+- `live-smoke` and `verify-live` assert what the session driver publishes, so they run
+  in `e2e-swarm.yml` after it. The Playwright specs stay in `e2e-web.yml` whole.
+
+**Rejected.**
+- Keep one job and split only the steps: the check name is still `e2e`, and the
+  domains still run in series.
+- One reusable workflow called by four thin files: the checks then read
+  `e2e-swarm / run`, and the step list lives in a place the domain's own file does not
+  show.
+- Share one booted stack across jobs: a Docker stack does not survive a job boundary.
+
+**Enforced by** `scripts/tests/unit/e2e-split-structure.test.ts` (no `e2e.yml`; the
+four domains; name, job id and file agree; shared setup and teardown; no copy of the
+boot), `scripts/tests/unit/smoke-ci-check-select.test.ts` (each `--check` is run by
+exactly one workflow, so a check cannot run twice or never), and the retargeted
+`nightly-mirrors-merge-set`, `stack-naming`, `smoke-reap`, `admission-record`,
+`evals-guard` and `e2e-onboarding-eval-pr-cost` tests.
+
+---
+
+<a id="d61"></a>
+## D61 — Release runbooks are executed end to end by an agent from the control machine; the privileged credentials live in the host's `~/.env` (supersedes parts of D47 §3, D55 (5) and policy §4.7; owner, 2026-10-08)
+
+**Status.** Accepted 2026-10-08. Implementation tracked on the v0.6.0 QA branch.
+
+**Decision.** Four rules bind every release runbook, from v0.6.0 on:
+
+1. **No human in the loop.** Every step of a runbook is executed by an agent. The
+   operator's authority is one recorded go for the release, given before the run,
+   never a keystroke during it.
+2. **The production runbook is rehearsed unmodified on stage.** Stage runs the same
+   script, at the same commit, with the same steps. Only the target file differs
+   (host, checkout, instance, `RM_ENV`, home directory). A stage leg that takes a
+   different code path from production is not a rehearsal of production.
+3. **Every database operation is scripted.** No step runs a hand-written `psql`
+   line. A query a runbook needs is a committed script with a receipt.
+4. **Everything runs from the control machine over SSH.** The control machine (the
+   developer machine with SSH access to the hosts) runs `bun run release:run`.
+   No step requires a person to log in to a host and type at a terminal.
+
+**The credentials.** The `rm_owner` password and the `doadmin` password are lines in
+the host's `~/.env`, beside the runtime role passwords. Every command that prompted
+for them reads them from there. They stay out of everything else:
+
+- `bun smoke` forwards only `rm_app`, `rm_worker` and `rm_readonly` to containers.
+  No container, compose file, image or log receives `rm_owner` or `doadmin`.
+- They never appear in a receipt, a journal, a process argument or command output.
+- `doadmin` is used by one command only, `prod-init enable-owner-login`.
+
+**The confirmation.** The literal `y` becomes `--confirm-target <host:port/database>`.
+A command that writes refuses unless the flag names exactly the target it resolved
+from `~/.env`. The protection the `y` gave (a person reads the target before a write)
+is kept as a check the agent must satisfy, not removed.
+
+**What this supersedes.** Spec §3's "typed at the terminal for the one run that needs
+it and never stored", the `~/.env` rule that it must not contain `rm_owner` or
+`doadmin`, and preflight check 4's refusal of those two keys. D55 (5)'s "typed
+`rm_owner` and `y`" for the first production migrate becomes "`rm_owner` from
+`~/.env` and `--confirm-target`". Policy §4.7's paragraph on entering the privileged
+credential, and standing check SC.2's operator authorization one step at a time.
+
+**What stays.** The target lock, the gates, the journals, the receipts, the
+supported-baseline match, `RM_ENV` and the identity matrix, and the refusal of a
+transaction-mode pooler. A runtime role still holds no DDL. Recovery after the
+migrate is still the operator's recorded decision (policy §4.8).
+
+**The trade-off, stated once.** A host that stores the owner password can rewrite the
+schema without a person present. The owner accepted that on 2026-10-08 in exchange
+for a cutover that is rehearsed exactly and run without hand steps. The mitigations are
+the confirm-target check, the target lock and the rule that no container receives the
+credential.
+
+**Why.** The v0.6.0 runbook mixed agent steps with operator keystrokes on the
+production host. Its stage leg (a `--local dump` twin) took a different path from the
+production leg, so the production steps were never actually rehearsed. On 2026-10-07
+the cutover could not proceed without a person logging in to type two passwords.
+
+**Amendment (owner, 2026-10-08).** The release runbooks use `rm_owner` only. No
+release step reads, requires or uses `doadmin`.
+
+- `doadmin` is stored in no file. The admin types it into one tool, the idempotent
+  password script `bun run role-passwords --target <stage|prod>` on the control
+  machine. It asks at a hidden prompt and sends the password over ssh stdin to
+  `bun scripts/prod-init.ts role-passwords --doadmin-stdin` on the host. It lives
+  only in that process's memory. That is the one human input of the release
+  process. It belongs to provisioning, run before a release, not to the runbook.
+- The script sets the four role passwords as `doadmin` and makes `rm_owner` `LOGIN`.
+  A working `~/.env` line is kept. An absent one is generated on the host, sent to
+  the server only as its SCRAM-SHA-256 verifier, and written to `~/.env`. A line
+  that fails refuses unless `--rotate` names it. A second run changes nothing.
+- Release step R1.2 requires a non-empty `rm_owner` line and proves an `rm_owner`
+  login with `SELECT 1`, read-only, before R6.1 stops the legacy stack. A failure
+  refuses with "rm_owner cannot log in", naming the `role-passwords` script for
+  that target. Step R6.2b (`prod-init enable-owner-login`) leaves the runbook.
+- `doadmin` leaves the `~/.env` allowlist. Preflight check 4 refuses a `doadmin`
+  line on prod again, naming it as the provisioning credential. R6.2 moves a stray
+  `doadmin` line to `~/.env.retired-<run-ts>`.
+
+This replaces "`doadmin` is used by one command only, `prod-init
+enable-owner-login`" above, and the `doadmin` half of "the `rm_owner` password and
+the `doadmin` password are lines in the host's `~/.env`".
+
+**Why the amendment.** Production's `/root/.env` had neither privileged line. A run
+that checked them only at R6.2 would have stopped the live site at R6.1 and then
+refused. Keeping `doadmin` out of every file removes the strongest credential from
+the host. Proving `rm_owner` at R1.2 means every precondition holds before the first
+irreversible step.
+
+---
+
+<a id="d61-amendment-1272"></a>
+**Amendment (issue 1272, 2026-10-12): the runner holds no past-upgrade fact.** The
+text above names the legacy tmux stack, R6.2a, the supported-baseline match and
+"before R6.1 stops the legacy stack". Those were facts of the v0.5.4 to v0.6.0
+upgrade, typed into the tool. They are gone:
+
+- The target files (`scripts/release/targets/{prod,stage}.json`) carry no `legacy`
+  block: no previous checkout, commit, tmux session, compose project or driver log.
+  A `legacy`, `commit`, `tag` or `tmuxSession` key refuses by name. A target names
+  where it lives and nothing of what runs there.
+- R6.1 stops whatever stack the host's smoke state names for the instance, with
+  `bun run smoke:down --instance <instance>` (never `-v`), and refuses with a
+  non-zero exit when the state names no stack. No release step drives or kills a
+  tmux session. S8.1 (the legacy checkout rename) and R7.7's retired-checkout scan
+  left with it: a checkout booted by `bun smoke` holds no credential (`~/.env`
+  does), so there is nothing to retire.
+- R6.2a, R6.7c and R6.7d, the one-time v0.6.0 cutover actions, left the generic
+  list. A release that needs a one-time action declares a delta step
+  (`RELEASE_DELTAS`, `stepsFor` in `scripts/release/steps.ts`) in its own delta
+  runbook, gated on a precondition receipt that proves it has not run.
+- R2.5 runs from the release checkout, like every other target step, and grades the
+  running stack the instance's smoke state names.
+- R1.2 and R2.3 judge the ledger against `backend/migrations` by filename set
+  ([D55 decision 8's amendment](#d55-8-amendment-1272)). R1.2 requires the
+  `RM_CREDENTIALS` line before the first irreversible step, since no step writes it.
+- `stage-target up --dump <dir>` builds the target from the dump's own ledger and
+  the tag and commit production's `/api/version` reports, replaying exactly that
+  ledger; `STAGE_TARGET` holds no previous commit, fixed ledger or driver script.
+- The step-list hash changed once, deliberately; `docs/runbooks/release-run.md`
+  records it, `steps-table.ts --write` keeps it, and a unit test holds the record
+  equal to the computed one. Every earlier stage journal is refused by SP.8.
+
+Rules 1 to 4 stand. The trade-off and the 2026-10-08 amendment stand. Why: the
+same list must run any patch from the version production actually runs, with no
+per-release code edit (owner, 2026-10-09, during the v0.6.1 QA session).
+
+## D62 — A release branch takes changes only from `main`, or from a QA branch when the change is incompatible with `main` or fixes a regression on `main` (refines policy §2 and §4.6; owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09. Amended 2026-10-14 by [D70](#d70).
+
+**Decision.**
+
+1. **Default route.** A fix lands on `main` by PR. It reaches `releases-A.B.x` by
+   cherry-pick or merge from `main`.
+2. **Exception.** A PR from the `qa/A.B.x-<YYYY-MM-DD>` branch directly onto
+   `releases-A.B.x` is allowed only when the change is incompatible with `main`
+   or fixes a regression that exists on `main`. The PR body names which of the
+   two conditions applies.
+3. **QA sessions are unchanged.** Patches still land on the QA branch first. The
+   release branch and `main` stay clean during a session. Only how a QA commit
+   reaches the release branch afterwards changes.
+4. **Force-push.** A release branch is force-pushed only on an explicit owner
+   instruction, after the archive tag `archive/releases-A.B.x-<YYYY-MM-DD>` is
+   pushed first. Precedent: `releases-0.6.x` was realigned to the production
+   commit `e96d4598` on 2026-10-09 (tag `v0.6.0` is its tip), and
+   `releases-0.5.x` on 2026-09-24.
+
+**Why.** A release line stays reviewable and main-first. Every change on it is
+either already on `main` or has a named reason it cannot be.
+
+## D63 — A release that reached production gets its version tag unless it was rolled back; failed checks are ticketed against the next patch version (refines policy §3; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
+
+**Decision.**
+
+1. A commit deployed to production gets the final tag `vA.B.C`, unless the
+   release was rolled back. A failed postflight or watch does not withhold it.
+2. Every failed check becomes an issue against the next patch version
+   `vA.B.(C+1)`. Its fixes start at `vA.B.(C+1)-rc.0`.
+3. A rollback withholds the tag. The next attempt is `vA.B.C-rc.(N+1)`.
+4. When the runner stops at a failed step after R6.1, the operator tags the
+   running commit with `bun scripts/release/tag.ts final`.
+
+**Why.** Production must never run a commit that no version names. The owner
+applied this rule to v0.5.1 (2026-09-28) and v0.6.0 (2026-10-09). Policy §3 still
+said the opposite, that a failed postflight consumes another rc of the same
+version. On 2026-10-10 the v0.6.1 production run failed R7.3a on one boot-race
+log line (issue 1280). Production was healthy on `v0.6.1-rc.0`, and the runner
+could not reach W3.
+
+## D64 — Stage runs a release-branch commit; once it passes, the rc tag is cut there, and production runs only by that rc tag (refines policy §3 and D61; owner, 2026-10-10)
+
+**Status.** Accepted 2026-10-10. Amended 2026-10-14 by [D70](#d70).
+
+**Decision.**
+
+1. Stage runs a commit on `releases-A.B.x`. Never a PR head, a QA branch commit
+   or any commit the release branch does not contain.
+2. When the stage run passes, `vA.B.C-rc.N` is cut at that exact commit and
+   pushed.
+3. The production go names that rc tag. Production never runs from a branch name
+   or a bare commit.
+4. A production run refuses a tag that does not point at the stage-passed commit
+   or is not reachable from `releases-A.B.x`.
+
+**Why.** On 2026-10-10 the v0.6.1 runs used the head of PR 1274 (`bca5186e`).
+Its squash merges gave `main` and `releases-0.6.x` the same tree under other
+hashes. `/health` on production then reported a commit that neither branch
+contained, and both v0.6.1 tags pointed outside the release branch. An
+empty-diff merge (`83985379`) repaired the branch. Cutting the rc on the release
+branch after stage, and deploying only that tag, makes the deployed commit, the
+tags and the branch agree by construction.
+
+
+## D65 — CI caches nothing, and a test that needs a build runs in one job per push (owner, 2026-09-24)
+
+**Status.** Accepted 2026-09-24. Recorded with issue 1040.
+
+**Decision.**
+
+1. No workflow caches anything. No step uses `actions/cache`, no step sets
+   buildx `cache-from` or `cache-to`, and no job pulls a pre-built project
+   image.
+2. Every `oven-sh/setup-bun` step sets `no-cache: true`. Every
+   `docker/setup-buildx-action` step sets `cache-binary: false`. No
+   `actions/setup-node` step sets a `cache` input.
+3. A test that builds an image runs in exactly one push-triggered job. The
+   inference-off rails test, `onboarding-eval-infra.test.ts`, runs in
+   `integration.yml` only.
+4. A failed compose step reports the tail of its own output, and the downloads
+   in the member-agent image retry. A network blip is retried in the build. It
+   is not hidden by a cache.
+
+**Why.** A cache hit hides a change in the dependency universe, and CI exists to
+catch that change. On 2026-09-24 main went red twice with a bare
+`compose build member-agent failed (exit 1)`. The image downloads without
+retries, the stack module never read the child's output, and the same test ran
+twice per push. The fix makes the failure visible and repeatable instead of
+caching around it.
+
+**Enforcement.** `scripts/tests/unit/ci-no-cache.test.ts`,
+`scripts/tests/unit/e2e-onboarding-eval-pr-cost.test.ts` and
+`scripts/tests/unit/member-agent-dockerfile-retries.test.ts`.
+
+---
+
+<a id="d66"></a>
+## D66 — Production data changes only through a migration (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09 as decision 2 of the
+[v0.6.0 upgrade post-mortem](./post-mortems/2026-10-09T1704Z-0.6.0-upgrade.md#owner-decisions-record-2026-10-09).
+Carried into the release standing runbook as rule 7 by the v0.6.1 runbook pr
+(1324). Recorded here with issue 1312.
+
+**Decision.**
+
+1. Every change to production data ships as a file under `backend/migrations`
+   and is applied by the release's migrate step (R6.3). No admin-route write, no
+   SQL by hand, no one-off script.
+2. This covers operator state as much as schema: a subject's scheduling columns
+   (`epoch_duration`, `epoch_anchor`, `judging_duration`), fixture purges and
+   value retypes. Migration 0117 (daily epochs), 0118 (fixture purge) and 0121
+   (closes six hours apart) are the first three.
+3. The migration ledger (`schema_migrations`) is the record of every production
+   data change. A release runbook lists its migrations and nothing else as its
+   data delta.
+4. The admin API remains the way an **ephemeral** stack (a smoke run, a CI
+   stack, a rehearsal copy of production) changes a subject's scheduling
+   columns. That write is `backend/src/swarm/admin.ts`, reached through
+   `backend/src/api/routes/swarm-admin.ts`; it has no deployment guard. The
+   rule, not the code, keeps it off production and stage.
+
+**Why.** On 2026-10-09 an operator set the 24 h epoch duration on production by
+hand through the admin route at 16:55 UTC. The change was correct and still left
+no record a later release could read, replay on stage or roll back. The
+post-mortem's third decision kept that edit live only until migration 0117
+replaced it with the same values. The fixture purge of issue 1208 had ruled a
+migration out of scope the day before; this rule overrides that.
+
+**Rejected.** An admin-route write with an audit row: the row records the
+change but a release cannot replay it on stage before production. A one-off
+script under `scripts/`: it runs outside the ledger and leaves no proof of
+whether it ran.
+
+**Enforcement.** `scripts/lint-docs.sh` check 7 and
+`scripts/tests/unit/docs-migration-rule-decision.test.ts` require this entry
+and refuse any current doc that still names the admin API as the sole way a
+subject's scheduling columns change.
+
+---
+
+<a id="d67"></a>
+## D67 — The ledger is reconciled with the migration files and the release tag's bytes, never matched against a per-release constant; new migration prefixes are unique and strictly increasing (owner, 2026-10-09)
+
+**Status.** Accepted 2026-10-09. Recorded with issue 1273, after the v0.6.1 QA
+session. Amends [D55](#d55) (5) and (8).
+
+**Decision.**
+
+1. One deterministic read-only check, `backend/src/db/ledger-reconcile.ts`,
+   compares the ledger with the files. Check 1: every name in
+   `schema_migrations` exists in `backend/migrations/` (else
+   `ledger-not-subset`). Check 2: pending is exactly the repository minus the
+   ledger, by filename; a caller that names the list it intends to apply gets
+   `unexpected-pending` on any difference. Check 3: for each applied name the
+   sha256 of the checked-out file equals the sha256 of the same path at the
+   pin ref (`bytes-differ` with both hashes; `unpinned` when the ref lacks
+   it). No check reads a 4-digit prefix or the `applied_at` order.
+2. The pin ref is the caller's. The database records no release tag, so the
+   runner takes `--pin-ref <tag|commit>`, the version production reports,
+   resolves it with `git rev-parse --verify` in the checkout, and refuses with
+   `pin-ref-unresolved` when it is absent. It never falls back to `HEAD` or to
+   the checkout.
+3. The release preflight's R1.2 and R2.3 and `bun run migrate`'s normal path
+   call this runner and refuse on any verdict but `ok`. `bun run migrate` runs
+   checks 1 and 2 before applying anything and check 3 under `--pin-ref`.
+   `bun run --cwd backend reconcile --pin-ref <ref> --json` prints the
+   receipt and exits 0 only on `ok`.
+4. `SUPPORTED_RELEASES` shrinks to the pre-identity baseline of D55 (5) and
+   (8), the one state the identity-first pass starts from. It is not retyped
+   per release. The supported-releases bump pr (1271) and its issue (1270),
+   which would have made it the 116-name v0.6.1 ledger, were closed unmerged.
+5. A new migration file takes the 4-digit prefix one above the highest prefix
+   present. The fourteen prefixes already carrying more than one file and the
+   `0064` to `0079` gap are grandfathered by the explicit allowlist in
+   `backend/tests/migration-numbering.test.ts`. No existing file is renamed.
+
+**Why.** `backend/migrations` holds 122 files; fourteen prefixes are used more
+than once and sixteen are skipped, so a number is neither a key nor a
+sequence. Production's ledger applied seven files out of number order and the
+ledger keys on the full filename, which is the only reason the duplicates do
+no harm. The preflight's exact match against a hard-coded list of the
+previous release's filenames refused a healthy production database after
+every release until someone edited the constant, and never checked the SQL
+bytes that ran, so an edited applied file passed unnoticed. Migrations are the
+one path production data may change by, so the check must be sound and must
+need no upkeep: the repository is the only file list, and the tag production
+reports is the only source of the bytes. The single-file migration strategy
+(issue 1173, folded into 1220) is a separate, later direction.
+
+**Enforcement.** `backend/tests/migration-numbering.test.ts`,
+`backend/tests/ledger-reconcile.test.ts`,
+`backend/tests/ledger-reconcile-runner.test.ts`, the reconcile cases of
+`backend/tests/migrate-run.test.ts`, and the R1.2 and R2.3 cases of
+`scripts/tests/unit/release-run.test.ts`.
+
+---
+
+<a id="d68"></a>
+## D68 — A take that names its session is filed against that session or refused; it is never routed into the next session (issue 1249, 2026-10-14)
+
+**Status.** Proposed 2026-10-14. Amends the issue 570 routing rule recorded in
+`submitRecommendation` (`backend/src/swarm/domain.ts`): "a take arriving after
+session N closed lands on N+1".
+
+**Decision.**
+
+1. `POST /api/swarm/submit` and `POST /api/swarm/signing-payload` accept an
+   optional `sessionId` (a session uuid). It is outside the signed bytes:
+   `canonicalizeSubmission` never reads it, so the canonical string is
+   identical with and without it.
+2. When a take names a session, submit looks up that session by id. The take
+   is stored on it while it is `collecting` and its `window_closes_at` has not
+   passed. Otherwise submit answers `409 submission window closed (session
+   <id>)` and stores nothing. The INSERT predicate re-checks the same session
+   id, its subject, its state and its close instant.
+3. A named session of another subject answers 409, not 404, and stores
+   nothing. An unknown session id answers 404.
+4. A take that names no session keeps the issue 570 behaviour: it is filed on
+   the subject's newest session.
+5. The bundled member client (`scripts/agent/member-session-client.ts`) sends
+   `RM_SESSION_ID`. The onboarding skill tells external members to send the
+   open session's id.
+
+**Why.** On 2026-10-08 the inference provider slowed and members filed takes
+after their session's window closed. Under the epoch model turnover opens N+1
+`collecting` in the transaction that closes N, so a late take written against
+N's brief passed every check and was stored on N+1. It counted toward a
+consensus whose brief its author never read. It was refused only when N+1's
+brief bound a different report snapshot. A take authored from one brief must
+not count toward another session's consensus.
+
+**Not decided here.** Making `sessionId` required or signed, rmpc changes, and
+removing the session-less fallback.
+
+**Enforcement.** `backend/tests/swarm-submission-window.test.ts` (late,
+on-time and wrong-subject named takes, and the unchanged issue 570 cases),
+`backend/tests/validation.test.ts`, `backend/tests/signing.test.ts`, and
+`scripts/tests/unit/member-session-client-http.test.ts`.
+
+---
+
+## D69 — The runtime has no environment class: `RM_ENV` is no runtime class, the insecure flag is retired, and the test harness opens test-only paths through one in-process seam (refines D52 (1) and policy §4.4; agent, 2026-10-13)
+
+**Status:** proposed. Drafted by the agent with issue 973 (pr 1325); the owner
+accepted the issue's three-slice split on 2026-10-14.
+
+**Decision.**
+
+1. `RM_ENV` is not a runtime class. `backend/src/config.ts` has no `env`
+   field. The api's and the workers' startup preflight takes no policy value.
+   The health payload and the boot log lines report no environment. No
+   container reads `RM_ENV`: the last reader, the stack's declared acceptance
+   path, retired with the acceptance-path issue (1326) under part 6.
+2. `RM_ALLOW_INSECURE`, `config.allowInsecure` and `bun smoke --allow-insecure`
+   are retired. No compose file, launcher or stack configuration defines or
+   forwards the variable, and a stack configuration that is handed it refuses.
+   Every privileged route requires its configured credential on every stack
+   (D52 (1)), with no opt-out of any kind.
+3. The test-only paths that `RM_ENV=ephemeral` used to open — re-pointing the
+   db pools, serving the fixture projects source, writing synthetic regime rows
+   — are opened by `backend/src/test-seam.ts`, armed by
+   `backend/tests/preload.ts` in the `bun test` process and by nothing else. A
+   process that is not the armed harness refuses each of them whatever its
+   environment says. The fixture projects source is injected by the harness;
+   a deployed process selects the live source with `PROJECTS_SOURCE=live` or
+   refuses. There is no environment override of the roster seed path.
+4. One `RM_ENV` reader remains after this decision and part 6. The
+   operator tools (`bun run migrate`, `prod-init`, `bun smoke`'s boot gates,
+   D61) read it as their §4.1 policy input. The owner decided on 2026-10-14
+   that they take an explicit flag instead, with the policy-input issue (1327).
+   This decision retires the runtime class and the insecure flag only.
+5. A repository guard (`scripts/tests/unit/retired-env-guard.test.ts`) fails
+   on a new read of `RM_ENV` in `backend/src` outside `deploy-policy.ts`, on
+   any mention of the retired names in a process, compose file or workflow, on
+   an `RM_ENV` key in a compose file, stack composefile or workflow, and on a
+   second caller of the seam.
+6. No environment value declares the acceptance path (issue 1326; agent,
+   2026-10-14, proposed: the issue asked for an owner call between the
+   standing-stack flag and a pin applied everywhere, and this takes both).
+   `backend/src/acceptance-path.ts` reads no environment. A caller states the
+   path: the armed test harness states `development` through the seam,
+   `bun smoke` states the kind of boot (`standingStack`: a `--static-port` or
+   `prod`-policy boot is the acceptance path, an operator's own stage boot is
+   development), and the local throwaway onboarding eval states
+   `development`. A caller that states nothing is the acceptance path. So the
+   api and the participant judge apply the AC-MODEL-01 judge pin on every
+   deployed stack, a stub judge model is reachable only through the armed
+   seam, and the standalone session driver refuses a keyless model on every
+   host. `StackConfig.rmEnv`, the participant env's `RM_ENV`, the plan
+   configuration's `RM_ENV` key, `docker-compose.yml`'s and the stack
+   composefiles' `RM_ENV` and the e2e workflow steps' `RM_ENV` are gone;
+   `buildComposeEnv()` refuses an `RM_ENV` handed through its extras. The e2e
+   setup action keeps `RM_ENV=stage` as `bun smoke`'s policy input (part 4).
+
+**Why.** A deployment's identity used to alter runtime authority and
+data-safety behaviour: `smoke`, `stage` and `ephemeral` each relaxed something,
+and an environment variable reaches a deployed process through a compose
+default, a shell export or a profile line. Production v0.5.4 ran as `smoke` and
+persisted fixture projects (issue 1208). Tests take their isolation from an
+ephemeral Postgres and injected credentials; they do not need the server to
+fail open, and a seam armed in one process is a claim the process can verify.
+
+---
+
+<a id="d70"></a>
+## D70 — Stage runs a QA branch; the stage-passed QA branch is squash-merged onto the release branch and the rc is cut there; production runs only by rc tags; the version tag is cut as soon as the cutover starts (supersedes D62 (1)–(2), D63 (3)–(4) and D64 (1)–(2) and (4); owner, 2026-10-14)
+
+**Status.** Accepted 2026-10-14. Implemented by the release runbook overhaul: stage
+takes a QA commit, SP.8 and `tag.ts rc` compare trees, and step C1 tags at the cutover's
+start. The same change made the cutover rolling, the soak 30 minutes, the go only the
+ref, operator and date, and the recovery decision part of the release YAML.
+
+**Decision.**
+
+1. **Stage runs on a QA branch.** Each stage session cuts
+   `qa/A.B.x-<YYYY-MM-DD>` from the `releases-A.B.x` tip. Stage runs a clean,
+   pushed commit of that branch, never a PR head or a fix branch. A pushed QA
+   branch is never rewritten; a new base means a new QA branch.
+2. **Squash after stage passes.** Only after the runbook passes on stage is the
+   QA branch squash-merged onto `releases-A.B.x`. The release branch must not
+   have moved since the QA branch was cut. The squash commit's tree must equal
+   the stage-passed tree.
+3. **The rc is cut at the squash commit.** `vA.B.C-rc.N` names a commit whose
+   tree passed stage. SP.8 and `tag.ts rc` compare tree hashes, not commit
+   hashes.
+4. **Production runs only by rc tags.** The production go names the rc tag.
+5. **A production failure belongs before the cutover.** An rc that fails in
+   production before R6.1 never reaches production. Its fix goes to a new QA
+   branch, stage runs again, and the next rc is `vA.B.C-rc.(N+1)`.
+6. **The cutover makes the version.** As soon as R6.1 starts on production, the
+   rc's commit gets `vA.B.C`. A later failed check, a known defect or a
+   rollback does not withhold or move it. Every defect found after the cutover
+   is an issue against `vA.B.(C+1)`.
+7. **Scope still comes from `main`.** Before a QA session, the release's scope
+   reaches `releases-A.B.x` from `main` by merge or cherry-pick. QA fixes reach
+   `main` afterwards by a separate PR from the QA branch.
+
+**Why.** QA commits are noisy, so the release branch takes one squash per
+stage-passed session. A squash re-hashes the commit, so identity is the tree.
+D64's failure (v0.6.1, 2026-10-10) came from fixes reaching `main` and the
+release branch by different squashes; comparing trees removes that failure
+without forbidding the squash. Tagging at the cutover keeps production from
+ever running a commit no version names, and makes every pre-cutover check the
+place a release can still stop.

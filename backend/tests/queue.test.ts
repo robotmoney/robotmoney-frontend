@@ -1,7 +1,9 @@
 import { test, expect, beforeAll, beforeEach } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handlers } from "../src/worker/handlers/index.ts";
 import { processOneJob } from "../src/worker/loop.ts";
+import { LANES } from "../src/worker/lanes.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
@@ -20,13 +22,13 @@ beforeAll(() => {
 // queue fixture was destroying the audit trail. A DELETE honours the declared
 // `ON DELETE SET NULL` and merely detaches it.
 beforeEach(async () => {
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  await sql`DELETE FROM job_schedules`;
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  await fixtureDb`DELETE FROM job_schedules`;
 });
 
 test("processOneJob: success → succeeded + a job_runs row", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload) VALUES ('test.ok','{}') RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload) VALUES ('test.ok','{}') RETURNING id`;
   expect(await processOneJob()).toBe(true);
   const [job] = await sql`SELECT status, attempts FROM jobs WHERE id=${id}`;
   expect(job.status).toBe("succeeded");
@@ -37,7 +39,7 @@ test("processOneJob: success → succeeded + a job_runs row", async () => {
 });
 
 test("processOneJob: failure with attempts left → pending with backoff", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('test.fail','{}',5) RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('test.fail','{}',5) RETURNING id`;
   await processOneJob();
   const [job] = await sql`SELECT status, attempts, run_after FROM jobs WHERE id=${id}`;
   expect(job.status).toBe("pending");
@@ -48,19 +50,19 @@ test("processOneJob: failure with attempts left → pending with backoff", async
 });
 
 test("processOneJob: failure on the last attempt → dead", async () => {
-  const [{ id }] = await sql`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('test.fail','{}',1) RETURNING id`;
+  const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('test.fail','{}',1) RETURNING id`;
   await processOneJob();
   const [job] = await sql`SELECT status FROM jobs WHERE id=${id}`;
   expect(job.status).toBe("dead");
 });
 
 test("scheduler: new schedule seeds next_run_at without firing; a due one catches up; idempotent", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','*/5 * * * *', true)`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','*/5 * * * *', true)`;
   expect(await tickScheduler()).toBe(0); // NULL next_run_at → seed only, no stale fire
   const [seeded] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
   expect(seeded.next_run_at).not.toBeNull();
 
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '20 minutes' WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '20 minutes' WHERE kind='test.ok'`;
   expect(await tickScheduler()).toBeGreaterThan(0); // catch up missed slots
   const [{ c }] = await sql`SELECT count(*)::int c FROM jobs WHERE kind='test.ok'`;
   expect(c).toBeGreaterThan(0);
@@ -77,9 +79,9 @@ test("scheduler: new schedule seeds next_run_at without firing; a due one catche
 // drain the backlog, next_run_at must be in the future and the schedule must
 // still be capable of enqueuing fresh (non-suppressed) work each tick.
 test("scheduler: a per-minute cron >1000 slots (16h40m) behind is never left pinned in the past", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','* * * * *', true)`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','* * * * *', true)`;
   const staleAt = new Date(Date.now() - 20 * 60 * 60 * 1000); // 20h behind = 1200 minute-slots
-  await sql`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
 
   const firstTickEnqueued = await tickScheduler();
   expect(firstTickEnqueued).toBeGreaterThan(0);
@@ -117,9 +119,9 @@ test("scheduler: a per-minute cron >1000 slots (16h40m) behind is never left pin
 // cadence-independent, not a per-minute special case. ~41 days behind
 // overflows the 1000-slot guard exactly the same way.
 test("scheduler: an hourly cron >1000 slots (~41 days) behind is never left pinned in the past", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','0 * * * *', true)`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled) VALUES ('test.ok','0 * * * *', true)`;
   const staleAt = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000); // 45 days ≈ 1080 hourly slots
-  await sql`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = ${staleAt} WHERE kind='test.ok'`;
 
   const firstTickEnqueued = await tickScheduler();
   expect(firstTickEnqueued).toBeGreaterThan(0);
@@ -142,8 +144,8 @@ test("scheduler: an hourly cron >1000 slots (~41 days) behind is never left pinn
 // payload is exactly the schedule's static `payload` column with no slot
 // timestamp at all (seed.ts's samplers all seed `{}`).
 test("scheduler: enqueued jobs carry the slot's own timestamp in the payload", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, payload, enabled) VALUES ('test.ok','* * * * *', '{"a":1}', true)`;
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '3 minutes' WHERE kind='test.ok'`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, payload, enabled) VALUES ('test.ok','* * * * *', '{"a":1}', true)`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '3 minutes' WHERE kind='test.ok'`;
   expect(await tickScheduler()).toBeGreaterThan(0);
   const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
   expect(rows.length).toBeGreaterThan(0);
@@ -162,11 +164,11 @@ test("scheduler: enqueued jobs carry the slot's own timestamp in the payload", a
 // regression pin on the pre-existing behaviour above — every missed slot,
 // same-day or not, still gets its own job.
 test("scheduler: 'all' catch-up policy (default) still enqueues every missed same-day slot", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'all')`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'all')`;
   expect(await tickScheduler()).toBe(0); // seed only, no stale fire
   // Backdated a handful of minutes — guaranteed same UTC day short of a run
   // starting in literally the first 8 minutes after midnight.
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '8 minutes' WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '8 minutes' WHERE kind='test.ok'`;
   const enqueued = await tickScheduler();
   expect(enqueued).toBeGreaterThan(1); // every missed slot got its own job, none collapsed
   const [{ c }] = await sql`SELECT count(*)::int c FROM jobs WHERE kind='test.ok'`;
@@ -177,14 +179,14 @@ test("scheduler: 'all' catch-up policy (default) still enqueues every missed sam
 // SAME UTC-day bucket into exactly one job (the last one due), instead of one
 // job per missed slot — the redundant-live-read case the wallet samplers hit.
 test("scheduler: 'collapse-per-bucket' catch-up policy collapses N missed same-day slots into exactly 1", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'collapse-per-bucket')`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','* * * * *', true, 'collapse-per-bucket')`;
   expect(await tickScheduler()).toBe(0); // seed only, no stale fire
   const before = new Date();
   // Clamped to the start of today: "now() - 8 minutes" alone can cross UTC
   // midnight (the very case this test exists to keep separate from same-day
   // collapsing — see the sibling cross-day test below), which would split
   // these slots across two buckets and produce 2 jobs instead of 1.
-  await sql`UPDATE job_schedules SET next_run_at = GREATEST(now() - interval '8 minutes', date_trunc('day', now())) WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = GREATEST(now() - interval '8 minutes', date_trunc('day', now())) WHERE kind='test.ok'`;
   expect(await tickScheduler()).toBe(1); // same-day missed slots, exactly one job enqueued
   const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
   expect(rows.length).toBe(1);
@@ -198,9 +200,9 @@ test("scheduler: 'collapse-per-bucket' catch-up policy collapses N missed same-d
 // spanning several days still produces one (collapsed) job PER DAY, so
 // cross-day catch-up is unaffected by same-day collapsing.
 test("scheduler: 'collapse-per-bucket' still gives each missed UTC day its own collapsed job", async () => {
-  await sql`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','0 * * * *', true, 'collapse-per-bucket')`;
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','0 * * * *', true, 'collapse-per-bucket')`;
   expect(await tickScheduler()).toBe(0); // seed only, no stale fire
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '50 hours' WHERE kind='test.ok'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '50 hours' WHERE kind='test.ok'`;
   expect(await tickScheduler()).toBeGreaterThan(0);
   const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok' ORDER BY id ASC`;
   const days = rows.map((r) => new Date(r.payload.slotAt).toISOString().slice(0, 10));
@@ -209,10 +211,57 @@ test("scheduler: 'collapse-per-bucket' still gives each missed UTC day its own c
   expect(rows.length).toBeGreaterThan(1); // 50h of hourly backlog spans multiple days
 });
 
+// Issue 1378: 'latest-only' folds a whole backlog, across days, into exactly
+// one job at the newest due slot — the six heavy kinds recompute current state,
+// so an older slot is the same run repeated.
+test("scheduler: 'latest-only' catch-up policy enqueues exactly one job, at the newest due slot, for N missed slots", async () => {
+  await fixtureDb`INSERT INTO job_schedules (kind, cron, enabled, catchup_policy) VALUES ('test.ok','0 * * * *', true, 'latest-only')`;
+  expect(await tickScheduler()).toBe(0); // seed only, no stale fire
+  // 50 hours of hourly backlog: 50 missed slots across at least two UTC days.
+  await fixtureDb`UPDATE job_schedules SET next_run_at = date_trunc('hour', now()) - interval '49 hours' WHERE kind='test.ok'`;
+  expect(await tickScheduler()).toBe(1);
+  const rows = await sql`SELECT payload FROM jobs WHERE kind='test.ok'`;
+  expect(rows.length).toBe(1);
+  // The newest due slot is the top of the current hour.
+  const newest = new Date();
+  newest.setUTCMinutes(0, 0, 0);
+  expect(rows[0].payload.slotAt).toBe(newest.toISOString());
+  const [sched] = await sql`SELECT next_run_at FROM job_schedules WHERE kind='test.ok'`;
+  expect(new Date(sched.next_run_at).getTime()).toBe(newest.getTime() + 3_600_000);
+  expect(await tickScheduler()).toBe(0); // fully caught up, idempotent
+});
+
+// Issue 1378: the parity sweep against an api that refuses connections settles
+// a 'degraded' run and a pending retry — the attempt is not spent as a hard
+// failure, as it was on the v0.6.2 stage boot (21:07:29.76, 'Unable to connect').
+test("analytics.parity_sweep against a refusing api settles 'degraded' and a pending retry, never 'failed' on the first attempt", async () => {
+  // A port nothing listens on: bind one, read its number, close it.
+  const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
+  const port = probe.port;
+  probe.stop(true);
+  const prev = { url: process.env.ANALYTICS_API_URL, file: process.env.ANALYTICS_TOKEN_FILE };
+  process.env.ANALYTICS_API_URL = `http://127.0.0.1:${port}`;
+  delete process.env.ANALYTICS_TOKEN_FILE;
+  try {
+    const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('analytics.parity_sweep','{}', 5) RETURNING id`;
+    expect(await processOneJob({ lane: LANES.analytics })).toBe(true);
+    const [job] = await sql`SELECT status, attempts, run_after, last_error FROM jobs WHERE id=${id}`;
+    expect(job.status).toBe("pending");
+    expect(job.attempts).toBe(1);
+    expect(new Date(job.run_after).getTime()).toBeGreaterThan(Date.now());
+    expect(job.last_error).toContain("unreachable");
+    const runs = await sql`SELECT status FROM job_runs WHERE job_id=${id}`;
+    expect(runs.map((r) => r.status)).toEqual(["degraded"]);
+  } finally {
+    if (prev.url === undefined) delete process.env.ANALYTICS_API_URL; else process.env.ANALYTICS_API_URL = prev.url;
+    if (prev.file !== undefined) process.env.ANALYTICS_TOKEN_FILE = prev.file;
+  }
+});
+
 test("reaper: stuck running job is requeued with backoff; exhausted → dead", async () => {
-  const [{ id: a }] = await sql`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
+  const [{ id: a }] = await fixtureDb`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
                                 VALUES ('test.ok','{}','running', now() - interval '10 minutes','dead-worker',1,5) RETURNING id`;
-  const [{ id: b }] = await sql`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
+  const [{ id: b }] = await fixtureDb`INSERT INTO jobs (kind, payload, status, locked_at, locked_by, attempts, max_attempts)
                                 VALUES ('test.fail','{}','running', now() - interval '10 minutes','dead-worker',5,5) RETURNING id`;
   expect(await reapStuckJobs()).toBeGreaterThanOrEqual(2);
   const [ja] = await sql`SELECT status, run_after FROM jobs WHERE id=${a}`;

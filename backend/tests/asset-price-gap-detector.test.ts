@@ -12,6 +12,7 @@ import { sql } from "../src/db/client.ts";
 import { detectAssetPriceGaps } from "../src/ops/asset-prices.ts";
 import type { TrackedAsset } from "../src/config.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -35,15 +36,15 @@ function testAsset(overrides: Partial<TrackedAsset> = {}): TrackedAsset {
 }
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM asset_prices WHERE symbol = ${SYMBOL}`;
-  await sql`DELETE FROM asset_price_floors WHERE symbol = ${SYMBOL}`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = ${SYMBOL}`;
+  await fixtureDb`DELETE FROM asset_price_floors WHERE symbol = ${SYMBOL}`;
 }
 
 beforeEach(cleanup);
 afterEach(cleanup);
 
 async function insertPrice(date: string): Promise<void> {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_prices
       (price_date, symbol, time_basis, price_usd, currency, source, observed_at, fetched_at, config_identity)
     VALUES
@@ -52,7 +53,7 @@ async function insertPrice(date: string): Promise<void> {
 }
 
 test("gap detection never reports a day before the symbol's proven floor, even though deployedAt is earlier", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_price_floors (symbol, first_priceable_date, proven)
     VALUES (${SYMBOL}, ${FLOOR}, true)
   `;
@@ -86,7 +87,7 @@ test("SP500 (priceKind 'yahoo') is never reported — it is not part of the pric
 });
 
 test("a fully dense symbol reports zero missing days", async () => {
-  await sql`
+  await fixtureDb`
     INSERT INTO asset_price_floors (symbol, first_priceable_date, proven)
     VALUES (${SYMBOL}, ${FLOOR}, true)
   `;

@@ -16,6 +16,7 @@
 // `backend/src/api/routes/dashboards.ts` is the thin adapter exposing these
 // as GET /api/dashboards/{coins,vaults,wallets}/:id.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import {
   num,
   isStale,
@@ -59,10 +60,170 @@ function since(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
+// Registered queries (smoke-production-spec.md §7.1): reads, reached only
+// through the dashboards' coin, vault and wallet profile routes.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const coinRow = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchCoinProfile.coin",
+  purpose: "Read one active coin's profile columns by id.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, project_id, name, ticker, chain, logo_url, contract_address,
+             price_usd, percent_change_24h, market_cap, fdv, volume_24h, refreshed_at
+      FROM lobster_coins WHERE id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const coinHistory = registerQuery({
+  role: "rm_app",
+  object: "daily_coin_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchCoinProfile.history",
+  purpose: "Read one coin's last year of daily price, cap and volume.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT snapshot_date::text AS snapshot_date, price_usd, market_cap, volume_24h
+      FROM daily_coin_snapshots WHERE coin_id = $1::uuid AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const projectAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:projectAgents",
+  purpose: "List a project's active agents by name, linked from a coin or vault profile.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, name FROM openclaw_agents WHERE project_id = $1::uuid AND is_active = true ORDER BY name ASC",
+    params: [SAMPLE_ID],
+  },
+});
+
+const vaultRow = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchVaultProfile.vault",
+  purpose: "Read one active vault's profile columns by id.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, project_id, name, protocol, strategy_type, chain, tvl_usd, yield_apy,
+             data_source, vault_address, last_rebalance_at, refreshed_at, created_at
+      FROM agent_vaults WHERE id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const vaultHistory = registerQuery({
+  role: "rm_app",
+  object: "daily_tvl_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchVaultProfile.history",
+  purpose: "Read one vault's last year of daily TVL.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT snapshot_date::text AS snapshot_date, tvl_usd FROM daily_tvl_snapshots
+      WHERE vault_id = $1::uuid AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const vaultWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchVaultProfile.wallets",
+  purpose: "List the vault's project's active tracked wallets.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, label, address, chain, balance_usd FROM tracked_wallets
+      WHERE project_id = $1::uuid AND is_active = true ORDER BY label ASC`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const walletRow = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchWalletProfile.wallet",
+  purpose: "Read one active tracked wallet's profile columns by id.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, project_id, label, category, chain, balance_usd, address, last_tx_at, refreshed_at
+      FROM tracked_wallets WHERE id = $1::uuid AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const walletHistory = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchWalletProfile.history",
+  purpose: "Read one wallet's last year of daily balances.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id = $1::uuid AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const walletBalance30dAgo = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchWalletProfile.balance30d",
+  purpose: "Read the wallet's balance as of 30 days ago, for its change figure.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id = $1::uuid AND snapshot_date <= $2::date ORDER BY snapshot_date DESC LIMIT 1`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const walletAgentByAddress = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchWalletProfile.agentByAddress",
+  purpose: "Find the active agent whose wallet address is this wallet's.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, name FROM openclaw_agents
+      WHERE wallet_address IS NOT NULL AND lower(wallet_address) = lower($1) AND is_active = true
+      ORDER BY name ASC LIMIT 1`,
+    params: ["0x0000000000000000000000000000000000000001"],
+  },
+});
+
+const walletAgentByProject = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/dossier-projections:fetchWalletProfile.agentByProject",
+  purpose: "Fall back to the wallet's project's first active agent by name.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, name FROM openclaw_agents WHERE project_id = $1::uuid AND is_active = true ORDER BY name ASC LIMIT 1",
+    params: [SAMPLE_ID],
+  },
+});
+
 export async function fetchCoinProfile(id: string): Promise<CoinProfile | null> {
   if (!UUID_RE.test(id)) return null;
 
-  const rows = await sql`
+  const rows = await on(sql, coinRow)`
     SELECT id, project_id, name, ticker, chain, logo_url, contract_address,
            price_usd, percent_change_24h, market_cap, fdv, volume_24h, refreshed_at
     FROM lobster_coins WHERE id = ${id} AND is_active = true`;
@@ -71,11 +232,11 @@ export async function fetchCoinProfile(id: string): Promise<CoinProfile | null> 
 
   const projectId = c.project_id as string | null;
   const [snaps, agentRows] = await Promise.all([
-    sql`SELECT snapshot_date::text AS snapshot_date, price_usd, market_cap, volume_24h
+    on(sql, coinHistory)`SELECT snapshot_date::text AS snapshot_date, price_usd, market_cap, volume_24h
         FROM daily_coin_snapshots WHERE coin_id = ${id} AND snapshot_date >= ${since(365)}
         ORDER BY snapshot_date ASC`,
     projectId
-      ? sql`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC`
+      ? on(sql, projectAgents)`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 
@@ -115,7 +276,7 @@ export async function fetchCoinProfile(id: string): Promise<CoinProfile | null> 
 export async function fetchVaultProfile(id: string): Promise<VaultProfile | null> {
   if (!UUID_RE.test(id)) return null;
 
-  const rows = await sql`
+  const rows = await on(sql, vaultRow)`
     SELECT id, project_id, name, protocol, strategy_type, chain, tvl_usd, yield_apy,
            data_source, vault_address, last_rebalance_at, refreshed_at, created_at
     FROM agent_vaults WHERE id = ${id} AND is_active = true`;
@@ -124,17 +285,17 @@ export async function fetchVaultProfile(id: string): Promise<VaultProfile | null
 
   const projectId = v.project_id as string | null;
   const [snaps, agentRows, walletRows] = await Promise.all([
-    sql`SELECT snapshot_date::text AS snapshot_date, tvl_usd
+    on(sql, vaultHistory)`SELECT snapshot_date::text AS snapshot_date, tvl_usd
         FROM daily_tvl_snapshots WHERE vault_id = ${id} AND snapshot_date >= ${since(365)}
         ORDER BY snapshot_date ASC`,
     // Best-effort "managing agent" (§5.12): agent_vaults carries no direct
     // agent FK, only project_id — same limitation list2-projections.ts
     // documents for its own best-effort agent<->wallet joins.
     projectId
-      ? sql`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC`
+      ? on(sql, projectAgents)`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     projectId
-      ? sql`SELECT id, label, address, chain, balance_usd FROM tracked_wallets WHERE project_id = ${projectId} AND is_active = true ORDER BY label ASC`
+      ? on(sql, vaultWallets)`SELECT id, label, address, chain, balance_usd FROM tracked_wallets WHERE project_id = ${projectId} AND is_active = true ORDER BY label ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 
@@ -185,7 +346,7 @@ export async function fetchVaultProfile(id: string): Promise<VaultProfile | null
 export async function fetchWalletProfile(id: string): Promise<WalletProfile | null> {
   if (!UUID_RE.test(id)) return null;
 
-  const rows = await sql`
+  const rows = await on(sql, walletRow)`
     SELECT id, project_id, label, category, chain, balance_usd, address, last_tx_at, refreshed_at
     FROM tracked_wallets WHERE id = ${id} AND is_active = true`;
   const w = rows[0];
@@ -195,21 +356,21 @@ export async function fetchWalletProfile(id: string): Promise<WalletProfile | nu
   const projectId = w.project_id as string | null;
 
   const [snaps, snap30, addressAgentRows, projectAgentRows] = await Promise.all([
-    sql`SELECT snapshot_date::text AS snapshot_date, total_balance_usd
+    on(sql, walletHistory)`SELECT snapshot_date::text AS snapshot_date, total_balance_usd
         FROM daily_wallet_snapshots WHERE wallet_id = ${id} AND snapshot_date >= ${since(365)}
         ORDER BY snapshot_date ASC`,
-    sql`SELECT total_balance_usd FROM daily_wallet_snapshots
+    on(sql, walletBalance30dAgo)`SELECT total_balance_usd FROM daily_wallet_snapshots
         WHERE wallet_id = ${id} AND snapshot_date <= ${since(30)}
         ORDER BY snapshot_date DESC LIMIT 1`,
     // Linked agent, §5.14: match by wallet_address first (same lowercased-
     // address join list2-projections.ts uses), else fall back to project_id.
     address
-      ? sql`SELECT id, name FROM openclaw_agents
+      ? on(sql, walletAgentByAddress)`SELECT id, name FROM openclaw_agents
             WHERE wallet_address IS NOT NULL AND lower(wallet_address) = lower(${address}) AND is_active = true
             ORDER BY name ASC LIMIT 1`
       : Promise.resolve([] as Record<string, unknown>[]),
     projectId
-      ? sql`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC LIMIT 1`
+      ? on(sql, walletAgentByProject)`SELECT id, name FROM openclaw_agents WHERE project_id = ${projectId} AND is_active = true ORDER BY name ASC LIMIT 1`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 

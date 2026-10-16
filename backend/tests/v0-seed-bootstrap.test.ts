@@ -34,6 +34,7 @@ import { verifyStoredSubmissionSignature } from "../src/lib/signing.ts";
 import { getMemberTakes, getSession, getTakeReceipt } from "../src/swarm/domain.ts";
 import { LIVE_ROSTER_HANDLES, seedLiveRoster } from "../src/swarm/roster-seed.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -167,7 +168,7 @@ test("drift: a mutated existing member field is reported field-by-field and neve
   const { payload } = await loadV0Archive();
   const athena = payload.members.find((m) => m.id === "athena")!;
   const mutatedTagline = "MUTATED — this should never be overwritten by the archive";
-  await sql`UPDATE swarm_members SET tagline = ${mutatedTagline} WHERE handle = 'athena'`;
+  await fixtureDb`UPDATE swarm_members SET tagline = ${mutatedTagline} WHERE handle = 'athena'`;
 
   const result = await runV0SeedBootstrap();
 
@@ -193,7 +194,7 @@ test("drift: a mutated take body is reported and never silently overwritten", as
     SELECT id, member_id, body FROM swarm_recommendations
     WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
   const tampered = "TAMPERED — a take body that the archive must not overwrite";
-  await sql`UPDATE swarm_recommendations SET body = ${tampered} WHERE id = ${target.id}`;
+  await fixtureDb`UPDATE swarm_recommendations SET body = ${tampered} WHERE id = ${target.id}`;
 
   const result = await runV0SeedBootstrap();
 
@@ -330,7 +331,7 @@ test("drift: a mutated received_at is reported and never silently overwritten", 
     SELECT id, received_at FROM swarm_recommendations
     WHERE subject_id = 'woon' ORDER BY date, member_id LIMIT 1`;
   const tampered = "2020-01-01T00:00:00.000Z";
-  await sql`UPDATE swarm_recommendations SET received_at = ${tampered} WHERE id = ${target.id}`;
+  await fixtureDb`UPDATE swarm_recommendations SET received_at = ${tampered} WHERE id = ${target.id}`;
 
   const result = await runV0SeedBootstrap();
 
@@ -386,7 +387,7 @@ test("drift: a take signed by a different key is reported rather than read as un
   // What a resumed import under a second archival key leaves behind: a valid
   // 64-byte Ed25519 signature over the same payload, made by someone else.
   const foreign = Buffer.alloc(64, 7).toString("base64");
-  await sql`UPDATE swarm_recommendations SET signature = ${foreign} WHERE id = ${target.id}`;
+  await fixtureDb`UPDATE swarm_recommendations SET signature = ${foreign} WHERE id = ${target.id}`;
 
   const result = await runV0SeedBootstrap();
 

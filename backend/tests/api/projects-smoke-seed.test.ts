@@ -5,8 +5,30 @@
 // counts stable across repeated runs).
 import { test, expect } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { seedSmokeProjects } from "../../src/projects/smoke-seed.ts";
+import { join } from "node:path";
+import { harnessUrl } from "../support/cluster.ts";
 import { fetchProjects } from "../../src/projects/projections.ts";
+
+// seedSmokeProjects writes through its module's own pool, and the tables it fills
+// are the owner's (rm_app holds no INSERT/DELETE on them). In production the seed
+// runs as the schema owner, so this test runs it the same way: in a child process
+// whose pool is the fixture owner login, on this file's database. The reads below
+// stay on the runtime pool.
+async function seedSmokeProjects(): Promise<void> {
+  const database = new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "");
+  const modulePath = join(import.meta.dir, "..", "..", "src", "projects", "smoke-seed.ts");
+  const child = Bun.spawn(
+    ["bun", "-e", `const m = await import(${JSON.stringify(modulePath)}); await m.seedSmokeProjects(); process.exit(0);`],
+    {
+      cwd: join(import.meta.dir, "..", ".."),
+      env: { ...process.env, DATABASE_URL: harnessUrl(database) },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [code, err] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  if (code !== 0) throw new Error(`owner-run seedSmokeProjects failed (${code}): ${err}`);
+}
 
 async function rowCounts() {
   const [[p], [a], [c], [w], [v], [r], [s]] = await Promise.all([

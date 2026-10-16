@@ -2,12 +2,11 @@ import { test, expect, beforeAll, afterAll } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
 // Pin the image to the same version the harness uses; see
 // scripts/lib/postgres-image.ts for the version and the -alpine
 // variant that production-equivalent tests run.
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0033_swarm_member_uuid_ids.sql";
@@ -28,15 +27,7 @@ const SIGNED_PAYLOAD = {
 };
 const SIGNATURE = "c2lnbmF0dXJlLW92ZXItdGhlLXBheWxvYWQtYWJvdmU=";
 
-function freePort(): Promise<number> {
-  return new Promise((res, rej) => {
-    const s = net.createServer();
-    s.on("error", rej);
-    s.listen(0, () => { const p = (s.address() as net.AddressInfo).port; s.close(() => res(p)); });
-  });
-}
-
-let containerName: string;
+let history: HistoryDatabase;
 let db: postgres.Sql<{}>;
 let payloadTextBefore: string;
 let recommendationId: string;
@@ -49,27 +40,8 @@ async function applyMigration(): Promise<void> {
 }
 
 beforeAll(async () => {
-  const port = await freePort();
-  containerName = `rmtest_uuid_migration_${crypto.randomUUID().slice(0, 8)}`;
-  const up = Bun.spawnSync([
-    "docker", "run", "-d", "--rm", "--name", containerName,
-    "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, POSTGRES_IMAGE,
-  ]);
-  if (up.exitCode !== 0) {
-    throw new Error(
-      `swarm-member-uuid-ids-migration test requires Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`,
-    );
-  }
-  db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 4, onnotice: () => {} });
-
-  const start = Date.now();
-  for (;;) {
-    try { await db`SELECT 1`; break; } catch (err) {
-      if (Date.now() - start > 30_000) throw err;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-  }
+  history = await createHistoryDatabase("swarm-member-uuid-ids-migration");
+  db = history.db;
 
   // Everything up to but NOT including 0033
   const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
@@ -118,7 +90,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try { await db?.end({ timeout: 5 }); } catch { /* closing a dead pool is not a failure */ }
-  if (containerName) Bun.spawnSync(["docker", "rm", "-f", containerName]);
+  await history?.drop();
 });
 
 test("AC1: legacy member id is converted to a UUID", async () => {

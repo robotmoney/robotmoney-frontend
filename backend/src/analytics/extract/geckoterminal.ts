@@ -28,8 +28,9 @@ import { isoDay } from "../transform/math.ts";
 import { UA } from "./http.ts";
 import { withFetchCache } from "./fetch-cache.ts";
 import { recordSourceFetch, type CacheStatus } from "../source-ledger.ts";
+import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree } from "../../chain/gecko-endpoint.ts";
+import { serialized } from "../../chain/gecko-rate-limit.ts";
 
-const ENDPOINT = "https://api.geckoterminal.com/api/v2/networks/new_pools";
 const MAX_PAGES = 10;
 const WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -54,7 +55,9 @@ export interface GeckoTerminalFetchOptions {
   sleep?: Sleep;
 }
 
-export const geckoTerminalUrl = (page: number) => `${ENDPOINT}?page=${page}`;
+// Keyless, this is `https://api.geckoterminal.com/api/v2/networks/new_pools?page=N`; with COINGECKO_API_KEY set it is the
+// Pro host's /onchain equivalent (chain/gecko-endpoint.ts).
+export const geckoTerminalUrl = (page: number) => geckoUrl("new_pools", `/networks/new_pools?page=${page}`);
 
 // Pure: the wait before the Nth retry (1-based) of a throttled page. Honors
 // `Retry-After` (RFC 7231 delta-seconds or HTTP-date) when present, else
@@ -96,6 +99,7 @@ async function fetchNewPoolsPage(
   sleep: Sleep,
 ): Promise<unknown> {
   const url = geckoTerminalUrl(page);
+  let target = url; // the Pro host may refuse (401/403); the same page is then retried on the free host
   const headers = { "user-agent": UA, accept: "application/json" };
   let cacheStatus: CacheStatus = "disabled";
   const result = await withFetchCache<{ payloadBase64: string }>("json", url, async () => {
@@ -109,22 +113,28 @@ async function fetchNewPoolsPage(
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), Math.min(timeoutMs, remaining));
       let res: Response;
+      // Credentialed when `target` is a Pro URL. The ledger redacts the key header (source-ledger.ts).
+      const reqHeaders = { ...headers, ...geckoAuthHeaders(target) };
       try {
-        res = await fetch(url, {
-          signal: ac.signal,
-          headers,
-        });
+        const send = () => fetch(target, { signal: ac.signal, headers: reqHeaders });
+        // The sweep requests up to 10 pages back to back. Free, that is unchanged (and is what throttles page 6);
+        // on the Pro tier the pages are spaced (GECKO_PRO_MIN_INTERVAL_MS).
+        res = tierOf(target) === "pro" ? await serialized(send, "pro") : await send();
       } catch (error) {
-        recordSourceFetch({ url, headers, cacheStatus, error });
+        recordSourceFetch({ url: target, headers: reqHeaders, cacheStatus, error });
         throw error;
       } finally {
         clearTimeout(timer);
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      recordSourceFetch({ url, headers, cacheStatus, responseStatus: res.status, payload: bytes,
+      recordSourceFetch({ url: target, headers: reqHeaders, cacheStatus, responseStatus: res.status, payload: bytes,
         providerReleaseId: res.headers.get("etag") ?? res.headers.get("last-modified"),
         error: res.ok ? undefined : `${res.status} ${res.statusText}` });
       if (res.ok) return { payloadBase64: Buffer.from(bytes).toString("base64") };
+      if (proRefused(target, res.status)) {
+        target = fallBackToFree(target, res.status, `new_pools page ${page}`, logger);
+        continue;
+      }
       if (!TRANSIENT_STATUSES.has(res.status)) throw new Error(`${res.status} ${res.statusText} for ${url}`);
       const wait =
         attempt < MAX_ATTEMPTS_PER_PAGE

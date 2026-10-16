@@ -3,12 +3,17 @@
 //
 //   1. load the persisted raw floor (raw_indicator_history)
 //   2. fetch every registry indicator via the real keyless fetchers
-//   3. mergeSeries(persisted, fetched) per id — append-only: the persisted floor
-//      is never deleted, the fetched value wins on overlap. Persist the merge back.
+//   3. mergeSeries(persisted, fetched) per id — keys are never deleted; the fetched
+//      value wins on overlap, so a value is revised in place when it differs beyond
+//      the D56 tolerance (recorded in analytics_overwrite_events). Persist the merge back.
 //   4. build the 2018-01-01..asof date axis, align (fwd/zero-fill) + applyTransform
+//      (prepareRegimeInputs, shared with the analyst SDK's runRegime)
 //   5. computeRegime for the 2-panel [macro,onchain] composite AND the 3-panel
 //      [+factor] extended composite; build the rich snapshot rows and persist them
 //   6. compute + persist the two research signals from REAL inputs.
+//
+// Run semantics (as-of, forward-fill, replay): docs/technical/regime-engine.md
+// section 8.1. Step 4 is the one shared seam, D59 in docs/decisions.md.
 //
 // HONESTY MODEL: the production default source is `liveDataSource` (real fetchers,
 // NO synthetic data). A failed/empty fetch degrades to the persisted-real floor via
@@ -18,12 +23,8 @@
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { INDICATORS, PANELS } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
-import { applyTransform } from "./transform/transforms.ts";
+import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import {
-  buildDateAxis,
-  alignDailyForwardFill,
-  alignDailyZeroFill,
-  forwardFillAge,
   MAX_FORWARD_FILL_DAYS,
   mergeSeries,
 } from "./transform/math.ts";
@@ -267,31 +268,19 @@ export async function runAnalytics(
       t0,
     );
 
-    // Persist the append-only merged floor back before computing. Tag every
+    // Persist the merged floor back before computing. Tag every
     // row with which AnalyticsDataSource actually produced it this run
     // (issue #397 provenance).
     t0 = new Date();
     await persistence.saveRawHistory(merged, sourceLabel);
     mergedRaw = merged;
-    collector.stage("store", "ok", "persisted append-only merged raw indicator floor", t0);
+    collector.stage("store", "ok", "persisted merged raw indicator floor", t0);
 
     t0 = new Date();
-    const dateAxis = buildDateAxis(BACKFILL_START, asof);
-    const transformed: Record<string, number[]> = {};
-    const lastRaw: Record<string, { date: string; value: number } | null> = {};
-    // #402: forward-fill age per indicator (days since the last REAL observation).
-    // zero_fill indicators aren't forward-filled — a gap there is a real "no flow"
-    // 0, not a carried-forward stale value — so they're left out of `ages` entirely
-    // and computeRegime never caps them.
-    const ages: Record<string, number[]> = {};
-    for (const ind of INDICATORS) {
-      const s = merged[ind.id] ?? [];
-      lastRaw[ind.id] = s.length ? s[s.length - 1] : null;
-      const isZeroFill = ind.align === "zero_fill";
-      const aligner = isZeroFill ? alignDailyZeroFill : alignDailyForwardFill;
-      transformed[ind.id] = applyTransform(ind.transform, aligner(s, dateAxis));
-      if (!isZeroFill) ages[ind.id] = forwardFillAge(s, dateAxis);
-    }
+    // #402: `ages` is the forward-fill age per non-zero_fill indicator (days since
+    // the last REAL observation); zero_fill indicators are left out so
+    // computeRegime never caps them. Built by the shared SDK seam.
+    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(merged, { start: BACKFILL_START, asof });
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
@@ -303,7 +292,11 @@ export async function runAnalytics(
     // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
     // extras fetch degrades to []: correlations/backtest simply carry fewer/no
     // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
-    const extras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    // Cut at asof like every other input (issue #1162 Part 0): a run for a past
+    // as-of day must not read prices dated after it. Live runs have no such rows,
+    // so this changes nothing on the live path; regime-sdk-equivalence pins it.
+    const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    const extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";

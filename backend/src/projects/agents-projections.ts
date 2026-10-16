@@ -26,7 +26,79 @@
 // (forward-filled) aggregation for score/balance series, "sum" for the x402
 // volume series.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
 import type { AgentDirectoryRow, AgentsDirectoryResponse, AgentsDirectorySummary } from "@robotmoney/contract";
+
+// Registered queries (smoke-production-spec.md §7.1): five reads, one per
+// relation, all reached only through GET /api/dashboards/agents.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const directoryAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/agents-projections:fetchAgentsDirectory.agents",
+  purpose: "Read every agent's directory columns for the agents directory.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, name, protocol_standard, x402_score, x402_txn_count, x402_volume_usd,
+             productivity_score, is_active, wallet_address
+      FROM openclaw_agents`,
+  },
+});
+
+const directoryWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/agents-projections:fetchAgentsDirectory.wallets",
+  purpose: "Read tracked wallets by address so an agent's wallet can be matched to its balance.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT id, address, balance_usd FROM tracked_wallets WHERE address IS NOT NULL" },
+});
+
+const directoryRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/agents-projections:fetchAgentsDirectory.revenue",
+  purpose: "Read the agents' last 30 days of daily revenue for the composite score.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const directoryAgentSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/agents-projections:fetchAgentsDirectory.agentSnapshots",
+  purpose: "Read the agents' daily snapshots for the score and x402 sparklines.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, productivity_score
+      FROM daily_agent_snapshots WHERE agent_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const directoryWalletSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_wallet_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/agents-projections:fetchAgentsDirectory.walletSnapshots",
+  purpose: "Read the matched wallets' daily balance snapshots for the balance sparkline.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      WHERE wallet_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
 
 export type { AgentDirectoryRow, AgentsDirectoryResponse, AgentsDirectorySummary };
 
@@ -102,7 +174,7 @@ function compositeScore(x402Score: number | null, productivityScore: number | nu
 const WEEKS = 26;
 
 export async function fetchAgentsDirectory(): Promise<AgentsDirectoryResponse> {
-  const agents = await sql`
+  const agents = await on(sql, directoryAgents)`
     SELECT id, name, protocol_standard, x402_score, x402_txn_count, x402_volume_usd,
            productivity_score, is_active, wallet_address
     FROM openclaw_agents
@@ -117,7 +189,7 @@ export async function fetchAgentsDirectory(): Promise<AgentsDirectoryResponse> {
 
   // Wallet balances: match by lowercased address (§5.7 — the two tables are
   // populated by independent discovery passes and never agree on case).
-  const wallets = await sql`SELECT id, address, balance_usd FROM tracked_wallets WHERE address IS NOT NULL`;
+  const wallets = await on(sql, directoryWallets)`SELECT id, address, balance_usd FROM tracked_wallets WHERE address IS NOT NULL`;
   const walletByAddr = new Map<string, { id: string; balanceUsd: number | null }>();
   for (const w of wallets) {
     const addr = (w.address as string | null)?.toLowerCase();
@@ -134,12 +206,12 @@ export async function fetchAgentsDirectory(): Promise<AgentsDirectoryResponse> {
   }
 
   const [revenue, agentSnaps, walletSnaps] = await Promise.all([
-    sql`SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
+    on(sql, directoryRevenue)`SELECT agent_id, revenue_date::text AS revenue_date, revenue_usd FROM agent_revenue_daily
         WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff30}`,
-    sql`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, productivity_score
+    on(sql, directoryAgentSnapshots)`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, productivity_score
         FROM daily_agent_snapshots WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff182}`,
     matchedWalletIds.size
-      ? sql`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
+      ? on(sql, directoryWalletSnapshots)`SELECT wallet_id, snapshot_date::text AS snapshot_date, total_balance_usd FROM daily_wallet_snapshots
             WHERE wallet_id IN ${sql([...matchedWalletIds])} AND snapshot_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);

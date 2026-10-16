@@ -5,6 +5,7 @@
 // quo rather than weakening existing coverage. JSDoc-typing this file is a
 // worthwhile follow-up, not a drive-by.
 import { api, ROUTES, path } from "../lib/api.js";
+import { archiveHasSnapshot, loadArchiveBrief } from "../lib/swarm-archive.js";
 import { assetDot, subjectDot, resolveTokenColors } from "./views/shared.js";
 import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
@@ -14,6 +15,7 @@ import { memberLogo } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
+import { memberStatusLine } from "../lib/member-status.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
@@ -29,6 +31,7 @@ import { nearestReading, shareChartSvg, shareChartTicks, shareChartXs } from "..
 import { VAULTS, VAULT_SLUGS, vaultBySlug, vaultForBucket, layerComplete, positionName, isVaultBookReading, portfolioTwr, fmtUsd as fmtVaultUsd } from "../lib/vault-data.js";
 import { DEVNET_LABEL, loadVaultDetail, loadVaultOverview, loadVaultSubjectFixture, vaultMode } from "../lib/vault-source.js";
 import { tvlChart } from "./tvl-chart.js";
+import { sessionWhen } from "../lib/session-when.js";
 import {
   adviceOf, adviceCall, setsWeights, analystAbsent, analystCount, isJudge, roleLabel, judgeHref, judgeLabelHtml, judgeName, judgementHref, JUDGEMENT_ROUTES,
   judgeWroteRationale, loadJudgement, loadMemberJudgements, loadRoster, loadSessionJudgements, normalizeJudgement,
@@ -126,7 +129,7 @@ function archivePreferred(date) {
   return String(date || "") <= ARCHIVE_LAST_DATE;
 }
 
-function camelSession(raw) {
+export function camelSession(raw) {
   if (!raw) return null;
   return {
     id: raw.id || `${raw.date}-${raw.subject_id || raw.subjectId}`,
@@ -166,6 +169,12 @@ function camelSession(raw) {
     // rewritten, so it still carries the old field name.
     swarmRecommendation: raw.swarmRecommendation || raw.swarm_recommendation || raw.committee_recommendation || null,
     generatedAt: raw.generatedAt || raw.generated_at || null,
+    // When the session actually opened (its first brief went out), and when it published. `date` and `generatedAt`
+    // are when the ROW was created, which can be days earlier when a session waits for its brief. This whitelist used
+    // to name neither, so the session page printed the creation day for a session opened days later (issue 1081).
+    // Archive sessions carry neither; the page falls back to `date` for them.
+    openedAt: raw.openedAt || raw.opened_at || null,
+    publishedAt: raw.publishedAt || raw.published_at || null,
     // The API serves this and this transform used to drop it, so the session
     // page had no deadline to reason about and printed `state` raw — which is
     // how the same session read "closed" on /swarm and "collecting" one click
@@ -256,6 +265,11 @@ export function camelMember(raw) {
     avatar: raw.avatar,
     wallet: raw.wallet,
     activatedAt: raw.activatedAt || raw.activated_at,
+    // Consecutive missed sessions (issue 1269): only the member route counts
+    // it; the roster and the static archive carry none.
+    silentSessions: typeof raw.silentSessions === "number" ? raw.silentSessions : null,
+    // The deployment's SWARM_DORMANCY_THRESHOLD_SESSIONS; the helper falls back to 7.
+    silentThreshold: typeof raw.silentThreshold === "number" ? raw.silentThreshold : null,
   };
 }
 
@@ -366,6 +380,7 @@ export async function loadArchiveSubject(id) {
 }
 
 export async function loadArchiveSnapshot(subject, date) {
+  if (!(await archiveHasSnapshot(subject, date))) return null;
   try { return normalizeSnapshot(await fetchJson(`/data/swarm/subjects/${subject}/${date}.json`)); }
   catch (_) { return null; }
 }
@@ -554,6 +569,9 @@ export const helpers = {
     if (rem100 >= 11 && rem100 <= 13) return `${n}th`;
     return `${n}${({ 1: "st", 2: "nd", 3: "rd" })[n % 10] || "th"}`;
   },
+  // The moment a session is shown as happening: when it opened, else published, else its row's date (issue 1081).
+  /** @param {any} s */
+  whenOf(s) { return sessionWhen(s); },
   formatDate(value, style = "short") {
     if (!value) return "—";
     const date = String(value).includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
@@ -823,7 +841,7 @@ export function registerStaticViews(Alpine) {
         this.subject = subject;
         this.roster = roster;
         if (location.pathname === routeAtEntry) {
-          document.title = `Judgement by ${this.judgeName()}, ${this.formatDate(j.sessionDate, "short")}: Robot Money Investment Swarm`;
+          document.title = `Judgement by ${this.judgeName()}, ${this.formatDate(j.sessionOpenedAt || j.sessionDate, "short")}: Robot Money Investment Swarm`;
         }
       } catch (_) {
         this.error = "This judgement could not be loaded.";
@@ -1195,7 +1213,7 @@ export function registerStaticViews(Alpine) {
       if (this.statusPhase() === "pending") {
         return { tone: "pending", label: "under review",
           lead: "An operator reviews your application, usually within a day.",
-          body: "You do not need to keep this page open: it updates itself the moment you are approved, and we email you too. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
+          body: "You do not need to keep this page open: it updates itself the moment you are approved. No email is sent, so check back here. Keep the identity your agent generated with rmpc, because it is the one thing you cannot recreate." };
       }
       if (state === "approved") {
         return { tone: "pending", label: "not filing yet",
@@ -1258,7 +1276,7 @@ export function registerStaticViews(Alpine) {
         verifiable: verifiable.length,
         archival: this.record.length - verifiable.length,
         verified: verifiable.filter((r) => r.take?.verified).length,
-        lastFiled: this.record[0] ? this.formatDate(this.record[0].sessionDate, "short") : "—",
+        lastFiled: this.record[0] ? this.formatDate(this.record[0].take?.receivedAt || this.record[0].sessionDate, "short") : "—",
         last: this.record[0] || null,
       };
     },
@@ -1309,7 +1327,7 @@ export function registerStaticViews(Alpine) {
       return `/swarm/members/${encodeURIComponent(this.id)}`;
     },
     recoveryMailto() {
-      return `mailto:hi@robotmoney.net?subject=${encodeURIComponent(`Key rotation for swarm member ${this.id}`)}`;
+      return `mailto:david@robotmoney.network?subject=${encodeURIComponent(`Key rotation for swarm member ${this.id}`)}`;
     },
     // The member id is a 36-character UUID that support, the admin surface and
     // the API all key on, so it gets a copy control rather than an invitation
@@ -1617,7 +1635,7 @@ export function registerStaticViews(Alpine) {
         const res = await api.get(`${ROUTES.swarm.brief}${qs}`);
         if (res && !res.error) return res;
       } catch (_) { /* fall through to the archive */ }
-      return fetchJson(`/data/swarm/briefs/${date}-${id}.json`).catch(() => null);
+      return loadArchiveBrief(date, id);
     },
     latestRow: null,
     // A weights subject whose newest session set no weights held its target:
@@ -1797,6 +1815,7 @@ export function registerStaticViews(Alpine) {
           subjectId: s.subjectId ?? s.subject_id,
           subjectName: s.subjectName ?? s.subject_name,
           generatedAt: s.generatedAt ?? s.generated_at ?? null,
+          openedAt: s.openedAt ?? s.opened_at ?? null,
         }));
       const remember = (list) => {
         const names = { ...this.subjectNames };
@@ -1837,7 +1856,7 @@ export function registerStaticViews(Alpine) {
           if (b && !b.error) return b;
         }
         return archivePreferred(s.date)
-          ? fetchJson(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).catch(() => null)
+          ? loadArchiveBrief(s.date, s.subjectId)
           : null;
       };
       const withBrief = async (row) => ({ ...row, reference: referenceWeights(await briefFor()) });
@@ -1851,6 +1870,7 @@ export function registerStaticViews(Alpine) {
           synthesis: full?.synthesis || "",
           swarmRecommendation: full?.swarmRecommendation || null,
           regimeSummary: full?.regimeSummary || null,
+          openedAt: full?.openedAt || null,
           publishedAt: full?.publishedAt || null,
           takes: (detail.takes || []).length,
           takeRows: (detail.takes || []).map(camelTake),
@@ -2892,9 +2912,9 @@ export function registerStaticViews(Alpine) {
     // A judge's record: its public judgements, newest first. A judge files no
     // takes, so its page lists these where a member's lists takes.
     judgements: [],
-    // Whether the judgements are served at all (RM-130): a release without
-    // #1017 serves none, and then the record is left out, not called empty.
-    judgementsServed: false,
+    // Whether the judgements were read: a failed read leaves the record out,
+    // not called empty.
+    judgementsRead: false,
     // subject id → the subject record's name. A take row carries the name its
     // session was filed under, which can lag a rename; /swarm and the subject
     // page print the record's name, so this page does too.
@@ -2975,7 +2995,7 @@ export function registerStaticViews(Alpine) {
         }
         if (isJudge(this.member)) {
           const judgements = await loadMemberJudgements(memberId);
-          this.judgementsServed = judgements !== null;
+          this.judgementsRead = judgements !== null;
           this.judgements = judgements || [];
         } else this.rows = await this.loadRows(memberId);
         try {
@@ -3045,7 +3065,7 @@ export function registerStaticViews(Alpine) {
           .map((s) => ({ date: s.date, subjectId: s.subjectId ?? s.subject_id, subjectName: s.subjectName ?? s.subject_name ?? s.subject_id, state: "published" }))
           .sort((a, b) => String(b.date).localeCompare(String(a.date)));
       }
-      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judged"].includes(s.state));
+      const inProgress = all.filter((s) => ["collecting", "window_closed", "aggregated", "judging", "judged"].includes(s.state));
       const published = all.filter((s) => s.state === "published").slice(0, 20);
       const details = await Promise.all([...inProgress, ...published].map(async (s) => {
         try {
@@ -3075,7 +3095,7 @@ export function registerStaticViews(Alpine) {
     },
     takePhase(state) {
       if (state === "collecting") return "live";
-      if (state === "window_closed" || state === "aggregated" || state === "judged") return "closing";
+      if (state === "window_closed" || state === "aggregated" || state === "judging" || state === "judged") return "closing";
       return "published";
     },
     // Only `collecting` turns on the deadline (lib/session-phase.js): past it,
@@ -3105,6 +3125,9 @@ export function registerStaticViews(Alpine) {
     },
     isJudge(m) { return isJudge(m); },
     roleLabel(m) { return roleLabel(m); },
+    // A seat silent for the threshold's sessions says so (issue 1269). A
+    // line, never an action: the member stays seated.
+    statusLine(m) { return memberStatusLine(m); },
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
     // A record card's call (the badge) and, for a hold, why.
@@ -3382,7 +3405,7 @@ export function registerStaticViews(Alpine) {
       const ids = [...new Set([...this.takes.map((t) => t.memberId), ...KNOWN_ARCHIVE_MEMBERS])];
       const members = await Promise.all(ids.map((id) => loadArchiveMember(id).catch(() => null)));
       this.members = members.filter(Boolean);
-      this.brief = await fetchJson(`/data/swarm/briefs/${date}-${subject}.json`).catch(() => null);
+      this.brief = await loadArchiveBrief(date, subject);
       // The archive path set no allocation at all, so a bucket_weights session
       // read from a backendless checkout drew Recommended alone — no target to
       // compare it against and no way to see whether it deviated. Same fallback
@@ -3464,16 +3487,15 @@ export function registerStaticViews(Alpine) {
     // The session's public judgements (lib/judgements.js). Asked for only when
     // the recommendation carries a judge block: a judgement is public once it
     // has reached the published session, and reaching it is what writes that
-    // block, so a session without one has none to show. Asking anyway would put
-    // a 404 in every reader's console for as long as production runs a backend
-    // without the route. The one case this passes over is a session whose
-    // aggregation was re-run after judging, which replaces the block; its
-    // judgements stay on their own pages and on the judge's.
+    // block, so a session without one has none to show. The one case this
+    // passes over is a session whose aggregation was re-run after judging,
+    // which replaces the block; its judgements stay on their own pages and on
+    // the judge's.
     async loadJudgements() {
       const s = this.session;
       if (this.source !== "api" || !s?.id || s.state !== "published" || !s.swarmRecommendation?.judge) return;
-      // Not served (RM-130) reads as none: the opinion the recommendation
-      // carries still shows, with no way to a judgement page.
+      // A failed read reads as none: the opinion the recommendation carries
+      // still shows, with no way to a judgement page.
       this.judgements = (await loadSessionJudgements(s.id)) || [];
     },
     isFramework() { return this.subject?.source?.type === "framework"; },
@@ -3493,7 +3515,7 @@ export function registerStaticViews(Alpine) {
     syncTitle(routeAtEntry) {
       const name = this.subjectTitle();
       if (!name || !this.session?.date || location.pathname !== routeAtEntry) return;
-      document.title = `${name}, ${this.formatDate(this.session.date, "short")}: Robot Money Investment Swarm`;
+      document.title = `${name}, ${this.formatDate((this.session.openedAt || this.session.publishedAt || this.session.date), "short")}: Robot Money Investment Swarm`;
     },
     // The session in the shape the shared review band reads (lib/
     // session-summary.js): the record, with its takes on it as `takeRows`.
@@ -3982,15 +4004,13 @@ export function registerStaticViews(Alpine) {
         || this.judgeBlocks().length > 0;
     },
     // ── the judge ────────────────────────────────────────────────────────
-    // ONE JUDGE PER SESSION (agreed with the backend owner, 2026-09-21): the
-    // house judge by default, one picked at random when several are seated,
-    // never one related to the session's subject or members. The page shows
-    // the judge whose opinion the recommendation carries (its judge.judged_by),
-    // else the newest public judgement, which covers a re-judged session; each
-    // judgement keeps its own page. On a
-    // backend that does not serve judgements, the opinion the recommendation
-    // carries stands in, under the judge it names, when a model wrote it; the
-    // fallback judge writes the aggregator's templates.
+    // ONE JUDGE OF RECORD PER SESSION: how it is chosen is in lib/judgements.js.
+    // The page shows the judge whose opinion the recommendation carries (its
+    // judge.judged_by), else the newest public judgement, which covers a
+    // re-judged session; each judgement keeps its own page. When no judgement
+    // was read (a failed read, or a page not reading the API), the opinion the
+    // recommendation carries stands in, under the judge it names, when a model
+    // wrote it; the fallback judge writes the aggregator's templates.
     judgeBlocks() {
       const rec = this.session?.swarmRecommendation;
       if (this.judgements.length) {
@@ -4083,20 +4103,22 @@ export function registerStaticViews(Alpine) {
     // The time of day matters once a subject convenes more than once a day.
     sessionTime() {
       // When it convened, the moment the date beside it names (rowTime).
-      const at = this.session?.generatedAt || this.session?.publishedAt;
+      const at = this.session?.openedAt || this.session?.generatedAt || this.session?.publishedAt;
       if (this.source !== "api" || !at || !Number.isFinite(Date.parse(at))) return "";
       return `${new Date(at).toISOString().slice(11, 16)} UTC`;
     },
-    // Record generated, as a time when it is the session's own day (the header
-    // prints that date), dated only when generated on another. Guarded:
-    // toISOString() throws on an unparseable stamp, so that one prints as is.
+    // When the row was created, as a time when that is the day the header shows (the header prints the day the session
+    // OPENED, issue 1081), dated when it is another: a session that waited for its brief was created days before it
+    // opened, and a bare "00:11 UTC" beside "October 1" would read as Oct 1 00:11. Guarded: toISOString() throws on an
+    // unparseable stamp, so that one prints as is.
     generatedLabel() {
       const at = this.session?.generatedAt || this.session?.generated_at;
       const t = Date.parse(at);
       if (!Number.isFinite(t)) return at || "";
       const iso = new Date(t).toISOString();
       const time = `${iso.slice(11, 16)} UTC`;
-      return iso.slice(0, 10) === String(this.session?.date || "").slice(0, 10) ? time : `${this.formatDate(at, "short")} · ${time}`;
+      const shown = String(sessionWhen(this.session) || "").slice(0, 10);
+      return iso.slice(0, 10) === shown ? time : `${this.formatDate(at, "short")} · ${time}`;
     },
     sessionJsonHref() {
       const s = this.session;
@@ -4436,6 +4458,7 @@ function historyRowOf(s) {
     subjectId: full?.subjectId,
     subjectName: full?.subjectName,
     generatedAt: full?.generatedAt ?? null,
+    openedAt: full?.openedAt ?? null,
     publishedAt: s?.publishedAt ?? s?.published_at ?? null,
     synthesis: full?.synthesis || "",
     swarmRecommendation: full?.swarmRecommendation || null,
@@ -4474,7 +4497,7 @@ async function subjectSessionIndex(subjectId) {
     .filter((s) => (s.subjectId ?? s.subject_id) === subjectId && s.state === "published")
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || ""))
       || String(b.generatedAt || b.generated_at || "").localeCompare(String(a.generatedAt || a.generated_at || "")))
-    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId }));
+    .map((s) => ({ id: s.id ?? `${s.date}-${subjectId}`, date: s.date, subjectId, openedAt: s.openedAt ?? null, publishedAt: s.publishedAt ?? s.published_at ?? null }));
   try {
     const list = pick(await publishedSessionList());
     if (list.length) return list;

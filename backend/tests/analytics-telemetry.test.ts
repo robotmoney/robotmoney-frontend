@@ -17,6 +17,7 @@
 //       fold into job_runs.output).
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { directTelemetrySink } from "../src/analytics/store/telemetry-direct.ts";
@@ -166,7 +167,7 @@ test(
 test(
   "AC1 + AC2: research.refresh with ONE requested tool (channel-divergence) creates a telemetry run covering all six stages and persists ONLY that tool's trace + canonical signal output",
   async () => {
-    await sql`DELETE FROM research_signals WHERE signal_key = 'channel-divergence' AND date = ${ASOF}`;
+    await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'channel-divergence' AND date = ${ASOF}`;
 
     const results = await runAnalytics(ASOF, "channel-divergence", hermeticDataSource, directAnalyticsPersistence, directTelemetrySink);
     expect(Object.keys(results)).toEqual(["channel-divergence"]); // canonical output: only the requested tool

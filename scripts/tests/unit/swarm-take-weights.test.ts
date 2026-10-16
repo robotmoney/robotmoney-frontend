@@ -8,8 +8,13 @@
 // every malformed shape is a loud refusal rather than a fabricated allocation.
 //
 // The publish-side half — the vector reaching the receipt as 10,000 bps, and
-// the named refusal when it does not — is pinned in
-// backend/tests/swarm-analyst-weights-receipt.test.ts.
+// the named refusal when it does not — is pinned against real Postgres in
+// backend/tests/swarm-analyst-weights-receipt.test.ts, on the epoch path the
+// system actually settles by: signed weighted takes, turnover, aggregate, the
+// judge of record's signed judgement, then `POST epochs/finalize` through the
+// admin handler, which publishes and assembles the receipt (issue #1026). Its
+// first version drove the removed worker handler and died with the swarm lane
+// in 5d6476c4; the rewrite ports every one of its scenarios.
 import { describe, expect, test } from "bun:test";
 import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import {
@@ -165,7 +170,7 @@ describe("promptFor — the ask matches what the session wants", () => {
   });
 });
 
-describe("the sections follow the subject", () => {
+describe("every take is asked for production's three sections (owner 2026-10-06)", () => {
   const BRIEF = {
     allocation: {
       asof: "2026-06-02",
@@ -177,21 +182,20 @@ describe("the sections follow the subject", () => {
       ],
     },
   };
+  const THREE = ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"];
 
-  test("an allocation session asks for REGIME and ALLOCATION, and no SUBJECT", () => {
+  test("an allocation session asks for all three sections", () => {
     const prompt = promptFor(PERSONA, REGIME, "robotmoney-allocation", { requireWeights: true });
-    expect(takeSectionLeadIns({ requireWeights: true })).toEqual(["**REGIME**", "**ALLOCATION**"]);
-    expect(prompt).toContain("**REGIME**");
-    expect(prompt).toContain("**ALLOCATION**");
-    expect(prompt).not.toContain("**SUBJECT**");
+    expect(takeSectionLeadIns({ requireWeights: true })).toEqual(THREE);
+    for (const section of THREE) expect(prompt).toContain(section);
+    expect(prompt).toContain("exactly three bulleted sections");
   });
 
-  test("any other subject asks for REGIME and SUBJECT, and nothing about the vault's targets", () => {
+  test("any other subject asks for the same three, with the brief's targets and never a written-in 95/5/0/0", () => {
     const prompt = promptFor(PERSONA, REGIME, "woon", { targets: sleeveTargetsFromBrief(BRIEF) });
-    expect(takeSectionLeadIns()).toEqual(["**REGIME**", "**SUBJECT**"]);
-    expect(prompt).toContain("**SUBJECT**");
-    expect(prompt).not.toContain("**ALLOCATION**");
-    expect(prompt).not.toContain("Sleeve targets in force");
+    expect(takeSectionLeadIns()).toEqual(THREE);
+    for (const section of THREE) expect(prompt).toContain(section);
+    expect(prompt).toContain("Sleeve targets in force: Conservative DeFi Yield 95% (Aave)");
     expect(prompt).not.toContain("95/5/0/0");
   });
 
@@ -209,12 +213,10 @@ describe("the sections follow the subject", () => {
     expect(sleeveTargetsFromBrief({ allocation: { buckets: [{ id: "x", target_weight: "n/a" }] } })).toEqual([]);
   });
 
-  test("the section check reads the same sets", () => {
-    const allocationTake = "**REGIME**\n- a\n**ALLOCATION**\n- b";
-    const subjectTake = "**REGIME**\n- a\n**SUBJECT**\n- b";
-    expect(missingSectionLeadIns(allocationTake, { requireWeights: true })).toEqual([]);
-    expect(missingSectionLeadIns(subjectTake)).toEqual([]);
-    expect(missingSectionLeadIns(subjectTake, { requireWeights: true })).toEqual(["**ALLOCATION**"]);
-    expect(missingSectionLeadIns(allocationTake)).toEqual(["**SUBJECT**"]);
+  test("the section helper still names what a body lacks, for guidance only (nothing refuses on it)", () => {
+    const subjectOnly = "**REGIME**\n- a\n**SUBJECT**\n- b";
+    expect(missingSectionLeadIns(subjectOnly)).toEqual(["**ALLOCATION**"]);
+    expect(missingSectionLeadIns(subjectOnly, { requireWeights: true })).toEqual(["**ALLOCATION**"]);
+    expect(missingSectionLeadIns("**REGIME**\n**ALLOCATION**\n**SUBJECT**")).toEqual([]);
   });
 });

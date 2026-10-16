@@ -1,74 +1,57 @@
-// F4/T18 — THE JUDGE BUDGET MUST BE REACHABLE THROUGH THE DOCUMENTED BOOT.
+// NO JUDGE SETTING OF ANY KIND REACHES THE STACK (D52, D55 (3); issue #1026).
 //
-// Written before the fix (QA plan §12.7.2). `docker-compose.yml` interpolates
-// `SWARM_JUDGE_TIMEOUT_MS: ${SWARM_JUDGE_TIMEOUT_MS:-}` into api and
-// worker-swarm, but `bun run smoke:stage` builds the compose environment from
-// `DEMO_COMPOSE_PASSTHROUGH` — and neither the timeout nor the base URL was on
-// it. So an operator who exported the value got an EMPTY variable in the
-// container and the 60 s default anyway: the QA run had to bypass the boot and
-// recreate one service by hand with 27 values re-supplied. This is the same
-// rescue `OPENCODE_API_KEY` needed in this release.
+// F4/T18 once put SWARM_JUDGE_TIMEOUT_MS and SWARM_JUDGE_BASE_URL on
+// DEMO_COMPOSE_PASSTHROUGH, because `api` ran the judge inline and an exported
+// budget reached nothing without them. The judge is a participant now: it takes
+// its model key and its transport from credential.json, and `api` interpolates
+// neither setting (docker-compose.yml).
+//
+// C-27 then added the test-only judge FAULT-INJECTION lever
+// (SWARM_JUDGE_FAULT_INJECTION and its acceptance opt-in) to the list, so an
+// operator could arm it through the documented boot. D55 (3) retires that
+// lever: docker-compose.yml no longer hands either variable to `api`, and the
+// passthrough no longer names them. This suite pins that neither the judge's
+// transport nor the lever is forwarded — an exported value reaches no container.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DEMO_COMPOSE_PASSTHROUGH, smokePassthroughEnv } from "../../lib/smoke-compose-passthrough.ts";
-import { JUDGE_LANE_CLAIM_SLACK_MS, JUDGE_WAIT_MS } from "../../lib/swarm/session.ts";
-import { DEFAULT_JUDGE_TIMEOUT_MS } from "../../../backend/src/swarm/judge-budget.ts";
 
-describe("judge transport settings reach the stack through the documented boot", () => {
-  test.each(["SWARM_JUDGE_TIMEOUT_MS", "SWARM_JUDGE_BASE_URL"])("%s is on DEMO_COMPOSE_PASSTHROUGH", (key) => {
-    expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).toContain(key);
+const RETIRED_JUDGE_KEYS = [
+  "SWARM_JUDGE_TIMEOUT_MS",
+  "SWARM_JUDGE_BASE_URL",
+  "OPENCODE_API_KEY",
+  // D55 (3): the fault-injection lever is retired from the stack.
+  "SWARM_JUDGE_FAULT_INJECTION",
+  "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN",
+] as const;
+
+describe("judge settings are not forwarded: no stack service judges, and the fault-injection lever is retired", () => {
+  test.each([...RETIRED_JUDGE_KEYS])("%s is NOT on DEMO_COMPOSE_PASSTHROUGH", (key) => {
+    expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).not.toContain(key);
   });
 
-  test("an exported budget survives into the compose environment", () => {
-    const out = smokePassthroughEnv({ SWARM_JUDGE_TIMEOUT_MS: "240000", SWARM_JUDGE_BASE_URL: "https://opencode.ai/zen/v1" });
-    expect(out.SWARM_JUDGE_TIMEOUT_MS).toBe("240000");
-    expect(out.SWARM_JUDGE_BASE_URL).toBe("https://opencode.ai/zen/v1");
+  test("an exported value never reaches the compose environment", () => {
+    const out = smokePassthroughEnv(Object.fromEntries(RETIRED_JUDGE_KEYS.map((key) => [key, "1"])));
+    for (const key of RETIRED_JUDGE_KEYS) expect(out).not.toHaveProperty(key);
   });
 
-  test("an unset budget still passes nothing, so the compose default stands", () => {
-    expect(smokePassthroughEnv({})).not.toHaveProperty("SWARM_JUDGE_TIMEOUT_MS");
-  });
-});
-
-// C-27 — THE FAULT-INJECTION LEVER MUST BE REACHABLE THROUGH THE DOCUMENTED
-// BOOT, same gap as SWARM_JUDGE_TIMEOUT_MS above and the same fix shape.
-// `docker-compose.yml` interpolates `SWARM_JUDGE_FAULT_INJECTION` and
-// `SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN` into api and worker-swarm,
-// but until DEMO_COMPOSE_PASSTHROUGH named them an operator exporting either
-// got an EMPTY variable in the container and every judging (and every arm
-// attempt) silently refused with `flag_absent`.
-describe("judge fault-injection flags reach the stack through the documented boot", () => {
-  test.each(["SWARM_JUDGE_FAULT_INJECTION", "SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN"])(
-    "%s is on DEMO_COMPOSE_PASSTHROUGH",
-    (key) => {
-      expect(DEMO_COMPOSE_PASSTHROUGH as readonly string[]).toContain(key);
-    },
-  );
-
-  test("exported fault-injection flags survive into the compose environment", () => {
-    const out = smokePassthroughEnv({
-      SWARM_JUDGE_FAULT_INJECTION: "1",
-      SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN: "1",
-    });
-    expect(out.SWARM_JUDGE_FAULT_INJECTION).toBe("1");
-    expect(out.SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN).toBe("1");
+  test("red control: a key that IS on the list does survive, so the checks above are not vacuous", () => {
+    expect(smokePassthroughEnv({ PROJECTS_SOURCE: "live" })).toHaveProperty("PROJECTS_SOURCE", "live");
   });
 
-  test("unset fault-injection flags still pass nothing, so the lever stays inert by default", () => {
-    const out = smokePassthroughEnv({});
-    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION");
-    expect(out).not.toHaveProperty("SWARM_JUDGE_FAULT_INJECTION_ACCEPTANCE_OPT_IN");
+  test("docker-compose.yml interpolates neither fault-injection variable into any service", () => {
+    const compose = readFileSync(join(import.meta.dir, "..", "..", "..", "docker-compose.yml"), "utf8");
+    const code = compose.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(code).not.toContain("SWARM_JUDGE_FAULT_INJECTION");
   });
 });
 
-// The driver's ceiling is DERIVED, not a coincidence: it used to be a bare
-// 120_000 whose comment claimed the model call was "bounded at ~60s" — true of
-// the old default and false of this one. A ceiling below the budget it is
-// waiting on guarantees the driver publishes before the judging can land.
-test("JUDGE_WAIT_MS is derived from the judge budget and leaves claim slack", () => {
-  expect(JUDGE_WAIT_MS).toBeGreaterThan(DEFAULT_JUDGE_TIMEOUT_MS);
-});
-
-test("the ceiling is the budget plus the named lane slack, not a literal", () => {
-  expect(JUDGE_WAIT_MS).toBe(DEFAULT_JUDGE_TIMEOUT_MS + JUDGE_LANE_CLAIM_SLACK_MS);
-  expect(JUDGE_LANE_CLAIM_SLACK_MS).toBeGreaterThan(0);
-});
+// THE DRIVER'S OWN JUDGE CEILING USED TO BE GRADED HERE and is gone with the
+// constant it graded. `JUDGE_WAIT_MS` was the model budget plus slack for the
+// `swarm.judge` job to be claimed off the single-concurrency swarm lane; there
+// is no such job and no such lane (issue #1026 W4). The driver's bound is now
+// the ABSOLUTE DEADLINE the API stores when judging is requested
+// (system-scheduler-spec.md §4.4), which no constant in this repository may
+// restate — §9: "a judging deadline is stored by the API when judging is
+// requested and is never restarted".

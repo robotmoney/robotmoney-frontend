@@ -1,0 +1,566 @@
+# Smoke production spec
+
+> **Status: adopted design, approved for implementation, not yet shipped.**
+> Adopted 2026-09-22 after adversarial review; recorded in
+> [D47](../decisions.md#d47). This is the **sole deployment-design authority**.
+> The former upgrade-deployment specification, its engineering plan, historical
+> release procedures, and unadopted external-stack proposals were removed from
+> the documentation tree on 2026-09-23. Recover historical versions from Git.
+>
+> Three workstreams, each landable alone, each with its own gates (§10): **W1
+> deployment lifecycle** (§§1, 2, 4, 5, 9), **W2 schema and privilege
+> verification** (§§3, 7, 8), **W3 participants** (§6). The production
+> sequence (§9) requires all three. Adoption does not establish implementation
+> status or schedule the work; do not use the retired engineering plan as a backlog.
+>
+> **Scope.** This specification governs every service the stack runs: `api`,
+> `website-server`, `system-scheduler`, `analytics-producer`, the pipeline
+> worker, local Postgres, and the participants. Amended 2026-09-24 (§12),
+> 2026-09-25, 2026-09-28, 2026-10-03 and 2026-10-08 (§14).
+> The static website is its own release unit, with its own deploy command and
+> version check (§13, [D54](../decisions.md#d54)).
+
+## Document authority
+
+| Document | Authority and limits |
+|---|---|
+| **This specification** | Adopted deployment mechanism, credentials, lifecycle, participants and acceptance gates. |
+| [Release-runbook policy](./release-runbooks.md) | Standing release gates, phases, evidence and approval; it does not select a competing deployment mechanism. |
+| [Smoke summary](../../scripts/lib/smoke.README.md) | Non-authoritative summary of this adopted design, not a claim that it has shipped. |
+| Historical deployment and per-release runbooks | Removed from the documentation tree. Recover from Git for audit only; they are not new-design templates. |
+| [Decision ledger D48](../decisions.md#d48) | Accepted judge-mode product behavior; this specification owns the deployment lifecycle and participant boundary. |
+| Old upgrade design and engineering plan | Removed from the documentation tree. D47 and this specification replace them in full; no old phase is approved for implementation. |
+| External stack and Kubernetes proposals | Not adopted and removed from the documentation tree. Recover from Git for historical research; they are not current tooling or a scheduled next step. |
+
+Where an older document conflicts on deployment design, this specification wins.
+The implemented behavior still comes from the exact code being run; no legacy
+command is made safe, and no proposed command becomes executable, by this
+precedence rule. The release policy's gates remain mandatory. `scripts/stack/`
+is the repository's existing Compose library, not the external `stack` tool.
+
+---
+
+## 1. Boot
+
+`bun smoke --static-port` brings up the production cluster and **exits**. Containers stay up under Docker (`restart: unless-stopped`). `bun smoke:down` is the only way to stop them. `bun smoke:status` and `bun smoke:tui` observe a running stack from another terminal; `bun smoke` never draws a TUI.
+
+`--static-port` is the one option production passes. Retired with no alias: `SMOKE_PROJECT`, `--no-tui`, `--agents`, `--smoke`, `--db`, `--pg-data`, `--twin`, `smoke:archive`, `smoke:stage`.
+
+### 1.1 Instance
+
+Every run acts on one named deployment instance. Production is `rm_prod`. On stage, precedence is: `--instance <name>`; then CI job identity (`naming.ts` `class: "ci"`, hashed from the run's identity vars, never from persisted state); then the name persisted by a previous local run; then a fresh local name, persisted. State directories live under `$HOME/.local/state/robotmoney-smoke/<instance>` (or under an absolute `RM_SMOKE_STATE_ROOT`), never inside a checkout: they hold generated passwords, service tokens and the journal, and `git clean` or a worktree switch must not be able to lose or leak them. Nothing in repository source holds a secret or an env file a deployment reads. State directories are scoped per instance, so a CI job cannot inherit a standing stage's instance and concurrent CI jobs stay distinct with prior state present. `smoke:status`, `smoke:down`, `volume` reuse (§5), and journal resume all select by instance name.
+
+### 1.2 Plan and locks
+
+Before any mutation smoke prints a redacted **plan**: instance, resolved target (§4), image source identities and digests, participant roster (§6), configuration, and every mutation it intends (`--migrate`, `--seed`, `--spoof-keys`). The plan's content hash is the **plan id**. The hash covers exactly: the instance name; the target's identity (host, port and database name, or the local mode and volume name) and its `deployment_identity` kind; each image's source identity, the Git tree hash of its build context, not its built digest, which changes on every rebuild and is recorded in the receipt instead; the roster's names, roles and public-key fingerprints; every non-secret configuration value; and the requested mutations. It excludes secret values, timestamps, and any state a journaled phase itself changes, such as the schema version a completed migration moved.
+
+It then holds two locks for the whole run: a **deployment lock** on the instance (a second `bun smoke` against a locked instance refuses) and a **target lock** on the database (§2).
+
+### 1.3 Journal
+
+Phases: plan → prepare (each committed preparation recorded separately) → preflight → replace service 1..n → participants → readiness. The journal is written before each phase and marked after. It separates the operator's **desired plan** (plan id), the **state expectations** recorded when a phase began, and the **outcomes** it committed.
+
+- A rerun resumes a journal only when the plan id matches. The journal's own committed work (a migration it applied, a manifest it wrote) never invalidates its resume.
+- A different plan id (roster, image source, or target changed) closes the old journal, reports what it reached, and starts a fresh reconciliation from current state. Completed phases are never reused under a different plan.
+- State changed by another operation fails the expectation check and refuses.
+
+### 1.4 Interruption and receipt
+
+Ctrl-C stops at the next phase boundary.
+- Before the *replace* phase, application-service replacement has not begun. Preparation may already have changed database state and participant containers; those changes are journaled, not undone, and a rerun sees them.
+- After replacement began, the stack stays in the journaled state with no guarantee the old services survive. `smoke:status` reports the phase and which services are new versus old; rerun resumes; `smoke:down` stops everything.
+
+At readiness smoke writes a durable **receipt** (resolved plan, schema identity, preflight and readiness results) beside the journal. `smoke:status`, rollback, and incident work read the receipt when present, the journal when not.
+
+## 2. Target-lock protocol
+
+One protocol for every tool that mutates or deploys against a database: `bun smoke`, `bun run migrate`, `--spoof-keys`, and the production-initialization commands (§9).
+
+**Invariant.** Loss of the coordinating lock never lets a competing tool overlap a mutation still executing. A cancellation request is not evidence the mutation stopped.
+
+- **Coordination.** The tool opens one dedicated connection and takes a session-level `pg_advisory_lock` on one constant key. Postgres already scopes advisory locks to a single database, so every tool that reaches the same database contends, whatever hostname it used. The connection is direct, never through a transaction-mode pooler, which silently breaks session locks. Smoke holds it from acquisition through preflight, replacement, and readiness, so a standalone migration cannot land between preflight and the new containers starting. It is released explicitly on exit.
+- **Fencing.** Every mutation (migration, grant reconciliation, seed, key rebind, token provisioning, identity write) runs in a transaction that first takes `pg_advisory_xact_lock` on the same key, on the connection performing it. A competitor that wins the session lock after the coordinator's connection died still blocks on the xact lock until the in-flight mutation commits or aborts.
+- **Acquisition.** After any local database is created or restored, before the first read used for a decision.
+- **Revalidation.** After acquiring, the tool re-reads `deployment_identity`, the ledger, and the schema manifest and re-runs the plan against them. A mismatch refuses.
+- **Contention.** A tool that finds the lock held waits with a timeout, then refuses naming the holder.
+- **Connection loss.** Detected at every phase boundary; the tool journals the phase and exits non-zero. No phase proceeds on a lock the tool cannot prove it still holds.
+
+## 3. Roles and credentials
+
+**Roles:** `rm_owner` (owns the schema, the migration login), `rm_app`, `rm_worker`, `rm_readonly`. There is no `rm_migrator`.
+
+**`doadmin`** is cluster provisioning only: it creates the four roles on a fresh cluster and performs the one-time `rm_owner` transition on an existing one (§9.1). After provisioning, one tool uses it: the idempotent password script `bun run role-passwords --target <stage|prod>`, a provisioning step run before a release ([D61](../decisions.md#d61), amendment 2026-10-08). The admin types the `doadmin` password at its hidden prompt. It lives only in that process's memory and is never stored in a file. No release runbook step reads it. `rm_owner` never holds `CREATEROLE`. The script runs `bun scripts/prod-init.ts role-passwords --doadmin-stdin` on the host and hands it the password over ssh's stdin.
+
+**`rm_owner` is `LOGIN`.** Its password is the `rm_owner` line of `~/.env` ([D61](../decisions.md#d61)). Every command that writes as `rm_owner` reads it from there: `bun run migrate`, `bun run prune`, a remote `bun smoke --migrate` or `--seed`, and `prod-init set-identity` and `provision-tokens`. No command reads it from a prompt, a pipe, an environment variable or an argument. A command whose `~/.env` has no `rm_owner` line refuses, naming the key and the file. The password never appears in a receipt, a journal, a log line, an error message or a process argument.
+
+**`--confirm-target`.** Every command that writes a remote target takes `--confirm-target <host:port/database>` ([D61](../decisions.md#d61)). It refuses unless the flag equals exactly the target it resolved from `~/.env`: `host`, `port` (5432 when absent) and `database` or `dbname`, as the file spells them. Nothing is normalized. A mismatch prints both. A target smoke owns needs no flag. The flag replaces the typed `y`. No person reads the target before a write, so the agent must name it.
+
+**Only `rm_owner` may `DELETE` or `TRUNCATE`** ([D55](../decisions.md#d55) (6)). No runtime role — `rm_app`, `rm_worker`, `rm_readonly` — holds `DELETE` or `TRUNCATE` on any table, append-only or not. Runtime code never removes a row. Where it deletes today, it is redesigned into one of three shapes: a tombstone column every read filters on; a read that filters out expired rows, with pruning left to an `rm_owner` run; or an upsert that replaces the row in place. Security revocations stay immediately effective: a revoked key, token or membership is refused on the next request, because the revoking transaction writes the tombstone, never because a later prune removed a row. Preflight check 2 enforces the grant half (§7). Two constraints bind the redesign. A table that unauthenticated requests write stays bounded with no `rm_owner` run: WebAuthn challenges use a fixed set of 32 slots, overwritten oldest-first under `CHALLENGE_ISSUE_LOCK` and consumed by a single-use conditional `UPDATE`. No release ships code that writes a revocation or consumption tombstone unless the same release carries the `compat: breaking` migration that revokes runtime `DELETE`, so code that ignores the tombstone can never boot beside it. Pruning is a manual, receipted `rm_owner` command with a 7-day minimum window, which never removes a security tombstone or audit history ([D55](../decisions.md#d55) (12), scheduler spec §6.3).
+
+**`~/.env`** is the deploying user's home-directory file, outside every checkout. It holds exactly these keys and nothing else: the remote connection (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and `rm_readonly`; the owner password `rm_owner` ([D61](../decisions.md#d61)); `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY` (the paid CoinGecko key, see "The CoinGecko key and GeckoTerminal" below). It must not contain `doadmin`, another superuser token, a service token, a signing key or a model key; preflight enforces the list (§7 check 4). `bun smoke` forwards only `rm_app`, `rm_worker` and `rm_readonly` to containers. No container, compose file, image or log receives `rm_owner` or `doadmin`. Args override env: any `--local` mode (§5) makes smoke ignore every remote connection value.
+
+**Participant credentials** live in `credential.json` (§6.1), never in `~/.env`. Each entry holds that participant's signing key, its API bearer token and its model key.
+
+**Service tokens.** Three holders call the API with a service token: `system-scheduler` (read subjects and sessions, perform lifecycle transitions), `analytics-producer` (the analytics ingestion routes), and the operator (the admin routes; this replaces the `ADMIN_TOKEN` environment variable). `system-scheduler` and `analytics-producer` hold one API credential and no other kind (scheduler spec §7). Every service token is issued by the API's own automation-token store: a row holding the token's hash and its rights, written by the same authorized preparation that writes `deployment_identity`. The API validates a presented token against that row; a file on disk establishes nothing by itself. The analytics token stops being a shared secret file the API compares against and is validated like the others. Each secret is handed to its holder the way a participant's key is handed to its container — a file the boot places in the instance's state directory, named per instance and per holder, never in `~/.env` and never in an image. In production the tokens are provisioned once at initialization (§9.1). In rehearsal they are provisioned by preparation (§5), unattended. Each instance holds its own tokens, so provisioning one never invalidates another's. Rotation is a re-provision and a container restart.
+
+**Why this shape.** Every credential lives in exactly one place, and that place is the least-privileged one that can hold it. `rm_owner` can rewrite the schema, so it stays on the host and never reaches a container. Runtime role passwords are in `~/.env` because the services need them at every boot and none of them can do DDL. Signing keys are in `credential.json` and each container receives only its own, so a compromised agent holds one key, not the roster. Service tokens are stored only as hashes in the database, so a leaked dump holds no usable token. **The trade-off** ([D61](../decisions.md#d61), owner, 2026-10-08). A host that stores the owner password can rewrite the schema without a person present. The owner accepted that for a cutover that is rehearsed exactly and run without hand steps. The mitigations are the `--confirm-target` check, the target lock and the rule that no container receives the credential.
+
+**No container holds a Docker socket.** Not a participant, and not `api`, the pipeline worker, `analytics-producer` or `system-scheduler` either. The socket is root on the host — it has no read-only mode and no capability to drop — so a service holding it puts root behind every request it handles. This design never needs one: `bun smoke` starts every container from the host and exits, Docker restarts them, and participants are standing containers that reach the API over HTTP only (§6.2). Nothing spawns a container at runtime, so nothing needs the means to.
+
+**What this replaces.** `#1014` (`a9f2008b`) delivered the judge's credential by a different route. One `agent-launcher` service held the Docker socket and the judge's `OPENCODE_API_KEY`, and injected that key into a short-lived judge container it spawned for each judging. That is credential management by socket, and it is reversed: the launcher, its socket mount and its per-request injection are gone, and the judge receives its key the way every participant does, from `credential.json`. `scripts/tests/integration/no-docker-socket-compose-config.test.ts` asserts that no service in any composition mounts the socket, and proves itself with a planted mount.
+
+**The api's request time limit.** The api ends a request that runs longer than **10 seconds** (`API_IDLE_TIMEOUT_SECONDS` in `backend/src/config.ts`, passed to `Bun.serve` as `idleTimeout`). That is Bun's own default; before issue 1060 nothing set it, so it was an accident, and it is now a decision. It is **not to be raised**: no api request should come near it, and a request over **5 seconds** (`API_SLOW_REQUEST_MS`) means CPU-bound or database-bound work is on the request path. The fix is to take that work off the path (a worker, a batch, an async submit), not to give it longer. No route is exempt. `POST /api/analytics/parity-sweep` had a 240 second exemption while the sweep compared every domain in the api's memory; since issue 1375 each request names one domain and runs one set-based statement in Postgres that returns counts, two digests and at most 20 mismatching keys (0.06 to 0.32 seconds per domain on the 2026-10-15 production dump), so it keeps the 10 second limit like every other route. The worker's `analytics.parity_sweep` job posts the four domains in turn, once a day at 04:47 UTC, clear of every data-acquisition job. Such a request logs one line with its method, path, duration, status and caller, and one that finishes past the limit logs an error saying the client was cut off: `docker logs rm_prod-api-1 2>&1 | grep -aE '\[api\] (slow request|request ran past)'`.
+
+**The CoinGecko key and GeckoTerminal.** `COINGECKO_API_KEY` (host `~/.env`) is one paid CoinGecko key with three users. The worker's `projects.refresh_coins` sends it to `pro-api.coingecko.com/api/v3` (issue 1047). The analytics-producer's `new_pools` sweep and the worker's token-price and pool lookups send it to `pro-api.coingecko.com/api/v3/onchain` (issue 1062), which is GeckoTerminal's data under CoinGecko's paid plan. Smoke reads this one key from `~/.env` and passes it to worker-analytics and the analytics-producer, and to nothing else; a key exported in the shell wins (issue 1098). Unset, they all use the keyless hosts, where GeckoTerminal allows about 10 calls a minute per IP. Our plan is **Basic**: it includes `new_pools`, token pools and token price, and not pool OHLCV, so OHLCV stays on the free host (`PRO_CALLS` in `backend/src/chain/gecko-endpoint.ts`; Analyst and above would add it). A 401 or 403 from the Pro host falls back to the free host for ten minutes and logs `[gecko] pro-api.coingecko.com answered HTTP …` once. Check the tier in use:
+
+```
+docker logs rm_prod-analytics-producer-1 2>&1 | grep -a '\[gecko\] new_pools via'
+docker logs rm_prod-worker-analytics-1   2>&1 | grep -a '\[gecko\]'
+```
+
+The source ledger redacts every `*api-key` request header. Setting the key is an owner step: the container must be recreated to read a changed `~/.env` (`docker compose up -d analytics-producer worker-analytics`).
+
+## 4. Environment and target
+
+### 4.1 `RM_ENV` (policy)
+
+Values: `prod`, `stage`. Stage, test, and CI are isomorphic and share `stage`. `RM_ENV` is policy only; it does not name the instance (§1.1).
+
+### 4.2 `deployment_identity` (target enrollment)
+
+A one-row table in the database, `deployment_identity.kind ∈ {production, rehearsal}`, writable only by `rm_owner`. `production` is written once by production initialization (§9.1). `rehearsal` is written by every `--local blank` bootstrap, every `--local dump` restore, and every restore of a production dump into a remote database, which must end by writing `rehearsal` through `rm_owner` before any stage tool connects. A pre-0081 production dump has no `deployment_identity` table, so nothing can hold `rehearsal` until 0081 is applied. **A stage `bun run migrate` prepares such a remote twin** ([D61](../decisions.md#d61) rule 2, 2026-10-08; this reverses the 2026-09-28 call of [D55](../decisions.md#d55) (10)). It is the remote rehearsal pass of §4.3. It runs the same command, at the same commit, with the same steps as the first production migrate. Only `RM_ENV` and the identity it writes differ.
+
+- The twin tooling (`bun run smoke:twin`, `bun run smoke:twin:once`) and every stage tool other than `bun run migrate` refuse a remote target with no `deployment_identity` table. The refusal changes nothing, and its message names the remote rehearsal pass.
+- The operator restores the dump into the remote database first. Then `RM_ENV=stage bun run migrate --confirm-target <host:port/database>` applies 0081 and writes `rehearsal` in one fenced transaction. It then applies the five files below 0081 and the rest through the normal path (§9.1). Its receipt records the pre-identity state. All of this happens before any other stage tool connects.
+- The hand step of the [pre-identity remote twin runbook](../runbooks/pre-identity-remote-twin.md) is retired. Its end state is the one the pass leaves, so a database it prepared is still accepted.
+- Otherwise a twin of such a dump uses `bun smoke --local dump` (§5), which prepares it with the local pass of §4.3.
+
+The twin tooling's `--migrate` does not do this. It runs `bun smoke --local dump --migrate` (`scripts/smoke-twin.ts`, `scripts/lib/smoke-twin-rehearsal.ts`), so it never reaches a remote database.
+
+It marks what the target is enrolled for. It is an accidental-target safeguard, not proof the data is disposable: its protection rests on the write restriction and on the restore procedure being pointed at the right database.
+
+### 4.3 Policy × identity matrix (enforced before any service starts)
+
+| `RM_ENV` | connection | identity row | result |
+|---|---|---|---|
+| `prod` | remote | `production` | production guards armed |
+| `prod` | remote | anything else | refuse |
+| `prod` | `--local` | any | refuse |
+| `stage` | remote | `rehearsal` | stage |
+| `stage` | remote | anything else | refuse; stage policy never touches production data |
+| `stage` | `--local blank`/`dump` | written by smoke as `rehearsal` | stage |
+| `stage` | `--local volume` | `rehearsal` | stage |
+| `stage` | `--local volume` | anything else | refuse; a reattached volume gets no weaker policy than a remote |
+| unset | remote | any | refuse |
+| unset | `--local` | as `stage` | warn `RM_ENV not set, running as stage`, proceed |
+| other | any | any | refuse |
+
+**Three named exceptions for a database with no identity row** ([D55](../decisions.md#d55) (5), (9), (10), [D61](../decisions.md#d61)). Only these three tool passes may run against a database with no `deployment_identity` table. Each applies `0081_deployment_identity` before any other pending migration.
+
+- **Production first pass** (`bun run migrate`, §9.1). A remote connection, `RM_ENV=prod`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `production`.
+- **Remote rehearsal pass** (`bun run migrate`, §4.2, [D61](../decisions.md#d61)). A remote connection, `RM_ENV=stage`, the `rm_owner` line of `~/.env` and `--confirm-target`. It writes `rehearsal` and never `production`. It is the production first pass with only the policy changed, so stage rehearses the cutover unmodified.
+- **`--local dump` preparation** (`bun smoke`, §5). Only on the Postgres container the same run created and restored. `RM_ENV` must not be `prod`, and it uses the owner password smoke generated. It writes `rehearsal`. It checks for itself that its connection is that local container, and it refuses any remote connection whatever `RM_ENV`, password or acknowledgement says.
+All three share three rules. 0081's DDL, its `schema_migrations` row and the identity row commit in one fenced transaction (§2). Before the pass, the ledger must equal a supported baseline of §9.1 exactly; any other pre-identity ledger refuses. No tool applies 0081 out of order outside these three passes. No boot and no other tool has an exception, and every later run requires the row. A second run with the row present takes the normal path. A remote target with no table refuses every other tool, naming the remote rehearsal pass of §4.2.
+
+**Rehearsal-only preparation:** `--migrate`, `--seed`, `--spoof-keys` require `rehearsal` in addition to their own guards.
+
+**Production initialization** (§9.1) is a set of separate commands allowed on `production`, each gated by `RM_ENV=prod`, `--confirm-target`, a receipt and the target lock. Stage runs the same commands unmodified ([D61](../decisions.md#d61) rule 2): under `RM_ENV=stage` each requires a `rehearsal` target. No command runs crosswise: prod against `rehearsal`, or stage against `production`, refuses. `role-passwords` runs before the first migrate, so it also accepts a target with no identity row under either policy, when the ledger equals a supported baseline exactly. A command that writes the database directly also requires the `rm_owner` line of `~/.env`; the key rotation of §9.1 step 6 goes through the admin API with the operator's admin service token instead. No release step acts as `doadmin`: only the provisioning script `bun run role-passwords` does (`prod-init role-passwords` on the host), from a hidden prompt or `--doadmin-stdin`, never from `~/.env` or any file ([D61](../decisions.md#d61), amendment 2026-10-08). None is reachable through `bun smoke`.
+
+### 4.4 No smoke overlay
+
+There is no `docker-compose.smoke.yml`, and no knob of it survives: `--allow-insecure` and `RM_ALLOW_INSECURE` are retired (issue #973), so every stack requires its configured credentials and the api has no insecure mode. There is no `--schedules-off`: scheduling has no off state. Stage runs the real `system-scheduler` against subjects whose epoch and judging durations were set short through the admin API ([`system-scheduler-spec.md`](./system-scheduler-spec.md) §2.3, §8). On a twin the operator does it with `bun run twin:accelerate` after READY (standing check SR.9): the subjects' durations through the admin API, the twin's restored open windows pulled in on its own container, and a scheduler restart, because an `updated` subject change re-arms no timer. The boot itself still changes no scheduling column. Parity with production is a tested property.
+
+## 5. Local Postgres (stage override)
+
+`--local <mode>` starts a Postgres container that smoke owns. In `blank` and `dump` modes smoke generates the four role passwords and saves them in the instance's state directory beside the volume; `volume` mode reuses them. No terminal prompt exists in any mode. A local mode needs no `--confirm-target`.
+
+**Service tokens in rehearsal.** In `blank` and `dump` modes, preparation also provisions the three service tokens (§3) for the rehearsal target — same rights, same delivery, same file locations as production — and journals that phase like any other. `volume` mode reuses the instance's saved tokens. A rerun under the same plan id reuses a completed provisioning rather than silently rotating it (§1.3). A remote rehearsal target uses tokens provisioned for that enrolled target by the same procedure, run explicitly. In every environment `system-scheduler` and `analytics-producer` each receive only their API credential; no database or signing credential is ever introduced for them.
+
+| mode | start state |
+|---|---|
+| `blank` | empty database bootstrapped from the snapshot (§8.1): schema, bootstrap data, ledger baselined to the snapshot's filename list, manifest written, `deployment_identity = rehearsal` |
+| `dump[=<path>]` | restored from a production `pg_dump`, then `deployment_identity = rehearsal`; `bun smoke:capture` (read-only, `rm_readonly`, against a node that serves reads; a standby that serves none does not qualify) takes a fresh dump |
+| `volume[=<name>]` | reattaches a Docker volume from a previous run of this instance with its saved credentials |
+
+`--reuse` is a modifier of `dump` only (amended 2026-10-06, issue 1174). A `dump` boot restores fresh by default, so a second boot never rehearses an already-migrated copy. With `--reuse`, the boot uses the smoke-twin this instance recorded and kept: a live container is adopted, a container that is gone is started again on its kept volume, and nothing is restored. It refuses when the instance records no twin or the twin came from another backup. It exists for the one rehearsal that needs the migrated copy again: the boot after `prod-init rebind-members` (runbook R3.8).
+
+**Which dump (owner, 2026-10-06).** A rehearsal restores a dump captured from production for that run, unless the operator names one. It never picks up a dump or twin left on the host. `--reuse`, `volume` and an earlier capture serve a rapid turnaround between test runs only, and only while the capture is at most 24 hours old (`manifest.json` `capturedAt`). Release policy [§4.3](./release-runbooks.md#43-backup-and-restore-proof).
+
+A **twin** is a use case, not a mode: a production-shaped database used for rehearsal, usually `--local dump`, sometimes a remote connection to a restored database.
+
+`--seed` creates demo data on a blank database. It is explicit, refuses a populated database, requires `rehearsal`, and is never implied by any mode.
+
+## 6. Participants (agents and judges)
+
+### 6.1 The credential file is the roster
+
+The in-house roster for a host is the contents of its credential file:
+
+```json
+{ "agents": { "athena": { … }, "noop-analyst": { … }, "robot-money": { … } },
+  "judges": { "themis": { … } } }
+```
+
+Path: `RM_CREDENTIALS=<path>` in `~/.env` or `--credentials <path>`; arg overrides. Agents and judges are distinct namespaces with distinct keys. Several judges are allowed; zero agents with several judges is valid. Each entry carries the participant's member id, signing key, API bearer token and model key, and each container receives only its own entry. An `agents` entry must be a member with role `member` and a `judges` entry a member with role `judge` (D48, amendment for issue 812); a mismatch with the database refuses the boot and names the entry.
+
+**Desired state.** A run makes the running participants equal the file: named ones are started or kept, unnamed running ones are stopped. A changed file is a roster change and appears in the plan.
+
+**A missing file is never an instruction.** A configured path that is missing, unreadable, or malformed refuses and leaves running participants untouched. Removing every participant requires an explicit empty roster `{ "agents": {}, "judges": {} }`. With no path configured, smoke proceeds with no participants only if none are running; otherwise it refuses and names them.
+
+### 6.2 Standing participant containers
+
+Each roster entry is one long-lived container (`restart: unless-stopped`) that behaves like a third-party deployment. What every participant shares: a standing container, a participant-held signing key, HTTP interaction with the API only, model work run as a one-shot process in a fresh per-item workspace with a timeout and process-group cleanup, and no database credential or Docker socket (§3). What differs is how each kind discovers its work:
+
+- **Agents poll.** An agent polls the API for `collecting` sessions it has not yet taken, submits, and sleeps.
+- **Judges subscribe.** A judge holds an authenticated stream to the API and receives judging requests created by the scheduler's request-judging transition (scheduler spec §4.4). The request is state, not a fleeting event: on every connect or reconnect the API serves every session in `judging` for which this judge has not yet submitted, so a judge that was down when the request was created still obtains it if it returns before the deadline. Each request carries the model to run, read from `swarm_judge_config.model` when the frame is built, so an admin change takes effect on the next judging with no restart and the judge has no other source for its model. The judge performs its model work and submits its judgement through the participant API. Redelivery can never change an outcome: a submission after finalize is recorded as late evidence (scheduler spec §4.4). The deadline and finalization belong to the scheduler, never to the judge, so an absent judge delays nothing and yields `no_consensus`. Readiness (§6.3) never requires a judge to be connected or a consensus to exist.
+
+**Idempotent submission, one final take.** A submission is identified by its signed `nonce`. A participant writes its signed submission into its workspace before sending it, so a crash-restart resends the same bytes. A resubmission whose nonce is already recorded for that member and session is a retry: it returns the existing record and the participant treats it as success. A new nonce is an intentional amendment, allowed while the window is open: each is its own signed row, and accepting one marks it final and unsets the member's previous one ([D51](../decisions.md#d51)). A partial unique index on `(session, member) WHERE final` makes two final takes impossible even when two submissions race, and `rm_app` may `UPDATE` only the `final` column of `swarm_recommendations`. An old and a new container overlapping during a roster change can therefore produce an amendment, never a second final take. One take in flight per participant.
+
+**What a take must carry (owner, 2026-10-06).** The judge reads, per take, the stance, the confidence, the body and the member's own proposed weights, and needs a position it can quote and compare. So a take is refused only when the judge cannot read it: no `STANCE`/`CONFIDENCE` control line (the member is absent, not re-sampled), no valid four-bucket weight vector on an allocation session (`bucket_weights`), or a body under 40 words (re-sampled once, then the member is absent). Section headers are **prompt guidance, not a gate**: every take is asked for production's three sections, REGIME, ALLOCATION and SUBJECT, in the member's own voice, with the sleeve targets taken from the session's brief, and no take is refused for omitting a header. One function (`judgeShortfalls`, `scripts/agent/participant/take-prompt.ts`) holds the body check for the participant one-shot, the in-process `authorTake` and the post-session harness. The API does not yet apply it at submission, so a take from outside our containers is not held to the word floor (open decision: whether the API rejects a short take from every source).
+
+**The judge is a participant** exactly like an agent. No component of the stack judges inline, and nothing but the admin route writes `swarm_judge_config`.
+
+**Third-party gate.** A judgement from an in-house judge is accepted whatever `swarm_judge_config.third_party_enabled` says. In-house means the member's `operator` is `robotmoney`, or the member holds one of the four in-house seats by handle (`athena`, `noop-analyst`, `robot-money`, `themis`) whatever its `operator` text says (owner, 2026-10-06: production's admin set themis's operator to "RM Protocol Labs" on 2026-09-29, and a gate keyed on the literal alone served the real judge nothing). Handles are admin-managed, so no member can make itself a seat. A judgement from any other judge is refused while that flag is false, and such a judge is served no pending session.
+
+### 6.3 Sessions are independent
+
+Sessions are timed by `system-scheduler`, per subject, in epochs — [`system-scheduler-spec.md`](./system-scheduler-spec.md) owns that entirely. They run whether or not this host runs any participant; third parties may supply every participant.
+
+**There is nothing to enable.** A subject's scheduling columns — epoch duration, epoch anchor and judging duration (scheduler spec §2.2) — are the whole schedule: set by bootstrap data on a blank database, changed afterwards by migration on a deployed stack or through the admin API on an ephemeral one (scheduler spec §2.3, D66), and never disabled. Sessions have no schedule rows, no cron strings, no `next_run_at`, and no enable command. The pipeline worker's `job_schedules` rows for the vault, wallet, buyback and project jobs are unrelated to sessions and are bootstrap data (§8.1). A plain restart never rewrites operator state, and `system-scheduler` rebuilds its timers from the API on every start.
+
+**Preflight vs readiness.** Preflight checks that every active subject has its scheduling columns (§7 check 6). It does not require an open epoch before the scheduler starts. Readiness checks first-epoch creation and scheduler health after startup.
+
+**Scheduler readiness** requires all of: the scheduler authenticated to the API; its stream established and synchronized (scheduler spec §3.1); its initial rebuild complete, meaning timers reconstructed and recoverable work resumed, not that any settlement has finished; and every active subject holding a `collecting` session. A scheduler reporting exhausted work (scheduler spec §4.6) is not ready. `collecting` rows alone establish nothing, since an exhausted turnover leaves such a row in place. Smoke reads this from the scheduler's health endpoint and records the result in the receipt. `smoke:status` and the TUI show the receipt as history and the health endpoint as now, side by side, including any degradation with its subject or session and last error. A session waiting on its judging deadline, or published `no_consensus`, is not a health failure. Recovery from exhausted work is a restart of that instance's scheduler container (`docker restart` of the instance's `system-scheduler`) after the failing dependency is back; smoke never restarts it on its own.
+
+**Other services' readiness.** Readiness also requires `api`'s `/health` to answer ok, the pipeline worker to have passed its startup checks (§7.2), and `analytics-producer` to have authenticated with its token and completed its seed command. Smoke records each result in the receipt.
+
+### 6.4 Spoofed keys
+
+`--spoof-keys [names]` generates fresh keypairs and bearer tokens for the named in-house members (default: every member with `operator = robotmoney`) so a production-shaped database can be driven without real keys. It exists for twins.
+
+Order: (1) write the generation to an instance-scoped file in the state directory, never the `RM_CREDENTIALS` path (equal paths refuse); (2) rebind every named member's key in one fenced transaction, keyed by member id; (3) stop every running participant holding an older generation; (4) start them from the new file. A retry reads the persisted generation and reuses it. Historical verification keys are preserved.
+
+This is recoverable, not atomic. Between (2) and (4) a container may hold the old key; the server rejects submissions signed with a superseded key, so the worst case is a refused take. A crash between (2) and (4) is recovered by rerunning `--spoof-keys`, which finds the database already at the persisted generation and performs only (3)–(4).
+
+**Roster precedence.** While a spoof generation exists for an instance, reconciliation (§6.1) takes the named members' entries from the generation file instead of `RM_CREDENTIALS`. A later plain boot therefore keeps those members on the keys the database accepts.
+
+Any one of these refuses: `RM_ENV = prod`; `deployment_identity ≠ rehearsal`; no `rm_owner` credential (generated by smoke in local modes, the `rm_owner` line of `~/.env` on a remote connection); flag not explicit.
+
+**The owned-twin exception (amended 2026-10-05).** A twin exists to rehearse the swarm it restored, and a twin that seats only the in-house members rehearses two of seven silently. So on a twin the boot owns — `--local dump` or `--local volume`, `deployment_identity = rehearsal` (`resolveSeatAllRestored`) — `--spoof-keys` may rebind ANY active member, third parties and judges included, and with no names it selects every active member. The copy is throwaway: nothing re-keyed here outlives the boot or reaches the real member. The rehearsal credential file lists every active member (throwaway keys, a model key per seat), and the participants phase refuses a twin that leaves any active non-judge member unseated. On any other target the third-party refusal stands.
+
+## 7. Preflight
+
+Boot order: config validation → plan and deployment lock → database create/restore (local) → target lock (§2) → identity matrix (§4.3) → authorized preparation → **preflight** → containers → readiness → receipt. Preflight is read-only and refuses the boot on any failure.
+
+**Checks, against any database including production:**
+
+1. Every role password smoke will hand to a container authenticates.
+2. Each role holds every privilege the registry (§7.1) says its programs need, and none from the denylist: superuser; `CREATEROLE`; membership in `rm_owner`; ownership of any application object; DDL; `DELETE` or `TRUNCATE` on any table (§3, [D55](../decisions.md#d55) (6)). Checked through catalog queries (`has_table_privilege`, `pg_has_role`, `pg_class.relowner`), never by executing application statements. A grant absent from the registry is not forbidden by that fact alone. Append-only protection is both absent privilege and the existing triggers.
+3. Schema, two questions against the installed version M:
+   (a) **integrity** — live definitions of every object class in §8.1 match the manifest for M stored in the database (§8.3), excluding the provider list. Genuine drift fails here whatever code is booting.
+   (b) **compatibility** — the booting code supports M (§8.4). An additive change to an existing table passes: (a) compares against M's manifest, which includes it; (b) reads the migration's declaration.
+4. `~/.env` holds only the keys §3 lists, `rm_owner` included. Any other key warns on `stage` and refuses on `prod`; a `doadmin`, superuser or cluster `postgres` credential is named in the message.
+5. `RM_ENV` × `deployment_identity` resolve per §4.3.
+6. Every active subject has its epoch duration, epoch anchor and judging duration. (Whether it has an open epoch is a readiness check, not a preflight one — §6.3.)
+
+### 7.1 Registry, enforced structurally
+
+All database access goes through one registered query interface that declares `(role, object, privilege)` at the call site. CI forbids raw `sql` outside it, so the registry cannot drift into a hand-maintained list. It is the input to check 2. It is not a runtime proof: execution under each role against a disposable database is a separate CI test.
+
+### 7.2 One library, three callers
+
+- **Smoke** runs the full preflight and refuses the cluster.
+- **The database-holding containers** — `api`, and the pipeline worker running the vault, wallet, buyback and project jobs as `rm_worker` — run checks 1–3 at startup against their own credential, log, and refuse to serve or claim work on failure. `system-scheduler` and `analytics-producer` hold no database credential (scheduler spec §7). The research worker lane serves only retired rows and is removed.
+- **Participants** hold no database credential. Their startup diagnostic is HTTP: API reachable, token valid, identity matches the roster entry.
+
+### 7.3 CI isomorphism
+
+CI end-to-end runs use the production roles and the production preflight. There is no superuser test database. The local container's superuser does only what `doadmin` does in production: it creates the four roles and the database, once. `rm_owner` then provisions the schema, tests connect as `rm_app`/`rm_worker`/`rm_readonly`, and nothing uses the superuser again.
+
+## 8. Schema
+
+### 8.1 Snapshot
+
+A hand-maintained file in three parts, carrying the exact filename list of the migrations it embodies (a number alone is not an identity) and an explicit exclusion list for provider-managed objects.
+
+**Numbering rule for new migration files** ([D67](../decisions.md#d67)). A new file in `backend/migrations/` takes the 4-digit prefix one above the highest prefix present, so from here on prefixes are unique and strictly increasing. The ledger keys on the full filename (`schema_migrations.name` is the primary key), which is the only reason the existing duplicates do no harm, and the reconciliation below never reads a prefix. Fourteen prefixes already carry more than one file (`0014`, `0021`, `0022`, `0023`, `0028`, `0029`, `0032`, `0033`, `0056`, `0057`, `0058`, `0059`, `0061`, `0062`; `0023`, `0028` and `0059` carry three) and `0064` to `0079` are skipped: both are grandfathered by the explicit allowlist in `backend/tests/migration-numbering.test.ts`, which fails when a prefix outside the allowlist appears twice, when a grandfathered prefix gains a file, or when a prefix outside the allowlisted gap is missing below the highest present. No existing file is renamed.
+
+**Ledger reconciliation** ([D67](../decisions.md#d67)). `backend/src/db/ledger-reconcile.ts` is one deterministic read-only check that gives three facts and a JSON receipt, and it is the only comparison between the ledger and the files: no per-release filename constant stands in for it. Check 1, ledger subset: every name in `schema_migrations` exists in `backend/migrations/`; a name the repository lacks yields verdict `ledger-not-subset` naming the files. Check 2, pending set: pending is exactly the repository minus the ledger, by filename; when the caller passes the list the release intends to apply and the two differ, verdict `unexpected-pending` names the difference. Check 3, applied bytes: for each applied name the sha256 of the file in the checked-out directory equals the sha256 of the same path at the pin ref; a difference yields `bytes-differ` with both hashes, a name absent at the pin ref yields `unpinned`. No check reads a 4-digit prefix or the `applied_at` order, so out-of-number-order applies and the grandfathered duplicates pass. The database records no release tag, so the runner takes `--pin-ref <tag|commit>`, resolves it with `git rev-parse --verify` in the checkout, and refuses with `pin-ref-unresolved` when the ref is absent, never falling back. The receipt is `{ readAt, migrationsDir, pinRef, pinCommit, ledgerSize, repoSize, pending[], missingFromRepo[], unexpectedPending[], perFile[{ name, sha256, pinSha256, verdict }], verdict }` (`backend/tests/fixtures/ledger-reconcile-receipt.schema.json`). `bun run --cwd backend reconcile --pin-ref <ref> --json` prints it and exits 0 only on `ok`. Callers: the release preflight's R1.2 and R2.3 refuse on any verdict other than `ok`, with the receipt in the step output; `bun run migrate` runs checks 1 and 2 as its precondition before applying anything, and check 3 when `--pin-ref` is given (§8.5).
+
+- **Schema declaration** — tables, constraints, indexes, functions, triggers, policies, ownership, default privileges. Canonical description and blank-database bootstrap. Never applied to a populated database.
+- **Bootstrap data** — the operational rows the application needs to run: singletons; each subject's epoch duration, epoch anchor and judging duration (scheduler spec §2.3); and the pipeline worker's `job_schedules` rows for the vault, wallet, buyback and project jobs. There are no session schedule rows. Distinct from `--seed` demo data.
+- **Roles and grants** — idempotent grant reconciliation for objects `rm_owner` owns. Applied only inside the migrate step, against the snapshot's own version. Role creation is not part of it.
+
+### 8.2 Migrations
+
+Numbered forward-only migrations are the only way to move a populated database. Every migration lands with the matching snapshot change and declares itself `additive` or `breaking` in a header the runner parses. On apply the runner records `compat` and `metadata_version` in `schema_migrations`; that is how an older image learns about migrations it does not contain. Blank bootstrap writes ledger rows for the snapshot's filename list, so `--migrate` never replays history.
+
+### 8.3 Manifest and the migrate run
+
+A one-row `schema_manifest` table holds the declared schema for the installed version: the serialized declaration, the filename list, a content hash, and a format version. Blank bootstrap writes it from the snapshot. Only `rm_owner` may write it or the ledger's `compat`/`metadata_version` columns; they are trusted inputs to boot decisions. A manifest whose hash does not match the ledger's filename list, or whose format version is unknown, refuses.
+
+A migrate run is: fence (§2) → apply pending migrations, one transaction each → roles-and-grants reconciliation (always, even with nothing pending) → publish the manifest for the final state in the reconciliation's transaction. Between the first commit and publication the database is *in progress*, ledger ahead of manifest: application boot refuses it (check 3a), and the migrate tool recognizes it, validates committed work against each migration's expected post-state, and resumes from the first unapplied step without replaying or accepting drift.
+
+### 8.4 Compatibility
+
+Code built for snapshot N boots against a database at M > N only if every ledger row outside its own filename list carries `compat = additive` and a `metadata_version` it understands. A `NULL` compat, an unknown version, or `breaking` refuses. This keeps code-only rollback alive after an additive migration and closes it after a breaking one, explicitly.
+
+**`additive`** means old code's supported behavior is preserved across schema, data, and grants: every query the older registry declares still succeeds with the same semantics, no bootstrap row it relies on is removed or reshaped, no privilege it needs is revoked. Adding SQL objects is necessary, not sufficient. The declaration is a reviewed claim, backed by the CI proof below.
+
+**CI proves:** blank + all migrations = snapshot; snapshot N + migrations = snapshot N+1; a snapshot-created database boots and passes preflight without `--seed`; an upgrade from a populated database of the pre-identity baseline (`SUPPORTED_RELEASES`: production's observed 76-name ledger before 0081, v0.5.0 plus `0061_rm_worker_wallet_backfill_grant`, `0062_rm_readonly_sequence_select`, `0063_swarm_judge_model_default` and `0080_analytics_ledger_compaction`, [D55](../decisions.md#d55) (8)) passes its data assertions; code at N boots against N+additive. An upgrade from any later release is not matched against a constant: the release preflight reconciles the target's ledger with the files and the release tag's bytes (§8.1, [D67](../decisions.md#d67)).
+
+**Snapshot N.** No release commit carries `backend/schema/` yet (v0.5.0 predates it), so snapshot N is a pinned fixture from a named commit: `backend/tests/fixtures/snapshots/<last filename>/` holds the four `backend/schema/` files of the commit its `fixture.json` names, byte for byte, each with a sha256 pin. Today that commit is the last one whose snapshot ends at `0095_automation_token_holders.sql`, so every migration from 0096 on is proved on a snapshot-built database. The proof bootstraps that fixture, runs the real migrate run with this checkout's migrations and snapshot, and compares the result with a blank bootstrap of the current snapshot by the normalized catalog and by check 3a. The fixture advances only when a release ships whose commit carries `backend/schema/`. The new fixture is that release commit's four files, stored under its last filename, and the old fixture directory is deleted. Three pins move with it in the same change: `FIXTURE_N` in `backend/tests/support/snapshot-fixture.ts`, the fixture's `ALLOWED` entry in `backend/tests/append-only-no-new-deletes.test.ts` (its `snapshot.sql` declares the append-only triggers, and a stale entry fails that file), and the recorded-difference list in `backend/tests/snapshot-advance.test.ts`. A fixture never advances in the same change as a migration, so every migration is proved against the snapshot before it. Differences recorded against a fixture's own defects only shrink. They are emptied when the fixture advances past them.
+
+### 8.5 `--migrate` and production upgrades
+
+In production an upgrade is an operator intervention: `bun run migrate --confirm-target <host:port/database>`, reading `rm_owner` from `~/.env`, planned per release, receipted. It is never part of the boot. An agent runs it from the control machine over SSH ([D61](../decisions.md#d61)). It needs no terminal.
+
+**`bun run migrate` refuses** when `~/.env` has no `rm_owner` line, naming the key and the file. It refuses when `--confirm-target` is absent or differs from the resolved target, printing both. It refuses when `rm_owner` is `NOLOGIN`, naming `bun scripts/prod-init.ts role-passwords`. Before the owner password is read it runs the ledger reconciliation of §8.1 on the `rm_readonly` session (checks 1 and 2 always, check 3 under `--pin-ref <tag|commit>`), refuses on any verdict other than `ok` with nothing applied, and records the receipt in its own ([D67](../decisions.md#d67)).
+
+**Where a standalone migrate records itself.** `bun run migrate` writes its receipt, `migrate-receipt-<start>.json`, and its journal, `migrate-journal-<start>.json`, into one directory: the instance's state directory (§1.1; `rm_prod` under `RM_ENV=prod`, else the one `--instance` names), or the directory of `--receipt <path>`. The journal is written before each phase and closed on every exit with the phase it stopped in (§2), so a run that refused, failed, lost its lock or was killed leaves the journal alone, and a run that succeeded leaves both. `bun smoke --migrate` keeps no journal of its own: the smoke journal (§1.3) records its `migrate` preparation.
+
+**Order.** When every pending migration is `additive`, the operator runs `bun run migrate` against the running stack, then `bun smoke --static-port` with the new images; the old code keeps serving because it supports the additive state (§8.4). When any pending migration is `breaking`, the operator runs `bun smoke:down`, then `bun run migrate`, then `bun smoke --static-port`, so no old service runs against the breaking state. The release's runbook names which case applies.
+
+`--migrate` is a convenience for stage, test, and CI, where the database and the boot happen in one step. It refuses on `RM_ENV=prod` or `deployment_identity ≠ rehearsal`, except that it carries the `--local dump` pass of §4.3 on a local database with no identity row. On a remote database with no `deployment_identity` table it refuses and names the remote rehearsal pass of §4.2. In local modes it uses the owner password smoke generated. On a remote connection it reads `rm_owner` from `~/.env`, warns, and requires `--confirm-target`. A remote `--seed` does the same. It runs the migrate run of §8.3.
+
+## 9. Production
+
+### 9.1 One-time initialization (receipted, never via `bun smoke`)
+
+1. The role passwords and `rm_owner LOGIN` — `bun scripts/prod-init.ts role-passwords --confirm-target <host:port/database>` ([D61](../decisions.md#d61)), from the control machine as `bun run role-passwords --target <stage|prod>`. It connects as `doadmin`, whose password is typed at a hidden prompt or piped with `--doadmin-stdin` and stored nowhere. It reads `pg_roles` for the four roles. For each role, a `~/.env` line that logs in is kept with no `ALTER`. An absent line is set: the host generates a password, the server receives only its SCRAM-SHA-256 verifier, and the host writes `<role> = <password>` into `~/.env` (atomic, 0600) and proves the login. A line that does not log in refuses. Only `--rotate <role>` replaces one, keeping the old line in `~/.env.retired-<ts>`. `rm_owner` also becomes `LOGIN`. A runtime role's attributes never change. A rerun keeps every role. It takes the target lock and writes a receipt of role → `kept`, `set` or `rotated`. Migration 0053's `NOLOGIN` lines change for fresh databases; existing databases need this step because the runner skips recorded files.
+2. Baseline — compare production's live schema with the snapshot for its installed filename list. Any difference is repaired by a migration first; the first `bun run migrate` publishes a manifest only when the live schema matches.
+3. Grant transition — migrations revoking `DELETE` and `TRUNCATE` on every table from every runtime role (0053 granted `DELETE` on all tables; §3, [D55](../decisions.md#d55) (6)). Check 2 fails until they land.
+4. `deployment_identity = production` — via `rm_owner`, written by the first migrate in the same transaction as 0081 (below, [D55](../decisions.md#d55) (9)). `bun scripts/prod-init.ts set-identity` then confirms the row under the same gates as the other steps and receipts it: it reads the row through `rm_owner` inside the fence and never writes one, so a target with no row refuses. Under `RM_ENV=stage` it confirms `rehearsal` the same way, on the target the remote rehearsal pass enrolled.
+5. Provision the three service tokens (§3).
+6. Rebind each seated member to its `credential.json` key through the admin `rotate-key` route, one member at a time, writing each returned bearer token into that member's entry.
+
+**The first production migrate runs before the identity row exists** ([D55](../decisions.md#d55) (5)). Production's ledger is v0.5.0's 72 files plus four more (`0061_rm_worker_wallet_backfill_grant.sql`, `0062_rm_readonly_sequence_select.sql`, `0063_swarm_judge_model_default.sql` and `0080_analytics_ledger_compaction.sql`), which predates the `deployment_identity` table (0081) and the manifest (0082), and every migrate run otherwise refuses a database with no identity row. So the first `bun run migrate`, which carries steps 2 and 3, may run once with no row, or no table, only when every one of these holds:
+
+- a remote connection;
+- `RM_ENV=prod`;
+- the ledger's filename list is exactly equal to the filename list of the one `SUPPORTED_RELEASES` entry, the pre-identity baseline (production's observed 76-name ledger, read on 2026-10-01: v0.5.0 plus `0061_rm_worker_wallet_backfill_grant`, `0062_rm_readonly_sequence_select` with the c3a68812 SQL, `0063_swarm_judge_model_default` and `0080_analytics_ledger_compaction`, which Lucas confirmed on 2026-10-03, [D55](../decisions.md#d55) (8)): no file missing, none extra, none renamed. A pure v0.5.0 ledger is four files less, the earlier 73-name ledger is three less, and both refuse. This exact match exists for the identity-first pass alone; every other run of `bun run migrate`, and the release preflight, reconcile the ledger with the files instead (§8.1, [D67](../decisions.md#d67)) and name no per-release constant;
+- `~/.env` holds the `rm_owner` line;
+- `--confirm-target` names exactly the target `~/.env` resolves to.
+
+It takes the target lock (§2) like every other mutation. Its receipt records the pre-identity state: that no identity row existed, the supported release the ledger matched, and that ledger's filename list. From then on every run of every tool requires the row, and the exception is never available again on that database. A ledger that matches no supported release, a partly migrated ledger, an `RM_ENV` other than `prod` or `stage`, a missing `rm_owner` line or a `--confirm-target` that is absent or wrong refuses and changes nothing. Under `RM_ENV=stage` the same run is the remote rehearsal pass of §4.3. It writes `rehearsal`, never `production`.
+
+**Identity first** ([D55](../decisions.md#d55) (9)). The guarded pass applies `0081_deployment_identity` before any other pending migration, out of filename order. 0081's DDL, its `schema_migrations` row and step 4's row, `production`, commit in one fenced transaction. The remaining pending migrations then take the normal path in filename order.
+
+**The normal path accepts the state the pass leaves.** Production lacks five files below 0081: `0056_swarm_judge_requires_model`, `0057_swarm_judge_policy_stamp`, `0058_swarm_judge_fault_injection`, `0059_swarm_judgement_completion_usage` and `0062_rm_worker_analytics_ledger_read_grant`. The normal path may apply a pending file that sorts below a recorded 0081 only when the identity row exists and the rest of the ledger equals the baseline plus 0081, plus any files applied after it. Every other out-of-order state refuses. Production records `0080_analytics_ledger_compaction`, so every other file it has not run is numbered above that name (0081 on): a pending file between the five and 0080 would be a gap, and the rule stays strict.
+
+So an interruption at any point after 0081 commits leaves the row in place, and a rerun takes the normal path and resumes from the first unapplied migration (§8.3), the five lower files included. An interruption before 0081 commits leaves the ledger on the baseline, and a rerun takes the guarded pass again. No tool applies 0081 out of order outside the three passes of §4.3; the runner refuses it anywhere else.
+
+**A production dump takes the same path** ([D55](../decisions.md#d55) (10)). A dump restored from production has no `deployment_identity` table either. A `--local dump` whose restored ledger equals the production baseline is prepared by smoke: it applies 0081 first and writes `rehearsal` in the same transaction, before any other pending migration, and the rest take the normal path. It needs no `RM_ENV=prod` and no `--confirm-target`: smoke owns the container and generated the owner password (§5). The local pass keeps the guards of §4.3. A remote twin of such a dump is prepared by `RM_ENV=stage bun run migrate --confirm-target …`, the remote rehearsal pass of §4.3. It runs the production first pass's steps and writes `rehearsal`. A dump with any other pre-identity ledger refuses.
+
+### 9.2 Every boot
+
+1. Host: `RM_ENV=prod`; `~/.env` with the §3 keys only (`rm_owner` included, never `doadmin`); `RM_CREDENTIALS` pointing at the credential file (today: agents `athena`, `noop-analyst`, `robot-money`; judge `themis`).
+2. `bun smoke --static-port`
+3. Plan printed, locks taken, preflight passes or the boot stops with the reason. On success smoke exits; the stack runs under Docker.
+4. Observe with `bun smoke:status`. Stop only with `bun smoke:down`.
+
+### 9.3 Transition from the current host
+
+The production host runs `RM_ENV=smoke` under the overlay, so no `prod` guard has ever been armed, the three seated agents hold the committed fixture keys, and sessions are driven by an in-process smoke driver rather than a scheduler. Cutover: set `RM_ENV=prod`, provision the credential file, run §9.1 (its step 6 rotates the three members fixture → real by member id), then §9.2.
+
+## 10. Acceptance gates
+
+Each is an executable release gate. Cutover requires all three workstreams green. The W7 gates govern the website lifecycle (§13), which ships on its own schedule.
+
+**W1 deployment lifecycle**
+- Unset `RM_ENV` against a remote target refuses.
+- Concurrent CI jobs plus a standing stage select distinct instances with prior state present.
+- Second `bun smoke` against a locked instance refuses.
+- Two instances preparing the same remote database serialize on the target lock.
+- Kill the lock connection mid-migration, start a second mutation tool: no overlap.
+- Standalone `bun run migrate` and `bun smoke` contend on the target lock, including connection loss mid-phase.
+- Ctrl-C before replace: services not replaced, committed preparation journaled not undone. Ctrl-C after: journal reported, rerun resumes.
+- Resume after committed preparation under the same plan id succeeds; changed roster/image/target does not reuse completed phases.
+- Sessions and participants survive the invoking terminal's exit.
+- Restart after a subject's window instant has passed: the boundary fires once on rebuild (scheduler spec §3.2).
+- `volume` reuse after restart.
+- Receipt read by `smoke:status`.
+- Overlay-free stage boots with the real `system-scheduler` against short epoch and judging durations.
+- A fresh `--local blank` boot authenticates the real scheduler with no production initialization; `--local dump` yields a token that works against the restored rehearsal; `volume` reuse and an interrupted-then-retried preparation keep the same token; two concurrent CI instances never share a token file.
+- With `collecting` rows already present, a scheduler that cannot authenticate or synchronize fails readiness. Exhaust turnover retries: degradation is visible in `smoke:status` with subject and last error. Restore the dependency and restart the scheduler: degradation clears and the boundary fires once.
+- Disconnect a judge at the judging request, reconnect it before the deadline: it obtains the pending request. Leave it disconnected: the session publishes `no_consensus` and readiness still passes.
+- A subject with a duration and no epoch passes preflight, then gains its first epoch from the scheduler before readiness passes; a subject missing its duration fails preflight.
+- A rebuild from unchanged sources keeps the plan id; a changed source changes it.
+- A `~/.env` key outside §3's list refuses on `prod`.
+- Readiness fails while `analytics-producer` has not completed its seed command, or while the pipeline worker has failed its startup checks.
+- A blank bootstrap seeds the pipeline worker's schedule rows and no session schedule row.
+
+**W2 schema and privilege verification**
+- `RM_ENV=stage` + the `rm_owner` line against `deployment_identity = production` refuses; plain stage boot against production identity refuses.
+- Snapshot bootstrap then `--migrate`; snapshot bootstrap boots without `--seed`.
+- Old code boots after an additive change to an existing table while genuine drift on the same database still fails.
+- Old release reads compat metadata written by a newer one and refuses unknown `metadata_version`.
+- Migrate fails between commits and during grant reconciliation; rerun reaches a verified final state.
+- Denylist: runtime role with `rm_owner` membership, object ownership, or `DELETE` or `TRUNCATE` on any table fails preflight.
+- No runtime path deletes: a revoked key, token or membership is refused on its next request with no `DELETE` issued, and an expired row stops being served before any prune runs.
+- First production migrate: with no `deployment_identity` row and a ledger exactly equal to the production baseline (the 76-name ledger of §9.1), `RM_ENV=prod`, the `rm_owner` line and a matching `--confirm-target` migrate once and receipt the pre-identity state. A ledger with one file more or less (a pure v0.5.0 ledger included), a missing `rm_owner` line, or an absent or wrong `--confirm-target` refuses and changes nothing. A second run with no row still refuses.
+- Remote rehearsal pass: the same state under `RM_ENV=stage` applies 0081 first, writes `rehearsal` in the same transaction, and migrates the rest. A non-baseline pre-identity ledger refuses and changes nothing. The production pass is unchanged and still writes `production`. A second run with the row present takes the normal path.
+- Identity first: the production pass applies 0081 and commits its DDL, its ledger row and `production` in the same transaction, before any other migration. Kill any migrate between two commits: the rerun resumes. Applying 0081 out of order outside the three passes of §4.3 refuses.
+- Kill and rerun, for each of the three passes: kill it before 0081 commits, and the rerun takes the pass again; kill it after 0081, and the rerun resumes through the normal path and applies the five files below 0081 (§9.1).
+- The normal path applies a pending file below a recorded 0081 only when the identity row exists and the rest of the ledger equals the baseline plus 0081, plus files applied after it; every other out-of-order state refuses.
+- A `--local dump` whose ledger equals the production baseline applies 0081 first, writes `rehearsal` in the same transaction, and boots; a dump with any other pre-identity ledger refuses. Pointed at a remote connection, the local dump preparation refuses, whatever `RM_ENV`, password or acknowledgement says.
+- A remote target with no `deployment_identity` table and a stage policy is refused by the twin tooling and by every stage tool but `bun run migrate` (`bun smoke`, `--migrate`, `--seed`, `--spoof-keys`). The refusal changes nothing and names the remote rehearsal pass.
+- A remote database left in the retired hand step's state (the baseline plus 0081, and `rehearsal`) is accepted by a stage `bun run migrate`, which applies the five files below 0081 and the rest through the normal path.
+- Privileged credentials ([D61](../decisions.md#d61)): `bun run migrate`, `bun run prune`, a remote `--migrate` or `--seed`, `prod-init set-identity` and `provision-tokens` refuse when `~/.env` has no `rm_owner` line, naming the key and the file. Each refuses an absent or wrong `--confirm-target`, printing both targets, and proceeds when it matches. No test path reads a terminal.
+- `role-passwords`: working lines are kept with no `ALTER`, and a rerun keeps every role. An absent line is set through a SCRAM verifier, written to `~/.env` and proven. A failing line refuses unless `--rotate` names it. An empty line refuses. A kept `NOLOGIN` `rm_owner` gets exactly `ALTER ROLE rm_owner LOGIN`, then a verified login. A wrong `--confirm-target`, or no terminal and no `--doadmin-stdin`, refuses and writes nothing. A `doadmin` line in `~/.env` is never read. A target with no identity row is accepted only when its ledger equals a supported baseline.
+- Production initialization never runs crosswise: each of `role-passwords`, `set-identity`, `provision-tokens` and `rebind-members` proceeds under `RM_ENV=prod` against `production` and under `RM_ENV=stage` against `rehearsal`, and refuses prod against `rehearsal` and stage against `production`.
+- Neither privileged password appears in a receipt, a journal, a log line, an error message or a process argument. No container environment or compose file `bun smoke` assembles carries `rm_owner` or `doadmin`.
+- More than 32 unauthenticated WebAuthn option requests leave the challenge row count at 32.
+- Code built before the `compat: breaking` migration that revokes runtime `DELETE` refuses to boot after it.
+- The prune command takes `rm_owner` from `~/.env` and `--confirm-target`, and writes a receipt. It never removes a row younger than 7 days, a security tombstone or audit history.
+- `rm_app` can `UPDATE` only the `final` column of `swarm_recommendations`.
+- Production baseline: a live schema that differs from the snapshot blocks the first manifest publication.
+- Registry structurally enforced; execution under each role on a disposable database.
+- Test database off superuser.
+- Unattended CI boot `--local blank --migrate --seed`.
+
+**W3 participants**
+- Judge runs as a participant; nothing judges inline.
+- Participant crash after submit: the resend is a retry and adds no row.
+- Roster change with overlapping containers: at most one final take per member.
+- Two amendments racing leave exactly one final take.
+- A roster entry whose role disagrees with the database refuses the boot.
+- A judgement from a judge whose operator is not `robotmoney` is refused while `third_party_enabled` is false; the in-house judge's is accepted.
+- After `--spoof-keys`, a plain boot keeps the spoofed members on their spoofed keys.
+- Configured credential file disappears while participants run: refuse, participants untouched.
+- `--spoof-keys` with `RM_CREDENTIALS` set writes elsewhere; interrupted rebind then rerun; crash after rebind commit before container replacement recovers.
+
+**W7 website lifecycle (§13, D54)**
+- A change to `contract/src/routes.js` without a contract version bump against the merge base fails `contract.yml`; with a bump it passes; a lowered version fails (`scripts/tests/unit/contract-version-bump.test.ts`).
+- `GET /api/version` answers `{api, commit}` with no credential, and still answers while every database query fails (`backend/tests/api-version-endpoint.test.ts`).
+- `website-server` proxies `/api/version` to `api` (`scripts/tests/integration/website-server-api-version.test.ts`).
+- `web-client.yml` fails when `apiRange` excludes the contract version; `/version.json` carries the range; the page's matcher agrees with the Bun-side rule on every table row (`scripts/tests/unit/web-client-api-range.test.ts`).
+- An API outside the page's range shows the reload notice and makes zero other `/api/*` requests with a clean console; an in-range API renders normally (`frontend/test/browser/api-range-mismatch.spec.ts`).
+- `bun smoke:web` refuses a site whose range excludes the running API, switches `website-server` without restarting `api` or a worker, and `--rollback` returns to the previous directory.
+- `bun smoke` refuses an API outside the live site's range unless the same plan deploys a site that admits it, and refuses against a live site with no declared range.
+- Rolling: deploying the site and the API one after the other, in either order, never serves a page against an API outside its range.
+
+## 11. Out of scope
+
+The design does not specify an admin UI for judge settings. D48 owns the accepted judge-mode decision and its replay prerequisite; only the admin route writes `swarm_judge_config`.
+
+## 12. Amendments (2026-09-24)
+
+Decided with the owner on 2026-09-24 and recorded as [D52](../decisions.md#d52). Each row records what changed so the edit is auditable from this document alone.
+
+| clause | said before | says now |
+|---|---|---|
+| header | scope implied: swarm services | governs every service the stack runs, including `analytics-producer` and the pipeline worker |
+| §1.1 | state directory location unstated | state lives under the deploying user's home, never in a checkout or in repository source |
+| §1.2 | "the plan's content hash is the plan id" | the hash's fields are listed; images hash by source, not built digest |
+| §2 | lock keyed on database identity; fenced list includes "schedule write" | one constant key over a direct connection; fenced list names token provisioning and the identity write |
+| §3 | `~/.env` holds connection + role passwords "only"; one scheduler token; participant keys | `~/.env` is the home-directory file with an exact key list; three service tokens, one store-and-file model; each `credential.json` entry carries signing key, bearer and model key |
+| §4.2 | "the documented remote-twin restore procedure" | any remote restore must write `rehearsal` before a stage tool connects |
+| §6.1 | roles implied by namespace | roster role must match the member's database role or the boot refuses |
+| §6.2 | retry vs amendment undefined | a retry resends the same signed nonce; a partial unique index keeps one final take; the in-house judge passes the third-party gate |
+| §6.3 | no schedule rows anywhere; readiness covers the scheduler | the ban covers sessions only; readiness also covers `api`, the pipeline worker and `analytics-producer` |
+| §6.4 | roster reads `RM_CREDENTIALS` after a spoof | the spoof generation file wins for the named members |
+| §7 | locks before create/restore; check 4 a denylist; analytics and research workers keep credentials | target lock after create/restore; check 4 an allowlist; the pipeline worker holds `rm_worker`, the research lane is removed; the local superuser only creates roles |
+| §8.1 | "there are no schedule rows" | bootstrap data seeds the pipeline worker's schedule rows and each subject's three scheduling columns |
+| §8.5 | upgrade order unstated | additive: migrate then boot; breaking: down, migrate, boot |
+| §9.1 | four steps | adds a schema baseline before the first manifest, three service tokens, and rotating seated members through `rotate-key` |
+
+
+## 13. Website lifecycle
+
+Decided with the owner on 2026-09-24 and recorded as [D54](../decisions.md#d54). The static website is its own release unit: it ships on its own schedule, apart from `api` and the workers. Each side names its version, and deploying either side checks the other.
+
+### 13.1 Versions
+
+- **The site's range.** `frontend/package.json` declares `apiRange`, the semver range of API versions the site accepts. The assembled site's `/version.json` carries it. A manifest with no range publishes `apiRange: null`.
+- **The API's version.** It is `contract/package.json`'s version. `GET /api/version` answers `{api, commit}` with no credential and no database access. `website-server` proxies it with the rest of `/api/`. `/version` keeps reporting build identity (AC-ID-03).
+- **Range grammar.** A range is one or more space-separated comparators, all of which must hold: `^`, `~`, `>=`, `>`, `<=`, `<`, `=`, or an exact `X.Y.Z`. Anything else, and a missing range, is outside every range. `scripts/lib/api-range.ts` holds the rule for every deploy tool. The page's matcher (`lib/api-compat.js`) is tested row by row against it.
+- **Bumps.** A change to `contract/src/routes.js` needs a greater `contract/package.json` version than the merge base has (`contract.yml`). `web-client.yml` fails when the site's range excludes the contract version built from the same commit.
+
+### 13.2 `bun smoke:web`
+
+`bun smoke:web` deploys the site and nothing else.
+
+1. It builds the site into a versioned directory under the instance state directory (§1.1).
+2. It reads the running API's `/api/version` and refuses when that version is outside the new site's range.
+3. It points `website-server` at the new directory and reloads nginx. The switch is atomic. It restarts no `api` or worker container.
+4. It writes its own journal and receipt under the instance's `web/` directory, beside the stack's own (§1.3, §1.4).
+
+`bun smoke:web --rollback` returns `website-server` to the previous directory, with the same reload and receipt.
+
+### 13.3 `bun smoke` and the live site
+
+Before it replaces `api`, `bun smoke` reads the live site's `/version.json`. It refuses when the new API version is outside the live site's range, unless the same plan deploys a site whose range includes that version. A live site with no declared range counts as outside every range.
+
+### 13.4 The page
+
+Before its first API call the page reads its own range from `/version.json` and the API's version from `/api/version`. When the API is outside the range, it shows a reload notice and makes no other `/api/*` call. When the check cannot be answered (the API is down, predates the route, or the site declares no range), the page loads as it did before the check existed. API outages stay with the existing unreachable-API handling.
+
+### 13.5 Open question
+
+**T26, not decided here.** The API still reads the assembled site directory (`_static`) to report the served site's identity at `/version` and `/health`. Once the site switches on its own, that report describes whichever directory the API can see, which may not be the one `website-server` serves. The question is tracked on issue #1026. Until it is decided, the report stays as it is. **Decided by [D55](../decisions.md#d55) on 2026-09-25:** the API retires the `_static` mount and the `static` identity field; the site reports itself through `/version.json` and the API through `/api/version`. The work lands in wave 6.
+
+## 14. Amendments (2026-09-25)
+
+Decided with the owner on 2026-09-25 and recorded as [D55](../decisions.md#d55). Each row records what changed so the edit is auditable from this document alone.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended 2026-09-24 | also amended 2026-09-25 (this section) |
+| §3 | runtime roles lose `DELETE`/`TRUNCATE` on append-only tables only | only `rm_owner` may `DELETE` or `TRUNCATE`; no runtime role holds either on any table; runtime deletes become tombstones, expiry-filtered reads or upserts; security revocations stay immediately effective (D55 (6)) |
+| §4.3 | every production run requires the identity row | `bun run migrate` has one guarded first-run exception for a database with no identity row (§9.1, D55 (5)) |
+| §7 check 2 | denylist: `DELETE`/`TRUNCATE` on append-only tables | denylist: `DELETE` or `TRUNCATE` on any table |
+| §8.4 | "each supported release" unnamed | `SUPPORTED_RELEASES` is production's observed 73-name ledger: v0.5.0 plus `0062_rm_readonly_sequence_select` with the c3a68812 SQL (D55 (8), as corrected the same day; its first text said v0.5.0 alone); replaced on 2026-10-03, see the last table |
+| §9.1 | grant transition revokes on append-only tables; the first migrate's identity precondition unstated | grant transition revokes on every table; the first migrate may run once with no identity row under `RM_ENV=prod`, an exact `SUPPORTED_RELEASES` ledger match, a typed `rm_owner` and an explicit `y`, with a receipt of the pre-identity state (D55 (5), (8)) |
+| §10 | denylist gate names append-only tables | denylist gate names every table; gates added for no runtime delete and for the first production migrate |
+| §9.1 | step 4 wrote `production` after the first migrate run | the guarded pass applies 0081 first and commits `production` in its transaction, then the rest; an interruption after 0081 resumes through the normal path; out-of-order 0081 only in that pass (D55 (9)) |
+| §9.1 | a production dump's `rehearsal` write had no table to land in | a `--local dump` whose ledger equals the production baseline takes the same identity-first path and writes `rehearsal` (D55 (10)) |
+| §10 | first-migrate gate matched a v0.5.0 ledger | it matches the 73-name baseline (76 since 2026-10-03, see the last table); gates added for the identity-first pass, a kill after 0081, and the identity-first dump (D55 (8)–(10)) |
+
+Corrected the same day, after a review of the recorded D55 answers against the owner's own words ([D55](../decisions.md#d55), the corrections of 2026-09-25).
+
+| clause | said before | says now |
+|---|---|---|
+| §3 | the delete redesign's constraints and the prune unstated | unauthenticated-write tables stay bounded without `rm_owner` (32 WebAuthn challenge slots); no tombstone ships ahead of the breaking revoke; pruning is a manual, receipted `rm_owner` command with a 7-day minimum window (D55 (6), (12)) |
+| §4.2 | a remote restore writes `rehearsal` before a stage tool connects | a remote twin from a pre-0081 dump had a tool pass (D55 (10)); withdrawn on 2026-09-28, see the last table |
+| §4.3 | one exception, for `bun run migrate`, once | named exceptions for the production first pass and the `--local dump` preparation, plus a remote twin pass withdrawn on 2026-09-28 (see the last table), each with its own guard; one fenced transaction for 0081's DDL, its ledger row and the identity row; the ledger must equal the baseline; out-of-order 0081 refused elsewhere (D55 (5), (9), (10)) |
+| §8.5 | `--migrate` always refuses without `rehearsal` | it carries the rehearsal passes of §4.3 on a database with no identity row; since 2026-09-28 only the `--local dump` pass (see the last table) |
+| §9.1 | the normal path "resumes" after 0081; the baseline credited to an owner ruling | the normal path accepts files below a recorded 0081 only in the exact state a pass leaves; the first pass also needs a remote connection; the 73-name baseline is Lucas's confirmed call (D55 (8), (9)) |
+| §10 W2 | identity-first and dump gates only | adds kill-and-rerun gates for each pass, the normal-path acceptance rule, the local pass refusing a remote connection, a remote twin gate (replaced on 2026-09-28, see the last table), the 32-slot challenge bound, the pre-revoke boot refusal and the prune command |
+
+Amended on 2026-09-28 by Lucas's call that a pre-0081 production dump cannot become a remote twin through any tool ([D55](../decisions.md#d55) (10)). This table supersedes the remote twin rows of the two tables above.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended 2026-09-24 and 2026-09-25 | also amended 2026-09-28 |
+| §4.2 | a remote twin from a pre-0081 dump was prepared by a tool pass | no tool prepares it; the twin tooling and every stage tool refuse a remote target with no `deployment_identity` table and name the one-off intervention; the intervention is a receipted `rm_owner` hand step in the [pre-identity remote twin runbook](../runbooks/pre-identity-remote-twin.md) that applies 0081 and writes `rehearsal` in one fenced transaction; otherwise the twin is a `--local dump` |
+| §4.3 | three named exceptions | two: the production first pass and the `--local dump` preparation; a remote target with no table refuses under stage policy and names the intervention |
+| §8.5 | `--migrate` carries two rehearsal passes | it carries the `--local dump` pass only, and refuses a remote database with no table |
+| §9.1 | a remote twin took the identity-first order through a tool | the one-off intervention takes it by hand; no tool applies 0081 out of order outside the two passes |
+| §10 W2 | kill-and-rerun for three passes; a remote twin pass and its target check | kill-and-rerun for two passes; the remote refusal naming the runbook; the normal path accepting the intervention's state |
+
+Amended on 2026-10-03 by Lucas's call ([D55](../decisions.md#d55) (8), (9), issue 1097) after production's ledger was read again on 2026-10-01. It holds 76 names, and a first migrate against the 73-name baseline refused it. This table supersedes the baseline rows of the tables above.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended 2026-09-24, 2026-09-25 and 2026-09-28 | also amended 2026-10-03 |
+| §8.4 | `SUPPORTED_RELEASES` is the 73-name ledger | it is the 76-name ledger read on 2026-10-01: the 73 plus `0061_rm_worker_wallet_backfill_grant`, `0063_swarm_judge_model_default` (v0.5.1) and `0080_analytics_ledger_compaction` (v0.5.2) |
+| §9.1 | production lacks six files below 0063 | production lacks five files below 0081; it records `0061`, which was the sixth |
+| §9.1 | the pending files `0063_deployment_identity` to `0092_*` sorted below the last recorded name, so the gap rule refused 16 of them | the never-shipped files are renumbered 0081 to 0110 (the identity migration is `0081_deployment_identity`), so all of them sort above `0080_analytics_ledger_compaction`; the gap rule is unchanged and stays strict |
+| §10 W2 | first-migrate gate matched the 73-name ledger | it matches the 76-name ledger; 75 or 77 names refuse; a restored 76-name ledger passes the gates with no gap refusal |
+| §6.4 | `--spoof-keys` spoofs in-house members only | on an owned twin (`resolveSeatAllRestored`) it may spoof every active member, defaults to all of them, and the boot refuses a twin that leaves an active non-judge member unseated (B12, issue #1152, 2026-10-05) |
+
+Amended on 2026-10-08 by the owner's decision [D61](../decisions.md#d61): release runbooks run end to end by an agent from the control machine, and stage rehearses the production runbook unmodified. This table supersedes the typed-credential, `y/n` and remote-twin rows of the tables above.
+
+| clause | said before | says now |
+|---|---|---|
+| header | amended 2026-09-24, 2026-09-25, 2026-09-28 and 2026-10-03 | also amended 2026-10-08 |
+| §3 | `rm_owner` is typed at the terminal and never stored; `~/.env` must not hold `rm_owner` or `doadmin` | `rm_owner` is a `~/.env` line; every command that prompted for it reads it there; no container receives it; `doadmin` is stored in no file: the admin types it into `bun run role-passwords`, a provisioning step before a release (amendment 2026-10-08); the trade-off is stated |
+| §3 | an explicit `y` confirms a remote write | `--confirm-target <host:port/database>` must equal the target resolved from `~/.env` exactly; a mismatch prints both |
+| §4.2 | a pre-0081 dump becomes a remote twin only by a hand step | `RM_ENV=stage bun run migrate --confirm-target …` prepares it; the hand step is retired and its end state still accepted |
+| §4.3 | two named exceptions; production initialization gated by `y/n` and a typed `rm_owner` | three: the remote rehearsal pass joins them and writes `rehearsal`; production initialization gated by `--confirm-target` and the `~/.env` `rm_owner` line |
+| §5 | no prompt in local modes | no prompt in any mode; a local mode needs no `--confirm-target` |
+| §7 check 4 | an `rm_owner` or `doadmin` line is named as dangerous | `rm_owner` is allowed; `doadmin`, other superuser and `postgres` keys are still named (amendment 2026-10-08) |
+| §8.5 | `bun run migrate` prompts for `rm_owner` and asks `y/n` | it reads `rm_owner` from `~/.env`, takes `--confirm-target`, and names `role-passwords` for a `NOLOGIN` owner |
+| §9.1 | step 1 is a hand `ALTER ROLE … LOGIN PASSWORD` through `doadmin`; the first migrate needs a typed password and `y` | step 1 is `prod-init role-passwords`, which keeps working role lines, generates absent ones through a SCRAM verifier and makes `rm_owner` LOGIN; the first migrate needs the `rm_owner` line and `--confirm-target` |
+| §10 W2 | typed-owner and `y` gates; stage `bun run migrate` refuses a remote target with no table | `~/.env` and `--confirm-target` gates; the remote rehearsal pass; `role-passwords`; the no-leak invariants |

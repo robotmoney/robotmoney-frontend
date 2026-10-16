@@ -1,6 +1,6 @@
 // HTTP implementation of the TelemetrySink port (issue #151) — the default
 // updater-process path, mirroring analytics/api-client.ts's AnalyticsPersistence
-// HTTP client exactly (same ANALYTICS_API_URL + ANALYTICS_TOKEN wiring, same
+// HTTP client exactly (same ANALYTICS_API_URL + ANALYTICS_TOKEN_FILE wiring, same
 // secret hygiene: the token never appears in a thrown error).
 import { ROUTES } from "@robotmoney/contract";
 import { resolveAnalyticsApiConfig, type AnalyticsApiConfig } from "./api-client.ts";

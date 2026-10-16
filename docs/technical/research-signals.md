@@ -124,5 +124,5 @@ are unaffected by this correction.
 ## See also
 
 - [`regime-engine.md`](regime-engine.md) — the regime core these signals deliberately share a percentile convention with, and deliberately do not share a composite/panel/bucketing structure with.
-- [`architecture.md` §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline) — plumbing, the EDGAR/MNA seed, and the `RESEARCH_TOOL_GROUP` shared-fetch alias.
+- [`architecture.md` §7.1](../architecture/task-queue-and-workers.md#71-analytics-suite-six-stage-pipeline) — plumbing, the EDGAR/MNA seed, and the `RESEARCH_TOOL_GROUP` shared-fetch alias.
 - `backend/src/analytics/analyze/research.ts` — the `ResearchPayload`/`Gauge` contract, including the non-finite-value (`null`) semantics.

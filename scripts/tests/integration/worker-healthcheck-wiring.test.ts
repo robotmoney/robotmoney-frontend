@@ -36,7 +36,9 @@ function composeServices(): Record<string, { healthcheck?: { test?: string[] } }
       cwd: repoRoot,
       // The two published-port lines are `${VAR:?…}`; compose refuses to resolve
       // without them. Values are arbitrary — nothing is published here.
-      env: { ...process.env, WEB_PORT: "18787", POSTGRES_PORT: "15432" },
+      // RM_INSTANCE / RM_INSTANCE_STATE_DIR are required the same way (smoke spec §1.1: no checkout
+      // fallback for the instance's state directory); nothing is mounted by `config`.
+      env: { ...process.env, WEB_PORT: "18787", POSTGRES_PORT: "15432", RM_INSTANCE: "rm_local_healthcheck", RM_INSTANCE_STATE_DIR: "/var/empty/rm_local_healthcheck" },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -75,14 +77,13 @@ function runCheck(argv: string[], heartbeatFile: string): { exitCode: number; st
 }
 
 describe("the healthcheck command docker-compose.yml declares actually runs", () => {
-  const argv = resolvedHealthcheckCommand("worker-swarm");
+  const argv = resolvedHealthcheckCommand("worker-analytics");
   const dir = mkdtempSync(join(tmpdir(), "rm-hc-wiring-"));
 
   test("the lanes and the producer are wired to the same command", () => {
     expect(resolvedHealthcheckCommand("analytics-producer")).toEqual(argv);
-    for (const lane of ["worker-analytics", "worker-research"]) {
-      expect(resolvedHealthcheckCommand(lane)).toEqual(argv);
-    }
+    // No research lane exists to wire (issue #1026 wave 6, P1).
+    expect(() => resolvedHealthcheckCommand("worker-research")).toThrow();
   });
 
   test("a fresh heartbeat exits 0", () => {

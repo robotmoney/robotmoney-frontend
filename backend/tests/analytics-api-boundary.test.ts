@@ -33,10 +33,11 @@ import { test, expect } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
+import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
@@ -44,6 +45,10 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 useCleanDatabasePerTest(import.meta.file);
 
 const SRC = join(import.meta.dir, "..", "src");
+// Issue #1095: the pure compute moved to packages/analyst-sdk/src, with
+// re-export shims left at the old analytics/ paths. The zero-database-access
+// rule has to follow it, or moving a file there would take it out of the scan.
+const SDK_SRC = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "src");
 
 function tsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -93,8 +98,14 @@ test("updater/orchestrator modules (analytics/** minus store,report,cutover) car
     // allowedPrefixes list below).
     return !rel.startsWith("store/") && !rel.startsWith("report/") && !rel.startsWith("cutover/");
   });
-  expect(files.length).toBeGreaterThan(15); // canary: the updater surface is known-large
-  const violations = scan(files, [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
+  const sdkFiles = tsFiles(SDK_SRC);
+  // Canaries: the updater surface is known-large, and the SDK directory really
+  // is in the scan (the old threshold of 15 was set before analyze/ and
+  // transform/ moved there, so it would no longer notice the SDK going missing).
+  expect(files.length).toBeGreaterThan(15);
+  expect(sdkFiles.length).toBeGreaterThan(15);
+  expect(files.length + sdkFiles.length).toBeGreaterThan(60);
+  const violations = scan([...files, ...sdkFiles], [IMPORT_DB_CLIENT, IMPORT_WORKER_CLIENT, IMPORT_POSTGRES, SQL_TAG, IMPORT_STORE]);
   expect(violations).toEqual([]);
 });
 
@@ -222,13 +233,16 @@ test("only API persistence + migration/smoke tooling import the analytics store 
 test(
   "retained analytics handlers persist only via authenticated HTTP when invoked directly by a compatibility test",
   async () => {
-    const TOKEN = "tok_analytics_worker_boundary";
+    // analytics-producer's store token, delivered as the file the client reads
+    // (smoke spec §3, D52 (1)).
+    const TOKEN = await provisionAnalyticsToken();
+    const TOKEN_FILE = writeTokenFile(TOKEN);
     const requests: { method: string; path: string; auth: string | null }[] = [];
 
     // Real Bun server wrapping the REAL analytics route handler (same code the
     // api process mounts), recording every request it serves.
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });
@@ -237,30 +251,26 @@ test(
         return new Response(JSON.stringify(r.body), { status: r.status, headers: { "Content-Type": "application/json" } });
       },
     });
-
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     try {
-      // Server side verifies the analytics-provider bearer (prod-shaped: no
-      // insecure fallback). This test explicitly wires the retained handler;
+      // Server side verifies the analytics-provider bearer against the token
+      // store. This test explicitly wires the retained handler;
       // production shared workers deliberately receive no provider secret.
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "hermetic"; // deterministic + offline sources
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       // Empty the queue: a clean database still carries seed()'s production
       // cold-start jobs, and processOneJob() claims the oldest eligible job, not
       // this test's. Ordered DELETEs, not TRUNCATE ... CASCADE — audit_log,
       // swarm_session_events and analytics_runs reference jobs(id), and CASCADE
       // truncates a referencing table whole regardless of ON DELETE SET NULL.
-      await sql`DELETE FROM job_runs`;
-      await sql`DELETE FROM jobs`;
+      await fixtureDb`DELETE FROM job_runs`;
+      await fixtureDb`DELETE FROM jobs`;
       const asof = new Date().toISOString().slice(0, 10);
       // Direct insertion is test-only. No supported API/admin/scheduler path can
       // create these legacy consumer jobs after D25.
@@ -303,8 +313,6 @@ test(
       expect(sigs.map((s) => s.signal_key).sort()).toEqual(["channel-divergence", "late-cycle-signals"]);
     } finally {
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;

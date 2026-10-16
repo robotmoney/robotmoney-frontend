@@ -31,6 +31,9 @@ const backendRoot = join(repoRoot, "backend");
 const backendTsconfigPath = join(backendRoot, "tsconfig.json");
 const TSC = join(backendRoot, "node_modules", ".bin", "tsc");
 
+/** The whole-backend `tsc --noEmit` budget; see the measurement at its test. */
+const REAL_REPO_TSC_BUDGET_MS = 180_000;
+
 interface BackendTsconfig {
   compilerOptions: Record<string, unknown>;
   include: string[];
@@ -85,9 +88,17 @@ describe("backend/tests/**/*.ts is genuinely typechecked (issue #454)", () => {
     expect(wf).toMatch(/working-directory:\s*backend[\s\S]*?run:\s*bun run typecheck/);
   });
 
-  // `tsc --noEmit` over the full backend (src/** + tests/**, ~100+ files) takes
-  // several seconds — comfortably over bun:test's default 5s per-test timeout —
-  // so this gets a generous explicit budget rather than a flaky race.
+  // `tsc --noEmit` over the full backend (src/** + tests/** + scripts/**) is the
+  // slowest thing in the unit suite. Measured on the shared self-hosted box
+  // (16 cores, load average 23-26 from concurrent stacks and CI) on 2026-09-24:
+  // 29s, 35s and 38s wall, ~32s of CPU each — so the old 30s budget failed on
+  // CPU time alone whenever the host was busy, and a red here said nothing
+  // about types. The budget is sized to the measurement with headroom for a
+  // loaded runner, not to "whatever passes": the check itself is unchanged —
+  // the real config, the real include, exit 0 and empty output — and a tsc
+  // that genuinely hangs still fails, just at three minutes instead of thirty
+  // seconds. If the measured time approaches this budget, the fix is making
+  // the typecheck cheaper, never raising the number again.
   test(
     "the REAL repo passes: backend/tsconfig.json's own config exits 0 with backend/tests/** in scope",
     () => {
@@ -95,7 +106,7 @@ describe("backend/tests/**/*.ts is genuinely typechecked (issue #454)", () => {
       expect(r.output, r.output).toBe("");
       expect(r.exitCode).toBe(0);
     },
-    30_000,
+    REAL_REPO_TSC_BUDGET_MS,
   );
 
   // ── the must-fail negative control ─────────────────────────────────────────

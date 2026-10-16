@@ -67,7 +67,6 @@ describe("scripts/stack purity", () => {
         profile: "core",
         composeFiles: DEFAULT_COMPOSE_FILES,
         database: DEFAULT_STACK_DATABASE,
-        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b" },
         environment: { class: "local", hash: "0000000000" },
       },
       { hooks: { onEvent: (e) => events.push(e) } },
@@ -84,7 +83,6 @@ describe("scripts/stack purity", () => {
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
       database: DEFAULT_STACK_DATABASE,
-      credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b" },
       environment: { class: "local", hash: "0000000000" },
     });
     expect(stack.spawnEnv.PATH).toBeUndefined();

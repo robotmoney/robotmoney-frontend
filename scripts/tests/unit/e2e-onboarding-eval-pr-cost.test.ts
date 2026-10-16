@@ -45,25 +45,60 @@
 // no network, no model. Nothing here can skip; every test below runs on every
 // invocation of `bun test scripts/tests/unit` (a required job).
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repoRoot = join(import.meta.dir, "../../..");
-const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
-// Issue #275 addendum: the inference-off infra-rails step moved out of e2e.yml
-// into its own workflow (it never needed the full LIVE smoke boot).
-const onboardingRailsYml = readFileSync(
-  join(repoRoot, ".github/workflows/onboarding-eval-rails.yml"),
-  "utf8",
-);
+// The eval lives in its own domain workflow now (the old single e2e.yml was split
+// by domain); its boot and teardown steps live in the shared composite actions.
+const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e-onboarding.yml"), "utf8");
+const setupAction = readFileSync(join(repoRoot, ".github/actions/e2e-setup/action.yml"), "utf8");
+const teardownAction = readFileSync(join(repoRoot, ".github/actions/e2e-teardown/action.yml"), "utf8");
+const INFRA_TEST = "scripts/tests/integration/onboarding-eval-infra.test.ts";
 
-/** The opt-in label. Changing it here without changing e2e.yml fails these tests. */
+/**
+ * `file#job` for every job, in a workflow that triggers on `push`, with a step
+ * that executes `testPath` directly (`bun test <path or a directory holding it>`)
+ * or through a package.json script (`bun run <name>`). Steps with their own
+ * `working-directory` or `--cwd` run another package's scripts and do not count.
+ */
+function pushJobsExecuting(
+  testPath: string,
+  workflows: Array<{ file: string; text: string }>,
+  scripts: Record<string, string>,
+): string[] {
+  const covers = (cmd: string): boolean => {
+    for (const m of cmd.matchAll(/bun test\s+([^\s|;&]+)/g)) {
+      const target = m[1]!.replace(/\/$/, "");
+      if (testPath === target || testPath.startsWith(`${target}/`)) return true;
+    }
+    return false;
+  };
+  const hits: string[] = [];
+  for (const { file, text } of workflows) {
+    const wf = Bun.YAML.parse(text) as { on?: unknown; true?: unknown; jobs?: Record<string, { steps?: Array<{ run?: string; "working-directory"?: string }> }> };
+    const on = (wf.on ?? wf.true) as unknown;
+    const onKeys = typeof on === "string" ? [on] : Array.isArray(on) ? (on as string[]) : Object.keys((on ?? {}) as object);
+    if (!onKeys.includes("push")) continue;
+    for (const [job, def] of Object.entries(wf.jobs ?? {})) {
+      const runs = (def.steps ?? []).filter((st) => st.run && !st["working-directory"]).map((st) => st.run!);
+      const executes = runs.some((run) => {
+        if (covers(run)) return true;
+        return [...run.matchAll(/bun run (?!--cwd)([\w:.-]+)/g)].some((m) => scripts[m[1]!] !== undefined && covers(scripts[m[1]!]!));
+      });
+      if (executes) hits.push(`${file}#${job}`);
+    }
+  }
+  return hits;
+}
+
+/** The opt-in label. Changing it here without changing e2e-onboarding.yml fails these tests. */
 const OPT_IN_LABEL = "real-eval";
 
 // ---------------------------------------------------------------------------
 // A miniature GitHub-Actions expression interpreter.
 //
-// Supports exactly what e2e.yml's gating expressions use: `||`, `&&`, `!`,
+// Supports exactly what e2e-onboarding.yml's gating expressions use: `||`, `&&`, `!`,
 // `==`, `!=`, parentheses, single-quoted strings, `true`/`false`/`null`,
 // context paths (including the `.*.` array filter) and `contains()`. It
 // reproduces Actions' value-returning `&&`/`||` (they yield an operand, not a
@@ -441,15 +476,25 @@ export function realEvalSpendIsOptIn(expr: string): string | null {
  * event for an unrelated label boot the full live stack.
  */
 export function jobGuardIsLabelNarrowed(expr: string): string | null {
+  // The job is path-gated by its `changes` job: `needs.changes.outputs.e2e` is
+  // 'true' when a changed file is off the skip list. Every context below
+  // supplies it as 'true' unless the case is about the skip itself.
+  const withPaths = (ctx: Ctx, e2e: string): Ctx => ({ ...ctx, needs: { changes: { outputs: { e2e } } } });
   const cases: Array<[string, Ctx, boolean]> = [
-    ["a push to the default branch", CTX.push, true],
-    ["the nightly schedule mirror", CTX.schedule, true],
-    ["a non-draft pull_request", CTX.prPlain, true],
-    ["a draft pull_request", CTX.prDraft, false],
-    [`adding the '${OPT_IN_LABEL}' label`, CTX.prLabeledOptIn, true],
-    ["adding an unrelated label", CTX.prLabeledOther, false],
-    [`adding '${OPT_IN_LABEL}' to a DRAFT pull_request`, CTX.prLabeledOptInDraft, false],
-    ["a manual workflow_dispatch", CTX.dispatchOn, true],
+    ["a push to the default branch", withPaths(CTX.push, "true"), true],
+    ["the nightly schedule mirror", withPaths(CTX.schedule, "true"), true],
+    ["a non-draft pull_request", withPaths(CTX.prPlain, "true"), true],
+    ["a draft pull_request", withPaths(CTX.prDraft, "true"), false],
+    [`adding the '${OPT_IN_LABEL}' label`, withPaths(CTX.prLabeledOptIn, "true"), true],
+    ["adding an unrelated label", withPaths(CTX.prLabeledOther, "true"), false],
+    [`adding '${OPT_IN_LABEL}' to a DRAFT pull_request`, withPaths(CTX.prLabeledOptInDraft, "true"), false],
+    ["a manual workflow_dispatch", withPaths(CTX.dispatchOn, "true"), true],
+    // The path gate: a PR that changed only skip-listed paths skips the stack,
+    // while a push, the nightly and a dispatch run whatever the filter said.
+    ["a non-draft pull_request that touched only skip-listed paths", withPaths(CTX.prPlain, "false"), false],
+    ["a push whose (irrelevant) path filter said false", withPaths(CTX.push, "false"), true],
+    ["the nightly whose (irrelevant) path filter said false", withPaths(CTX.schedule, "false"), true],
+    ["a dispatch whose (irrelevant) path filter said false", withPaths(CTX.dispatchOn, "false"), true],
   ];
   for (const [what, ctx, want] of cases) {
     let got: boolean;
@@ -475,7 +520,7 @@ export function jobGuardIsLabelNarrowed(expr: string): string | null {
 export function prSummaryNamesTheNightly(workflow: string): string | null {
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -511,7 +556,7 @@ export function prSummaryNamesTheNightly(workflow: string): string | null {
 export function pushSummaryExplainsWhyNotRun(workflow: string): string | null {
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -552,7 +597,7 @@ export function noticeTracksTheSpend(workflow: string): string | null {
   }
   let step: string;
   try {
-    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e.yml");
+    step = stepContaining(workflow, "GITHUB_STEP_SUMMARY", "e2e-onboarding.yml");
   } catch {
     return "no step writes to GITHUB_STEP_SUMMARY";
   }
@@ -571,7 +616,7 @@ export function noticeTracksTheSpend(workflow: string): string | null {
 // ---------------------------------------------------------------------------
 // 1. The real workflow passes every check.
 // ---------------------------------------------------------------------------
-describe("e2e.yml spends no onboarding eval on an unlabelled pull_request", () => {
+describe("e2e-onboarding.yml spends no onboarding eval on an unlabelled pull_request", () => {
   test("the spend expression resolves to '' on ordinary PRs and '1' on the opt-in routes", () => {
     const expr = unwrap(soleMappingValue(e2eYml, "ONBOARDING_REAL_EVAL"), "ONBOARDING_REAL_EVAL");
     expect(realEvalSpendIsOptIn(expr)).toBeNull();
@@ -769,13 +814,17 @@ describe("the expression interpreter reproduces Actions semantics", () => {
 // ---------------------------------------------------------------------------
 describe("the coverage that replaces the per-PR eval is really there", () => {
   test("a failed smoke prominently classifies exhausted OpenCode credit", () => {
-    const smoke = stepContaining(e2eYml, "bun run scripts/smoke.ts", "e2e.yml");
+    const smoke = stepContaining(setupAction, "bun --no-env-file scripts/smoke.ts", "e2e-setup action");
     expect(smoke).toContain('set -o pipefail');
     expect(smoke).toContain('tee "$RUNNER_TEMP/e2e-smoke.log"');
 
-    const diagnosis = stepContaining(e2eYml, "E2E blocked by OpenCode billing credit", "e2e.yml");
+    const diagnosis = stepContaining(teardownAction, "E2E blocked by OpenCode billing credit", "e2e-teardown action");
     expect(diagnosis).toContain("Diagnose OpenCode billing exhaustion");
-    expect(diagnosis).toContain("if: ${{ failure() }}");
+    // `always()`, not `failure()`: a composite's failure() sees only the
+    // composite's own steps, never the calling job's, so a `failure()` guard
+    // here would never fire. With no marker the step writes nothing.
+    expect(diagnosis).toContain("if: always()");
+    expect(diagnosis).not.toContain("failure()");
     expect(diagnosis).toContain('rg -Fq -- "cause=exhausted-credits" "${diagnostic_paths[@]}"');
     expect(diagnosis).toContain('.agents/swarm-sessions/$SMOKE_PROJECT');
     expect(diagnosis).toContain('.agents/onboarding-evals/$SMOKE_PROJECT');
@@ -793,35 +842,47 @@ describe("the coverage that replaces the per-PR eval is really there", () => {
     expect(e2eYml).not.toContain("RUNNING on the funded default model");
   });
 
-  // Issue #275 addendum: this step moved out of e2e.yml into its own
-  // onboarding-eval-rails.yml workflow (it never needed the full LIVE smoke
-  // boot e2e.yml exists for — its own minimal postgres+api stack was always
-  // enough). The STEP itself still carries no additional if: guard beyond the
-  // JOB-level draft+path gate onboarding-eval-rails.yml declares — an `if:`
-  // on the step would let the last onboarding-surface assertion a relevant PR
-  // makes disappear as quietly as the removed per-PR eval did.
-  test("the inference-off rails step still runs unconditionally within its job, in its own workflow", () => {
-    const step = stepContaining(
-      onboardingRailsYml,
-      "bun test scripts/tests/integration/onboarding-eval-infra.test.ts",
-      "onboarding-eval-rails.yml",
-    );
-    expect(step).toContain("Onboarding eval infra rails (inference-off, fail-fast)");
-    expect(step).not.toMatch(/^\s*if:/m);
-    // e2e.yml no longer runs this test directly — the split moved it, not
-    // duplicated it.
-    expect(e2eYml).not.toContain("bun test scripts/tests/integration/onboarding-eval-infra.test.ts");
+  // Issue #1040: the inference-off rails test (onboarding-eval-infra.test.ts)
+  // used to run twice per push: once in `bun run test:integration` and once in
+  // its own workflow. Every push paid two member-agent builds.
+  // It now runs in exactly one push-triggered job, integration.yml's.
+  test("exactly one push-triggered job executes onboarding-eval-infra.test.ts, and it is integration.yml's `integration`", () => {
+    const wfDir = join(repoRoot, ".github/workflows");
+    const workflows = readdirSync(wfDir)
+      .filter((f) => f.endsWith(".yml"))
+      .map((f) => ({ file: f, text: readFileSync(join(wfDir, f), "utf8") }));
+    const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { scripts: Record<string, string> };
+    const jobs = pushJobsExecuting(INFRA_TEST, workflows, pkg.scripts);
+    expect(jobs).toEqual(["integration.yml#integration"]);
+    expect(existsSync(join(wfDir, "onboarding-eval-rails.yml"))).toBe(false);
   });
 
-  test("onboarding-eval-rails.yml's job defers on draft PRs, same as the e2e job it split from", () => {
-    expect(onboardingRailsYml).toMatch(/github\.event\.pull_request\.draft == false/);
+  test("the counter goes red on a planted second push-triggered job, and ignores a pull_request-only one", () => {
+    const scripts = { "test:integration": "bun test scripts/tests/integration" };
+    const mk = (on: string, run: string) =>
+      `on:\n${on}\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ${run}\n`;
+    const push = "  push:\n    branches: [main]";
+    const pr = "  pull_request:";
+    expect(pushJobsExecuting(INFRA_TEST, [{ file: "a.yml", text: mk(push, "bun run test:integration") }], scripts)).toEqual(["a.yml#j"]);
+    expect(
+      pushJobsExecuting(
+        INFRA_TEST,
+        [
+          { file: "a.yml", text: mk(push, "bun run test:integration") },
+          { file: "b.yml", text: mk(push, `bun test ${INFRA_TEST}`) },
+        ],
+        scripts,
+      ),
+    ).toHaveLength(2);
+    expect(pushJobsExecuting(INFRA_TEST, [{ file: "c.yml", text: mk(pr, "bun run test:integration") }], scripts)).toEqual([]);
+    expect(pushJobsExecuting(INFRA_TEST, [{ file: "d.yml", text: mk(push, "bun run test:unit") }], { "test:unit": "bun test scripts/tests/unit" })).toEqual([]);
   });
 
   // Issue #373 retired swarm-opencode-nightly.yml. Its measurement was the
   // SAME real-inference admission this workflow used to spend on a push to
   // main, so the nightly it held became this workflow's own `schedule:` — and
   // the coverage that replaces the per-PR eval must therefore be found HERE, in
-  // e2e.yml, or it is nowhere. Issue #803 later took the spend OFF push, which
+  // e2e-onboarding.yml, or it is nowhere. Issue #803 later took the spend OFF push, which
   // makes this schedule route this measurement's ONLY continuously-recurring
   // home — dropping it here would leave nothing recurring at all.
   test("this workflow itself carries the retired nightly's 04:37 slot", () => {

@@ -8,7 +8,7 @@
 // This suite proves, by ACTUALLY RUNNING the real `bun run test:browser`
 // entrypoint (the exact command scripts/lib/smoke-main.ts's "browser checks"
 // step invokes), both directions:
-//   - NEGATIVE: without BACKEND_URL/ADMIN_TOKEN, the whole test:browser run
+//   - NEGATIVE: without BACKEND_URL/RM_OPERATOR_TOKEN_FILE, the whole test:browser run
 //     fails loudly (non-zero exit) with the guard's own message — never a
 //     silent all-skip green.
 //   - POSITIVE: with both set, admin-live.spec.ts's tests are discovered by
@@ -42,23 +42,26 @@ function listBrowserTests(env: Record<string, string | undefined>) {
 }
 
 describe("admin-live.spec.ts module-load guard (loud-skip, never silent-skip)", () => {
-  test("source carries the BACKEND_URL/ADMIN_TOKEN guard and its loud-skip message", () => {
+  test("source carries the BACKEND_URL/RM_OPERATOR_TOKEN_FILE guard and its loud-skip message", () => {
+    // The operator's service token (smoke spec §3, D52) is a FILE; the spec is
+    // handed its path, and no env token of any kind.
     const src = readFileSync(specPath, "utf8");
     expect(src).toContain("process.env.BACKEND_URL");
-    expect(src).toContain("process.env.ADMIN_TOKEN");
+    expect(src).toContain("process.env.RM_OPERATOR_TOKEN_FILE");
+    expect(src).not.toContain("process.env.ADMIN_TOKEN");
     expect(src).toContain("refusing an all-skip false-green run");
   });
 
-  test("`bun run test:browser` fails non-zero with the guard's own message when BACKEND_URL/ADMIN_TOKEN are unset", () => {
+  test("`bun run test:browser` fails non-zero with the guard's own message when BACKEND_URL/RM_OPERATOR_TOKEN_FILE are unset", () => {
     const env = { ...process.env };
     delete env.BACKEND_URL;
-    delete env.ADMIN_TOKEN;
+    delete env.RM_OPERATOR_TOKEN_FILE;
 
     const { exitCode, stderr, stdout } = listBrowserTests(env);
 
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain(
-      "admin-live.spec.ts requires BACKEND_URL and ADMIN_TOKEN in the environment",
+      "admin-live.spec.ts requires BACKEND_URL and RM_OPERATOR_TOKEN_FILE in the environment",
     );
     expect(stderr).toContain("refusing an all-skip false-green run");
     // The loud failure aborts collection of every spec file, not just this
@@ -66,8 +69,8 @@ describe("admin-live.spec.ts module-load guard (loud-skip, never silent-skip)", 
     expect(stdout).toContain("Total: 0 tests in 0 files");
   }, 60_000);
 
-  test("`bun run test:browser` discovers admin-live.spec.ts's tests when BACKEND_URL/ADMIN_TOKEN are set — no extra CI wiring needed", () => {
-    const env = { ...process.env, BACKEND_URL: "http://127.0.0.1:8787", ADMIN_TOKEN: "guard-test-dummy-token" };
+  test("`bun run test:browser` discovers admin-live.spec.ts's tests when BACKEND_URL/RM_OPERATOR_TOKEN_FILE are set — no extra CI wiring needed", () => {
+    const env = { ...process.env, BACKEND_URL: "http://127.0.0.1:8787", RM_OPERATOR_TOKEN_FILE: "/nonexistent/guard-test-operator-token" };
 
     const { exitCode, stdout, stderr } = listBrowserTests(env);
 
@@ -87,28 +90,28 @@ describe("admin-live.spec.ts is wired into the required e2e job's live-stack boo
     expect(config).toContain('testDir: "./frontend/test/browser"');
   });
 
-  test("scripts/lib/smoke-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL and ADMIN_TOKEN exported explicitly", () => {
+  test("scripts/lib/smoke-main.ts's 'browser checks' step runs the real `test:browser` script with BACKEND_URL and the operator token's PATH exported explicitly", () => {
     const src = readFileSync(join(repoRoot, "scripts/lib/smoke-main.ts"), "utf8");
 
-    // Issue #456: smoke-main.ts no longer mutates process.env.ADMIN_TOKEN
-    // globally (the 2026-07-14 maintainability review's flagged
-    // module-level-mutable-state shape) — every child process that needs the
-    // admin token, including this one, now gets it as an explicit
-    // `ADMIN_TOKEN: adminPassword` entry in its OWN spawn env instead of
-    // inheriting it off a prior same-process mutation via `...process.env`.
+    // Issue #456: smoke-main.ts mutates no token onto process.env — every
+    // child process that needs the operator's token, including this one, gets
+    // its FILE PATH as an explicit entry in its OWN spawn env
+    // (`...operatorTokenEnv()`, smoke spec §3), never a value inherited off a
+    // prior same-process mutation.
     expect(src).not.toContain("process.env.ADMIN_TOKEN =");
+    expect(src).not.toContain("ADMIN_TOKEN");
 
     const browserStepIdx = src.indexOf('"browser checks"');
     expect(browserStepIdx).toBeGreaterThan(-1);
 
     // The step block itself: `run(["bun", "run", "test:browser"], repoRoot,
-    // { ...process.env, BACKEND_URL: backendUrl, ADMIN_TOKEN: adminPassword }
+    // { ...process.env, BACKEND_URL: backendUrl, ...operatorTokenEnv() }
     // ..., "browser checks")`.
     const stepStart = src.lastIndexOf("await run(", browserStepIdx);
     const stepBlock = src.slice(stepStart, browserStepIdx + '"browser checks"'.length);
     expect(stepBlock).toContain('"test:browser"');
     expect(stepBlock).toContain("BACKEND_URL: backendUrl");
-    expect(stepBlock).toContain("ADMIN_TOKEN: adminPassword");
+    expect(stepBlock).toContain("...operatorTokenEnv()");
     expect(stepBlock).toContain("...process.env");
   });
 });

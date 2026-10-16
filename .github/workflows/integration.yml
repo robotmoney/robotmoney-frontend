@@ -35,12 +35,12 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main, "releases-*", "fusion/**"]
+    branches: [main, "releases-*", "qa/**"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does — so a red nightly means exactly what a red merge would
   # have meant, with no required reading. Cron minutes are staggered across the
-  # ten mirrors. The invariant is enforced mechanically by
+  # eleven mirrors. The invariant is enforced mechanically by
   # scripts/tests/unit/nightly-mirrors-merge-set.test.ts, not by convention.
   schedule:
     - cron: "39 3 * * *"
@@ -65,13 +65,35 @@ jobs:
       scripts: ${{ steps.filter.outputs.scripts }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
         id: filter
         with:
           filters: |
             scripts:
-              - 'scripts/**'
+              # Everything under scripts/ EXCEPT scripts/tests/unit/**: a unit
+              # test cannot change what an integration test sees. Listed
+              # positively because a `some` filter cannot subtract; the unit
+              # test ci-gate-path-filters.test.ts fails if a new scripts/ or
+              # scripts/tests/ directory is neither listed here nor named there
+              # as skipped, so an unclassified directory cannot silently skip.
+              - 'scripts/*'
+              - 'scripts/agent/**'
+              - 'scripts/audits/**'
+              - 'scripts/checks/**'
+              - 'scripts/fusion/**'
+              - 'scripts/lib/**'
+              - 'scripts/ops/**'
+              - 'scripts/prompts/**'
+              - 'scripts/stack/**'
+              - 'scripts/web-client/**'
+              - 'scripts/tests/fixtures/**'
+              - 'scripts/tests/integration/**'
+              - 'scripts/tests/support/**'
               - 'evals/**'
+              # The api image onboarding-eval-infra.test.ts builds takes its
+              # inputs from both trees (issue #1040).
+              - 'backend/**'
+              - 'contract/**'
               - '.github/**'
               - 'tsconfig.json'
               - 'package.json'
@@ -93,6 +115,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
       # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
       # --list`, which shells out to Playwright's CLI/transform — that runs on
       # Node.js (its bin is `#!/usr/bin/env node`), which `setup-bun` does not

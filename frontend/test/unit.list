@@ -12,19 +12,26 @@
 
 # Executes client JS
 scripts/tests/unit/admin-api-error-text.test.ts
+scripts/tests/unit/admin-nits-1123.test.ts
 scripts/tests/unit/ask-roboto-matcher.test.ts
 scripts/tests/unit/dash-color-css-lockstep.test.ts
 scripts/tests/unit/dash-format.test.ts
 scripts/tests/unit/docs-parity-354.test.ts
 scripts/tests/unit/e2e-route-rename-guard.test.ts
+scripts/tests/unit/session-takes-sectioned-body.test.ts
 scripts/tests/unit/frontend-routes.test.ts
+scripts/tests/unit/camel-session.test.ts
 scripts/tests/unit/member-avatar-precedence.test.ts
 scripts/tests/unit/member-mark-distinctness.test.ts
+scripts/tests/unit/member-status-line.test.ts
 scripts/tests/unit/prerender-content.test.ts
 scripts/tests/unit/prerender-routes.test.ts
 scripts/tests/unit/seo-legacy-aliases.test.ts
 scripts/tests/unit/seo-research.test.ts
+scripts/tests/unit/seo-token-faq.test.ts
+scripts/tests/unit/session-phase.test.ts
 scripts/tests/unit/site-nav.test.ts
+scripts/tests/unit/stamp-assets.test.ts
 scripts/tests/unit/smart-contract-risks-data.test.ts
 scripts/tests/unit/sparkline.test.ts
 scripts/tests/unit/swarm-apply-form-and-status.test.ts
@@ -36,6 +43,7 @@ scripts/tests/unit/swarm-synthesis-preview.test.ts
 scripts/tests/unit/swarm-take-memo-link.test.ts
 scripts/tests/unit/seo-cite-title.test.ts
 scripts/tests/unit/vault-data.test.ts
+scripts/tests/unit/web-client-api-range.test.ts
 
 # Asserts on shipped client files
 scripts/tests/unit/admin-webauthn-local-assets.test.ts
@@ -49,6 +57,9 @@ scripts/tests/unit/no-baked-allocation-literals.test.ts
 scripts/tests/unit/no-client-side-feeds.test.ts
 scripts/tests/unit/onboarding-skill-rmpc-install-verified.test.ts
 scripts/tests/unit/regime-indicator-glossary-links.test.ts
+scripts/tests/unit/swarm-archive-index.test.ts
 scripts/tests/unit/swarm-docs-rmpc-and-routes.test.ts
 scripts/tests/unit/swarm-session-take-key.test.ts
 scripts/tests/unit/relative-time-left.test.ts
+
+scripts/tests/unit/zaraz-analytics.test.ts

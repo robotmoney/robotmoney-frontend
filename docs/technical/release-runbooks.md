@@ -1,696 +1,424 @@
-# Release process — foundational runbook policy
+# Release process — runbook policy
 
-> **Agent Note:** To find info quickly, see the TOC below. If you are starting to document or create tooling for an upcoming upgrade that doesn't have a version number yet, jump immediately to **§9. Tracking Unnumbered Upcoming Upgrades**.
+> **Status: in effect.** This is the one prose document for releases. It holds the rules. The
+> steps are YAML: the general runbook templates in `scripts/release/runbooks/templates/`, and each
+> release's own add-only copy in `scripts/release/runbooks/releases/` (§5). The runner,
+> `bun run release:run`, executes a release's YAML. Older per-release Markdown runbooks were
+> removed on 2026-10-14; recover one from Git (`git show v0.6.1:docs/runbooks/v0-6-1-rollout.md`)
+> only when an audit needs the exact record.
 >
-> **Table of Contents:**
-> - [1. Scope and authority](#1-scope-and-authority)
-> - [2. Release branch](#2-release-branch)
-> - [3. Version tags and release candidates](#3-version-tags-and-release-candidates)
-> - [4. Foundational release workflow](#4-foundational-release-workflow)
-> - [5. Per-release runbook format](#5-per-release-runbook-format)
-> - [6. Per-release GitHub tracking issue](#6-per-release-github-tracking-issue)
-> - [7. Backporting](#7-backporting)
-> - [8. Compatibility contract](#8-compatibility-contract--how-the-components-are-allowed-to-drift)
-> - [9. Tracking Unnumbered Upcoming Upgrades](#9-tracking-unnumbered-upcoming-upgrades)
+> **Contents:** [1. Scope](#1-scope-and-authority) ·
+> [2. Branches](#2-branches) · [3. Tags](#3-release-candidates-and-version-tags) ·
+> [4. Workflow](#4-the-release-workflow) · [5. Runbooks](#5-runbooks-are-yaml) ·
+> [6. Tracking issue](#6-the-tracking-issue) · [7. Backporting](#7-backporting) ·
+> [8. Compatibility](#8-compatibility-contract) · [9. Standing checks](#9-standing-check-ids) ·
+> [10. Standing invariants](#10-the-standing-invariants-sw2)
 
-> **Status: in effect.** This document defines the foundational release-runbook
-> policy that every per-release runbook must follow. It is not itself a
-> runnable checklist; concrete rollouts are executed from per-release runbooks
-> committed under `docs/runbooks/` (see §5). An example is
-> [`docs/archive/v0-2-2-rollout.md`](../archive/v0-2-2-rollout.md) (archived after
-> that release shipped), written
-> against the `releases-0.2.x` branch.
-
-This is not the process for landing ordinary feature work — that is PR review
-against `main`, covered by [CONTRIBUTING.md](../../CONTRIBUTING.md) and the CI
-taxonomy. This document is specifically about the step where a set of
-already-merged `main` history is packaged, gated, and cut over into
-production.
+This is not the process for ordinary feature work, which is PR review against `main`
+([CONTRIBUTING.md](../../CONTRIBUTING.md)). It covers packaging a release, rehearsing it on stage
+and cutting it over in production.
 
 ## 1. Scope and authority
 
-Every production rollout of a numbered release must be planned, rehearsed, and
-executed from a per-release runbook that conforms to this policy. The
-per-release runbook is the **definitive, agent-executable procedure** for that
-release — not the tracking issue (§6), and not tribal knowledge held by
-whoever last did a rollout. The tracking issue's checklists exist to gate
-progress through the runbook, not to duplicate or replace its content.
+[Smoke production spec](./smoke-production-spec.md) owns deployment, migration, target identity and
+schema-preflight mechanics (D47). Production has booted with `bun smoke --static-port` since
+v0.6.0. This document owns the release gates, phases, evidence and approval.
 
-No release may skip a gate described here unless the release tracking issue
-explicitly records the exception, the reason for it, and operator sign-off.
+**Agent-executed, end to end ([D61](../decisions.md#d61), owner 2026-10-08).**
 
-## 2. Release branch
+1. No human in the loop. An agent executes every step. The operator's authority is one recorded go
+   given before the run.
+2. Production runs what stage passed, unmodified: the same runner and the same step list, with only
+   the target file different.
+3. Every database operation is a committed script with a receipt. No step runs `psql` by hand.
+4. Everything runs from the control machine over SSH. No step asks a person to log in to a host.
 
-Each release ships from a branch named `releases-A.B.x`:
+**The website never goes down (owner, 2026-10-14).** Every release, on stage and on production, is a
+rolling upgrade (§4.7). No step stops the whole stack. No tmux session drives or holds any process.
 
-- literal, plural **`releases`** (not `release`),
-- `A.B` are the integer major and minor version being released,
-- a literal trailing **`x`** where the patch number would go — the patch
-  number is deliberately left blank, because the branch holds the whole
-  `A.B` line, patches included.
+**Every production data change ships as a migration** ([D66](../decisions.md#d66), owner
+2026-10-09). No admin-route write, no SQL by hand, no one-off script. C05-migrate is the one step that
+writes production data.
 
-Example: `releases-0.2.x` for the 0.2 line.
+A check with no tool is a `gap`. A gap blocks the release until it is built or the owner records an
+exception in the release's YAML (§5).
 
-Feature PRs never target `releases-A.B.x` directly — ordinary feature work is
-reviewed and merged via PR against `main`, exactly as this document's intro
-paragraph says. Once a release's scope is decided, the branch receives only
-(a) the specific commits cherry-picked from `main` that the release needs,
-and (b) small incidental nit-fix commits made directly on the branch while
-getting it out the door (see §7, Backporting). A release is **never tagged
-directly on `main`** — the tag lands on the `releases-A.B.x` branch, so
-`main` keeps moving with ordinary merges while the release line is frozen
-except for the fixes it specifically needs. This applies to every tag the
-release produces, release candidates included (§3).
+## 2. Branches
 
-Cherry-picking is what the branch needs *once `main` has moved past the
-release scope*. A branch cut while the release scope is still exactly "all of
-`main`" is legitimately cut whole and kept in step by fast-forward. Selective
-cherry-pick starts at the point the branch and `main` must diverge, not at
-the cut.
+Each release line ships from `releases-A.B.x` (literal `releases`, the integer major and minor, a
+literal `x`). Example: `releases-0.6.x`. Feature PRs never target it.
 
-## 3. Version tags and release candidates
+The release branch takes changes by two routes only ([D70](../decisions.md#d70), owner 2026-10-14):
 
-A version tag `vA.B.C` is **never** cut before **both** a completed preflight
-and a completed postflight. The version tag records what has been *proven in
-production*, not what is *intended for release*. Everything before that point
-is a release candidate, tagged `vA.B.C-rc.N`, `N` counting from 0.
+- **(a) Scope.** Before a QA session starts, the release's scope reaches `releases-A.B.x` from `main`
+  by merge or cherry-pick.
+- **(b) The stage-passed QA branch.** After the runbook passes on stage at a commit of
+  `qa/A.B.x-<YYYY-MM-DD>`, that branch is squash-merged onto `releases-A.B.x`. The squash commit's
+  tree must equal the tree stage passed.
 
-> **Revised 2026-09-11, effective from v0.5.0.** Through v0.4.0 the rc tag was
-> cut FIRST — "at the tip you intend to ship" — and stage preflight/rehearsal
-> ran against that already-tagged commit. As of v0.5.0 the order is reversed:
-> stage preflight and rehearsal run against the untagged tip, and the rc tag
-> is cut only once both pass. An rc tag therefore now means "this exact commit
-> has already cleared stage," not "this is a candidate to be tested" — see
-> the superseded-precedent note below. `backend/scripts/upgrades/0.4.0-to-0.5.0/steps.ts`'s
-> `P6.rc-tag` requiring `P4.preflight-live` and `P5.rehearsal` is the
-> mechanical form of this paragraph; `rollout-where.ts`'s `NEXT` is what
-> actually enforces it, by manifest order.
+No commit lands on the release branch during a QA session. Session fixes reach `main` afterwards by
+a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
+instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Tags land on the release
+branch, never on `main` or a QA branch.
 
-The cycle, run entirely on the release's `releases-A.B.x` branch (§2):
+**QA branches (owner, 2026-10-06 and 2026-10-07).** A QA session cuts one
+`qa/A.B.x-<YYYY-MM-DD>` branch from the release branch tip and pushes it. Every patch of the
+session, runbook corrections included, merges there by PR. A pushed QA branch is never rewritten:
+no force push, reset or rebase. A new base means a new branch, `qa/A.B.x-<YYYY-MM-DD>-2`, and the
+session report names which branch each piece of evidence ran on. Every CI workflow runs on a push
+to `qa/**`, so the commit stage runs carries its own green CI (SP.7).
 
-1. Prepare the tip you intend to ship, on `releases-A.B.x`, untagged.
-2. Run stage preflight and stage rehearsal against that commit. **Either
-   fails** → fix, return to step 2 against the corrected commit. A stage
-   failure consumes no rc number — nothing has been tagged yet to increment.
-3. **Both pass** → cut `vA.B.C-rc.N` at that exact commit (`N` counting from
-   0), and deploy that rc to production.
-4. Run postflight. **Postflight fails** → patch, and go back through a fresh
-   stage pass (step 2) on the corrected commit before cutting
-   `vA.B.C-rc.(N+1)` and deploying again. Every patch needed to reach a
-   correct system consumes another rc number.
-5. **Postflight clean** → tag `vA.B.C` at the exact commit that is running and
-   verified in production — i.e. the final rc's commit.
+## 3. Release candidates and version tags
 
-Three consequences, stated outright because each one looks like a mistake and
-none is:
+An rc tag `vA.B.C-rc.N` (`N` from 0) names a commit whose tree passed stage. A version tag
+`vA.B.C` names what production was cut over to. Production runs only by an rc tag.
 
-- **`vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.** That is
-  expected and correct, not duplication to clean up. Step 5 has no other
-  commit available to it — the version tag names what production is running.
-- **`vA.B.C` can never be cut at a commit that was not actually deployed and
-  verified.** A fix that lands after the last deployed rc requires a new rc
-  and another pass through steps 2–4; it cannot be "rolled into the final
-  tag."
-- **An rc number now only ever counts production postflight failures, never
-  stage failures.** Under the pre-v0.5.0 order a rejected stage rehearsal
-  still consumed an rc number (the tag already existed); under this order it
-  does not, because step 2 can repeat freely before anything is tagged. A
-  release that needed five stage attempts and shipped clean on its first
-  deploy is `rc.0`, not `rc.4`.
+The cycle (D70):
 
-rc tags obey §2's branch rule exactly as the release tag does: they are cut on
-`releases-A.B.x`, never on `main`.
+1. **Stage runs on a QA branch.** Stage runs a clean, pushed QA commit, never a PR head or a fix
+   branch. Fixes merge into the QA branch, and stage reruns on its new tip. A stage failure
+   consumes no rc number.
+2. **Refresh the lockfiles.** Every rc carries a freshly resolved lockfile (owner, 2026-10-14): run
+   `bun scripts/release/lockfile.ts refresh` on the QA branch and commit the result before the
+   stage run. QA step Q01-lockfile refuses a commit whose lockfiles differ from a fresh resolve.
+   Hosts install with `--frozen-lockfile`.
+3. **The runbook passes on stage.** Record the commit and its tree hash.
+4. **Squash the QA branch onto the release branch.** The release branch must not have moved since
+   the QA branch was cut, and the squash tree must equal the stage-passed tree.
+5. **Cut `vA.B.C-rc.N` at the squash commit** with
+   `bun scripts/release/tag.ts rc --release vA.B.C --commit <squash> --stage-journal <passed stage run>`.
+   It refuses a commit whose tree is not the stage run's tree, and pushes the tag.
+6. **Production runs only by that rc tag.** SP.8 refuses a tag whose tree differs from the
+   stage-passed tree.
+7. **A failure before the cutover** (any preflight step, or C01-backup to C04-probe-start) means the
+   rc never reaches production. Fix it on a new QA branch, rerun stage, squash again and cut
+   `vA.B.C-rc.(N+1)`.
+8. **The cutover starts (C05-migrate)** → step C06-version-tag tags `vA.B.C` at the rc's commit at once. A later failed
+   check, a known defect or a rollback never withholds or moves it. Every defect found after the
+   cutover is an issue against `vA.B.(C+1)`, whose first rc is `vA.B.(C+1)-rc.0`.
 
-### Precedent — v0.2.1 through v0.4.0 (superseded 2026-09-11)
+Consequences, stated because each looks like a mistake and none is:
 
-This was a newly written-down convention, not a newly invented one, when v0.2.1
-first ran it (tag-then-validate), undocumented (`git log -1 --format='%h %ci %s' <tag>`):
+- `vA.B.C` and the final `vA.B.C-rc.N` point at the same commit.
+- Stage and production run different commits with the same tree. `/api/version` reports each
+  target's own commit; the tree hash ties them together.
+- An rc number counts production attempts stopped before the cutover. Five stage attempts and a
+  clean first production attempt is `rc.0`.
 
-- `v0.2.1-rc.0` → `c2b9afc`, 2026-08-07
-- `v0.2.1-rc.1` → `5970f2d`, 2026-08-08
-- `v0.2.1` → `5970f2d`, 2026-08-08 — **the same commit as `rc.1`**
+## 4. The release workflow
 
-That shared-commit final tag is still the norm §3 describes, unchanged by the
-2026-09-11 revision above — only the ORDER of "cut the rc" versus "run stage
-preflight/rehearsal" reversed, not the final-tag mechanics. One honest limit
-on the precedent, unaffected either way: v0.2.1 predates the `releases-A.B.x`
-convention and is reachable from `main`
-(`git merge-base --is-ancestor v0.2.1 origin/main` succeeds, as it does for
-both rc tags). It is precedent for the **rc numbering**, not for the branch
-placement rule — that rule starts with v0.2.2.
+Each gate blocks. A failed gate stops the release until it passes or the owner records an
+exception in the release's YAML.
 
-## 4. Foundational release workflow
+**Three phases (owner, 2026-10-15).** Every step of a runbook belongs to one phase, its id names it,
+and the phases run in this order:
 
-Every per-release runbook must implement the following workflow, in order.
-Each gate is blocking: the runbook must stop and escalate if a gate fails,
-and no later gate may be started until the current one is satisfied or
-explicitly waived by the operator with a written reason.
+| Phase | Ids | Where and when | What it does |
+|---|---|---|---|
+| **QA** | `Q01`… | Stage only, as often as needed, on a QA branch commit | Checks the lockfile, picks or captures the dump, builds the stage target, sets its role passwords. A stage run then runs the preflight and cutover steps exactly as production does |
+| **Preflight** | `P01`… | Production, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
+| **Cutover** | `C01`… | Production, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade |
+| **Soak** | `S01`… | Every release, on stage (QA) and on production | The general checks: identity, product (readonly tier), logs, the baseline comparison, host guards, then 30 minutes after READY the log gate and the standing invariants (no crashed container, no pipeline errors), then every container's log |
+| **Version** | `V01`… | Every release, on stage (QA) and on production, after the soak | The release's own checks, one per change it ships: a feature landed, a bug is fixed, a feature retired. Only a release runbook adds them; a template has none. A check that must write runs on stage only |
 
-### 4.1. Code-readiness gate
+A stage run is QA: it builds stage, then runs the preflight, cutover, soak and version steps exactly
+as production will, so production's checks have passed on stage before production runs them. Stage has
+no separate preflight: the stage pass earns the rc, and nothing reruns on stage for it.
+Production's cutover refuses without a green preflight of the same rc and step list from the last
+60 minutes, and carries the preflight steps' records instead of running them again. Preflights are
+cheap: run a new one rather than stretch an old one.
 
-Before any rollout activity, verify both of the following:
+### 4.1. Code readiness
 
-1. The release tracking issue is closed/complete — every Phase and feature
-   issue linked from its Phases tasklist is closed, and the objective is
-   clearly stated (§6).
-2. Every commit expected to ship in this release is present on the release
-   branch. Prefer merging to `main` first and cherry-picking to
-   `releases-A.B.x`; verify with a diff or log inspection that no expected
-   change is missing from the branch.
+Every Phase and feature issue linked from the tracking issue's Phases tasklist is closed, and the
+objective is stated (§6). Every commit expected to ship is on the release branch by §2 route (a).
+The tracking issue itself stays open until §4.9.
 
-Do not begin preflight, rehearsal, or any other rollout step while either of
-the above is incomplete.
+### 4.2. Preflight
 
-### 4.2. Pre-upgrade baseline
+`bun run release:run --target prod --preflight --go <go>` checks, on the control machine, the rc
+tag, CI on its commit (`P.ci`), a passed stage run of the same tree and step list (`P.stage`), the
+recovery decision (`P.recovery`) and that no run is in flight. It then runs the preflight steps on
+the hosts. P01-checkout to P06-capture-install put the release and capture checkouts at the rc and
+install them frozen. P02-identity proves the host, `~/.env` and the rm_owner login. P07-baseline
+records production's state through `rm_readonly`: the ledger and its reconciliation with
+`backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
+flight and the database size. It refuses any pending migration that is not `compat: additive`
+(§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
+owner (`--triage <file>`).
 
-Before the upgrade changes any production state, record the production
-database state using a read-only user or cluster node. Capture especially the
-properties that the upgrade will change or correct — schemas, reference data,
-configuration values, row counts, checksums, or any other state the objective
-identifies as changing.
+### 4.3. Backup, restore proof and dumps
 
-Save this baseline artifact next to the pre-upgrade backup with a clear
-filename and timestamp. It must be available for comparison during postflight
-and for use during rollback if needed.
+C01-backup captures production's backup new, from the read replica, as the cutover's first step.
+C03-restore-proof restores it into a throwaway container and records the restore time, before the
+first irreversible step (C05-migrate).
 
-### 4.3. Backup/restore smoke test
+**Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
+from the newest production dump already on the capture host if it is at most 24 hours old
+(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
+Step Q02-dump does this; step Q03-stage-up restores the dump it left. Never restore a dump older
+than 24 hours. Never point rehearsal preparation at the production database.
 
-On a staging host inside the production database's private network, test
-backup and restore of the production read-only database. The test must prove
-that the backup tooling produces a restorable artifact and that the restore
-procedure completes without error. Do not proceed to the digital-smoke-twin
-rehearsal until this smoke test passes.
+### 4.4. Stage QA
 
-The repo ships both halves, and a runbook names them rather than restating
-them:
+QA runs the release's YAML unmodified against the production-shaped stage target
+([stage-target.md](../runbooks/stage-target.md)), as one run:
 
 ```bash
-bun run smoke:smoke:capture     # rm_readonly -> replica; pg_dump + pg_dumpall, gpg-encrypted
+bun run release:run --target stage --go <stage go>
 ```
 
-Every command in this family reads its credentials from **`.env.readonly`** and
-never from `.env` — a staging host's `.env` holds the writer credential, and
-these commands are defined by not needing it.
+Q01-lockfile to Q04-role-passwords build the target (`onlyFor: stage`; production records them
+skipped, and the step-list hash is the same for both, SP.8). Q04-role-passwords sets the role
+passwords through the stage database: its doadmin is a disposable stage credential, passed on a
+pipe and stored in no file, so the D61 rule on doadmin, which is production's, is kept. The
+preflight and cutover steps then run as production runs them. A failed step resumes with
+`--run <ts> --from <step>`. QA runs as many times as the fixes need.
 
-`smoke:capture` refuses to run against the primary (`pg_is_in_recovery()` must be
-true), refuses the application's writer credential, refuses a `pg_dump` older
-than the server, and refuses to write inside the checkout. It emits a
-`manifest.json` recording what it captured and from where — §4.5 cites that file
-instead of transcribing its contents.
+Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
+`bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
+spends inference credits.
 
-### 4.4. Digital-smoke-twin rehearsal
+### 4.5. Stage report
 
-Set up a digital smoke-twin by restoring the backup from §4.3 to a local Postgres
-container (**not** a remote database) on a staging machine. Run the full upgrade
-on the smoke-twin, including:
-
-- preflight checks,
-- the cutover step that applies the upgrade,
-- postflight verification.
-
-The smoke-twin must use the same release candidate that is planned for production.
-Any failure, warning, or unexpected state change discovered on the smoke-twin is a
-blocking issue.
-
-The smoke-twin is a named data path, not an assembly:
-
-```bash
-bun smoke -- --db smoke-twin      # restore the backup, boot the real stack against it
-bun run smoke:smoke:smoke-twin --once       # the same boot, unattended, plus the frontend checks
-bun run smoke:smoke-twin                # capture + restore + boot on the pinned tunnel port, and stay up
-```
-
-`bun run smoke:smoke-twin` is for a smoke-twin that stays up for people to look at. It publishes
-production data on the public tunnel, so treat the unclaimed admin credential as
-a live exposure and claim it immediately; the gate itself does not need it.
-
-"not a remote database" is now enforced rather than trusted: `--db smoke-twin`
-restores into a local container and points the stack at it, and the mode enum
-makes "smoke-twin" and "external" separate, non-substitutable choices.
-
-**Which command satisfies the gate.** `smoke:smoke-twin --once` grades restore + boot +
-serve, and nothing release-specific — use it to check the smoke-twin machinery itself.
-The gate is satisfied by the release's own entry point, which runs the same
-driver and adds this release's checks plus the receipts:
-
-```bash
-bun scripts/upgrades/<from>-to-<to>/stage-rehearsal.ts $RM_BACKUP_DIR --emit-receipt
-```
-
-**Postflight runs INSIDE the rehearsal, and cannot be a step after it.** The
-smoke-twin exists only for the duration of the boot — the driver tears it down on
-every exit path — so "run postflight against the smoke-twin afterwards" is an
-instruction to race teardown from a second terminal. The release's
-`stage-rehearsal.ts` therefore hands its postflight to the driver's `onReady`
-window, between the frontend checks and teardown, and that run is what emits
-`P5.postflight-smoke-twin`. A rehearsal that cannot reach the smoke-twin to run those checks
-FAILS; it never reports a clean boot as a clean gate.
-
-Preflight stays a separate, earlier command, because it grades the dump and the
-live replica before anything is booted at all (§4.3, and the per-release
-runbook's own preflight section).
-
-### 4.5. Stage rehearsal report
-
-After the digital-smoke-twin rehearsal, produce a written stage rehearsal report
-that includes at least:
-
-- smoke-twin setup summary (source backup, container details, RC used),
-- preflight results,
-- cutover steps executed and their results,
-- postflight results,
-- acceptance-criteria pass/fail status against the release objective,
-- any issues found and how they were resolved,
-- a go/no-go decision with operator sign-off.
-
-The stage rehearsal gate passes only when this report exists, all acceptance
-criteria pass, and the operator has signed off.
-
-The smoke-twin setup summary should CITE the artifacts rather than restate them:
-`manifest.json` in the backup directory records the source, role, replica proof
-and server/client versions, and the boot banner records the container, the volume
-and the backup stamp.
+The report names the QA commit and tree, the dump identity, the step-list hash, the receipts, the
+results, what could not be covered, and the go/no-go. Reference generated artifacts instead of
+restating their values.
 
 ### 4.6. Fix loop
 
-If the digital-smoke-twin rehearsal or stage report finds any issue that affects
-production safety or acceptance criteria, do not proceed to production
-execution. Instead:
+A fix is developed in a development worktree, never on a host. A host runs a clean checkout of a
+pushed commit (`git status --porcelain` empty). Fix on the QA branch (§2), redeploy its tip to
+stage, and rerun. The same loop applies when an rc fails in production before the cutover (§3
+step 7).
 
-1. Open PRs with fixes against `main`.
-2. Merge the fixes to `main`.
-3. Cherry-pick the merged fixes to the release branch (`releases-A.B.x`).
-4. Cut a new release candidate (`vA.B.C-rc.(N+1)`) at the updated branch tip.
-5. Restart the runbook from §4.1.
+### 4.7. Production execution: a rolling upgrade
 
-Runbook corrections that do not change deployed code (e.g., wording, command
-corrections) may be committed directly to the release branch, but they still
-cost a new rc and a fresh pass through §4.
+The owner writes the go once a stage run of the same step list passed on the same tree (SP.8) and
+the tracking issue's phases are closed:
 
-### 4.7. Production execution
+```text
+tag: vA.B.C-rc.N
+operator: <name>
+date: <yyyy-mm-dd>
+```
 
-Once the stage rehearsal gate passes, run the actual cutover and postflight
-on a production machine. Follow the per-release runbook step by step. Every
-destructive or irreversible step must be explicitly marked in the runbook and
-authorized by the operator before execution.
+A stage go names `commit:` (the QA commit) instead of `tag:`. The go names nothing else (owner,
+2026-10-14): the release comes from the target file and the rc tag, the target from `--target`, and
+the recovery decision from the release's YAML (`recovery:`, SC.1). The runner refuses a stage commit
+that is not on a QA branch of the release line, a production tag that is not an rc of the release
+on `releases-A.B.x`, and stops at the first failed step. With the go, run the preflight (§4.2), then
+within 60 minutes:
 
-Preflight must be re-run or re-confirmed on production before the cutover
-begins, even if the smoke-twin rehearsal passed, to ensure the production
-environment matches the smoke-twin assumptions.
+```bash
+bun run release:run --target prod --go <go> --after-preflight <the preflight's journal>
+```
 
-The entire upgrade — preflight, cutover, and postflight — is **agent-executed
-end to end**. No human runs commands against the production server directly;
-a human's role is authorizing the release and reading the tracking issue's
-checklists, not typing commands into a production shell.
+The cutover backs up and proves the restore (C01-backup to C03-restore-proof), then never takes the
+website down:
 
-### 4.8. Rollback
+1. **C04-probe-start** starts the website probe on the control machine: the public origin's `/` and
+   `/version.json` every 2 s.
+2. **C05-migrate** migrates while the previous release still serves. Only `compat: additive` migrations
+   may run this way; P07-baseline refused anything else. A breaking migration needs its own plan.
+3. **C06-version-tag** tags `vA.B.C` (production only).
+4. **C09-tokens** keeps every valid service token. A running holder keeps authenticating, and only a
+   missing or stale token is minted.
+5. **C10-rolling-boot**, the rolling boot (`bun smoke --static-port`), replaces api, worker-analytics,
+   system-scheduler and analytics-producer one at a time, each healthy before the next.
+   website-server is never recreated, and the boot refuses before replacing anything if compose's
+   dry run says it would be. While the api swaps, nginx keeps serving the site and answers `/api/`
+   from its maintenance fallback.
+6. **C12-site** switches the site atomically and reloads nginx gracefully (`bun smoke:web`).
+7. **C13-probe-grade** stops the probe and fails the release on any answer that is not 200, or on any gap.
 
-A postflight failure on production defaults to a full rollback by restoring
-the pre-upgrade dump from §4.2. The operator may override the default
-rollback only by recording the override reason, the alternate remediation
-plan, and a second sign-off in the production rollout report (§4.9).
+The privileged credential `rm_owner` is a line in the host's `~/.env`. `doadmin` is stored in no
+file: the admin types it into `bun run role-passwords` before the run, and no production step reads it
+([D61's amendment](../decisions.md#d61-amendment-1272)). A write names its target with
+`--confirm-target`. No container receives a privileged credential, and no receipt, journal or log
+line prints one.
 
-The rollback procedure must be written into the per-release runbook and
-rehearsed on the digital smoke-twin at least once before production execution.
+**Postflight and soak.** S01-verify-version to S06-host-guards verify identity, product (readonly tier), logs, the baseline
+comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): S07-soak-gate grades logs since
+READY, S08-soak-checks runs the standing invariants against the READY baseline, and
+S09-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+soak. They are graded afterwards as a report, once 37 h have passed:
+`bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
-### 4.9. Production rollout report
+**A boot or a rolling boot is uneventful (issue 1378).** The services hold this
+contract, so a runbook needs no step to drain or clean the queue by hand:
 
-After a successful cutover (or after rollback), produce a final production
-rollout report covering at least:
+- `worker-analytics` claims no job until the api's `/health` answers. It waits
+  in process as well as through compose, because a rolling boot starts each
+  service with `--no-deps`.
+- At worker start a sweep cancels the stale backlog of the `latest-only` and
+  `collapse-per-bucket` kinds, with the reason `superseded at worker start`.
+  A restored dump's backlog never runs, and live samplers start on time.
+- After downtime each heavy kind enqueues one job, not one per missed slot.
+- The stack stops the old `analytics-producer` before the seed one-shot. The
+  new producer starts its boot catch-up a bounded, jittered delay after api
+  readiness.
+- On stop, `worker-analytics` releases its job inside its 45 s grace period.
+  The api, `system-scheduler` and `analytics-producer` drain on SIGTERM and
+  exit 0. A container that exits 137, or a job the reaper requeues after a
+  stop, is a finding to triage, not expected noise.
 
-- the release candidate deployed,
-- cutover and postflight results (or rollback results),
-- any issues encountered and their resolution,
-- the final version tag applied,
-- backport TODOs (§7),
-- operator sign-off.
+### 4.7.1. Product verification
 
-The report is the closing artifact of the release. The release tracking issue
-is closed only after this report is filed and the final tag exists on the
-release branch.
+Verification asks whether the product does what it claims; postflight asks whether the migration
+landed. They are separate steps. Only the `readonly` tier of `verify:live` may run against
+production: a `full` leg publishes sessions and spends inference. A WARN is not a pass, and
+"nothing was asserted" (exit 2) is not "the product is wrong" (exit 1).
 
-## 5. Per-release runbook format
+### 4.7.2. Log gates
 
-Each release has an operator runbook committed under `docs/runbooks/`. The
-runbook must:
+`bun run twin:gate` grades a twin and `bun run prod:gate` grades production, before
+(`--mode baseline`) and after (`--mode post-release`) the cutover. The rule is default deny: every
+distinct error in every log must match a classification in
+`scripts/lib/gate/log-classifications.json` with a written reason. A session that publishes
+`no_consensus` is a warning, never a good session (owner, 2026-10-06).
 
-- state the release identity and the delta it introduces,
-- list go/no-go gates that map directly to §4,
-- provide a preflight script or checklist,
-- provide step-by-step cutover commands, with destructive or irreversible
-  steps explicitly marked,
-- provide post-cutover verification steps,
-- be written so it can be executed top to bottom, every command
-  copy-pasteable, every claim verified against a specific commit SHA rather
-  than described from memory,
-- **name data paths by `--db <mode>`; never describe how to construct one.**
-  There are three — `ephemeral` (the smoke's own container), `external` (a managed
-  server from `.env`), `smoke-twin` (a local restored copy of production) — and the
-  tooling that builds each is shared and version-agnostic. A runbook that
-  re-derives a smoke-twin out of lower-level flags is how the last one ended up
-  pinned to a single release.
+### 4.8. Recovery
 
-By convention the runbook lives on the release's `releases-A.B.x` branch,
-alongside the code it describes cutting over to, so a runbook change and the
-release content it documents move together.
+The recovery decision is the release YAML's `recovery:` text (SC.1). The preflight's `P.recovery`
+refuses a release without one, and the run journals its sha256.
+Before C05-migrate, fix and resume: nothing has changed. A failed C05-migrate resumes at C05-migrate while the previous
+release keeps serving. After C05-migrate, fix forward on the next patch version, or restore the C01-backup dump
+with the write loss it implies. The version tag stays either way (§3 step 8). Do not assume a
+deployment tool rolls back by itself.
 
-Filenames under `docs/runbooks/` are kebab-case
-(`scripts/lint-docs.sh` enforces this repo-wide for `docs/*.md` and
-`docs/runbooks/*.md`).
+### 4.9. Production report
 
-## 6. Per-release GitHub tracking issue
+The closing artifact names the rc deployed, the cutover and postflight results, the probe grade, the
+soak and its logs, issues opened against the next patch version, backport TODOs (§7), and the
+operator's sign-off. The tracking issue closes only after the report is filed and the version tag
+exists on the release branch.
 
-Each release has one GitHub tracking issue carrying the label
-`release:vX.Y.Z`. The tracking issue states the release's **objective**: the
-end state the upgrade is meant to reach — which features should be live, what
-state the database should be in — not just a list of merged PRs.
+## 5. Runbooks are YAML
 
-The issue carries two GitHub-checkbox checklists:
+There are two kinds of file, and the runner runs only the second:
 
-- a **preflight checklist**, mirroring the runbook's go/no-go gates and
-  dry-run steps,
-- a **postflight checklist**, mirroring the runbook's post-cutover
-  verification steps.
+- **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default. A
+  `website-only` template joins with its runner mode.
+- **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
+  (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
+  adds**. Every template step stays, unchanged and in order. An added step or check may sit
+  anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
+  absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required), its
+  `notes:` (identity, migrations, exceptions and owner decisions), and its `scope:`.
 
-Checking a box on the tracking issue is a claim that the corresponding gate
-in the runbook was actually executed and passed — the issue is a state
-summary derived from real runbook execution, never ticked off independent of
-it.
+**Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
+`check: <step>`, the version step that proves it landed, or `none: <reason>` (docs only, CI only,
+release tooling the run itself exercises). QA step Q05-scope refuses a commit whose range from the
+version the target runs carries a PR the scope does not list, or a listed PR it does not carry. A
+version check is a file `scripts/release/version-checks/<release>/<name>.ts`, run by
+`scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
+`onlyFor: stage`.
 
-The Phases tasklist is not just status tracking: it is the hard precondition
-checked before preflight is allowed to start — see §4.1.
+`scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+step, and a unit test holds every in-flight release runbook to the current template, so a step
+added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
+taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
+is irreversible; a step a tool cannot perform is a `gap`.
+
+## 6. The tracking issue
+
+Each release has one GitHub tracking issue labelled `release:vX.Y.Z`. It states the objective: the
+end state, not a list of PRs. Its Phases tasklist is the precondition §4.1 checks. A box ticked there
+claims the gate ran and passed.
 
 ## 7. Backporting
 
-**Not a go/no-go gate.** §4's workflow never checks backport debt, and an
-outstanding backport is never a reason to hold up, fail, or re-run any step
-of the rollout. Backporting is engineering hygiene owed once `vA.B.C` is
-tagged and `releases-A.B.x` stops being the active release line — it is a
-concern for whoever picks up work on `main` next, not for the agent executing
-the rollout.
+Not a gate. Every fix made on a QA branch reaches the release branch in the stage-passed squash
+(§2 route (b)), and reaches `main` afterwards by a separate PR from the QA branch, evaluated against
+`main` as it is then.
 
-Any fix discovered on the `releases-A.B.x` branch during rollout is carried
-back to `main` outside this runbook's flow, by whoever picks up work on
-`main` next — this document prescribes nothing more about it.
+## 8. Compatibility contract
 
----
+Schema identity, manifest integrity, migration metadata and code/schema compatibility are defined by
+[smoke production spec §§8–9](./smoke-production-spec.md#8-schema). "Additive" means older supported
+code keeps its query behavior, data meaning, bootstrap assumptions and required grants; adding a
+column alone does not establish it. A rolling release depends on it: the previous release serves
+against the new schema between C05-migrate and C10-rolling-boot. API changes stay additive where possible, and the
+site served during an API change must accept both API versions (`apiRange`).
 
-## 8. Compatibility contract — how the components are allowed to drift
+## 9. Standing check IDs
 
-> **Migrated here 2026-08-21** from `docs/technical/release-cycle.md` §5, which
-> was archived as
-> [`docs/archive/release-cycle.md`](../archive/release-cycle.md). That document
-> mixed two things: this compatibility contract, which is **live policy**, and a
-> proposed k3s/GitOps production topology, which is a future-infrastructure
-> proposal alongside the `stack-*` documents. Only the contract is normative, so
-> only the contract moved.
->
-> These rules are what make a rollback survivable. `rollout-procedure.md` §10
-> asks each release whether its outgoing code is safe against the incoming
-> schema; **R1 is the reason the answer is normally yes.**
+Every step of a template names the standing checks it satisfies. A check leaves this list only by a
+recorded owner decision.
 
+| ID | Check | Steps |
+|---|---|---|
+| SP.1 | Position: which release, which commit, which phase; clean checkouts | P01-checkout to P06-capture-install |
+| SP.2 | Backup taken and restore proven, with the restore time | C01-backup, C02-backup-sums, C03-restore-proof |
+| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | P07-baseline |
+| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | C10-rolling-boot |
+| SP.5 | Log baseline, triaged before the cutover | P08-log-baseline |
+| SP.6 | Product baseline: row counts and database size | P07-baseline |
+| SP.7 | CI green on the commit | preflight `P.ci` |
+| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
+| SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
+| SR.0 | Stage's starting dump at most 24 hours old | Q02-dump, Q03-stage-up |
+| SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
+| SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
+| SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
+| SC.3 | The operator's go is recorded before the run | `--go` |
+| SC.4 | The website never goes down: every probe answer 200, no gap | C04-probe-start, C13-probe-grade |
+| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | P07-baseline, C05-migrate, C09-tokens, C10-rolling-boot, C12-site |
+| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | S01-verify-version |
+| SV.2 | Smoke status: preflight and readiness green | C11-ready |
+| SV.3 | Product verification, readonly tier | S02-verify-product |
+| SV.4 | Log verdict after the release | S03-log-verdict |
+| SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
+| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
+| SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
+| SW.1 | The soak: logs since READY graded | S07-soak-gate |
+| SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
+| SW.3 | The version tag at the cutover's start | C06-version-tag |
+| SW.4 | Every container's logs and inspect since READY in the journal | S09-collect-logs |
 
-### 8.1 The four rules
+Retired: SC.2 (2026-10-08, replaced by the go, D61).
 
-The minimal approach, chosen in discussion. The governing insight is that
-**ordering discipline makes runtime detection unnecessary — you don't need
-to detect a mismatch you have made impossible.** These four rules are *the*
-operational contract; everything else in §8 is either the pattern that
-implements them (§8.2) or an option deliberately deferred because they hold
-(§8.4).
+## 10. The standing invariants (SW.2)
 
-- **R1 — Every migration is additive.** New tables, columns, and indexes
-  only. Nullable or defaulted, never `NOT NULL` without a default. No
-  renames, no drops, no type narrowing. *Consequence: the DB can always be
-  safely ahead of the code.* Schema-additive is not automatically
-  *semantics*-safe, though: until every **writer** has rolled, rows keep
-  arriving with the new column NULL/absent — so readers must treat
-  NULL/missing as the legacy state for the whole transition. That is not
-  an extra rule; it is the dual-read phase of expand/contract (§8.2),
-  stated explicitly.
-- **R2 — Destructive changes wait until provably safe.** A drop or rename
-  ships in a **later PR** than the code that stopped using the old shape,
-  never the same one. "Later" is defined operationally, not by calendar
-  feel — a destructive migration may merge only when **both** hold:
-  1. the drift check (the drift check described in the archived release-cycle proposal) confirms all five Deployments **and** the Pages
-     deploy are on SHAs at or past the commit that removed the last use of
-     the old shape;
-  2. a browser-tab grace window has elapsed since that deploy — proposed
-     default **7 days**; the exact number is the one parameter left open
-     (left open in that proposal).
-- **R3 — API responses only gain fields, and consumers don't lead with
-  requests.** Never remove, rename, or change the type or meaning of a
-  response field: JSON clients ignore unknown fields natively, so an old
-  SPA calling a new API just works. The corollary in the request
-  direction: a consumer (SPA, producer, worker) must not **send** a new
-  request field until the API that accepts it is deployed — R3 makes old
-  clients safe against new servers, and this corollary keeps new clients
-  from outrunning old servers.
-- **R4 — Deploy provider before consumer.** The DB deploys before its
-  readers (API, worker lanes); the API deploys before its callers (SPA,
-  analytics-producer). "DB → backend → frontend" is the common case, but
-  the rule is the dependency direction, not the list. Combined with R1 and
-  R3, the only skew that can arise is "the provider is ahead," which is
-  safe by construction.
+These read-only invariants hold on every healthy stack, at every gate. They run as ONE
+instance-aware script, `bun run soak:checks` (`scripts/standing-soak.ts`, decisions in
+`scripts/lib/gate/standing.ts`), beside `twin:gate` and `prod:gate`. Like the gates it takes
+`--instance`, reads the stack record, runs every query through the instance's api container on a
+read-only session, reads container logs and `docker inspect`, and holds no admin token, no
+superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
+with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
+R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at S04-soak-record and runs the full check over the soak at S08-soak-checks.
 
-**What this covers**, without a line of detection code: rolling API
-replicas (both versions work against an additive DB — R1); a worker
-mid-rollout (same reason); a lagging writer against a new reader (R1's
-dual-read clause); an edge-cached SPA against a newer API (R3); a
-rolled-ahead producer (R3's request corollary plus R4); and rollback,
-since old code still works against a forward DB (R1 again). Within the
-backend itself, §6's bump-all-five policy means api/worker/producer skew
-exists only inside a single rolling window, not as a persistent state.
+| Id | Invariant | Status | Note |
+|---|---|---|---|
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). A cron the script cannot expand is a WARN |
+| R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
+| R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
+| R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
+| R8.f | Parity sweeps: none dead, longest under 60 s, p50 at or under 5 s. The sweep runs once a day at 04:47 UTC, one request per domain (issue 1375), so a soak shorter than a day may see none: that is INFO, not a failure. The schedule parity check also fails unless `analytics.parity_sweep` is scheduled exactly once, at `47 4 * * *` | script | |
+| R8.g | Website server errors: none, or only warned | script | |
+| R8.h, R8.i | Quorum excludes the judge. Every published session has takes, a judgement and a receipt | script | |
+| R8.j | No session wedged past its window plus grace | script | |
+| R8.k, R8.k2 | Every ledger guard armed. The old payload table stays gone | script | |
+| R8.l | Newest vintage: run lengths add up to the member count | script | |
+| R8.m | No connection-pool starvation (sessions idle in a transaction) | script | `pg_stat_activity` shows the api role only its own sessions, so the detail says how many of the open sessions it could see |
+| R8.n | Host disk | script | `df /` on the host the script runs on |
+| R8.n2 | No container's writable layer is over 2 GB | script | `docker inspect --size` (`SizeRw`) for every project container. Issue 1258: the HTTP fetch cache grew to 20 GB in one worker's writable layer while R8.n still passed. An unreadable size is a FAIL |
+| R8.n3 | Host free disk has not fallen more than 2 GB since the baseline | script | The baseline's free space comes from `--record`. A baseline without it (recorded before this check) is a WARN until the next `--record` |
+| R8.p | `schema_migrations` equals the recorded baseline | script | Baseline recorded at READY with `--record`, so a release's own migrations are in it. §1: the ledger is the record of every data change |
+| R8.q | Judge config: enforce, pinned model, third parties off | script | The pin is `deepseek-v4.1-flash` (migration 0111). The two pre-0111 ids are a WARN, valid only before 0111 applies |
+| R8.r | Role and grant integrity: `rm_worker` INSERTs, the api connects as `rm_app`, `rm_readonly` reads sequences | script | Graded on a production (`external`) stack only. A twin's dump carries no grants |
+| R8.s | `/health` and the judgements route answer 200 | script | Probes the api at the stack record's port. `--base-url` probes the public origin instead |
+| R8.t | Every published session has `openedAt` | script | Sessions dated on or after `--opened-at-from` (default 2026-09-22) |
+| R8.u | Api: no cut-off at the request limit on a reader, every slow request listed | script | R8.u2 lists slow requests as a WARN. The api's limit is 10 s and a request over 5 s is logged |
+| R8.v | The buyback scan never fails on a refused range | script | Reads every `worker-*` lane, not one named container |
+| R8.w | Gecko tier matches the key, no 429/401/403, the key is in no ledger row or api/website environment | script | Key presence is read from `docker inspect`; no value is ever printed. R8.w2 and R8.w3 are its error and containment halves |
+| R8.x | The regime day is logged | script | `regime asof D` is logged from the `analytics-producer` container, so each line is compared with its own Docker timestamp |
+| R8.o | Informational: error-like lines per container | script | INFO by design: it never fails. The gates classify the lines |
 
-**Enforcement**, kept as light as the rules themselves:
-
-- **R1** — a CI grep over changed files under `backend/migrations/` for
-  `DROP` / `RENAME` / `ALTER ... TYPE`, failing the PR unless it carries an
-  explicit contract-migration label. The same gate flags a bare
-  `CREATE INDEX`: on a live database a non-concurrent index build blocks
-  writes for its duration while being perfectly "additive," so an index
-  migration must use `CREATE INDEX CONCURRENTLY` (with the
-  `-- no-transaction` runner support, §8.3) or carry an explicit
-  small-table override label. Roughly ten lines either way; not built yet
-  (§6.1).
-- **R3** — **not enforced today, and the existing gate is narrower than it
-  looks.** The goldens-drift gate (D14) is
-  `scripts/tests/unit/goldens-drift.test.ts`, and what it actually asserts
-  is that the committed `goldens/api-goldens.json` is non-empty, that its
-  route set is populated, and that a few key routes have plausible shapes.
-  The goldens themselves are *captured* from a running backend by
-  `scripts/update-goldens.ts`, so they do track real response shapes — but
-  the gate compares goldens to the current code, not a new response shape
-  to the **previous** one. It is a freshness check on the preview mock
-  layer, not an additive-only check on the API contract. Enforcing R3
-  mechanically would mean diffing response shapes across versions; that
-  gate does not exist.
-- **R4** — enforced by making one sequencer own the whole order. §6's
-  reconciler runs migration Job → backend rollout → static publish as one
-  sequence on one machine, so "provider before consumer" is the only order
-  that can happen. (An earlier draft called this "already free" with the
-  SPA on its own CI-triggered deploy — wrong: nothing would have stopped a
-  new SPA going live seconds after merge against a backend that converges
-  minutes later. The fix is that the reconciler deploys the static tier
-  too; see §6.)
-
-**The explicit limit.** All four rules rest on being able to guarantee
-deploy order. If you ever need to ship API code *before* its migration, R4
-breaks and nothing here protects you — you would need real feature
-detection (§8.4). Plainly: don't do that.
-
-### 8.2 Expand/contract for DB migrations
-
-Expand/contract is the pattern R1 and R2 implement; it is spelled out here
-because the middle step is the part the rules don't state. Adopt the
-standard **expand/contract** (a.k.a. parallel-change) pattern for
-every schema change that a running API/worker depends on:
-
-1. **Expand** — add the new column/table/index additively; nothing reads it
-   yet, nothing existing breaks.
-2. **Migrate readers** — ship API/worker code that can read *both* old and
-   new shapes, then code that writes the new shape (backfilling old rows as
-   needed). "Both shapes" explicitly includes rows a not-yet-rolled writer
-   is still producing with the new column NULL/absent — a reader must
-   treat NULL/missing as the legacy state until *every* writer (API and
-   all lanes) is confirmed on the new code, not merely until its own
-   deploy lands.
-3. **Contract** — once every consumer (API instances, all three worker
-   lanes, the analytics-producer) is confirmed on code that no longer
-   reads/writes the old shape, drop the old column/table in its own
-   migration.
-
-Concretely for this repo: because `migrate.ts` has no down-migration and no
-rollback, the "contract" step is the *only* place a schema change is allowed
-to be destructive — every other migration in a feature's rollout should be
-additive by construction. This also means a migration file should never be
-required to land in the same deploy as the API code that depends on it;
-today they usually do (§4), and that's the main thing this pattern would
-change in practice — §3.2's pre-deploy migration Job is the mechanism that
-makes the split real, and §6 the rollout gate that enforces the ordering.
-
-### 8.3 Migration hygiene gaps against a live database
-
-Every environment we run today migrates a **fresh or short-lived** database
-(§1). Three properties of `backend/migrations/` + `backend/src/db/migrate.ts`
-are benign under that assumption and stop being benign the moment migrations
-are a gated pre-deploy step (§3.2) against a live Managed Postgres with real
-data and real concurrent traffic. The first remains an open gap; the second
-and third are now **resolved by prescribed runner changes** (collected in
-§6.1).
-
-- **Numeric prefixes are not unique, and nothing checks.** Two collisions
-  already exist on main: `0014_projects_pipelines.sql` /
-  `0014_wallet_balance_samples.sql`, and `0021_chain_indexer_samples.sql` /
-  `0021_committee_waitlist.sql` (the historical filename — issue #263 renamed
-  the live schema in `0025_swarm_rename.sql`, but migration files themselves
-  are an immutable record of what actually ran and are never renamed).
-  `migrate.ts` sorts by *filename*, so
-  ordering is deterministic (the suffix breaks the tie) — but the prefixes
-  are not unique and not truly sequential, and nothing catches a collision
-  at merge time. Harmless when a single boot applies everything to a fresh
-  DB; a real ordering hazard once expand/contract sequencing has to hold
-  across branches that merge concurrently.
-- **`migrate()` calls `seed()` — resolved: split them.** The runner ends
-  with `await seed()` — inserting `job_schedules` rows and similar
-  required state. Left alone, §3.2's pre-deploy migration Job would
-  **re-seed production on every deploy**; `seed()` is idempotent, and
-  re-seeding a fresh smoke DB is exactly what it is for, but a live
-  production DB is a different risk posture. Decided: **the production
-  migration Job runs schema-only** — seeding is split out of `migrate()`
-  behind a flag or separate entrypoint, smoke/CI keep today's combined
-  behavior, and production seeds deliberately (at bootstrap, or on
-  explicit operator action), never implicitly per deploy (§6.1).
-- **No lock or timeout discipline — resolved: runner defaults plus a
-  transaction carve-out.** There is no `lock_timeout`, no
-  `statement_timeout`, and no `CREATE INDEX CONCURRENTLY` anywhere in
-  `backend/migrations/`. Against a live database, an `ALTER TABLE` that
-  takes an ACCESS EXCLUSIVE lock behind a long-running query queues — and
-  everything behind *it* queues too, stalling traffic on a table that was
-  never being altered. That risk simply does not exist against the fresh
-  DBs every current environment uses. And there is a structural conflict:
-  `CONCURRENTLY` cannot run inside a transaction, while `migrate.ts` wraps
-  each file in `sql.begin(...)`. Prescribed (§6.1): the runner sets
-  `lock_timeout` and `statement_timeout` defaults for every migration, and
-  honors a `-- no-transaction` header comment that runs that file outside
-  `sql.begin`, making `CREATE INDEX CONCURRENTLY` expressible; §8.1's R1
-  gate then rejects bare `CREATE INDEX` so the safe form is the default
-  form.
-
-### 8.4 API/DB version skew: why runtime detection is deferred
-
-R1–R4 (§8.1) make runtime version detection unnecessary: if the DB is only
-ever additive and only ever ahead, there is no mismatch left to detect. So
-the API does **not** need to negotiate capabilities today, and this doc does
-not propose that it should.
-
-Worth recording precisely because it constrains any future attempt: there is
-no schema version to pin to. `schema_migrations` (see
-`backend/src/db/migrate.ts`) is `name text PRIMARY KEY` — a **set of applied
-migration filenames**, not an ordered version counter. "The DB is at version
-N" is not a value anything can read; hard version pinning isn't merely
-undesirable here, it isn't implementable without inventing a new version
-concept.
-
-**Considered and deferred: a published schema-version / capability
-descriptor** — recorded the same way as Flux (the drift check described in the archived release-cycle proposal) and Kustomize (the drift check described in the archived release-cycle proposal):
-
-- A version **integer** was rejected outright. The filename set is strictly
-  richer information, and collapsing it to an ordinal is lossy — especially
-  given that the prefixes are not linearly ordered (§8.3).
-- If adopted, the shape would be **two layers**: fine-grained *schema*
-  capabilities internal to the API and workers (probed with `to_regclass` /
-  `information_schema` and cached at boot), and coarse *feature*
-  capabilities published to clients (the AND of schema-supports-it,
-  flag-is-on, config-present). The split matters: DB shape never leaks into
-  the client contract.
-- **Adoption trigger**: when deploy ordering can no longer be guaranteed —
-  multiple independent operators, or customer-managed deployments. One
-  operator and one cluster (§3.2) is not that.
-
-The degraded-state instinct this repo already has stays relevant regardless:
-the regime DTO's explicit staleness block
-(`{ asof, serverDate, ageDays, stale, thresholdDays }`,
-[architecture.md §7.1](../architecture.md#71-analytics-suite-six-stage-pipeline))
-declares a degraded state in the payload instead of failing opaquely — the
-right shape for any mismatch that does reach a client.
-
-### 8.5 API versioning for the frontend and workers as consumers
-
-There is no versioning scheme in the API today — routes are flat paths in
-`contract/src/routes.js`, shared as literal source between frontend and
-backend, not as a semver'd artifact. That's fine as long as frontend and API
-are deployed together (today's reality per §2), but §3.1 commits the SPA to
-an independent edge deploy path — so an edge-cached SPA (or a stale browser
-tab) calling an API that has moved on is the normal state between deploys,
-not a corner case. The lightest-weight approach consistent with this
-project's minimalism: keep endpoint **shapes** additive-only (new optional
-fields, never repurposing or removing a field in place — the same discipline
-the goldens-drift gate already enforces for the preview mock layer,
-[decisions.md D14](../decisions.md#d14--preview-mode-goldens-backed-over-the-baked-frozen-single-file)),
-and reserve an actual path-prefix version (`/api/v2/...`) for the rare
-breaking change, with the old prefix kept alive for a declared deprecation
-window (§8.7) rather than deleted the day the new one ships. Workers/producer
-should follow the same additive-fields discipline since the producer is
-already an API consumer over authenticated HTTP (§2c).
-
-### 8.6 Feature flags
-
-No feature-flag infrastructure exists in this codebase today (confirmed —
-no `FEATURE_*` env convention, no flag service, no flag table). For a
-feature that spans schema + API + frontend + workers, a flag needs to be
-readable by whichever of those components guards the user-visible or
-data-mutating behavior — realistically that's **the API**, since it's the
-one component every write and read passes through, and it already has a
-precedent for environment-driven feature gating: the swarm cron
-sequence is gated by `SWARM_SCHEDULES_ENABLED` plus per-kind cron env
-vars ([architecture.md
-§9.4](../architecture.md#94-data-model--session-lifecycle)). The frontend
-would read flag state from the API (a field on an existing response, or a
-small dedicated endpoint) rather than maintaining its own flag source, to
-avoid a second source of truth. Workers reading flags would need the same
-API-mediated (or DB-row-mediated) source rather than their own env-var copy,
-to avoid a lane running stale flag state after a flip. None of this is
-built; §8 flags the storage/source-of-truth question as explicitly open.
-If the two-layer capability descriptor of §8.4 is ever adopted, its coarse
-*feature* layer — the AND of schema-supports-it, flag-is-on,
-config-present — is the natural home for exactly this: one published
-answer to "is X available," with the flag as one input. Noted as a
-connection, not a commitment; both remain deferred.
-
-### 8.7 Deprecation policy
-
-No deprecation policy exists today because nothing has ever needed to
-outlive a replacement — every environment redeploys everything at once. Once
-components decouple, an old endpoint/field shape needs to stay live for
-**at least as long as the slowest consumer can realistically still be
-running it** — for the frontend that means "at least until a browser tab
-open at deploy time would have naturally reloaded," for a worker lane that
-means "until every worker container has been redeployed," and for the DB
-that means the expand/contract window (§8.2). Communicating a deprecation
-today has no established channel — no changelog, no deprecation-header
-convention in the API responses. The concrete window length and the
-communication mechanism are both left open (left open in that proposal).
-
-## 9. Tracking Unnumbered Upcoming Upgrades
-
-Currently, migrations and runbook steps shouldn't be added directly to a target version directory (e.g. `0.4.0`) when the next version number is undecided. To prevent test drift and version guessing, we use a rolling `next` target.
-
-### 9.1 The `next` Directory and Runbook
-
-All upcoming migrations, upgrades, and runbook instructions go into a generic "next" placeholder:
-- **Runbook:** `docs/runbooks/<next>-rollout.md`
-- **Release Manifest:** `backend/scripts/upgrades/<next>/release.ts`
-- **Rollout Tests:** `backend/tests/rollout-steps-<next>.test.ts`
-
-### 9.2 Migration Accumulation
-
-As features merge into `main`, their migrations must be declared in the `<next>/release.ts` manifest and any operational steps added to `<next>-rollout.md`. The `rollout-steps-<next>.test.ts` suite is the **only** test that performs the `onDisk` drift check against `backend/migrations/`. 
-
-### 9.3 The Numbering Step (Cutting a Release)
-
-When it is time to cut a release (e.g. `v0.5.0`), the release PR executes the versioning:
-1. Rename `docs/runbooks/next-rollout.md` to `docs/runbooks/v0-5-0-rollout.md`.
-2. Rename `backend/scripts/upgrades/next/` to `backend/scripts/upgrades/0.4.0-to-0.5.0/` (or applicable versions).
-3. Rename `rollout-steps-<next>.test.ts` to `rollout-steps-0-5-0.test.ts` and **remove its `onDisk` drift check** (the test is frozen to only assert the static manifest).
-4. Re-create a fresh, empty `next/` directory and test files to track the subsequent cycle.
+A query that errored never reads as a pass: a read that fails is a FAIL of the check that needed it.
+A release that adds an invariant adds a row here, with its red-control test, in the same pull request
+(§9).

@@ -6,12 +6,12 @@
 // (issue #93): there is NO AI/LLM enrichment anywhere on this path. The only
 // supported write is the privileged admin route below; the scheduled discovery
 // pipeline never clobbers admin-authored overview text.
-import { config as globalConfig } from "../../config.ts";
 import { sql } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import { fetchProjects } from "../../projects/projections.ts";
 import { fetchProjectDetail } from "../../projects/profile-projections.ts";
 import { optionalString, readJsonObject } from "../validation.ts";
-import { secretEq } from "../auth.ts";
+import { isPrivileged } from "../auth.ts";
 
 export async function getProjects() {
   return fetchProjects();
@@ -26,26 +26,36 @@ export async function getProjectDetail(slug: string) {
   return fetchProjectDetail(slug);
 }
 
-// Auth surface for the admin write. Injectable so tests can exercise a prod-mode
-// config (token required, insecure disallowed) against the ephemeral DB.
-export interface AdminAuthConfig {
-  adminToken: string | null;
-  allowInsecure: boolean;
-}
+const updateOverview = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  // SELECT as well: the WHERE, the COALESCE fallbacks and RETURNING all read the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/api/routes/projects:updateProjectOverview",
+  purpose: "Write the admin-supplied overview and description text of one project, leaving omitted fields as they are.",
+  callers: ["src/api/routes/projects"],
+  probe: {
+    statement: `UPDATE projects SET
+      overview_short = COALESCE($1, overview_short),
+      overview_long  = COALESCE($2, overview_long),
+      description    = COALESCE($3, description),
+      updated_at = now()
+    WHERE slug = $4
+    RETURNING slug, overview_short, overview_long, description`,
+    params: [null, null, null, "probe-slug"],
+  },
+});
 
 // PATCH the admin-managed overview text for a project by slug. PRIVILEGED with
-// the same guard swarm routes use: if ADMIN_TOKEN is set, require it as
-// X-Admin-Token (constant-time compared); if unset, allow only outside prod
-// (config.allowInsecure). Fail-closed: prod with no token → 403.
+// the one admin guard every admin route uses, isPrivileged() (an admin session,
+// the operator's store token or the claimed password). It used to compare an
+// env ADMIN_TOKEN of its own, which D52 (1) retired. Fail-closed: no credential
+// → 403 before the body is read.
 export async function updateProjectOverview(
   req: Request,
   slug: string,
-  cfg: AdminAuthConfig = globalConfig,
 ): Promise<{ status: number; body: unknown }> {
-  const privileged = cfg.adminToken
-    ? secretEq(req.headers.get("X-Admin-Token"), cfg.adminToken)
-    : cfg.allowInsecure;
-  if (!privileged) return { status: 403, body: { error: "admin authorization required" } };
+  if (!(await isPrivileged(req))) return { status: 403, body: { error: "admin authorization required" } };
 
   const b = await readJsonObject(req);
   if (!b) return { status: 400, body: { error: "invalid JSON body" } };
@@ -58,7 +68,7 @@ export async function updateProjectOverview(
 
   // COALESCE keeps any field the caller omitted untouched; only provided text is
   // written. No LLM call — the text is exactly what the admin supplied.
-  const rows = await sql`
+  const rows = await on(sql, updateOverview)`
     UPDATE projects SET
       overview_short = COALESCE(${overviewShort ?? null}, overview_short),
       overview_long  = COALESCE(${overviewLong ?? null}, overview_long),

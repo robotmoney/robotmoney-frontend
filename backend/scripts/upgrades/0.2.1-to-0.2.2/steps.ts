@@ -1,16 +1,16 @@
-// The v0.2.2 rollout step manifest — the single declaration of what this
-// release's runbook is made of, consumed by where.ts (position), by
+// The v0.2.2 rollout step manifest — the single declaration consumed by
+// where.ts (position), by
 // preflight.ts/postflight.ts (the migration list), and by
-// backend/tests/rollout-steps.test.ts (which holds it and the runbook prose in
-// agreement mechanically).
+// backend/tests/rollout-steps.test.ts (which checks its code invariants).
 //
-// WHY A MANIFEST. docs/archive/v0-2-2-rollout.md is 2500 lines of prose that
-// an agent has to reverse-engineer its position from. Worse, facts stated in
+// WHY A MANIFEST. The historical rollout procedure was long enough that an
+// agent had to reverse-engineer its position from prose. Worse, facts stated in
 // two places drift: §5.6 asked for "all Gate A–D results" after §2 had
 // abolished Gate A and renamed the rest, and THIS_RELEASE_MIGRATIONS said four
 // migrations in preflight.ts while postflight.ts said six. Both are the same
 // bug — a fact with two homes. Everything here has exactly one home, and the
-// runbook's `yaml step` blocks are checked against it by the test.
+// Historical prose checks were retired with the procedure; code invariants
+// remain checked by the test.
 //
 // WHAT IS NOT HERE. Nothing that git or the filesystem already answers. Whether
 // an rc tag exists at HEAD, which files changed since a receipt, whether the

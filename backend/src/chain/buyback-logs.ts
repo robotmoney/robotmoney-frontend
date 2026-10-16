@@ -20,7 +20,9 @@ import {
   type BaseRpcSource,
 } from "../config.ts";
 import { sql } from "../db/client.ts";
+import { on, registerQuery, type RegistryDb } from "../db/registry.ts";
 import {
+  BaseRpcHttpError,
   decodeUint256,
   encodeAddressArg,
   ethBlockNumber,
@@ -79,11 +81,90 @@ function num(v: string | null): number {
   return v == null ? 0 : Number(v);
 }
 
+// Registered queries (smoke-production-spec.md §7.1). The read serves GET
+// /api/dashboards/buybacks on the api's pool (rm_app). The indexer's cursor
+// reads and writes run in the buybacks job handler, which hands `indexBuybacks`
+// the WORKER's pool (db/worker-client.ts, rm_worker): under spec §3 the worker
+// container holds no rm_app credential. Those four sites therefore declare
+// rm_worker, and grants.sql lists buyback_scan_state (insert+update) and
+// buyback_swaps (insert) on its allowlists. Before 2026-10-05 (B11, issue
+// #1150) they declared rm_app and ran on whatever pool db/client.ts built —
+// rm_app on the v0.5.x host (RM_ENV=smoke handed the worker the api's URL),
+// rm_worker on a 0.6 twin, where every sweep was refused and swallowed.
+const DASHBOARDS = "src/api/routes/dashboards";
+const BUYBACKS_HANDLER = "src/worker/handlers/buybacks";
+
+const swapRows = registerQuery({
+  role: "rm_app",
+  object: "buyback_swaps",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:readRows",
+  purpose: "Read every persisted buyback swap, newest first, for the buybacks payload.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT tx_hash, occurred_on, weth_spent, value_usd, robotmoney_received, provenance FROM buyback_swaps
+      ORDER BY occurred_on DESC NULLS LAST, block_number DESC NULLS LAST, log_index DESC NULLS LAST, id ASC`,
+  },
+});
+
+const scanCursor = registerQuery({
+  role: "rm_worker",
+  object: "buyback_scan_state",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.cursor",
+  purpose: "Read the indexer's durable last-scanned block so a scan resumes where the previous one stopped.",
+  callers: [BUYBACKS_HANDLER],
+  probe: { statement: "SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1" },
+});
+
+const maxIndexedBlock = registerQuery({
+  role: "rm_worker",
+  object: "buyback_swaps",
+  privileges: ["SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.maxBlock",
+  purpose: "Read the highest already-indexed live block, below which a scan never resumes.",
+  callers: [BUYBACKS_HANDLER],
+  probe: { statement: "SELECT MAX(block_number)::text AS mx FROM buyback_swaps" },
+});
+
+const insertSwap = registerQuery({
+  role: "rm_worker",
+  object: "buyback_swaps",
+  // SELECT because ON CONFLICT (tx_hash) reads the arbiter column.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.insert",
+  purpose: "Insert one decoded live buyback swap, idempotent on its transaction hash.",
+  callers: [BUYBACKS_HANDLER],
+  probe: {
+    statement: `INSERT INTO buyback_swaps
+        (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
+      VALUES ($1::bigint, $2, $3::integer, $4::date, $5::numeric, $6::numeric, $7::numeric, 'live')
+      ON CONFLICT (tx_hash) DO NOTHING`,
+    params: [1, "0xprobe", 0, "2026-01-01", "1", "1", "1"],
+  },
+});
+
+const advanceCursor = registerQuery({
+  role: "rm_worker",
+  object: "buyback_scan_state",
+  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
+  // EXCLUDED are read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/chain/buyback-logs:indexBuybacks.advance",
+  purpose: "Advance the indexer's durable cursor after each scanned chunk.",
+  callers: [BUYBACKS_HANDLER],
+  probe: {
+    statement: `INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at) VALUES (1, $1::bigint, now())
+      ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()`,
+    params: [1],
+  },
+});
+
 async function readRows(): Promise<DbRow[]> {
   // Newest-first: live rows (with a block number) precede the null-block seeds;
   // among same-day rows, higher block/log index is more recent; id ASC is the
   // final tiebreak so the seed set keeps its inserted (contract-golden) order.
-  return sql<DbRow[]>`
+  return on(sql, swapRows)<DbRow>`
     SELECT tx_hash, occurred_on, weth_spent, value_usd, robotmoney_received, provenance
       FROM buyback_swaps
      ORDER BY occurred_on DESC NULLS LAST,
@@ -330,13 +411,80 @@ async function wethSpentForTx(
   return matched ? Number(raw) / WEI_18 : null;
 }
 
+// The provider's eth_getLogs block-range cap, once it has said what it is (RM-156). mainnet.base.org, the
+// BASE_RPC_URL default, now caps a range at 500 blocks and answers anything wider with HTTP 413 and "eth_getLogs is
+// limited to a 500 range". Halving a 9000-block window gets under that only after five levels, about 31 refused
+// requests per window, each spending the shared rate budget. Read from the answer instead, the cap sizes every later
+// window in this process: one refusal, then windows the provider takes. Process-wide, because the provider does
+// not change between runs; null until a provider has named one.
+let learnedRangeCap: number | null = null;
+const RANGE_CAP_RE = /limited to a (\d+) range/i;
+
+/** The provider's range cap as an RPC error states it, or null when it does not. */
+export function rangeCapFromError(err: unknown): number | null {
+  if (!(err instanceof BaseRpcHttpError) || err.status !== 413) return null;
+  const m = RANGE_CAP_RE.exec(err.detail);
+  const cap = m ? Number(m[1]) : NaN;
+  return Number.isInteger(cap) && cap > 0 ? cap : null;
+}
+
+/** The window the scan reads in: the provider's cap once known, BUYBACK_LOG_CHUNK until then. */
+export function buybackLogWindow(): number {
+  return learnedRangeCap != null ? Math.min(learnedRangeCap, BUYBACK_LOG_CHUNK) : BUYBACK_LOG_CHUNK;
+}
+
+/** Test-only: forget the learned cap. */
+export function _resetBuybackRangeCapForTests(): void {
+  learnedRangeCap = null;
+}
+
+/**
+ * `eth_getLogs` over [from, to], halving the range when the provider answers HTTP 413 (the response would be too big).
+ *
+ * A busy range can exceed a provider's response limit even when it is under the block-range cap that
+ * BUYBACK_LOG_CHUNK was sized for. On production, 2026-09-29 to 09-30, the scan failed five times with
+ * `Base RPC HTTP 413` and left the persisted rows (and so the buyback figures) where they were (issue 1061).
+ * The halves are disjoint and are read low then high, so every log is returned once and in block order. A range
+ * that never answers 413 makes one request. A single block that still answers 413 throws: it cannot be split.
+ */
+async function getLogsSplittingOn413(
+  filter: { address: string; topics: (string | null)[] },
+  from: number,
+  to: number,
+): Promise<EthLog[]> {
+  try {
+    return await ethGetLogs({ ...filter, fromBlock: "0x" + from.toString(16), toBlock: "0x" + to.toString(16) }, rpcOpts());
+  } catch (err) {
+    if (!(err instanceof BaseRpcHttpError) || err.status !== 413 || from >= to) throw err;
+    // A 413 that names the provider's range cap: read [from, to] in windows of that size, and remember it.
+    const cap = rangeCapFromError(err);
+    if (cap != null && to - from + 1 > cap) {
+      learnedRangeCap = cap;
+      console.warn(`[buyback-logs] the provider caps eth_getLogs at ${cap} blocks; reading ${from}-${to} in windows of ${cap}`);
+      const logs: EthLog[] = [];
+      for (let lo = from; lo <= to; lo += cap) logs.push(...(await getLogsSplittingOn413(filter, lo, Math.min(lo + cap - 1, to))));
+      return logs;
+    }
+    const mid = from + Math.floor((to - from) / 2);
+    console.warn(`[buyback-logs] eth_getLogs ${from}-${to} answered HTTP 413; reading ${from}-${mid} and ${mid + 1}-${to} separately`);
+    const low = await getLogsSplittingOn413(filter, from, mid);
+    const high = await getLogsSplittingOn413(filter, mid + 1, to);
+    return [...low, ...high];
+  }
+}
+
 export interface IndexResult {
   indexed: number;
   skipped: string | null;
   scannedToBlock: number | null;
 }
 
-export async function indexBuybacks(): Promise<IndexResult> {
+/**
+ * @param db the pool the indexer's sites run on: the worker's (rm_worker) from
+ *   the buybacks handler; the api's by default, for tests and the dashboards
+ *   process. The four indexer sites declare rm_worker.
+ */
+export async function indexBuybacks(db: RegistryDb = sql): Promise<IndexResult> {
   const cfg = resolveBuybackConfig();
   if (cfg.source !== "live") {
     // Hermetic smoke / CI: never reach a live log indexer; the seeded rows stand.
@@ -349,10 +497,13 @@ export async function indexBuybacks(): Promise<IndexResult> {
   // of empty eth_getLogs calls before reaching the buyback era. With no env read
   // there is no value to malform, so the old NaN path — which slipped past the
   // `floor <= 0` warning and froze the chunk loop permanently — cannot recur.
-  // The chunk/maxChunks constants are the committed scan-window bounds; 9000 sits
-  // under the common 10k eth_getLogs provider cap (see config.ts).
-  const chunk = BUYBACK_LOG_CHUNK;
-  const maxChunks = BUYBACK_MAX_CHUNKS;
+  // The chunk/maxChunks constants are the committed scan-window bounds (see
+  // config.ts); a provider that caps ranges lower names its cap, and the
+  // window follows it (buybackLogWindow).
+  // One run's reach is BUYBACK_MAX_CHUNKS windows of BUYBACK_LOG_CHUNK blocks. When the provider caps ranges
+  // below the chunk (RM-156), the window shrinks to its cap and the run reads more, smaller windows, so a run still
+  // covers the same blocks: the budget is the blocks, and the windows are how the provider will take them.
+  const blockBudget = BUYBACK_LOG_CHUNK * BUYBACK_MAX_CHUNKS;
   const floor = cfg.fromBlock;
 
   // One run, one working set. See resetBuybackScanCaches for why these are scoped to
@@ -369,8 +520,8 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // MAX(block_number), so the old row-derived cursor never advanced). We also
     // never resume before the highest already-indexed live block.
     const [cursorRow, maxRow] = await Promise.all([
-      sql<{ b: string | null }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
-      sql<{ mx: string | null }[]>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
+      on(db, scanCursor)<{ b: string | null }>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`,
+      on(db, maxIndexedBlock)<{ mx: string | null }>`SELECT MAX(block_number)::text AS mx FROM buyback_swaps`,
     ]);
     const cursor = cursorRow[0]?.b == null ? null : Number(cursorRow[0].b);
     const persistedMax = maxRow[0]?.mx == null ? null : Number(maxRow[0].mx);
@@ -387,16 +538,13 @@ export async function indexBuybacks(): Promise<IndexResult> {
     // is a fabricated value_usd — ~13.5% wrong at the seeded buybacks alone
     // (~$1,884.55 today vs ~$2,179.3 then). Each row is priced from its own
     // block's day candle below, cached per day so a many-swap day costs one call.
-    for (let c = 0; c < maxChunks && from <= latest; c++) {
-      const to = Math.min(from + chunk - 1, latest);
-      const logs: EthLog[] = await ethGetLogs(
-        {
-          address: cfg.robotmoneyToken,
-          topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)],
-          fromBlock: "0x" + from.toString(16),
-          toBlock: "0x" + to.toString(16),
-        },
-        rpcOpts(),
+    for (let scanned = 0; scanned < blockBudget && from <= latest; ) {
+      const to = Math.min(from + buybackLogWindow() - 1, latest);
+      scanned += to - from + 1;
+      const logs: EthLog[] = await getLogsSplittingOn413(
+        { address: cfg.robotmoneyToken, topics: [TRANSFER_TOPIC, null, topicAddress(cfg.primaryWallet)] },
+        from,
+        to,
       );
       // ONE batched prefetch per chunk, before the per-swap loop below.
       // Every swap needs its block's timestamp and its block's WETH-out logs,
@@ -429,7 +577,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
         // duplicates a swap. NOTE: a single tx emitting multiple ROBOTMONEY-in
         // legs records only the first (robotmoney_received slightly undercounts
         // such txs); acceptable for the buyback pattern, tracked as a follow-up.
-        const res = await sql`
+        const res = await on(db, insertSwap)`
           INSERT INTO buyback_swaps
             (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
           VALUES
@@ -441,7 +589,7 @@ export async function indexBuybacks(): Promise<IndexResult> {
       // Advance + persist the scan cursor for THIS window regardless of hits, so
       // the next run resumes past it. scannedToBlock reflects real coverage.
       scannedToBlock = to;
-      await sql`
+      await on(db, advanceCursor)`
         INSERT INTO buyback_scan_state (id, last_scanned_block, updated_at)
         VALUES (1, ${to}, now())
         ON CONFLICT (id) DO UPDATE SET last_scanned_block = EXCLUDED.last_scanned_block, updated_at = now()

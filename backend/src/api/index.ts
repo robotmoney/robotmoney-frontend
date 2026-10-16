@@ -3,13 +3,17 @@
 // the sibling `website-server` nginx image (issue #892), which proxies /api/
 // and /health here so a single-box deployment still presents as one origin.
 import { ROUTES } from "@robotmoney/contract";
-import { config, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
-import { isDatabaseUnavailable, sql } from "../db/client.ts";
+import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
+import { withRequestTiming } from "./request-timing.ts";
+import { closeDb, isDatabaseUnavailable } from "../db/client.ts";
+import { databaseAnswers } from "../db/connection-check.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
-import { readStaticIdentity } from "../ops/static-identity.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
+import { apiVersionResponse } from "../ops/api-version.ts";
+import { maintenanceStatus } from "../ops/maintenance.ts";
 import { analyticsLedgerGuardOutcome, assertAnalyticsLedgerGuardArmed } from "../db/analytics-ledger-guard.ts";
+import { runStartupPreflight } from "../db/preflight.ts";
 import { createComment, listComments } from "./routes/comments.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal, getVaultEconomics, getWalletBalances, getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation, getEntities, getMarketOverview, getList2, getLeaderboard, getActivityLog, getAgentsDirectory, getAgentDetail, getCoinsList, getVaultsList, getWalletsList, getCoinProfile, getVaultProfile, getWalletProfile } from "./routes/dashboards.ts";
 import { createSubmission } from "./routes/submissions.ts";
@@ -18,6 +22,8 @@ import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
+import { handlePublicAnalytics } from "./routes/public-analytics.ts";
+import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
 
@@ -98,22 +104,72 @@ await assertAppendOnlyGuardArmed();
 // checked independently — see backend/src/db/analytics-ledger-guard.ts.
 await assertAnalyticsLedgerGuardArmed();
 
-const server = Bun.serve({
+// PREFLIGHT CHECKS 1-3 AGAINST THIS PROCESS'S OWN CREDENTIAL (spec §7.2,
+// #1026 criterion 44). `api` holds rm_app and nothing else, and it refuses to
+// serve a database whose rm_app password does not authenticate (1), whose
+// rm_app grants miss what this program's registered queries need or hold
+// anything from the denylist (2), or whose schema has drifted from the manifest
+// stored in it, is mid-migration, or is at a version this image does not
+// support (3). Last before Bun.serve on purpose: every import above has run, so
+// check 2 judges the registry of exactly the program about to serve, and a
+// refusal binds no port. Bounded (STARTUP_PREFLIGHT_DEFAULT_BUDGET_MS), because
+// it sits between the process and its port and a hung boot is never restarted.
+//
+// There is no exception (issue #973 retired the `RM_ENV=ephemeral` one): a
+// refusal exits 1 in every process, and a test that boots this entrypoint
+// hands it an `rm_app` credential on a migrated database, as a stack does
+// (tests/support/automation-auth.ts bootApi).
+// backend/tests/container-startup-preflight.test.ts spawns this file as rm_app
+// and proves each refusal leaves no listener.
+{
+  const startup = await runStartupPreflight({ role: "rm_app", databaseUrl: config.databaseUrl });
+  for (const line of startup.lines) (startup.passed ? console.log : console.error)(line);
+  if (!startup.passed) process.exit(1);
+}
+
+// Requests being answered right now; the SIGTERM drain waits for zero.
+let inFlight = 0;
+
+const server = Bun.serve<SchedulerStreamSocketData, never>({
   port: config.apiPort,
+  // Explicit, not Bun's 10 s default (issue 1060). See API_IDLE_TIMEOUT_SECONDS in config.ts.
+  idleTimeout: API_IDLE_TIMEOUT_SECONDS,
+  // THE SCHEDULER STREAM'S SOCKET (D55 (11), scheduler spec §6.3). The only
+  // WebSocket this process serves; routes/swarm-stream.ts owns its handler.
+  websocket: schedulerStreamWebSocket,
   async fetch(req, server) {
+    // Counted for the SIGTERM drain below (issue 1378).
+    inFlight++;
+    try {
+      return await (async () => {
     const url = new URL(req.url);
     const { pathname } = url;
 
     if (req.method === "OPTIONS") return corsPreflightResponse(req, pathname);
 
+    // The scheduler's subscription upgrades here, before any other routing,
+    // because only `fetch` holds the server handle an upgrade needs. A refusal
+    // is an ordinary JSON response; an upgrade returns nothing, and Bun owns
+    // the connection from then on. No CORS: the caller is system-scheduler,
+    // never a browser.
+    if (pathname === ROUTES.swarm.scheduler.subscribe) {
+      try {
+        return await upgradeSchedulerStream(req, url, server);
+      } catch (err) {
+        if (isDatabaseUnavailable(err)) return json({ error: "database unavailable" }, 503);
+        console.error("api error:", err);
+        return json({ error: "internal error" }, 500);
+      }
+    }
+
     // Client ip for rate limiting. See client-ip.ts's resolveClientIp() for
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
     // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"));
+    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"), req.headers.get("cf-connecting-ip"));
 
     try {
-      return withCors(await route(req, url, pathname, clientIp), req, pathname);
+      return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
     } catch (err) {
       // Malformed percent-encoding (decodeURIComponent) → 400; anything else →
       // a sanitized 500 (never leak a stack). No unhandled rejections from fetch.
@@ -133,13 +189,25 @@ const server = Bun.serve({
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
     }
+      })();
+    } finally {
+      inFlight--;
+    }
   },
 });
 
 async function route(req: Request, url: URL, pathname: string, clientIp: string): Promise<Response> {
+    // D54: the API's contract version, FIRST — ahead of /health and of every
+    // branch below that can touch the database, so a Postgres outage never
+    // reaches it. No auth by design: the website checks it at load, before it
+    // has any session, and the body is two public constants.
+    if (pathname === ROUTES.apiVersion && req.method === "GET") {
+      return apiVersionResponse();
+    }
+
     if (pathname === ROUTES.health) {
       let db = "down";
-      try { await sql`SELECT 1`; db = "up"; } catch { db = "down"; }
+      db = (await databaseAnswers()) ? "up" : "down";
       // handle_namespace reports what the BOOT guard concluded, so an
       // "unchecked" boot (database unqueryable through the guard's budget) or
       // an overridden one is machine-readable and not merely a log line that
@@ -149,7 +217,6 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       // trade a wrong-attribution risk for a restart loop.
       return json({
         status: "ok",
-        env: config.env,
         db,
         handle_namespace: handleNamespaceGuardOutcome(),
         // "armed" | "disarmed" | "not_applied" | "unavailable" | "unchecked".
@@ -166,13 +233,6 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
         // its identity — never a package version or a timestamp standing in for
         // one (backend/src/ops/build-identity.ts).
         build: buildIdentityJson(),
-        // AND WHICH FRONTEND IT IS SERVING (T26). The api co-serves the SPA
-        // from STATIC_DIR, a read-only bind of a directory assembled on the
-        // deploy host outside this image — `build` above says nothing about it,
-        // so a redeploy that rebuilt the image and skipped `bun run
-        // static:assemble` passed every identity check while serving the
-        // previous release's HTML. `matches_image` is that drift, as a boolean.
-        static: readStaticIdentity(config.staticDir),
         analytics_ledger_guard: analyticsLedgerGuardOutcome(),
       });
     }
@@ -183,12 +243,15 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     // reasons: /health is a liveness probe whose body varies with database and
     // guard state, while this is a constant for the life of the process.
     if (pathname === ROUTES.version) {
-      // Flat, plus `static` — the SPA half of AC-ID-03 (T26). Both halves in
-      // one body because the check runbook §7 describes is one `curl` and a
-      // comparison, and the question "is the frontend this API serves the same
-      // release as the API" cannot be answered from two requests that raced a
-      // redeploy.
-      return json({ ...buildIdentityJson(), static: readStaticIdentity(config.staticDir) });
+      // Flat: this process's own build identity and nothing about the site.
+      // The site reports itself at /version.json and the api's contract
+      // version is at /api/version (D55 (1)).
+      return json(buildIdentityJson());
+    }
+
+    // Maintenance window status (issue 1220): public, no credential.
+    if (pathname === ROUTES.status.maintenance && req.method === "GET") {
+      return json(await maintenanceStatus());
     }
 
     if (pathname === ROUTES.comments.list && req.method === "GET") {
@@ -357,6 +420,14 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       if (r) return json(r.body, r.status);
     }
 
+    // Tokenless public analytics reads (issue #1095, D58). Its own prefix, NOT
+    // under /api/analytics/ below: that one is auth-gated by a startsWith match
+    // and is a credentialed-CORS prefix. GET only (405 otherwise), rate limited
+    // per ip, and the handler answers every request itself.
+    if (pathname.startsWith("/api/public/analytics/")) {
+      return handlePublicAnalytics(req, url, clientIp);
+    }
+
     // Analytics ingestion boundary (issue #106): the analytics-provider-only
     // typed read/mutation surface updater processes use instead of direct SQL.
     if (pathname.startsWith("/api/analytics/")) {
@@ -383,4 +454,46 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     return new Response("Not found", { status: 404 });
 }
 
-console.log(`api listening on :${server.port} (env=${config.env})`);
+console.log(`api listening on :${server.port}`);
+
+// SIGTERM DRAIN (issue 1378). bun runs as PID 1's child under `init: true`
+// (docker-compose.yml), so `docker stop` now reaches this process. Without a
+// handler it was ignored and the api was SIGKILLed after Docker's grace (exit
+// 137) mid-request. The drain stops accepting, closes the scheduler stream
+// sockets (system-scheduler reconnects and rebuilds, scheduler spec §6), lets
+// in-flight requests finish, closes the pool and exits 0. A drain that has not
+// finished inside API_SHUTDOWN_GRACE_MS (default 25 s, under the compose
+// stop_grace_period of 30 s) force-closes what is left and exits 1, so a stuck
+// request is named in the log rather than hidden by a SIGKILL.
+const shutdownGraceMs = Number(process.env.API_SHUTDOWN_GRACE_MS ?? 25_000);
+let draining = false;
+async function drain(signal: string): Promise<void> {
+  if (draining) return;
+  draining = true;
+  console.log(`api ${signal} received: draining (grace ${shutdownGraceMs}ms)`);
+  const force = setTimeout(() => {
+    console.error(`api drain exceeded ${shutdownGraceMs}ms: closing the remaining connections`);
+    void server.stop(true);
+    process.exit(1);
+  }, shutdownGraceMs);
+  const sockets = closeSchedulerStreamSockets();
+  // Stop accepting, then wait for the requests being answered. An idle
+  // keep-alive connection is not a request: once none is in flight the
+  // remaining connections are closed, rather than held for their idle timeout.
+  void server.stop(false);
+  while (inFlight > 0) await Bun.sleep(25);
+  await server.stop(true);
+  // Every request is answered by now, so the pool holds only background work
+  // (a stream's polling). closeDb() waits up to 5 s for it, and on a database
+  // that has stopped answering it waits all 5: give it one second, then exit.
+  await Promise.race([
+    closeDb().catch((err) => console.error("api drain: closing the database pool failed:", err)),
+    Bun.sleep(1_000),
+  ]);
+  clearTimeout(force);
+  console.log(`api drained (${sockets} stream socket(s) closed); exiting 0`);
+  process.exit(0);
+}
+process.on("SIGTERM", () => void drain("SIGTERM"));
+process.on("SIGINT", () => void drain("SIGINT"));
+

@@ -23,6 +23,7 @@ import {
   type ProducerKind,
   type ScheduleState,
 } from "../src/producer/index.ts";
+import { writeTokenFile } from "./support/automation-auth.ts";
 
 // BOOT COVER (see the boot-cover block in src/producer/index.ts)
 // Nothing wrote a heartbeat between container start and the liveness loop, so
@@ -34,7 +35,7 @@ test("the first record lands BEFORE the API wait, so a slow API cannot age the c
   const order: string[] = [];
   const beats: { phase: string; detail?: string; staleAfterMs: number }[] = [];
   await startProducerSchedules({
-    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     beat: async (rec) => {
       order.push(`beat:${rec.phase}`);
       beats.push({ phase: rec.phase, detail: rec.detail, staleAfterMs: rec.staleAfterMs });
@@ -213,7 +214,7 @@ test("a brief API outage is tolerated; a sustained one withholds the heartbeat",
 function readinessFixture(expectedToken: string): { server: ReturnType<typeof Bun.serve>; requests: string[] } {
   const requests: string[] = [];
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url);
       requests.push(url.pathname);
@@ -286,7 +287,7 @@ test("the real schedule() registers what the liveness check reads — the two ca
   // the readiness wait is stubbed, so no network is touched), then judges the
   // crons it actually armed. afterEach disarms the timers.
   await startProducerSchedules({
-    env: { PRODUCER_REGIME_CRON: "30 22 * * *", PRODUCER_RESEARCH_CRON: "0 23 * * *", ANALYTICS_TOKEN: "t" },
+    env: { PRODUCER_REGIME_CRON: "30 22 * * *", PRODUCER_RESEARCH_CRON: "0 23 * * *", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     waitUntilReady: async () => {},
   });
 
@@ -302,3 +303,78 @@ test("the real schedule() registers what the liveness check reads — the two ca
 test("disarming really does cancel the timers a test armed", () => {
   expect(armedScheduleSnapshot().size).toBe(0); // afterEach from the case above
 });
+
+// ── SIGTERM (issue 1378) ────────────────────────────────────────────────────
+// The producer registered no handler and bun ran as PID 1, so `docker stop`
+// was ignored and the container was SIGKILLed (exit 137). `serve` now stops
+// its timers and exits 0 on SIGTERM, in startup (still waiting on the api)
+// and in steady state (crons armed, liveness loop running). The process is
+// the real entrypoint against a stub api.
+async function spawnServe(apiUrl: string): Promise<{ child: ReturnType<typeof Bun.spawn>; out: () => string }> {
+  const { mkdtempSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "rm-producer-sigterm-"));
+  const child = Bun.spawn(["bun", "run", "src/producer/index.ts", "serve"], {
+    cwd: join(import.meta.dir, ".."),
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      ANALYTICS_API_URL: apiUrl,
+      ANALYTICS_TOKEN_FILE: writeTokenFile("rmat_producer"),
+      HEARTBEAT_FILE: join(dir, "heartbeat"),
+      PRODUCER_BOOT_CATCHUP_DELAY_MS: "600000",
+      PRODUCER_BOOT_CATCHUP_JITTER_MS: "0",
+      PRODUCER_LIVENESS_TICK_MS: "200",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let seen = "";
+  void (async () => {
+    const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+    const dec = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        seen += dec.decode(value, { stream: true });
+      }
+    } catch { /* killed */ }
+  })();
+  return { child, out: () => seen };
+}
+
+async function until(pred: () => boolean, ms = 20_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error("condition not reached");
+    await Bun.sleep(50);
+  }
+}
+
+test("serve: SIGTERM during startup, still waiting on the api, exits 0", async () => {
+  let asked = false;
+  const stub = Bun.serve({ port: 0, fetch() { asked = true; return new Response("starting", { status: 503 }); } });
+  try {
+    const { child } = await spawnServe(`http://127.0.0.1:${stub.port}`);
+    await until(() => asked);
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(0);
+  } finally {
+    stub.stop(true);
+  }
+}, 30_000);
+
+test("serve: SIGTERM in steady state (api ready, waiting out its boot catch-up delay) exits 0", async () => {
+  const stub = Bun.serve({ port: 0, fetch() { return Response.json({ ok: true }); } });
+  try {
+    const { child, out } = await spawnServe(`http://127.0.0.1:${stub.port}`);
+    await until(() => out().includes("boot catch-up starts in 600000ms"));
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(0);
+    expect(out()).toContain("SIGTERM: stopping the crons");
+  } finally {
+    stub.stop(true);
+  }
+}, 30_000);

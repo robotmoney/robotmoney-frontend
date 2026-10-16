@@ -8,7 +8,7 @@
 // used to mint four private name shapes and the answer was no, which is why
 // nothing could be reaped without risking the live site.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CI_IDENTITY_VARS,
@@ -183,20 +183,22 @@ describe("labels — the channel tooling selects on", () => {
 // spawners: these are the places the scheme has to be APPLIED, and none of them
 // is reachable from a unit test any other way (each one needs Docker to run).
 describe("the scheme is actually wired into every spawner", () => {
-  test("docker-compose.smoke.yml stamps attribution on services, pgdata, and the managed default network", () => {
-    const smoke = readFileSync(join(repoRoot, "docker-compose.smoke.yml"), "utf8");
-    const classLines = smoke.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
-    const hashLines = smoke.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
-    // postgres, website-server, api, the shared worker anchor, agent-launcher,
-    // member-agent, volume, network. agent-launcher (issue #1012) is stamped for
-    // the same reason the rest are, and one reason more: the short-lived JUDGE
-    // containers it starts are reaped by these labels, so a launcher the channel
-    // tooling could not select on would take its judge containers with it.
-    expect(classLines.length).toBe(8);
-    expect(hashLines.length).toBe(8);
-    for (const l of classLines) expect(l).toContain(`\${${ENV_CLASS_COMPOSE_VAR}}`);
-    for (const l of hashLines) expect(l).toContain(`\${${ENV_HASH_COMPOSE_VAR}}`);
-    expect(smoke).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
+  test("docker-compose.yml stamps attribution on services, pgdata, and the managed default network", () => {
+    // The overlay that used to carry these was deleted (issue #1026 wave 6, P1).
+    // The three stamps are defined ONCE, as the `x-smoke-labels` anchor, and
+    // every stamped object refers to it: postgres, api, website-server,
+    // worker-analytics, system-scheduler, analytics-producer, member-agent, the
+    // pgdata volume and the default network.
+    expect(existsSync(join(repoRoot, "docker-compose.smoke.yml"))).toBe(false);
+    const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
+    const classLines = compose.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
+    const hashLines = compose.split("\n").filter((l) => l.includes(`${ENV_HASH_LABEL}:`));
+    expect(classLines.length).toBe(1);
+    expect(hashLines.length).toBe(1);
+    expect(classLines[0]).toContain(`\${${ENV_CLASS_COMPOSE_VAR}`);
+    expect(hashLines[0]).toContain(`\${${ENV_HASH_COMPOSE_VAR}`);
+    expect(compose.match(/\*smoke-labels/g)?.length).toBe(9);
+    expect(compose).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
   });
 
   test("no spawner keeps a private ad-hoc name shape", () => {
@@ -228,28 +230,72 @@ describe("the scheme is actually wired into every spawner", () => {
     expect(src).toContain("...labelFlags");
   });
 
-  test("every workflow-pinned SMOKE_PROJECT carries the CI prefix", () => {
-    // Issue #373 retired swarm-opencode-nightly.yml: its real-inference
-    // admission is the SAME measurement e2e.yml already spends on a push to
-    // main, and e2e.yml now also runs on the nightly `schedule` that workflow
-    // used to hold. e2e.yml is therefore the only workflow left that pins a
-    // SMOKE_PROJECT.
-    const workflows = ["e2e.yml"];
-    let seen = 0;
-    for (const w of workflows) {
-      const src = readFileSync(join(repoRoot, ".github", "workflows", w), "utf8");
+  test("the workflows NAME the boot's project through the helper, and never pin it into the boot", () => {
+    // Spec §1 retires SMOKE_PROJECT with no alias (issue #1026): the boot
+    // derives its project from the job's identity and refuses an exported one.
+    // So the shared e2e-setup action resolves the name with the SAME helper
+    // before the boot and returns it as an output; the shared e2e-teardown action
+    // (billing diagnostic, always() teardown) reads it back through an input.
+    // Every e2e-*.yml only passes that output along. The e2e-*.yml set is the
+    // only place that boots a smoke (issue #373 retired swarm-opencode-nightly.yml).
+    const actions = join(repoRoot, ".github", "actions");
+    const setup = readFileSync(join(actions, "e2e-setup", "action.yml"), "utf8");
+    const teardown = readFileSync(join(actions, "e2e-teardown", "action.yml"), "utf8");
+
+    const pinned = (src: string): string[] => {
+      const values: string[] = [];
       for (const line of src.split("\n")) {
-        const m = /^\s*SMOKE_PROJECT:\s*(\S+)/.exec(line);
-        if (!m) continue;
-        seen++;
-        // A CI project name that did NOT say `rm_ci` would be indistinguishable
-        // from the standing stage smoke to anything sweeping this host.
-        expect({ workflow: w, value: m[1]!.startsWith(`${CI_PROJECT_PREFIX}_`) }).toEqual({ workflow: w, value: true });
+        const m = /^\s*SMOKE_PROJECT:\s*(\S.*)$/.exec(line);
+        if (m) values.push(m[1]!.trim());
       }
+      return values;
+    };
+    // The diagnostic and the teardown each read the resolved name, and nothing
+    // else sets it: a literal would drift from what the boot derived.
+    expect(pinned(teardown)).toEqual(["${{ inputs.smoke-project }}", "${{ inputs.smoke-project }}"]);
+    expect(pinned(setup)).toEqual([]);
+    expect(setup).toContain("id: smoke-project");
+    expect(setup).toContain("scripts/stack/print-project-name.ts");
+    expect(setup).toContain("value: ${{ steps.smoke-project.outputs.name }}");
+    // The boot step itself carries no SMOKE_PROJECT: its env block ends at the
+    // end of the action, and the boot would refuse the variable anyway.
+    const boot = setup.slice(setup.indexOf("- name: Full-stack smoke"));
+    expect(boot).toContain("scripts/smoke.ts --local blank");
+    expect(boot).not.toMatch(/^\s*SMOKE_PROJECT:/m);
+
+    const workflows = readdirSync(join(repoRoot, ".github", "workflows")).filter((f) => /^e2e-.+\.ya?ml$/.test(f));
+    expect(workflows.length).toBeGreaterThan(1);
+    for (const f of workflows) {
+      const text = readFileSync(join(repoRoot, ".github", "workflows", f), "utf8");
+      expect({ workflow: f, pins: pinned(text) }).toEqual({ workflow: f, pins: [] });
+      expect({ workflow: f, boots: text.includes("uses: ./.github/actions/e2e-setup") }).toEqual({ workflow: f, boots: true });
+      expect({ workflow: f, passes: text.includes("smoke-project: ${{ steps.stack.outputs.smoke-project }}") }).toEqual({ workflow: f, passes: true });
     }
-    // The smoke boot, billing-diagnostic, and always() teardown steps each
-    // carry the run-scoped project name.
-    expect(seen).toBe(3);
+  });
+
+  test("the helper the workflow runs prints the boot's exact CI project, which carries the CI prefix", () => {
+    const ci = { GITHUB_ACTIONS: "true", GITHUB_WORKFLOW: "e2e", GITHUB_RUN_ID: "42", GITHUB_RUN_ATTEMPT: "2", GITHUB_JOB: "e2e" };
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", "stack", "print-project-name.ts")], {
+      env: { PATH: process.env.PATH ?? "", ...ci },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).toBe(0);
+    const expected = stackProjectName("stack", resolveStackEnvironment(ci));
+    expect(r.stdout.toString().trim()).toBe(`name=${expected}`);
+    // A CI project name that did NOT say `rm_ci` would be indistinguishable
+    // from the standing stage smoke to anything sweeping this host.
+    expect(expected.startsWith(`${CI_PROJECT_PREFIX}_`)).toBe(true);
+  });
+
+  test("red control: outside Actions the helper refuses rather than print a name no boot will use", () => {
+    const r = Bun.spawnSync(["bun", "--no-env-file", join(repoRoot, "scripts", "stack", "print-project-name.ts")], {
+      env: { PATH: process.env.PATH ?? "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stdout.toString()).toBe("");
   });
 });
 });

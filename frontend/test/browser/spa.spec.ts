@@ -54,17 +54,22 @@ async function expectNoBrowserErrors(errors: string[]): Promise<void> {
 // The take count is read the same way. The seed drives three members, and a
 // member whose model refuses or times out is recorded absent, as the session
 // is built to tolerate; the page is right to show the takes that landed.
-async function resolveSeededSession(page: Page, subjectId: string): Promise<{ date: string; takes: number }> {
+//
+// The session is resolved by id from the PUBLISHED sessions. The scheduler opens
+// a subject's next epoch the moment one settles, so the newest row for a subject
+// is an open epoch with no takes, and `/swarm/<date>/<subject>` (the LATEST
+// session that day) renders that one, not the session the driver ran.
+async function resolveSeededSession(page: Page, subjectId: string): Promise<{ id: string; date: string; takes: number }> {
   const match = await page.evaluate(async (id) => {
-    const res = await fetch(`/api/swarm/sessions?limit=50`);
+    const res = await fetch(`/api/swarm/sessions?state=published&limit=50`);
     const body = await res.json();
-    const row = (body.sessions as Array<{ subjectId: string; date: string; takeCount?: number }>).find((s) => s.subjectId === id);
-    return row ? { date: row.date, takes: Number(row.takeCount) } : null;
+    const row = (body.sessions as Array<{ id: string; subjectId: string; date: string; takeCount?: number }>).find((s) => s.subjectId === id && Number(s.takeCount) > 0);
+    return row ? { id: row.id, date: row.date, takes: Number(row.takeCount) } : null;
   }, subjectId);
   // Fail loudly rather than falling back to a computed date: a null here
   // means the seed did not run (or ran for a different subject), which is a
   // real defect this test must still catch — not paper over.
-  if (!match) throw new Error(`no swarm session found for subject "${subjectId}" — did the seed run?`);
+  if (!match) throw new Error(`no published swarm session with takes found for subject "${subjectId}" — did the seed run?`);
   if (!(match.takes > 0)) throw new Error(`the seeded ${subjectId} session carries no takes — no member filed`);
   return match;
 }
@@ -127,9 +132,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator("#vaults #vault")).toBeVisible();
   await expect(page.locator("#allocation")).toBeVisible();
 
-  // Test performance page with Wallet Performance heading
-  await navigate(page, "/performance");
-  await expect(page.getByRole("heading", { name: /Wallet Performance/, exact: false })).toBeVisible();
+  // The protocol wallets' page, at its address since RM-157.
+  await navigate(page, "/treasury");
+  await expect(page.getByRole("heading", { name: "Treasury", exact: true, level: 1 })).toBeVisible();
 
   // A member's page is a research record now (RM-121); its h1 still carries
   // .profile-name. The tagline under it (.profile-role) shows only what the
@@ -143,7 +148,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator(".profile-role")).not.toContainText("reads the session through");
 
   const woon = await resolveSeededSession(page, "woon");
-  await page.goto(`/swarm/${woon.date}/woon`);
+  await page.goto(`/swarm/sessions/${woon.id}`);
   await expect(page.locator(".session-title")).toHaveText("Woon Treasury");
   // The per-member submissions table became the vote chart (RM-121): one dot
   // per member who took part, keyed on the member like the table rows were
@@ -335,22 +340,20 @@ test("navigation destroys Chart.js and p5 resources from the previous view", asy
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  // /performance rather than /allocation. Both view factories build Chart.js
-  // canvases, so either proves the teardown; this one moved here in #802 when
-  // /allocation briefly resolved to an inline-SVG page, and there is no reason
-  // to move it back now that it does not.
-  await navigate(page, "/performance");
-  const perfCanvas = page.locator(".a2-chart canvas").first();
+  // A research page: since RM-157 the treasury draws in SVG, and the research
+  // series are among the views that still build Chart.js canvases.
+  await navigate(page, "/research/channel-divergence");
+  const perfCanvas = page.locator(".rs__series-canvas canvas").first();
   await expect(perfCanvas).toBeVisible();
   const chartId = await perfCanvas.evaluate((canvas) => {
     const chart = window.Chart?.getChart(canvas as HTMLCanvasElement);
-    if (!chart) throw new Error("performance Chart.js instance was not created");
+    if (!chart) throw new Error("research Chart.js instance was not created");
     return chart.id;
   });
 
   // The logo is the way home: the nav has no Home link (RM-124).
   await page.locator(".nav__logo").click();
-  await expect(page.locator(".a2-chart canvas")).toHaveCount(0);
+  await expect(page.locator(".rs__series-canvas canvas")).toHaveCount(0);
   await expect.poll(() =>
     page.evaluate((id) => Boolean(window.Chart?.instances?.[id]), chartId)
   ).toBe(false);
@@ -428,8 +431,8 @@ test("the noindex override does not leak onto the next route", async ({ page }) 
 // to NOT_FOUND_META and served "Page Not Found — Robot Money" under
 // `noindex, follow` while rendering its content perfectly well.
 const MEDIA_SECTION_ROUTES = [
-  { path: "/media/articles", title: "Articles — Robot Money Media" },
-  { path: "/media/videos", title: "Videos — Robot Money Media" },
+  { path: "/media/articles", title: "Articles | Robot Money Media" },
+  { path: "/media/videos", title: "Videos | Robot Money Media" },
 ];
 
 for (const { path, title } of MEDIA_SECTION_ROUTES) {
@@ -467,10 +470,9 @@ test("a legacy /docs/investment-committee URL is canonical to its renamed addres
     "content",
     "https://robotmoney.network/docs/investment-swarm/how-it-works",
   );
-  // The rewrite must not cost the page its own copy — before it, this path
-  // still reached the /docs section prefix and got a real title, and it should
-  // keep exactly that one.
-  await expect(page).toHaveTitle("How It Works — Robot Money Docs");
+  // The rewrite must not cost the page its own copy: the legacy path takes the
+  // docs page's own title, exactly as the new path does.
+  await expect(page).toHaveTitle("How the Investment Swarm Works | Robot Money Docs");
 
   await expectNoBrowserErrors(errors);
 });

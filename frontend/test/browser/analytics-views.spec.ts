@@ -258,7 +258,7 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
 // analytics pipeline currently always recomputes + upserts the FULL history
 // every run, so this fixture can't come from production data — it's a
 // synthetic 30-day excision from the vendored daily snapshot, exactly like
-// performance-view.spec.ts's AC5 gap fixture, to exercise the chart's own
+// the gap fixture in treasury-view.spec.ts, to exercise the chart's own
 // dense-axis behaviour independent of that backend guarantee.
 const GAP_START_INDEX = 1500;
 const GAP_DAYS = 30;

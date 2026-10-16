@@ -148,7 +148,7 @@ describe("nightly is isomorphic to the merge-to-main set", () => {
 // step at a time and invisible to the trigger equality above.
 //
 // Reporting therefore has to RIDE on tests that already run (the e2e admission
-// record is rendered from the admission e2e.yml already spends), never on a new
+// record is rendered from the admission e2e-onboarding.yml already spends), never on a new
 // suite stood up to produce a metric.
 describe("nightly runs the merge set and nothing more", () => {
   const files = workflowFiles();

@@ -81,6 +81,18 @@ test.describe(`every sitemap route loads in the preview (api: ${api})`, () => {
         if (new URL(req.url()).pathname.endsWith("/not-found.html")) notFoundFetched = true;
       });
 
+      // A live api that predates /api/status/maintenance (issue 1220) answers
+      // 404 until it is deployed. The client treats that as "no maintenance"
+      // and the browser logs one generic "Failed to load resource" line per
+      // such response. That line is the only one forgiven, and only against a
+      // live host: the fixtures sweep has a golden for the route and stays strict.
+      let maintenanceNotDeployed = 0;
+      page.on("response", (res) => {
+        if (api !== "fixtures" && res.status() === 404 && new URL(res.url()).pathname === "/api/status/maintenance") {
+          maintenanceNotDeployed += 1;
+        }
+      });
+
       await page.goto(`${baseUrl}/${query}#${route}`);
       await expect(page.locator("#watermark")).toBeVisible();
 
@@ -97,6 +109,11 @@ test.describe(`every sitemap route loads in the preview (api: ${api})`, () => {
         .toBe(route);
       const view = page.frameLocator("#frame").locator("main#view > *");
       await expect(view.first()).toBeAttached({ timeout: 15_000 });
+
+      for (let i = 0; i < maintenanceNotDeployed; i += 1) {
+        const at = problems.findIndex((p) => p.startsWith("console.error: Failed to load resource: the server responded with a status of 404"));
+        if (at >= 0) problems.splice(at, 1);
+      }
 
       expect(notFoundFetched, `${route} rendered the not-found view`).toBe(false);
       expect(problems, `${route} logged errors:\n  ${problems.join("\n  ")}`).toEqual([]);

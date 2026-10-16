@@ -18,7 +18,7 @@ test("/terms renders the Terms of Service page and links back home", async ({ pa
   await navigate(page, "/terms");
   await expect(page.locator("h1.tos__h1")).toContainText("Terms of");
   await expect(page.locator("a.tos__back-link")).toHaveAttribute("href", "/");
-  await expect(page).toHaveTitle("Terms of Service — Robot Money");
+  await expect(page).toHaveTitle("Terms of Service | Robot Money");
 });
 
 test("/privacy renders the Privacy Policy page and links back home", async ({ page }) => {
@@ -26,7 +26,7 @@ test("/privacy renders the Privacy Policy page and links back home", async ({ pa
   await navigate(page, "/privacy");
   await expect(page.locator("h1.pp__h1")).toContainText("Privacy");
   await expect(page.locator("a.pp__back-link")).toHaveAttribute("href", "/");
-  await expect(page).toHaveTitle("Privacy Policy — Robot Money");
+  await expect(page).toHaveTitle("Privacy Policy | Robot Money");
 });
 
 test("both pages are indexable (no noindex override, unlike the gated dashboard routes)", async ({ page }) => {

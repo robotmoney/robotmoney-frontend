@@ -1,0 +1,4 @@
+# The SDK never touches the network. This preload replaces globalThis.fetch with
+# a thrower so any test (or code under test) that reaches for it fails loudly.
+[test]
+preload = ["./tests/no-network.ts"]

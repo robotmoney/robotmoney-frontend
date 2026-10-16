@@ -21,6 +21,186 @@
 // the row counts stay stable. All figures are deterministic (seeded by index), so
 // re-runs and goldens are byte-stable except for the rolling 30-day date window.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// The demo seed runs from db/seed.ts as the schema owner: it is the one place
+// a facet row is deleted (D55 (6): no runtime role holds DELETE).
+const SEED_CALLERS = ["src/db/seed"];
+
+const upsertProject = registerQuery({
+  role: "rm_owner",
+  object: "projects",
+  // SELECT as well: RETURNING and the ON CONFLICT (slug) arbiter read columns.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.upsertProject",
+  purpose: "Upsert a demo project's identity row on its UNIQUE slug so its id is stable across runs.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO projects (
+          slug, display_name, description, overview_short, website_url, twitter_handle,
+          data_coverage_score, has_agent, has_coin, has_wallet, has_vault, is_sticky, status
+        ) SELECT
+          $1, $2, $3, $4, $5, $6,
+          $7::smallint, true, $8::boolean, $9::boolean, $10::boolean, $11::boolean, 'active' WHERE false
+        ON CONFLICT (slug) DO UPDATE SET
+          display_name        = EXCLUDED.display_name,
+          description         = EXCLUDED.description,
+          overview_short      = EXCLUDED.overview_short,
+          website_url         = EXCLUDED.website_url,
+          twitter_handle      = EXCLUDED.twitter_handle,
+          data_coverage_score = EXCLUDED.data_coverage_score,
+          has_agent           = EXCLUDED.has_agent,
+          has_coin            = EXCLUDED.has_coin,
+          has_wallet          = EXCLUDED.has_wallet,
+          has_vault           = EXCLUDED.has_vault,
+          is_sticky           = EXCLUDED.is_sticky,
+          status              = 'active',
+          updated_at          = now()
+        RETURNING id`,
+    params: ["probe", "probe", null, null, null, null, 1, false, false, false, false],
+  },
+});
+
+const deleteAgents = registerQuery({
+  role: "rm_owner",
+  object: "openclaw_agents",
+  // SELECT as well: the WHERE clause reads project_id.
+  privileges: ["DELETE", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.delete_openclaw_agents",
+  purpose: "Reset one demo project's openclaw_agents rows so the re-insert below keeps counts stable.",
+  callers: SEED_CALLERS,
+  probe: { statement: "DELETE FROM openclaw_agents WHERE project_id = $1::uuid", params: ["00000000-0000-0000-0000-000000000000"] },
+});
+const deleteCoins = registerQuery({
+  role: "rm_owner",
+  object: "lobster_coins",
+  // SELECT as well: the WHERE clause reads project_id.
+  privileges: ["DELETE", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.delete_lobster_coins",
+  purpose: "Reset one demo project's lobster_coins rows so the re-insert below keeps counts stable.",
+  callers: SEED_CALLERS,
+  probe: { statement: "DELETE FROM lobster_coins WHERE project_id = $1::uuid", params: ["00000000-0000-0000-0000-000000000000"] },
+});
+const deleteWallets = registerQuery({
+  role: "rm_owner",
+  object: "tracked_wallets",
+  // SELECT as well: the WHERE clause reads project_id.
+  privileges: ["DELETE", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.delete_tracked_wallets",
+  purpose: "Reset one demo project's tracked_wallets rows so the re-insert below keeps counts stable.",
+  callers: SEED_CALLERS,
+  probe: { statement: "DELETE FROM tracked_wallets WHERE project_id = $1::uuid", params: ["00000000-0000-0000-0000-000000000000"] },
+});
+const deleteVaults = registerQuery({
+  role: "rm_owner",
+  object: "agent_vaults",
+  // SELECT as well: the WHERE clause reads project_id.
+  privileges: ["DELETE", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.delete_agent_vaults",
+  purpose: "Reset one demo project's agent_vaults rows so the re-insert below keeps counts stable.",
+  callers: SEED_CALLERS,
+  probe: { statement: "DELETE FROM agent_vaults WHERE project_id = $1::uuid", params: ["00000000-0000-0000-0000-000000000000"] },
+});
+
+const insertAgent = registerQuery({
+  role: "rm_owner",
+  object: "openclaw_agents",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertAgent",
+  purpose: "Insert a demo project's agent facet, with the x402 counters that drive the live X402 flag.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO openclaw_agents (project_id, name, protocol_standard, x402_score, x402_txn_count, x402_resources_count)
+        SELECT $1::uuid, $2, $3, $4::numeric, $5::integer, $6::integer WHERE false
+        RETURNING id`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", "probe", null, null, null],
+  },
+});
+
+const insertRevenue = registerQuery({
+  role: "rm_owner",
+  object: "agent_revenue_daily",
+  privileges: ["INSERT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertRevenue",
+  purpose: "Insert an agent's trailing-30d daily revenue so the 30d sum is non-zero.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO agent_revenue_daily (agent_id, revenue_date, revenue_usd, source)
+        SELECT $1::uuid, $2::date, $3::numeric, $4 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "2000-01-01", 1, "probe"],
+  },
+});
+
+const insertAgentSnapshots = registerQuery({
+  role: "rm_owner",
+  object: "daily_agent_snapshots",
+  privileges: ["INSERT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertAgentSnapshots",
+  purpose: "Insert an agent's trailing-30d daily snapshots, the activity series for tokenless projects.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO daily_agent_snapshots (agent_id, snapshot_date, x402_volume_usd, x402_txn_count, productivity_score)
+        SELECT $1::uuid, $2::date, $3::numeric, $4::integer, $5::numeric WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "2000-01-01", 1, 1, 1],
+  },
+});
+
+const insertCoin = registerQuery({
+  role: "rm_owner",
+  object: "lobster_coins",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertCoin",
+  purpose: "Insert a demo project's coin facet.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO lobster_coins (project_id, name, ticker, market_cap, fdv, percent_change_24h)
+          SELECT $1::uuid, $2, $3, $4::numeric, $5::numeric, $6::numeric WHERE false
+          RETURNING id`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", "probe", 1, 1, 1],
+  },
+});
+
+const insertCoinSnapshots = registerQuery({
+  role: "rm_owner",
+  object: "daily_coin_snapshots",
+  privileges: ["INSERT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertCoinSnapshots",
+  purpose: "Insert a coin's 30d price snapshot series, which draws the sparkline.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO daily_coin_snapshots (coin_id, snapshot_date, price_usd)
+          SELECT $1::uuid, $2::date, $3::numeric WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "2000-01-01", 1],
+  },
+});
+
+const insertWallets = registerQuery({
+  role: "rm_owner",
+  object: "tracked_wallets",
+  privileges: ["INSERT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertWallets",
+  purpose: "Insert a demo project's wallet facets, summed into walletTotalUsd by the projection.",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO tracked_wallets (project_id, label, chain, balance_usd)
+          SELECT $1::uuid, $2, $3, $4::numeric WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe", "probe", 1],
+  },
+});
+
+const insertVault = registerQuery({
+  role: "rm_owner",
+  object: "agent_vaults",
+  privileges: ["INSERT"],
+  site: "src/projects/smoke-seed:seedSmokeProjects.insertVault",
+  purpose: "Insert a demo project's vault facet, presence only (the VLT flag).",
+  callers: SEED_CALLERS,
+  probe: {
+    statement: `INSERT INTO agent_vaults (project_id, name)
+        SELECT $1::uuid, $2 WHERE false`,
+    params: ["00000000-0000-0000-0000-000000000000", "probe"],
+  },
+});
 
 const DAYS = 30;
 
@@ -307,7 +487,7 @@ export async function seedSmokeProjects(): Promise<void> {
       // 1) Project identity — upsert on the UNIQUE slug so the id is stable across
       // runs (facet rows below reference it). has_* mirror facet presence for
       // tidiness; the projection recomputes facets live regardless.
-      const [{ id }] = await tx`
+      const [{ id }] = await on(tx, upsertProject)`
         INSERT INTO projects (
           slug, display_name, description, overview_short, website_url, twitter_handle,
           data_coverage_score, has_agent, has_coin, has_wallet, has_vault, is_sticky, status
@@ -335,14 +515,14 @@ export async function seedSmokeProjects(): Promise<void> {
 
       // 2) Reset this project's facets. Deleting the agent/coin CASCADE-removes its
       // revenue/snapshot rows (0013 FKs), so re-inserting below keeps counts stable.
-      await tx`DELETE FROM openclaw_agents WHERE project_id = ${projectId}`;
-      await tx`DELETE FROM lobster_coins   WHERE project_id = ${projectId}`;
-      await tx`DELETE FROM tracked_wallets WHERE project_id = ${projectId}`;
-      await tx`DELETE FROM agent_vaults    WHERE project_id = ${projectId}`;
+      await on(tx, deleteAgents)`DELETE FROM openclaw_agents WHERE project_id = ${projectId}`;
+      await on(tx, deleteCoins)`DELETE FROM lobster_coins   WHERE project_id = ${projectId}`;
+      await on(tx, deleteWallets)`DELETE FROM tracked_wallets WHERE project_id = ${projectId}`;
+      await on(tx, deleteVaults)`DELETE FROM agent_vaults    WHERE project_id = ${projectId}`;
 
       // 3) Agent facet (+ optional x402 counters that drive the live X402 flag).
       const x = p.agent.x402;
-      const [{ id: agentId }] = await tx`
+      const [{ id: agentId }] = await on(tx, insertAgent)`
         INSERT INTO openclaw_agents (project_id, name, protocol_standard, x402_score, x402_txn_count, x402_resources_count)
         VALUES (${projectId}, ${p.agent.name}, ${p.agent.protocol}, ${x?.score ?? null}, ${x?.txns ?? null}, ${x?.resources ?? null})
         RETURNING id
@@ -355,7 +535,7 @@ export async function seedSmokeProjects(): Promise<void> {
         revenue_usd: round2(wiggle(p.dailyRevenueBase, i + 3, d, 0.25)),
         source: p.revenueSource,
       }));
-      await tx`INSERT INTO agent_revenue_daily ${tx(revRows)}`;
+      await on(tx, insertRevenue)`INSERT INTO agent_revenue_daily ${tx(revRows, "agent_id", "revenue_date", "revenue_usd", "source")}`;
 
       // 4b) Trailing-30d daily agent snapshots (activity series for tokenless projects).
       const agentSnaps = Array.from({ length: DAYS }, (_, d) => ({
@@ -365,13 +545,13 @@ export async function seedSmokeProjects(): Promise<void> {
         x402_txn_count: x?.txns ? Math.round(wiggle(x.txns / 30, i, d, 0.2)) : 0,
         productivity_score: p.score ?? 0,
       }));
-      await tx`INSERT INTO daily_agent_snapshots ${tx(agentSnaps)}`;
+      await on(tx, insertAgentSnapshots)`INSERT INTO daily_agent_snapshots ${tx(agentSnaps, "agent_id", "snapshot_date", "x402_volume_usd", "x402_txn_count", "productivity_score")}`;
 
 
       // 5) Coin facets + a 30d price snapshot series per coin (draws the sparkline).
       for (let ci = 0; ci < p.coins.length; ci++) {
         const c = p.coins[ci];
-        const [{ id: coinId }] = await tx`
+        const [{ id: coinId }] = await on(tx, insertCoin)`
           INSERT INTO lobster_coins (project_id, name, ticker, market_cap, fdv, percent_change_24h)
           VALUES (${projectId}, ${c.name}, ${c.ticker}, ${c.marketCap}, ${c.fdv}, ${c.change24h})
           RETURNING id
@@ -381,19 +561,20 @@ export async function seedSmokeProjects(): Promise<void> {
           snapshot_date: ymd(now, d),
           price_usd: round6(wiggle(c.basePrice, ci + i + 1, d, 0.08)),
         }));
-        await tx`INSERT INTO daily_coin_snapshots ${tx(snaps)}`;
+        await on(tx, insertCoinSnapshots)`INSERT INTO daily_coin_snapshots ${tx(snaps, "coin_id", "snapshot_date", "price_usd")}`;
       }
 
       // 6) Wallet facets (summed into walletTotalUsd by the projection).
       if (p.wallets.length > 0) {
-        await tx`INSERT INTO tracked_wallets ${tx(
+        await on(tx, insertWallets)`INSERT INTO tracked_wallets ${tx(
           p.wallets.map((w) => ({ project_id: projectId, label: w.label, chain: w.chain, balance_usd: w.balanceUsd })),
+          "project_id", "label", "chain", "balance_usd",
         )}`;
       }
 
       // 7) Vault facet (presence only → the VLT flag).
       if (p.vault !== null) {
-        await tx`INSERT INTO agent_vaults (project_id, name) VALUES (${projectId}, ${p.vault})`;
+        await on(tx, insertVault)`INSERT INTO agent_vaults (project_id, name) VALUES (${projectId}, ${p.vault})`;
       }
     }
   });

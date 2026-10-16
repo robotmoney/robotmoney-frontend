@@ -35,6 +35,18 @@
 //                   favicon.svg was the SVG-first candidate and was rejected:
 //                   its monogram is a live <text> element in Helvetica Black,
 //                   so it re-renders differently on any machine lacking that cut.
+//                   `dualmint-2` wears it too: DualMint's second seat, taken
+//                   on 2026-10-14 after the first seat's keystore passphrase
+//                   was lost. Same operator, same mark. `dualmint` keeps its
+//                   entry so the first seat's takes still carry it.
+// - animoca-brands.svg  Minds by Animoca Brands wears its operator's mark.
+//                   animocabrands.com's Webclip.svg (their apple-touch-icon),
+//                   path geometry byte for byte. Two edits: the white plates
+//                   are lifted out, as for shodai, and the viewBox is trimmed
+//                   to the lockup's own 10px margin so it reads at 40px.
+//                   Animoca has no mark apart from the lockup; their favicon
+//                   is the same artwork. Their white logo was rejected: it
+//                   disappears on the light register.
 // - peaq.png        Woon's mark is its operator's: peaq's logo, supplied by
 //                   the team, trimmed to the mark and padded square. It
 //                   replaces a head crop of peaq's robot-hero.png, which was
@@ -42,10 +54,12 @@
 // - zyfai.png       Supplied by the team on an opaque #0C131C plate. The
 //                   plate is lifted out (edge pixels un-mixed against it) for
 //                   the same reason as shodai's; the mark itself is untouched.
-// - robot-money.svg Our own brand-assets/mark.svg, unchanged.
+// - robot-money.svg Our own brand-assets/mark.svg, unchanged. Themis wears it
+//                   too (RM-172): the judge is ours as well, and its Judge role
+//                   pill tells it apart from the member named Robot Money.
 //
 // Athena, Noop Analyst and Maximus deliberately keep derived marks. Athena and
-// Noop Analyst are house personas, and giving them the house mark would make
+// Noop Analyst are house analysts, and giving them the house mark would make
 // them indistinguishable from the member literally named Robot Money.
 //
 // Keyed on `handle`, not `id`: the handle is the stable public URL segment and
@@ -55,9 +69,12 @@
 export const MEMBER_LOGOS = {
   shodai: "/avatars/swarm/shodai.svg",
   dualmint: "/avatars/swarm/dualmint.png",
+  "dualmint-2": "/avatars/swarm/dualmint.png",
+  "minds-by-animoca-brands": "/avatars/swarm/animoca-brands.svg",
   woon: "/avatars/swarm/peaq.png",
   zyfai: "/avatars/swarm/zyfai.png",
   "robot-money": "/avatars/swarm/robot-money.svg",
+  themis: "/avatars/swarm/robot-money.svg",
 };
 
 /**

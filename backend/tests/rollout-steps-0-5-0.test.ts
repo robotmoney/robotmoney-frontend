@@ -3,12 +3,7 @@
 // job and cannot be skipped for being slow, matching
 // rollout-steps-0-3-0.test.ts's own stated reason for the same property.
 //
-// Deliberately NOT the full runbook<->manifest ```yaml step block matcher
-// 0.2.2-to-0.3.0/0.3.0-to-0.4.0's sibling tests use: v0.4.0 dropped that
-// heavyweight format in favor of prose cross-referencing release-runbooks.md's
-// generic §4 gates (docs/runbooks/v0-4-0-rollout.md has no yaml step blocks
-// at all), and v0-5-0-rollout.md follows that same, more recent convention.
-// What this file DOES pin — `requires` pointing backwards and resolving to
+// These checks pin `requires` pointing backwards and resolving to
 // real steps — is exactly the invariant rollout-where.ts's propagateBlocked()
 // depends on (its own header: "ONE FORWARD PASS SUFFICES because `requires`
 // always point BACKWARDS in manifest order"), and the one this release
@@ -18,8 +13,6 @@
 // (release-runbooks.md §3, revised 2026-09-11), reversing every prior
 // release's tag-first order.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { STEPS } from "../scripts/upgrades/0.4.0-to-0.5.0/steps.ts";
 
 describe("0.4.0-to-0.5.0 rollout manifest", () => {
@@ -54,6 +47,23 @@ describe("0.4.0-to-0.5.0 rollout manifest", () => {
     expect(ids.indexOf("P5.rehearsal")).toBeLessThan(ids.indexOf("P6.rc-tag"));
   });
 
+  test("P8.verify-prod is the LAST cutover step and requires postflight", () => {
+    // Schema shape and product behaviour are different questions, asked in
+    // that order: postflight proves the migration landed, verify-prod proves
+    // the live product satisfies its invariants. Ordering matters because
+    // `requires` must point BACKWARDS in manifest order for
+    // propagateBlocked() to resolve in one pass.
+    const ids = STEPS.map((s) => s.id);
+    expect(ids.indexOf("P8.postflight-prod")).toBeLessThan(ids.indexOf("P8.verify-prod"));
+    const verify = STEPS.find((s) => s.id === "P8.verify-prod")!;
+    expect(verify.requires).toContain("P8.postflight-prod");
+    expect(verify.hostRole).toBe("cutover");
+    // readonly, not full: a `full` leg drives the pipeline (publishes sessions,
+    // spends inference) and would manufacture the very history the readonly
+    // legs exist to audit.
+    expect(verify.verify).toContain("--tier readonly");
+  });
+
   test("P8.postflight-prod requires the RC tag in addition to preflight and rehearsal", () => {
     // Production postflight runs against a deployed RC — it should not be
     // gradeable as unblocked while no RC has even been cut yet.
@@ -69,41 +79,5 @@ describe("0.4.0-to-0.5.0 rollout manifest", () => {
     // can renumber this step's phase without silently falling through to the
     // generic "no receipt" evaluation path.
     expect(rcTag.id.endsWith(".rc-tag")).toBe(true);
-  });
-});
-
-// T31 · THE RC-TAG GATE MUST NAME EVERY CRITERION IT GATES.
-//
-// §5's list was split (criterion 7 became 7 and 8, and the consensus-receipt
-// auto-publish criterion was renumbered to 8) but §5.1's gate sentence was not
-// updated: it still authorised cutting the rc tag "once every criterion above
-// (1–7) passes". The one criterion left outside the literal gate is the one the
-// runbook itself calls the release's single operator-observable behaviour
-// change, AND the only one whose failure mode is a silent fifteen-minute wait
-// rather than a printed FAIL row — so an operator who interrupts the hang reads
-// "criteria 1-7 passed" off the postflight output that did complete and tags an
-// unrehearsed candidate, consuming an rc number.
-describe("the v0.5.0 runbook's RC-tag gate", () => {
-  const runbook = readFileSync(
-    join(import.meta.dir, "..", "..", "docs", "runbooks", "v0-5-0-rollout.md"),
-    "utf8",
-  );
-  const gate = runbook.slice(runbook.indexOf("### 5.1 Cut the RC tag"));
-
-  test("§5 numbers exactly eight criteria", () => {
-    const list = runbook.slice(runbook.indexOf("release acceptance criteria"), runbook.indexOf("### 5.1"));
-    const numbers = [...list.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
-    expect(numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-  });
-
-  test("§5.1 gates on 1–8, not 1–7", () => {
-    expect(gate).toMatch(/every criterion above \(1[–-]8\) passes/);
-    expect(gate).not.toMatch(/every criterion above \(1[–-]7\) passes/);
-  });
-
-  test("§5.1 says criterion 8 is proved by the rehearsal's EXIT CODE", () => {
-    expect(gate).toMatch(/stage-rehearsal\.ts/);
-    expect(gate).toMatch(/exit/i);
-    expect(gate).toMatch(/not by reading the\s+postflight table/i);
   });
 });

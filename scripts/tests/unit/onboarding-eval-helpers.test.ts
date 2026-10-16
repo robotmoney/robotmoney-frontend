@@ -166,7 +166,7 @@ describe("onboarding-eval pure helpers", () => {
   test("resolveModelConfig defaults to the funded registry default when AGENT_MODEL is unset", () => {
     const cfg = resolveModelConfig({ OPENCODE_API_KEY: "sk-zen" });
     expect(cfg.model).toBe(DEFAULT_INFERENCE_MODEL);
-    expect(cfg.model).toBe("opencode/deepseek-v4-flash");
+    expect(cfg.model).toBe("opencode/deepseek-v4.1-flash");
     expect(cfg).toEqual({ model: DEFAULT_INFERENCE_MODEL, apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen", keyless: false });
   });
 
@@ -177,7 +177,7 @@ describe("onboarding-eval pure helpers", () => {
 
   test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
     // A key set for an unrelated reason must never get pulled into a keyless run.
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen", RM_ENV: "smoke" });
+    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" }, { path: "development" });
     expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
   });
 
@@ -209,7 +209,7 @@ describe("onboarding-eval pure helpers", () => {
   test("isKeylessModel is derived from the registry, and big-pickle stays reachable but is not the default", () => {
     expect(isKeylessModel("opencode/nemotron-3-ultra-free")).toBe(true);
     expect(isKeylessModel("opencode/big-pickle")).toBe(true);
-    expect(isKeylessModel("opencode/deepseek-v4-flash")).toBe(false);
+    expect(isKeylessModel("opencode/deepseek-v4.1-flash")).toBe(false);
     // Saturated upstream with no paid tier — deliberately no longer the default.
     expect(DEFAULT_INFERENCE_MODEL).not.toBe("opencode/big-pickle");
   });
@@ -309,7 +309,7 @@ describe("onboarding-eval pure helpers", () => {
 // eval spends 20 minutes riding. Any drift here is a behaviour change to that
 // gate, not a refactor.
 describe("member-agent container primitive", () => {
-  const FUNDED: MemberAgentModel = { model: "opencode/deepseek-v4-flash", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen" };
+  const FUNDED: MemberAgentModel = { model: "opencode/deepseek-v4.1-flash", apiKeyEnv: "OPENCODE_API_KEY", apiKey: "sk-zen" };
   const KEYLESS: MemberAgentModel = { model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null };
 
   const base = {
@@ -364,9 +364,11 @@ describe("member-agent container primitive", () => {
   test("FUNDED: the argv is byte-for-byte what the eval spawns, with exactly one -e credential", () => {
     expect(buildMemberAgentArgv({ ...base, modelConfig: FUNDED })).toEqual([
       "docker",
-      "compose", "-p", "rm_smoke_stack_abc",
+      // `--env-file /dev/null` rides along because this argv is built by
+      // composeArgs(): a container-creating call must not interpolate from the
+      // checkout's own `.env` (scripts/stack/config.ts).
+      "compose", "--env-file", "/dev/null", "-p", "rm_smoke_stack_abc",
       "-f", "docker-compose.yml",
-      "-f", "docker-compose.smoke.yml",
       "run",
       "--rm",
       "--no-deps",
@@ -375,10 +377,10 @@ describe("member-agent container primitive", () => {
       "-e", "OPENCODE_API_KEY=sk-zen",
       "member-agent",
       "run",
-      "--model", "opencode/deepseek-v4-flash",
+      "--model", "opencode/deepseek-v4.1-flash",
       "--format", "json",
       "--auto",
-      "--title", "onboarding-eval-run1-opencode-deepseek-v4-flash",
+      "--title", "onboarding-eval-run1-opencode-deepseek-v4.1-flash",
       "--print-logs",
       "--log-level", "DEBUG",
       "--dir", "/home/agent",
@@ -501,7 +503,7 @@ describe("member-agent container primitive", () => {
   });
 
   // ── The compose child's environment (2026-07-27) ──────────────────────────
-  // `docker compose run` re-resolves the WHOLE project, and docker-compose.smoke.yml
+  // `docker compose run` re-resolves the WHOLE project, and docker-compose.yml
   // labels the pgdata volume with ${SMOKE_PROJECT}. A child without it hashes a
   // different volume definition than `stack.up()` recorded, and compose then
   // asks — interactively — whether to recreate the live database. Reproduced on
@@ -548,10 +550,11 @@ describe("member-agent container primitive", () => {
 // re-proving the eval.
 describe("runOnboardingEvalWithRetry", () => {
   const FUNDED_ENV = { OPENCODE_API_KEY: "sk-zen" };
-  // RM_ENV IS STATED. Under D13 an unset RM_ENV is the acceptance path, where a
-  // keyless model is refused outright; these cases are about the DEVELOPMENT
-  // retry rules, so the env says which environment it is.
-  const KEYLESS_ENV = { AGENT_MODEL: "free", RM_ENV: "smoke" };
+  // THE PATH IS STATED. A caller that states none is the acceptance path, where
+  // a keyless model is refused outright; these cases are about the DEVELOPMENT
+  // retry rules, so each run states that path (issue 1326).
+  const KEYLESS_ENV = { AGENT_MODEL: "free" };
+  const DEV_PATH = { path: "development" as const };
 
   function fakeResult(overrides: Partial<OnboardingEvalResult> = {}): OnboardingEvalResult {
     return {
@@ -674,7 +677,7 @@ describe("runOnboardingEvalWithRetry", () => {
 
   // A bare timeout is retried on EVERY tier. It used to be keyless-only, on the
   // theory that a funded model is fast enough for a timeout to mean something.
-  // Measured otherwise on 2026-07-28: a funded `opencode/deepseek-v4-flash`
+  // Measured otherwise on 2026-07-28: a funded `opencode/deepseek-v4.1-flash`
   // generated its key, said "Key generated! Now I need to build the canonical
   // application payload bytes", and then emitted nothing at all for ~18 minutes
   // — no tool call, no token, no error.
@@ -695,6 +698,7 @@ describe("runOnboardingEvalWithRetry", () => {
         backendUrl: "http://x",
         automationToken: "t",
         env,
+        modelPath: DEV_PATH,
         backoffMsSchedule: [0],
         runOnce: async () => {
           calls++;
@@ -714,6 +718,7 @@ describe("runOnboardingEvalWithRetry", () => {
         backendUrl: "http://x",
         automationToken: "t",
         env,
+        modelPath: DEV_PATH,
         backoffMsSchedule: [0],
         runOnce: async () => {
           calls++;
@@ -779,6 +784,7 @@ describe("runOnboardingEvalWithRetry", () => {
       backendUrl: "http://x",
       automationToken: "t",
       env: KEYLESS_ENV, // a tier whose bare timeouts ARE retried — this still is not
+      modelPath: DEV_PATH,
       backoffMsSchedule: [0],
       runOnce: async () => {
         calls++;

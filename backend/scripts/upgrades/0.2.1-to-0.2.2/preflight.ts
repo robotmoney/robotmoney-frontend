@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
-import { type Db, runPreflightMain } from "../../lib/preflight-utils.ts";
+import { type Db, homeEnvFilePath, runPreflightMain } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 // The migration list lives in steps.ts, not here. This file and postflight.ts
 // each used to declare their own copy, and the copies disagreed — postflight
@@ -33,7 +33,7 @@ const migrationsDir = join(scriptDir, "..", "..", "..", "migrations");
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
 // backend/scripts/upgrades/0.2.1-to-0.2.2/ -> <repo root>/.env.readonly
-const envPath = join(scriptDir, "..", "..", "..", "..", ".env.readonly");
+const envPath = homeEnvFilePath();
 
 /** Lock duration on swarm_members is proportional to row count: 0030 runs
  *  ADD COLUMN + full-table UPDATE + SET NOT NULL + CREATE UNIQUE INDEX inside

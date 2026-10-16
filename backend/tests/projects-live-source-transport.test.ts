@@ -12,7 +12,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
 import { liveProjectsDataSource } from "../src/projects/access/live-source.ts";
-import { _resetRpcConcurrencyForTests, decodeAggregate3Calls, encodeAggregate3Result, MULTICALL3_ADDRESS, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
+import {
+  _resetRpcConcurrencyForTests,
+  decodeAggregate3Calls,
+  encodeAggregate3Result,
+  MULTICALL3_ADDRESS,
+  MULTICALL3_MAX_SUBCALLS_PER_POST,
+  type Aggregate3Result,
+} from "../src/chain/base-rpc-client.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 
 const realFetch = globalThis.fetch;
@@ -215,6 +222,118 @@ test("(f) walletBalanceUsd refuses a non-'base' chain without ever opening a soc
   await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "ethereum")).rejects.toThrow(/only covers chain "base"/);
   await expect(liveProjectsDataSource.walletBalanceUsd(WALLET, "solana")).rejects.toThrow(/only covers chain "base"/);
   expect(calls).toBe(0);
+});
+
+// Issue 1275: refreshWallets asks supportsWallet before each read, so the
+// rule must accept exactly what walletBalanceUsd can read: chain "base" with a
+// 0x-prefixed 40-hex address. Everything else is skipped, never read.
+test("(g) supportsWallet is true only for chain 'base' with a 0x plus 40-hex address", () => {
+  const s = liveProjectsDataSource;
+  expect(s.supportsWallet(WALLET, "base")).toBe(true);
+  expect(s.supportsWallet("0x" + "AbCdEf".repeat(6) + "0123", "base")).toBe(true);
+  // Other chains, even with a valid EVM address.
+  expect(s.supportsWallet(WALLET, "ethereum")).toBe(false);
+  expect(s.supportsWallet(WALLET, "solana")).toBe(false);
+  expect(s.supportsWallet(WALLET, "Base")).toBe(false);
+  expect(s.supportsWallet(WALLET, "")).toBe(false);
+  // Non-EVM or malformed addresses on base.
+  expect(s.supportsWallet("7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "base")).toBe(false);
+  expect(s.supportsWallet("0xwallet0000000000000000000000000000000aaa", "base")).toBe(false);
+  expect(s.supportsWallet("0x" + "cd".repeat(19), "base")).toBe(false);
+  expect(s.supportsWallet("0x" + "cd".repeat(21), "base")).toBe(false);
+  expect(s.supportsWallet("cd".repeat(20), "base")).toBe(false);
+  expect(s.supportsWallet(` ${WALLET}`, "base")).toBe(false);
+  expect(s.supportsWallet("", "base")).toBe(false);
+});
+
+// ── walletBalancesUsd (issue 1373) ───────────────────────────────────────────
+// refreshWallets reads every Base wallet through this one batched call. Each
+// wallet is a Multicall3 getEthBalance sub-call built by readChainAmountsBatched,
+// split into MULTICALL3_MAX_SUBCALLS_PER_POST-sized POSTs. It must never fall
+// back to one RPC request per wallet, and it reads the ETH price once.
+const walletAt = (i: number): string => "0x" + "5e".repeat(4) + i.toString(16).padStart(32, "0");
+const getEthBalanceTarget = (callData: string): string => "0x" + callData.slice(-40);
+
+interface BatchMock {
+  posts: { method: string; wallets: string[] }[];
+  geckoCalls: number;
+}
+
+// Answers each aggregate3 POST with 1 ETH per wallet. `failSubCall` reverts one
+// wallet's sub-call; `failPostWith` makes every POST carrying that wallet fail
+// at the JSON-RPC level (retries see the same failure).
+function mockBatchedEth(opts: { failSubCall?: string; failPostWith?: string } = {}): BatchMock {
+  const m: BatchMock = { posts: [], geckoCalls: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("geckoterminal.com")) {
+      m.geckoCalls += 1;
+      const addrs = u.split("/token_price/")[1]!.toLowerCase().split(",");
+      const token_prices: Record<string, string> = {};
+      for (const addr of addrs) token_prices[addr] = "2000";
+      return new Response(JSON.stringify({ data: { attributes: { token_prices } } }), { status: 200 });
+    }
+    const body = JSON.parse(String(init?.body)) as { id?: number; method: string; params: [{ to: string; data: string }, string] };
+    const calls = body.method === "eth_call" ? decodeAggregate3Calls(body.params[0].data) : [];
+    const wallets = calls.map((c) => getEthBalanceTarget(c.callData));
+    m.posts.push({ method: body.method, wallets });
+    expect(body.params[0].to).toBe(MULTICALL3_ADDRESS);
+    for (const c of calls) {
+      expect(c.target.toLowerCase()).toBe(MULTICALL3_ADDRESS.toLowerCase());
+      expect(c.callData.slice(0, 10)).toBe(GET_ETH_BALANCE);
+    }
+    if (opts.failPostWith && wallets.includes(opts.failPostWith)) {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, error: { code: -32000, message: "forced chunk failure" } }), { status: 200 });
+    }
+    const results: Aggregate3Result[] = wallets.map((w) =>
+      w === opts.failSubCall ? { success: false, returnData: "0x" } : { success: true, returnData: word(1_000_000_000_000_000_000n) },
+    );
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id ?? 1, result: encodeAggregate3Result(results) }), { status: 200 });
+  }) as unknown as typeof fetch;
+  return m;
+}
+
+test("(h) walletBalancesUsd reads 250 wallets as chunked Multicall3 getEthBalance sub-calls, never one RPC request per wallet, with one price read", async () => {
+  const wallets = Array.from({ length: 250 }, (_, i) => walletAt(i));
+  const m = mockBatchedEth();
+  const reads = await liveProjectsDataSource.walletBalancesUsd(wallets, "base");
+
+  expect(m.posts.length).toBe(Math.ceil(250 / MULTICALL3_MAX_SUBCALLS_PER_POST));
+  expect(m.posts.every((p) => p.method === "eth_call")).toBe(true); // no eth_getBalance per wallet
+  expect(m.posts.every((p) => p.wallets.length <= MULTICALL3_MAX_SUBCALLS_PER_POST)).toBe(true);
+  // Every wallet is asked for exactly once across the chunks.
+  expect(m.posts.flatMap((p) => p.wallets).sort()).toEqual([...wallets].sort());
+  expect(m.geckoCalls).toBe(1);
+  expect(reads.size).toBe(250);
+  for (const w of wallets) expect(reads.get(w)).toEqual({ ok: true, balanceUsd: 2000 });
+});
+
+test("(i) walletBalancesUsd fails only the reverted wallet and only the wallets of a chunk whose POST threw", async () => {
+  process.env.BASE_RPC_MAX_RETRIES = "0";
+  const wallets = Array.from({ length: 250 }, (_, i) => walletAt(i));
+  const reverted = walletAt(3);
+  const inBrokenChunk = walletAt(150);
+  const m = mockBatchedEth({ failSubCall: reverted, failPostWith: inBrokenChunk });
+  const reads = await liveProjectsDataSource.walletBalancesUsd(wallets, "base");
+
+  const broken = new Set(m.posts.find((p) => p.wallets.includes(inBrokenChunk))!.wallets);
+  expect(broken.size).toBe(MULTICALL3_MAX_SUBCALLS_PER_POST);
+  expect(broken.has(reverted)).toBe(false);
+  for (const w of wallets) {
+    const r = reads.get(w)!;
+    if (w === reverted || broken.has(w)) expect(r.ok).toBe(false);
+    else expect(r).toEqual({ ok: true, balanceUsd: 2000 });
+  }
+  expect(m.geckoCalls).toBe(1);
+});
+
+test("(j) walletBalancesUsd collapses duplicate and mixed-case addresses to one sub-call, keyed lowercase", async () => {
+  const m = mockBatchedEth();
+  const reads = await liveProjectsDataSource.walletBalancesUsd([WALLET, WALLET.toUpperCase().replace("0X", "0x"), WALLET], "base");
+  expect(m.posts.length).toBe(1);
+  expect(m.posts[0]!.wallets).toEqual([WALLET]);
+  expect([...reads.keys()]).toEqual([WALLET]);
+  expect(reads.get(WALLET)).toEqual({ ok: true, balanceUsd: 2000 });
 });
 
 // CI grep (AC): the live source contains ZERO hand-rolled RPC construction —

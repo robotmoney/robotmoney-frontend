@@ -6,7 +6,7 @@ export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
 // /allocation, whose Vaults section lists all four: router.js moves the
 // address to /allocation#vaults.
 export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
-export const PERFORMANCE_VIEW = `${VIEW_DIR}/performance.html`;
+export const TREASURY_VIEW = `${VIEW_DIR}/treasury.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
 export const NOT_FOUND_VIEW = `${VIEW_DIR}/not-found.html`;
@@ -154,8 +154,12 @@ const ROUTES = {
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
   "/allocation": ALLOCATION_VIEW,
-  "/performance": PERFORMANCE_VIEW,
-  "/allocation2": PERFORMANCE_VIEW, // legacy redirect
+  // The protocol wallets' page (RM-157). /performance was its address until
+  // October 2026 and /allocation2 before that; both resolve here and router.js
+  // moves the address bar to /treasury.
+  "/treasury": TREASURY_VIEW,
+  "/performance": TREASURY_VIEW, // legacy redirect
+  "/allocation2": TREASURY_VIEW, // legacy redirect
   // /vault renders /allocation (RM-115's URL table): an address people
   // already hold is worth more resolving to the page that answers it than
   // 404ing. router.js rewrites it to /allocation#vaults before rendering, and

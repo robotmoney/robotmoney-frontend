@@ -56,7 +56,10 @@ interface ActiveAcquisition {
 const active = new AsyncLocalStorage<ActiveAcquisition>();
 
 const SECRET_QUERY_KEYS = /^(api_?key|token|access_?token|secret|password|credential|authorization)$/i;
-const SECRET_HEADER_KEYS = /^(authorization|proxy-authorization|x-api-key|api-key|cookie|set-cookie)$/i;
+// Any header whose name ends in `api-key` carries a credential: x-api-key, api-key, and CoinGecko's x-cg-pro-api-key and
+// x-cg-demo-api-key. The list used to name only the first two, so the paid CoinGecko key would have been written in plain
+// text to the append-only source_fetches table the first time a request carried it (issue 1062).
+const SECRET_HEADER_KEYS = /^(authorization|proxy-authorization|cookie|set-cookie)$|api-?key$/i;
 
 export function redactRequestIdentity(urlText: string, headers: Record<string, string> = {}): SourceFetchEvidence["requestIdentity"] {
   const url = new URL(urlText);

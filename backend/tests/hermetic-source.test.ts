@@ -10,6 +10,7 @@ import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
@@ -61,8 +62,8 @@ test("hermeticDataSource is deterministic (same series across runs)", async () =
 // fed the hermetic source — with the network hard-banned for the whole run.
 test("runAnalytics(hermetic) persists regime + research OFFLINE (smoke/e2e path)", async () => {
   const ASOF = new Date().toISOString().slice(0, 10);
-  await sql`DELETE FROM raw_indicator_history`;
-  await sql`DELETE FROM research_signals WHERE date = ${ASOF}`;
+  await fixtureDb`DELETE FROM raw_indicator_history`;
+  await fixtureDb`DELETE FROM research_signals WHERE date = ${ASOF}`;
 
   banNetwork();
   const results = await runAnalytics(ASOF, undefined, hermeticDataSource, directAnalyticsPersistence);

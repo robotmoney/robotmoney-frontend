@@ -22,6 +22,7 @@ const SIGNING_KEYS = new Set([
   "memoUrl",
   "reportSnapshotId",
   "weights",
+  "sessionId",
 ]);
 
 const SUBMISSION_KEYS = new Set([
@@ -35,6 +36,7 @@ const SUBMISSION_KEYS = new Set([
   "memoUrl",
   "reportSnapshotId",
   "weights",
+  "sessionId",
   "signature",
 ]);
 
@@ -68,6 +70,17 @@ export function requiredString(
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized && normalized.length <= max ? normalized : null;
+}
+
+// Issue #1249: the session a take names (swarm_sessions.id, a uuid), or
+// omitted. `null` means present but malformed, as optionalReportSnapshotId.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SESSION_ID_ERROR = "sessionId must be a session id (uuid string), or omitted";
+function optionalSessionId(body: JsonObject): string | undefined | null {
+  if (body.sessionId === undefined) return undefined;
+  const value = body.sessionId;
+  if (typeof value !== "string" || !UUID_RE.test(value.trim())) return null;
+  return value.trim().toLowerCase();
 }
 
 export function optionalString(
@@ -227,6 +240,11 @@ export function validateSubmission(
     return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
   }
 
+  const sessionId = optionalSessionId(body);
+  if (sessionId === null) {
+    return { ok: false, error: SESSION_ID_ERROR };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance || !signature ||
     typeof confidence !== "number"
@@ -248,6 +266,7 @@ export function validateSubmission(
       memoUrl: optionalString(body, "memoUrl", 2000),
       reportSnapshotId,
       weights,
+      sessionId,
     },
   };
 }
@@ -306,6 +325,12 @@ export function validateSigningDraft(
     return { ok: false, error: "reportSnapshotId must be a positive integer id (string), or omitted" };
   }
 
+  // Accepted so a member signs the same draft it submits, and dropped from
+  // the result: sessionId is outside the signed bytes (issue #1249).
+  if (optionalSessionId(body) === null) {
+    return { ok: false, error: SESSION_ID_ERROR };
+  }
+
   if (
     !memberId || !date || !subjectId || !nonce || !stance ||
     typeof confidence !== "number"
@@ -349,6 +374,7 @@ export function parseSubjectCreate(body: JsonObject | null): {
   id: string; name: string; operator?: string; homepage?: string; xHandle?: string; thesisBlurb?: string;
   wallets?: unknown; nftContracts?: unknown; source?: unknown; recommendationType?: string;
   linkedMemberId?: string; structuralNotes?: unknown; lastReviewed?: string;
+  epochDuration?: unknown; epochAnchor?: unknown; judgingDurationSeconds?: unknown;
 } | null {
   if (!body) return null;
   const id = requiredString(body, "id", 100);
@@ -367,6 +393,16 @@ export function parseSubjectCreate(body: JsonObject | null): {
     linkedMemberId: optionalString(body, "linkedMemberId", 100),
     structuralNotes: body.structuralNotes,
     lastReviewed: optionalString(body, "lastReviewed", 10),
+    // The three scheduling columns (scheduler spec §2.2, D53 (7)) are passed
+    // through unvalidated ON PURPOSE, and PRESENT-BUT-WRONG stays present: a
+    // `null` or a string is handed on as-is so createSubjectAdmin refuses it
+    // with a message naming the field (§2.4: no NULL, no non-positive
+    // duration). Dropping a non-number here would silently turn an explicit
+    // `null` into "use the schema default", and a second check here would be a
+    // second place for the rule to drift from migrations 0085/0090's CHECKs.
+    epochDuration: "epochDuration" in body ? body.epochDuration : undefined,
+    epochAnchor: "epochAnchor" in body ? body.epochAnchor : undefined,
+    judgingDurationSeconds: "judgingDurationSeconds" in body ? body.judgingDurationSeconds : undefined,
   };
 }
 
@@ -441,19 +477,6 @@ export function parseRegisterMember(body: JsonObject | null): {
   const publicKey = requiredString(body, "publicKey", 1000);
   if (!memberId || !name || !publicKey) return null;
   return { memberId, name, publicKey, lens: optionalString(body, "lens", 500), contact: optionalString(body, "contact", 320) };
-}
-
-export function parseSessionCreate(body: JsonObject | null): {
-  date: string; subjectId: string; briefOpensAt: string; windowClosesAt: string; publishAt: string;
-} | null {
-  if (!body) return null;
-  const date = requiredString(body, "date", 10);
-  const subjectId = requiredString(body, "subjectId", 100);
-  const briefOpensAt = requiredString(body, "briefOpensAt", 40);
-  const windowClosesAt = requiredString(body, "windowClosesAt", 40);
-  const publishAt = requiredString(body, "publishAt", 40);
-  if (!date || !subjectId || !briefOpensAt || !windowClosesAt || !publishAt) return null;
-  return { date, subjectId, briefOpensAt, windowClosesAt, publishAt };
 }
 
 // ── Self-service member profile (issue #325) ────────────────────────────────
@@ -532,14 +555,13 @@ export function validateMemberProfile(body: JsonObject | null): ValidationResult
   if (body.operator !== undefined) {
     const v = requiredString(body, "operator", 200);
     if (!v) return { ok: false, error: "operator must be a non-empty string up to 200 chars" };
-    // Issue #925, defense in depth. `judge-session.ts`'s in-house exemption no
-    // longer reads `operator` at all (it keys off `handle`, which self-service
-    // can never set), so this check gates nothing security-relevant by
-    // itself. It exists only because `GET /api/swarm/members` renders
-    // `operator` verbatim (issue #918) — refusing the literal in-house value
-    // stops an ordinary member from cosmetically forging itself as
-    // 'robotmoney'-operated on the public roster, while an ordinary operator
-    // string ('peaq', 'self', ...) still goes through untouched.
+    // Issue #925, re-armed by D52. The judge's third-party gate is keyed on
+    // `operator` (swarm/domain.ts submitJudgement, smoke-production-spec.md
+    // §6.2), so the in-house literal is security-relevant: a member that could
+    // write it into its own row would judge while third-party judging is off.
+    // `updateMemberProfile` refuses it at the writer as well; this is the
+    // route's half, and an ordinary operator string ('peaq', 'self', ...) still
+    // goes through untouched.
     if (v.toLowerCase() === "robotmoney") {
       return { ok: false, error: "operator cannot be set to 'robotmoney' via self-service" };
     }

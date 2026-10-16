@@ -9,7 +9,7 @@
 // command reclaims them.
 //
 // What it removes: EXACTLY the volumes labeled robotmoney.smoke=1 (applied only by
-// docker-compose.smoke.yml — see scripts/lib/smoke-volumes.ts). Never a
+// docker-compose.yml — see scripts/lib/smoke-volumes.ts). Never a
 // name-substring match. With `--project <name>` it scopes to one run's volume
 // (used by CI teardown so a shared self-hosted runner deletes only its own run,
 // never a co-tenant standing smoke). Every volume also now carries

@@ -14,6 +14,124 @@
 // revenue source covers the whole directory, only a subset of Virtuals-protocol
 // agents (see worker/handlers/projects.ts syncRevenue).
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1): reads, one per
+// relation, reached only through GET /api/projects.
+const PROJECTS_ROUTE = "src/api/routes/projects";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const directoryProjects = registerQuery({
+  role: "rm_app",
+  object: "projects",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.projects",
+  purpose: "Read the active projects above the coverage floor, best-covered first.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, slug, display_name, logo_url, description, overview_short, overview_long,
+             website_url, twitter_handle, data_coverage_score, is_sticky, has_agent
+      FROM projects WHERE status = 'active' AND data_coverage_score >= $1 ORDER BY data_coverage_score DESC`,
+    params: [0],
+  },
+});
+
+const directoryCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.coins",
+  purpose: "Read the listed projects' active coins.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h, refreshed_at
+      FROM lobster_coins WHERE project_id IN ($1::uuid) AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const directoryWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.wallets",
+  purpose: "Read the listed projects' active tracked wallets.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, project_id, label, balance_usd, chain, refreshed_at
+      FROM tracked_wallets WHERE project_id IN ($1::uuid) AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const directoryAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.agents",
+  purpose: "Read the listed projects' active agents.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT id, project_id, protocol_standard, x402_score, x402_txn_count, x402_resources_count
+      FROM openclaw_agents WHERE project_id IN ($1::uuid) AND is_active = true`,
+    params: [SAMPLE_ID],
+  },
+});
+
+const directoryVaults = registerQuery({
+  role: "rm_app",
+  object: "agent_vaults",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.vaults",
+  purpose: "Read the listed projects' active vaults' TVL.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: "SELECT id, project_id, tvl_usd FROM agent_vaults WHERE project_id IN ($1::uuid) AND is_active = true",
+    params: [SAMPLE_ID],
+  },
+});
+
+const directoryRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.revenue",
+  purpose: "Read the listed agents' last 30 days of daily revenue.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date ORDER BY revenue_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const directoryCoinSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_coin_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.coinSnapshots",
+  purpose: "Read the listed coins' last 30 days of daily prices.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT coin_id, price_usd FROM daily_coin_snapshots
+      WHERE coin_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const directoryAgentSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/projections:fetchProjects.agentSnapshots",
+  purpose: "Read the listed agents' last 30 days of daily snapshots.",
+  callers: [PROJECTS_ROUTE],
+  probe: {
+    statement: `SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count, productivity_score
+      FROM daily_agent_snapshots WHERE agent_id IN ($1::uuid) AND snapshot_date >= $2::date ORDER BY snapshot_date ASC`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
 import type { Project, ProjectCoin, ProjectWallet, ProjectsResponse } from "@robotmoney/contract";
 
 // Directory floor: only projects in the top coverage tier are listed (matches the
@@ -75,7 +193,7 @@ export function selectPrimaryCoinId(coins: Pick<ProjectCoin, "id" | "marketCap">
 // first-load sticky pins lead, then by max coin market cap desc, then coverage
 // score desc. Interactive re-sorting is a client concern (the Alpine view).
 export async function fetchProjects(): Promise<ProjectsResponse> {
-  const projects = await sql`
+  const projects = await on(sql, directoryProjects)`
     SELECT id, slug, display_name, logo_url, description, overview_short, overview_long,
            website_url, twitter_handle, data_coverage_score, is_sticky, has_agent
     FROM projects
@@ -87,13 +205,13 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
   const ids = projects.map((p) => p.id as string);
 
   const [coins, wallets, agents, vaults] = await Promise.all([
-    sql`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h, refreshed_at
+    on(sql, directoryCoins)`SELECT id, project_id, name, ticker, market_cap, fdv, percent_change_24h, price_usd, volume_24h, refreshed_at
         FROM lobster_coins WHERE project_id IN ${sql(ids)} AND is_active = true`,
-    sql`SELECT id, project_id, label, balance_usd, chain, refreshed_at
+    on(sql, directoryWallets)`SELECT id, project_id, label, balance_usd, chain, refreshed_at
         FROM tracked_wallets WHERE project_id IN ${sql(ids)} AND is_active = true`,
-    sql`SELECT id, project_id, protocol_standard, x402_score, x402_txn_count, x402_resources_count
+    on(sql, directoryAgents)`SELECT id, project_id, protocol_standard, x402_score, x402_txn_count, x402_resources_count
         FROM openclaw_agents WHERE project_id IN ${sql(ids)} AND is_active = true`,
-    sql`SELECT id, project_id, tvl_usd FROM agent_vaults WHERE project_id IN ${sql(ids)} AND is_active = true`,
+    on(sql, directoryVaults)`SELECT id, project_id, tvl_usd FROM agent_vaults WHERE project_id IN ${sql(ids)} AND is_active = true`,
   ]);
 
   const agentIds = agents.map((a) => a.id as string);
@@ -102,17 +220,17 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
 
   const [revenue, snaps, agentSnaps] = await Promise.all([
     agentIds.length
-      ? sql`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      ? on(sql, directoryRevenue)`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff}
             ORDER BY revenue_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     coinIds.length
-      ? sql`SELECT coin_id, price_usd FROM daily_coin_snapshots
+      ? on(sql, directoryCoinSnapshots)`SELECT coin_id, price_usd FROM daily_coin_snapshots
             WHERE coin_id IN ${sql(coinIds)} AND snapshot_date >= ${cutoff}
             ORDER BY snapshot_date ASC`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count, productivity_score
+      ? on(sql, directoryAgentSnapshots)`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count, productivity_score
             FROM daily_agent_snapshots
             WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff}
             ORDER BY snapshot_date ASC`

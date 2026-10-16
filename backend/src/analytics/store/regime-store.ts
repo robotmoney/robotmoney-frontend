@@ -9,6 +9,7 @@
 // ({raw_value, raw_date, transformed_value, percentile, signed_percentile,
 // panel_weight, sparkline}) in the `indicators` jsonb. Pure I/O — no compute.
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import type postgres from "postgres";
 // The row shape lives in the pure (DB-free) projection module so the shared eq
 // mapper can import it without pulling in this Postgres client. Re-exported here
@@ -29,8 +30,38 @@ export async function saveRegimeSnapshots(
   }
 }
 
+// The columns the upsert writes, in the statement's order. The probe below is
+// built from this list, so it cannot drift from the column list it proves.
+const UPSERT_COLUMNS = [
+  "date", "composite", "composite_percentile", "regime",
+  "macro_regime", "onchain_regime", "factor_regime",
+  "macro_index", "onchain_index", "factor_index",
+  "macro_percentile", "onchain_percentile", "factor_percentile",
+  "panel_weights", "version", "source", "percentiles", "indicators",
+  "panels", "bucket_thresholds", "backtest", "correlations", "extras",
+] as const;
+
+const upsertRegime = registerQuery({
+  role: "rm_app",
+  object: "regime_snapshots",
+  // SELECT as well: ON CONFLICT (date) reads the arbiter column, which Postgres checks as a read.
+  privileges: ["INSERT", "UPDATE", "SELECT"],
+  site: "src/analytics/store/regime-store:saveRegimeSnapshots",
+  purpose: "Upsert one regime snapshot on its date, so re-running a slot overwrites the row rather than duplicating it.",
+  // The swarm route and the analytics route (through output-snapshot-store) publish snapshots; the
+  // one-shot importer writes the vendored fixture.
+  callers: ["src/api/routes/swarm", "src/api/routes/analytics", "src/db/import-regime-eq"],
+  probe: {
+    statement:
+      `INSERT INTO regime_snapshots (${UPSERT_COLUMNS.join(", ")}) ` +
+      `SELECT ${UPSERT_COLUMNS.map((_, i) => `$${i + 1}`).join(", ")} WHERE false ` +
+      `ON CONFLICT (date) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== "date").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}`,
+    params: UPSERT_COLUMNS.map((c) => (c === "date" ? "2000-01-01" : null)),
+  },
+});
+
 async function upsertSnapshot(s: RegimeSnapshotRow, db: DbHandle): Promise<void> {
-  await db`
+  await on(db, upsertRegime)`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
          macro_regime, onchain_regime, factor_regime,
@@ -73,37 +104,4 @@ async function upsertSnapshot(s: RegimeSnapshotRow, db: DbHandle): Promise<void>
         backtest = EXCLUDED.backtest,
         correlations = EXCLUDED.correlations,
         extras = EXCLUDED.extras`;
-}
-
-// Read one snapshot back as a typed row (numerics coerced from Postgres text).
-// Used by the store round-trip tests and available to the report stage.
-export async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRow | null> {
-  const [row] = await sql`SELECT * FROM regime_snapshots WHERE date = ${date}`;
-  if (!row) return null;
-  const num = (v: unknown): number | null => (v == null ? null : Number(v));
-  return {
-    date: typeof row.date === "string" ? row.date : new Date(row.date).toISOString().slice(0, 10),
-    composite: num(row.composite),
-    compositePercentile: num(row.composite_percentile),
-    regime: row.regime ?? null,
-    macroRegime: row.macro_regime ?? null,
-    onchainRegime: row.onchain_regime ?? null,
-    factorRegime: row.factor_regime ?? null,
-    macroIndex: num(row.macro_index),
-    onchainIndex: num(row.onchain_index),
-    factorIndex: num(row.factor_index),
-    macroPercentile: num(row.macro_percentile),
-    onchainPercentile: num(row.onchain_percentile),
-    factorPercentile: num(row.factor_percentile),
-    panelWeights: (row.panel_weights ?? null) as Record<string, Record<string, number>> | null,
-    version: row.version ?? null,
-    source: (row.source ?? null) as string | null,
-    percentiles: (row.percentiles ?? {}) as Record<string, number>,
-    indicators: (row.indicators ?? []) as RegimeSnapshotRow["indicators"],
-    panels: (row.panels ?? null) as readonly string[] | null,
-    bucketThresholds: (row.bucket_thresholds ?? null) as Record<string, unknown> | null,
-    backtest: (row.backtest ?? null) as Record<string, unknown> | null,
-    correlations: (row.correlations ?? null) as Record<string, unknown> | null,
-    extras: (row.extras ?? null) as Record<string, unknown> | null,
-  };
 }

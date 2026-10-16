@@ -37,7 +37,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalizeApplication, canonicalizeClaimChallenge, canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { fetchRmpc, runRmpcJson, RMPC_VERSION, resolveRmpcAsset, missingCommitteeIdentitySubcommands } from "./lib/rmpc-fetch.ts";
-import { admin, enqueueLifecycleJob, runRegimeClassify, waitForSessionState } from "./lib/swarm/session.ts";
+import {
+  ensureSubjectViaAdmin,
+  readSessionDate,
+  runRegimeClassify,
+  setSubjectEpochDuration,
+  waitForSchedulerEpoch,
+} from "./lib/swarm/session.ts";
+import { operatorTokenFromEnv } from "./lib/operator-token.ts";
 import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 
 // Re-exported so this script's own boot logic can be tested in isolation.
@@ -47,9 +54,11 @@ import { DEFAULT_COMPOSE_FILES } from "./stack/config.ts";
 export { resolveRmpcAsset, missingCommitteeIdentitySubcommands };
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8787";
-const AUTOMATION_TOKEN = process.env.AUTOMATION_TOKEN;
+// The operator's service token (smoke spec §3: the admin right), read from the
+// file RM_OPERATOR_TOKEN_FILE names — `bun smoke` hands this driver the path.
+const OPERATOR_TOKEN = operatorTokenFromEnv(process.env);
 const adminHeaders: Record<string, string> = {
-  ...(AUTOMATION_TOKEN ? { "X-Automation-Token": AUTOMATION_TOKEN } : {})
+  ...(OPERATOR_TOKEN ? { "X-Automation-Token": OPERATOR_TOKEN } : {})
 };
 
 // Distinctly namespaced identity + subject (issue #104) so this driver never
@@ -187,26 +196,39 @@ async function main(): Promise<void> {
   }
   log(`applyStatus reflects applied → approved → claimed for ${memberId}, no contact/publicKey echoed`);
 
-  // ── Open a distinctly-namespaced session (reuses the swarm session
-  // driver's proven job-queue lifecycle — the same path the required e2e +
-  // nightly swarm sessions drive — instead of a second, unproven
-  // direct-admin lifecycle) ──────────────────────────────────────────────────
-  // admin()/waitForSessionState() read BACKEND_URL from env at module load;
-  // this script is invoked with BACKEND_URL already set (smoke-main.ts or the
-  // operator), so the import at the top of this file resolves the right base.
-  await admin("subject", { id: SUBJECT_ID, name: "RMPC Release E2E Subject" });
+  // ── Open a distinctly-namespaced epoch (reuses the swarm session driver's
+  // own lifecycle helpers — the same path the required e2e + nightly swarm
+  // sessions drive — instead of a second, unproven hand-rolled one) ──────────
+  // These helpers read BACKEND_URL from env at call time; this script is
+  // invoked with BACKEND_URL already set (smoke-main.ts or the operator), so
+  // the import at the top of this file resolves the right base.
+  await ensureSubjectViaAdmin({ id: SUBJECT_ID, name: "RMPC Release E2E Subject" }, OPERATOR_TOKEN, { epochDurationSeconds: 30 * 60 });
   // Idempotent, matches runSession()'s own pre-session regime seed — makes this
   // script self-sufficient even if run before any other regime seed exists.
   // The snapshot is the PRODUCER's own regime.classify job (issue #361 Phase
   // 4); the removed admin("regime") classifier path no longer exists.
   await runRegimeClassify(TODAY, producerRail());
 
-  await enqueueLifecycleJob("open_session", { date: TODAY, subjectId: SUBJECT_ID });
-  const scheduled = await waitForSessionState(TODAY, SUBJECT_ID, "scheduled");
-  const sessionId = scheduled.session.id;
-
-  await enqueueLifecycleJob("publish_brief", { sessionId, windowMinutes: 30 });
-  await waitForSessionState(TODAY, SUBJECT_ID, "collecting");
+  // THE WINDOW IS THE SUBJECT'S EPOCH DURATION NOW (system-scheduler-spec.md
+  // §2.2/§2.3), not a per-brief argument. Half an hour, which is what the old
+  // `windowMinutes: 30` asked for: long enough that this script's single
+  // submission below lands well inside it, and this script never closes the
+  // window at all — it proves the onboarding chain and the signature, not the
+  // settlement.
+  await setSubjectEpochDuration(SUBJECT_ID, 30 * 60, OPERATOR_TOKEN);
+  // §4.1: the SCHEDULER opens the epoch — one transaction creates the session,
+  // publishes its brief and sets `window_closes_at` — from the subject's
+  // `subject.changed`. Only system-scheduler calls an epoch transition
+  // (D55 (4)), so this waits for it on the public read.
+  const opened = await waitForSchedulerEpoch(SUBJECT_ID, { epochSeconds: 30 * 60, maxWaitMs: 120_000 });
+  const sessionId = opened.sessionId;
+  // Postgres dates the session (migration 0022). This script's later reads are
+  // date-addressed, and TODAY is only correct while the run does not straddle
+  // UTC midnight — so the date is read back rather than assumed.
+  const sessionDate = await readSessionDate(sessionId);
+  if (sessionDate !== TODAY) {
+    fail(`session ${sessionId} is dated ${sessionDate}, not ${TODAY} — this run straddled UTC midnight`);
+  }
   log(`session ${sessionId} open for ${TODAY}/${SUBJECT_ID}`);
 
   // ── canonicalizeSubmission (contract) + rmpc sign + POST submit (REST) ─────

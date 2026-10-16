@@ -135,7 +135,7 @@ export function structurallyRedactSecrets(text: string): string {
       "$1$2<secret redacted>$2",
     )
     .replace(
-      /(\b(?:CLAIM_TOKEN|ADMIN_TOKEN|ANALYTICS_TOKEN|[A-Z0-9_]*API_KEY|[A-Z0-9_]*PASSPHRASE|PRIVATE_KEY|SECRET_KEY|KEYSTORE)\s*=\s*)(?!<[^>\r\n]+ redacted>)([^\s]+)/g,
+      /(\b(?:[A-Z0-9_]*TOKEN|[A-Z0-9_]*API_KEY|[A-Z0-9_]*PASSPHRASE|PRIVATE_KEY|SECRET_KEY|KEYSTORE)\s*=\s*)(?!<[^>\r\n]+ redacted>)([^\s]+)/g,
       "$1<secret redacted>",
     )
     .replace(/(--(?:claim-token|admin-token|analytics-token|api-key|passphrase|private-key|secret-key)\s+)([^\s]+)/gi, "$1<secret redacted>")

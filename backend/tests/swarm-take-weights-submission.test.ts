@@ -22,6 +22,7 @@
 import { expect, test } from "bun:test";
 import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
+import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -60,21 +61,11 @@ async function submit(
   return await ic.submitRecommendation(m.token, { ...sub, signature });
 }
 
-/** An admin-scheduled session (so it carries a FROZEN roster), collecting. */
-async function scheduledSession(subjectId: string) {
-  const briefOpensAt = new Date();
-  const windowClosesAt = new Date(briefOpensAt.getTime() + 60_000);
-  const publishAt = new Date(briefOpensAt.getTime() + 120_000);
-  const created = await admin.createSessionAdmin({
-    date: briefOpensAt.toISOString().slice(0, 10),
-    subjectId,
-    briefOpensAt: briefOpensAt.toISOString(),
-    windowClosesAt: windowClosesAt.toISOString(),
-    publishAt: publishAt.toISOString(),
-  });
-  if (!created.ok) throw new Error(`createSessionAdmin failed: ${JSON.stringify(created)}`);
-  const sessionId = String((created as any).session.id);
-  await ic.publishBrief(sessionId, 60);
+/** An open epoch (so it carries a FROZEN roster, seated at open), collecting. */
+async function epochSession(subjectId: string) {
+  const opened = await ic.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch failed: ${JSON.stringify(opened)}`);
+  const sessionId = opened.sessionId;
   const row = (await sql`SELECT date FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   return { sessionId, date: dayOf(row.date) };
 }
@@ -166,12 +157,12 @@ test("the forced roster excuse is refused without the force flag, and is AUDITED
   // `ensureSubject` seeds bucket_weights, so the legacy shape is set
   // explicitly: these takes were filed when the subject asked for prose only.
   await sql`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = ${subjectId}`;
-  // Members must exist BEFORE the session: createSessionAdmin freezes the
+  // Members must exist BEFORE the session: an epoch freezes the
   // roster from the active members at creation time, and the frozen roster is
   // what the lever edits.
   const blocked = await member();
   const other = await member();
-  const { sessionId, date } = await scheduledSession(subjectId);
+  const { sessionId, date } = await epochSession(subjectId);
 
   // Both file a weightless take while the subject is still position_actions —
   // the legacy shape, legal when it was filed.
@@ -182,7 +173,7 @@ test("the forced roster excuse is refused without the force flag, and is AUDITED
   // weightless, and the receipt gate now refuses them forever.
   await sql`UPDATE swarm_subjects SET recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
   await sql`UPDATE swarm_sessions SET window_closes_at = now() WHERE id = ${sessionId}`;
-  const closed = await admin.closeSessionAdmin(sessionId, undefined);
+  const closed = await verbs.closeSessionAdmin(sessionId, undefined);
   if (!closed.ok) throw new Error(`close failed: ${JSON.stringify(closed)}`);
 
   // The un-forced lever still refuses once collection has begun — the pre-T17
@@ -215,7 +206,7 @@ test("the forced roster excuse is refused without the force flag, and is AUDITED
   // AND IT ACTUALLY UNSTICKS THE SESSION: re-aggregating now drops the excused
   // member's take from the frozen set, so the rollup carries the surviving
   // canonical-four vector.
-  const reaggregated = await admin.aggregateSessionAdmin(sessionId, undefined);
+  const reaggregated = await verbs.aggregateSessionAdmin(sessionId, undefined);
   if (!reaggregated.ok) throw new Error(`re-aggregate failed: ${JSON.stringify(reaggregated)}`);
   const rec = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`)[0]
     .swarm_recommendation as { type: string; weights?: { bucket: string }[] };
@@ -227,7 +218,7 @@ test("the forced excuse refuses on a TERMINAL session — it is a backstop, not 
   const subjectId = rid("terminal");
   await ic.ensureSubject(subjectId, "terminal subject");
   const m = await member();
-  const { sessionId } = await scheduledSession(subjectId);
+  const { sessionId } = await epochSession(subjectId);
   await sql`UPDATE swarm_sessions SET state = 'published' WHERE id = ${sessionId}`;
   const res = await admin.rosterExcuseAdmin(sessionId, m.id, admin.ADMIN_ACTOR, { force: true });
   expect(res.ok).toBe(false);

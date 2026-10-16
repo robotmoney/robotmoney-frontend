@@ -17,7 +17,7 @@
 // 'stale' — never rethrow, never fabricate (the same honest-degrade path BNKR
 // uses; original #202 AC3).
 //
-// Demo-readiness gate (AC2): the gate is e2e.yml's "Full-stack smoke" step
+// Demo-readiness gate (AC2): the gate is the e2e-setup action's "Full-stack smoke" step
 // (scripts/smoke.ts → scripts/lib/smoke-main.ts), which reaches READY when
 // postgres + migrations/seed + api/mcp /health + the EDGAR bootstrap complete
 // AND the worker lanes stay up. The ONLY step in that boot sequence that
@@ -39,6 +39,7 @@
 // when Docker/Postgres is absent — never a silent skip (test-coverage policy).
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../src/chain/base-rpc-client.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
@@ -46,6 +47,7 @@ import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 import { getWalletBalances } from "../src/api/routes/dashboards.ts";
 import { processOneJob } from "../src/worker/loop.ts";
 import { LANES } from "../src/worker/lanes.ts";
+import { _resetTokenMarketForTests } from "../src/worker/handlers/token-market.ts";
 
 const realFetch = globalThis.fetch;
 const realConsoleError = console.error;
@@ -64,8 +66,17 @@ const ENV_KEYS = [
 // wallet feeds' same-tick gecko fan-out coalesces into a single request).
 const MAX_RETRIES = 2;
 const EXPECTED_GECKO_ATTEMPTS = MAX_RETRIES + 1;
+// The wallet.sample_balances JOB also samples the token page's market
+// (worker/handlers/token-market.ts, v0.6.0 release finding 2026-10-08). Its two
+// price reads make NO upstream call here: the wallet sample's token_price
+// request has just failed, so it holds off (PRICE_FAILURE_HOLDOFF_MS). Its pool
+// read is on its own ten-minute interval and spends one bounded budget on the
+// pool endpoint, then stops before the candles. So the job costs exactly two
+// budgets, never one per price leg.
+const EXPECTED_JOB_GECKO_ATTEMPTS = 2 * EXPECTED_GECKO_ATTEMPTS;
 
 beforeEach(async () => {
+  _resetTokenMarketForTests();
   process.env.BASE_RPC_SOURCE = "live"; // real batched-multicall path against the mocked transport
   process.env.PRICE_SOURCE = "live"; // real GeckoTerminal/Yahoo path against the mocked transport
   process.env.GECKO_PRICE_MAX_RETRIES = String(MAX_RETRIES);
@@ -74,7 +85,7 @@ beforeEach(async () => {
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
-  await sql`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
   // This file does not opt into useCleanDatabase (tests/support/clean-db.ts),
   // so it shares the ONE database every other non-opted-in file shares for the
   // whole `bun test` run. AC2 below asserts asset_prices has ZERO rows for
@@ -84,7 +95,7 @@ beforeEach(async () => {
   // unrelated earlier file (any test exercising sampleWalletSleeves's D41/#946
   // dual-write, or sampleWalletBalances succeeding fresh on a WETH price) left
   // a same-day WETH row in.
-  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 afterEach(async () => {
@@ -94,10 +105,10 @@ afterEach(async () => {
   _resetTokenPriceCacheForTests();
   _resetWalletBalancesCacheForTests();
   _resetRateLimitStateForTests();
-  await sql`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
   // Symmetric with beforeEach: don't leave a row for a LATER shared-database
   // file to trip over either.
-  await sql`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
+  await fixtureDb`DELETE FROM asset_prices WHERE symbol = 'WETH' AND price_date = current_date`;
 });
 
 // Transport mock: Base RPC (Multicall3 aggregate3) answers healthily so every
@@ -155,7 +166,7 @@ function mockPersistent429Transport(): { gecko: number; yahoo: number } {
 }
 
 async function seedYesterdayWethSample(): Promise<void> {
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (current_date - 1, 'WETH', 1.5, 2500, 3750, 'live', now() - interval '1 day')
   `;
@@ -210,9 +221,9 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
   // migrate+seed step. Queue cleared first so the claim below deterministically
   // picks this job (same isolation discipline as tests/queue.test.ts; DELETE
   // instead of TRUNCATE CASCADE so FK'd telemetry tables just SET NULL).
-  await sql`DELETE FROM job_runs`;
-  await sql`DELETE FROM jobs`;
-  const [job] = await sql<{ id: number }[]>`
+  await fixtureDb`DELETE FROM job_runs`;
+  await fixtureDb`DELETE FROM jobs`;
+  const [job] = await fixtureDb<{ id: number }[]>`
     INSERT INTO jobs (kind, payload, dedupe_key)
     VALUES ('wallet.sample_balances', '{}', 'wallet.sample_balances:coldstart')
     RETURNING id
@@ -225,8 +236,10 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
     // escaping) IS the worker surviving — the original #202 defect mode.
     expect(await processOneJob({ lane: LANES.analytics, workerId: "test-429-analytics" })).toBe(true);
 
-    // The price feed really was exercised through the real retry budget.
-    expect(counters.gecko).toBe(EXPECTED_GECKO_ATTEMPTS);
+    // The price feed really was exercised through the real retry budget, and
+    // the token-market sample added only its pool budget (see
+    // EXPECTED_JOB_GECKO_ATTEMPTS).
+    expect(counters.gecko).toBe(EXPECTED_JOB_GECKO_ATTEMPTS);
 
     // The job settled 'succeeded' — NOT failed/dead/degraded — because the
     // sampler honest-degrades under 429-exhaustion instead of throwing, so
@@ -275,7 +288,7 @@ test("smoke-readiness gate reaches ready under persistent 429s: the boot's cold-
     const weth = payload.holdings.find((h) => h.symbol === "WETH");
     expect(weth).toMatchObject({ priceUsd: 2500, valueUsd: 3750, provenance: "stale" });
   } finally {
-    await sql`DELETE FROM job_runs`;
-    await sql`DELETE FROM jobs`;
+    await fixtureDb`DELETE FROM job_runs`;
+    await fixtureDb`DELETE FROM jobs`;
   }
 });

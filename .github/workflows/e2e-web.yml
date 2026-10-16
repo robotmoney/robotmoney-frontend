@@ -1,0 +1,149 @@
+# e2e, domain 3 of 4: the WEB client against a LIVE stack. The core-surface
+# checks (scripts/smoke-frontend-check.ts, the loud-failure guard that keeps a
+# broken smoke off main; self-tested by scripts/tests/integration/
+# smoke-frontend-check.test.ts) and the Playwright specs (`bun run test:browser`)
+# with BACKEND_URL pointed at the stack the boot left up.
+#
+# The specs that stub `/api/**` themselves also run, with no stack, in
+# web-client.yml (D45). The ones that need a real api, named in
+# scripts/web-client/static-specs.ts, run only here. See e2e-lifecycle.yml for
+# how the four e2e-*.yml domains divide the old e2e.yml, and for the CI taxonomy
+# class and draft deferral that apply here too.
+name: e2e-web
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "qa/**"]
+  schedule:
+    - cron: "27 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+jobs:
+  # ── change detection ───────────────────────────────────────────────────────
+  changes:
+    # Plumbing, not an assurance job: it must run in every context so the e2e
+    # job below has a filter output to gate on.
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - uses: actions/checkout@v4
+      # ALLOW LIST, owned by the WEB domain. dorny's default `some` quantifier:
+      # the job runs when ANY changed file matches ANY pattern, and a path on no
+      # list (docs, unit tests, the scheduler and swarm entry scripts) skips it.
+      # This domain is the only e2e that reads the client, so a frontend-only
+      # change boots this one stack and no other. It takes all of frontend/
+      # (the specs in frontend/test included), the website-server origin, the
+      # static assembly the boot serves, the Playwright config, scripts/
+      # web-client, and the goldens the specs answer /api from. It also takes
+      # the WHOLE backend and the analyst SDK the backend image runs: the specs
+      # read live data, and any backend module can break what they read. Each e2e-*.yml carries its own list;
+      # scripts/tests/unit/ci-gate-path-filters.test.ts pins which paths select
+      # which domain.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          filters: |
+            e2e:
+              # The stack every domain boots: the shared setup/teardown actions, this
+              # file, the root install, the compose model and the images it builds, the
+              # host-side boot (scripts/smoke*.ts, scripts/stack, scripts/lib and the
+              # scripts/agent modules they import), the backend files the boot itself
+              # imports or runs (migrations, schema, seed data, backend/scripts), the
+              # shared contract (the backend image copies it and the checks import it),
+              # and the fixtures the boot seats.
+              - 'stacks/**'
+              - '.github/actions/e2e-setup/**'
+              - '.github/actions/e2e-teardown/**'
+              - '.github/workflows/e2e-web.yml'
+              - 'package.json'
+              - 'bun.lock'
+              - 'docker-compose.yml'
+              - 'backend/Dockerfile'
+              - 'backend/package.json'
+              - 'backend/bun.lock'
+              - 'backend/migrations/**'
+              - 'backend/schema/**'
+              - 'backend/seed-data/**'
+              - 'backend/scripts/**'
+              - 'backend/src/acceptance-path.ts'
+              - 'backend/src/deploy-policy.ts'
+              - 'backend/src/db/target-lock.ts'
+              - 'website-server/Dockerfile'
+              - 'contract/**'
+              - 'scripts/smoke*.ts'
+              - 'scripts/smoke-ci-checks.ts'
+              - 'scripts/stack/**'
+              - 'scripts/lib/**'
+              - 'scripts/agent/**'
+              - 'test-fixtures/**'
+              - 'shared-fixtures/**'
+              # The web client's own surface.
+              - 'frontend/**'
+              - 'website-server/**'
+              - 'backend/**'
+              - 'packages/analyst-sdk/**'
+              - 'playwright.config.ts'
+              - 'scripts/static-assembly.sh'
+              - 'scripts/prerender.ts'
+              - 'scripts/stamp-assets.ts'
+              - 'scripts/static-manifest.ts'
+              - 'scripts/preview-server.ts'
+              - 'scripts/web-client/**'
+              - 'goldens/**'
+
+  e2e-web:
+    needs: [changes]
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.e2e == 'true') }}
+    runs-on: ubuntu-latest
+    # The ceiling for the whole job. The specs took ~10 minutes live; the rest is
+    # headroom for a slow provider.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot a LIVE smoke stack
+        id: stack
+        uses: ./.github/actions/e2e-setup
+        with:
+          browser: "true"
+          opencode-api-key: ${{ secrets.OPENCODE_API_KEY }}
+          agent-model: ${{ vars.AGENT_MODEL || '' }}
+      # The specs read the published swarm sessions the session driver files
+      # (spa.spec.ts resolves the seeded "woon" session, swarm-receipts.spec.ts a
+      # server-verified take). The blank boot has none, so this domain runs the
+      # driver first, as the old single e2e job did. The first live run failed
+      # without it.
+      - name: Swarm session (seeds the published sessions the specs read)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check swarm-session
+        env:
+          CI: "true"
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Core-surface checks (smoke-frontend-check)
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check frontend
+        env:
+          CI: "true"
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Playwright specs on the live stack
+        run: bun --no-env-file scripts/smoke-ci-checks.ts --check browser
+        env:
+          CI: "true"
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+      - name: Tear down this job's smoke stack
+        if: always()
+        uses: ./.github/actions/e2e-teardown
+        with:
+          smoke-project: ${{ steps.stack.outputs.smoke-project }}

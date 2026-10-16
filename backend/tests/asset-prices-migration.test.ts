@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { sql } from "../src/db/client.ts";
 import { QUARANTINED_PROVENANCE } from "../src/chain/wallet-valuation.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -31,12 +32,12 @@ const D_QUARANTINE = "2018-01-03"; // only a quarantined row exists — seeded n
 const D_SP500 = "2018-01-04"; // SP500 is never part of the price series
 
 async function runMigration(): Promise<void> {
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     DROP TABLE asset_prices;
     DROP TABLE asset_price_floors;
   `);
   const ddl = await readFile(migrationPath, "utf8");
-  await sql.begin(async (tx) => {
+  await fixtureDb.begin(async (tx) => {
     await tx.unsafe(ddl);
   });
 }
@@ -44,11 +45,11 @@ async function runMigration(): Promise<void> {
 test("0046 seeds asset_prices from live/seed provenance with an explicit, deterministic conflict rule", async () => {
   // Majority rule: balance (100) + one agreeing sleeve (100) outvote a lone
   // dissenting sleeve (200).
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D_MAJORITY}, 'WETH', 1, 100, 100, 'live', '2018-01-01T23:59:00Z')
   `;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (${D_MAJORITY}, '0xaaa', 'WETH', 1, 100, 100, 'live', '2018-01-01T23:59:01Z'),
@@ -57,31 +58,31 @@ test("0046 seeds asset_prices from live/seed provenance with an explicit, determ
 
   // Tie-break rule: one balance row, one dissenting sleeve row — equal votes,
   // resolved toward the aggregate balance value.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D_TIE}, 'ROBOTMONEY', 1, 5, 5, 'seed', '2018-01-02T23:59:00Z')
   `;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D_TIE}, '0xaaa', 'ROBOTMONEY', 1, 6, 6, 'seed', '2018-01-02T23:59:01Z')
   `;
 
   // Quarantined rows are precisely the ones whose price describes a different
   // asset (migration 0036) — never seeded, even alone.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D_QUARANTINE}, 'WETH', 1, 999, 999, ${QUARANTINED_PROVENANCE}, '2018-01-03T23:59:00Z')
   `;
 
   // SP500 is never part of the price series (config-valued, no vendor read),
   // regardless of provenance.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, value_usd, price_usd, provenance, sampled_at)
     VALUES (${D_SP500}, 'SP500', NULL, 3000, 3000, 'live', '2018-01-04T23:59:00Z')
   `;
 
   // USDC is priced $1, tagged 'pinned' rather than 'geckoterminal'.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D_MAJORITY}, 'USDC', 10, 1, 10, 'live', '2018-01-01T23:59:00Z')
   `;
@@ -126,12 +127,12 @@ test("0046 excludes the still-open UTC day's live row from the seed, but seeds a
   // The wallet balance sampler runs hourly and continuously upserts a `live`
   // row for the still-open day — this is that row, and it must NOT be
   // seeded as a fabricated 'utc-daily-close'.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${today}, 'WETH', 1, 111, 111, 'live', now())
   `;
   // A prior day that has actually closed IS seeded, same as the 2018 fixtures.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${yesterday}, 'WETH', 1, 222, 222, 'live', ${yesterday + "T23:59:00Z"})
   `;

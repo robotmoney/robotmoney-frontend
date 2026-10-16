@@ -558,7 +558,7 @@ export const sessionSummary = {
   // the 21st. Archive rows carry a bare date, so they print nothing here.
   /** @param {any} row */
   rowTime(row) {
-    const at = row?.generatedAt || row?.publishedAt;
+    const at = row?.openedAt || row?.generatedAt || row?.publishedAt;
     if (!at || !Number.isFinite(Date.parse(at)) || !String(at).includes("T")) return "";
     return `${new Date(at).toISOString().slice(11, 16)} UTC`;
   },

@@ -26,7 +26,6 @@ const config: StackConfig = {
   profile: "core",
   composeFiles: ["docker-compose.yml"],
   database: { user: "u", password: "p", name: "d" },
-  credentials: { adminToken: "admin", automationToken: "automation", analyticsToken: "analytics" },
   environment: { class: "ci", hash: "0123456789" },
 };
 
@@ -48,7 +47,7 @@ function fakeRuntime(rec: Recorded, overrides: Partial<StackRuntime> = {}): Stac
       return { exitCode: 0, stdout: "", stderr: "" };
     },
     async run() {
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
     async probe() {
       rec.probes += 1;
@@ -100,7 +99,7 @@ test("up() runs exactly one migration, and it precedes initialization", async ()
   await stackFor(rec, {
     async run(argv) {
       composeCalls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up({ initialize: async () => { composeCalls.push(["<initialize>"]); } });
 
@@ -111,19 +110,73 @@ test("up() runs exactly one migration, and it precedes initialization", async ()
   expect(composeCalls.filter((a) => a.some((s) => s.includes("migrate")))).toHaveLength(1);
 });
 
-test("a deferred provider service starts after initialization and waits for health", async () => {
+test("up({ migrate: false }) skips the compose call but still emits the migrate phase", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const composeCalls: string[][] = [];
+
+  await stackFor(rec, {
+    async run(argv) {
+      composeCalls.push(argv);
+      return { exitCode: 0, outputTail: "" };
+    },
+  }).up({ migrate: false, initialize: async () => { composeCalls.push(["<initialize>"]); } });
+
+  expect(composeCalls.some((a) => a.some((s) => s.includes("migrate")))).toBe(false);
+  expect(rec.events).toContain("migrate:start");
+  expect(rec.events).toContain("migrate:done");
+
+  const order = rec.events.filter((e) => e.endsWith(":done")).map((e) => e.split(":")[0]);
+  expect(order).toEqual([
+    "docker-preflight",
+    "build",
+    "postgres",
+    "migrate",
+    "services",
+    "ports",
+    "health",
+    "initialize",
+  ]);
+});
+
+test("up({ migrate: true }) still runs exactly one migration (same as the default)", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const composeCalls: string[][] = [];
+
+  await stackFor(rec, {
+    async run(argv) {
+      composeCalls.push(argv);
+      return { exitCode: 0, outputTail: "" };
+    },
+  }).up({ migrate: true, initialize: async () => { composeCalls.push(["<initialize>"]); } });
+
+  expect(composeCalls.filter((a) => a.some((s) => s.includes("migrate")))).toHaveLength(1);
+});
+
+test("up() deletes MIGRATE_DATABASE_URL after migrate() runs, however it got set", async () => {
+  const rec: Recorded = { events: [], probes: 0 };
+  const before = process.env.MIGRATE_DATABASE_URL;
+  process.env.MIGRATE_DATABASE_URL = "sentinel-for-test";
+  try {
+    await stackFor(rec).up();
+    expect(process.env.MIGRATE_DATABASE_URL).toBeUndefined();
+  } finally {
+    if (process.env.MIGRATE_DATABASE_URL !== undefined) delete process.env.MIGRATE_DATABASE_URL;
+    if (before !== undefined) process.env.MIGRATE_DATABASE_URL = before;
+  }
+});
+
+test("a deferred provider service is stopped before initialization, then starts after it and waits for health", async () => {
   const rec: Recorded = { events: [], probes: 0 };
   const composeCalls: string[][] = [];
   const fullConfig: StackConfig = {
     ...config,
     profile: "full",
-    credentials: { ...config.credentials, analyticsTokenFile: "/etc/hosts" },
   };
   const stack = createStack(fullConfig, {
     runtime: fakeRuntime(rec, {
       async run(argv) {
         composeCalls.push(argv);
-        return 0;
+        return { exitCode: 0, outputTail: "" };
       },
     }),
   });
@@ -139,6 +192,10 @@ test("a deferred provider service starts after initialization and waits for heal
   );
   expect(init).toBeGreaterThan(-1);
   expect(producer).toBeGreaterThan(init);
+  // Issue 1378: the old producer is stopped before the seed one-shot runs.
+  const stop = composeCalls.findIndex((a) => a.includes("stop") && a.includes("analytics-producer"));
+  expect(stop).toBeGreaterThan(-1);
+  expect(stop).toBeLessThan(init);
   const primaryStart = composeCalls.find((a) => a.includes("up") && a.includes("api"));
   expect(primaryStart).not.toContain("analytics-producer");
 });
@@ -173,7 +230,7 @@ test("static assembly is spawned through the runtime seam, before any container 
   await stackFor(rec, {
     async run(argv) {
       spawned.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
   }).up();
 
@@ -193,9 +250,9 @@ test("a failed static assembly aborts the boot before any container starts", asy
   await expect(
     stackFor(rec, {
       async run(argv) {
-        if (argv.some((s) => s.endsWith("static-assembly.sh"))) return 3;
+        if (argv.some((s) => s.endsWith("static-assembly.sh"))) return { exitCode: 3, outputTail: "" };
         dockerRan = true;
-        return 0;
+        return { exitCode: 0, outputTail: "" };
       },
     }).up(),
   ).rejects.toThrow(/static assembly failed .*exited 3/);

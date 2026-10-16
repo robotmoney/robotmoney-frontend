@@ -16,33 +16,25 @@ const TAKE_RE = new RegExp(`^${ROUTES.swarm.take.replace(":id", UUID)}$`, "i");
 // holding only a session id can reach it, and so the URL is the same before and
 // after every redeploy.
 //
-// TWO ROUTES, ONE RECEIPT (decision D10). `CONSENSUS_RE` is the path
-// robotmoney-core anchors on chain as `payloadUri`, and it answers the BARE
-// canonical bytes: the exact keccak256 preimage of `payloadDigest`. Until D10
-// it answered the read-time verification envelope instead, whose keccak256 is
-// NOT the anchored digest, so a third party holding only the chain had to know
-// from nowhere on chain to take `.receipt`, re-canonicalize it under the v1
-// rules and hash that — an unwrap rule that had grown five implementations in
-// three languages with no shared fixture. `CONSENSUS_VERIFIED_RE` is where that
-// envelope lives now. Nothing anchors the verified path.
-//
-// The verified pattern is tested FIRST: both are anchored regexes so they
-// cannot actually overlap, but the specific path being matched before the
-// general one is the property a future `:id` loosening must not silently break.
+// TWO ROUTES, ONE RECEIPT. `CONSENSUS_RE` answers the read-time verification
+// envelope, exactly as production v0.5.4 does at this path. `CANONICAL_RE`
+// answers the BARE canonical bytes: the keccak256 preimage of `payloadDigest`
+// minus its pinned domain prefix. The canonical path is new since v0.5.4.
+// Both are anchored regexes, so they cannot overlap.
 const CONSENSUS_RE = new RegExp(`^${ROUTES.swarm.sessionConsensusReceipt.replace(":id", UUID)}$`, "i");
-const CONSENSUS_VERIFIED_RE = new RegExp(`^${ROUTES.swarm.sessionConsensusReceiptVerified.replace(":id", UUID)}$`, "i");
+const CANONICAL_RE = new RegExp(`^${ROUTES.swarm.sessionConsensusReceiptCanonical.replace(":id", UUID)}$`, "i");
 
 const NO_RECEIPT = { error: "no consensus receipt published for this session" };
 
 export const handleSwarmReceiptRoutes: SwarmRouteExtension = async (req, url) => {
   if (req.method !== "GET") return null;
 
-  const verified = url.pathname.match(CONSENSUS_VERIFIED_RE);
-  if (verified) {
+  const consensus = url.pathname.match(CONSENSUS_RE);
+  if (consensus) {
     // Lowercased before the lookup for the same reason the payload is:
     // `session_id` has exactly one admitted spelling in schema 1.0, and two
     // URLs that differ only in case must not become two receipts.
-    const stored = await getConsensusReceipt(decodeURIComponent(verified[1]!).toLowerCase());
+    const stored = await getConsensusReceipt(decodeURIComponent(consensus[1]!).toLowerCase());
     if (!stored) return { status: 404, body: NO_RECEIPT };
     return {
       status: 200,
@@ -65,9 +57,9 @@ export const handleSwarmReceiptRoutes: SwarmRouteExtension = async (req, url) =>
     };
   }
 
-  const consensus = url.pathname.match(CONSENSUS_RE);
-  if (consensus) {
-    const stored = await getStoredConsensusReceipt(decodeURIComponent(consensus[1]!).toLowerCase());
+  const canonical = url.pathname.match(CANONICAL_RE);
+  if (canonical) {
+    const stored = await getStoredConsensusReceipt(decodeURIComponent(canonical[1]!).toLowerCase());
     // A 404 is an ERROR, not content, so it is JSON — it must never be
     // mistakable for anchorable bytes by a consumer that skipped the status.
     if (!stored) return Response.json(NO_RECEIPT, { status: 404 });
@@ -93,7 +85,7 @@ export const handleSwarmReceiptRoutes: SwarmRouteExtension = async (req, url) =>
     // The trailing newline IS part of the preimage and is therefore served.
     // That is a constant, not an unwrap rule: there is no field to select, no
     // second canonicalization, and no way to pick the wrong object — which is
-    // exactly what D10 bought over anchoring the envelope.
+    // exactly what serving the bare bytes buys over the envelope.
     if (!stored.canonicalBytes.startsWith(RECEIPT_DOMAIN_SEPARATOR)) {
       // Unreachable for anything this server assembled, and loud rather than
       // clever if it ever is: bytes that do not carry the pinned schema-1.0

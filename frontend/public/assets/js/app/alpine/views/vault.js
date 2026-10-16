@@ -42,7 +42,6 @@ import {
   recommendationHref,
   sleeveNote,
   statusLabel,
-  USDC_BASE,
   VAULTS,
   vaultBySlug,
 } from "../../lib/vault-data.js";
@@ -58,8 +57,10 @@ const HOLDINGS_SHOWN = 8;
 const ACTIVITY_PAGE = 10;
 const KIND_LABEL = { adapter: "Lending venue", token: "Token", idle: "Idle" };
 // What a lending venue and idle cash are held in: every vault takes USDC,
-// Circle's USDC on Base (lib/vault-data.js USDC_BASE).
+// Circle's USDC on Base. The staging devnet is a fork of Base, so the token is
+// the same contract there.
 const DEPOSIT_ASSET = "USDC";
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 // An activity event as the feed names it, in the page's words. A kind this
 // map does not know is printed in sentence case rather than as a raw enum.
 const ACTIVITY_LABEL = {
@@ -607,8 +608,7 @@ export function registerVaultView(Alpine) {
       const c = r.caps || null;
       if (numberOrNull(c?.tvlCap) !== null) rows.push({ k: "TVL cap", v: fmtUsd(c.tvlCap) });
       if (numberOrNull(c?.perDepositCap) !== null) rows.push({ k: "Per-deposit cap", v: fmtUsd(c.perDepositCap) });
-      // Linked to the audit ledger where the registry names one.
-      if (r.auditStatus) rows.push({ k: "Audit", v: String(r.auditStatus), href: /^https:\/\//.test(String(r.auditHref ?? "")) ? String(r.auditHref) : null });
+      if (r.auditStatus) rows.push({ k: "Audit", v: String(r.auditStatus) });
       return rows;
     },
     contractLinks() {

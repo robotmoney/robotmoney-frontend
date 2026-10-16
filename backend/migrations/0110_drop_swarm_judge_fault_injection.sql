@@ -1,0 +1,31 @@
+-- compat: breaking
+-- metadata_version: 1
+--
+-- Drop the judge fault-injection lever's table — issue #1026, decision D55 (3),
+-- criterion 167.
+--
+-- The lever (R13) faulted the backend `judge()`, which D53 deleted. Nothing in
+-- the API forms an opinion any more, so the switch had nothing to break and only
+-- added a way to arm a test path in production. Its arm route, its admin
+-- control, its env flags and its compose lines are deleted in the same change,
+-- so the table has no reader and no writer left.
+--
+-- A FORWARD MIGRATION, NOT A DELETED 0058. 0058 is recorded in
+-- `schema_migrations` on every shared database, and a file deleted from disk
+-- leaves that ledger row naming a migration nobody can read while the table it
+-- made stays behind.
+--
+-- WHAT STAYS READABLE. The `audit_log` rows the lever wrote (action
+-- `judge_fault_injection`) are history and live in `audit_log`, which this file
+-- does not touch. The judgements the lever affected live in
+-- `swarm_session_judgements`, which it does not touch either. The table held a
+-- single control row (id = 1) and no history, so dropping it loses nothing a
+-- reader of the record relies on. `swarm_session_judgements` never referenced
+-- it, so no foreign key blocks the drop.
+--
+-- WHY `breaking`. §8.4: additive means every query the older registry declares
+-- still succeeds. Code built for 0058-0091 read this table on the judging path.
+-- That code booted against this database takes a 42P01, so a code-only
+-- rollback past this file must be refused rather than discovered at runtime.
+
+DROP TABLE IF EXISTS swarm_judge_fault_injection;

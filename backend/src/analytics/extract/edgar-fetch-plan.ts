@@ -27,9 +27,10 @@
 // #108 seed artifact FILE is never modified here, but the ROWS it seeded are
 // NOT untouched by this module — Tier 2 re-plans and re-fetches every one of
 // them, and the caller's upsert (store/raw-history-store.ts) overwrites both
-// `value` and `source`, flipping a seeded row's provenance 'seed' → 'live'.
-// That flip is intended ("a genuine live fetch upgrades a previously-seeded
-// row's provenance"), which is exactly WHY the batch-level divergence guard
+// `value` and `source` whenever the fetched value differs beyond tolerance,
+// flipping a seeded row's provenance 'seed' → 'live' (a label change alone
+// writes nothing since 2026-09-29). A changed value is exactly WHY the
+// batch-level divergence guard
 // below (`assessEdgarBatchDivergence`) exists: a single well-formed but wrong
 // full-sweep batch would otherwise rewrite the entire archived baseline
 // irreversibly (store/floor-seed.ts's gap-fill can only restore MISSING

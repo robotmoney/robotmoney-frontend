@@ -159,7 +159,7 @@
 # here, job or step: this workflow has no second trigger to be asymmetric with.
 #
 # Cron: 02:11 UTC, a minute and an hour no other workflow in this repo uses.
-# The mirrors occupy 03:03–03:57 and 04:37/05:19; the staggered-cron assertion in
+# The mirrors occupy 03:03–03:57 and 04:15/04:37/05:19; the staggered-cron assertion in
 # nightly-mirrors-merge-set.test.ts covers the push-to-main set, but this file
 # keeps clear of every existing slot anyway so a future widening of that
 # assertion cannot collide. It also runs BEFORE the mirrors, so a night that
@@ -195,6 +195,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.3.5"
+          no-cache: true
 
       # The audit itself. Always exits 0 by construction — including when it
       # cannot run at all, in which case it reports every check UNKNOWN rather
@@ -205,7 +206,7 @@ jobs:
         run: bun scripts/production-drift-audit.ts
 
       # `if: always()` so the report survives a red run — the same discipline
-      # e2e.yml's admission record uses. On success it is the primary artifact;
+      # e2e-onboarding.yml's admission record uses. On success it is the primary artifact;
       # on a red run it is the only thing that says what the auditor managed to
       # learn before it broke.
       - name: Upload the drift report

@@ -25,7 +25,7 @@ let backendUrl: string;
 
 beforeAll(() => {
   fixtureBackend = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === ROUTES.swarm.members) {

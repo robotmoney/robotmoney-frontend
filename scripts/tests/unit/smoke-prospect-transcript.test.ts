@@ -58,7 +58,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       expect(transcript.directory).toBe(join(repoRoot, ".agents", "onboarding-evals", "rm_smoke_abc123", "helios"));
       expect(statSync(transcript.directory).isDirectory()).toBe(true);
@@ -74,13 +74,13 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       const manifest = JSON.parse(readFileSync(join(transcript.directory, "manifest.json"), "utf8"));
       expect(manifest.candidateName).toBe("Helios");
       expect(manifest.composeProject).toBe("rm_smoke_abc123");
       expect(manifest.runId).toBe("helios");
-      expect(manifest.model).toBe("opencode/deepseek-v4-flash");
+      expect(manifest.model).toBe("opencode/deepseek-v4.1-flash");
       // Contact itself is never persisted unredacted — only its hash.
       const raw = readFileSync(join(transcript.directory, "manifest.json"), "utf8");
       expect(raw).not.toContain(IDENTITY.contact);
@@ -96,7 +96,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       const telemetry = createOnboardingTelemetry({ composeProject: "rm_smoke_abc123", runId: "helios" }, transcript.sink);
       telemetry.emit({ source: "agent", stream: "event", message: "member-agent container observed", containerName: "c1" });
@@ -120,7 +120,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       // Mirrors what runOnboardingEval does internally per attempt: its own
       // fresh telemetry (correct per-attempt runId/attempt), funneled through
@@ -146,7 +146,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       transcript.finish(admittedResult(), 12_345);
       const result = JSON.parse(readFileSync(join(transcript.directory, "result.json"), "utf8"));
@@ -169,7 +169,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       const failed = admittedResult({
         admitted: false,
@@ -199,7 +199,7 @@ describe("startProspectTranscript (scripts/lib/smoke-prospect-transcript.ts)", (
         repoRoot,
         composeProject: "rm_smoke_abc123",
         identity: IDENTITY,
-        model: "opencode/deepseek-v4-flash",
+        model: "opencode/deepseek-v4.1-flash",
       });
       transcript.finishThrew(new Error("docker compose run failed: no space left on device"), 900);
       const result = JSON.parse(readFileSync(join(transcript.directory, "result.json"), "utf8"));

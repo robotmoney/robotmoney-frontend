@@ -20,7 +20,8 @@
 // ambient environment — a stray exported `host` must never influence which
 // database a smoke writes to. Second, reading the file makes the source of the
 // value auditable: the resolution says which key of which file it came from.
-// `DATABASE_URL` (the form `.env.example` documents) always wins when present;
+// `urlFromDiscreteKeys` assembles exactly ONE URL — the rm_app writer role —
+// from $HOME/.env's discrete tokens + role line; nothing else is read;
 // otherwise the discrete DO-panel keys are assembled into one, so a pasted
 // connection panel works without hand-editing.
 //
@@ -30,13 +31,32 @@
 // smoke boot. It is imported by scripts/lib/smoke-main.ts and re-exported from
 // scripts/smoke.ts alongside resolveSmokeEnv.
 import { readFileSync } from "node:fs";
+import {
+  HOME_ENV_FILE as SHARED_HOME_ENV_FILE,
+  ROLES as SHARED_ROLES,
+  CONNECTION_TOKENS as SHARED_CONNECTION_TOKENS,
+  homeEnvFilePath as sharedHomeEnvFilePath,
+  parseEnvFile as sharedParseEnvFile,
+  loadEnvFile as sharedLoadEnvFile,
+  redactPostgresUrl as sharedRedactPostgresUrl,
+  urlForRole as sharedUrlForRole,
+  redactedTarget as sharedRedactedTarget,
+} from "./env-role.ts";
 
 /** The compose services whose `depends_on: postgres` must be dropped. */
+
+export { HOME_ENV_FILE, CONNECTION_TOKENS, ROLES } from "./env-role.ts";
+export { urlForRole, redactedTarget } from "./env-role.ts";
+
+// `system-scheduler` is deliberately ABSENT, and its absence is the point of
+// issue #1026: it has no database connection at all to make external
+// (system-scheduler-spec.md §1 — database connection "**No.** Never."), so it
+// carries no `depends_on: postgres` for this overlay to drop. Adding it here
+// would be harmless today and wrong tomorrow: it would state that the clock
+// has a database, which is the exact claim the design removes.
 export const POSTGRES_DEPENDENT_SERVICES = [
   "api",
-  "worker-swarm",
   "worker-analytics",
-  "worker-research",
 ] as const;
 
 /** The compose service and named volume the overlay removes outright. */
@@ -45,42 +65,17 @@ export const EPHEMERAL_PG_VOLUME = "pgdata";
 
 
 /**
- * The database classification step, as data.
- *
- * ONLY an external database gets it — the ephemeral compose postgres is this
- * boot's own, created empty moments ago. For an external server the step
- * states, in the boot log, which situation this boot is in: an EMPTY database
- * gets bootstrapped (migrate + seed + archive restore); a POPULATED one is
- * assumed to be working production data — restored manually from a .dump, or
- * a surviving volume — and is ADOPTED: the same migrate + seed path runs, but
- * every writer on it is idempotent and deduplicated, filling gaps and never
- * overwriting existing rows (differences surface as drift reports, existing
- * rows win). backend/scripts/db-preflight.ts carries the full rationale.
- *
- * Runs as a one-off container BEFORE migrate(), so the mode is on record
- * before the first write. `--no-deps` because nothing else needs to be up to
- * ask the question. It fails (and aborts the boot) only when the database
- * cannot be reached at all.
+ * How every refusal below names the path it refuses. `--db external` is retired
+ * with no alias (spec §1) and the entrypoint refuses it by name, so an operator
+ * who ran plain `bun smoke` must not be told about it here.
  */
-export const DB_PREFLIGHT_STEP = "db preflight";
-export const DB_PREFLIGHT_ARGV: readonly string[] = Object.freeze([
-  "run", "--rm", "--no-deps", "api", "bun", "run", "scripts/db-preflight.ts",
-]);
-
-/**
- * The full preflight argv for a boot with a known scenario initializer.
- *
- * The initializer travels with the question because the answer depends on it:
- * a populated database may be ADOPTED by an "archive" (production-shaped) boot,
- * whose whole seed path is idempotent and non-clobbering — but never by a
- * "simulation" boot, whose smoke fixtures overwrite by design (their ON CONFLICT
- * DO UPDATE is how corrected smoke copy reaches a smoke stack). db-preflight.ts
- * refuses that combination, and treats a missing flag as simulation so the
- * strict branch is the one you get by forgetting the parameter.
- */
-export function dbPreflightArgv(initializer: "archive" | "simulation"): string[] {
-  return [...DB_PREFLIGHT_ARGV, `--initializer=${initializer}`];
-}
+export const REMOTE_LABEL = "remote database (no --local flag)";
+// NO CLASSIFICATION ONE-SHOT. A remote boot used to run
+// backend/scripts/db-preflight.ts in an `api` container before its first write,
+// to say whether the database was empty or populated. That question now belongs
+// to the step that needs its answer: `--seed` refuses a populated database in
+// the same fenced transaction it seeds in (backend/src/db/seed.ts
+// assertSeedable), and every boot's full preflight (check 3) judges the schema.
 
 /** What the postgres bring-up phase should say, and which container tile (if
  *  any) it owns. */
@@ -129,7 +124,7 @@ export interface ExternalPgResolution {
   /** Host as parsed, for the boot banner. */
   host?: string;
   /** Which `.env` key the value came from, for the boot banner. */
-  source?: "DATABASE_URL" | "discrete keys";
+  source?: "discrete keys";
 }
 
 /**
@@ -140,89 +135,47 @@ export interface ExternalPgResolution {
  * A missing file is NOT an error here — the caller reports that with context.
  */
 export function parseEnvFile(text: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    const key = line.slice(0, eq).replace(/^export\s+/, "").trim();
-    let value = line.slice(eq + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
-      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) out[key] = value;
-  }
-  return out;
+  return sharedParseEnvFile(text);
 }
 
 export function loadEnvFile(path: string): Record<string, string> | undefined {
-  try {
-    return parseEnvFile(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
+  return sharedLoadEnvFile(path);
 }
 
 /** Replace the password with `***`. Used for every printed/recorded form. */
 export function redactPostgresUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    if (u.password) u.password = "***";
-    return u.toString();
-  } catch {
-    return "(unparseable postgres url)";
-  }
+  return sharedRedactPostgresUrl(url);
 }
 
 /**
  * Assemble a URL from the discrete keys DigitalOcean's connection panel prints.
- * Returns undefined unless the four load-bearing parts are all present — a
- * half-specified database is a mistake to report, not a default to invent.
+ * Delegates to the shared single-role resolver: under the role taxonomy
+ * (issue #699) the discrete tokens + the rm_app role line assemble exactly ONE
+ * URL — the writer role a smoke boot needs. Returns undefined unless the
+ * connection tokens are all present AND the role line exists — a half-specified
+ * database is a mistake to report, not a default to invent.
  */
 export function urlFromDiscreteKeys(env: Record<string, string>): string | undefined {
-  const host = env.host ?? env.PGHOST;
-  const user = env.username ?? env.PGUSER;
-  const password = env.password ?? env.PGPASSWORD;
-  const database = env.database ?? env.PGDATABASE;
-  if (!host || !user || !password || !database) return undefined;
-  const port = env.port ?? env.PGPORT ?? "5432";
-  const sslmode = env.sslmode ?? env.PGSSLMODE;
-  const u = new URL(`postgres://${host}`);
-  u.port = port;
-  u.username = encodeURIComponent(user);
-  u.password = encodeURIComponent(password);
-  u.pathname = `/${database}`;
-  if (sslmode) u.searchParams.set("sslmode", sslmode);
-  return u.toString();
+  return sharedUrlForRole(env, "rm_app");
 }
 
-/**
- * Reject the two addresses that LOOK right and are always wrong here, with the
- * reason rather than a generic refusal. Both fail at a distance otherwise: the
- * containers start, then every query dies with a connection error that names an
- * address the operator never typed.
- */
 export function assertReachableFromContainer(url: string): void {
   let host: string;
   try {
     host = new URL(url).hostname;
   } catch {
-    throw new Error(`--db external: could not parse the resolved connection URL: ${redactPostgresUrl(url)}`);
+    throw new Error(`${REMOTE_LABEL}: could not parse the resolved connection URL: ${redactPostgresUrl(url)}`);
   }
   if (host === EPHEMERAL_PG_SERVICE) {
     throw new Error(
-      `--db external: the connection URL points at host "${EPHEMERAL_PG_SERVICE}", which IS the ephemeral ` +
-        `compose service this flag exists to replace — that service is not started in external mode, so nothing ` +
-        `would be listening. Point DATABASE_URL at the managed server's hostname.`,
+      `${REMOTE_LABEL}: the connection URL points at host "${EPHEMERAL_PG_SERVICE}", which IS the compose ` +
+        `service a local mode starts — it is not started for the remote database, so nothing would be ` +
+        `listening. Point the rm_app role line at the managed server's hostname.`,
     );
   }
   if (host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]") {
     throw new Error(
-      `--db external: the connection URL points at ${host}, which inside a container means the CONTAINER ` +
+      `${REMOTE_LABEL}: the connection URL points at ${host}, which inside a container means the CONTAINER ` +
         `itself, not this host — the api and workers would each dial their own empty loopback. Use the server's ` +
         `routable hostname or address (for a Postgres running on this host, that is the docker bridge address, ` +
         `e.g. 172.17.0.1, not localhost).`,
@@ -246,7 +199,7 @@ export function externalPgOverlayYaml(redactedUrl: string): string {
     (s) => `  ${s}:\n    depends_on: !reset null\n`,
   ).join("");
   return (
-    `# GENERATED by scripts/lib/smoke-external-pg.ts for \`bun run smoke -- --db external\`.\n` +
+    `# GENERATED by scripts/lib/smoke-external-pg.ts for a remote-database \`bun smoke\` (no --local flag).\n` +
     `# Runs the stack against an EXTERNAL/managed Postgres, so no ephemeral\n` +
     `# postgres container and no pgdata volume are created at all.\n` +
     `#   target: ${redactedUrl}\n` +
@@ -265,55 +218,39 @@ export function externalPgOverlayYaml(redactedUrl: string): string {
  * operator asked for the managed one would be the worst possible outcome — the
  * smoke would look healthy while writing to nothing that persists.
  */
-/**
- * Is a managed Postgres CONFIGURED in `.env`? Answers the question without
- * requiring the flag, and without throwing — used by `bun run smoke:stage`, which
- * chooses a data path rather than being told one.
- *
- * Deliberately separate from resolveExternalPg: that function's contract is
- * "the operator asked for external Postgres, so a broken .env is a FATAL
- * misconfiguration". Here an absent or unusable .env is simply a "no", because
- * nobody asked for anything yet. A wrapper that used the throwing version to
- * probe would turn "you have no .env" into a failed boot.
- */
-export function detectEnvPostgres(envFilePath: string): ExternalPgResolution {
-  try {
-    return resolveExternalPg(["--db", "external"], { envFilePath });
-  } catch {
-    return { enabled: false };
-  }
-}
+// NO NON-THROWING PROBE. `detectEnvPostgres()` answered "is a managed Postgres
+// configured?" for `bun run smoke:stage`, which chose a data path by sniffing
+// `.env`. That wrapper is retired (smoke spec §1), and every boot now states
+// its data path: no flag is the remote database, `--local <mode>` is local.
 
 export function resolveExternalPg(
   argv: string[],
-  opts: { envFilePath: string } = { envFilePath: ".env" },
+  opts: { envFilePath: string } = { envFilePath: sharedHomeEnvFilePath() },
 ): ExternalPgResolution {
   if (!argv.includes("--db") && argv.includes("external")) return { enabled: false };
 
   const env = loadEnvFile(opts.envFilePath);
   if (!env) {
     throw new Error(
-      `--db external: no readable .env at ${opts.envFilePath}. This flag takes the connection details from ` +
-        `that file — add DATABASE_URL=postgres://user:password@host:port/database?sslmode=require (see .env.example), ` +
-        `or drop the flag to boot the ephemeral postgres container.`,
+      `${REMOTE_LABEL}: no readable $HOME/.env at ${opts.envFilePath}. The remote database's connection details ` +
+        `come from that file — discrete tokens plus a rm_app= writer role line (see .env.example). ` +
+        `Fix it, or pass \`--local blank\` to boot a local container instead.`,
     );
   }
 
-  const direct = env.DATABASE_URL?.trim();
-  const assembled = direct ? undefined : urlFromDiscreteKeys(env);
-  const url = direct || assembled;
+  const url = urlFromDiscreteKeys(env);
   if (!url) {
     throw new Error(
-      `--db external: ${opts.envFilePath} has no DATABASE_URL, and not enough discrete keys to assemble one ` +
-        `(needs host, port, database, username, password — the fields DigitalOcean's connection panel prints). ` +
-        `Add DATABASE_URL=postgres://user:password@host:port/database?sslmode=require and re-run.`,
+      `${REMOTE_LABEL}: ${opts.envFilePath} cannot assemble the rm_app writer URL — needs host, port, database ` +
+        `(the fields DigitalOcean's connection panel prints) plus a rm_app=<password> role line. ` +
+        `Fix $HOME/.env and re-run.`,
     );
   }
 
   const scheme = url.split(":")[0];
   if (scheme !== "postgres" && scheme !== "postgresql") {
     throw new Error(
-      `--db external: the connection URL must start with postgres:// or postgresql://, got "${scheme}://".`,
+      `${REMOTE_LABEL}: the connection URL must start with postgres:// or postgresql://, got "${scheme}://".`,
     );
   }
   assertReachableFromContainer(url);
@@ -323,6 +260,6 @@ export function resolveExternalPg(
     url,
     redactedUrl: redactPostgresUrl(url),
     host: new URL(url).hostname,
-    source: direct ? "DATABASE_URL" : "discrete keys",
+    source: "discrete keys",
   };
 }

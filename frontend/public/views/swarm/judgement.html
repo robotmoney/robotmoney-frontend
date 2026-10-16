@@ -39,7 +39,7 @@
         <nav class="rr-crumbs" aria-label="Breadcrumb">
           <a href="/swarm">Swarm</a><span aria-hidden="true">/</span>
           <a :href="subjectHref()" x-text="subjectTitle()"></a><span aria-hidden="true">/</span>
-          <a :href="sessionHref()" x-text="formatDate(judgement.sessionDate, 'short')"></a><span aria-hidden="true">/</span>
+          <a :href="sessionHref()" x-text="formatDate(judgement.sessionOpenedAt || judgement.sessionDate, 'short')"></a><span aria-hidden="true">/</span>
           <span aria-current="page">Judgement</span>
         </nav>
 
@@ -54,7 +54,7 @@
         </header>
 
         <div class="rr-meta">
-          <span class="rr-meta__i">Session <a class="rr-lnk" :href="sessionHref()" x-text="formatDate(judgement.sessionDate, 'short')"></a></span>
+          <span class="rr-meta__i">Session <a class="rr-lnk" :href="sessionHref()" x-text="formatDate(judgement.sessionOpenedAt || judgement.sessionDate, 'short')"></a></span>
           <span class="rr-meta__i">Subject <a class="rr-lnk" :href="subjectHref()" x-text="subjectTitle()"></a></span>
           <span class="rr-meta__i">Judge
             <template x-if="judgeHref()"><a class="rr-lnk" :href="judgeHref()" x-text="judgeName()"></a></template>

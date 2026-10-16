@@ -22,10 +22,13 @@
 //      REAL binary surface — pinned to the same three-subcommand list
 //      scripts/lib/rmpc-fetch.ts asserts against the pinned release's
 //      `committee-identity --help`.
+//   6. (issue #1268) no code sample or poll/loop instruction in the member
+//      docs or scripts/*.ts discovers sessions through open-session, which
+//      names only the newest collecting session.
 //
 // Runs in the required unit.yml root job via `bun run test:unit`.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ONBOARDING_PROMPT, ROUTES } from "@robotmoney/contract";
 import { missingCommitteeIdentitySubcommands } from "../../lib/rmpc-fetch.ts";
@@ -314,5 +317,75 @@ describe("the repo-owned onboarding skill completes claim before declaring succe
     const completion = skill.indexOf("Onboarding complete —");
     expect(guard).toBeGreaterThan(0);
     expect(completion).toBeGreaterThan(guard);
+  });
+});
+
+// Issue #1268 (post-mortem 2026-10-09, findings 4 and 5): GET open-session
+// names ONE collecting session, the newest, while the four subjects collect at
+// once. An agent that discovers through it acts on one subject and misses the
+// rest. Every member-facing sample and loop instruction must discover through
+// open-sessions. The compatibility note saying open-session returns only the
+// newest session is the one allowed mention.
+describe("member docs and scripts discover sessions through open-sessions, not open-session (issue #1268)", () => {
+  // `open-session` / `openSession` NOT followed by the plural `s`.
+  const SINGULAR_PATH = /\/api\/swarm\/open-session(?!s)/;
+  const SINGULAR_ANY = /open-session(?!s)/;
+  const SINGULAR_ROUTE = /ROUTES\.swarm\.openSession(?!s)/;
+  const COMPAT_NOTE = /only the newest/i;
+
+  function fencedBlocks(md: string): string[] {
+    return [...md.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]!);
+  }
+  function preBlocks(html: string): string[] {
+    return [...html.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map((m) => decodeEntities(m[1]!));
+  }
+  // Prose sentences (markup stripped) that tell the reader to poll or loop.
+  function pollOrLoopSentences(text: string): string[] {
+    return text.split(/(?<=[.!?])\s+/).filter((sentence) => /\b(poll|loop)/i.test(sentence));
+  }
+  function offendingSentences(prose: string): string[] {
+    return pollOrLoopSentences(prose).filter((s) => SINGULAR_ANY.test(s) && !COMPAT_NOTE.test(s));
+  }
+  const mdProse = (md: string) => md.replace(/```[\s\S]*?```/g, " ").replace(/\s+/g, " ");
+
+  const docs = [
+    { rel: ONBOARDING_SKILL, samples: fencedBlocks, prose: mdProse },
+    { rel: PARTICIPATION, samples: preBlocks, prose: textOf },
+    { rel: API_REFERENCE, samples: preBlocks, prose: textOf },
+  ];
+
+  for (const { rel, samples, prose } of docs) {
+    test(`${rel}: no code sample fetches /api/swarm/open-session`, () => {
+      const blocks = samples(read(rel));
+      // Canary: each doc carries code samples today.
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks.filter((b) => SINGULAR_PATH.test(b))).toEqual([]);
+    });
+
+    test(`${rel}: no poll/loop instruction discovers through open-session`, () => {
+      expect(offendingSentences(prose(read(rel)))).toEqual([]);
+    });
+  }
+
+  test("the guard catches the pre-fix api-reference wording (canary)", () => {
+    expect(offendingSentences("On reads, poll open-session at a reasonable interval (minutes, not seconds).")).toHaveLength(1);
+    expect(offendingSentences("Do not build the loop on GET /api/swarm/open-session: it returns only the newest one session.")).toEqual([]);
+  });
+
+  // scripts/lib/agent-endpoints.ts is the endpoint catalogue: it documents
+  // open-session as a route, not a discovery loop. It is not a top-level
+  // scripts/*.ts file, so it is excluded by construction.
+  const scriptFiles = readdirSync(join(repoRoot, "scripts")).filter((f) => f.endsWith(".ts"));
+
+  test("scripts/*.ts includes the starter agent (canary)", () => {
+    expect(scriptFiles).toContain("starter-swarm-agent.ts");
+  });
+
+  test("no scripts/*.ts calls ROUTES.swarm.openSession or fetches /api/swarm/open-session", () => {
+    const offenders = scriptFiles.filter((f) => {
+      const src = read(`scripts/${f}`);
+      return SINGULAR_ROUTE.test(src) || SINGULAR_PATH.test(src);
+    });
+    expect(offenders).toEqual([]);
   });
 });

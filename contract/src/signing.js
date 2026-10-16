@@ -50,3 +50,28 @@ export function canonicalizeClaimChallenge(challenge) {
     expiresAt: challenge.expiresAt,
   });
 }
+
+// A JUDGEMENT is signed in its own domain, exactly as a claim challenge is
+// (issue #1026 W3, smoke-production-spec.md §6.2: "The judge is a participant
+// exactly like an agent", and a participant signs what it submits). `purpose`
+// comes first so the bytes of a judgement can never collide with a take's or a
+// claim's, whatever the fields hold.
+//
+// WHAT THE SIGNATURE BINDS. The session, the model that answered, the prompt it
+// was given (`promptHash`), the frozen take set it read (`inputsDigest`), a
+// fresh `nonce`, and the model's RAW answer text. The raw text, not a parsed
+// object: the server parses it with the same parser the receipt trusts, and a
+// signature over a re-serialized object would bind whatever one serializer
+// happened to produce rather than what the model said.
+export function canonicalizeJudgement(j) {
+  return JSON.stringify({
+    purpose: "swarm-judgement-v1",
+    memberId: j.memberId,
+    sessionId: j.sessionId,
+    nonce: j.nonce,
+    model: j.model,
+    promptHash: j.promptHash,
+    inputsDigest: j.inputsDigest,
+    opinion: j.opinion,
+  });
+}

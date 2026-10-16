@@ -1,8 +1,9 @@
 // HTTP implementation of the AnalyticsPersistence port (issue #106): the ONLY
 // persistence path the independent producer (and retained legacy handler tests)
 // uses. Typed calls to the authenticated /api/analytics/* boundary, presenting
-// the analytics-provider bearer credential (ANALYTICS_TOKEN). No db/client, no
-// SQL — the API process owns all analytics-table SQL behind these endpoints.
+// the analytics-provider bearer credential: analytics-producer's store token,
+// read from the file ANALYTICS_TOKEN_FILE names (smoke spec §3). No db/client,
+// no SQL — the API process owns all analytics-table SQL behind these endpoints.
 //
 // SECRET HYGIENE: the token is held in a closure and set only on the outgoing
 // Authorization header. It is never logged, never echoed into thrown errors,
@@ -20,11 +21,30 @@ import type {
 } from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
 import type { TerminalRunPackageInput } from "./output-snapshots.ts";
-import { envSecret } from "../lib/env-secret.ts";
+import { readFileSync } from "node:fs";
+import { ALL_PARITY_DOMAINS, type ParityDomain } from "./cutover/parity-domains.ts";
 
 export interface AnalyticsApiConfig {
   baseUrl: string; // e.g. http://api:8787 (compose) / http://localhost:8787
-  token: string | null; // ANALYTICS_TOKEN; null only in insecure/ephemeral envs
+  token: string | null; // analytics-producer's store token; null when no file is named
+}
+
+/**
+ * The analytics-provider bearer, from the file ANALYTICS_TOKEN_FILE names.
+ *
+ * The FILE is the only source (smoke spec §3: each service token is "a file
+ * the boot places in the instance's state directory"). There is no
+ * token-valued env var to fall back on, so a secret can never ride in an
+ * env var or an image. A named file that is missing or empty throws: that is a
+ * broken delivery, and answering it with "no token" would only move the failure
+ * to a 401 somewhere less legible.
+ */
+export function readAnalyticsToken(env: Record<string, string | undefined> = process.env): string | null {
+  const file = env.ANALYTICS_TOKEN_FILE?.trim();
+  if (!file) return null;
+  const value = readFileSync(file, "utf8").trim();
+  if (!value) throw new Error("ANALYTICS_TOKEN_FILE points to an empty token file");
+  return value;
 }
 
 // Resolve the producer's API wiring from the environment at CALL time (tests
@@ -35,26 +55,18 @@ export function resolveAnalyticsApiConfig(
 ): AnalyticsApiConfig {
   return {
     baseUrl: (env.ANALYTICS_API_URL || `http://localhost:${Number(env.API_PORT ?? 8787)}`).replace(/\/+$/, ""),
-    token: envSecret("ANALYTICS_TOKEN", env),
+    token: readAnalyticsToken(env),
   };
 }
 
-// Fail-loud startup guard (issue #106 AC): an analytics producer configured to
-// run in smoke/prod MUST have its analytics-provider credential. Without it every
-// submission would 401 at the boundary — refusing to boot is the honest failure.
-// `allowInsecure` (RM_ENV=ephemeral or explicit RM_ALLOW_INSECURE=1) is the only
-// opt-out, mirroring the API-side gate in config.ts/api auth.
-export function assertAnalyticsUpdaterCredentials(cfg: {
-  env: string;
-  allowInsecure: boolean;
-  analyticsToken: string | null;
-}): void {
-  if (!cfg.allowInsecure && !cfg.analyticsToken) {
-    throw new Error(
-      `analytics updater is configured for RM_ENV=${cfg.env} without ANALYTICS_TOKEN — ` +
-        "set the analytics-provider bearer credential (or RM_ALLOW_INSECURE=1 for a local throwaway smoke)",
-    );
-  }
+/**
+ * The api did not answer: the connection failed, or a gateway answered 502 or
+ * 504 for it. A 503 is the api's own answer (database unavailable) and still
+ * fails the job, as issue 1375 left it. Not a refusal of the request, so a caller that can
+ * wait (the parity sweep, issue 1378) degrades and retries instead of failing.
+ */
+export class AnalyticsApiUnreachableError extends Error {
+  override name = "AnalyticsApiUnreachableError";
 }
 
 // The one authenticated-HTTP call shape every analytics-boundary caller in
@@ -70,11 +82,20 @@ async function analyticsApiCall<T>(
 ): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cfg.token) headers.Authorization = `Bearer ${cfg.token}`;
-  const res = await fetch(`${cfg.baseUrl}${route}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${cfg.baseUrl}${route}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    throw new AnalyticsApiUnreachableError(`analytics API ${method} ${route} unreachable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (res.status === 502 || res.status === 504) {
+    const detail = await res.text().catch(() => "");
+    throw new AnalyticsApiUnreachableError(`analytics API ${method} ${route} not ready: HTTP ${res.status}${detail ? ` — ${detail.slice(0, 500)}` : ""}`);
+  }
   if (!res.ok) {
     // Surface the server's error text but NEVER the credential.
     const detail = await res.text().catch(() => "");
@@ -151,21 +172,62 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
   };
 }
 
+/** What POST A.paritySweep answers for one domain (api/routes/analytics.ts). */
+export interface ParityDomainSummary {
+  domain: ParityDomain;
+  matched: boolean;
+  legacyRowCount: number;
+  ledgerRowCount: number;
+  mismatchCount: number;
+  /** Time the api spent on the domain: its statement plus the observation insert. */
+  durationMs: number;
+}
+
+/** The analytics.parity_sweep job's output: one entry per domain, in sweep order. */
 export interface ParitySweepSummary {
-  domains: number;
-  matched: string[];
-  mismatched: string[];
+  domains: ParityDomainSummary[];
+  matched: ParityDomain[];
+  mismatched: ParityDomain[];
 }
 
 // Issue #979 fix: the worker's ONLY legitimate way to run the dual-write
-// parity sweep. runParitySweep() (analytics/cutover/parity.ts) reads/writes
-// Postgres directly through db/client.ts's rm_app-credentialed pool, which
-// worker/** must never import — even transitively (that was exactly the
-// regression this fixes: worker/handlers/index.ts importing parity.ts
-// directly, which pulled db/client.ts into every worker container). This
-// goes over the SAME authenticated HTTP boundary as analyticsApiClient()
-// above, POSTing to A.paritySweep, which runs the sweep INSIDE the API
-// process instead.
-export async function triggerParitySweep(cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig()): Promise<ParitySweepSummary> {
-  return await analyticsApiCall<ParitySweepSummary>(cfg, "POST", ROUTES.analytics.paritySweep);
+// parity sweep. analytics/cutover/parity.ts reads/writes Postgres directly
+// through db/client.ts's rm_app-credentialed pool, which worker/** must never
+// import — even transitively. This goes over the SAME authenticated HTTP
+// boundary as analyticsApiClient() above, POSTing to A.paritySweep, which runs
+// the comparison INSIDE the API process instead.
+//
+// ONE REQUEST PER DOMAIN (issue 1375), in ALL_PARITY_DOMAINS order, so each
+// request is one bounded statement in Postgres and none comes near the api's
+// request limit. One log line per domain. A failed domain call fails the job
+// and names the domain; the domains before it have already recorded their
+// observations, which are evidence in their own right.
+export async function triggerParitySweep(
+  cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig(),
+  log: (line: string) => void = console.log,
+): Promise<ParitySweepSummary> {
+  const domains: ParityDomainSummary[] = [];
+  for (const domain of ALL_PARITY_DOMAINS) {
+    const started = performance.now();
+    let summary: ParityDomainSummary;
+    try {
+      summary = await analyticsApiCall<ParityDomainSummary>(cfg, "POST", ROUTES.analytics.paritySweep, { domain });
+    } catch (err) {
+      const message = `parity sweep failed on domain ${domain}: ${err instanceof Error ? err.message : String(err)}`;
+      // Keep the class: the handler degrades on an unready api (issue 1378).
+      if (err instanceof AnalyticsApiUnreachableError) throw new AnalyticsApiUnreachableError(message);
+      throw new Error(message);
+    }
+    log(
+      `[parity-sweep] domain=${domain} matched=${summary.matched} legacy=${summary.legacyRowCount} ` +
+        `ledger=${summary.ledgerRowCount} mismatches=${summary.mismatchCount} durationMs=${summary.durationMs} ` +
+        `requestMs=${Math.round(performance.now() - started)}`,
+    );
+    domains.push(summary);
+  }
+  return {
+    domains,
+    matched: domains.filter((d) => d.matched).map((d) => d.domain),
+    mismatched: domains.filter((d) => !d.matched).map((d) => d.domain),
+  };
 }

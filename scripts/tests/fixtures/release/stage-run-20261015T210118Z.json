@@ -1,0 +1,878 @@
+{
+  "version": 1,
+  "target": "stage",
+  "rmEnv": "stage",
+  "release": "v0.6.2",
+  "commit": "ff1d2ef9f5a9948305b5cf4011733d37300295de",
+  "stepListHash": "9910d29b1d2a10d87d4d0d142bc8dfaa48f5d94e0724e4d76a90d09d0412b8fd",
+  "stepIds": [
+    "Q01-lockfile",
+    "Q02-dump",
+    "Q03-stage-up",
+    "Q04-role-passwords",
+    "Q05-scope",
+    "P01-checkout",
+    "P02-identity",
+    "P03-install",
+    "P04-capture-checkout",
+    "P05-capture-identity",
+    "P06-capture-install",
+    "P07-baseline",
+    "P08-log-baseline",
+    "C01-backup",
+    "C02-backup-sums",
+    "C03-restore-proof",
+    "C04-probe-start",
+    "C05-migrate",
+    "C06-version-tag",
+    "C07-env-rewrite",
+    "C08-identity",
+    "C09-tokens",
+    "C10-rolling-boot",
+    "C11-ready",
+    "C12-site",
+    "C13-probe-grade",
+    "S01-verify-version",
+    "S02-verify-product",
+    "S03-log-verdict",
+    "S04-soak-record",
+    "S05-compare-baseline",
+    "S06-host-guards",
+    "S07-soak-gate",
+    "S08-soak-checks",
+    "S09-collect-logs",
+    "V01-subject-spacing",
+    "V02-maintenance-fallback",
+    "V03-missed-sessions",
+    "V04-closed-session-take",
+    "V05-starter-takes",
+    "V06-dry-run-take",
+    "V07-brand-marks",
+    "V08-fetch-cache",
+    "V09-rm-env-retired",
+    "V10-fixture-guard",
+    "V11-take-rules"
+  ],
+  "goSha256": "f42b3b0c084021f7449a479a941e3532e63a0e3b137f0798ac686975333157b5",
+  "runTs": "20261015T210118Z",
+  "startedAt": "2026-10-15T21:01:18.550Z",
+  "updatedAt": "2026-10-15T22:02:33.056Z",
+  "status": "passed",
+  "steps": {
+    "Q01-lockfile": {
+      "id": "Q01-lockfile",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:01:18.556Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:01:21.065Z",
+      "durationMs": 2509
+    },
+    "Q02-dump": {
+      "id": "Q02-dump",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:01:21.066Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:01:28.995Z",
+      "durationMs": 7929
+    },
+    "Q03-stage-up": {
+      "id": "Q03-stage-up",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:01:28.995Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage-target-up/credentials-init.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage-target-up/env-rewrite.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/provision-tokens-2026-10-15T21-07-14-232Z.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/rebind-members-2026-10-15T21-07-56-982Z.json",
+          "missing": true
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:09.299Z",
+      "durationMs": 400304
+    },
+    "Q04-role-passwords": {
+      "id": "Q04-role-passwords",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:09.300Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/role-passwords-2026-10-15T21-08-42-826Z.json",
+          "missing": true
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:26.582Z",
+      "durationMs": 17282
+    },
+    "Q05-scope": {
+      "id": "Q05-scope",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:26.583Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:27.520Z",
+      "durationMs": 937
+    },
+    "P01-checkout": {
+      "id": "P01-checkout",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:27.521Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:31.416Z",
+      "durationMs": 3895
+    },
+    "P02-identity": {
+      "id": "P02-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:31.417Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P02-identity/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:36.830Z",
+      "durationMs": 5413
+    },
+    "P03-install": {
+      "id": "P03-install",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:36.831Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:38.865Z",
+      "durationMs": 2034
+    },
+    "P04-capture-checkout": {
+      "id": "P04-capture-checkout",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:38.866Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:41.450Z",
+      "durationMs": 2584
+    },
+    "P05-capture-identity": {
+      "id": "P05-capture-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:41.451Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261015T210118Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P05-capture-identity/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:47.595Z",
+      "durationMs": 6144
+    },
+    "P06-capture-install": {
+      "id": "P06-capture-install",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:47.596Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:08:49.902Z",
+      "durationMs": 2306
+    },
+    "P07-baseline": {
+      "id": "P07-baseline",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:08:49.903Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261015T210118Z/baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P07-baseline/receipts/baseline.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261015T210118Z/baseline-would-clear.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P07-baseline/receipts/baseline-would-clear.txt"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261015T210118Z/baseline-ledger.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P07-baseline/receipts/baseline-ledger.txt"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:09:00.484Z",
+      "durationMs": 10581
+    },
+    "P08-log-baseline": {
+      "id": "P08-log-baseline",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:09:00.485Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-baseline.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P08-log-baseline/receipts/prod-gate-baseline.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/P08-log-baseline/receipts/prod-gate-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:09:10.660Z",
+      "durationMs": 10175
+    },
+    "C01-backup": {
+      "id": "C01-backup",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:09:10.661Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261015T210118Z/manifest.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C01-backup/receipts/manifest.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:18:39.881Z",
+      "durationMs": 569220
+    },
+    "C02-backup-sums": {
+      "id": "C02-backup-sums",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:18:39.882Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261015T210118Z/SHA256SUMS",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C02-backup-sums/receipts/SHA256SUMS"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:18:47.525Z",
+      "durationMs": 7643
+    },
+    "C03-restore-proof": {
+      "id": "C03-restore-proof",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:18:47.525Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261015T210118Z/restore-proof.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C03-restore-proof/receipts/restore-proof.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:32.888Z",
+      "durationMs": 285363
+    },
+    "C04-probe-start": {
+      "id": "C04-probe-start",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:32.888Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:33.065Z",
+      "durationMs": 177
+    },
+    "C05-migrate": {
+      "id": "C05-migrate",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:33.066Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/migrate-receipt-2026-10-15T21-23-51-267Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C05-migrate/receipts/migrate-receipt-2026-10-15T21-23-51-267Z.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/migrate-journal-2026-10-15T21-23-51-267Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C05-migrate/receipts/migrate-journal-2026-10-15T21-23-51-267Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:42.973Z",
+      "durationMs": 9907
+    },
+    "C06-version-tag": {
+      "id": "C06-version-tag",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:42.973Z",
+      "endedAt": "2026-10-15T21:23:42.973Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C07-env-rewrite": {
+      "id": "C07-env-rewrite",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:42.978Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/env-rewrite.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C07-env-rewrite/receipts/env-rewrite.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:48.604Z",
+      "durationMs": 5626
+    },
+    "C08-identity": {
+      "id": "C08-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:48.604Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/set-identity-2026-10-15T21-24-06-913Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C08-identity/receipts/set-identity-2026-10-15T21-24-06-913Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:54.094Z",
+      "durationMs": 5490
+    },
+    "C09-tokens": {
+      "id": "C09-tokens",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:54.094Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/provision-tokens-2026-10-15T21-24-12-466Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C09-tokens/receipts/provision-tokens-2026-10-15T21-24-12-466Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:23:59.794Z",
+      "durationMs": 5700
+    },
+    "C10-rolling-boot": {
+      "id": "C10-rolling-boot",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:23:59.800Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:30.440Z",
+      "durationMs": 150640
+    },
+    "C11-ready": {
+      "id": "C11-ready",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:30.441Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:34.256Z",
+      "durationMs": 3815
+    },
+    "C12-site": {
+      "id": "C12-site",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:34.261Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/web/receipt.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/C12-site/receipts/receipt.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:39.768Z",
+      "durationMs": 5507
+    },
+    "C13-probe-grade": {
+      "id": "C13-probe-grade",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:39.768Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:39.943Z",
+      "durationMs": 175
+    },
+    "S01-verify-version": {
+      "id": "S01-verify-version",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:39.943Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/identity-check.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S01-verify-version/receipts/identity-check.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:45.900Z",
+      "durationMs": 5957
+    },
+    "S02-verify-product": {
+      "id": "S02-verify-product",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:45.900Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/rm-backup-v022/receipts/R7.verify.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S02-verify-product/receipts/R7.verify.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:26:50.080Z",
+      "durationMs": 4180
+    },
+    "S03-log-verdict": {
+      "id": "S03-log-verdict",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:26:50.081Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-post-release.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S03-log-verdict/receipts/prod-gate-post-release.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-post-release.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S03-log-verdict/receipts/prod-gate-post-release.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:27:00.720Z",
+      "durationMs": 10639
+    },
+    "S04-soak-record": {
+      "id": "S04-soak-record",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:27:00.720Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/soak-record.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S04-soak-record/receipts/soak-record.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/soak-record.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S04-soak-record/receipts/soak-record.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/soak-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S04-soak-record/receipts/soak-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:27:19.588Z",
+      "durationMs": 18868
+    },
+    "S05-compare-baseline": {
+      "id": "S05-compare-baseline",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:27:19.589Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261015T210118Z/compare-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S05-compare-baseline/receipts/compare-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:27:25.363Z",
+      "durationMs": 5774
+    },
+    "S06-host-guards": {
+      "id": "S06-host-guards",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:27:25.363Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/host-guards.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S06-host-guards/receipts/host-guards.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:27:31.514Z",
+      "durationMs": 6151
+    },
+    "S07-soak-gate": {
+      "id": "S07-soak-gate",
+      "status": "accepted",
+      "exit": 1,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:57:02.139Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-watch.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S07-soak-gate/receipts/prod-gate-watch.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/prod-gate-watch.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S07-soak-gate/receipts/prod-gate-watch.md"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:57:13.864Z",
+      "durationMs": 11725,
+      "error": "exit 1, expected 0",
+      "accepted": {
+        "reason": "practice-run override (owner, session of 2026-10-14): known product defects, not v0.6.2 regressions: the api restarted twice, each time during an in-flight analytics.parity_sweep (21:29:12-21:30:04Z, 21:33:08-21:34:02Z; issue 1375), and worker-analytics is unhealthy from the projects.refresh_wallets lane hold (1373, 1276); the other unclassified lines are containers losing that api",
+        "issue": 1375,
+        "at": "2026-10-15T21:57:38.018Z"
+      }
+    },
+    "S08-soak-checks": {
+      "id": "S08-soak-checks",
+      "status": "accepted",
+      "exit": 1,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T21:57:39.471Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/soak-full.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S08-soak-checks/receipts/soak-full.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/soak-full.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S08-soak-checks/receipts/soak-full.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T21:58:11.574Z",
+      "durationMs": 32103,
+      "error": "exit 1, expected 0",
+      "accepted": {
+        "reason": "practice-run override (owner, session of 2026-10-14): R8.s and R8.t read the api at the stack record's port 32975, but the api restarted twice and publishes 32977 now (a runbook tooling bug, fixed on the runbook PR 1355 by a live docker-port lookup); R8.a and R8.c are the 21:30 regime run failing while the api was down during a parity sweep (issue 1375)",
+        "issue": 1375,
+        "at": "2026-10-15T22:00:41.764Z"
+      }
+    },
+    "S09-collect-logs": {
+      "id": "S09-collect-logs",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:00:42.839Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/collect-logs.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/collect-logs.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-website-server-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-website-server-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-api-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-api-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-website-server-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-website-server-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-api-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-api-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/S09-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.inspect.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:26.870Z",
+      "durationMs": 44031
+    },
+    "V01-subject-spacing": {
+      "id": "V01-subject-spacing",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:26.872Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/schedule-parity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V01-subject-spacing/receipts/schedule-parity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:32.627Z",
+      "durationMs": 5755
+    },
+    "V02-maintenance-fallback": {
+      "id": "V02-maintenance-fallback",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:32.627Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-maintenance-fallback.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V02-maintenance-fallback/receipts/version-check-maintenance-fallback.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:38.852Z",
+      "durationMs": 6225
+    },
+    "V03-missed-sessions": {
+      "id": "V03-missed-sessions",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:38.853Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-missed-sessions.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V03-missed-sessions/receipts/version-check-missed-sessions.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:45.357Z",
+      "durationMs": 6504
+    },
+    "V04-closed-session-take": {
+      "id": "V04-closed-session-take",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:45.359Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-closed-session-take.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V04-closed-session-take/receipts/version-check-closed-session-take.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:51.901Z",
+      "durationMs": 6542
+    },
+    "V05-starter-takes": {
+      "id": "V05-starter-takes",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:51.902Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-starter-takes.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V05-starter-takes/receipts/version-check-starter-takes.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:01:57.358Z",
+      "durationMs": 5456
+    },
+    "V06-dry-run-take": {
+      "id": "V06-dry-run-take",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:01:57.359Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-dry-run-take.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V06-dry-run-take/receipts/version-check-dry-run-take.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:02.804Z",
+      "durationMs": 5445
+    },
+    "V07-brand-marks": {
+      "id": "V07-brand-marks",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:02:02.805Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-brand-marks.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V07-brand-marks/receipts/version-check-brand-marks.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:08.877Z",
+      "durationMs": 6072
+    },
+    "V08-fetch-cache": {
+      "id": "V08-fetch-cache",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:02:08.878Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-fetch-cache.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V08-fetch-cache/receipts/version-check-fetch-cache.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:15.399Z",
+      "durationMs": 6521
+    },
+    "V09-rm-env-retired": {
+      "id": "V09-rm-env-retired",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:02:15.400Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-rm-env-retired.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V09-rm-env-retired/receipts/version-check-rm-env-retired.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:21.053Z",
+      "durationMs": 5653
+    },
+    "V10-fixture-guard": {
+      "id": "V10-fixture-guard",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:02:21.054Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-fixture-guard.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V10-fixture-guard/receipts/version-check-fixture-guard.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:26.907Z",
+      "durationMs": 5853
+    },
+    "V11-take-rules": {
+      "id": "V11-take-rules",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-15T22:02:26.907Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261015T210118Z/version-check-take-rules.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261015T210118Z/V11-take-rules/receipts/version-check-take-rules.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-15T22:02:33.056Z",
+      "durationMs": 6149
+    }
+  },
+  "recovery": {
+    "ref": "/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-frontend/qa-0-6-x-2026-10-14/scripts/release/runbooks/releases/v0.6.2.yaml#recovery",
+    "sha256": "d511fb4e022dba8ac3ca61e1712a8902d2912ca4f14385cd84306e5e20d6c090"
+  },
+  "tree": "4ea6d57bff89e51c19f81be2162ec3f6c1142469",
+  "cutoverSeconds": 181
+}

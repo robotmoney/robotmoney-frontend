@@ -8,10 +8,13 @@ const take = (memberId: string, body: string) => ({
   confidence: 0.5,
 });
 
+const FILLER = Array.from({ length: 45 }, (_, i) => `word${i}`).join(" ");
+
+// A judge-ready body: enough prose to read a position from (judgeShortfalls), distinct per member.
 const body = (detail: string) => [
   "**REGIME**", `- ${detail} regime`,
   "**ALLOCATION**", `- ${detail} allocation`,
-  "**SUBJECT**", `- ${detail} subject`,
+  "**SUBJECT**", `- ${detail} subject ${FILLER}`,
 ].join("\n");
 
 // Published-attendance shape; absent list is what the backend rollup said.
@@ -92,22 +95,22 @@ describe("settledAttendance — each settled result is its own member's", () => 
     expect(settledAttendance(present, [ok, ok, ok])).toEqual({ failed: [], fulfilled: ["athena", "cygnus", "boreas"] });
   });
 });
-describe("sessionRequiresWeights — the recommendation's type decides a take's sections", () => {
+describe("sessionRequiresWeights — the recommendation's type decides whether a weight vector is required", () => {
   const session = (type: string, takes: unknown[] = []) => ({ session: { swarmRecommendation: { type } }, takes });
   const weights = [{ bucket: "fixed_income", weight: 1 }];
 
-  test("an allocation session's takes carry ALLOCATION; any other subject's do not", () => {
+  test("an allocation session requires a weight vector; any other subject does not", () => {
     expect(sessionRequiresWeights(session("bucket_weights"))).toBe(true);
     expect(sessionRequiresWeights(session("position_actions"))).toBe(false);
   });
 
   test("an outside take's optional weights do not turn a portfolio session into an allocation one", () => {
     // Weights are optional on any take. A bodyless outside take that carries
-    // them must leave the house members held to REGIME and SUBJECT.
+    // them must not change what the house members are held to.
     const pub = session("position_actions", [{ memberId: "outside", weights }]);
     expect(sessionRequiresWeights(pub)).toBe(false);
     expect(() => assertAuthoredTakes("session", [
-      take("athena", "**REGIME**\n- risk-on\n**SUBJECT**\n- the book holds"),
+      take("athena", `**REGIME**\n- risk-on\n**SUBJECT**\n- the book holds ${FILLER}`),
       { memberId: "outside", weights, stance: "neutral", confidence: 0.5 },
     ], attendance([]), [], ["athena"], { requireWeights: sessionRequiresWeights(pub) })).not.toThrow();
   });

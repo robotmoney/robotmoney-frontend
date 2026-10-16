@@ -184,6 +184,20 @@ export async function fetchSigningPayload(draft: Record<string, unknown>): Promi
   return body.canonical;
 }
 
+/**
+ * POST the signed take. The body names RM_SESSION_ID, the session whose brief
+ * this take was authored from, so a take that arrives after that window closed
+ * is refused rather than filed into the next session (issue #1249). sessionId
+ * is outside the signed bytes, so it is added here, after signing.
+ */
+export async function submitTake(token: string, draft: Record<string, unknown>, signature: string) {
+  return await restJson<{ ok?: boolean; verified?: boolean; error?: string }>(ROUTES.swarm.submit, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ ...draft, sessionId: requiredEnv("RM_SESSION_ID"), signature }),
+  });
+}
+
 /** Read the optional immutable report binding from a public brief response. */
 export function reportSnapshotIdFromBrief(brief: { reportSnapshotId?: unknown } | null | undefined): string | undefined {
   return typeof brief?.reportSnapshotId === "string" && brief.reportSnapshotId.length > 0
@@ -416,7 +430,7 @@ async function participate(): Promise<void> {
     // the vector this member states is covered by this member's own signature
     // and is reproducible by anyone holding the receipt. The client still never
     // builds canonical bytes locally — the server response is the authority.
-    ...(authored.weights ? { weights: authored.weights } : {}),
+    ...(authored.weights?.length ? { weights: authored.weights } : {}),
     ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
   const canonical = await fetchSigningPayload(draft);
@@ -427,11 +441,7 @@ async function participate(): Promise<void> {
     const { privateKey } = await ensureClientKeyPair();
     signature = b64(await crypto.subtle.sign({ name: "Ed25519" }, privateKey, new TextEncoder().encode(canonical)));
   }
-  const submitted = await restJson<{ ok?: boolean; verified?: boolean; error?: string }>(ROUTES.swarm.submit, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ ...draft, signature }),
-  });
+  const submitted = await submitTake(token, draft, signature);
   if (!submitted.body?.ok || submitted.body.verified !== true) {
     throw new Error(`submission was not verified (HTTP ${submitted.status}): ${JSON.stringify(submitted.body).slice(0, 300)}`);
   }

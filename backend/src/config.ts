@@ -1,8 +1,8 @@
 // Central environment configuration. The only required input is DATABASE_URL.
-// RM_ENV selects behavior hints (ephemeral | smoke | prod) but the connection
-// itself is always driven by DATABASE_URL so the same code runs everywhere.
-import parser from "cron-parser";
-import { envSecret } from "./lib/env-secret.ts";
+// There is no environment class here (issue #973 retired RM_ENV from the
+// runtime): the connection is always driven by DATABASE_URL, every protected
+// route always requires its configured credential, and the test-only paths are
+// opened by backend/src/test-seam.ts, never by an environment value.
 
 function required(name: string): string {
   const v = process.env[name];
@@ -316,8 +316,7 @@ export function resolveStrategyVaults(): StrategyVaultConfig[] {
 // Why not a prop-wallet aave leg via resolveAaveATokens: that would surface the
 // position as its OWN top-level series, splitting one account's NAV across two
 // chart lines and turning the eight fixed labelled series into nine (a shape
-// asserted in frontend/test/browser/performance-view.spec.ts and the
-// WalletBalances DTO). GIZA-SS1's aToken balance is part of GIZA-SS1's NAV, so
+// the WalletBalances DTO fixes). GIZA-SS1's aToken balance is part of GIZA-SS1's NAV, so
 // it belongs inside that leg. See docs/decisions.md D37.
 //
 // cUSDCv3 (0xb125e6687d4313864e53df431d5425969c15eb2f) is deliberately ABSENT
@@ -467,6 +466,21 @@ export interface BuybackConfig {
 // cannot be supplied cannot be malformed.
 export const BUYBACK_FROM_BLOCK = 43_741_600;
 
+// $ROBOTMONEY's Doppler pool (RM-156). The token launched through Bankr on
+// Doppler, not Clanker: its liquidity sits in Doppler's locker (the pool's
+// DecayMulticurveInitializer), which shares the pool's swap fees between the
+// beneficiaries stored at launch and keeps a running total of every fee it has
+// collected. IMMUTABLE MAINNET FACTS read off the launch transaction
+// (0xf7d157013065523e9616e58f83e0cb45d004ed4b0bdd8165e7e5a6302d7a377f), so
+// committed constants with no env override, as BUYBACK_FROM_BLOCK is: nothing
+// legitimately varies them per environment. chain/token-fee-income.ts reads
+// them; scripts/token-fees.ts reads the same contracts by hand.
+export const ROBOTMONEY_DOPPLER = Object.freeze({
+  locker: "0xd59ce43e53d69f190e15d9822fb4540dccc91178", // DecayMulticurveInitializer (Sourcify-verified)
+  hook: "0xbb7784a4d481184283ed89619a3e3ed143e1adc0", // DecayMulticurveInitializerHook: the pool's fee schedule
+  poolId: "0xcece56fd6eb8fcbc6c45af8181bfe71ea6057770630490cac36dbbc4aa27a4a6", // Uniswap v4 PoolId: currency0 WETH, currency1 ROBOTMONEY
+});
+
 // The deepest Base WETH/USDC pool (~$111M reserve), used ONLY to read HISTORICAL
 // daily WETH/USD candles when the buyback indexer prices a swap at its own block
 // time (chain/token-prices.ts fetchGeckoDailyCloseUsd). Baked like every other
@@ -537,17 +551,31 @@ export function resolveBuybackConfig(
 // nothing can turn is not configuration; it is a constant with a misleading
 // spelling.
 //
-// WHY 9000. `eth_getLogs` is range-capped by the provider, and 10,000 blocks is
-// the cap the common public endpoints impose (including https://mainnet.base.org,
-// the BASE_RPC_URL default). 9000 sits under it with margin rather than at it, so
-// an off-by-one in the inclusive `[from, from + chunk - 1]` window below can
-// never turn a working scan into a provider-side range error. THIS IS THE NUMBER
-// TO REVISIT — and the only one — if BASE_RPC_URL is ever re-pointed at a
-// provider with a different cap: lower it to that provider's cap minus a similar
-// margin. MAX_CHUNKS bounds one run's wall-clock and RPC spend; the persisted
+// WHY 9000. `eth_getLogs` is range-capped by the provider, and 10,000 blocks was
+// the cap the common public endpoints imposed when this was set. 9000 sits under
+// it with margin rather than at it, so an off-by-one in the inclusive
+// `[from, from + chunk - 1]` window below can never turn a working scan into a
+// provider-side range error. By 2026-10 https://mainnet.base.org, the
+// BASE_RPC_URL default, caps a range at 500 and says so in its HTTP 413; the
+// scan reads that cap and narrows its window to it (buyback-logs.ts
+// buybackLogWindow), keeping a run's reach at CHUNK × MAX_CHUNKS blocks. So
+// this is the WIDEST window the scan asks for: lower it only for a provider
+// that refuses wide ranges without naming its cap. MAX_CHUNKS bounds one run's wall-clock and RPC spend; the persisted
 // scan cursor (buyback_scan_state) carries progress across runs, so a lower value
 // costs catch-up latency, never coverage.
 export const BUYBACK_LOG_CHUNK = 9000;
+
+// The api's request time limit, in seconds, passed to Bun.serve as `idleTimeout`. 10 s is Bun's own default, and before
+// this constant nothing set it, so it was an accident; it is now a decision (issue 1060). It is deliberately NOT raised.
+// No api request should take anywhere near it: a request that runs past a few seconds means CPU-bound or database-bound
+// work is on the request path, and the fix is to take that work off the path (a worker, a batch, an async submit), not to
+// give it longer. A longer limit hides the defect and lets one slow request hold a connection and the event loop. On
+// 2026-09-30 one request ran past 10 s and nginx answered 502; the log said nothing about which request or how long.
+// Bun allows at most 255; nginx's proxy_read_timeout is 60 s, so the api, not the proxy, ends a stuck request.
+export const API_IDLE_TIMEOUT_SECONDS = 10;
+// A request that takes longer than this is logged once with its method, path, duration and caller (api/request-timing.ts).
+// Treat every such line as a defect to fix: a healthy api call does not take 5 seconds.
+export const API_SLOW_REQUEST_MS = 5_000;
 export const BUYBACK_MAX_CHUNKS = 25;
 
 // Config-time double-count guard (AC): a prop wallet must never be the vault or
@@ -574,86 +602,17 @@ export function assertNoVaultAddressCollision(
   }
 }
 
-// --- Swarm session-lifecycle cron cadence (issue #208) -------------------
-// The five swarm.* job_schedules rows (open_session/publish_brief/
-// close_window/aggregate/publish) ship seed-time DISABLED by default so a
-// fresh CI/e2e/smoke database never auto-enqueues real swarm lifecycle jobs
-// alongside the smoke's own explicit enqueue-job admin path.
-// SWARM_SCHEDULES_ENABLED is the single switch that turns the WHOLE
-// managed sequence on for a deployment: production sets it explicitly (daily
-// 06:00-08:00 UTC — see the per-kind CRON defaults below); staging may set the
-// same flag with accelerated SWARM_*_CRON overrides; repo smoke/e2e never
-// sets it (docker-compose.smoke.yml pins it off). Resolved once at seed-time
-// (backend/src/db/seed.ts) — job_schedules
-// rows are the persisted source of truth thereafter; the scheduler
-// (worker/scheduler.ts) owns next_run_at/last_enqueued_at bookkeeping.
-export interface SwarmScheduleConfig {
-  kind: string;
-  cron: string;
-  enabled: boolean;
-  payload: Record<string, unknown>;
-  timezone: string;
-}
-
-// Fail-closed cron validation (review-operations finding on issue #208): every
-// job_schedules row is ticked by ONE shared scheduler (worker/scheduler.ts
-// tickScheduler) that evaluates ALL due rows inside a SINGLE transaction/loop —
-// an unparseable cron on any one row throws mid-loop and rolls back the whole
-// tick, silently stalling every OTHER schedule too (vault sampling, wallet
-// balances, buybacks, projects pipelines, analytics), repeatedly, every tick,
-// until fixed. Before this env-configurability landed, the five swarm.*
-// crons were fixed literals that could never be wrong; now an operator typo
-// in SWARM_*_CRON is user-reachable. Validate at config-resolution time
-// (seed-time) so a bad value fails the `bun run migrate` deploy step loudly,
-// instead of degrading the shared scheduler at runtime.
-function assertValidCron(envVarName: string, cron: string): void {
-  try {
-    parser.parseExpression(cron);
-  } catch (e) {
-    throw new Error(`invalid ${envVarName} "${cron}": ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-export function resolveSwarmSchedules(
-  env: Record<string, string | undefined> = process.env,
-): SwarmScheduleConfig[] {
-  const enabled = env.SWARM_SCHEDULES_ENABLED === "1" || env.SWARM_SCHEDULES_ENABLED === "true";
-  const windowMinutesRaw = Number(env.SWARM_WINDOW_MINUTES ?? "");
-  const windowMinutes = Number.isFinite(windowMinutesRaw) && windowMinutesRaw > 0 ? windowMinutesRaw : 60;
-  const timezone = "UTC";
-  const cronVars: Record<string, string> = {
-    SWARM_OPEN_SESSION_CRON: env.SWARM_OPEN_SESSION_CRON || "0 6 * * *",
-    SWARM_PUBLISH_BRIEF_CRON: env.SWARM_PUBLISH_BRIEF_CRON || "0 7 * * *",
-    SWARM_CLOSE_WINDOW_CRON: env.SWARM_CLOSE_WINDOW_CRON || "0 8 * * *",
-    SWARM_AGGREGATE_CRON: env.SWARM_AGGREGATE_CRON || "0 9 * * *",
-    SWARM_PUBLISH_CRON: env.SWARM_PUBLISH_CRON || "0 10 * * *",
-  };
-  for (const [name, cron] of Object.entries(cronVars)) assertValidCron(name, cron);
-  return [
-    { kind: "swarm.open_session", cron: cronVars.SWARM_OPEN_SESSION_CRON, enabled, payload: {}, timezone },
-    // windowMinutes rides on the publish_brief job's payload — publishBrief()
-    // reads it to compute window_closes_at, so SWARM_WINDOW_MINUTES is the
-    // single knob that keeps the publish_brief -> close_window cron gap
-    // (default 07:00 -> 08:00 = 60 minutes) coherent with the actual window.
-    { kind: "swarm.publish_brief", cron: cronVars.SWARM_PUBLISH_BRIEF_CRON, enabled, payload: { windowMinutes }, timezone },
-    { kind: "swarm.close_window", cron: cronVars.SWARM_CLOSE_WINDOW_CRON, enabled, payload: {}, timezone },
-    { kind: "swarm.aggregate", cron: cronVars.SWARM_AGGREGATE_CRON, enabled, payload: {}, timezone },
-    { kind: "swarm.publish", cron: cronVars.SWARM_PUBLISH_CRON, enabled, payload: {}, timezone },
-  ];
-}
-
 // --- Swarm public base URL ----------------------------------------------
-// The absolute origin the swarm notification emails link back to. Every
-// other surface in this codebase can get away with a root-relative path because
-// it renders inside a browser that already has an origin; an email does not. It
-// is read in a mail client, so a link that is not absolute is not a link at all.
-// That matters more here than it looks: the application status page at
-// /swarm/apply/<memberId> is reachable ONLY by its opaque id, nothing on the
-// site links to it, and the operator is handed the URL exactly once by their own
-// coding agent in a chat transcript. The email is the durable copy, so the URL
-// inside it has to be complete and it has to point at the deployment the
-// operator actually applied to (staging applicants must not be sent to
-// production, where their member id does not exist).
+// The canonical public origin absolute links into the site are built from.
+// There is no notification email any more (D50 removed it); what is left is
+// the applicant status page at /swarm/apply/<memberId>, which is reachable
+// ONLY by its opaque id — nothing on the site links to it, and the operator is
+// handed the URL exactly once by their own coding agent in a chat transcript.
+// D50 keeps this origin for exactly that reason: the status page is now the
+// only channel an applicant has, so a URL built for it has to be complete and
+// has to point at the deployment the operator actually applied to (staging
+// applicants must not be sent to production, where their member id does not
+// exist).
 //
 // Defaults to the public production site: an unconfigured real deployment still
 // emits a link that works for a real operator, which is the failure mode we can
@@ -664,16 +623,13 @@ export function resolveSwarmSchedules(
 //
 // THIS DEFAULT IS THE EFFECTIVE PRODUCTION VALUE, not a placeholder.
 // SWARM_PUBLIC_BASE_URL is named by NO compose file: not docker-compose.yml's
-// api `environment:` allowlist, not docker-compose.smoke.yml's, not the
+// api `environment:` allowlist, not docker-compose.yml's, not the
 // x-worker-env anchor — and there is no `env_file:` anywhere and
 // backend/Dockerfile sets no ENV, so the variable can never reach the
 // container. It is also absent from scripts/lib/smoke-main.ts's
 // DEMO_COMPOSE_PASSTHROUGH, so a `bun smoke` / `bun run smoke` operator cannot
-// inject it either. Whatever is written here is what every swarm notification
-// email links to. It is exported and pinned by
-// backend/tests/swarm-public-base-url.test.ts precisely because the tests that
-// exercise the emails assert against `config.swarmPublicBaseUrl` (the
-// variable), which stays green no matter what this string says.
+// inject it either. Whatever is written here is the canonical public origin.
+// It is exported and pinned by backend/tests/swarm-public-base-url.test.ts.
 export const SWARM_PUBLIC_BASE_URL_DEFAULT = "https://robotmoney.network";
 
 export function resolveSwarmPublicBaseUrl(
@@ -682,47 +638,23 @@ export function resolveSwarmPublicBaseUrl(
   return (env.SWARM_PUBLIC_BASE_URL || SWARM_PUBLIC_BASE_URL_DEFAULT).replace(/\/+$/, "");
 }
 
-// --- Swarm notification sender (issue #322) ------------------------------
-// Resolved the same call-time way as resolveSwarmPublicBaseUrl above rather
-// than only baked into the `config` singleton below: applyMember's receipt is
-// the one caller (domain.ts::sendApplicationReceipt) that must observe an
-// unset sender WITHOUT throwing — every other notification path (activation,
-// seat-open) is fine treating the frozen-at-load `config.swarmNotificationEmailFrom`
-// as authoritative, since a real deployment's env does not change mid-process.
-// A call-time resolver is what lets a test flip this one input per-call, in the
-// same process, without reloading the config module.
-export function resolveSwarmNotificationEmailFrom(
-  env: Record<string, string | undefined> = process.env,
-): string | null {
-  return env.SWARM_NOTIFICATION_EMAIL_FROM || null;
-}
-
-// Fail-closed: default to "prod" when RM_ENV is unset, and REFUSE to start on an
-// unrecognized value (so a typo like "production" can never silently open the
-// privileged surface). The unauthenticated convenience path is opt-in: it is
-// allowed only in the "ephemeral" (CI/throwaway) env or with RM_ALLOW_INSECURE=1.
-const VALID_ENVS = ["ephemeral", "smoke", "prod"] as const;
-const RM_ENV = process.env.RM_ENV ?? "prod";
-if (!(VALID_ENVS as readonly string[]).includes(RM_ENV)) {
-  throw new Error(`invalid RM_ENV "${RM_ENV}" — expected one of ${VALID_ENVS.join(" | ")}`);
-}
+// No environment value, and no insecure flag, opens a privileged route:
+// every service credential is a row in the API's automation-token store
+// (smoke-production-spec.md §3, D52 (1)), validated in backend/src/api/auth.ts
+// the same way in every deployed stack. Issue #973 retired both variables from
+// the runtime, so there is no env field here to branch on. The one connection
+// rule that used to hang off `RM_ENV=prod` holds everywhere: the api never
+// runs as the cluster superuser.
 const databaseUrl = required("DATABASE_URL");
-if (RM_ENV === "prod" && new URL(databaseUrl).username === "doadmin") {
-  throw new Error("DATABASE_URL must use the rm_app runtime role in production, never doadmin");
+if (new URL(databaseUrl).username === "doadmin") {
+  throw new Error("DATABASE_URL must use the rm_app runtime role, never doadmin");
 }
 
 export const config = {
-  env: RM_ENV as (typeof VALID_ENVS)[number],
-  // Privileged endpoints (onboarding/admin/analytics) may run WITHOUT a token
-  // only when this is true; otherwise the relevant token is required in every env.
-  allowInsecure: process.env.RM_ALLOW_INSECURE === "1" || RM_ENV === "ephemeral",
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
   databaseUrl,
   apiPort: Number(process.env.API_PORT ?? 8787),
-  // Read-only for AC-ID-03/T26 identity purposes only (backend/src/ops/static-identity.ts) —
-  // website-server (issue #892), not this process, serves the SPA from the same mount.
-  staticDir: process.env.STATIC_DIR || null,
   // Origins allowed to call this API cross-origin (issue #871): a split-repo
   // frontend deployed as its own container is no longer same-origin, so it
   // needs CORS. Empty by default — the single-box same-origin deployment
@@ -733,23 +665,12 @@ export const config = {
     .map((o) => o.trim())
     .filter(Boolean),
   workerId: process.env.WORKER_ID ?? `worker-${process.pid}`,
-  // Shared secret guarding privileged endpoints (member onboarding + admin
-  // lifecycle). If set, callers must present it as `X-Admin-Token`. If unset,
-  // those endpoints are allowed only outside prod (smoke/ephemeral convenience).
-  adminToken: process.env.ADMIN_TOKEN || null,
-  automationToken: process.env.AUTOMATION_TOKEN || null,
-  // Credential for the analytics-provider role. Only this role may write the
-  // regime via POST /api/swarm/regime. Presented as a Bearer token. If set,
-  // it is required (every env); if unset, the role is allowed only outside prod
-  // (smoke/ephemeral convenience), mirroring adminToken.
-  analyticsToken: envSecret("ANALYTICS_TOKEN"),
-  // Swarm activation email uses a durable outbox + swarm worker job.
-  // The sender is persisted with the message; the deployment transport is an
-  // HTTP email adapter invoked only by that worker (tests inject a fake).
-  swarmNotificationEmailFrom: resolveSwarmNotificationEmailFrom(),
-  swarmNotificationEmailTransportUrl: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_URL || null,
-  swarmNotificationEmailTransportToken: process.env.SWARM_NOTIFICATION_EMAIL_TRANSPORT_TOKEN || null,
-  // Origin every link inside those emails is built from (see the resolver above).
+  // There is no service-token field here, and there must not be one: the
+  // scheduler, analytics-producer and operator tokens are rows in the API's
+  // automation-token store (smoke-production-spec.md §3, D52 (1)), validated
+  // by backend/src/api/auth.ts. The api reads no token env and no token file.
+  // Canonical public origin for absolute links into the site. See the resolver
+  // above; it is pinned by backend/tests/swarm-public-base-url.test.ts.
   swarmPublicBaseUrl: resolveSwarmPublicBaseUrl(),
   // NOTE: the analytics pipeline (analytics/index.ts runAnalytics) selects its
   // data source SOLELY via `ANALYTICS_SOURCE` (unset|live → real fetchers,

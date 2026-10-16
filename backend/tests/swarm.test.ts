@@ -1,8 +1,9 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
@@ -35,6 +36,14 @@ async function signedApply(fields: { name: string; contact: string; lens?: strin
 // next test's admission a spurious 409. Unique ids cannot fix that; a clean
 // database can.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 async function activeMember() {
   const id = rid("m");
@@ -162,7 +171,7 @@ test("the three key-STORING paths refuse every low-order encoding with an explan
   const post = async (path: string, body: Record<string, unknown>) => {
     const req = new Request(`http://test${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
       body: JSON.stringify(body),
     });
     return handleSwarm(req, new URL(req.url));
@@ -307,7 +316,7 @@ test("submit: signature verify/reject, window, duplicate", async () => {
 
   // Required negative control: the stored submit-time flag stays true, but a
   // changed persisted payload must make both public read surfaces report false.
-  await sql`UPDATE swarm_recommendations
+  await fixtureDb`UPDATE swarm_recommendations
             SET payload = jsonb_set(payload, '{body}', to_jsonb(${"tampered after insert"}::text)),
                 verified = true
             WHERE id = ${ok.recommendationId}`;
@@ -333,9 +342,15 @@ test("submit: signature verify/reject, window, duplicate", async () => {
   // and that reads collapse to the latest live in
   // backend/tests/swarm-take-revisions.test.ts.
   expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(201);
-  // Reusing a nonce is still a replay and is still refused — the constraint
-  // that did NOT move.
-  expect((await ic.submitRecommendation(m.token, await signed("n2"))).status).toBe(409);
+  // Resending the SAME signed bytes is a retry (D52, smoke spec §6.2): 200 with
+  // the existing record, no second row. Reusing the nonce under DIFFERENT bytes
+  // is still a replay and still refused — the constraint that did NOT move.
+  const resent = await ic.submitRecommendation(m.token, await signed("n2"));
+  expect(resent.status).toBe(200);
+  expect((resent as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  const reusedNonce = { memberId: m.id, date, subjectId: subj, nonce: "n2", stance: "bearish", confidence: 0.5, body: "other bytes" };
+  const reusedSig = await signMessage(canonicalizeSubmission(reusedNonce), m.privateKey);
+  expect((await ic.submitRecommendation(m.token, { ...reusedNonce, signature: reusedSig })).status).toBe(409);
 
   // tampered signature → 400 (fresh member to avoid the per-member dup guard)
   const m2 = await activeMember();
@@ -439,7 +454,6 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
   expect(rs).toHaveProperty("macro_percentile");
   expect(rs).toHaveProperty("onchain_regime");
   expect(rs.method).toBe(REGIME_METHOD.id);
-
 
   // subject snapshot total flowed onto the session.
   expect(s.subjectSnapshotTotalValueUsd).toBeGreaterThan(0);
@@ -621,7 +635,7 @@ test("aggregation omits invented prose and weights when no eligible body or vali
   expect(detail?.session.synthesis).toBeNull();
 });
 
-test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take is 409 with exactly one recommendation row", async () => {
+test("restart-safety (issue #208): re-opening the same session is idempotent (one row); a REPLAYED member take returns the existing record with exactly one recommendation row", async () => {
   const subj = rid("restart");
   await ensureProseSubject(subj, "Restart Subject");
 
@@ -657,9 +671,14 @@ test("restart-safety (issue #208): re-opening the same session is idempotent (on
   // retry, and asserting 409 on it would pin the feature shut. Replay
   // protection on `(member_id, nonce)` is untouched and is what actually makes
   // a retry idempotent.
+  //
+  // A retry now answers with the EXISTING record (D52, smoke spec §6.2): 200,
+  // `alreadySubmitted`, the same id — so a restarted participant treats it as
+  // the success it is instead of a refusal it cannot act on.
   const replay = await ic.submitRecommendation(m.token, await sign(nonce));
-  expect(replay.status).toBe(409);
-  expect((replay as { error: string }).error).toContain("nonce already used");
+  expect(replay.status).toBe(200);
+  expect((replay as { alreadySubmitted?: boolean }).alreadySubmitted).toBe(true);
+  expect((replay as { recommendationId?: string }).recommendationId).toBe((ok as { recommendationId?: string }).recommendationId);
   const recRows = await sql`SELECT id FROM swarm_recommendations WHERE session_id = ${first.id} AND member_id = ${m.id}`;
   expect(recRows.length).toBe(1);
 });
@@ -844,25 +863,45 @@ test("GET /api/swarm/sessions: malformed cursor and out-of-range limit are 400s 
 });
 
 // ── Issue #783: nextSessionAt on the sessions envelope ──────────────────────
+//
+// RE-SOURCED FROM THE EPOCH MODEL (issue #1026 W4). The field used to report
+// the enabled session-opening cron row's `next_run_at`; those rows are
+// retired, and the epoch model answers the same question exactly rather than
+// approximately. Scheduler spec §2.1: epochs run back to back, so the instant
+// the current window closes IS the instant the next session opens. The field's
+// NAME, SHAPE and NULL semantics are unchanged, because it is a published
+// contract (scripts/lib/agent-endpoints.ts documents it to outside agents).
 
-test("GET /api/swarm/sessions: nextSessionAt is null when the swarm.open_session schedule is disabled (the seeded production baseline)", async () => {
+test("GET /api/swarm/sessions: nextSessionAt is null when no subject has an open window", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   expect(res?.status).toBe(200);
   const body = res!.body as { nextSessionAt: string | null };
-  expect("nextSessionAt" in body).toBe(true); // never omitted, so a caller can tell "not scheduled" apart from "older API"
+  expect("nextSessionAt" in body).toBe(true); // never omitted, so a caller can tell "none open" apart from "older API"
   expect(body.nextSessionAt).toBeNull();
 });
 
-test("GET /api/swarm/sessions: nextSessionAt reads the SAME next_run_at tickScheduler maintains for the enabled swarm.open_session row, on both the default page and ?full=1", async () => {
-  const slot = new Date(Date.now() + 3 * 60 * 60 * 1000); // arbitrary future instant
-  await sql`UPDATE job_schedules SET enabled = true, next_run_at = ${slot} WHERE kind = 'swarm.open_session'`;
+test("GET /api/swarm/sessions: nextSessionAt is the EARLIEST open window's close instant, on both the default page and ?full=1", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
+  const soon = new Date(Date.now() + 60 * 60 * 1000);
+  const later = new Date(Date.now() + 3 * 60 * 60 * 1000);
+  const a = rid("nextA");
+  const b = rid("nextB");
+  await ensureProseSubject(a, "Next A");
+  await ensureProseSubject(b, "Next B");
+  // The question is about the swarm, not one subject, so the earliest boundary
+  // across every open window is the answer.
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${b}, ${b}, 'collecting', ${later})`;
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${a}, ${a}, 'collecting', ${soon})`;
 
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   expect(res?.status).toBe(200);
   const body = res!.body as { nextSessionAt: string | null };
-  expect(body.nextSessionAt).toBe(slot.toISOString());
+  expect(body.nextSessionAt).toBe(soon.toISOString());
 
   // ?full=1 is a different response branch in listSessions() — assert it
   // carries the identical value rather than dropping it like it drops
@@ -870,11 +909,15 @@ test("GET /api/swarm/sessions: nextSessionAt reads the SAME next_run_at tickSche
   const fullReq = new Request("http://test/api/swarm/sessions?full=1");
   const fullRes = await handleSwarm(fullReq, new URL(fullReq.url));
   const fullBody = fullRes!.body as { nextSessionAt: string | null };
-  expect(fullBody.nextSessionAt).toBe(slot.toISOString());
+  expect(fullBody.nextSessionAt).toBe(soon.toISOString());
 });
 
-test("GET /api/swarm/sessions: nextSessionAt is null when the schedule is enabled but has never ticked (next_run_at not yet seeded)", async () => {
-  await sql`UPDATE job_schedules SET enabled = true, next_run_at = NULL WHERE kind = 'swarm.open_session'`;
+test("GET /api/swarm/sessions: a collecting session with no advertised instant does not answer for the swarm", async () => {
+  await sql`UPDATE swarm_sessions SET state = 'window_closed' WHERE state = 'collecting'`;
+  const subjectId = rid("nextNull");
+  await ensureProseSubject(subjectId, "Next Null");
+  await sql`INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
+            VALUES (${subjectId}, ${subjectId}, 'collecting', NULL)`;
   const req = new Request("http://test/api/swarm/sessions");
   const res = await handleSwarm(req, new URL(req.url));
   const body = res!.body as { nextSessionAt: string | null };
@@ -1250,7 +1293,7 @@ test("two sessions for one subject on one day: BOTH briefs survive, each keeping
   expect(dated?.sessionId).toBe(second.id);
   expect(dated?.body?.windowClosesAt).toBe(secondPublished.windowClosesAt);
 
-  // Re-publishing the SAME session (a retried swarm.publish_brief job) still
+  // Re-publishing the SAME session (a retried brief publication) still
   // updates in place — no third row — and must not touch session 1's brief.
   const republished = await ic.publishBrief(second.id, 45);
   const afterRepublish = await sql`SELECT id FROM swarm_briefs WHERE subject_id = ${subj} AND date = ${date}`;
@@ -1446,6 +1489,7 @@ test("ordinal string formatting for percentiles in buildRationale and buildConse
 });
 
 import { toTake } from "../src/swarm/projections.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 test("toTake constructs a public DTO where SwarmTake.weights === null if payload.weights is malformed", () => {
   const row = {
@@ -1467,4 +1511,43 @@ test("toTake constructs a public DTO where SwarmTake.weights === null if payload
   const rowValid = { ...row, payload: { weights: [{ bucket: "b", weight: 1 }] } };
   const takeDtoValid = toTake(rowValid as any);
   expect(takeDtoValid.weights).toEqual([{ bucket: "b", weight: 1 }]);
+});
+
+// ── The dispatcher doors that bypassed the epoch model are gone (#1026) ─────
+//
+// system-scheduler-spec.md §2.3, §4 and §6.2. Each of these wrote state the
+// scheduler waits on without the event that tells it so: `subject` upserted an
+// active subject with no `subject.changed`, `open` inserted a `scheduled`
+// session, and `brief`/`close`/`aggregate`/`publish` moved a session with no
+// epoch binding and no captured judge mode. They answer 410 now, and write
+// nothing.
+test("the retired subject/open/brief/close/aggregate/publish dispatcher actions answer 410 and write nothing", async () => {
+  const post = async (action: string, body: Record<string, unknown>) => {
+    const req = new Request(`http://test${routePath(ROUTES.swarm.admin.action, { action })}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
+      body: JSON.stringify(body),
+    });
+    return (await handleSwarm(req, new URL(req.url))) as { status: number; body: { error: string } };
+  };
+  const subjectId = rid("retired_doors");
+  const before = await sql<{ subjects: number; sessions: number }[]>`
+    SELECT (SELECT count(*)::int FROM swarm_subjects) AS subjects, (SELECT count(*)::int FROM swarm_sessions) AS sessions`;
+
+  const subject = await post("subject", { id: subjectId, name: "should not exist" });
+  expect(subject.status).toBe(410);
+  expect(subject.body.error).toContain("POST /api/swarm/admin/subjects");
+  for (const action of ["open", "brief", "close", "aggregate", "publish"]) {
+    const res = await post(action, { subjectId, sessionId: "00000000-0000-4000-8000-000000000000" });
+    expect({ action, status: res.status }).toEqual({ action, status: 410 });
+    expect(res.body.error).toContain("epochs/");
+  }
+  // `subject_fixtures` stays for a subject that exists, and refuses to CREATE
+  // one: on an unknown id its upsert would be an active subject with no event.
+  const fixtures = await post("subject_fixtures", { id: subjectId, name: "should not exist" });
+  expect(fixtures.status).toBe(404);
+
+  const after = await sql<{ subjects: number; sessions: number }[]>`
+    SELECT (SELECT count(*)::int FROM swarm_subjects) AS subjects, (SELECT count(*)::int FROM swarm_sessions) AS sessions`;
+  expect(after).toEqual(before);
 });

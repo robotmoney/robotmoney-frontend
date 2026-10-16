@@ -7,12 +7,10 @@
 // `<!-- /release:pending -->`: a "Next release" heading, entries whose id is
 // `next-<slug>` and whose meta carries `<span class="cl__pending">Next
 // release</span>` where the date goes, and an "Also in the next release" list.
-// The hero reads "Updated with the next release".
 //
 // Stamping rewrites that block for the given day:
 //   - each pending meta span becomes `<time datetime="YYYY-MM-DD">D Mon YYYY</time>`;
 //   - each `next-<slug>` id and its permalink become `YYYY-MM-DD-<slug>`;
-//   - the hero becomes `<time datetime="YYYY-MM-DD">D Month YYYY</time>`;
 //   - the heading becomes the month ("October 2026") and the Also block
 //     "Also in October", OR, when the first month below is that same month,
 //     the block merges into it: its entries go to the top of the month, its
@@ -70,8 +68,6 @@ export function parseReleaseDate(input: string): ReleaseDate {
 const monthName = (d: ReleaseDate) => MONTHS[d.month - 1];
 /** The entry meta's format: "2 Oct 2026". */
 export const metaDate = (d: ReleaseDate) => `${d.day} ${monthName(d).slice(0, 3)} ${d.year}`;
-/** The hero's format: "2 October 2026". */
-export const heroDate = (d: ReleaseDate) => `${d.day} ${monthName(d)} ${d.year}`;
 
 export function monthDivider(label: string): string {
   const head = `<!-- ── ${label} `;
@@ -210,7 +206,7 @@ export function stampChangelog(html: string, isoDate: string): StampResult {
     }
     // The blank line that preceded the removed block stays; drop the one it leaves doubled.
     const joined = before.replace(/\n[ \t]*\n$/, "\n\n") + after.replace(/^\n+/, "");
-    return { html: stampHero(joined, date), entries: entryCount, improvements: improvements.length, fixes: fixes.length, mode, month };
+    return { html: noPendingLeft(joined), entries: entryCount, improvements: improvements.length, fixes: fixes.length, mode, month };
   }
 
   // A new month: the block becomes its section.
@@ -221,7 +217,7 @@ export function stampChangelog(html: string, isoDate: string): StampResult {
     .replace(heading, (line) => line.replace(/ data-release="pending"/, "").replace(/>[^<]*<\/h2>/, `>${month}</h2>`))
     .replace(/(<h3 class="cl__also-h">)[^<]*(<\/h3>)/, `$1Also in ${monthName(date)}$2`);
   block = stampEntries(block);
-  return { html: stampHero(before + block + after, date), entries: entryCount, improvements: improvements.length, fixes: fixes.length, mode, month };
+  return { html: noPendingLeft(before + block + after), entries: entryCount, improvements: improvements.length, fixes: fixes.length, mode, month };
 }
 
 const CHANGELOG_LASTMOD = /(<loc>https:\/\/robotmoney\.network\/changelog<\/loc><lastmod>)\d{4}-\d{2}-\d{2}(<\/lastmod>)/;
@@ -233,13 +229,11 @@ export function stampSitemap(xml: string, isoDate: string): string {
   return xml.replace(CHANGELOG_LASTMOD, `$1${date.iso}$2`);
 }
 
-function stampHero(html: string, date: ReleaseDate): string {
-  const hero = /(<p class="cl__updated">Updated )(?:<span class="cl__pending"[^>]*>[^<]*<\/span>|<time datetime="[^"]*">[^<]*<\/time>)(<\/p>)/;
-  if (!hero.test(html)) throw new StampError("the hero's Updated line is not where the stamp expects it");
-  const out = html.replace(hero, `$1<time datetime="${date.iso}">${heroDate(date)}</time>$2`);
-  const leftover = [/data-release="pending"/, /<!-- \/?release:pending -->/, /id="next-/, /href="#next-/, /class="cl__pending"/].find((re) => re.test(out));
+/** The stamped page, or a StampError when any pending trace survived. */
+function noPendingLeft(html: string): string {
+  const leftover = [/data-release="pending"/, /<!-- \/?release:pending -->/, /id="next-/, /href="#next-/, /class="cl__pending"/].find((re) => re.test(html));
   if (leftover) throw new StampError(`stamping left a pending trace behind (${leftover.source}); nothing written`);
-  return out;
+  return html;
 }
 
 if (import.meta.main) {

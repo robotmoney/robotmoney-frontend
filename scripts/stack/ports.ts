@@ -202,9 +202,40 @@ function bindProbe(port: number): Promise<boolean> {
 export async function assertStageWebPortFree(
   port: number = STAGE_WEB_PORT,
   purpose: string = STAGE_WEB_PORT_PURPOSE,
+  own?: OwnInstance,
 ): Promise<void> {
   if (await bindProbe(port)) return;
+  if (own && heldOnlyByOwnInstance(port, own)) return;
   throw new PortUnavailableError(port, purpose);
+}
+
+/**
+ * The one holder the pre-flight accepts: THIS instance's own compose project.
+ *
+ * A run interrupted after the replace phase (§1.4: "Ctrl-C after: journal
+ * reported, rerun resumes") leaves its website-server up on 48787 on purpose —
+ * nothing is torn down — and the rerun must get past this pre-flight to read
+ * its journal and resume. On stage-2 (2026-10-05, 4c9f9dcc) it could not: the
+ * rerun refused on its own container. So a port held ONLY by containers
+ * labelled with this instance's compose project is not a conflict; the replace
+ * phase reconciles them. Any other holder (another instance, CI's smoke, a
+ * plain process) still refuses.
+ */
+export interface OwnInstance {
+  /** This instance's compose project name (`com.docker.compose.project`). */
+  readonly project: string;
+  readonly run: CommandRunner;
+}
+
+export function heldOnlyByOwnInstance(port: number, own: OwnInstance): boolean {
+  const r = own.run(["docker", "ps", "--filter", `publish=${port}`, "--format", '{{.Label "com.docker.compose.project"}}\t{{.Names}}']);
+  if (r.exitCode !== 0) return false;
+  const holders = r.stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.split("\t")[0] ?? "");
+  return holders.length > 0 && holders.every((project) => project === own.project);
 }
 
 // ── "What holds this port?" diagnostic ──────────────────────────────────────

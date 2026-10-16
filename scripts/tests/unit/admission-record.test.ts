@@ -1,5 +1,5 @@
 // The real-inference admission RECORD (issue #373, docs/architecture.md §11.3
-// E6). Reporting rides on the admission `.github/workflows/e2e.yml` already
+// E6). Reporting rides on the admission `.github/workflows/e2e-onboarding.yml` already
 // spends — one on a push to main, one on its nightly `schedule` mirror — so the
 // admission rate over time is derivable from run history rather than from a
 // bespoke sampling loop or scorecard module.
@@ -192,12 +192,12 @@ describe("formatAdmissionRecords summarises the run's admissions", () => {
 });
 
 // ── The wiring: the record has to actually reach a human ────────────────────
-describe("the record is wired into e2e.yml on both green and red runs", () => {
-  const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e.yml"), "utf8");
+describe("the record is wired into e2e-onboarding.yml on both green and red runs", () => {
+  const e2eYml = readFileSync(join(repoRoot, ".github/workflows/e2e-onboarding.yml"), "utf8");
   const stepBlocks = e2eYml.split(/\n\s*- name:/).slice(1);
   const stepWith = (needle: string): string => {
     const block = stepBlocks.find((b) => b.includes(needle));
-    if (!block) throw new Error(`e2e.yml has no step containing ${JSON.stringify(needle)}`);
+    if (!block) throw new Error(`e2e-onboarding.yml has no step containing ${JSON.stringify(needle)}`);
     return block;
   };
 

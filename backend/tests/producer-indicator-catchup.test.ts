@@ -10,6 +10,7 @@ import type { AnalyticsDataSource, Logger } from "../src/analytics/access/data-s
 import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { Point, RawIndicatorHistory } from "../src/analytics/types.ts";
 import { catchUpMissedIndicatorDays, startProducerSchedules } from "../src/producer/index.ts";
+import { writeTokenFile } from "./support/automation-auth.ts";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-20T12:00:00Z");
@@ -187,7 +188,7 @@ test("catchUpMissedIndicatorDays: a seed-write failure is swallowed — still re
 test("startProducerSchedules: runs the indicator catch-up before arming the daily crons", async () => {
   const order: string[] = [];
   await startProducerSchedules({
-    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN: "t" },
+    env: { ANALYTICS_API_URL: "http://unused:1", ANALYTICS_TOKEN_FILE: writeTokenFile("t") },
     waitUntilReady: async () => { order.push("ready"); },
     catchUp: async () => { order.push("catchup:research"); },
     catchUpIndicators: async () => { order.push("catchup:indicators"); },

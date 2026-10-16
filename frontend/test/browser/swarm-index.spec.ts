@@ -569,3 +569,62 @@ test("the flagship draws the newest weights and names a newer session that held 
   await expect(held.locator(".rr-meta__i").nth(2)).toHaveText("Since Aug 3, 2026");
   await expect(alloc.locator(".rr-cta")).toContainText("Read the Aug 3, 2026 session");
 });
+
+// A session waits for its brief: on 2026-09-28 four rows were created at 00:11 to 00:40 UTC and briefed on 09-29 and
+// 09-30. `date` and `generatedAt` are when the ROW was created, so the page must show the day and time the session
+// opened (`openedAt`), while the link keeps the row's date, which is in the URL and in what members sign.
+test("a session that waited for its brief is shown on the day it opened, not the day its row was created", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  await page.route("**/api/swarm/subjects/woon", (route) =>
+    route.fulfill(json({ id: "woon", name: "Woon", operator: "peaq", source: { type: "rpc" } })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      sessions: [{
+        id: "sess-backlog",
+        date: "2026-09-28",
+        subjectId: "woon",
+        subjectName: "Woon",
+        state: "published",
+        windowClosesAt: "2026-09-30T22:33:16Z",
+        openedAt: "2026-09-30T16:33:16Z",
+        publishedAt: "2026-09-30T22:34:40Z",
+        regimeSummary: null,
+        swarmRecommendation: AUTHORED_REC,
+        synthesis: "x",
+        socialDraftId: null,
+        generatedAt: "2026-09-28T00:23:59Z",
+      }],
+      nextCursor: null,
+    })));
+  await page.goto("/swarm");
+  const row = page.locator(".rr-hist tbody tr").first();
+  await expect(row.locator("th a")).toHaveText("Sep 30, 2026");
+  await expect(row.locator("th small")).toContainText("16:33 UTC");
+  await expect(page.locator(".rr-hist")).not.toContainText("Sep 28, 2026");
+});
+
+// The history lists sessions newest first by when each OPENED, across every subject. The API pages by (date, generated_at),
+// both the row's creation: on 2026-09-28 treasury was created at 00:40 and allocation at 00:39, yet allocation opened on
+// 10-01 and treasury on 09-29. Served in API order, treasury (Sep 29) printed above allocation (Oct 1).
+test("the history is ordered by when each session opened, not by when its row was created", async ({ page }) => {
+  await page.route("**/api/swarm/members*", (route) =>
+    route.fulfill(json({ members: [{ id: "m1", status: "active", name: "Athena", lens: "macro" }] })));
+  const row = (id: string, subjectId: string, name: string, generatedAt: string, openedAt: string) => ({
+    id, date: "2026-09-28", subjectId, subjectName: name, state: "published", windowClosesAt: openedAt,
+    openedAt, publishedAt: openedAt, regimeSummary: null, swarmRecommendation: AUTHORED_REC, synthesis: "x", socialDraftId: null, generatedAt,
+  });
+  await page.route("**/api/swarm/subjects/*", (route) => route.fulfill(json({ id: "x", name: "X", operator: "o", source: { type: "rpc" } })));
+  await page.route("**/api/swarm/sessions*", (route) =>
+    route.fulfill(json({
+      // API order: by (date, generated_at) descending, i.e. creation order.
+      sessions: [
+        row("sess-treasury", "robotmoney-treasury", "Treasury", "2026-09-28T00:40:35Z", "2026-09-29T18:26:00Z"),
+        row("sess-alloc", "robotmoney-allocation", "Allocation", "2026-09-28T00:39:40Z", "2026-10-01T02:01:00Z"),
+      ],
+      nextCursor: null,
+    })));
+  await page.goto("/swarm");
+  const dates = page.locator(".rr-hist tbody tr th a");
+  await expect(dates).toHaveText(["Oct 1, 2026", "Sep 29, 2026"]);
+});

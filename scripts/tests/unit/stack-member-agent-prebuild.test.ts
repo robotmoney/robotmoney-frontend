@@ -18,10 +18,8 @@ describe("shared full-stack member-agent prebuild", () => {
     const dir = mkdtempSync(join(tmpdir(), "rm-stack-prebuild-"));
     cleanup.push(dir);
     const logPath = join(dir, "docker.log");
-    const tokenPath = join(dir, "analytics-token");
-    writeFileSync(tokenPath, "test-token\n", { mode: 0o600 });
 
-    const server = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
     try {
       const dockerPath = join(dir, "docker");
       writeFileSync(
@@ -45,14 +43,8 @@ describe("shared full-stack member-agent prebuild", () => {
         repoRoot: dir,
         project: "rm_ci_stack_prebuild",
         profile: "full",
-        composeFiles: ["docker-compose.yml", "docker-compose.smoke.yml"],
+        composeFiles: ["docker-compose.yml"],
         database: { ...DEFAULT_STACK_DATABASE, url: "postgres://managed.example/db" },
-        credentials: {
-          adminToken: "admin",
-          automationToken: "automation",
-          analyticsToken: "analytics",
-          analyticsTokenFile: tokenPath,
-        },
         environment: { class: "ci", hash: "prebuild00" },
       };
       const stack = createStack(cfg, { hostEnv: { PATH: `${dir}:/usr/bin:/bin` } });

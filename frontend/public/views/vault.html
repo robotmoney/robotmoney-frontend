@@ -44,7 +44,7 @@
                wears the pill. -->
           <span class="rr-meta__i">Status
             <template x-if="status() === 'Live'"><b class="rm-live"><i class="rm-pulse" aria-hidden="true"></i>Live</b></template>
-            <template x-if="status() === 'Coming soon'"><span class="rm-pill">Coming soon</span></template>
+            <template x-if="status() === 'Coming soon'"><span class="rm-soon">Coming soon</span></template>
             <template x-if="status() !== 'Live' && status() !== 'Coming soon'"><b x-text="status()"></b></template>
           </span>
           <span class="rr-meta__i">Deposit asset <b><a class="rr-lnk" :href="depositAssetHref()" target="_blank" rel="noopener noreferrer">USDC</a></b></span>
@@ -388,12 +388,7 @@
           <dl class="rr-dl">
             <div class="rr-dl__risk"><dt>Risk</dt><dd>Vault holdings carry smart contract, liquidity and valuation risk. Capital and returns are not guaranteed.</dd></div>
             <template x-for="m in mechanics()" :key="m.k">
-              <div><dt x-text="m.k"></dt>
-                <dd>
-                  <template x-if="m.href"><a :href="m.href" target="_blank" rel="noopener noreferrer" x-text="m.v"></a></template>
-                  <template x-if="!m.href"><span x-text="m.v"></span></template>
-                </dd>
-              </div>
+              <div><dt x-text="m.k"></dt><dd x-text="m.v"></dd></div>
             </template>
             <template x-if="contractLinks().length">
               <div>

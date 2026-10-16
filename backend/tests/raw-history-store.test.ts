@@ -4,6 +4,7 @@
 // overwrites rather than duplicating.
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   loadRawIndicatorHistory,
   saveRawIndicatorHistory,
@@ -15,7 +16,7 @@ const A = "TEST_RAW_A";
 const B = "TEST_RAW_B";
 
 async function cleanup() {
-  await sql`DELETE FROM raw_indicator_history WHERE indicator IN (${A}, ${B})`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator IN (${A}, ${B})`;
 }
 
 test("saveRawIndicatorHistory → loadRawIndicatorHistory: round-trips, grouped and sorted", async () => {
@@ -90,6 +91,16 @@ test("saveRawIndicatorHistory: tags rows with the provenance `source` (issue #39
   const [overwritten] = await sql`SELECT value, source FROM raw_indicator_history WHERE indicator = ${B} AND date = '2020-04-01'`;
   expect(Number(overwritten.value)).toBe(3);
   expect(overwritten.source).toBe("live");
+
+  // The SAME value under another label is not a change (owner, 2026-09-29):
+  // the row, its label and its overwrite evidence all stay as they are.
+  const [{ n: eventsBefore }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_overwrite_events WHERE table_name = 'raw_indicator_history'`;
+  await saveRawIndicatorHistory({ [B]: [{ date: "2020-04-01", value: 3 }] }, undefined, "seed");
+  const [kept] = await sql`SELECT value, source FROM raw_indicator_history WHERE indicator = ${B} AND date = '2020-04-01'`;
+  expect(Number(kept.value)).toBe(3);
+  expect(kept.source).toBe("live");
+  const [{ n: eventsAfter }] = await fixtureDb`SELECT count(*)::int AS n FROM analytics_overwrite_events WHERE table_name = 'raw_indicator_history'`;
+  expect(eventsAfter).toBe(eventsBefore);
 
   await cleanup();
 });

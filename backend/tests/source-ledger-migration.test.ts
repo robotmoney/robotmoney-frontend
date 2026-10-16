@@ -2,35 +2,16 @@ import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import net from "node:net";
 import postgres from "postgres";
-import { POSTGRES_IMAGE } from "../../scripts/lib/postgres-image.ts";
+import { createHistoryDatabase } from "./support/history-database.ts";
 
 const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 const MIGRATION = "0057_source_acquisition_ledger.sql";
 
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.on("error", reject);
-    server.listen(0, () => { const port = (server.address() as net.AddressInfo).port; server.close(() => resolve(port)); });
-  });
-}
-
 test("0057 backfills one legacy baseline per current raw row at one migration knowledge time and reapplies idempotently", async () => {
-  const port = await freePort();
-  const container = `rmtest_source_ledger_migration_${crypto.randomUUID().slice(0, 8)}`;
-  const up = Bun.spawnSync(["docker", "run", "-d", "--rm", "--name", container,
-    "-e", "POSTGRES_PASSWORD=robotmoney", "-e", "POSTGRES_USER=robotmoney", "-e", "POSTGRES_DB=robotmoney",
-    "-p", `${port}:5432`, POSTGRES_IMAGE]);
-  if (up.exitCode !== 0) throw new Error(`source ledger migration test requires Docker+Postgres:\n${up.stderr.toString()}`);
-  const db = postgres(`postgres://robotmoney:robotmoney@localhost:${port}/robotmoney`, { max: 1, onnotice: () => {} });
+  const history = await createHistoryDatabase("source-ledger-migration", { max: 1 });
+  const db = history.db;
   try {
-    const started = Date.now();
-    for (;;) {
-      try { await db`SELECT 1`; break; }
-      catch (error) { if (Date.now() - started > 30_000) throw error; await Bun.sleep(200); }
-    }
     await db`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`;
     const files = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql")).sort();
     for (const file of files.filter((f) => f < MIGRATION)) {
@@ -81,7 +62,6 @@ test("0057 backfills one legacy baseline per current raw row at one migration kn
              (SELECT count(*) FROM source_payloads)::int AS payloads`;
     expect({ acquisitions, fetches, payloads }).toEqual({ acquisitions: 0, fetches: 0, payloads: 0 });
   } finally {
-    await db.end({ timeout: 5 });
-    Bun.spawnSync(["docker", "rm", "-f", container]);
+    await history.drop();
   }
 }, 120_000);

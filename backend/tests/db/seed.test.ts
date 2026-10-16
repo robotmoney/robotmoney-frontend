@@ -6,23 +6,25 @@
 // IP, and per-minute GeckoTerminal/Base-RPC sampling exhausts both quotas),
 // which is also proven here — as is the same treatment for the smoke's
 // regime.classify / research.refresh analytics rows (issue #287). Runs against the ephemeral Postgres from
-// tests/preload.ts (already migrated + seeded once); seed()/seedJobSchedules()
+// tests/preload.ts (already migrated + seeded once); seed(fixtureDb)/seedJobSchedules(fixtureDb)
 // are idempotent, so re-invoking them here is safe and self-contained.
 import { afterEach, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { SCHEDULES, seed, seedSmokeJobSchedules, seedJobSchedules } from "../../src/db/seed.ts";
-import { resolveSwarmSchedules } from "../../src/config.ts";
 import { tickScheduler } from "../../src/worker/scheduler.ts";
 
 // Every test in this file must leave the shared ephemeral Postgres on the
 // PRODUCTION baseline (later test files, e.g. tests/api/admin-surface.test.ts,
 // assert against it): drop smoke-only rows and re-arm the per-minute baseline.
 afterEach(async () => {
-  await sql`DELETE FROM job_schedules WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron <> '* * * * *'`;
-  await sql`UPDATE job_schedules SET enabled = true WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *'`;
+  await fixtureDb`DELETE FROM job_schedules WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron <> '* * * * *'`;
+  await fixtureDb`UPDATE job_schedules SET enabled = true WHERE kind IN ('wallet.sample_balances', 'wallet.sample_sleeves') AND cron = '* * * * *'`;
   // Demo-cadence + pre-#287 analytics rows: the production baseline keeps only
   // the two daily rows for these kinds.
-  await sql`
+  await fixtureDb`
     DELETE FROM job_schedules
      WHERE kind IN ('regime.classify', 'research.refresh')
        AND cron NOT IN ('30 22 * * *', '0 23 * * *')`;
@@ -30,11 +32,11 @@ afterEach(async () => {
   // second smoke-cadence row, unlike wallet.sample_balances above) — re-arm it
   // so later test files sharing this ephemeral Postgres see the production
   // baseline enabled.
-  await sql`UPDATE job_schedules SET enabled = true WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *'`;
+  await fixtureDb`UPDATE job_schedules SET enabled = true WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *'`;
 });
 
 test("cadence (#118): seed registers wallet.sample_balances at the every-minute cron '* * * * *'", async () => {
-  await seed(); // idempotent (ON CONFLICT DO NOTHING throughout)
+  await seed(fixtureDb); // idempotent (ON CONFLICT DO NOTHING throughout)
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances'
   `;
@@ -47,9 +49,9 @@ test("cadence (#118): seed registers wallet.sample_balances at the every-minute 
 });
 
 test("smoke cadence: explicit step seeds an ENABLED hourly sampler and DISABLES the per-minute baseline", async () => {
-  await seed(); // establish the production baseline first (fresh-boot shape)
-  await seedSmokeJobSchedules();
-  await seedSmokeJobSchedules();
+  await seed(fixtureDb); // establish the production baseline first (fresh-boot shape)
+  await seedSmokeJobSchedules(fixtureDb);
+  await seedSmokeJobSchedules(fixtureDb);
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances' ORDER BY cron
   `;
@@ -64,9 +66,9 @@ test("smoke cadence: explicit step seeds an ENABLED hourly sampler and DISABLES 
 });
 
 test("smoke cadence never re-enables an operator-disabled hourly row (seed stays ON CONFLICT DO NOTHING)", async () => {
-  await seedSmokeJobSchedules();
-  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'wallet.sample_balances' AND cron = '3 * * * *'`;
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
+  await fixtureDb`UPDATE job_schedules SET enabled = false WHERE kind = 'wallet.sample_balances' AND cron = '3 * * * *'`;
+  await seedSmokeJobSchedules(fixtureDb);
   const rows = await sql<{ enabled: boolean }[]>`
     SELECT enabled FROM job_schedules WHERE kind = 'wallet.sample_balances' AND cron = '3 * * * *'
   `;
@@ -75,7 +77,7 @@ test("smoke cadence never re-enables an operator-disabled hourly row (seed stays
 });
 
 test("a canonical seed re-run leaves the baseline untouched", async () => {
-  await seedJobSchedules();
+  await seedJobSchedules(fixtureDb);
   const rows = await sql<{ cron: string; enabled: boolean }[]>`
     SELECT cron, enabled FROM job_schedules WHERE kind = 'wallet.sample_balances'
   `;
@@ -85,7 +87,7 @@ test("a canonical seed re-run leaves the baseline untouched", async () => {
 });
 
 test("cold start (#118): seed enqueues exactly ONE immediate wallet.sample_balances job (idempotent on dedupe_key)", async () => {
-  await seed();
+  await seed(fixtureDb);
   const jobs = await sql<{ kind: string; status: string }[]>`
     SELECT kind, status FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'
   `;
@@ -94,7 +96,7 @@ test("cold start (#118): seed enqueues exactly ONE immediate wallet.sample_balan
 
   // Re-running seed must NOT enqueue a duplicate (constant dedupe_key + partial
   // unique index) — the scheduled cron owns steady-state sampling thereafter.
-  await seed();
+  await seed(fixtureDb);
   const again = await sql<{ c: number }[]>`
     SELECT count(*)::int AS c FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'
   `;
@@ -102,9 +104,9 @@ test("cold start (#118): seed enqueues exactly ONE immediate wallet.sample_balan
 });
 
 test("cold start is independent of the smoke schedule step", async () => {
-  await sql`DELETE FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'`;
-  await seed();
-  await seedSmokeJobSchedules();
+  await fixtureDb`DELETE FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'`;
+  await seed(fixtureDb);
+  await seedSmokeJobSchedules(fixtureDb);
   const jobs = await sql<{ c: number }[]>`
     SELECT count(*)::int AS c FROM jobs WHERE dedupe_key = 'wallet.sample_balances:coldstart'
   `;
@@ -138,7 +140,7 @@ const analyticsRows = async (): Promise<ScheduleRow[]> =>
   );
 
 test("smoke analytics cadence (#287): legacy consumer schedules remain disabled for the independent producer", async () => {
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   const byKey = Object.fromEntries((await analyticsRows()).map((r) => [`${r.kind}|${r.cron}`, r.enabled]));
   // Rows remain for migration compatibility, but the independent producer
   // owns the cadence and shared consumers must never claim these jobs.
@@ -149,15 +151,15 @@ test("smoke analytics cadence (#287): legacy consumer schedules remain disabled 
 });
 
 test("smoke analytics cadence (#287): seeding over pre-existing */2 rows leaves them DISABLED, and a re-run is a no-op", async () => {
-  await seedJobSchedules(); // production baseline first
+  await seedJobSchedules(fixtureDb); // production baseline first
   // An already-deployed smoke, seeded before #287: both ~2-minute rows present
   // and ENABLED (edgar-seed-bootstrap flips research.refresh on in practice).
-  await sql`
+  await fixtureDb`
     INSERT INTO job_schedules (kind, cron, enabled)
     VALUES ('regime.classify', '*/2 * * * *', true),
            ('research.refresh', '1-59/2 * * * *', true)`;
 
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   const after = await analyticsRows();
   const byKey = Object.fromEntries(after.map((r) => [`${r.kind}|${r.cron}`, r.enabled]));
   // The conflict key is (kind, cron), so the hourly rows only COEXIST with the
@@ -167,14 +169,14 @@ test("smoke analytics cadence (#287): seeding over pre-existing */2 rows leaves 
   expect(byKey["regime.classify|7 * * * *"]).toBe(false);
   expect(byKey["research.refresh|37 * * * *"]).toBe(false);
 
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   expect(await analyticsRows()).toEqual(after);
 });
 
 test("smoke analytics cadence (#287): the disable is one-directional — an operator-disabled hourly row is never re-enabled", async () => {
-  await seedSmokeJobSchedules();
-  await sql`UPDATE job_schedules SET enabled = false WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
+  await fixtureDb`UPDATE job_schedules SET enabled = false WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
+  await seedSmokeJobSchedules(fixtureDb);
   const rows = await sql<{ enabled: boolean }[]>`
     SELECT enabled FROM job_schedules WHERE kind = 'regime.classify' AND cron = '7 * * * *'`;
   expect(rows).toHaveLength(1);
@@ -199,44 +201,44 @@ const recomputeCoverageRow = async (): Promise<{ enabled: boolean } | undefined>
   )[0];
 
 test("smoke guard (#399): explicit step disables projects.recompute_coverage on a fresh seed", async () => {
-  await sql`DELETE FROM job_schedules WHERE kind = 'projects.recompute_coverage'`;
-  await seedJobSchedules();
-  await seedSmokeJobSchedules();
+  await fixtureDb`DELETE FROM job_schedules WHERE kind = 'projects.recompute_coverage'`;
+  await seedJobSchedules(fixtureDb);
+  await seedSmokeJobSchedules(fixtureDb);
   const row = await recomputeCoverageRow();
   expect(row?.enabled).toBe(false);
 });
 
 test("smoke guard (#399): re-seeding an EXISTING smoke database disables a row left enabled by an older deployment (upgrade case)", async () => {
-  await seedJobSchedules(); // production baseline: row exists and enabled
+  await seedJobSchedules(fixtureDb); // production baseline: row exists and enabled
   const before = await recomputeCoverageRow();
   expect(before?.enabled).toBe(true);
 
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   const after = await recomputeCoverageRow();
   expect(after?.enabled).toBe(false);
 
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
 });
 
 test("smoke guard (#399): idempotent — an operator-disabled row stays disabled across repeated seed runs", async () => {
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
-  await seedSmokeJobSchedules();
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
+  await seedSmokeJobSchedules(fixtureDb);
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
 });
 
 test("smoke guard (#399): canonical production schedule remains enabled", async () => {
-  await seedJobSchedules();
+  await seedJobSchedules(fixtureDb);
   const row = await recomputeCoverageRow();
   expect(row?.enabled).toBe(true);
 });
 
 test("smoke guard (#399): a disabled schedule is never picked up by the scheduler (tickScheduler filters WHERE enabled)", async () => {
-  await seedSmokeJobSchedules();
+  await seedSmokeJobSchedules(fixtureDb);
   expect((await recomputeCoverageRow())?.enabled).toBe(false);
-  await sql`UPDATE job_schedules SET next_run_at = now() - interval '1 day' WHERE kind = 'projects.recompute_coverage'`;
+  await fixtureDb`UPDATE job_schedules SET next_run_at = now() - interval '1 day' WHERE kind = 'projects.recompute_coverage'`;
   await tickScheduler();
   const jobs = await sql<{ c: number }[]>`
     SELECT count(*)::int AS c FROM jobs WHERE kind = 'projects.recompute_coverage'
@@ -244,13 +246,49 @@ test("smoke guard (#399): a disabled schedule is never picked up by the schedule
   expect(jobs[0]!.c).toBe(0); // disabled row is never enqueued, so the handler never fires and smoke scores stay untouched
 });
 
-test("canonical seeded row set is byte-for-byte SCHEDULES plus swarm rows", async () => {
-  await sql`DELETE FROM job_schedules`; // re-seeded immediately below (fresh-boot shape)
-  await seedJobSchedules();
-  const rows = plain(await sql<ScheduleRow[]>`SELECT kind, cron, enabled FROM job_schedules`);
-  const expected = plain([
-    ...SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-    ...resolveSwarmSchedules().map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })),
-  ]);
-  expect(rows).toEqual(expected);
+test("the seed and the snapshot's REAL bootstrap data write the same job_schedules rows — and no swarm or session row", async () => {
+  // Two writers of one row set: backend/schema/bootstrap-data.sql (a blank
+  // bootstrap, smoke spec §8.1) and seedJobSchedules(fixtureDb) (every other boot).
+  // This case used to compare seedJobSchedules(fixtureDb) with SCHEDULES — the list it
+  // iterates — which could not fail. It now compares what each writer actually
+  // leaves in the table, column for column, so a row added to either and not
+  // the other goes red.
+  type FullRow = { kind: string; cron: string; enabled: boolean; timezone: string; payload: unknown; catchup_policy: string };
+  const readAll = async (): Promise<FullRow[]> =>
+    (
+      await sql<FullRow[]>`
+        SELECT kind, cron, enabled, timezone, payload, catchup_policy FROM job_schedules ORDER BY kind, cron`
+    ).map((r) => ({ ...r, payload: JSON.parse(JSON.stringify(r.payload)) }));
+
+  // The bootstrap data's own statements, verbatim from the file — not a copy.
+  const bootstrap = readFileSync(join(import.meta.dir, "..", "..", "schema", "bootstrap-data.sql"), "utf8");
+  const inserts = bootstrap.split("\n").filter((line) => line.startsWith("INSERT INTO public.job_schedules "));
+  expect(inserts.length).toBeGreaterThan(0);
+
+  await fixtureDb`DELETE FROM job_schedules`; // restored by the seed below and by afterEach
+  for (const statement of inserts) await fixtureDb.unsafe(statement);
+  const fromBootstrap = await readAll();
+
+  await fixtureDb`DELETE FROM job_schedules`;
+  await seedJobSchedules(fixtureDb);
+  const fromSeed = await readAll();
+
+  expect(fromSeed).toEqual(fromBootstrap);
+
+  // And both are SCHEDULES, so the list the seed module exports is the list a
+  // blank database gets.
+  const expected = plain(SCHEDULES.map((s) => ({ kind: s.kind, cron: s.cron, enabled: s.enabled })));
+  expect(plain(fromBootstrap)).toEqual(expected);
+
+  // §8.1: bootstrap data carries "the pipeline worker's job_schedules rows for
+  // the vault, wallet, buyback and project jobs. There are no session schedule
+  // rows." Each named family present and enabled; no swarm kind at all.
+  for (const family of ["vault.", "wallet.", "buybacks.", "projects."]) {
+    const present = fromBootstrap.some((r) => r.kind.startsWith(family) && r.enabled);
+    expect({ family, present }).toEqual({ family, present: true });
+  }
+  expect(fromBootstrap.filter((r) => r.kind.startsWith("swarm."))).toEqual([]);
+  // No other table's rows ride along as session scheduling: the file writes no
+  // swarm_sessions, swarm_subjects or swarm_recommendations row.
+  expect(bootstrap).not.toMatch(/INSERT INTO public\.swarm_(sessions|subjects|recommendations) /);
 });

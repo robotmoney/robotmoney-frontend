@@ -4,6 +4,7 @@ import { sessionPhase, isLiveState } from "../../lib/session-phase.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../../lib/relative-time.js";
 import { stanceColor, stanceClass, stanceStyle } from "../../lib/stance.js";
 import { operatorName } from "../../lib/operator.js";
+import { sessionWhen as whenOf } from "../../lib/session-when.js";
 // typechecked .ts file (scripts/tests/unit/swarm-synthesis-preview.test.ts),
 // which pulls the whole file into the root TS program transitively and
 // surfaces a pile of pre-existing implicit-any errors unrelated to this
@@ -16,6 +17,7 @@ import { operatorName } from "../../lib/operator.js";
 // portfolios instead of four subjects, real session counts, and a member
 // register.
 import { api, ROUTES, path } from "../../lib/api.js";
+import { loadArchiveBrief } from "../../lib/swarm-archive.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { sessionSummary } from "../../lib/session-summary.js";
@@ -85,6 +87,7 @@ const ROW_BLURBS = {
   "Woon Treasury Allocation": "peaq's tokenized agent. Earnings go to $WOON buybacks, $PEAQ, and the Robot Money vault.",
 };
 const rowBlurb = (p) => ROW_BLURBS[String(p?.name || "").trim()] || p?.thesisBlurb || "";
+
 
 export function registerSwarmView(Alpine) {
   // ── Investment Swarm ──────────────────────────────────────────────────
@@ -197,8 +200,8 @@ export function registerSwarmView(Alpine) {
       }));
       // Two subjects can convene on one date; the later one leads, as each row
       // prints its time.
-      return rows.filter(Boolean).sort((a, b) => String(b.date).localeCompare(String(a.date))
-        || String(b.generatedAt || b.publishedAt || "").localeCompare(String(a.generatedAt || a.publishedAt || "")));
+      return rows.filter(Boolean).sort((a, b) => String(whenOf(b)).localeCompare(String(whenOf(a)))
+        || String(b.generatedAt || "").localeCompare(String(a.generatedAt || "")));
     },
     async loadSubjects() {
       const ids = [...new Set(this.sessions.map((s) => s.subjectId).filter(Boolean))];
@@ -254,7 +257,7 @@ export function registerSwarmView(Alpine) {
         const b = await api.get(ROUTES.swarm.brief, { session: s.id }).catch(() => null);
         if (b && !b.error) return b;
       }
-      return fetch(`/data/swarm/briefs/${s.date}-${s.subjectId}.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      return loadArchiveBrief(s.date, s.subjectId);
     },
 
     // ── the research record's pieces (RM-121) ────────────────────────────
@@ -266,7 +269,7 @@ export function registerSwarmView(Alpine) {
     allocTakeRows: [],
     facts() {
       const published = this.publishedSessions();
-      const latest = published.reduce((acc, s) => (!acc || String(s.date) > String(acc) ? s.date : acc), null);
+      const latest = published.reduce((acc, s) => (!acc || String(whenOf(s)) > String(acc) ? whenOf(s) : acc), null);
       // Members who file takes: a judge sits on the roster and files none.
       const rows = [
         { k: "Members", v: String(analystCount(this.members)) },
@@ -422,7 +425,7 @@ export function registerSwarmView(Alpine) {
     allocationMeta() {
       const rows = this.allocationSessions();
       if (!rows.length) return "";
-      const latest = rows.reduce((acc, s) => (String(s.date) > String(acc) ? s.date : acc), rows[0].date);
+      const latest = rows.reduce((acc, s) => (String(whenOf(s)) > String(acc) ? whenOf(s) : acc), whenOf(rows[0]));
       const noun = rows.length === 1 ? "session" : "sessions";
       return `${rows.length} ${noun} · latest ${this.formatDate(latest)}`;
     },
@@ -443,8 +446,11 @@ export function registerSwarmView(Alpine) {
     // from the panel link, which hid half the swarm's work behind a filter
     // the reader could not see. The chips below separate allocation from
     // the books; the feed itself does not.
+    // Newest first by when each session OPENED, across every subject. The API pages by (date, generated_at), both the row's
+    // creation, so a session that waited for its brief sorts among the days it was created, not the day it opened.
     publishedSessions() {
-      return this.sessions.filter((s) => s.state === "published");
+      return this.sessions.filter((s) => s.state === "published")
+        .sort((a, b) => String(whenOf(b)).localeCompare(String(whenOf(a))));
     },
     // A framework subject that folds into a vault is not a fourth BOOK. It
     // still has its own sessions, listed above; it does not get a row in
@@ -741,6 +747,10 @@ export function registerSwarmView(Alpine) {
     stanceColor(s) { return stanceColor(s); },
     stanceClass(s) { return stanceClass(s); },
     stanceStyle(s) { return stanceStyle(s); },
+    // The moment a session is shown as happening. A session's `date` is the day its row was
+    // created (convened_at), which can be days before its brief went out, so a session is shown on
+    // the day it opened (`openedAt`). `date` still names the session: it is in the URL and in what members sign.
+    whenOf(s) { return whenOf(s); },
     formatDate(value, style = "short") {
       const date = String(value || "").includes("T") ? new Date(value) : new Date(`${value}T00:00:00Z`);
       const opts = style === "long"

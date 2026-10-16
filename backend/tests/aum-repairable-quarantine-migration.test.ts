@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { sql } from "../src/db/client.ts";
 import { QUARANTINED_PROVENANCE } from "../src/chain/wallet-valuation.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -26,7 +27,7 @@ test("0037 archives a mixed quarantine day losslessly and frees every active nat
   `;
   expect(server!.major).toBe(18);
 
-  await sql.unsafe(`
+  await fixtureDb.unsafe(`
     DROP TABLE wallet_balance_sample_evidence;
     DROP TABLE wallet_sleeve_sample_evidence;
     DROP FUNCTION rm_aum_evidence_guard();
@@ -61,7 +62,7 @@ test("0037 archives a mixed quarantine day losslessly and frees every active nat
   `;
 
   const ddl = await readFile(migrationPath, "utf8");
-  await sql.begin(async (tx) => {
+  await fixtureDb.begin(async (tx) => {
     await tx.unsafe(ddl);
   });
 
@@ -158,14 +159,14 @@ test("0037 archives a mixed quarantine day losslessly and frees every active nat
     },
   ]);
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples
       (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (${DAY}, 'WETH', 1, 2, 2, 'backfilled', now()),
       (${DAY}, 'USDC', 3, 1, 3, 'backfilled', now())
   `;
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples
       (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES

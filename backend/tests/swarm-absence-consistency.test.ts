@@ -24,6 +24,7 @@ import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission } from "@robotmoney/contract";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { activeSubject as epochSubject, setJudgeMode, sessionRow } from "./support/epoch-fixtures.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -61,14 +62,31 @@ async function submit(m: { id: string; token: string; privateKey: CryptoKey }, d
   return r;
 }
 
-function sessionTimes(date: string) {
-  return {
-    date,
-    briefOpensAt: `${date}T09:00:00Z`,
-    windowClosesAt: `${date}T10:00:00Z`,
-    publishAt: `${date}T10:05:00Z`,
-  };
+/**
+ * Open an epoch for the subject — the frozen-roster path. The epoch seats
+ * every active member in the transaction that opens it (domain.ts
+ * insertEpoch), so the roster is exactly the members registered before it.
+ */
+async function openedEpoch(subjectId: string) {
+  const opened = await ic.openEpoch(subjectId);
+  if (!opened.ok) throw new Error(`openEpoch(${subjectId}) failed: ${JSON.stringify(opened)}`);
+  return { sessionId: opened.sessionId, date: sessionDate((await sessionRow(opened.sessionId)).date) };
 }
+
+/** Close the epoch at its boundary (§4.3) and aggregate it (§4.4 step 1). */
+async function turnOverAndAggregate(subjectId: string, sessionId: string) {
+  const turned = await ic.turnOverEpoch(subjectId, sessionId);
+  if (!turned.ok) throw new Error(`turnOverEpoch failed: ${JSON.stringify(turned)}`);
+  const aggregated = await ic.aggregateEpoch(sessionId);
+  if (!aggregated.ok) throw new Error(`aggregateEpoch failed: ${JSON.stringify(aggregated)}`);
+  const [row] = await sql<{ swarm_recommendation: any }[]>`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${sessionId}`;
+  return row!.swarm_recommendation as { quorum: { active: number; submitted: number; absent: number }; absent: string[] };
+}
+
+const absentEvents = async (sessionId: string) =>
+  (await sql<{ member_id: string }[]>`
+    SELECT member_id FROM swarm_agent_health_events WHERE session_id = ${sessionId} AND event_type = 'absent'`)
+    .map((r) => r.member_id).sort();
 
 // The invariant the contract promises (contract/src/swarm.d.ts:
 // SwarmRecommendation.absent + SwarmQuorum): for a seated roster the take
@@ -78,32 +96,31 @@ function expectAttendanceConsistent(rollup: { quorum: { active: number; submitte
   expect(rollup.quorum.absent).toBe(rollup.absent.length);
 }
 
-// ── The frozen-roster (admin-created) path ─────────────────────────────────
+// ── The frozen-roster (epoch) path ──────────────────────────────────────────
 test("a seated member that submits nothing is named in `absent`, and the shortfall equals the list", async () => {
-  const subjectId = await activeSubject();
+  const subjectId = await epochSubject("absence", 3600);
   const present1 = await activeMember("present-1");
   const present2 = await activeMember("present-2");
   const noShow = await activeMember("no-show"); // enrolled, seated, never submits
 
-  const date = "2026-09-01";
-  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
-  const sessionId = (created as any).session.id as string;
+  const { sessionId, date } = await openedEpoch(subjectId);
 
   // The roster this test asserts against is exactly the three members above.
   const roster = await admin.getSessionRoster(sessionId);
   expect(roster.map((r: any) => String(r.member_id)).sort())
     .toEqual([present1.id, present2.id, noShow.id].sort());
 
-  await ic.publishBrief(sessionId, 60);
   await submit(present1, date, subjectId);
   await submit(present2, date, subjectId);
-  await ic.closeWindow(sessionId);
-  const rollup = await ic.aggregateSession(sessionId);
+  const rollup = await turnOverAndAggregate(subjectId, sessionId);
 
   // The no-show is named — not merely missing from the take count.
   expect(rollup.absent).toEqual([noShow.id]);
   expect(rollup.quorum).toMatchObject({ active: 3, submitted: 2, absent: 1 });
   expectAttendanceConsistent(rollup);
+  // …and the turnover recorded the same absence, in its own transaction
+  // (system-scheduler-spec.md §4.3): the telemetry and the rollup agree.
+  expect(await absentEvents(sessionId)).toEqual([noShow.id]);
 
   // The take-derived derivation the driver used to run (issue #501): a member
   // with no submission has no take row, so filtering the takes could only ever
@@ -113,9 +130,12 @@ test("a seated member that submits nothing is named in `absent`, and the shortfa
 
   // Same list on the SERVED payload — this is the object the smoke driver reads
   // (scripts/lib/swarm/session.ts absenceReport) and the admin/session views
-  // render, so the invariant has to survive the projection too.
-  await ic.publishSession(sessionId);
-  const served = await ic.getSession(date, subjectId);
+  // render, so the invariant has to survive the projection too. Finalize under
+  // judge mode `off` publishes it (§4.4).
+  await setJudgeMode("off");
+  const finalized = await ic.finalizeEpoch(sessionId);
+  expect(finalized.ok, JSON.stringify(finalized)).toBe(true);
+  const served = await ic.getSessionById(sessionId);
   const rec = served!.session.swarmRecommendation!;
   expect(rec.absent).toEqual([noShow.id]);
   expectAttendanceConsistent(rec);
@@ -123,24 +143,23 @@ test("a seated member that submits nothing is named in `absent`, and the shortfa
 });
 
 test("an excused member leaves the roster entirely: not seated, not absent, not in the denominator", async () => {
-  const subjectId = await activeSubject();
+  const subjectId = await epochSubject("absence-excused", 3600);
   const present = await activeMember("exc-present");
   const noShow = await activeMember("exc-no-show");
   const excused = await activeMember("exc-excused");
 
-  const date = "2026-09-02";
-  const created = await admin.createSessionAdmin({ ...sessionTimes(date), subjectId });
-  const sessionId = (created as any).session.id as string;
-  expect((await admin.rosterExcuseAdmin(sessionId, excused.id)).status).toBe(200);
+  const { sessionId, date } = await openedEpoch(subjectId);
+  // An epoch is collecting from its first instant, so the excusal is the
+  // audited forced one (admin.ts rosterExcuseAdmin).
+  expect((await admin.rosterExcuseAdmin(sessionId, excused.id, admin.ADMIN_ACTOR, { force: true })).status).toBe(200);
 
-  await ic.publishBrief(sessionId, 60);
   await submit(present, date, subjectId);
-  await ic.closeWindow(sessionId);
-  const rollup = await ic.aggregateSession(sessionId);
+  const rollup = await turnOverAndAggregate(subjectId, sessionId);
 
   expect(rollup.absent).toEqual([noShow.id]);
   expect(rollup.quorum).toMatchObject({ active: 2, submitted: 1, absent: 1 });
   expectAttendanceConsistent(rollup);
+  expect(await absentEvents(sessionId)).toEqual([noShow.id]);
 });
 
 // ── The smoke/e2e (openSession) path — the shape that filed #501 ────────────

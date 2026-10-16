@@ -15,6 +15,7 @@ import { applyRawFloorSeed } from "../src/analytics/store/floor-seed.ts";
 import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "../src/analytics/extract/floor-seed.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 // A tiny two-indicator seed CSV → gz file on disk.
 function writeSeed(): string {
@@ -34,7 +35,7 @@ function writeSeed(): string {
 }
 
 beforeEach(async () => {
-  await sql`DELETE FROM raw_indicator_history WHERE indicator IN ('AAA','BBB')`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator IN ('AAA','BBB')`;
 });
 
 test("loadRawFloorSeed parses a gzipped date,indicator,value CSV", async () => {
@@ -59,7 +60,7 @@ test("missing seed file fails loudly (never silent-skip)", async () => {
 test("cold DB: seed writes every row; a second run is a no-op (idempotent)", async () => {
   const path = writeSeed();
   try {
-    const first = await applyRawFloorSeed(await loadRawFloorSeed(path));
+    const first = await applyRawFloorSeed(await loadRawFloorSeed(path), fixtureDb);
     expect(first.seededPoints).toBe(5); // 3 AAA + 2 BBB
     expect(first.existingPoints).toBe(0);
     expect(first.indicators).toBe(2);
@@ -69,7 +70,7 @@ test("cold DB: seed writes every row; a second run is a no-op (idempotent)", asy
     expect(afterFirst.BBB.map((p) => p.value)).toEqual([10, 20]);
 
     // Idempotent: second run finds every (date,indicator) present → writes nothing.
-    const second = await applyRawFloorSeed(await loadRawFloorSeed(path));
+    const second = await applyRawFloorSeed(await loadRawFloorSeed(path), fixtureDb);
     expect(second.seededPoints).toBe(0);
     expect(second.existingPoints).toBe(5);
 
@@ -84,7 +85,7 @@ test("cold DB: seed writes every row; a second run is a no-op (idempotent)", asy
 test("cold DB: seeded rows are tagged source='seed' (issue #397 provenance)", async () => {
   const path = writeSeed();
   try {
-    await applyRawFloorSeed(await loadRawFloorSeed(path));
+    await applyRawFloorSeed(await loadRawFloorSeed(path), fixtureDb);
     const rows = await sql`SELECT indicator, source FROM raw_indicator_history WHERE indicator IN ('AAA','BBB') ORDER BY indicator, date`;
     expect(rows.length).toBe(5);
     expect(rows.every((r: any) => r.source === "seed")).toBe(true);
@@ -97,9 +98,9 @@ test("append-only floor: pre-existing DB rows win on overlap; seed only fills ga
   const path = writeSeed();
   try {
     // Simulate a warm DB where AAA@2020-01-02 already holds a REAL fetched value (99).
-    await saveRawIndicatorHistory({ AAA: [{ date: "2020-01-02", value: 99 }] });
+    await saveRawIndicatorHistory({ AAA: [{ date: "2020-01-02", value: 99 }] }, fixtureDb);
 
-    const res = await applyRawFloorSeed(await loadRawFloorSeed(path));
+    const res = await applyRawFloorSeed(await loadRawFloorSeed(path), fixtureDb);
     // AAA: only 01-01 and 01-03 are missing (01-02 already present) → 2; BBB: both → 2.
     expect(res.seededPoints).toBe(4);
     expect(res.existingPoints).toBe(1);
@@ -122,7 +123,7 @@ test("append-only floor: pre-existing DB rows win on overlap; seed only fills ga
 // real ~580 KB fixture directly so a future regeneration that drops/corrupts
 // BTC_MVRV fails loudly here, not just in the full regime-fidelity replay.
 beforeEach(async () => {
-  await sql`DELETE FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
+  await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
 });
 
 test("committed vendored floor seed contains finite, ordered BTC_MVRV observations", async () => {
@@ -150,7 +151,7 @@ test("cold DB: the committed floor seeds BTC_MVRV once; a second run is a no-op 
   const mvrvSeed = seed.BTC_MVRV;
   expect(mvrvSeed.length).toBeGreaterThan(2000);
 
-  const first = await applyRawFloorSeed(seed);
+  const first = await applyRawFloorSeed(seed, fixtureDb);
   expect(first.seededPoints).toBeGreaterThan(0);
 
   const [{ n: afterFirst }] = await sql`
@@ -158,7 +159,7 @@ test("cold DB: the committed floor seeds BTC_MVRV once; a second run is a no-op 
   expect(afterFirst).toBe(mvrvSeed.length);
 
   // Idempotent: every (date, BTC_MVRV) is now present → the second run adds none.
-  await applyRawFloorSeed(seed);
+  await applyRawFloorSeed(seed, fixtureDb);
   const [{ n: afterSecond }] = await sql`
     SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'BTC_MVRV'`;
   expect(afterSecond).toBe(mvrvSeed.length);
@@ -177,9 +178,9 @@ test("append-only floor: an existing real BTC_MVRV DB value is never overwritten
   const overlapDate = mvrvSeed[0].date;
   const realValue = 9.87654321; // a distinguishable "already fetched live" value
 
-  await saveRawIndicatorHistory({ BTC_MVRV: [{ date: overlapDate, value: realValue }] });
+  await saveRawIndicatorHistory({ BTC_MVRV: [{ date: overlapDate, value: realValue }] }, fixtureDb);
 
-  const res = await applyRawFloorSeed(seed);
+  const res = await applyRawFloorSeed(seed, fixtureDb);
   // Every BTC_MVRV date except the one pre-seeded overlap is newly written.
   expect(res.seededPoints).toBeGreaterThanOrEqual(mvrvSeed.length - 1);
 

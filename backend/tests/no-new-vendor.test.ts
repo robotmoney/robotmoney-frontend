@@ -45,22 +45,40 @@ test("new #84 valuation files reach no forbidden vendor host or import", () => {
   }
 });
 
-test("the token-price fetcher reaches only GeckoTerminal + Yahoo hosts", () => {
+// GeckoTerminal is CoinGecko's, and we pay for a CoinGecko plan (issue #1062). The same on-chain data is served from the
+// paid host under the same key, so that ONE host is allowed, in ONE module (chain/gecko-endpoint.ts). The price fetchers
+// no longer name a GeckoTerminal host themselves: they get their URLs from that module, so the host policy is one place
+// to read and one test to hold. Nothing else about the #84 boundary changes: still no Alchemy, DexScreener, Dune or
+// Supabase, and still no CoinGecko host anywhere else in these files (FORBIDDEN above checks "coingecko" in code).
+const GECKO_ENDPOINT_HOSTS = ["api.geckoterminal.com", "pro-api.coingecko.com"];
+
+test("GeckoTerminal's hosts are named in exactly one module, and are exactly the free host and CoinGecko's paid host for it", () => {
+  const src = readFileSync(join(process.cwd(), "src/chain/gecko-endpoint.ts"), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  const hosts = [...new Set([...code.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase()))].sort();
+  expect(hosts).toEqual([...GECKO_ENDPOINT_HOSTS].sort());
+});
+
+test("the token-price fetcher reaches only Yahoo by name, and GeckoTerminal only through gecko-endpoint", () => {
   const src = readFileSync(join(process.cwd(), "src/chain/token-prices.ts"), "utf8");
   const hosts = [...src.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase());
   for (const host of hosts) {
-    const ok = host.includes("geckoterminal.com") || host.includes("yahoo.com");
-    expect(ok, `unexpected host ${host} in token-prices.ts`).toBe(true);
+    expect(host.includes("yahoo.com"), `unexpected host ${host} in token-prices.ts`).toBe(true);
   }
-  // Sanity: it does mention the two allowed vendors.
-  expect(src.includes("geckoterminal.com")).toBe(true);
+  // Sanity: it reaches GeckoTerminal, and does so through the one module that names the hosts.
+  expect(src.includes('from "./gecko-endpoint.ts"')).toBe(true);
 });
 
-test("the historical-price fetcher (#709) reaches ONLY GeckoTerminal", () => {
+test("the historical-price fetcher (#709) reaches GeckoTerminal only through gecko-endpoint, and names no host", () => {
   const src = readFileSync(join(process.cwd(), "src/chain/historical-prices.ts"), "utf8");
   const hosts = [...src.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1]!.toLowerCase());
-  for (const host of hosts) {
-    expect(host.includes("geckoterminal.com"), `unexpected host ${host} in historical-prices.ts`).toBe(true);
-  }
-  expect(src.includes("geckoterminal.com")).toBe(true);
+  expect(hosts, "historical-prices.ts must not name a host; chain/gecko-endpoint.ts does").toEqual([]);
+  expect(src.includes('from "./gecko-endpoint.ts"')).toBe(true);
+});
+
+test("the new_pools extractor names no GeckoTerminal host either", () => {
+  const src = readFileSync(join(process.cwd(), "src/analytics/extract/geckoterminal.ts"), "utf8");
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  expect([...code.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1])).toEqual([]);
+  expect(src.includes("gecko-endpoint.ts")).toBe(true);
 });

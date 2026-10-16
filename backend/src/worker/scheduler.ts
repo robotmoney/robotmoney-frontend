@@ -1,5 +1,69 @@
 import parser from "cron-parser";
 import { jsonValue, sql } from "../db/worker-client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1), on the worker's own
+// pool, driven by the worker process's scheduler tick.
+const WORKER_ENTRY = "src/worker/index";
+
+const dueSchedules = registerQuery({
+  role: "rm_worker",
+  object: "job_schedules",
+  // UPDATE for FOR UPDATE SKIP LOCKED, which locks the due rows.
+  privileges: ["SELECT", "UPDATE"],
+  site: "src/worker/scheduler:tickScheduler.due",
+  purpose: "Lock the enabled schedules that are due, skipping any another scheduler holds.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `SELECT id, kind, cron, payload, timezone, next_run_at, catchup_policy FROM job_schedules
+      WHERE enabled AND (next_run_at IS NULL OR next_run_at <= now())
+      FOR UPDATE SKIP LOCKED`,
+  },
+});
+
+const setNextRun = registerQuery({
+  role: "rm_worker",
+  object: "job_schedules",
+  // SELECT because the WHERE reads the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/scheduler:tickScheduler.setNextRun",
+  purpose: "Give a schedule with no next run its first one, from its cron.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: "UPDATE job_schedules SET next_run_at = $1::timestamptz WHERE id = $2",
+    params: ["2026-01-01T00:00:00Z", 0],
+  },
+});
+
+const enqueueSlot = registerQuery({
+  role: "rm_worker",
+  object: "jobs",
+  // SELECT for RETURNING and the ON CONFLICT arbiter.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/worker/scheduler:tickScheduler.enqueue",
+  purpose: "Enqueue one schedule slot's job, idempotent on its dedupe key.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: `INSERT INTO jobs (kind, payload, dedupe_key) VALUES ($1, $2::jsonb, $3)
+      ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+      RETURNING id`,
+    params: ["noop", "{}", "noop:probe"],
+  },
+});
+
+const advanceSchedule = registerQuery({
+  role: "rm_worker",
+  object: "job_schedules",
+  // SELECT because the WHERE reads the row.
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/worker/scheduler:tickScheduler.advance",
+  purpose: "Stamp a schedule's last enqueue and move its next run past now.",
+  callers: [WORKER_ENTRY],
+  probe: {
+    statement: "UPDATE job_schedules SET last_enqueued_at = now(), next_run_at = $1::timestamptz WHERE id = $2",
+    params: ["2026-01-01T00:00:00Z", 0],
+  },
+});
 
 interface ScheduleRow {
   id: number;
@@ -8,7 +72,7 @@ interface ScheduleRow {
   payload: Record<string, unknown>;
   timezone: string;
   next_run_at: Date | null;
-  catchup_policy: "all" | "collapse-per-bucket";
+  catchup_policy: "all" | "collapse-per-bucket" | "latest-only";
 }
 
 // Catch-up is bounded per tick so one wedged schedule can't hold the
@@ -25,7 +89,7 @@ const MAX_SLOTS_PER_TICK = 1000;
 // guarantees a given slot enqueues at most once.
 export async function tickScheduler(): Promise<number> {
   return await sql.begin(async (tx) => {
-    const due = await tx<ScheduleRow[]>`
+    const due = await on(tx, dueSchedules)<ScheduleRow>`
       SELECT id, kind, cron, payload, timezone, next_run_at, catchup_policy
         FROM job_schedules
        WHERE enabled AND (next_run_at IS NULL OR next_run_at <= now())
@@ -39,7 +103,7 @@ export async function tickScheduler(): Promise<number> {
         // Brand-new schedule: seed next_run_at to the next FUTURE occurrence
         // without firing a stale past slot.
         const it = parser.parseExpression(s.cron, { tz: s.timezone, currentDate: now });
-        await tx`UPDATE job_schedules SET next_run_at = ${it.next().toDate()} WHERE id = ${s.id}`;
+        await on(tx, setNextRun)`UPDATE job_schedules SET next_run_at = ${it.next().toDate()} WHERE id = ${s.id}`;
         continue;
       }
       // Enqueue EVERY occurrence from the stored slot up to now (catch up missed
@@ -59,12 +123,19 @@ export async function tickScheduler(): Promise<number> {
       // clamp above, rather than every schedule paying for a cross-tick
       // dedupe structure this issue's use case (hours, not weeks, of
       // same-day backlog) never needs.
+      //
+      // Under 'latest-only' (issue 1378) the bucket is the whole backlog: only
+      // the newest due slot of this tick's batch is inserted. A backlog wider
+      // than MAX_SLOTS_PER_TICK yields one more job per extra tick, which the
+      // worker-start sweep (boot.ts) cancels on the next boot. The six heavy kinds recompute current
+      // state from scratch, so an older slot is the same run repeated (migration
+      // 0125's header).
       let pendingBucket: string | null = null;
       let pendingSlotDate: Date | null = null;
       const insertSlot = async (slotDate: Date) => {
         const slot = slotDate.toISOString().slice(0, 16).replace(/[-:T]/g, "");
         const payload = { ...s.payload, slotAt: slotDate.toISOString() };
-        const inserted = await tx`
+        const inserted = await on(tx, enqueueSlot)`
           INSERT INTO jobs (kind, payload, dedupe_key)
           VALUES (${s.kind}, ${tx.json(jsonValue(payload))}, ${`${s.kind}:${slot}`})
           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
@@ -74,8 +145,9 @@ export async function tickScheduler(): Promise<number> {
       for (let guard = 0; guard < MAX_SLOTS_PER_TICK; guard++) {
         const slotDate = it.next().toDate();
         if (slotDate > now) { nextRun = slotDate; break; }
-        if (s.catchup_policy === "collapse-per-bucket") {
-          const bucket = slotDate.toISOString().slice(0, 10); // UTC calendar day
+        if (s.catchup_policy === "collapse-per-bucket" || s.catchup_policy === "latest-only") {
+          // UTC calendar day, or one bucket for the whole backlog.
+          const bucket = s.catchup_policy === "latest-only" ? "latest" : slotDate.toISOString().slice(0, 10);
           if (pendingBucket !== null && bucket !== pendingBucket) await insertSlot(pendingSlotDate!);
           pendingBucket = bucket;
           pendingSlotDate = slotDate;
@@ -102,8 +174,8 @@ export async function tickScheduler(): Promise<number> {
       // guard was exhausted mid-backlog (bucket is only complete so far; a
       // later tick may still add to the SAME day, producing one more job for
       // it — see the per-tick-batch note above).
-      if (s.catchup_policy === "collapse-per-bucket" && pendingSlotDate) await insertSlot(pendingSlotDate);
-      await tx`UPDATE job_schedules SET last_enqueued_at = now(), next_run_at = ${nextRun} WHERE id = ${s.id}`;
+      if (s.catchup_policy !== "all" && pendingSlotDate) await insertSlot(pendingSlotDate);
+      await on(tx, advanceSchedule)`UPDATE job_schedules SET last_enqueued_at = now(), next_run_at = ${nextRun} WHERE id = ${s.id}`;
     }
     return enqueued;
   });

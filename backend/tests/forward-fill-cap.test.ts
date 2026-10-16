@@ -17,6 +17,7 @@
 import { test, expect } from "bun:test";
 import type { RegimeIndicator } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import {
@@ -177,7 +178,7 @@ test("computeRegime: omitting `ages` (every existing call site) preserves curren
 test(
   "runAnalytics (LIVE path): an indicator whose real floor is older than the forward-fill horizon is served as visibly degraded, not current",
   async () => {
-    await sql`DELETE FROM raw_indicator_history`;
+    await fixtureDb`DELETE FROM raw_indicator_history`;
 
     const asof = "2026-06-29";
     const STALE_ID = "T10Y2Y";
@@ -207,7 +208,7 @@ test(
       date: addDays(asof, k - 1200),
       value: 18 + 4 * Math.sin(k / 6),
     }));
-    await saveRawIndicatorHistory({ [STALE_ID]: staleFloor, [HEALTHY_ID]: healthyFloor });
+    await saveRawIndicatorHistory({ [STALE_ID]: staleFloor, [HEALTHY_ID]: healthyFloor }, fixtureDb);
 
     const origFetch = globalThis.fetch;
     (globalThis as any).fetch = () => Promise.reject(new Error("network disabled for forward-fill-cap test"));

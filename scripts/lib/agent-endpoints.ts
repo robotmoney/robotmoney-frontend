@@ -51,6 +51,13 @@ export interface AgentEndpoint {
    */
   description: string;
   /**
+   * For an endpoint that answers a bare GET with 400 because it needs a query
+   * (the brief needs a session or a date and subject): the query to show in
+   * llms.txt, written as code there rather than as a link a crawler would
+   * request and record as an error.
+   */
+  requiredQuery?: string;
+  /**
    * Indexed site routes this endpoint fills. Drives the per-route alternate
    * links and the <noscript> block scripts/prerender.ts injects.
    *
@@ -96,13 +103,35 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 200 B",
   },
   {
+    id: "getApiVersion",
+    method: "GET",
+    path: ROUTES.apiVersion,
+    summary: "Which API contract version this deployment speaks",
+    description:
+      "Returns `api`, the semver version of the published @robotmoney/contract package this API serves, and `commit`, the build commit (null when the image was built without one). The version moves whenever a route or response shape changes, so a client can compare it against the range it was written for before calling anything else. Needs no credential and answers even while the database is down.",
+    backs: [],
+    contractType: "{ api, commit }",
+    sizeHint: "under 100 B",
+  },
+  {
+    id: "getMaintenanceStatus",
+    method: "GET",
+    path: ROUTES.status.maintenance,
+    summary: "Whether a maintenance window is scheduled or under way",
+    description:
+      "Returns `state` (`none`, `scheduled` or `active`), `startsAt` and `expectedEnd` as ISO-8601 instants, and a short `message`; the times and message are null when `state` is `none`. During a window the site stays up and shows the expected end. Needs no credential.",
+    backs: [],
+    contractType: "MaintenanceStatus",
+    sizeHint: "under 300 B",
+  },
+  {
     id: "getVaultEconomics",
     method: "GET",
     path: ROUTES.dashboards.vaultEconomics,
     summary: "rmUSDC vault TVL, share price, APY and per-adapter split",
     description:
       "ROBOT MONEY'S OWN rmUSDC vault: the ERC-4626 vault on Base, its total value locked in USD, share price, deposit cap, and the per-adapter breakdown across Morpho, Aave and Compound. This is the number to quote for \"Robot Money vault TVL\"; the `vaultTvlUsd` on the overview endpoint is a different dataset entirely. `asOf` is when the values were read onchain and `stale` says whether that read is older than the refresh interval, so a caller can decide for itself whether to quote the number.",
-    backs: ["/allocation", "/"],
+    backs: ["/allocation"],
     contractType: "VaultEconomics",
     sizeHint: "about 1 KB",
   },
@@ -113,7 +142,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Target allocation: strategy sleeves and bucket weights",
     description:
       "The target weights the protocol is managed against: the strategy sleeves (95 percent conservative DeFi yield, 5 percent agent tokens) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.",
-    backs: ["/allocation"],
+    backs: ["/allocation", "/"],
     contractType: "AllocationFramework",
     sizeHint: "about 1 KB",
   },
@@ -124,7 +153,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Per-wallet holdings grouped into the allocation sleeves",
     description:
       "What each Robot Money protocol wallet actually holds, grouped into the same sleeves that `allocation` sets targets for. This is the realised side of the target/actual pair.",
-    backs: ["/allocation", "/performance"],
+    backs: ["/allocation", "/treasury"],
     contractType: "WalletSleeves",
     sizeHint: "about 2 KB",
   },
@@ -135,9 +164,9 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Live protocol wallet valuation plus daily history",
     description:
       "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.",
-    backs: ["/performance", "/allocation"],
+    backs: ["/treasury", "/allocation"],
     contractType: "WalletBalances",
-    sizeHint: "about 45 KB, the largest of the treasury reads",
+    sizeHint: "about 55 KB, the largest of the treasury reads",
   },
   {
     id: "getTokenMetrics",
@@ -145,8 +174,8 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.tokenMetrics,
     summary: "$ROBOTMONEY price, supply, market cap and the fee split",
     description:
-      "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks and the tokens bought are burned.",
-    backs: ["/tokenomics", "/"],
+      "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks, and the protocol holds the tokens it buys.",
+    backs: ["/tokenomics"],
     contractType: "{ robotmoney, feeSplit }",
     sizeHint: "under 500 B",
   },
@@ -167,7 +196,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.regimeSnapshots,
     summary: "Daily cross-asset risk-on / risk-off classifier",
     description:
-      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`.",
+      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). This is where regime outputs live; the raw inputs are under /api/public/analytics/.",
     backs: ["/regime", "/regime/indicators", "/regime-detection"],
     params: [
       {
@@ -183,8 +212,78 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         example: "backtest",
       },
     ],
-    contractType: "{ latest: RegimeSnapshot, history: RegimeSnapshot[] }",
+    contractType: "RegimeSnapshotsResponse",
     sizeHint: "about 125 KB at the default 180 days and 33 KB at `?range=1`; `&include=backtest` adds about 125 KB of backtests",
+  },
+  {
+    id: "getPublicRawHistory",
+    method: "GET",
+    path: ROUTES.publicAnalytics.rawHistory,
+    summary: "Raw indicator history the regime is computed from",
+    description:
+      "Every stored raw indicator point as date, indicator, value and source, ordered by date then indicator. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "indicator", in: "query", description: "One indicator id, for example T10Y2Y.", example: "T10Y2Y" },
+      { name: "from", in: "query", description: "First date, YYYY-MM-DD, inclusive.", example: "2024-01-01" },
+      { name: "to", in: "query", description: "Last date, YYYY-MM-DD, inclusive.", example: "2024-12-31" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicRawHistoryResponse",
+    sizeHint: "about 80 B a row; 8 KB at the default 100",
+  },
+  {
+    id: "getPublicAssetPrices",
+    method: "GET",
+    path: ROUTES.publicAnalytics.assetPrices,
+    summary: "Daily USD closes of the tracked assets",
+    description:
+      "One row per asset per UTC day with the price, the provider, the pool it came from and when it was observed and fetched. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "symbol", in: "query", description: "One asset symbol.", example: "ROBOTMONEY" },
+      { name: "from", in: "query", description: "First date, YYYY-MM-DD, inclusive.", example: "2026-03-01" },
+      { name: "to", in: "query", description: "Last date, YYYY-MM-DD, inclusive.", example: "2026-04-01" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicAssetPricesResponse",
+    sizeHint: "about 400 B a row",
+  },
+  {
+    id: "getPublicVintages",
+    method: "GET",
+    path: ROUTES.publicAnalytics.vintages,
+    summary: "Frozen data vintages an analytics run committed to",
+    description:
+      "Each vintage: the run key, tool, as-of date, knowledge-time and market-time cutoffs, manifest digest, member count, build identity and methodology. With `include=members` and a `run_key` and `tool_id` naming one vintage, `limit` and `cursor` page that vintage's members, one row per stored source value id (about 170,000 for a production vintage). Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "run_key", in: "query", description: "The run key, a UUID.", example: "00000000-0000-4000-8000-000000000000" },
+      { name: "tool_id", in: "query", description: "The analytics tool id.", example: "regime" },
+      { name: "include", in: "query", description: "`members` adds the vintage's members; needs run_key and tool_id.", example: "members" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicVintagesResponse",
+    sizeHint: "about 600 B a vintage; members about 70 B a row",
+  },
+  {
+    id: "getPublicOverwriteEvents",
+    method: "GET",
+    path: ROUTES.publicAnalytics.overwriteEvents,
+    summary: "Every recorded revision of a stored analytics row",
+    description:
+      "Each time a raw indicator, regime snapshot or research signal row was replaced or removed, the row as it was and as it became, in the order recorded. A page can hold fewer rows than `limit` when the rows are large. Tokenless and read-only (GET only; any other method is 405), at most 100 requests a minute per client, cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "table_name", in: "query", description: "`raw_indicator_history`, `regime_snapshots` or `research_signals`.", example: "raw_indicator_history" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicOverwriteEventsResponse",
+    sizeHint: "from 300 B a row for raw history to about 0.5 MB for a regime snapshot",
   },
   {
     id: "getResearchSignal",
@@ -205,7 +304,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "The Investment Swarm roster",
     description:
       "Every swarm member: handle, display name, status (active, inactive, applied), role (member, or judge for a consensus judge that files no takes), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
-    backs: ["/swarm"],
+    backs: ["/swarm", "/"],
     contractType: "{ members: SwarmMember[] }",
     sizeHint: "about 20 KB",
   },
@@ -255,8 +354,8 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessions,
     summary: "Swarm session index, paginated",
     description:
-      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the next fire time of the enabled `swarm.open_session` schedule, or null when no such schedule is enabled. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
-    backs: ["/swarm"],
+      "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the instant the earliest open submission window closes, which is the same instant its subject's next epoch opens, or null when no subject has one open. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
+    backs: ["/swarm", "/"],
     params: [
       { name: "subject", in: "query", description: "One subject's sessions, filtered before the page is cut. Cannot be combined with full=1.", example: "robotmoney-allocation" },
       { name: "search", in: "query", description: "Case-insensitive literal phrase matched against the date, the recommendation's rationale and the synthesis; at most 200 characters. Cannot be combined with full=1." },
@@ -266,7 +365,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "full", in: "query", description: "Set to 1 to return every field rather than the light index projection.", example: "1" },
     ],
     contractType: "SwarmSessionListResponse",
-    sizeHint: "about 80 KB for the default page of 20 rows; pass limit to shrink it",
+    sizeHint: "about 160 KB for the default page of 20 rows; pass limit to shrink it",
   },
   {
     id: "getSwarmSessionById",
@@ -306,6 +405,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "under 500 B",
   },
   {
+    id: "getOpenSessions",
+    method: "GET",
+    path: ROUTES.swarm.openSessions,
+    summary: "Every session collecting takes, soonest close first",
+    description:
+      "Every session whose submission window is open right now, soonest close first, each in the shape `open-session` returns. Several subjects collect at once, and `open-session` names only the newest of them. An external member agent that serves more than one subject polls this endpoint, not `open-session`.",
+    backs: ["/swarm"],
+    contractType: "{ sessions: SwarmSession[] }",
+    sizeHint: "under 2 KB",
+  },
+  {
     id: "getSwarmTake",
     method: "GET",
     path: ROUTES.swarm.take,
@@ -323,7 +433,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessionJudgements,
     summary: "The consensus judge's public opinion on one session",
     description:
-      "A session has one judge: the house judge by default, one picked at random when several are seated, never one related to the session's subject or members. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+      "A session has one judge of record: the active judge that comes first by member id and filed no take in it; an outside judge counts only once third-party judging is on. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmJudgementsResponse",
@@ -345,24 +455,24 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     id: "getConsensusReceipt",
     method: "GET",
     path: ROUTES.swarm.sessionConsensusReceipt,
-    summary: "The anchored consensus receipt bytes for a session",
-    description:
-      "The aggregate receipt for one session: the signed consensus over the member takes. THIS IS THE ANCHORED URL — it is what robotmoney-core writes on chain as `payloadUri`, and it returns the BARE canonical receipt, byte-stable, with nothing wrapped around it. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. For the read-time verification verdict, fetch the `/verified` sibling.",
-    backs: ["/swarm"],
-    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
-    contractType: "ConsensusReceipt",
-    sizeHint: "a few KB",
-  },
-  {
-    id: "getConsensusReceiptVerified",
-    method: "GET",
-    path: ROUTES.swarm.sessionConsensusReceiptVerified,
     summary: "The consensus receipt with a read-time verification verdict",
     description:
-      "The same receipt as its parent path, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify — never withheld and never passed off as valid. This URL is NOT the anchored one: the envelope's keccak256 is not `payloadDigest`, so verify the commitment against the parent path instead.",
+      "The aggregate receipt for one session: the signed consensus over the member takes, wrapped in a verification envelope recomputed on every request: the receipt, the canonical bytes it was published as, `verified`, a per-signature verdict, and `unverifiedReasons` when it is not. Served even when it does not verify, never withheld and never passed off as valid. Addressed by session id rather than by content digest, so it survives redeploys and a reader holding only a session id can reach it. A receipt is only published for a session that reached the judged state, so most sessions do not have one. The envelope's keccak256 is not `payloadDigest`: to check the on-chain commitment, fetch the `/canonical` sibling.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmConsensusReceiptResponse",
+    sizeHint: "a few KB",
+  },
+  {
+    id: "getConsensusReceiptCanonical",
+    method: "GET",
+    path: ROUTES.swarm.sessionConsensusReceiptCanonical,
+    summary: "The canonical consensus receipt bytes for a session",
+    description:
+      "The same receipt as its parent path, as the BARE canonical bytes, byte-stable, with nothing wrapped around them. To check the on-chain commitment, prepend the domain separator `robotmoney:consensus-receipt:v1\\n` to the body exactly as received and keccak256 the result: that is `payloadDigest`.",
+    backs: ["/swarm"],
+    params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
+    contractType: "ConsensusReceipt",
     sizeHint: "a few KB",
   },
   {
@@ -371,13 +481,14 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.brief,
     summary: "The brief a session published",
     description:
-      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to the most recent session that day THAT HAS PUBLISHED A BRIEF, which is not always the newest session, because a session convenes as scheduled and its brief follows on a separate job. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
+      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and a subject runs several sessions a day. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
     backs: ["/swarm"],
     params: [
       { name: "session", in: "query", description: "Session id. Preferred." },
       { name: "date", in: "query", description: "UTC date, YYYY-MM-DD. Use with subject.", example: "2026-09-03" },
       { name: "subject", in: "query", description: "Subject id. Use with date.", example: "robotmoney-treasury" },
     ],
+    requiredQuery: "?session={id}",
     contractType: "SwarmBrief",
     sizeHint: "about 980 KB, of which 976 KB is body.researchSignals",
   },
@@ -592,12 +703,25 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.register]: "privileged demo and E2E shortcut",
   [ROUTES.swarm.signingPayload]: "member write flow; documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.submit]: "member write flow; requires a member bearer and an Ed25519 signature",
+  [ROUTES.swarm.submitDryRun]: "member write flow, checked without writing; requires a member bearer, documented at /docs/investment-swarm/api-reference",
   [ROUTES.swarm.memos]: "member write flow",
   [ROUTES.swarm.memberProfile]: "member write flow; the GET side is covered by getSwarmMember",
   [ROUTES.swarm.verifyToken]: "member bearer introspection",
   [ROUTES.swarm.regime]: "analytics-provider ingestion boundary",
   [ROUTES.swarm.memberAvatar]: "image bytes; linked from the member payload, not independently useful",
   [ROUTES.swarm.takePermalink]: "an HTML page, not an API resource; it is in sitemap.xml",
+  // Issue #1026 W4. Two credentialed machine surfaces that do not live under
+  // /api/swarm/admin/ and so are not skipped wholesale by the namespace rule.
+  // Neither is a browsable resource and neither answers an anonymous caller:
+  // the first two need the `system-scheduler` automation token, the rest a
+  // participant's own bearer (system-scheduler-spec.md §7). There is no job-ack
+  // route: the stream carries change events only (§6.3, D52).
+  [ROUTES.swarm.scheduler.fullRead]: "scheduler automation token only; an internal snapshot for one client",
+  [ROUTES.swarm.scheduler.subscribe]: "scheduler automation token only; a WebSocket upgrade carrying the change stream (D55 (11)), not a document",
+  [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
+  [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
+  [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
+  [ROUTES.swarm.participants.judgeRefusal]: "judge participant report of a refused attempt; requires a judge's member bearer and decides nothing",
 };
 
 /** Absolute URL for an endpoint, path params left as :name placeholders. */

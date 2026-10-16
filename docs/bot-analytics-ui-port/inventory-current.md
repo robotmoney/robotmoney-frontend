@@ -215,7 +215,7 @@ New API endpoints will be needed for every list/detail page (only the aggregate
    e.g. `projects.spec.ts`, `allocation-view.spec.ts`); there is a **visual-snapshot
    golden** spec (`regime-visual.spec.ts` + `-snapshots/`, 1% maxDiffPixelRatio,
    animations disabled). `frontend.yml` alone runs only `preview-smoke.spec.ts`; the
-   full browser suite runs inside `e2e.yml`'s **full-stack `bun run smoke` readiness
+   full browser suite runs inside `e2e-web.yml`'s **full-stack `bun run smoke` readiness
    gate** (single Blacksmith runner; cycles are hours-long per memory notes, and the
    user's global test-coverage invariants forbid silent skips / zero-test greens).
 4. **Contract boundary**: endpoint paths live only in `contract/src/routes.js`,

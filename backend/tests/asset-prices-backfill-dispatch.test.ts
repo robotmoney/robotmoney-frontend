@@ -15,6 +15,7 @@ import { sql } from "../src/db/client.ts";
 import { SCHEDULES } from "../src/db/seed.ts";
 import { getHandler } from "../src/worker/handlers/index.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -39,8 +40,8 @@ test("the registered ops.backfill_asset_prices handler runs the real backfill ag
   // already covers with injected deps. A clean DB has no candidate days, so
   // this executes the real anti-join query against real Postgres and returns
   // without ever reaching the network-touching branch.
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM asset_prices`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM asset_prices`;
 
   const handler = getHandler("ops.backfill_asset_prices")!;
   const result = (await handler({})) as {

@@ -455,7 +455,7 @@ test("rmAGENT on Base is not live: every frame drawn, each saying it holds nothi
   await page.goto("/index.html");
   await navigate(page, "/vault/rmagent");
   // "Coming soon", in the pill, beside the Network fact that names Base.
-  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
+  await expect(fact(page, "Status").locator(".rm-soon")).toHaveText("Coming soon");
   await expect(fact(page, "Network").locator("b")).toHaveText("Base");
   await expect(fact(page, "Share price")).toHaveCount(0);
   // Holdings and Activity keep their frames, as the vault subject's do: $0,
@@ -502,7 +502,7 @@ test("an unknown vault slug renders not found", async ({ page }) => {
   await stubSaved(page);
   await page.goto("/vault/nope");
   await expect(page.locator("#view")).toContainText("Page not found");
-  expect(await page.title()).toBe("Page Not Found — Robot Money");
+  expect(await page.title()).toBe("Page Not Found | Robot Money");
 });
 
 test("bare /vault moves to /allocation#vaults, scrolled to it, canonical /allocation", async ({ page }) => {
@@ -677,7 +677,7 @@ test("the switch carries from /allocation to a vault by its link, survives a rel
     await expect(page.locator("#view")).not.toContainText(devnetOnly);
   }
   await navigate(page, "/vault/rmagent");
-  await expect(fact(page, "Status").locator(".rm-pill")).toHaveText("Coming soon");
+  await expect(fact(page, "Status").locator(".rm-soon")).toHaveText("Coming soon");
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$0");
   await expectNoBrowserErrors(errors);
 });
@@ -1066,7 +1066,9 @@ async function covenantFindings(page: Page, root: string): Promise<string[]> {
         const hued = paints.filter((p) => (HUES as string[]).includes(p));
         if (el.getAttribute("data-mark") === "series") {
           if (!hued.length) out.push(`series mark off the vault hues on ${tag}: ${paints.join(" / ")}`);
-        } else if (hued.length) {
+        } else if (hued.length && !el.matches(".rm-pulse")) {
+          // The live mark is green by decision (David, 2026-10-06), and it is a
+          // state, not a series: the beat tells it from a swatch.
           out.push(`vault hue with no data-mark on ${tag}: ${hued.join(" / ")}`);
         }
       }

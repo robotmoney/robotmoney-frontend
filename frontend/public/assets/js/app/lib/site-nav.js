@@ -19,7 +19,7 @@ export const NAV_SECTIONS = [
     prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks"],
   },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
-  { key: "company", prefixes: ["/tokenomics", "/media", "/performance", "/swarm/subjects/robotmoney-treasury"] },
+  { key: "company", prefixes: ["/tokenomics", "/media", "/treasury", "/performance", "/swarm/subjects/robotmoney-treasury"] },
 ];
 
 /** @param {string} pathname */

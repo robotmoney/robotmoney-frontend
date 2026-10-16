@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { jsonValue, sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { fileURLToPath } from "node:url";
 import {
   resolveVaultAdapters,
@@ -27,6 +28,7 @@ import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } 
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
 import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
+import { TOKEN_FEE_INCOME_SELECTORS } from "../../src/chain/token-fee-income.ts";
 import { sampleWalletSleeves } from "../../src/worker/handlers/wallet.ts";
 import {
   _resetWalletSleevesCacheForTests,
@@ -35,6 +37,12 @@ import {
 } from "../../src/chain/wallet-sleeves.ts";
 import { _resetAllocationFrameworkCacheForTests, ALLOCATION_FRAMEWORK_SEED } from "../../src/chain/allocation-framework.ts";
 import { _resetTokenPriceCacheForTests } from "../../src/chain/token-prices.ts";
+import { _resetTokenMarketForTests, sampleTokenMarket } from "../../src/worker/handlers/token-market.ts";
+import { useCleanDatabase } from "../support/clean-db.ts";
+
+// The buyback fixture rows are DATA a migration inserts (the snapshot's bootstrap data
+// holds operational rows only), so this file runs on the migration-built template.
+useCleanDatabase(import.meta.file, { migrationBuilt: true });
 
 const realFetch = globalThis.fetch;
 const word = (n: bigint): string => "0x" + n.toString(16).padStart(64, "0");
@@ -47,8 +55,10 @@ async function resetCaches() {
   _resetWalletSleevesCacheForTests();
   _resetAllocationFrameworkCacheForTests();
   _resetTokenPriceCacheForTests();
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`DELETE FROM vault_adapter_samples`;
+  _resetTokenMarketForTests();
+  await fixtureDb`DELETE FROM token_market_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM vault_adapter_samples`;
 }
 
 beforeEach(async () => {
@@ -73,7 +83,15 @@ const BALANCE_OF = "0x70a08231";
 const CONVERT_TO_ASSETS = "0x07a2d13a";
 const GET_ETH_BALANCE = "0x4d2301cc"; // Multicall3 getEthBalance(address)
 const AGGREGATE3 = "0x82ad56cb"; // Multicall3 aggregate3(Call3[])
-function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean; failBalanceOfTargets?: string[] } = {}) {
+// The Doppler locker and hook reads behind token-metrics' fee income (RM-156).
+const { getCumulatedFees0: CUM_FEES0, getCumulatedFees1: CUM_FEES1, getShares: GET_SHARES, getFeeScheduleOf: FEE_SCHEDULE } = TOKEN_FEE_INCOME_SELECTORS;
+// Fixture locker state: 100 WETH and 10B ROBOTMONEY collected since launch,
+// the primary prop wallet holding the 57% share, the pool at 1.2%.
+const FIXTURE_CUM0 = 100n * 10n ** 18n;
+const FIXTURE_CUM1 = 10_000_000_000n * 10n ** 18n;
+const FIXTURE_SHARE = 570_000_000_000_000_000n;
+const FIXTURE_END_FEE = 12_000n;
+function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?: boolean; failBalanceOfTargets?: string[]; failFeeIncome?: boolean } = {}) {
   const counter = { aggregateCalls: 0 };
   // One aggregate3 sub-call, answered with the same fixtures the single-call
   // branch serves; a target in failBalanceOfTargets reverts (success:false).
@@ -85,12 +103,29 @@ function mockChain(opts: { totalSupply?: bigint; failPrice?: boolean; failCall?:
       return { success: true, returnData: word(1_000_000n) };
     }
     if (sel === CONVERT_TO_ASSETS) return { success: true, returnData: word(4_500_000_000n) };
+    if (sel === CUM_FEES0) return { success: true, returnData: word(FIXTURE_CUM0) };
+    if (sel === CUM_FEES1) return { success: true, returnData: word(FIXTURE_CUM1) };
+    if (sel === FEE_SCHEDULE) return { success: true, returnData: word(1n) + word(800_000n).slice(2) + word(FIXTURE_END_FEE).slice(2) + word(FIXTURE_END_FEE).slice(2) + word(10n).slice(2) };
+    if (sel === GET_SHARES) {
+      if (opts.failFeeIncome) return { success: false, returnData: "0x" };
+      // Only the primary prop wallet holds a share, as on chain.
+      const holder = "0x" + callData.slice(10 + 64 + 24, 10 + 128);
+      return { success: true, returnData: word(holder === resolvePropWallets()[0] ? FIXTURE_SHARE : 0n) };
+    }
     throw new Error(`mockChain: unexpected sub-call selector ${sel}`);
   };
   globalThis.fetch = (async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("geckoterminal.com") || u.includes("finance.yahoo.com")) {
       if (opts.failPrice) throw new Error("mockChain: forced price failure");
+      // One pool's reading and its daily candles (token-metrics' market leg).
+      if (u.includes("/ohlcv/day")) {
+        const candles = Array.from({ length: 30 }, (_, i) => [1_700_000_000 + i * 86_400, 1, 1, 1, 1, 1_000]);
+        return new Response(JSON.stringify({ data: { attributes: { ohlcv_list: candles } } }), { status: 200 });
+      }
+      if (u.includes("/networks/base/pools/")) {
+        return new Response(JSON.stringify({ data: { attributes: { reserve_in_usd: "168000.5", volume_usd: { h24: "2274.25" } } } }), { status: 200 });
+      }
       // token_price takes a comma-separated address list (token-prices.ts
       // micro-batches same-burst legs into one request) — answer every
       // requested address at the fixed fixture price.
@@ -192,8 +227,45 @@ test("token-metrics: stub source → fixture supply + stub price + computed mark
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000);
   expect(r.robotmoney.priceUsd).toBeCloseTo(0.00001, 12);
   expect(r.robotmoney.marketCapUsd).toBeCloseTo(Math.round(55_000_000_000 * 0.00001 * 100) / 100, 6);
-  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 40 }, { label: "Clanker", pct: 3 }]);
+  expect(r.feeSplit).toEqual([{ label: "Protocol", pct: 57 }, { label: "Bankr", pct: 36.1 }, { label: "Doppler", pct: 5 }, { label: "Ecosystem", pct: 1.9 }]);
+  // RM-156 legs serve their fixtures under stub sources, never a live read.
+  expect(r.protocolHoldings).toEqual({ robotmoney: 7_000_000_000, pctOfSupply: 12.73 });
+  expect(r.market).toEqual({ liquidityUsd: 150_000, volume24hUsd: 4_000 });
+  // 30 WETH × $1,600 + 8B × $0.00001; 30-day volume $120,000 × 1.2% × 57%.
+  expect(r.feeIncome).toEqual({ lifetimeWeth: 30, lifetimeRobotmoney: 8_000_000_000, lifetimeUsd: 128_000, last30DaysUsd: 820.8 });
   expect(r.stale).toBe(false);
+});
+
+test("token-metrics: LIVE fee income is the prop wallets' share of the locker's lifetime totals, valued at today's prices, in one eth_call", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "live";
+  const counter = mockChain({ totalSupply: 100_000_000_000n * 10n ** 18n });
+  // The prices and the pool come from the worker's reading (token-market.ts).
+  expect(await sampleTokenMarket()).toEqual({ price: "ok", weth: "ok", pool: "ok" });
+  const r = await getTokenMetrics();
+  // 57% of 100 WETH and of 10B ROBOTMONEY; every price is the mock's $0.50.
+  expect(r.feeIncome.lifetimeWeth).toBeCloseTo(57, 9);
+  expect(r.feeIncome.lifetimeRobotmoney).toBeCloseTo(5_700_000_000, 0);
+  expect(r.feeIncome.lifetimeUsd).toBeCloseTo(57 * 0.5 + 5_700_000_000 * 0.5, 2);
+  // 30 candles × $1,000 × 1.2% × 57%.
+  expect(r.feeIncome.last30DaysUsd).toBeCloseTo(30_000 * 0.012 * 0.57, 2);
+  expect(r.market).toEqual({ liquidityUsd: 168000.5, volume24hUsd: 2274.25 });
+  // Every prop wallet's balanceOf is the mock's 1e6 wei.
+  expect(r.protocolHoldings.robotmoney).toBeCloseTo((resolvePropWallets().length * 1_000_000) / 1e18, 24);
+  expect(counter.aggregateCalls).toBe(1);
+  expect(r.stale).toBe(false);
+});
+
+test("token-metrics: a locker read that does not answer degrades fee income and holdings to null with stale:true; supply and price stand", async () => {
+  process.env.BASE_RPC_SOURCE = "live";
+  process.env.PRICE_SOURCE = "stub";
+  mockChain({ totalSupply: 100_000_000_000n * 10n ** 18n, failFeeIncome: true });
+  const r = await getTokenMetrics();
+  expect(r.feeIncome).toEqual({ lifetimeWeth: null, lifetimeRobotmoney: null, lifetimeUsd: null, last30DaysUsd: null });
+  expect(r.protocolHoldings).toEqual({ robotmoney: null, pctOfSupply: null });
+  expect(r.robotmoney.totalSupply).toBeCloseTo(100_000_000_000, 0);
+  expect(r.robotmoney.priceUsd).toBeCloseTo(0.00001, 12);
+  expect(r.stale).toBe(true);
 });
 
 test("token-metrics: a LIVE supply read is decoded from the chain (callTotalSupply path executes, 18dp normalized)", async () => {
@@ -210,10 +282,17 @@ test("token-metrics: a failed live price leg degrades priceUsd + marketCap to nu
   process.env.BASE_RPC_SOURCE = "stub"; // supply from the fixture
   process.env.PRICE_SOURCE = "live"; // price leg goes live and is forced to fail
   mockChain({ failPrice: true });
+  // The worker's reads fail, so it has no reading to persist for any leg.
+  expect(await sampleTokenMarket()).toEqual({ price: "failed", weth: "failed", pool: "failed" });
   const r = await getTokenMetrics();
   expect(r.robotmoney.totalSupply).toBe(55_000_000_000); // supply still resolves
   expect(r.robotmoney.priceUsd).toBeNull();
   expect(r.robotmoney.marketCapUsd).toBeNull();
+  // The pool reads the same price host, so it degrades with it; fee income in
+  // tokens still stands (stub chain), its USD value does not.
+  expect(r.market).toEqual({ liquidityUsd: null, volume24hUsd: null });
+  expect(r.feeIncome.lifetimeWeth).toBe(30);
+  expect(r.feeIncome.lifetimeUsd).toBeNull();
   expect(r.stale).toBe(true);
 });
 
@@ -300,7 +379,7 @@ test("wallet-sleeves: ONE reverted sub-call degrades ONLY that holding to stale;
 test("wallet-sleeves: a THROWN batch (forced RPC failure) degrades every holding to value null + provenance 'stale' (never fabricated)", async () => {
   process.env.BASE_RPC_SOURCE = "stub";
   process.env.PRICE_SOURCE = "stub";
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   mockChain({ failCall: true });
   await sampleWalletSleeves({}).catch(() => {});
   const r = await getWalletSleeves();
@@ -320,9 +399,9 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
 
   const fresh = new Date(Date.now() - 60_000);
   const tooOld = new Date(Date.now() - 6 * 60_000);
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
-  await sql`
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES
       (current_date, 'WETH', 1, 2500, 2500, 'live', ${fresh}),
@@ -352,22 +431,22 @@ test("wallet-sleeves (#173): a failed live price read falls back to a recent per
     expect(bankr.stale).toBe(true);
     expect(r.stale).toBe(true);
   } finally {
-    await sql`DELETE FROM wallet_balance_samples`;
-    await sql`DELETE FROM wallet_sleeve_samples`;
+    await fixtureDb`DELETE FROM wallet_balance_samples`;
+    await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   }
 });
 
 test("wallet-sleeves seam: amount and price readers inject independently and persisted-price provenance reaches the unchanged DTO", async () => {
   process.env.BASE_RPC_SOURCE = "live";
   process.env.PRICE_SOURCE = "live";
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const sampledAt = new Date();
   const sampleDate = sampledAt.toISOString().slice(0, 10);
   const propWallets = resolvePropWallets();
 
   // Seed sample rows into Postgres
   for (const w of propWallets) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES
         (${sampleDate}, ${w.toLowerCase()}, 'ROBOTMONEY', 2, 3, 6, 'stale', ${sampledAt}),
@@ -387,7 +466,7 @@ test("wallet-sleeves seam: amount and price readers inject independently and per
 
   const providerHolding = r.wallets.find((wallet) => wallet.type === "primary")!.holdings.find((holding) => holding.symbol === "USDC")!;
   expect(providerHolding).toEqual({ symbol: "USDC", amount: 2, priceUsd: 4, valueUsd: 8, provenance: "live", observedAt: sampledAt.toISOString() });
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────
@@ -407,7 +486,7 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
   // Genuinely exercise the row-absent branch on the shared pool, then restore the
   // seeded row so the suite's DB state is unchanged.
   try {
-    await sql`DELETE FROM allocation_framework WHERE id = 1`;
+    await fixtureDb`DELETE FROM allocation_framework WHERE id = 1`;
     resetCaches();
     const r = await getAllocation();
     expect(r.managed).toBe(true);
@@ -415,10 +494,10 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
     expect(r.strategy.find((s) => s.label === "Conservative DeFi Yield")!.targetPct).toBe(95);
   } finally {
     // Restore the swarm seed row (id=1) exactly as db/seed.ts wrote it.
-    await sql`
+    await fixtureDb`
       INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
       VALUES (1, ${ALLOCATION_FRAMEWORK_SEED.asof}, ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
-              ${sql.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
+              ${fixtureDb.json(jsonValue(ALLOCATION_FRAMEWORK_SEED.buckets))})
       ON CONFLICT (id) DO NOTHING
     `;
     resetCaches();
@@ -451,7 +530,7 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     const r1 = await indexBuybacks();
     const c1 = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
     // from=FLOOR; BUYBACK_MAX_CHUNKS windows of BUYBACK_LOG_CHUNK blocks.
@@ -465,7 +544,7 @@ test("buyback indexer advances a persisted scan cursor across empty windows and 
     expect(Number(c2[0]!.b)).toBe(FLOOR + RUN_SPAN * 2 - 1);
   } finally {
     for (const k of ["BASE_RPC_SOURCE"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -516,7 +595,7 @@ test("buyback indexer: a fresh database scans from the committed constant, never
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`; // fresh DB: no cursor, and every seed row has block_number NULL
+    await fixtureDb`DELETE FROM buyback_scan_state`; // fresh DB: no cursor, and every seed row has block_number NULL
     const r = await indexBuybacks();
     // The RPC-visible window, not just the return value: the very first
     // eth_getLogs must open at the buyback era, not at genesis (and not at the
@@ -526,7 +605,7 @@ test("buyback indexer: a fresh database scans from the committed constant, never
     expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + 10_000);
   } finally {
     for (const k of ["BASE_RPC_SOURCE", "BUYBACK_FROM_BLOCK"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -557,7 +636,7 @@ test("issue #641: the buyback scan bounds are committed constants — the retire
     throw new Error(`unexpected ${body.method}`);
   }) as unknown as typeof fetch;
   try {
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     const r = await indexBuybacks();
     expect(r.scannedToBlock).toBe(BUYBACK_FROM_BLOCK + RUN_SPAN - 1);
     // Not the 1-block window the planted env would have produced.
@@ -567,7 +646,7 @@ test("issue #641: the buyback scan bounds are committed constants — the retire
     expect([BUYBACK_LOG_CHUNK, BUYBACK_MAX_CHUNKS]).toEqual([9000, 25]);
   } finally {
     for (const k of ["BUYBACK_LOG_CHUNK", "BUYBACK_MAX_CHUNKS"]) delete process.env[k];
-    await sql`DELETE FROM buyback_scan_state`;
+    await fixtureDb`DELETE FROM buyback_scan_state`;
     _resetBuybackCacheForTests();
   }
 });
@@ -674,8 +753,8 @@ async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable" | "other-side") 
   // the mock window is wide enough that the first 9000-block window contains
   // HISTORIC_BLOCK, so no env override is needed.
   const calls = mockHistoricBuyback(ohlcv);
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
-  await sql`DELETE FROM buyback_scan_state`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await fixtureDb`DELETE FROM buyback_scan_state`;
   const result = await indexBuybacks();
   const rows = await sql<{ occurred_on: Date; weth_spent: string; value_usd: string | null }[]>`
     SELECT occurred_on, weth_spent::text, value_usd::text FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}
@@ -685,8 +764,8 @@ async function indexOneHistoricSwap(ohlcv: "ok" | "unavailable" | "other-side") 
 
 async function cleanupHistoricSwap() {
   delete process.env.BASE_RPC_SOURCE;
-  await sql`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
-  await sql`DELETE FROM buyback_scan_state`;
+  await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ${SWAP_TX}`;
+  await fixtureDb`DELETE FROM buyback_scan_state`;
   _resetBuybackCacheForTests();
   _resetTokenPriceCacheForTests();
 }
@@ -745,7 +824,7 @@ test("buyback indexer: a candle for the OTHER side of the pool is REFUSED — th
 });
 
 test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request path when readers expect.unreachable()", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const sampledAt = new Date();
   const sampleDate = sampledAt.toISOString().slice(0, 10);
   const wallets = resolvePropWallets();
@@ -753,7 +832,7 @@ test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request 
 
   for (const w of wallets) {
     for (const s of symbols) {
-      await sql`
+      await fixtureDb`
         INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
         VALUES (${sampleDate}, ${w.toLowerCase()}, ${s}, 10, 2, 20, 'live', ${sampledAt})
         ON CONFLICT (sample_date, wallet_address, symbol) DO NOTHING
@@ -783,16 +862,16 @@ test("wallet-sleeves: getWalletSleeves performs ZERO RPC/price calls on request 
       expect(h.provenance).toBe("live");
     }
   }
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 test("wallet-sleeves: served provenance and observedAt pass-through persisted row's own value exactly", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const fixedSampledAt = new Date("2026-07-25T10:00:00.000Z");
   const sampleDate = "2026-07-25";
   const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
 
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${sampleDate}, ${wallet.toLowerCase()}, 'USDC', 100, 1, 100, 'stale', ${fixedSampledAt})
   `;
@@ -805,11 +884,11 @@ test("wallet-sleeves: served provenance and observedAt pass-through persisted ro
   expect(usdc.provenance).toBe("stale");
   expect(usdc.observedAt).toBe(fixedSampledAt.toISOString());
 
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });
 
 test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, budget+1s -> stale true)", async () => {
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const BUDGET_MS = 5 * 60_000;
   const wallet = "0xfbc2cc30f0674ed0244ee1f0ba7864423230c9d6";
   const symbols = ["USDC", "ROBOTMONEY", "WETH", "ETH", "BNKR"];
@@ -818,7 +897,7 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   const freshTime = new Date(Date.now() - (BUDGET_MS - 1000));
   const dateFresh = freshTime.toISOString().slice(0, 10);
   for (const s of symbols) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES (${dateFresh}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${freshTime})
     `;
@@ -829,11 +908,11 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   expect(bankrFresh.stale).toBe(false);
 
   // 2) Budget + 1s (stale)
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   const staleTime = new Date(Date.now() - (BUDGET_MS + 1000));
   const dateStale = staleTime.toISOString().slice(0, 10);
   for (const s of symbols) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_sleeve_samples (sample_date, wallet_address, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES (${dateStale}, ${wallet.toLowerCase()}, ${s}, 10, 1, 10, 'live', ${staleTime})
     `;
@@ -843,5 +922,5 @@ test("wallet-sleeves: freshness budget boundary pair (budget-1s -> stale false, 
   const bankrStale = rStale.wallets.find((w) => w.name === "Bankr")!;
   expect(bankrStale.stale).toBe(true);
 
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
 });

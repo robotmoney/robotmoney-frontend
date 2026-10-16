@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import {
   resolvePropWallets,
   resolveTrackedAssets,
@@ -90,8 +91,8 @@ function setBaseEnv(extra: Record<string, string> = {}) {
 }
 
 beforeEach(async () => {
-  await sql`DELETE FROM wallet_balance_samples`;
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_balance_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   _resetWalletBalancesCacheForTests();
   _resetWalletSleevesCacheForTests();
   _resetRpcConcurrencyForTests();
@@ -111,7 +112,7 @@ afterEach(async () => {
   _resetWalletSleevesCacheForTests();
   _resetRpcConcurrencyForTests();
   _resetTokenPriceCacheForTests();
-  await sql`DELETE FROM wallet_sleeve_samples`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples`;
   for (const k of ENV_KEYS) delete process.env[k];
 });
 
@@ -372,7 +373,7 @@ test("issue #862: only the config-valued SP500 leg carries sizeVerifiedAt — ev
 test("AC3: a forced single-leg failure degrades that holding to its last-persisted sample marked 'stale'; other legs stay live", async () => {
   setBaseEnv();
   // last-persisted WETH sample the degrade path should fall back to.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance)
     VALUES ('2026-06-25', 'WETH', 15.4, 1550, 23870, 'live')
   `;
@@ -441,7 +442,7 @@ test("AC3-retry: a transient 429 on the whole aggregate3 batch is retried and AL
 test("AC3-retry negative control: the SAME transient 429 with BASE_RPC_MAX_RETRIES=0 makes the batch throw so EVERY chain leg degrades to 'stale' — proving retry (not something else) produces the live outcome", async () => {
   setBaseEnv({ BASE_RPC_RETRY_BASE_MS: "1", BASE_RPC_MAX_RETRIES: "0" });
   // last-persisted WETH sample the degrade path falls back to (mirrors AC3).
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance)
     VALUES ('2026-06-25', 'WETH', 15.4, 1550, 23870, 'live')
   `;
@@ -677,7 +678,7 @@ test("AC8 (issue #118): the request path serves PERSISTED samples and makes ZERO
     ["BNKR", 20000, 0.0005, 10, "seed"],
   ];
   for (const [symbol, amount, price, value, prov] of rows) {
-    await sql`
+    await fixtureDb`
       INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
       VALUES (${today}, ${symbol}, ${amount}, ${price}, ${value}, ${prov}, now())
     `;
@@ -731,7 +732,7 @@ test("AC8b (issue #118): the request path reflects the LATEST scheduled sample p
   setBaseEnv();
   // An OLD live sample and a NEWER stale degrade for the same symbol: the request
   // path must serve the NEWEST (the last thing the schedule persisted).
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES ('2026-07-01', 'WETH', 10, 1500, 15000, 'live', '2026-07-01T00:10:00Z'),
            ('2026-07-13', 'WETH', 10, 1550, 15500, 'stale', '2026-07-13T00:10:00Z')
@@ -752,7 +753,7 @@ test("AC8b (issue #118): the request path reflects the LATEST scheduled sample p
 test("issue #927 regression: fetchPersistedWalletBalances derives priceUsd from value_usd/amount when the persisted row's own price_usd is NULL", async () => {
   setBaseEnv();
   const today = new Date().toISOString().slice(0, 10);
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${today}, 'WETH', 10, NULL, 17000, 'live', now())
   `;
@@ -983,7 +984,7 @@ test("issue #294 regression: fetchWalletBalances degrade path is unchanged — a
   // ever became valueLeg's default again, this test would catch it: the
   // buggy path would return the FRESH chain amount (20000) priced at the
   // persisted price, not this persisted row's own amount/value.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES ('2026-06-25', 'BNKR', 15000, 0.0004, 6, 'live', now())
   `;
@@ -1021,7 +1022,7 @@ test("issue #927 regression: lastPersistedHolding() derives priceUsd from value_
 
   // A recent persisted BNKR row shaped like a post-#927 sampleWalletBalances
   // write: price_usd NULL, value_usd/amount both present and non-zero.
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES ('2026-06-25', 'BNKR', 15000, NULL, 6, 'live', now())
   `;
@@ -1177,7 +1178,7 @@ test("#642: a row persisted BEFORE migration 0032 reads as absent, never as fals
   // nobody measured that way.
   setBaseEnv();
   const today = new Date().toISOString().slice(0, 10);
-  await sql`
+  await fixtureDb`
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${today}, 'ZYFAI-SS1', 4538, 1, 4538, 'live', now())
   `; // strategy_nav_idle_only left unset → NULL, exactly like a pre-0032 row

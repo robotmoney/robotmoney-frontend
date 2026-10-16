@@ -1,7 +1,7 @@
 // Unit tests for the pure half of `--db smoke-twin` (scripts/lib/smoke-twin.ts).
 //
 // The impure half — gpg decrypt, pg_restore, docker run — is exercised for real
-// by a smoke-twin boot and by smoke:smoke-twin --once; there is no honest way to fake an
+// by a smoke-twin boot and by smoke:twin:once; there is no honest way to fake an
 // encrypted production dump, and the same reasoning is already written down in
 // backend/tests/restore-container.test.ts's header.
 //

@@ -579,6 +579,18 @@ async function backoffOrGiveUp(waitMs: number, deadline: number, method: string,
   await sleep(waitMs);
 }
 
+/** A non-2xx answer the transport did not retry (or ran out of retries for). The message is the one callers have always seen. */
+export class BaseRpcHttpError extends Error {
+  // `detail` is the start of the provider's own answer, kept because a status
+  // alone hides what a caller can act on: mainnet.base.org answers an
+  // over-wide eth_getLogs with HTTP 413 and "eth_getLogs is limited to a 500
+  // range" (RM-156), which buyback-logs.ts reads to size its window. The
+  // message stays the status alone, as callers and tests match it.
+  constructor(readonly status: number, readonly detail: string = "") {
+    super(`Base RPC HTTP ${status}`);
+    this.name = "BaseRpcHttpError";
+  }
+}
 
 // The SINGLE JSON-RPC transport for every Base read in the app. Throws on
 // transport failure, a non-2xx HTTP status (after exhausting bounded retries on
@@ -667,8 +679,10 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
         continue;
       }
       // Exhausted / non-transient: THROW so the caller degrades to stale. Never
-      // fabricate, never report live off a dead endpoint.
-      throw new Error(`Base RPC HTTP ${res.status}`);
+      // fabricate, never report live off a dead endpoint. The answer's first
+      // 300 characters ride along as `detail`; a body that cannot be read is "".
+      const detail = await res.text().then((t) => t.slice(0, 300), () => "");
+      throw new BaseRpcHttpError(res.status, detail);
     }
   }
 }
@@ -1065,10 +1079,48 @@ export async function callDecimals(tokenAddress: string, opts: RpcCallOptions): 
 // sub-call that reverts comes back as {success:false} (allowFailure), NOT a
 // throw, so the caller degrades just that leg. This is the single-eth_call path
 // wallet-balances uses to avoid the 429 storm.
+//
+// CHUNKING (issue 1373). A batch larger than MULTICALL3_MAX_SUBCALLS_PER_POST
+// goes out as several aggregate3 POSTs, run one after another through the
+// shared rate bucket. The provider meters POSTs, not sub-calls (markets §3.4),
+// so the projects wallet refresh (~785 getEthBalance reads) costs 8 POSTs
+// instead of one per wallet. A chunk whose POST throws comes back as
+// {success:false} for ITS sub-calls only, so the caller degrades just those
+// legs. Only when every chunk throws does the whole call throw, which keeps the
+// "transport is down" signal every caller already handles. A batch that fits
+// in one chunk is the same single POST, with the same throw, as before.
+export const MULTICALL3_MAX_SUBCALLS_PER_POST = 100;
+
 export async function multicall3Aggregate3(calls: Call3[], opts: RpcCallOptions): Promise<Aggregate3Result[]> {
   if (calls.length === 0) return [];
-  const result = await ethCall(MULTICALL3_ADDRESS, encodeAggregate3(calls), opts);
-  return decodeAggregate3(result);
+  if (calls.length <= MULTICALL3_MAX_SUBCALLS_PER_POST) {
+    return decodeAggregate3(await ethCall(MULTICALL3_ADDRESS, encodeAggregate3(calls), opts));
+  }
+  const chunks = Math.ceil(calls.length / MULTICALL3_MAX_SUBCALLS_PER_POST);
+  const out: Aggregate3Result[] = [];
+  let firstError: unknown;
+  let anyChunkRead = false;
+  for (let c = 0; c < chunks; c++) {
+    const chunk = calls.slice(c * MULTICALL3_MAX_SUBCALLS_PER_POST, (c + 1) * MULTICALL3_MAX_SUBCALLS_PER_POST);
+    try {
+      const results = decodeAggregate3(await ethCall(MULTICALL3_ADDRESS, encodeAggregate3(chunk), opts));
+      // A short or long answer cannot be lined up with its sub-calls.
+      if (results.length !== chunk.length) {
+        throw new Error(`Base RPC: aggregate3 returned ${results.length} results for ${chunk.length} sub-calls`);
+      }
+      out.push(...results);
+      anyChunkRead = true;
+    } catch (err) {
+      firstError ??= err;
+      console.error(
+        `Base RPC: aggregate3 chunk ${c + 1} of ${chunks} (${chunk.length} sub-calls) failed, marking its sub-calls failed:`,
+        err instanceof Error ? err.message : String(err),
+      );
+      for (let i = 0; i < chunk.length; i++) out.push({ success: false, returnData: "0x" });
+    }
+  }
+  if (!anyChunkRead) throw firstError;
+  return out;
 }
 
 // A single `eth_getBalance` (native ETH balance in wei). Separate JSON-RPC

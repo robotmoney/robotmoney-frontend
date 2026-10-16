@@ -3,6 +3,7 @@
 // run-ledger-store.ts) — the updater/producer goes through the HTTP
 // boundary.
 import { sql, type DbHandle } from "../../db/client.ts";
+import { on, registerQuery } from "../../db/registry.ts";
 import {
   buildOutputArtifact,
   buildReportArtifact,
@@ -41,6 +42,87 @@ export class TerminalRunPackageConflictError extends Error {
   }
 }
 
+/** The only entry module that reaches this store: the analytics ingestion route. */
+const ANALYTICS_ROUTE = "src/api/routes/analytics";
+
+const insertOutputSnapshot = registerQuery({
+  role: "rm_app",
+  object: "analytics_output_snapshots",
+  // SELECT as well: RETURNING reads the columns of the row it wrote.
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/store/output-snapshot-store:insertOutputSnapshots",
+  purpose: "Freeze one immutable output artifact of a terminal run package (issue #978).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
+      SELECT $1::bigint, $2, $3, $4 WHERE false
+      RETURNING id, byte_length`,
+    params: [1, "regime_snapshots", "probe", "probe"],
+  },
+});
+
+const insertReport = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["INSERT", "SELECT"],
+  site: "src/analytics/store/output-snapshot-store:insertReportSnapshot",
+  purpose: "Freeze the exact report bytes of a succeeded terminal run package (issue #978).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)
+    SELECT $1::bigint, $2::date, $3, $4 WHERE false
+    RETURNING id`,
+    params: [1, "2000-01-01", "probe", "probe"],
+  },
+});
+
+const readOutputsByRun = registerQuery({
+  role: "rm_app",
+  object: "analytics_output_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/output-snapshot-store:findPackageByRun.outputs",
+  purpose: "Read a run's frozen output artifacts, the idempotency check of a terminal package submission.",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: "SELECT id, artifact_kind, checksum, byte_length FROM analytics_output_snapshots WHERE run_id = $1::bigint",
+    params: [1],
+  },
+});
+
+const readReportByRun = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/output-snapshot-store:findPackageByRun.report",
+  purpose: "Read a run's frozen report snapshot id, the second half of the idempotency check.",
+  callers: [ANALYTICS_ROUTE],
+  probe: { statement: "SELECT id FROM analytics_report_snapshots WHERE run_id = $1::bigint", params: [1] },
+});
+
+const readReportChecksum = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/output-snapshot-store:assertReplayMatches",
+  purpose: "Read a stored report's checksum, to compare a replayed submission against it.",
+  callers: [ANALYTICS_ROUTE],
+  probe: { statement: "SELECT checksum FROM analytics_report_snapshots WHERE id = $1::bigint", params: [1] },
+});
+
+const readReportSnapshot = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/output-snapshot-store:loadReportSnapshot",
+  purpose: "Retrieve a report snapshot by its immutable id, byte-exact (issue #978 AC3).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id, run_id, asof::text AS asof, report_bytes, checksum, byte_length
+    FROM analytics_report_snapshots WHERE id = $1::bigint`,
+    params: [1],
+  },
+});
+
 export interface OutputSnapshotRecord {
   id: string;
   artifactKind: OutputArtifactKind;
@@ -71,7 +153,7 @@ export async function insertOutputSnapshots(
   const out: OutputSnapshotRecord[] = [];
   for (const [kind, rows] of kinds) {
     const artifact = buildOutputArtifact(kind, rows);
-    const [row] = await tx`
+    const [row] = await on(tx, insertOutputSnapshot)`
       INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
       VALUES (${input.runId}::bigint, ${kind}, ${Buffer.from(artifact.bytes)}, ${artifact.checksum})
       RETURNING id, byte_length`;
@@ -85,7 +167,7 @@ export async function insertOutputSnapshots(
 // terminal package).
 export async function insertReportSnapshot(input: TerminalRunPackageInput, tx: DbHandle): Promise<string> {
   const artifact = buildReportArtifact(input.reportBytes ?? new Uint8Array());
-  const [row] = await tx`
+  const [row] = await on(tx, insertReport)`
     INSERT INTO analytics_report_snapshots (run_id, asof, report_bytes, checksum)
     VALUES (${input.runId}::bigint, ${input.asof}::date, ${Buffer.from(artifact.bytes)}, ${artifact.checksum})
     RETURNING id`;
@@ -116,11 +198,13 @@ export interface TerminalRunPackageResult {
 // both for the idempotent-replay check below and by the API's retrieval
 // route.
 export async function findPackageByRun(runId: string, db: DbHandle = sql): Promise<TerminalRunPackageResult | null> {
-  const outputRows = (await db`
+  const outputRows = await on(db, readOutputsByRun)<
+    { id: string; artifact_kind: OutputArtifactKind; checksum: string; byte_length: string }
+  >`
     SELECT id, artifact_kind, checksum, byte_length FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint
-  `) as unknown as { id: string; artifact_kind: OutputArtifactKind; checksum: string; byte_length: string }[];
+  `;
   if (outputRows.length === 0) return null;
-  const [report] = (await db`SELECT id FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`) as unknown as { id: string }[];
+  const [report] = await on(db, readReportByRun)<{ id: string }>`SELECT id FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
   return {
     outputSnapshots: outputRows.map((r) => ({
       id: String(r.id),
@@ -178,7 +262,7 @@ async function assertReplayMatches(
     if (!stored.reportSnapshotId) {
       reportMatches = false;
     } else {
-      const [row] = await db`SELECT checksum FROM analytics_report_snapshots WHERE id = ${stored.reportSnapshotId}::bigint`;
+      const [row] = await on(db, readReportChecksum)<{ checksum: string }>`SELECT checksum FROM analytics_report_snapshots WHERE id = ${stored.reportSnapshotId}::bigint`;
       reportMatches = row?.checksum === expectedReportChecksum;
     }
   } else {
@@ -242,7 +326,7 @@ export interface ReportSnapshot {
 
 // Retrieval by immutable ID (issue #978 AC3): byte-exact, never re-derived.
 export async function loadReportSnapshot(id: string, db: DbHandle = sql): Promise<ReportSnapshot | null> {
-  const [row] = await db`
+  const [row] = await on(db, readReportSnapshot)<Record<string, any>>`
     SELECT id, run_id, asof::text AS asof, report_bytes, checksum, byte_length
     FROM analytics_report_snapshots WHERE id = ${id}::bigint`;
   if (!row) return null;
@@ -254,16 +338,4 @@ export async function loadReportSnapshot(id: string, db: DbHandle = sql): Promis
     checksum: row.checksum,
     byteLength: Number(row.byte_length),
   };
-}
-
-export async function loadOutputSnapshot(
-  runId: string,
-  kind: OutputArtifactKind,
-  db: DbHandle = sql,
-): Promise<{ bytes: Uint8Array; checksum: string } | null> {
-  const [row] = await db`
-    SELECT payload_bytes, checksum FROM analytics_output_snapshots
-    WHERE run_id = ${runId}::bigint AND artifact_kind = ${kind}`;
-  if (!row) return null;
-  return { bytes: new Uint8Array(row.payload_bytes as Buffer), checksum: row.checksum };
 }

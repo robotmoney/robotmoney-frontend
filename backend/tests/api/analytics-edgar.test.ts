@@ -52,9 +52,9 @@
 //   AC9 — the refresh's planned/new/revised/fetched/missing/rejected metrics
 //         are logged accurately, `tier=` is on the line (issue #509), and
 //         the bearer credential never appears in any log line.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../../src/db/client.ts";
-import { config } from "../../src/config.ts";
+import { fixtureDb } from "../support/fixture-db.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { runAnalytics } from "../../src/analytics/index.ts";
 import { liveDataSource } from "../../src/analytics/access/data-source.ts";
@@ -63,8 +63,17 @@ import { loadEdgarSeed } from "../../src/analytics/extract/edgar-seed.ts";
 import { enumerateMonths } from "../../src/analytics/extract/edgar.ts";
 import { EDGAR_FLOOR_START } from "../../src/analytics/extract/edgar-fetch-plan.ts";
 import { selectEdgarRefreshTier } from "../../src/analytics/edgar-incremental-refresh.ts";
+import { provisionAnalyticsToken, writeTokenFile } from "../support/automation-auth.ts";
 
-const TOKEN = "tok_edgar_e2e_secret";
+// analytics-producer's store-issued token and the file it is delivered in
+// (smoke spec §3, D52 (1)): the client reads ANALYTICS_TOKEN_FILE and nothing
+// else, and the API validates the bearer against the store.
+let TOKEN = "";
+let TOKEN_FILE = "";
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  TOKEN_FILE = writeTokenFile(TOKEN);
+});
 
 // The first Sunday (UTC — the periodic full-sweep weekday) on or after
 // `from` — used to pick an `asof` for this Tier 2 (full-sweep) suite
@@ -131,15 +140,14 @@ function installFetchDouble(localBaseUrl: string, edgarCountFor: (monthStart: st
 test(
   "live EDGAR refresh (R6 full re-crawl): seeding the full committed floor, a later refresh requests EVERY month in range over the REAL authenticated API + DB; a further run at the same as-of requests that SAME full range again",
   async () => {
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     const requests: { method: string; path: string; auth: string | null }[] = [];
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });
@@ -150,27 +158,25 @@ test(
     });
     let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
     try {
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "live"; // exercise the REAL liveDataSource
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       // ── ARRANGE: seed raw_indicator_history with the FULL committed EDGAR
       // seed (issue #108's artifact) — the same real, checked-in floor
       // production boots from.
       const { history, manifest } = await loadEdgarSeed();
       const mnaRows = history[manifest.indicator]!;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       for (const row of mnaRows) {
-        await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
+        await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
       }
       // A "later" refresh relative to endMonth, pinned to the periodic
       // full-sweep weekday so this suite deterministically exercises Tier 2
       // (see nextFullSweepDate above) rather than depending on which
       // weekday the seed's own manifest.asOf happens to fall on.
       const asof = nextFullSweepDate(manifest.asOf);
-      await sql`DELETE FROM research_signals WHERE date = ${asof}`;
+      await fixtureDb`DELETE FROM research_signals WHERE date = ${asof}`;
 
       // EDGAR answers each already-seeded month with the value the committed
       // artifact holds, and the one genuinely-new month with a fresh count.
@@ -255,13 +261,11 @@ test(
     } finally {
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
 
     async function runAnalyticsWithLogger(asOfDate: string, logger: { log: (m: string) => void; warn: (m: string) => void; error: (m: string) => void }) {
@@ -299,15 +303,14 @@ test(
 test(
   "live EDGAR refresh (Tier 1 incremental, non-full-sweep asof): the SAME seeded floor drives ONLY missing+revision-window requests over the REAL authenticated API + DB — zero requests for historical months, on this run or a repeat run",
   async () => {
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     const requests: { method: string; path: string; auth: string | null }[] = [];
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         requests.push({ method: req.method, path: url.pathname, auth: req.headers.get("Authorization") });
@@ -319,21 +322,19 @@ test(
     let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
     const capturedLogs: string[] = [];
     try {
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "live";
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       const { history, manifest } = await loadEdgarSeed();
       const mnaRows = history[manifest.indicator]!;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
       for (const row of mnaRows) {
-        await sql`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
+        await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value) VALUES (${row.date}, 'MNA', ${row.value})`;
       }
       const asof = nextIncrementalDate(manifest.asOf);
       expect(selectEdgarRefreshTier(asof)).toBe("incremental"); // the tier under test, asserted not assumed
-      await sql`DELETE FROM research_signals WHERE date = ${asof}`;
+      await fixtureDb`DELETE FROM research_signals WHERE date = ${asof}`;
 
       // ── ACT 1: the daily refresh over the real committed floor.
       fetchDouble = installFetchDouble(process.env.ANALYTICS_API_URL, () => 5);
@@ -398,13 +399,11 @@ test(
     } finally {
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   // Bounded by construction (a handful of 250ms-paced requests per run) —

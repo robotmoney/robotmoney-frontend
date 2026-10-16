@@ -24,12 +24,12 @@ describe("swarm session diagnostic artifacts", () => {
       sessionId: "42",
       memberId: "athena",
       runId: "athena-s42-test",
-      model: "opencode/deepseek-v4-flash",
+      model: "opencode/deepseek-v4.1-flash",
       timeoutMs: 300_000,
       redactions: [{ value: secret, placeholder: "<OPENCODE_API_KEY redacted>" }],
     });
     const telemetry = createOnboardingTelemetry(
-      { composeProject: "rm_smoke_stack_x", runId: "athena-s42-test", model: "opencode/deepseek-v4-flash" },
+      { composeProject: "rm_smoke_stack_x", runId: "athena-s42-test", model: "opencode/deepseek-v4.1-flash" },
       writer.sink,
       [{ value: secret, placeholder: "<OPENCODE_API_KEY redacted>" }],
     );
@@ -50,7 +50,7 @@ describe("swarm session diagnostic artifacts", () => {
     expect(events).toContain('"truncated":true');
     for (const line of events.trim().split("\n")) expect(() => JSON.parse(line)).not.toThrow();
     const manifest = JSON.parse(readFileSync(join(writer.directory, "manifest.json"), "utf8"));
-    expect(manifest.model).toBe("opencode/deepseek-v4-flash");
+    expect(manifest.model).toBe("opencode/deepseek-v4.1-flash");
     expect(writer.directory).toContain("/.agents/swarm-sessions/rm_smoke_stack_x/42/athena/athena-s42-test");
   });
 
@@ -64,7 +64,7 @@ describe("swarm session diagnostic artifacts", () => {
       sessionId: ".",
       memberId: "../../outside",
       runId: "a/../../../escape",
-      model: "opencode/deepseek-v4-flash",
+      model: "opencode/deepseek-v4.1-flash",
       timeoutMs: 1,
     });
     expect(writer.directory.startsWith(`${artifactRoot}${sep}`)).toBe(true);

@@ -56,10 +56,14 @@ export function registerResearchView(Alpine) {
     },
     drawSeriesCharts() {
       if (!this.payload?.indicators || !window.Chart || !this.$root) return;
+      // Kept so destroy() can release them: a series chart left behind holds
+      // its canvas and listeners after the reader navigates away.
+      this._seriesCharts?.forEach((c) => c.destroy());
+      this._seriesCharts = [];
       for (const canvas of this.$root.querySelectorAll("canvas[data-series]")) {
         const pts = this.seriesPoints(canvas.getAttribute("data-series"));
         if (pts.length < 2) continue;
-        new window.Chart(canvas, {
+        this._seriesCharts.push(new window.Chart(canvas, {
           type: "line",
           data: {
             labels: pts.map((p) => p.date),
@@ -70,7 +74,7 @@ export function registerResearchView(Alpine) {
             plugins: { legend: { display: false } },
             scales: { x: { display: false }, y: monoAxis({ ticks: { maxTicksLimit: 3 } }) },
           },
-        });
+        }));
       }
     },
     drawChart() {
@@ -92,7 +96,10 @@ export function registerResearchView(Alpine) {
         },
       });
     },
-    destroy() { this._chart?.destroy(); this._chart = null; },
+    destroy() {
+      this._chart?.destroy(); this._chart = null;
+      this._seriesCharts?.forEach((c) => c.destroy()); this._seriesCharts = [];
+    },
     pct(x) { return x == null ? "—" : Math.round(x * 100) + "%"; },
     readClass(read) {
       const r = String(read || "");

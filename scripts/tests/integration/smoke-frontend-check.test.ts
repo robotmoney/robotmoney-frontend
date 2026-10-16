@@ -1,6 +1,6 @@
 // Self-test for the "smoke readiness" gate (issue #58). scripts/smoke-frontend-check.ts
 // is the core-surface-missing detector that the required `e2e` workflow runs against
-// the LIVE smoke boot (see .github/workflows/e2e.yml and docs/architecture.md, which name
+// the LIVE smoke boot (see .github/workflows/e2e-web.yml and docs/architecture.md, which name
 // this the "smoke readiness" gate; issue #147 removed DEMO_HERMETIC and the hermetic
 // path entirely, so there is only one supported smoke mode left). Nothing else proves
 // the guard's loud-failure path actually fires when a core surface breaks — a change
@@ -46,7 +46,7 @@ function walletPayload(provenance: "live" | "stub" = "live", legOverrides: Recor
 // the reported incident produced: a proxy or static fallback served the SPA
 // shell with HTTP 200 and text/html, so a consumer that only checks the status
 // code sails past it and then fails on parse.
-type RegimeAnswer = "ok" | "spa-shell";
+type RegimeAnswer = "ok" | "spa-shell" | "empty" | "half-empty";
 
 function regimePayload() {
   return {
@@ -62,7 +62,7 @@ function startStubBackend(
   regime: RegimeAnswer = "ok",
 ) {
   return Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === ROUTES.swarm.sessions) {
@@ -77,6 +77,8 @@ function startStubBackend(
             headers: { "Content-Type": "text/html; charset=utf-8" },
           });
         }
+        if (regime === "empty") return Response.json({ latest: null, history: [], staleness: null });
+        if (regime === "half-empty") return Response.json({ latest: null, history: [{ date: "2026-09-10", composite: 0.41, regime: "neutral" }], staleness: null });
         return Response.json(regimePayload());
       }
       const rel = url.pathname === "/" ? "/index.html" : url.pathname;
@@ -132,6 +134,26 @@ describe("scripts/smoke-frontend-check.ts (smoke readiness gate self-test)", () 
       expect(exitCode).not.toBe(0);
       expect(stdout).toContain(ROUTES.dashboards.regimeSnapshots);
       expect(stdout).toContain("text/html");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  // A fresh boot writes no regime snapshot (the producer's schedule does), so a
+  // well-formed empty answer passes. A latest-less answer that still has history does not.
+  test("exits 0 when the regime snapshot is well-formed but empty (no producer run yet)", async () => {
+    const backend = startStubBackend({}, walletPayload("live"), "empty");
+    try {
+      expect((await runCheck(backend)).exitCode).toBe(0);
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  test("exits non-zero when the regime snapshot has history but no latest row", async () => {
+    const backend = startStubBackend({}, walletPayload("live"), "half-empty");
+    try {
+      expect((await runCheck(backend)).exitCode).not.toBe(0);
     } finally {
       backend.stop(true);
     }
@@ -199,6 +221,28 @@ describe("wallet-balances provenance (issue #134)", () => {
       }
       expect(exitCode).toBe(0);
       expect(stdout).toContain("degraded legs (allowed, non-live): ZYFAI-SS1=stale, SP500=seed");
+    } finally {
+      backend.stop(true);
+    }
+  }, 20_000);
+
+  // A same-day smoke-twin rehearsal restores job_schedules with a next_run_at
+  // already due by boot time, so the first real cron tick classifies as a
+  // same-bucket catch-up (worker/handlers/slot.ts) and every leg gets relabelled
+  // 'backfilled' (worker/handlers/wallet.ts:63) even though the read itself was
+  // live. This is still a genuine live chain/price read (wallet-valuation.ts:57),
+  // not a fabricated value, so it must be an allowed degrade like 'stale'/'seed'
+  // rather than failing every same-day rehearsal.
+  test("'backfilled' legs are allowed (same-day rehearsal catch-up relabels a live read)", async () => {
+    const backend = startStubBackend({}, walletPayload("live", { "ZYFAI-SS1": "backfilled" }));
+    try {
+      const { exitCode, stdout, stderr } = await runCheck(backend);
+      if (exitCode !== 0) {
+        console.error(stdout);
+        console.error(stderr);
+      }
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("degraded legs (allowed, non-live): ZYFAI-SS1=backfilled");
     } finally {
       backend.stop(true);
     }

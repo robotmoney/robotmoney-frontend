@@ -8,12 +8,13 @@
 //   - the environment handed to a compose child is BUILT, not inherited, so an
 //     ambient provider key or an operator's own admin token can never reach a
 //     container.
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  assertFullStackProducerCredential,
+  assertContainerTokenFiles,
   buildArgs,
   buildComposeEnv,
   buildServicesFor,
@@ -25,17 +26,17 @@ import {
   DOCKER_CLIENT_ENV_ALLOWLIST,
   dockerClientHostEnv,
   downArgs,
-  generateStackCredentials,
   hostBackendUrl,
   internalDatabaseUrl,
   migrateArgs,
   MEMBER_AGENT_SERVICE,
   pgReadyArgs,
-  LAUNCHER_SERVICES,
   servicesFor,
   upArgs,
   WORKER_LANE_SERVICES,
   PRODUCER_SERVICES,
+  SCHEDULER_SERVICES,
+  serviceTokenFile,
   type StackConfig,
 } from "../../stack/index.ts";
 
@@ -51,31 +52,31 @@ function cfg(overrides: Partial<StackConfig> = {}): StackConfig {
     profile: "core",
     composeFiles: DEFAULT_COMPOSE_FILES,
     database: DEFAULT_STACK_DATABASE,
-    credentials: { adminToken: "cfg-admin", automationToken: "cfg-automation", analyticsToken: "cfg-analytics" },
     environment: ENVIRONMENT,
     ...overrides,
   };
 }
 
 describe("stack profiles", () => {
-  test("core is exactly postgres + api + website-server — no worker lane, no member-agent, no launcher", () => {
+  test("core is exactly postgres + api + website-server — no worker lane, no member-agent", () => {
     expect(servicesFor("core")).toEqual(["postgres", "api", "website-server"]);
     for (const lane of WORKER_LANE_SERVICES) expect(servicesFor("core")).not.toContain(lane);
     expect(servicesFor("core")).not.toContain("member-agent");
-    // Issue #1012: `core` never judges, so it never needs the one service that
-    // holds the Docker socket. Letting the socket into the cheapest profile
-    // would put it on every bring-up that only wanted an api.
-    for (const svc of LAUNCHER_SERVICES) expect(servicesFor("core")).not.toContain(svc);
   });
 
-  test("full is core plus worker lanes, the independent producer and the agent launcher, in order", () => {
-    expect(servicesFor("full")).toEqual([
-      ...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...PRODUCER_SERVICES, ...LAUNCHER_SERVICES,
-    ]);
+  test("full is core plus worker lanes, the clock and the independent producer, in order", () => {
+    expect(servicesFor("full"))
+      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
-    // A `full` stack judges, and every judging starts a container through this
-    // service — so it must be RUNNING, not merely built (issue #1012).
-    expect(servicesFor("full")).toContain("agent-launcher");
+  });
+
+  test("the clock is in `full` but is NOT a worker lane (issue #1026)", () => {
+    // The distinction is load-bearing: anything reasoning about lanes (the
+    // external-pg `depends_on` surgery, the DB-writer quiesce list) must not
+    // pick it up, and anything reasoning about the full stack must.
+    expect(servicesFor("full")).toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).not.toContain("system-scheduler");
+    expect([...WORKER_LANE_SERVICES]).toEqual(["worker-analytics"]);
   });
 
   test("full prebuilds the profile-gated member-agent image exactly once without starting it", () => {
@@ -93,10 +94,14 @@ describe("stack profiles", () => {
 });
 
 describe("buildComposeEnv", () => {
-  test("full profile requires a real producer credential file", () => {
-    expect(() => buildComposeEnv(cfg({ profile: "full" }))).toThrow(
-      "full stack profile requires credentials.analyticsTokenFile",
-    );
+  test("no profile emits a service token: the files under RM_INSTANCE_STATE_DIR are the whole delivery (spec §3)", () => {
+    for (const profile of ["core", "full"] as const) {
+      const env = buildComposeEnv(cfg({ profile, instance: { name: "rm_local_x", stateDir: "/state/rm_local_x" } }));
+      for (const key of ["ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN", "ANALYTICS_TOKEN_FILE_HOST"]) {
+        expect({ profile, key, present: key in env }).toEqual({ profile, key, present: false });
+      }
+      expect(env.RM_INSTANCE_STATE_DIR).toBe("/state/rm_local_x");
+    }
   });
 
 
@@ -105,7 +110,7 @@ describe("buildComposeEnv", () => {
     expect(env.ANALYTICS_SOURCE).toBe("live");
   });
 
-  test("ignores the ambient environment entirely — the config's tokens win, sentinels never appear", () => {
+  test("ignores the ambient environment entirely — an ambient token never appears", () => {
     const saved = {
       ADMIN_TOKEN: process.env.ADMIN_TOKEN,
       ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
@@ -116,8 +121,8 @@ describe("buildComposeEnv", () => {
     process.env.ANTHROPIC_API_KEY = "AMBIENT-KEY-SENTINEL";
     try {
       const env = buildComposeEnv(cfg());
-      expect(env.ADMIN_TOKEN).toBe("cfg-admin");
-      expect(env.ANALYTICS_TOKEN).toBe("cfg-analytics");
+      expect("ADMIN_TOKEN" in env).toBe(false);
+      expect("ANALYTICS_TOKEN" in env).toBe(false);
       expect(JSON.stringify(env)).not.toContain("SENTINEL");
     } finally {
       for (const [k, v] of Object.entries(saved)) {
@@ -128,33 +133,33 @@ describe("buildComposeEnv", () => {
   });
 });
 
-describe("full-stack producer credential preflight", () => {
-  test("core does not require producer secret material", () => {
-    expect(() => assertFullStackProducerCredential(cfg())).not.toThrow();
-  });
-
-  test("full rejects missing, unreadable, and empty token files before Docker launch", () => {
+describe("full-stack service-token preflight (spec §3: the scheduler and the producer each read their own file)", () => {
+  test("core starts neither holder, so it needs no token file", () => {
     const dir = mkdtempSync(join(tmpdir(), "rm-stack-token-preflight-"));
     try {
-      expect(() => assertFullStackProducerCredential(cfg({ profile: "full" }))).toThrow(
-        "full stack profile requires credentials.analyticsTokenFile",
-      );
-      expect(() => assertFullStackProducerCredential(cfg({
-        profile: "full",
-        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: join(dir, "missing") },
-      }))).toThrow("is not readable");
-      const empty = join(dir, "empty");
-      writeFileSync(empty, "\n", { mode: 0o600 });
-      expect(() => assertFullStackProducerCredential(cfg({
-        profile: "full",
-        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: empty },
-      }))).toThrow("is empty");
-      const valid = join(dir, "valid");
-      writeFileSync(valid, "bearer\n", { mode: 0o600 });
-      expect(() => assertFullStackProducerCredential(cfg({
-        profile: "full",
-        credentials: { adminToken: "a", automationToken: "automation", analyticsToken: "b", analyticsTokenFile: valid },
-      }))).not.toThrow();
+      expect(() => assertContainerTokenFiles(cfg({ instance: { name: "rm_local_x", stateDir: dir } }))).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("full refuses a missing or empty holder file before any service starts, naming it and the provisioning path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-stack-token-preflight-"));
+    const full = cfg({ profile: "full", instance: { name: "rm_local_x", stateDir: dir } });
+    try {
+      expect(() => assertContainerTokenFiles(full)).toThrow(serviceTokenFile(dir, "system-scheduler"));
+      expect(() => assertContainerTokenFiles(full)).toThrow("bun scripts/prod-init.ts provision-tokens");
+      for (const holder of ["system-scheduler", "analytics-producer"] as const) {
+        const file = serviceTokenFile(dir, holder);
+        const holderDir = join(dir, "tokens", holder);
+        mkdirSync(holderDir, { recursive: true, mode: 0o700 });
+        writeFileSync(file, holder === "system-scheduler" ? "rmat_s\n" : "\n", { mode: 0o600 });
+      }
+      expect(() => assertContainerTokenFiles(full)).toThrow(`${serviceTokenFile(dir, "analytics-producer")} is empty`);
+      writeFileSync(serviceTokenFile(dir, "analytics-producer"), "rmat_p\n", { mode: 0o600 });
+      expect(() => assertContainerTokenFiles(full)).not.toThrow();
+      // The operator's file is never a container's: its absence does not matter here.
+      expect(serviceTokenFile(dir, "operator")).toBe(join(dir, "tokens", "operator", "token"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -182,15 +187,57 @@ describe("buildSpawnEnv", () => {
     expect(env.SOME_RANDOM_HOST_VAR).toBeUndefined();
   });
 
-  test("a stray operator ADMIN_TOKEN never shadows the stack's own", () => {
-    expect(buildSpawnEnv(cfg(), hostEnv).ADMIN_TOKEN).toBe("cfg-admin");
+  test("a stray operator ADMIN_TOKEN never reaches a compose child (the stack carries none of its own, D52)", () => {
+    const env = buildSpawnEnv(cfg(), hostEnv);
+    expect(env.ADMIN_TOKEN).toBeUndefined();
+    expect(Object.values(env)).not.toContain("operator-leak");
   });
 });
 
 describe("argv builders", () => {
+  // A boot on a host whose checkout carries a deployment `.env` put that file's
+  // WORKER_DATABASE_URL into every worker lane of a twin stack that has no
+  // `postgres` service, and the lanes died in DNS. buildSpawnEnv's allowlist
+  // could not have stopped it: compose loads the project directory's `.env`
+  // itself. Neutralising it belongs in argv, next to `-p`/`-f`.
+  test("composeArgs neutralises compose's own .env auto-load", () => {
+    for (const argv of [composeArgs("p"), composeArgs("p", ["a.yml"])]) {
+      const i = argv.indexOf("--env-file");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(argv[i + 1]).toBe("/dev/null");
+      // Before the subcommand, which composeArgs is only ever a prefix of.
+      expect(i).toBeLessThan(argv.indexOf("-p"));
+    }
+  });
+
+  // The prefix must be built in ONE place, or the `--env-file` above is only as
+  // good as whoever remembered it. scripts/lib/swarm/session.ts had a
+  // hand-rolled `["docker", "compose", "-p", …]` that spawned `run --rm` — a
+  // container-creating call, interpolating the compose files, outside this
+  // module's only guarantee.
+  test("no hand-rolled compose prefix anywhere under scripts/", () => {
+    const scriptsDir = join(import.meta.dir, "..", "..");
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "tests" && entry.name !== "node_modules") walk(full);
+        } else if (entry.name.endsWith(".ts") && full !== join(scriptsDir, "stack", "config.ts")) {
+          // `"compose", "-p"` — a prefix assembled by hand rather than by composeArgs().
+          if (/"compose",\s*"-p"/.test(readFileSync(full, "utf8"))) offenders.push(full.slice(scriptsDir.length + 1));
+        }
+      }
+    };
+    walk(scriptsDir);
+    expect(offenders).toEqual([]);
+  });
+
   test("composeArgs puts the topology in argv, not the environment", () => {
-    expect(composeArgs("p", ["a.yml", "b.yml"])).toEqual(["compose", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
-    expect(composeArgs("p")).toEqual(["compose", "-p", "p", "-f", "docker-compose.yml", "-f", "docker-compose.smoke.yml"]);
+    expect(composeArgs("p", ["a.yml", "b.yml"]))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "a.yml", "-f", "b.yml"]);
+    expect(composeArgs("p"))
+      .toEqual(["compose", "--env-file", "/dev/null", "-p", "p", "-f", "docker-compose.yml"]);
   });
 
   test("upArgs names services explicitly — never a bare `up -d`", () => {
@@ -215,12 +262,30 @@ describe("argv builders", () => {
   });
 
   test("migrateArgs renders each -e pair in order and still ends in the migrate command", () => {
-    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--seed-smoke-schedules"])).toEqual([
+    // The trailing script argument is a placeholder for the pass-through shape
+    // only. It used to be `--seed-smoke-schedules`, a flag src/db/migrate.ts
+    // stopped parsing in 17e978bf; no caller passes one now (issue #1026).
+    expect(migrateArgs({ DEMO_SEED_PROJECTS: "1" }, ["--placeholder-arg"])).toEqual([
       "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
       "-e", "DEMO_SEED_PROJECTS=1",
-      "api", "bun", "run", "src/db/migrate.ts", "--seed-smoke-schedules",
+      "api", "bun", "run", "src/db/migrate.ts", "--placeholder-arg",
     ]);
-    expect(migrateArgs()).toEqual(["run", "--rm", "--no-deps", "-T", "api", "bun", "run", "src/db/migrate.ts"]);
+    expect(migrateArgs()).toEqual([
+      "run", "--rm", "--no-deps", "-T",
+      "-e", "MIGRATE_DATABASE_URL",
+      "api", "bun", "run", "src/db/migrate.ts",
+    ]);
+  });
+
+  test("the migration credential is named BARE, so it never enters docker's argv", () => {
+    // `-e VAR=secret` would be readable in `ps` for the life of the call.
+    // `-e VAR` makes docker read it from its own environment instead.
+    const args = migrateArgs();
+    const i = args.indexOf("MIGRATE_DATABASE_URL");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i - 1]).toBe("-e");
+    expect(args.some((a) => a.startsWith("MIGRATE_DATABASE_URL="))).toBe(false);
   });
 });
 
@@ -234,18 +299,9 @@ describe("urls and credentials", () => {
     expect(hostBackendUrl(48787)).not.toContain("localhost");
   });
 
-  test("generateStackCredentials returns two distinct, non-empty, per-call-fresh secrets", () => {
-    const a = generateStackCredentials();
-    const b = generateStackCredentials();
-    expect(a.adminToken.length).toBeGreaterThan(0);
-    expect(a.automationToken.length).toBeGreaterThan(0);
-    expect(a.analyticsToken.length).toBeGreaterThan(0);
-    expect(a.adminToken).not.toBe(a.analyticsToken);
-    expect(a.adminToken).not.toBe(a.automationToken);
-    expect(a.automationToken).not.toBe(a.analyticsToken);
-    expect(a.adminToken).not.toBe(b.adminToken);
-    expect(a.automationToken).not.toBe(b.automationToken);
-    expect(a.analyticsToken).not.toBe(b.analyticsToken);
+  test("the stack library mints no service token: generateStackCredentials is gone with the env tokens (D52)", async () => {
+    const stack = await import("../../stack/index.ts");
+    expect("generateStackCredentials" in stack).toBe(false);
   });
 });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Assemble the api process's STATIC_DIR — the cutover host for robotmoney.network
-# (docs/decisions.md D29, docs/runbooks/deployment.md §5.1).
+# (docs/decisions.md D29; docs/architecture.md §8 owns deployment authority).
 #
 # The api co-serves the marketing SPA straight from STATIC_DIR, so whatever
 # sits in this directory IS what a link unfurler reads. `frontend/public` alone
@@ -33,6 +33,12 @@ cp -R frontend/public/. "$OUT"/
 # bytes it describes: /version.json is how a deployed site says which client
 # version it is, independently of the api's own version.
 bun scripts/web-client/version.ts > "$OUT/version.json"
+
+# Cache busting for the application JavaScript (docs/technical/static-asset-cache.md, C3): every module import, and the
+# module entry point in index.html, gets one `?v=<stamp>` derived from the scripts' own content. It runs BEFORE the
+# prerender because the per-route pages are cut from this index.html, and it fails the assembly if any import cannot be
+# stamped: a graph stamped except for one module would load that module twice.
+bun scripts/stamp-assets.ts "$OUT"
 
 PRERENDER_DIR="$OUT" bun scripts/prerender.ts
 

@@ -34,15 +34,24 @@
 //   AC7 — replaying the SAME successful refresh (same as-of, same upstream
 //         values) a second time converges: no duplicate raw-history rows,
 //         a stable recomputed signal payload.
-import { test, expect } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { config } from "../src/config.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { analyticsApiClient } from "../src/analytics/api-client.ts";
+import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 
-const TOKEN = "tok_research_last_good_secret";
+// analytics-producer's store-issued token and the file it is delivered in
+// (smoke spec §3, D52 (1)): the client reads ANALYTICS_TOKEN_FILE and nothing
+// else, and the API validates the bearer against the store.
+let TOKEN = "";
+let TOKEN_FILE = "";
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  TOKEN_FILE = writeTokenFile(TOKEN);
+});
 
 function startdtOf(url: string): string {
   try {
@@ -84,7 +93,7 @@ function startRejectingServer() {
   let failMethod: string | null = null;
   let failPath: string | null = null;
   const server = Bun.serve({
-    port: 0,
+    port: 0, hostname: "127.0.0.1",
     async fetch(req) {
       const url = new URL(req.url);
       if (failMethod && failPath && req.method === failMethod && url.pathname === failPath) {
@@ -105,14 +114,13 @@ function startRejectingServer() {
 test(
   "atomicity + idempotency: a degraded refresh NEVER changes the persisted floor or the published signal; a repeated SUCCESSFUL refresh converges",
   async () => {
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         const r = await handleAnalytics(req, url);
@@ -122,15 +130,13 @@ test(
     });
     let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
     try {
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "live";
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       const asof = "2010-03-14"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01, 2010-02, 2010-03}
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       // A partially seeded floor (2010-01 only) — this asof lands on the
       // full-sweep weekday, so tier 'full' is selected: the plan is the
       // FULL [EDGAR_FLOOR_START, asof] range regardless of what's already
@@ -140,7 +146,7 @@ test(
       const seed: { date: string; indicator: string; value: number }[] = [
         { date: "2010-01-31", indicator: "MNA", value: 11 },
       ];
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
       const fullRangeMonths = 3; // 2010-01, 2010-02, 2010-03
 
       // ── RUN 1: a fully successful refresh — establishes the "last-good"
@@ -202,13 +208,11 @@ test(
     } finally {
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 60_000 },
@@ -220,29 +224,26 @@ test(
 test(
   "API rejection: a fully validated EDGAR batch that the analytics API itself rejects changes NOTHING and throws; a rejection on the LATER signal submission still leaves the just-committed floor write in place but never publishes a signal against it",
   async () => {
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     const { server, armFailure, disarm } = startRejectingServer();
     let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
     try {
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "live";
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       const asof = "2010-04-11"; // a Sunday (full-sweep weekday) close to EDGAR_FLOOR_START (2010-01) — full range is {2010-01..2010-04}
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       const seed: { date: string; indicator: string; value: number }[] = [
         { date: "2010-01-31", indicator: "MNA", value: 3 },
         { date: "2010-02-28", indicator: "MNA", value: 3 },
       ];
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
 
       // ── RUN A: establishes last-good (this asof lands on the full-sweep
       // weekday → tier 'full': the FULL range 2010-01..2010-04 lands, value=5).
@@ -301,13 +302,11 @@ test(
       disarm();
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 60_000 },
@@ -330,14 +329,13 @@ test(
 test(
   "divergence guard: a complete, well-formed but DEGENERATE full-sweep batch degrades instead of overwriting the persisted floor; a bulk rewrite is refused too; a realistic back-revision still lands",
   async () => {
-    const origConfig = { analyticsToken: config.analyticsToken, allowInsecure: config.allowInsecure };
     const origEnv = {
       ANALYTICS_SOURCE: process.env.ANALYTICS_SOURCE,
       ANALYTICS_API_URL: process.env.ANALYTICS_API_URL,
-      ANALYTICS_TOKEN: process.env.ANALYTICS_TOKEN,
+      ANALYTICS_TOKEN_FILE: process.env.ANALYTICS_TOKEN_FILE,
     };
     const server = Bun.serve({
-      port: 0,
+      port: 0, hostname: "127.0.0.1",
       async fetch(req) {
         const url = new URL(req.url);
         const r = await handleAnalytics(req, url);
@@ -347,11 +345,9 @@ test(
     });
     let fetchDouble: ReturnType<typeof installFetchDouble> | null = null;
     try {
-      config.analyticsToken = TOKEN;
-      config.allowInsecure = false;
       process.env.ANALYTICS_SOURCE = "live";
       process.env.ANALYTICS_API_URL = `http://localhost:${server.port}`;
-      process.env.ANALYTICS_TOKEN = TOKEN;
+      process.env.ANALYTICS_TOKEN_FILE = TOKEN_FILE;
 
       // 2011-01-02 is a Sunday (the full-sweep weekday), so tier 'full' plans
       // the whole 13-month [2010-01, 2011-01] range — a miniature of the real
@@ -359,8 +355,8 @@ test(
       // value. Small enough to run four real-paced sweeps inside a test.
       const asof = "2011-01-02";
       const fullRangeMonths = 13;
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
-      await sql`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'late-cycle-signals' AND date = ${asof}`;
       const seed: { date: string; indicator: string; value: number }[] = [];
       const lastDayOfMonth = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate();
       for (let i = 0; i < fullRangeMonths; i++) {
@@ -369,7 +365,7 @@ test(
         const day = lastDayOfMonth(y, m);
         seed.push({ date: `${y}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`, indicator: "MNA", value: 100 });
       }
-      await sql`INSERT INTO raw_indicator_history ${sql(seed, "date", "indicator", "value")}`;
+      await fixtureDb`INSERT INTO raw_indicator_history ${fixtureDb(seed, "date", "indicator", "value")}`;
 
       // ── RUN 1: a healthy reconciliation — EDGAR confirms every month
       // unchanged. Establishes last-good and proves the guard is not simply
@@ -428,13 +424,11 @@ test(
     } finally {
       if (fetchDouble) fetchDouble.restore();
       server.stop(true);
-      config.analyticsToken = origConfig.analyticsToken;
-      config.allowInsecure = origConfig.allowInsecure;
       for (const [k, v] of Object.entries(origEnv)) {
         if (v === undefined) delete process.env[k as keyof typeof origEnv];
         else process.env[k as keyof typeof origEnv] = v;
       }
-      await sql`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
+      await fixtureDb`DELETE FROM raw_indicator_history WHERE indicator = 'MNA'`;
     }
   },
   { timeout: 120_000 },

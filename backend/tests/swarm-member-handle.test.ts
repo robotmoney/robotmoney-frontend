@@ -31,9 +31,11 @@ import * as admin from "../src/swarm/admin.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { canonicalizeSubmission, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
 
@@ -46,6 +48,14 @@ const sessionDate = (s: Record<string, unknown>): string =>
 // next test's admission a spurious 409. Unique ids cannot fix that; a clean
 // database can.
 useCleanDatabasePerTest(import.meta.file);
+
+// Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
+// env token and no insecure mode to fall back on. Per test, because each test
+// gets its own database (the clone hook above runs first).
+let OPERATOR = "";
+beforeEach(async () => {
+  OPERATOR = await provisionOperatorToken();
+});
 
 // `handle` is read back off the row rather than assumed to equal `id`: since
 // issue #562 registerMember derives the public handle from the member's NAME,
@@ -139,7 +149,7 @@ async function callSwarm(req: Request): Promise<{ status: number; body: any }> {
 const postJson = (path: string, body: unknown) =>
   new Request(`http://localhost${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Admin-Token": OPERATOR },
     body: JSON.stringify(body),
   });
 
@@ -468,10 +478,14 @@ test("POST /api/swarm/register: the same conflict, answered the same way — ON 
 async function waitUntilBlockedOn(fragment: string, whatItProves: string): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    const [row] = await sql<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM pg_stat_activity
-      WHERE wait_event_type = 'Lock' AND query ILIKE ${`%${fragment}%`}`;
-    if ((row?.n ?? 0) > 0) return;
+    // The owner-acting fixture login reads pg_stat_activity: another session's
+    // statement text is visible to it through rm_owner's pg_read_all_stats
+    // (tests/preload.ts), and the blocked create runs on the pool's login.
+    const [row] = await fixtureDb.unsafe(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+        WHERE wait_event_type = 'Lock' AND query ILIKE '${`%${fragment}%`.replace(/'/g, "''")}'`,
+    );
+    if (Number(row?.n ?? 0) > 0) return;
     await new Promise((r) => setTimeout(r, 25));
   }
   throw new Error(
@@ -640,7 +654,7 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
   // B's take is the higher revision, so a merged query picks B deterministically
   // — without this the pre-fix result would depend on physical row order and the
   // test would prove nothing on a good day.
-  await sql`UPDATE swarm_recommendations SET revision = 2 WHERE member_id = ${b.id}`;
+  await fixtureDb`UPDATE swarm_recommendations SET revision = 2 WHERE member_id = ${b.id}`;
 
   // A second session only B takes in, so a merged query also returns a take from
   // a session A never sat in.
@@ -662,11 +676,11 @@ test("getMemberTakes cannot merge two members' takes into one reference", async 
   // --disable-triggers, logical replication) cannot bypass it, and a plain
   // ENABLE silently downgrades it to 'O' for the rest of the suite — reopening
   // the exact hole the migration closes, in the shared database, invisibly.
-  await sql`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
+  await fixtureDb`ALTER TABLE swarm_members DISABLE TRIGGER swarm_members_handle_namespace_trigger`;
   try {
     await sql`UPDATE swarm_members SET handle = ${b.id} WHERE id = ${a.id}`;
   } finally {
-    await sql`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
+    await fixtureDb`ALTER TABLE swarm_members ENABLE ALWAYS TRIGGER swarm_members_handle_namespace_trigger`;
   }
   const [trg] = await sql<{ tgenabled: string }[]>`
     SELECT tgenabled FROM pg_trigger WHERE tgname = 'swarm_members_handle_namespace_trigger'`;

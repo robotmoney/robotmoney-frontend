@@ -42,13 +42,15 @@ import {
   PRIOR_RELEASE_MIGRATIONS,
   THIS_RELEASE_MIGRATIONS,
 } from "../scripts/upgrades/0.2.2-to-0.3.0/release.ts";
+import { harnessConnection } from "./support/cluster.ts";
+import { createHistoryDatabase, type HistoryDatabase } from "./support/history-database.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(testDir, "..", "migrations");
 
-const DB_URL = process.env.DATABASE_URL;
 // Loud, not skipped: this suite is meaningless without the real trigger catalog.
-if (!DB_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must provision the ephemeral Postgres first");
+if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is unset — tests/preload.ts must provision the ephemeral Postgres first");
+const DB_NAME = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, "");
 
 /** The guard migration is the only `applied` entry the check reads. */
 const GUARD_APPLIED = new Set<string>([APPEND_ONLY_MIGRATION]);
@@ -134,7 +136,7 @@ describe("append-only-safety tells a LOCK apart from a WRITE", () => {
   let db: Db;
 
   beforeAll(() => {
-    db = postgres(DB_URL, { max: 1, onnotice: () => {} });
+    db = harnessConnection(DB_NAME);
   });
   afterAll(async () => {
     await db?.end({ timeout: 5 });
@@ -937,18 +939,13 @@ describe("scanMigrationSql — the units behind the check", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
-  let admin: ReturnType<typeof postgres>;
+  let history: HistoryDatabase;
   let baselineDb: Db;
-  let dbName: string;
 
   beforeAll(async () => {
-    admin = postgres(DB_URL, { max: 1, onnotice: () => {} });
-    dbName = `tmp_preflight_v022_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    await admin.unsafe(`CREATE DATABASE ${dbName}`);
-
-    const url = new URL(DB_URL);
-    url.pathname = `/${dbName}`;
-    baselineDb = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    // The cluster admin only creates and drops the database (history-database.ts).
+    history = await createHistoryDatabase("preflight_v022", { max: 1 });
+    baselineDb = history.db;
 
     const release = new Set<string>(THIS_RELEASE_MIGRATIONS);
     const baseline = (await readdir(migrationsDir)).filter((f) => f.endsWith(".sql") && !release.has(f)).sort();
@@ -985,9 +982,7 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await baselineDb?.end({ timeout: 5 });
-    if (dbName) await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
-    await admin?.end({ timeout: 5 });
+    await history?.drop();
   });
 
   test("the baseline really is v0.2.2: every prior-release migration is applied, none of this release's is", async () => {
@@ -1096,23 +1091,16 @@ describe("v0.3.0 preflight, end to end on a v0.2.2 baseline database", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("ground truth catches what text-harvesting cannot: a SELECT ... INTO install", () => {
-  let admin: ReturnType<typeof postgres>;
+  let history: HistoryDatabase;
   let db: Db;
-  let dbName: string;
 
   beforeAll(async () => {
-    admin = postgres(DB_URL, { max: 1, onnotice: () => {} });
-    dbName = `tmp_preflight_select_into_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
-    await admin.unsafe(`CREATE DATABASE ${dbName}`);
-    const url = new URL(DB_URL);
-    url.pathname = `/${dbName}`;
-    db = postgres(url.toString(), { max: 1, onnotice: () => {} });
+    history = await createHistoryDatabase("preflight_select_into", { max: 1 });
+    db = history.db;
   });
 
   afterAll(async () => {
-    await db?.end({ timeout: 5 });
-    if (dbName) await admin.unsafe(`DROP DATABASE IF EXISTS ${dbName}`);
-    await admin?.end({ timeout: 5 });
+    await history?.drop();
   });
 
   test("RED: a guard installed via SELECT ... INTO is unattributed by text but live in pg_trigger", async () => {

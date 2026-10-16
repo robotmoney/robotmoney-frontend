@@ -67,7 +67,8 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
     ["/committee", "/swarm"],
     ["/admin/committee", "/admin/swarm"],
     ["/docs/investment-committee", "/docs/investment-swarm"],
-    ["/allocation2", "/performance"],
+    ["/allocation2", "/treasury"],
+    ["/performance", "/treasury"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   ];
 
@@ -110,7 +111,7 @@ test("/vault is an exact alias: the bare path is /allocation, each vault page is
   }
 
   // Anything else under /vault/ is not found, not a vault page.
-  expect(metaFor("/vault/nope").title).toBe("Page Not Found — Robot Money");
+  expect(metaFor("/vault/nope").title).toBe("Page Not Found | Robot Money");
   expect(metaFor("/vault/nope").robots).toBe("noindex, follow");
   expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
 });

@@ -59,9 +59,7 @@ const SEPTEMBER_ALSO = `        <div class="cl__also" x-show="!tag">
 
 function page(opts: { pending?: string; septemberAlso?: string } = {}): string {
   return `<section class="cl" x-data="changelogPage()">
-  <header class="cl__hero">
-      <p class="cl__updated">Updated <span class="cl__pending" data-release="pending">with the next release</span></p>
-  </header>
+  <header class="cl__hero"></header>
       <div class="cl__log" x-ref="log">
 
 ${opts.pending ?? PENDING}
@@ -129,10 +127,6 @@ describe("a release in a new month becomes that month's section", () => {
     expect(html.match(/<div class="cl__meta"><time datetime="2026-10-02">2 Oct 2026<\/time>/g)).toHaveLength(2);
   });
 
-  test("the hero carries the day in full", () => {
-    expect(html).toContain('<p class="cl__updated">Updated <time datetime="2026-10-02">2 October 2026</time></p>');
-  });
-
   test("nothing pending is left, and September is untouched", () => {
     noPendingTrace(html);
     expect(listUnder(html, "Also in September", "Improvements")).toEqual(["Old improvement."]);
@@ -163,8 +157,7 @@ describe("a release in the month on top merges into it", () => {
     expect(html.match(/<div class="cl__also"/g)).toHaveLength(1);
   });
 
-  test("the hero is dated and nothing pending is left", () => {
-    expect(html).toContain('Updated <time datetime="2026-09-29">29 September 2026</time>');
+  test("nothing pending is left", () => {
     noPendingTrace(html);
   });
 

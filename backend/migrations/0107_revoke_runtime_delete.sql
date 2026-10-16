@@ -1,0 +1,53 @@
+-- compat: breaking
+-- metadata_version: 1
+--
+-- Only rm_owner may DELETE or TRUNCATE — issue #1026, decision D55 (6),
+-- smoke-production-spec.md §3 and §9.1 step 3.
+--
+-- D55 (6): "No runtime role (`rm_app`, `rm_worker`, `rm_readonly`) holds
+-- `DELETE` or `TRUNCATE` on any table, append-only or not." §9.1 step 3:
+-- "Grant transition — migrations revoking `DELETE` and `TRUNCATE` on every
+-- table from every runtime role (0053 granted `DELETE` on all tables). Check 2
+-- fails until they land."
+--
+-- WHAT IT UNDOES.
+--   * 0053: `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA
+--     public TO rm_app`. 0083 took DELETE back on the append-only tables; every
+--     ordinary table that existed at 0053 kept it.
+--   * 0054/0061: rm_worker's DELETE on its allowlisted tables (the job queue,
+--     the samplers, the wallet repair pass).
+--   * 0058: rm_app's DELETE on swarm_judge_fault_injection.
+--   * any hand-run grant of either privilege to any runtime role.
+-- One statement per privilege covers every table, present and future-proofed
+-- by the default below: a list of protected tables is a list that can miss
+-- one (D55 (6)'s own reason).
+--
+-- DEFAULT PRIVILEGES. rm_owner's own defaults (0053, 0062) already grant no
+-- DELETE or TRUNCATE; the REVOKE below re-asserts that for every table rm_owner
+-- creates later. 0016's default grant of DELETE to rm_worker is FOR THE LOGIN
+-- THAT RAN 0016 (the cluster's provisioning login), which rm_owner cannot
+-- alter: no role here is a member of it. It is revoked by the provisioning
+-- step that login runs (scripts/lib/smoke-database.ts
+-- PROVISIONING_DEFAULT_PRIVILEGES_SQL; spec §9.1 step 3 in production).
+--
+-- WHY `breaking` (spec §8.4: "no privilege it needs is revoked"). Code built
+-- before this release deletes: the admin password change and recovery DELETE
+-- every passkey and session, the WebAuthn routes DELETE challenges, and the
+-- wallet repair pass DELETEs a day of samples. The same release carries the
+-- code that writes a tombstone or an upsert instead (D55 (6): "No release may
+-- ship code that writes a revocation or consumption tombstone unless the same
+-- release carries the `compat: breaking` migration that revokes runtime
+-- `DELETE`"). Code built before the tombstones does not read them, so a
+-- rollback to it would serve a revoked session again; the label makes that
+-- code refuse to boot here (preflight check 3b,
+-- tests/pre-revoke-boot-refusal.test.ts).
+--
+-- Preflight check 2 refuses either privilege on any table for any runtime role
+-- (src/db/preflight.ts, the `append_only_write` rule), and grants.sql revokes
+-- both from every relation on every migrate run.
+--
+-- IDEMPOTENT ON RE-APPLY: a REVOKE of a privilege not held is a no-op.
+
+REVOKE DELETE, TRUNCATE ON ALL TABLES IN SCHEMA public FROM rm_app, rm_worker, rm_readonly;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public
+  REVOKE DELETE, TRUNCATE ON TABLES FROM rm_app, rm_worker, rm_readonly;

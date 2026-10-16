@@ -146,7 +146,6 @@ export const APP_CODE: readonly string[] = Object.freeze([
   "frontend/**",
   "scripts/**",
   "docker-compose.yml",
-  "docker-compose.smoke.yml",
   "package.json",
   "bun.lock",
 ]);

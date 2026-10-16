@@ -3,11 +3,12 @@
 // computed outputs HERE instead of writing SQL: the API process is the only
 // runtime component that imports the analytics store writers.
 //
-// Every route requires the analytics-provider bearer credential
-// (ANALYTICS_TOKEN, constant-time compared; ADMIN_TOKEN / member bearers are
-// NEVER substitutes). Fail-closed: with no token configured the boundary opens
-// only under config.allowInsecure (RM_ENV=ephemeral or explicit
-// RM_ALLOW_INSECURE=1) — smoke/prod without a token stay locked.
+// Every route requires the analytics-provider credential: analytics-producer's
+// store token, presented as a Bearer, whose row carries the
+// `analytics_ingestion` right (smoke spec §3, D52 (1)). The operator's admin
+// token, the scheduler's token and member bearers are NEVER substitutes — each
+// holds a different right — and no deployment flag opens the boundary without
+// one.
 //
 // Mutation contract:
 //   • the ENTIRE payload is validated before a transaction is opened — a
@@ -56,11 +57,11 @@ import type {
 } from "../../analytics/output-snapshots.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
-// Issue #979 fix: runParitySweep() touches Postgres directly (db/client.ts's
-// rm_app pool) via analytics/cutover/parity.ts. It may only ever be called
+// Issue #979 fix: the parity checks touch Postgres directly (db/client.ts's
+// rm_app pool) via analytics/cutover/parity.ts. They may only ever be called
 // from HERE — the API process — never from worker/**, even transitively.
 // See POST A.paritySweep below.
-import { runParitySweep } from "../../analytics/cutover/parity.ts";
+import { checkDomainParity, isParityDomain, recordParityObservation, ALL_PARITY_DOMAINS } from "../../analytics/cutover/parity.ts";
 import type {
   TelemetryArtifact,
   TelemetryRunStatus,
@@ -601,33 +602,68 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
   return { runId: String(v.runId), asof: v.asof, status, warnings, logs, exceptions };
 }
 
+export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
+  A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
+  A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
+  A.vintages, A.vintage, A.runPackage, A.reportSnapshot, A.paritySweep,
+]);
+
+/**
+ * How many analytics-provider requests the api runs at once.
+ *
+ * WHY A CAP. Every route here is the analytics producer's, and on 2026-09-25..28
+ * a regime run sent many ledger writes at once. Each became a slow query on the
+ * bloated ledger (issue 1035), together they held every connection of the api's
+ * pool (PG_POOL_MAX, 10), and every public request waited past Bun's ~10 s idle
+ * timeout: minutes of 502s on each run. With this cap the producer can hold at
+ * most this many connections; the rest always serve the site. Excess producer
+ * requests wait here, in line, instead of in the pool. The readiness probe is
+ * exempt: it touches no data.
+ */
+export const ANALYTICS_CONCURRENCY = 2;
+
+/** A counting semaphore: `acquire()` resolves to a release function, in FIFO order. */
+export function createLimiter(limit: number): { acquire: () => Promise<() => void>; inFlight: () => number; waiting: () => number } {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const release = () => {
+    active--;
+    const next = queue.shift();
+    if (next) { active++; next(); }
+  };
+  return {
+    acquire: () => new Promise<() => void>((resolve) => {
+      const grant = () => { let done = false; resolve(() => { if (!done) { done = true; release(); } }); };
+      if (active < limit) { active++; grant(); } else queue.push(grant);
+    }),
+    inFlight: () => active,
+    waiting: () => queue.length,
+  };
+}
+
+const analyticsSlots = createLimiter(ANALYTICS_CONCURRENCY);
+
 // Returns { status, body } or null if the path isn't an analytics route.
 export async function handleAnalytics(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
+  if (!ANALYTICS_PATHS.has(url.pathname) || url.pathname === A.readiness) return handleAnalyticsUnbounded(req, url);
+  const release = await analyticsSlots.acquire();
+  try {
+    return await handleAnalyticsUnbounded(req, url);
+  } finally {
+    release();
+  }
+}
+
+async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
   const p = url.pathname;
   const m = req.method;
-  const isAnalyticsRoute =
-    p === A.readiness ||
-    p === A.rawHistory ||
-    p === A.rawHistorySeed ||
-    p === A.researchSignalDates ||
-    p === A.rawHistoryGaps ||
-    p === A.sourceAcquisitions ||
-    p === A.researchEligibility ||
-    p === A.telemetry ||
-    p === A.runs ||
-    p === A.runEvents ||
-    p === A.vintages ||
-    p === A.vintage ||
-    p === A.runPackage ||
-    p === A.reportSnapshot ||
-    p === A.paritySweep;
-  if (!isAnalyticsRoute) return null;
+  if (!ANALYTICS_PATHS.has(p)) return null;
 
   // Authenticate FIRST — reads and mutations alike are analytics-provider-only.
-  // 401 when no credential was presented, 403 when one was presented but does
-  // not match. Neither ADMIN_TOKEN nor member bearers are accepted here: the
-  // comparison is strictly against ANALYTICS_TOKEN.
-  if (!hasAnalyticsProviderRole(req)) {
+  // 401 when no credential was presented, 403 when one was presented but its
+  // store row (if any) does not carry `analytics_ingestion`. The operator and
+  // scheduler tokens, an admin session and member bearers are all refused.
+  if (!(await hasAnalyticsProviderRole(req))) {
     const presented = bearer(req);
     return presented
       ? { status: 403, body: { error: "analytics-provider role required" } }
@@ -673,7 +709,7 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
   // RETIRED (issue #978): `POST /api/analytics/regime-snapshots` and
   // `POST /api/analytics/research-signals`. Both upserted straight into the
   // current views with no run_id, no immutable output artifact and no report
-  // snapshot, so anything holding ANALYTICS_TOKEN could publish regime rows
+  // snapshot, so anything holding the analytics credential could publish regime rows
   // that no frozen report ever contained — and publishBrief, which derives its
   // binding from those rows, would then bind a signed brief to some OTHER
   // run's report. `POST /api/analytics/run-packages` is now the sole HTTP
@@ -826,14 +862,31 @@ export async function handleAnalytics(req: Request, url: URL): Promise<{ status:
   // analytics/cutover/parity.ts (and therefore db/client.ts) itself — the
   // API process is the only runtime component allowed to hold the
   // rm_app-credentialed pool.
+  //
+  // ONE DOMAIN PER REQUEST (issue 1375). The body names the domain; this runs
+  // that domain's one set-based statement in Postgres, appends its
+  // observation and answers with the verdict, the counts and how long it took.
+  // Nothing proportional to the data is held here, and the request stays well
+  // inside the api's 10 s request limit. A missing or unknown domain is a 400
+  // and records nothing.
   if (m === "POST" && p === A.paritySweep) {
-    const results = await runParitySweep();
+    const body = (await req.json().catch(() => null)) as { domain?: unknown } | null;
+    const domain = body?.domain;
+    if (!isParityDomain(domain)) {
+      return { status: 400, body: { error: `body.domain must be one of: ${ALL_PARITY_DOMAINS.join(", ")}` } };
+    }
+    const started = performance.now();
+    const result = await checkDomainParity(domain);
+    await recordParityObservation(result);
     return {
       status: 200,
       body: {
-        domains: results.length,
-        matched: results.filter((r) => r.matched).map((r) => r.domain),
-        mismatched: results.filter((r) => !r.matched).map((r) => r.domain),
+        domain,
+        matched: result.matched,
+        legacyRowCount: result.legacyRowCount,
+        ledgerRowCount: result.ledgerRowCount,
+        mismatchCount: result.mismatchCount,
+        durationMs: Math.round(performance.now() - started),
       },
     };
   }

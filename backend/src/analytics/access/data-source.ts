@@ -11,6 +11,7 @@ import type { Indicator } from "../analyze/indicators.ts";
 import { fetchAll } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
+import { LEDGER_EXTRA_KEYS } from "../extras.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
   refreshEdgarWithTierFallback,
@@ -188,10 +189,14 @@ export const liveDataSource: AnalyticsDataSource = {
     if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
     const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
       captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
+    // The provider and ledger-key literals stay inline: tests/analytics-source-tolerance.test.ts
+    // scrapes them from acquire(...) call sites. tests/extras-key-map.test.ts pins them to
+    // LEDGER_EXTRA_KEYS (the symbols and cache identities below come from the map directly).
+    const X = LEDGER_EXTRA_KEYS;
     const [spx, eth, tbill3m] = await Promise.all([
-      safe("^GSPC", () => acquire("yahoo", "backtest:^GSPC", `^GSPC:${EXTRAS_START}`, () => fetchYahoo("^GSPC", unix(EXTRAS_START))), logger),
-      safe("ETH-USD", () => acquire("yahoo", "backtest:ETH-USD", `ETH-USD:${EXTRAS_START}`, () => fetchYahoo("ETH-USD", unix(EXTRAS_START))), logger),
-      safe("FRED DTB3", () => acquire("fred", "backtest:DTB3", "DTB3", () => fetchFred("DTB3")), logger),
+      safe(X.spx.symbol, () => acquire("yahoo", "backtest:^GSPC", `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
+      safe(X.eth.symbol, () => acquire("yahoo", "backtest:ETH-USD", `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
+      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", "backtest:DTB3", X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
     ]);
     return { spx, eth, tbill3m };
   },

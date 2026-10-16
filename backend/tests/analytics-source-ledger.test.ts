@@ -31,7 +31,7 @@ const sink: AcquisitionSink = { saveSourceAcquisition };
 /** The source variants fetchOne actually branches on, read from its own switch
  *  so this file cannot drift out of step with the adapter registry. */
 async function enumeratedSourceVariants(): Promise<string[]> {
-  const src = await Bun.file(new URL("../src/analytics/extract/sources.ts", import.meta.url)).text();
+  const src = await Bun.file(new URL("../../packages/analyst-sdk/src/extract/sources.ts", import.meta.url)).text();
   const body = src.slice(src.indexOf("export async function fetchOne"), src.indexOf("export async function fetchAll"));
   const variants = [...body.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]!);
   expect(variants.length).toBeGreaterThan(7);
@@ -221,15 +221,24 @@ test("issue #1035 AC2: a value within the source's tolerance adds no revision; o
   expect(versions).toHaveLength(2);
 });
 
-test("issue #1035: a relabel within tolerance is one 'unchanged' version carrying the head value, the same rule raw history applies", async () => {
+test("a relabel within tolerance writes nothing: the head keeps its value and its label, the same rule raw history applies", async () => {
+  // Owner, 2026-09-29: the live fetch and the 'seed' catch-up take turns on
+  // the same points, and a row per turn was ~13 rows per point of no value.
   const date = "2023-07-01";
   const base = 31.5;
   await acquireNoisy([{ date, value: base }], "seed");
   await acquireNoisy([{ date, value: base * (1 + 1e-7) }], "live");
-  const versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  await acquireNoisy([{ date, value: base }], "live");
+  let versions = (await noisyVersions()).filter((v) => v.market_date === date);
   expect(versions.map((v) => [v.revision_kind, Number(v.value), v.provenance])).toEqual([
     ["initial", base, "seed"],
-    ["unchanged", base, "live"],
+  ]);
+  // A real change carries the label it arrived with.
+  await acquireNoisy([{ date, value: base * (1 + 1e-5) }], "live");
+  versions = (await noisyVersions()).filter((v) => v.market_date === date);
+  expect(versions.map((v) => [v.revision_kind, v.provenance])).toEqual([
+    ["initial", "seed"],
+    ["revision", "live"],
   ]);
 });
 

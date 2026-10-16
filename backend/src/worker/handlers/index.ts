@@ -3,11 +3,11 @@
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
-import * as swarm from "./swarm.ts";
 import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
+import { sampleTokenMarket } from "./token-market.ts";
 import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
 // Issue #979 fix: NEVER import analytics/cutover/parity.ts here — it imports
 // db/client.ts (the rm_app-credentialed API pool), and worker/** must never
@@ -15,7 +15,7 @@ import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
 // analytics-api-boundary transitive-reachability test). triggerParitySweep()
 // is the authenticated-HTTP call to the API process instead, the same
 // worker→API pattern analyticsApiClient() already uses for #977/#978.
-import { triggerParitySweep } from "../../analytics/api-client.ts";
+import { AnalyticsApiUnreachableError, triggerParitySweep } from "../../analytics/api-client.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -33,13 +33,34 @@ export const handlers: Record<string, JobHandler> = {
   // combined `analytics.run` kind is RETIRED (issue #107): regime and research
   // are distinct kinds so a slow research fetch can never starve regime work.
   "regime.classify": analytics.regimeClassify,
-  // research signals only → research_signals (research lane)
+  // research signals only → research_signals (legacy rows; only the `generic` lane claims them)
   "research.refresh": analytics.researchRefresh,
   // hourly vault share-price sample (feeds the 7-day APY calc)
   "vault.sample_share_price": sampleSharePrice,
   "vault.sample_adapters": sampleVaultAdapters,
   // daily prop-wallet balance sample (feeds the /performance history + last-live fallback)
-  "wallet.sample_balances": sampleWalletBalances,
+  //
+  // The same tick then samples the token page's market reading (prices and the
+  // pool, token-market.ts), so the api serves it from Postgres and never calls
+  // GeckoTerminal itself (v0.6.0 release finding, 2026-10-08). It rides this
+  // existing, already-scheduled kind on purpose: a new kind would need a new
+  // job_schedules row on every live database. It runs after the wallet sample,
+  // whose price reads it reuses from the 30-second cache, and it runs even when
+  // the wallet sample throws. Its own failure is recorded in the result and
+  // never fails the wallet job.
+  "wallet.sample_balances": async (payload) => {
+    let tokenMarket: unknown;
+    let balances: unknown;
+    try {
+      balances = await sampleWalletBalances(payload);
+    } finally {
+      // In finally so a wallet failure still samples the market, and the
+      // wallet error stays what the job records.
+      tokenMarket = await sampleTokenMarket().catch((err) => ({ error: String(err) }));
+    }
+    // The wallet result keeps its shape; the market outcome is one more field.
+    return balances !== null && typeof balances === "object" ? { ...balances, tokenMarket } : { result: balances, tokenMarket };
+  },
   "wallet.sample_sleeves": sampleWalletSleeves,
   // The self-healing pair (issue #709). `ops.repair_gaps` is the dispatcher of
   // docs/technical/markets-asset-pricing-ingest.md §4.1 — it asks the gap detector what is
@@ -68,43 +89,52 @@ export const handlers: Record<string, JobHandler> = {
   // already-covered day is never re-selected, so a caught-up deployment's
   // run is just the anti-join query.
   "ops.backfill_asset_prices": () => backfillAssetPricesForCleanDays(),
-  // Issue #979 AC2: the dual-write parity sweep. recordParityObservation()/
-  // runParitySweep() (analytics/cutover/parity.ts) are the ONLY thing that
-  // populates analytics_parity_observations, which is the evidence
+  // Issue #979 AC2: the dual-write parity sweep. recordParityObservation()
+  // (analytics/cutover/parity.ts) is the ONLY thing that populates
+  // analytics_parity_observations, which is the evidence
   // analytics-ledger-cutover-gate.ts later reads — that CLI only evaluates
   // existing observations and flips analytics_read_mode, it never records
   // one. Without a real recurring caller here, that table stays permanently
-  // empty and ledger-mode reads can never be armed. Same
-  // self-healing-means-scheduled shape as `ops.backfill_asset_prices` above:
-  // every domain's check both re-derives its own row counts/checksums from
-  // Postgres AND inserts a fresh observation row each tick, so this is cheap
-  // and safe to run often — hourly is far more than the gate's default
-  // 12-observation / 24h window needs, which lets the window close in about
-  // half a day instead of waiting on a slower cadence.
+  // empty and ledger-mode reads can never be armed.
   //
-  // WIRING (issue #979 fix): this handler never touches Postgres itself. It
-  // calls POST /api/analytics/parity-sweep (triggerParitySweep(),
-  // analytics/api-client.ts) over the SAME authenticated HTTP boundary the
-  // retained analytics handlers above already use — runParitySweep() runs
-  // INSIDE the API process, which legitimately holds the rm_app pool.
-  "analytics.parity_sweep": () => triggerParitySweep(),
+  // ONCE A DAY, ONE REQUEST PER DOMAIN (issue 1375). The schedule row
+  // (db/seed.ts, migration 0123) fires at 04:47 UTC, when no producer run,
+  // projects job or buyback refresh is due. triggerParitySweep()
+  // (analytics/api-client.ts) posts each domain in turn over the SAME
+  // authenticated HTTP boundary the retained analytics handlers above use; the
+  // api runs that domain's one set-based statement in Postgres. This handler
+  // never touches Postgres itself.
+  //
+  // AN UNREADY API DEGRADES, IT DOES NOT FAIL (issue 1378). On the v0.6.2
+  // stage boot of 2026-10-15 the lane claimed a sweep at 21:07:29.62, before
+  // the api listened (21:07:30.47), and spent the attempt as a hard failure
+  // ('Unable to connect'). A refused connection or a gateway 502/504 now returns
+  // { ok: false }, which loop.ts records as a 'degraded' run and retries after
+  // its backoff. Any other error (a 4xx, a bad answer) still fails the job.
+  "analytics.parity_sweep": async () => {
+    try {
+      return await triggerParitySweep();
+    } catch (err) {
+      if (err instanceof AnalyticsApiUnreachableError) return { ok: false, error: err.message };
+      throw err;
+    }
+  },
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
-  // swarm session lifecycle
-  "swarm.open_session": swarm.openSession,
-  "swarm.publish_brief": swarm.publishBrief,
-  "swarm.close_window": swarm.closeWindow,
-  "swarm.aggregate": swarm.aggregateSession,
-  "swarm.judge": swarm.judgeSession,
-  "swarm.publish": swarm.publishSession,
-  // Three notification kinds, one delivery body. They stay separate registry
-  // entries rather than collapsing into a shared "swarm.send_notification"
-  // because `kind` is what an operator greps in `jobs`/`job_runs` when a mail
-  // did not arrive, and "the receipt lane is backed up" is a different incident
-  // from "approvals are not going out".
-  "swarm.send_application_received_notification": swarm.sendApplicationReceivedNotification,
-  "swarm.send_activation_notification": swarm.sendActivationNotification,
-  "swarm.send_seat_open_notification": swarm.sendSeatOpenNotification,
+  // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue
+  // work any more: system-scheduler-spec.md §4 gives the lifecycle a different
+  // shape — the `system-scheduler` container drives a subject's epoch through
+  // the API, and §1/§7 put every step that needs a model in a participant
+  // container, because the scheduler "calls no model, so it has no model key".
+  // A registration here would put one back inside a process that holds the
+  // database credential.
+  // The three swarm email delivery kinds (application receipt, activation
+  // approval, waitlist seat-open) were REMOVED with the swarm email feature
+  // itself — issue #1026 W5, decision D50 reversing D30. Nothing enqueues them
+  // any more and migration 0084 drops the outbox they delivered from; 0084 is
+  // also the one place their names still appear, because it settles any row a
+  // pre-0084 deployment left queued. Leaving the kinds unregistered is the right
+  // end state: loop.ts fails a job whose kind has no handler.
   // projects "Agentic Economy Ecosystem" data pipelines (issue #87). Ported from
   // the deprecated bot-analytics edge functions onto the kind→handler pattern.
   // discover/refreshCoins/refreshWallets/syncRevenue/fetchVaults each already

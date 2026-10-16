@@ -14,6 +14,8 @@
 // price-feed 429 on 2026-08-22.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
+import { sql as workerSql } from "../src/db/worker-client.ts";
+import { fixtureDb } from "./support/fixture-db.ts";
 import {
   backfillWalletDay,
   backfillWalletWindow,
@@ -48,10 +50,10 @@ const resolvedBlock = (date: string, rpcCalls: number) => {
 };
 
 async function cleanup(): Promise<void> {
-  await sql`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM wallet_backfill_state WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
-  await sql`DELETE FROM chain_day_blocks WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_balance_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_sleeve_samples WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM wallet_backfill_state WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
+  await fixtureDb`DELETE FROM chain_day_blocks WHERE sample_date = ANY(${ALL_DAYS}::date[])`;
 }
 
 beforeEach(async () => {
@@ -109,7 +111,7 @@ function countingDeps(overrides: Partial<WalletBackfillDeps> = {}): {
 
 test("a window of N days costs ONE resolver pass and ONE price load", async () => {
   const { deps, counts, priceRanges } = countingDeps();
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   expect(out.length).toBe(3);
   expect(out.every((r) => r.status === "filled")).toBe(true);
@@ -123,7 +125,7 @@ test("a window of N days costs ONE resolver pass and ONE price load", async () =
 
 test("results come back positionally aligned with the requested dates", async () => {
   const { deps } = countingDeps();
-  const out = await backfillWalletWindow(sql, [D3, D1, D2], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D3, D1, D2], deps, NOW);
   expect(out.map((r) => r.sampleDate)).toEqual([D3, D1, D2]);
 });
 
@@ -144,7 +146,7 @@ test("one day whose block will not resolve fails ALONE — the rest are repaired
     },
   });
 
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const byDate = new Map(out.map((r) => [r.sampleDate, r]));
   expect(byDate.get(D1)!.status).toBe("filled");
@@ -176,7 +178,7 @@ test("a day with an unreadable leg fails alone and is still day-atomic", async (
     },
   });
 
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
   expect(out.filter((r) => r.status === "filled").length).toBe(2);
   const failed = out.find((r) => r.status === "failed")!;
   expect(failed.sampleDate).toBe(D2);
@@ -197,7 +199,7 @@ test("a price-load failure fails every day it covers — and writes none of them
     },
   });
 
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
   expect(out.every((r) => r.status === "failed")).toBe(true);
   expect(out.every((r) => (r.detail ?? "").includes("429"))).toBe(true);
   // Block numbers are still recorded: resolution succeeded, pricing did not.
@@ -229,7 +231,7 @@ test("a shared price-load failure charges NO day an attempt", async () => {
     },
   });
 
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ attempts: number }[]>`
     SELECT attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
@@ -267,7 +269,7 @@ test("a symbol REFUSED at its pool charges no day an attempt, however often the 
   const { deps } = countingDeps({ loadPrices: pricesExcept("BNKR") });
 
   // One more pass than the per-day ceiling (default 3).
-  for (let i = 0; i < 4; i++) await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  for (let i = 0; i < 4; i++) await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ status: string; attempts: number }[]>`
     SELECT status, attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
@@ -300,8 +302,8 @@ test("a THIN DAY is still charged to that day — the symbol is priced, only thi
     },
   });
 
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ sample_date: Date; status: string; attempts: number }[]>`
     SELECT sample_date, status, attempts FROM wallet_backfill_state
@@ -322,7 +324,7 @@ test("repeated shared failures never exhaust a day — it stays re-plannable", a
 
   // One more pass than the per-day ceiling (default 3). Under the old
   // accounting the third pass flipped every day to 'exhausted' for good.
-  for (let i = 0; i < 4; i++) await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  for (let i = 0; i < 4; i++) await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ status: string; attempts: number }[]>`
     SELECT status, attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
@@ -348,7 +350,7 @@ test("a day-specific failure DOES charge that day, and only that day", async () 
     },
   });
 
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ sample_date: string; status: string; attempts: number }[]>`
     SELECT sample_date::text AS sample_date, status, attempts
@@ -375,7 +377,7 @@ test("the resolver's SHARED head-block failure charges no day", async () => {
     },
   });
 
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ attempts: number }[]>`
     SELECT attempts FROM wallet_backfill_state WHERE sample_date = ANY(${[D1, D2, D3]}::date[])
@@ -405,7 +407,7 @@ test("issue #761 — a permanently refusing shared leg reaches BLOCKED after con
   // simulating a mistyped pin that refuses identically every time.
   let now = NOW;
   for (let i = 0; i < 3; i++) {
-    await backfillWalletWindow(sql, [D1, D2, D3], deps, now);
+    await backfillWalletWindow(workerSql, [D1, D2, D3], deps, now);
     now = new Date(now.getTime() + 6 * 60_000);
   }
 
@@ -435,7 +437,7 @@ test("issue #761 — retries inside the debounce window count as ONE incident, n
   // (worker/loop.ts), not five separate scheduled runs.
   let now = NOW;
   for (let i = 0; i < 5; i++) {
-    await backfillWalletWindow(sql, [D1, D2, D3], deps, now);
+    await backfillWalletWindow(workerSql, [D1, D2, D3], deps, now);
     now = new Date(now.getTime() + 5_000);
   }
 
@@ -450,9 +452,9 @@ test("issue #761 — retries inside the debounce window count as ONE incident, n
 test("issue #761 — a DIFFERENT shared leg resets the streak rather than inheriting it", async () => {
   const { deps: priceBroken } = countingDeps({ loadPrices: pricesExcept("BNKR") });
   let now = NOW;
-  await backfillWalletWindow(sql, [D1, D2, D3], priceBroken, now);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], priceBroken, now);
   now = new Date(now.getTime() + 6 * 60_000);
-  await backfillWalletWindow(sql, [D1, D2, D3], priceBroken, now);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], priceBroken, now);
 
   // Two consecutive price-pool refusals — one short of the threshold.
   let row = (
@@ -473,7 +475,7 @@ test("issue #761 — a DIFFERENT shared leg resets the streak rather than inheri
       throw new Error("simulated transport outage");
     },
   };
-  await backfillWalletWindow(sql, [D1, D2, D3], chainBroken, now);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], chainBroken, now);
 
   row = (
     await sql<{ defer_leg: string | null; defer_streak: number; status: string }[]>`
@@ -489,7 +491,7 @@ test("issue #761 — a BLOCKED day heals itself the moment the leg is fixed, no 
   const { deps: broken } = countingDeps({ loadPrices: pricesExcept("BNKR") });
   let now = NOW;
   for (let i = 0; i < 3; i++) {
-    await backfillWalletWindow(sql, [D1, D2, D3], broken, now);
+    await backfillWalletWindow(workerSql, [D1, D2, D3], broken, now);
     now = new Date(now.getTime() + 6 * 60_000);
   }
   const [before] = await sql<{ status: string }[]>`SELECT status FROM wallet_backfill_state WHERE sample_date = ${D1}`;
@@ -499,7 +501,7 @@ test("issue #761 — a BLOCKED day heals itself the moment the leg is fixed, no 
   // cooldown-elapsed retry planWalletBackfill() issues once
   // WALLET_BACKFILL_LEG_RETRY_COOLDOWN_MINUTES has passed — no operator, no SQL.
   const { deps: fixed } = countingDeps();
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], fixed, now);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], fixed, now);
   expect(out.every((r) => r.status === "filled")).toBe(true);
 
   const rows = await sql<{ status: string; defer_leg: string | null; defer_streak: number; attempts: number }[]>`
@@ -515,7 +517,7 @@ test("issue #761 — a BLOCKED day heals itself the moment the leg is fixed, no 
 
 test("each day commits its OWN checkpoint row, so an interruption loses at most one day", async () => {
   const { deps } = countingDeps();
-  await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
 
   const rows = await sql<{ sample_date: Date; status: string; block_number: string }[]>`
     SELECT sample_date, status, block_number FROM wallet_backfill_state
@@ -530,7 +532,7 @@ test("each day commits its OWN checkpoint row, so an interruption loses at most 
 test("an OPEN day is skipped without spending anything, and never blocks the closed ones", async () => {
   const { deps, counts } = countingDeps();
   const today = "2019-07-10";
-  const out = await backfillWalletWindow(sql, [D1, today], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, today], deps, NOW);
 
   const byDate = new Map(out.map((r) => [r.sampleDate, r]));
   expect(byDate.get(today)!.status).toBe("skipped");
@@ -542,7 +544,7 @@ test("an OPEN day is skipped without spending anything, and never blocks the clo
 
 test("re-running a window over already-filled days writes nothing new, spends nothing, and KEEPS the checkpoint", async () => {
   const { deps, counts } = countingDeps();
-  await backfillWalletWindow(sql, [D1, D2], deps, NOW);
+  await backfillWalletWindow(workerSql, [D1, D2], deps, NOW);
   const [before] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ANY(${[D1, D2]}::date[])
   `;
@@ -552,7 +554,7 @@ test("re-running a window over already-filled days writes nothing new, spends no
   `;
   const spentBefore = counts.resolvedDays;
 
-  const second = await backfillWalletWindow(sql, [D1, D2], deps, NOW);
+  const second = await backfillWalletWindow(workerSql, [D1, D2], deps, NOW);
 
   // The days come back as the FILLED days they are. They used to be re-executed
   // and come back 'skipped, 0 rows, already populated', which overwrote the
@@ -584,14 +586,14 @@ test("backfillWalletDay IS the N=1 window — same result, same rows", async () 
   // would refuse. The single-day entry point is a delegation, and this is what
   // keeps it one.
   const a = countingDeps();
-  const viaDay = await backfillWalletDay(sql, D1, a.deps, NOW);
+  const viaDay = await backfillWalletDay(workerSql, D1, a.deps, NOW);
   const dayRows = await sql<{ symbol: string; value_usd: string; provenance: string }[]>`
     SELECT symbol, value_usd, provenance FROM wallet_balance_samples WHERE sample_date = ${D1} ORDER BY symbol
   `;
   await cleanup();
 
   const b = countingDeps();
-  const viaWindow = (await backfillWalletWindow(sql, [D1], b.deps, NOW))[0]!;
+  const viaWindow = (await backfillWalletWindow(workerSql, [D1], b.deps, NOW))[0]!;
   const windowRows = await sql<{ symbol: string; value_usd: string; provenance: string }[]>`
     SELECT symbol, value_usd, provenance FROM wallet_balance_samples WHERE sample_date = ${D1} ORDER BY symbol
   `;
@@ -610,7 +612,7 @@ test("a caller that injects only the per-day resolver still drives the executor"
     readChainAmounts: deps.readChainAmounts,
     loadPrices: deps.loadPrices,
   };
-  const out = await backfillWalletWindow(sql, [D1, D2], perDayOnly, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2], perDayOnly, NOW);
   expect(out.every((r) => r.status === "filled")).toBe(true);
 });
 
@@ -640,7 +642,7 @@ test("a window reads every day's legs in ONE multi-block pass, each at its own b
     },
   };
 
-  const out = await backfillWalletWindow(sql, [D1, D2, D3], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2, D3], deps, NOW);
   expect(out.every((r) => r.status === "filled")).toBe(true);
   expect(seen.calls).toBe(1); // ONE pass for three days
   expect([...seen.tags]).toEqual([D1, D2, D3].map((d) => "0x" + blockFor(d).toString(16)));
@@ -662,7 +664,7 @@ test("a window-wide chain-read failure fails every day it covered, and writes no
     },
   };
 
-  const out = await backfillWalletWindow(sql, [D1, D2], deps, NOW);
+  const out = await backfillWalletWindow(workerSql, [D1, D2], deps, NOW);
   expect(out.every((r) => r.status === "failed")).toBe(true);
   expect(out.every((r) => (r.detail ?? "").includes("simulated transport outage"))).toBe(true);
   const [row] = await sql<{ n: number }[]>`
@@ -673,7 +675,7 @@ test("a window-wide chain-read failure fails every day it covered, and writes no
 
 test("an empty window is a no-op, not a throw", async () => {
   const { deps, counts } = countingDeps();
-  expect(await backfillWalletWindow(sql, [], deps, NOW)).toEqual([]);
+  expect(await backfillWalletWindow(workerSql, [], deps, NOW)).toEqual([]);
   expect(counts.resolveBatches).toBe(0);
   expect(counts.priceLoads).toBe(0);
 });

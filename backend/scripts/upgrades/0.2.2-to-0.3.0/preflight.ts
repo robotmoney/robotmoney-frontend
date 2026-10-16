@@ -20,7 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { columnExists, tableExists } from "../../lib/checks.ts";
 import type { Checker } from "../../lib/checks.ts";
-import { type Db, runPreflightMain } from "../../lib/preflight-utils.ts";
+import { type Db, homeEnvFilePath, runPreflightMain } from "../../lib/preflight-utils.ts";
 import { deriveHostRole } from "../../lib/rollout-receipt.ts";
 import {
   APPEND_ONLY_MIGRATION,
@@ -39,7 +39,7 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(scriptDir, "..", "..", "..", "migrations");
 const repoRoot = join(scriptDir, "..", "..", "..", "..");
-const envPath = join(scriptDir, "..", "..", "..", "..", ".env.readonly");
+const envPath = homeEnvFilePath();
 
 /**
  * A transaction older than this will queue in front of 0034's ACCESS EXCLUSIVE

@@ -17,7 +17,6 @@ const config: StackConfig = {
   profile: "core",
   composeFiles: ["docker-compose.yml"],
   database: { user: "u", password: "p", name: "d" },
-  credentials: { adminToken: "admin", automationToken: "automation", analyticsToken: "analytics" },
   environment: { class: "ci", hash: "0123456789" },
 };
 
@@ -32,7 +31,7 @@ function runtimeRecording(calls: string[][]): StackRuntime {
     },
     async run(argv) {
       calls.push(argv);
-      return 0;
+      return { exitCode: 0, outputTail: "" };
     },
     async probe() {
       return { ok: true, detail: "ok" };

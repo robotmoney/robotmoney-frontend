@@ -8,30 +8,27 @@
 //     memo surface);
 //   * buildRegimeSummary (live aggregation) READS stored labels, re-derives
 //     only when the stored label is NULL, and never writes synthetic rows;
-//   * synthetic backfill is smoke-gated (refused under RM_ENV=prod) and reserved
+//   * synthetic backfill is test-seam-gated (issue #973: a process that is not
+//     the armed test harness writes nothing, whatever RM_ENV says) and reserved
 //     for the smoke fixture path (ensureSmokeSubjectFixtures).
-import { test, expect, afterEach } from "bun:test";
+import { test, expect } from "bun:test";
+import { join } from "node:path";
 import { classifyRegime, REGIME_METHOD, REGIME_RISK_OFF, REGIME_RISK_ON } from "@robotmoney/contract";
 
 import { classifyRegime as classifierLabel } from "../src/analytics/analyze/regime.ts";
-import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import {
   backfillRegimeHistory,
   buildRegimeSummary,
   ensureSmokeSubjectFixtures,
 } from "../src/swarm/domain.ts";
+import { testSeamArmed } from "../src/test-seam.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 // Own database per TEST, cloned from the migrated template: these tests each
 // start from an empty table, which used to mean wiping one the previous test
 // filled. See support/clean-db.ts.
 useCleanDatabasePerTest(import.meta.file);
-
-const origEnv = config.env;
-afterEach(() => {
-  (config as { env: string }).env = origEnv;
-});
 
 async function snapshotCount(): Promise<number> {
   const [{ n }] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM regime_snapshots`;
@@ -153,8 +150,8 @@ test("buildRegimeSummary history rows emit percentiles when source columns exist
 
 // ── AC: synthetic backfill is smoke-gated ─────────────────────────────────────
 
-test("smoke-gated backfill still seeds >= 8 persisted points, labeled by the canonical classifier", async () => {
-  expect(config.env).not.toBe("prod"); // tests run under RM_ENV=ephemeral
+test("seam-gated backfill still seeds >= 8 persisted points in the armed harness, labeled by the canonical classifier", async () => {
+  expect(testSeamArmed()).toBe(true); // tests/preload.ts armed this process
   await backfillRegimeHistory("2026-07-05");
   expect(await snapshotCount()).toBeGreaterThanOrEqual(8);
 
@@ -174,11 +171,32 @@ test("smoke fixture path (ensureSmokeSubjectFixtures) keeps smoke sparklines at 
   expect(summary.history.length).toBeGreaterThanOrEqual(8);
 });
 
-test("backfillRegimeHistory REFUSES to write synthetic rows under RM_ENV=prod", async () => {
-  (config as { env: string }).env = "prod";
-  await backfillRegimeHistory("2026-07-07");
-  expect(await snapshotCount()).toBe(0);
-});
+test("backfillRegimeHistory writes NO synthetic rows in a process that is not the armed harness, whatever RM_ENV says", async () => {
+  // The deployed runtime is a process that never armed backend/src/test-seam.ts.
+  // This subprocess inherits the environment (DATABASE_URL points at this
+  // test's own clean database) and is handed each retired env value in turn;
+  // none of them opens the synthetic path.
+  const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
+  const url = new URL(process.env.DATABASE_URL!);
+  url.pathname = `/${db}`;
+  for (const rmEnv of ["prod", "stage", "smoke", "ephemeral", undefined]) {
+    const env: Record<string, string> = { ...process.env as Record<string, string>, DATABASE_URL: url.toString() };
+    if (rmEnv === undefined) delete env.RM_ENV; else env.RM_ENV = rmEnv;
+    const proc = Bun.spawnSync(
+      [process.execPath, "-e", `
+        const { backfillRegimeHistory } = await import("./src/swarm/domain.ts");
+        const { closeDb } = await import("./src/db/client.ts");
+        await backfillRegimeHistory("2026-07-07");
+        await closeDb();
+        console.log("done");
+      `],
+      { cwd: join(import.meta.dir, ".."), env, stdout: "pipe", stderr: "pipe" },
+    );
+    if (proc.exitCode !== 0) throw new Error(`subprocess failed (${proc.exitCode}, RM_ENV=${rmEnv}): ${proc.stderr.toString()}`);
+    expect(proc.stdout.toString()).toContain("done");
+    expect(await snapshotCount()).toBe(0);
+  }
+}, 120_000);
 
 test("buildRegimeSummary output carries method === REGIME_METHOD.id", async () => {
   await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-08', 0.50, 'neutral')`;

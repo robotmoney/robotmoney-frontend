@@ -18,6 +18,77 @@
 // `backend/src/api/routes/dashboards.ts` is the thin adapter exposing this as
 // GET /api/dashboards/leaderboard.
 import { sql } from "../db/client.ts";
+import { on, registerQuery } from "../db/registry.ts";
+
+// Registered queries (smoke-production-spec.md §7.1): reads, one per
+// relation, reached only through GET /api/dashboards/leaderboard. The 30- and
+// 182-day revenue windows are one statement with a different cutoff.
+const DASHBOARDS = "src/api/routes/dashboards";
+const SAMPLE_ID = "00000000-0000-0000-0000-000000000000";
+
+const leaderboardAgents = registerQuery({
+  role: "rm_app",
+  object: "openclaw_agents",
+  privileges: ["SELECT"],
+  site: "src/projects/leaderboard-projections:fetchLeaderboard.agents",
+  purpose: "Read every active agent for the leaderboard.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at, is_active
+      FROM openclaw_agents WHERE is_active = true`,
+  },
+});
+
+const leaderboardWallets = registerQuery({
+  role: "rm_app",
+  object: "tracked_wallets",
+  privileges: ["SELECT"],
+  site: "src/projects/leaderboard-projections:fetchLeaderboard.wallets",
+  purpose: "Read active tracked wallets so an agent's wallet balance can be matched by address.",
+  callers: [DASHBOARDS],
+  probe: { statement: "SELECT address, balance_usd, refreshed_at FROM tracked_wallets WHERE is_active = true" },
+});
+
+const leaderboardRevenue = registerQuery({
+  role: "rm_app",
+  object: "agent_revenue_daily",
+  privileges: ["SELECT"],
+  site: "src/projects/leaderboard-projections:fetchLeaderboard.revenue",
+  purpose: "Read the agents' daily revenue since a cutoff (the 30- and 182-day windows).",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      WHERE agent_id IN ($1::uuid) AND revenue_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const leaderboardSnapshots = registerQuery({
+  role: "rm_app",
+  object: "daily_agent_snapshots",
+  privileges: ["SELECT"],
+  site: "src/projects/leaderboard-projections:fetchLeaderboard.snapshots",
+  purpose: "Read the agents' last 30 days of x402 snapshots.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: `SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count
+      FROM daily_agent_snapshots WHERE agent_id IN ($1::uuid) AND snapshot_date >= $2::date`,
+    params: [SAMPLE_ID, "2026-01-01"],
+  },
+});
+
+const leaderboardCoins = registerQuery({
+  role: "rm_app",
+  object: "lobster_coins",
+  privileges: ["SELECT"],
+  site: "src/projects/leaderboard-projections:fetchLeaderboard.coins",
+  purpose: "Read the agents' projects' active coins, to pick each project's best by market cap.",
+  callers: [DASHBOARDS],
+  probe: {
+    statement: "SELECT id, project_id, ticker, market_cap FROM lobster_coins WHERE project_id IN ($1::uuid) AND is_active = true",
+    params: [SAMPLE_ID],
+  },
+});
 import type { LeaderboardResponse, LeaderboardRow, LeaderboardSourceHealth, ConfidenceLabel, EvidenceStatus } from "@robotmoney/contract";
 
 export type { LeaderboardResponse, LeaderboardRow };
@@ -95,7 +166,7 @@ function evidenceStatus(present: boolean, partial: boolean): EvidenceStatus {
 }
 
 export async function fetchLeaderboard(): Promise<LeaderboardResponse> {
-  const agents = await sql`
+  const agents = await on(sql, leaderboardAgents)`
     SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at, is_active
     FROM openclaw_agents WHERE is_active = true
   `;
@@ -105,21 +176,21 @@ export async function fetchLeaderboard(): Promise<LeaderboardResponse> {
   const cutoff182 = since(182);
 
   const [wallets, revenue30, revenue182, agentSnaps30, projectCoins] = await Promise.all([
-    sql`SELECT address, balance_usd, refreshed_at FROM tracked_wallets WHERE is_active = true`,
+    on(sql, leaderboardWallets)`SELECT address, balance_usd, refreshed_at FROM tracked_wallets WHERE is_active = true`,
     agentIds.length
-      ? sql`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      ? on(sql, leaderboardRevenue)`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff30}`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
+      ? on(sql, leaderboardRevenue)`SELECT agent_id, revenue_usd, revenue_date::text AS revenue_date FROM agent_revenue_daily
             WHERE agent_id IN ${sql(agentIds)} AND revenue_date >= ${cutoff182}`
       : Promise.resolve([] as Record<string, unknown>[]),
     agentIds.length
-      ? sql`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count
+      ? on(sql, leaderboardSnapshots)`SELECT agent_id, snapshot_date::text AS snapshot_date, x402_volume_usd, x402_txn_count
             FROM daily_agent_snapshots WHERE agent_id IN ${sql(agentIds)} AND snapshot_date >= ${cutoff30}`
       : Promise.resolve([] as Record<string, unknown>[]),
     projectIds.length
-      ? sql`SELECT id, project_id, ticker, market_cap FROM lobster_coins WHERE project_id IN ${sql(projectIds)} AND is_active = true`
+      ? on(sql, leaderboardCoins)`SELECT id, project_id, ticker, market_cap FROM lobster_coins WHERE project_id IN ${sql(projectIds)} AND is_active = true`
       : Promise.resolve([] as Record<string, unknown>[]),
   ]);
 

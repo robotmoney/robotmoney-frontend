@@ -3,29 +3,25 @@
 // idempotent retry semantics, rejection of a second conflicting freeze, and
 // readback of the exact frozen manifest. Drives the REAL route handlers and
 // SQL stores through handleAnalytics against real ephemeral Postgres.
-import { test, expect, afterEach } from "bun:test";
+import { test, expect, beforeAll } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { config } from "../../src/config.ts";
 import { handleAnalytics } from "../../src/api/routes/analytics.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
+import { provisionAnalyticsToken, provisionOperatorToken } from "../support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
 
 const A = ROUTES.analytics;
-const TOKEN = "tok_analytics_test_secret";
-const ADMIN = "tok_admin_test_secret";
+let TOKEN = "";
+let ADMIN = "";
 
-const orig = { analyticsToken: config.analyticsToken, adminToken: config.adminToken, allowInsecure: config.allowInsecure };
-function prodAuth() {
-  config.analyticsToken = TOKEN;
-  config.adminToken = ADMIN;
-  config.allowInsecure = false;
-}
-afterEach(() => {
-  config.analyticsToken = orig.analyticsToken;
-  config.adminToken = orig.adminToken;
-  config.allowInsecure = orig.allowInsecure;
+// Store-issued, like the real credentials (smoke spec §3, D52 (1)): the
+// producer's token is the only one the analytics boundary accepts, and the
+// operator's admin token is refused there, in every env.
+beforeAll(async () => {
+  TOKEN = await provisionAnalyticsToken();
+  ADMIN = await provisionOperatorToken();
 });
 
 function req(method: string, path: string, body?: unknown, token?: string): Request {
@@ -56,7 +52,6 @@ async function beginRunViaApi(overrides: Record<string, unknown> = {}): Promise<
 }
 
 test("POST runs (begin run): analytics-provider auth is required, and no header row exists without a valid token", async () => {
-  prodAuth();
   const body = runBody();
   expect((await call(req("POST", A.runs, body)))?.status).toBe(401);
   expect((await call(req("POST", A.runs, body, ADMIN)))?.status).toBe(403);
@@ -72,7 +67,6 @@ test("POST runs (begin run): analytics-provider auth is required, and no header 
 });
 
 test("POST runs: the WHOLE body is validated before any transaction opens — a malformed payload writes nothing", async () => {
-  prodAuth();
   // Delta, not an absolute count: this file's OTHER tests share one database
   // (useCleanDatabase is per-file) and may already have written a header.
   const [{ n: before }] = await sql`SELECT count(*)::int AS n FROM analytics_ledger_runs`;
@@ -93,7 +87,6 @@ test("POST runs: the WHOLE body is validated before any transaction opens — a 
 });
 
 test("POST runs: idempotent retry on the SAME runKey replays the existing header rather than creating a second one", async () => {
-  prodAuth();
   const body = runBody();
   const first = await call(req("POST", A.runs, body, TOKEN));
   expect(first!.status).toBe(200);
@@ -107,7 +100,6 @@ test("POST runs: idempotent retry on the SAME runKey replays the existing header
 });
 
 test("POST runs: a genuinely CONCURRENT duplicate submission (not just a sequential retry) is still idempotent, not an unhandled 23505", async () => {
-  prodAuth();
   const body = runBody();
   // Fire both requests together so they race on the same run_key uniqueness
   // check, rather than one completing before the other starts.
@@ -125,7 +117,6 @@ test("POST runs: a genuinely CONCURRENT duplicate submission (not just a sequent
 });
 
 test("POST runs/events (append event): auth required, whole-body validated, and events land in order", async () => {
-  prodAuth();
   const { runId } = await beginRunViaApi();
 
   const eventBody = { event: { runId, eventType: "started", detail: null } };
@@ -157,7 +148,6 @@ function vintageBody(runId: string, methodologyVersionId: string, overrides: Rec
 }
 
 test("POST vintages (freeze): auth required, whole-body validated, idempotent retry, rejection of a second CONFLICTING freeze, and exact-manifest readback", async () => {
-  prodAuth();
   const { runId, methodologyVersionId } = await beginRunViaApi({ runKey: crypto.randomUUID(), asof: "2026-05-16", toolId: "vintage-test" });
   const body = vintageBody(runId, methodologyVersionId, { toolId: "vintage-test" });
 
@@ -200,7 +190,6 @@ test("POST vintages (freeze): auth required, whole-body validated, idempotent re
 });
 
 test("GET vintage: unauthorized without a token, and 404 for a (runId, toolId) that was never frozen", async () => {
-  prodAuth();
   const { runId } = await beginRunViaApi({ runKey: crypto.randomUUID(), asof: "2026-05-17", toolId: "never-frozen" });
   expect((await call(req("GET", `${A.vintage}?runId=${runId}&toolId=never-frozen`)))?.status).toBe(401);
   expect((await call(req("GET", `${A.vintage}?runId=${runId}&toolId=never-frozen`, undefined, TOKEN)))?.status).toBe(404);

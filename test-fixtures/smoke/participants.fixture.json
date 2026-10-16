@@ -1,0 +1,17 @@
+{
+  "note": "FIXTURE KEYS ONLY. Ed25519 seeds (32 bytes, base64url) and model keys that exist nowhere but in this file and a throwaway rehearsal database. They authorize nothing real. scripts/smoke-e2e.ts seats these two identities through the running API's admin route and writes the roster file a boot reads.",
+  "agents": {
+    "athena": {
+      "name": "Athena E2E",
+      "privateD": "velvet-thunder-private-athena-quiet-harbors",
+      "modelKey": "fixture-model-key-athena"
+    }
+  },
+  "judges": {
+    "themis": {
+      "name": "Themis E2E",
+      "privateD": "ivory-comet-private-themis-lanterns-ribbons",
+      "modelKey": "fixture-model-key-themis"
+    }
+  }
+}
