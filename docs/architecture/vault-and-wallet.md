@@ -1,5 +1,9 @@
 # Vault economics and wallet balances
 
+> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
+> covers deposit consent, supported execution paths and reproducible historical snapshots.
+> It is not accepted or shipped; the existing boundaries below remain authoritative.
+
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 
 ## 10. Vault economics & wallet balances (live chain data)
