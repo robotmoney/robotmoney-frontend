@@ -1,7 +1,7 @@
 # Admin Surface: Research and Investment Swarm
 
 > **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers a read-only member referral-code projection and its admin UI integration.
+> covers a read-only member referral-code projection, admin corrections and their admin UI integration.
 > It is not accepted or shipped; the existing boundaries below remain authoritative.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.

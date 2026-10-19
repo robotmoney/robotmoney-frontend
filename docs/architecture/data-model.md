@@ -1,7 +1,7 @@
 # Data model
 
 > **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers referral attribution without a new database table or migration.
+> covers referral attribution; whether admin corrections need a new table is still open.
 > It is not accepted or shipped; the existing boundaries below remain authoritative.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.

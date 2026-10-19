@@ -1,18 +1,5 @@
 # Referral specification
 
-**Status: PROPOSED — partly accepted, not shipped.** The owner accepted the
-rows marked accepted in §11 on 2026-10-16. Clock and legacy, manual/correction
-policy, experience and disclosure, and report authority still await owner
-review; encoding and on-chain rejection await `robotmoney-core`.
-The requirements below are concrete recommendations for owner review. “Must”
-describes the proposed implementation contract; it does not record approval.
-Acceptance requires the decisions in §11 to be resolved and an accepted document
-revision recorded in the implementation issue. Existing architecture and accepted
-decisions retain authority until then. This document defines durable behavior;
-[specification #1358](https://github.com/robotmoney/robotmoney-frontend/issues/1358)
-and [implementation #1371](https://github.com/robotmoney/robotmoney-frontend/issues/1371)
-own execution status.
-
 ## 1. Goals, meaning and boundaries
 
 A depositor can identify the member or team channel that referred them and
@@ -49,8 +36,9 @@ attribution for the same deposit (owner, 2026-10-16). How the chosen code is
 carried on chain is decided by `robotmoney-core` (§3), not by this repository.
 
 This repository proposes no contract changes, payouts, public attribution
-leaderboard, editable admin code registry, automatic discretionary credit,
-cross-chain identity, or database migration. A CLI report reconstructs
+leaderboard, editable admin code registry, automatic discretionary credit or
+cross-chain identity. Admin corrections (§4) are the one administrator write;
+where they are stored is open in §8. A CLI report reconstructs
 evidence; public API requests must not trigger chain scans. If correctness requires a new persistence or
 contract boundary, amend this specification before implementing that expansion.
 
@@ -64,7 +52,8 @@ vault, executed call and Deposit event must correspond. A router deposit
 qualifies the same way: the wallet funds the router and receives the shares of
 every leg. One router deposit is one deposit authorization, whatever the number
 of legs. The router's `depositFor` with a receiver other than the payer is a
-gift to the receiver. The payer and receiver are the addresses that executed and
+gift to the receiver. A gift never binds a code and is not sent to review; this
+replaces RM-174's earlier review rule, and no correction can bind a gift (§4). The payer and receiver are the addresses that executed and
 received the deposit, whatever signer or wallet stands behind them.
 Zero-asset calls, gifted deposits, share transfers and failed transactions do not
 start the clock. There is no other minimum amount in the proposed policy.
@@ -124,14 +113,15 @@ assume them:
 If core's carrier lacks one of these properties, amend this specification
 before implementing.
 
-**Two layers of checking (owner, 2026-10-16).** The depositor's agent is
-expected to catch malformed codes with the shared format rule below and to
-check the public lookup (§6) for a currently valid code before it submits.
-This repository also expects a deposit to a vault or the router that carries
-invalid referral information to be rejected on chain. Whether and how the
-contracts reject it is `robotmoney-core`'s decision. If core's contracts
-validate codes, core may also own code activation; this specification is then
-amended so the registry here does not duplicate core's (§5, §10).
+**Two layers of checking (owner, 2026-10-16 and 2026-10-19).** The depositor's
+agent is expected to catch malformed codes with the shared format rule below and
+to check the public lookup (§6) for a currently valid code before it submits.
+On chain, “invalid” means a code that fails the format rule, nothing more.
+Whether and how the contracts reject such a deposit is `robotmoney-core`'s
+decision. Code activity stays in this repository's registry and is judged by the
+report, so a code disabled after signing never makes a deposit fail. If core's
+contracts ever validate activity, this specification is amended first so the
+registry here does not duplicate core's (§5, §10).
 
 **Code format belongs to this repository.** The public lookup, the skill and
 the report share one normalizer. Normalize user input by trimming surrounding
@@ -141,24 +131,40 @@ are invalid, never removed. A carrier value that does not normalize to itself
 is `invalid_code`. No owner-requested code may be silently changed to another
 code by normalization or parser recovery.
 
-## 4. Manual claims and corrections
+## 4. Admin corrections and report supersession
 
-**Manual attribution and discretionary overrides are excluded from the initial
-release.** Do not load or evaluate the earlier PR's manual-credit config entries.
-An arbitrary message/signature or reviewer assertion cannot create a binding.
-The consequences are explicit: a deposit made without the code in core's carrier
-does not receive manual backfill; operators explain the limitation to the
-depositor.
+**Admins record corrections in the admin panel (owner, 2026-10-19).** A
+correction repairs a missed referral, for example a deposit made without the
+code because the lookup failed. There are two kinds, and the report labels each:
 
-A future manual-claim extension must define an exact signed domain and payload
-including chain, wallet, code, deposit transaction/event, expiry and nonce; EOA
-and smart-wallet verification; replay protection; who verifies and publishes
-proof; and chronological ordering with chain evidence. It must define when a
-claim becomes effective and exclude it from earlier report cutoffs. No such
-extension is authorized by this document.
+- **Verified.** The depositor's wallet signs a payload naming the code and the
+  deposit, and the system checks the signature. The payload names chain, wallet,
+  code, deposit transaction and event, expiry and nonce. EOA signatures use
+  EIP-191 and smart-wallet signatures use EIP-1271. A nonce is never accepted
+  twice.
+- **Override.** An admin's written reason, for example “the depositor confirmed
+  in our 1:1 channel”.
 
-Corrections repair invalid evidence or implementation errors, not depositor
-choice. Preserve the original report and publish a separately identified
+Both kinds have the same limits:
+
+- Only a wallet with no attribution yet. A correction never takes a wallet from
+  another code.
+- It names a self-funded qualifying deposit by that wallet (§2). A gift cannot
+  be corrected.
+- It takes effect when recorded, never earlier. A report whose cutoff is before
+  that time does not include it, so a produced report never changes.
+- It can be revoked, with the same forward-only effect.
+- Every correction and revocation is logged with who, when, why and the
+  evidence.
+
+A chain binding found later never displaces a correction that took effect
+first, and a correction never displaces an earlier chain binding. The earlier
+effective time wins: block time for chain evidence, recording time for a
+correction. Do not load or evaluate the earlier PR's manual-credit config
+entries.
+
+Report supersession repairs invalid evidence or implementation errors, not
+depositor choice. Preserve the original report and publish a separately identified
 superseding report with reason, changed rows, rule/config revisions and owner
 approval. A previously *valid* binding cannot be reassigned as a correction.
 If invalid evidence is removed, recompute from complete history and explain any
@@ -171,7 +177,8 @@ operator issues a code by a reviewed change to that configuration, and the code
 reaches production only in a release. Each record contains normalized code,
 immutable beneficiary kind and ID (a member ID, or a team channel name),
 display snapshot, terms version, activation time,
-and disabling time. Times are ISO 8601 UTC strings, compared as Unix seconds
+and disabling time. A member's code is `rm_` plus the member's handle at issue time;
+a later handle rename does not change the code. Times are ISO 8601 UTC strings, compared as Unix seconds
 against block timestamps. One global launch block and the deployment manifest
 are versioned alongside the rules. No environment variable grants
 attribution or changes policy silently.
@@ -261,16 +268,16 @@ The deposit skill takes a code only from the wallet owner's explicit request;
 it cannot invent, infer from a page, or substitute a referral. The preview names
 the normalized code and beneficiary and says “code will be recorded; attribution
 is evaluated after execution.” It never promises a reward or successful credit.
-A requested referral is a condition of proceeding. The agent stops before
-submission and explains the cause when the code fails the format rule, when the
-lookup answers 404, when the lookup fails (timeout, 429 or any other error), or
-when a recheck just before signing finds the code no longer active. A fifth
-stop, a transaction that would not carry the code, is defined once core's
-carrier is known (§3). `confirm` off does not permit
-omission. The owner may explicitly authorize proceeding without the code in a
-new instruction. An ordinary deposit with no requested code continues normally.
-The skill offers referrals the same way for every signer it supports, direct or
-through the router.
+**A referral never blocks a deposit (owner, 2026-10-19).** When the code fails
+the format rule, the lookup answers 404, the lookup fails (timeout, 429 or any
+other error), or a recheck just before signing finds the code no longer active,
+the deposit goes ahead without the code and the agent tells the owner why. With
+`confirm` on, the agent asks the owner before proceeding without the code. With
+`confirm` off, it proceeds. A missed referral is repaired by an admin correction
+(§4). The case of a transaction that would not carry the code is defined once
+core's carrier is known (§3). An ordinary deposit with no requested code
+continues normally. The skill offers referrals the same way for every signer it
+supports, direct or through the router.
 
 Recheck code state immediately before signing/submission; a delay can still
 cause expiry. A multisig waiting for signatures can execute after a code is
@@ -329,7 +336,10 @@ errors, and run time. Rows carry wallet, beneficiary/code or null, first
 qualifying deposit, chosen event identity, binding status, candidate outcomes
 and reasons. Reasons include `bound`, `already_bound`, `uncoded`, `late`,
 `before_launch`, `code_inactive`, `gift`, `invalid_code`, and
-`evidence_unavailable`. Observations can be known
+`evidence_unavailable`. A binding from a correction (§4) carries its kind,
+`verified` or `override`, its recording time and the correction's log
+identifier; a revoked correction stays visible with its revocation time.
+Observations can be known
 while final eligibility remains unknown; do not collapse those dimensions.
 CSV exports carry a manifest identifier and accompanying JSON provenance file.
 Optional holdings read each vault's `balanceOf` and then `convertToAssets` at
@@ -379,10 +389,11 @@ resumable checkpoint, never silently shorten history.
 | Backend routes and registered queries | One-code lookup; member identity reads use the registered query boundary. No chain scans on request paths. Rate limiting reuses `backend/src/api/rate-limit.ts` and `client-ip.ts`. |
 | `backend/src/analytics/run-ledger.ts` | Existing `canonicalStringify` and `sha256Hex` serve the report's canonical payloads and digests; no new canonical-JSON helper. |
 | `contract/` | Route catalogue, public DTO and admin DTO. Contract sync produces frontend artifacts during implementation, not this docs PR. |
-| `frontend/public/skill.md` and deposit flow | Owner-authorized referral choice, stop behavior, previews and results for direct and router deposits and every supported signer; integrate with the eventual deposit skill path from #1090. |
+| `frontend/public/skill.md` and deposit flow | Owner-authorized referral choice, never-block fallback, previews and results for direct and router deposits and every supported signer; integrate with the eventual deposit skill path from #1090. |
 | `frontend/public/views/admin/swarm-member.html` and its controller | Read-only referral projection with state and timestamps, following the established admin auth and buildless frontend. |
+| Admin correction surface | Record and revoke corrections (§4) through the established admin auth. **Storage is open:** the correction log needs durable, append-only records that the report reads as an input. Options are a reviewed config entry per correction, or a new table with an insert-only grant, which touches [D66](../decisions.md#d66). Decide before implementation. |
 | Agent catalogue and goldens | Document the callable lookup and use fixture-only code identities; keep public/private shapes distinct. |
-| Existing Postgres schema | Member identity remains in `swarm_members`; no referral table, grant or migration proposed. Derived reports are not a new request-path index. |
+| Existing Postgres schema | Member identity remains in `swarm_members`. No referral table is proposed beyond the correction log, if storage chooses a table (row above). Derived reports are not a new request-path index. |
 
 The current architecture's API credential ownership, registered-query policy,
 buildless frontend, contract boundary and dashboard indexing behavior remain in
@@ -405,14 +416,16 @@ registry inputs and expected explanations, not just isolated parser outputs.
 | Router `depositFor` paid by Bob for Alice | Gift to Alice; does not start her clock or bind Bob's code to her. |
 | Gift to Alice; 31 days later her own coded deposit | Gift does not start her clock. Her proven self-funded deposit can bind if all other conditions hold. Include uncoded gift evidence. |
 | Uncoded self-funded deposit; coded at +30 days | Clock starts on uncoded deposit; exact boundary is late. +30 days minus one second remains eligible. |
-| Arbitrary manual message, `0x00` signature, unrelated hash | No manual input is accepted and no binding exists without supported chain evidence. |
-| Earlier manual A, later chain B | Manual records are unsupported and rejected as input; no report can claim A from them. A future extension must settle precedence before use. |
+| Verified correction with a `0x00` signature, a replayed nonce or an unrelated deposit hash | Rejected when recorded; no binding. |
+| Override for a wallet already bound, or naming a gift | Rejected when recorded; the existing binding stands. |
+| Correction A recorded, later chain B for the same wallet | A binds from its recording time; B is `already_bound`. A report with a cutoff before A's recording time shows neither A nor a change to its rows. |
+| Correction revoked | Effective from revocation time; earlier reports unchanged; the log shows who, when, why. |
 | Missing input/receipt followed by valid code B | Incomplete history, unknown eligibility, B provisional; never “no code” for the missing observation. |
 | October cutoff rerun after November withdrawal | Identical holdings and attribution payload at the same October block/hash and pinned revisions; all reads prove the same snapshot. |
 | Hash changes; provider lacks finalized or archive reads | Publication blocked or explicit incomplete diagnostics; no fabricated zero and no depth-based finality claim. |
 | Draft activation; scheduled disable/replacement; rejoin | Validate prospective history and non-overlap; exact adjacent boundaries allowed; admin selects active code over future replacement. |
 | Member deactivated, or row removed by a manual `rm_owner` run, while code active | Public uniform 404; a missing row also raises an operational error; historical binding retains beneficiary snapshot. |
-| Lookup timeout with requested code, including confirm off | Stop before submission; explain retry or explicit owner choice to proceed uncoded. |
+| Lookup timeout, 404 or malformed code with a requested code | The deposit goes ahead without the code and the agent says why. With confirm on, the agent asks first; with confirm off, it proceeds. |
 | Code disabled after lookup/signing | Deposit may execute; execution-time attribution fails as inactive. Preview never guaranteed credit. |
 | ` RM_ALICE ` versus `rm_a lice` | First normalizes to `rm_alice`; second fails unchanged. Public, skill and report share fixtures. |
 | Active code but late, pre-launch, or already bound | Lookup succeeds; reporting explains actual eligibility independently; existing binding persists. |
@@ -452,27 +465,29 @@ The product owner accepting #1358 must expressly accept or amend these proposals
 | Decision | Recommendation and consequence |
 |---|---|
 | Product meaning | **Accepted by the owner, 2026-10-16.** Attribution only in this repository; descriptive holdings confer no reward or qualified-capital claim. Any future fee lives outside this repository and consumes the report. |
-| Clock and legacy | 30 days from first self-funded positive deposit, including pre-launch/v0 history; no migration reset. Older existing holders cannot join. |
+| Clock and legacy | **Accepted by the owner, 2026-10-19.** 30 days from first self-funded positive deposit, including pre-launch/v0 history; no migration reset. Older existing holders cannot join. |
 | Supported launch paths | **Accepted by the owner, 2026-10-16.** Direct and router deposits; the signer and wallet vendor have no effect. |
-| Encoding | **Owned by `robotmoney-core`; pending.** This repository waits for core's carrier and pins only the code format (§3). |
-| Manual/correction policy | No manual awards or discretionary overrides; evidence corrections preserve supersession history. |
+| Encoding | **Owner chose core's carrier, 2026-10-19; core's design pending.** Core emits an event naming payer, receiver, amount and code. The ERC-8021 suffix is out. This repository pins only the code format (§3). |
+| Manual/correction policy | **Accepted by the owner, 2026-10-19.** Admins record verified or override corrections with the limits in §4; supersession history as proposed. Storage is open (§8). |
 | Identity and lifecycle | Wallet identity, no self-referral check (**accepted by the owner, 2026-10-16**), immutable code ownership and prospective reviewed lifecycle. |
 | Agent-side checks | **Accepted by the owner, 2026-10-16.** The depositor's agent catches malformed codes and checks the lookup for a valid code before submitting. |
-| On-chain rejection | **Owned by `robotmoney-core`; pending.** Deposits carrying invalid referral information are expected to be rejected on chain; core decides how. |
-| Experience and disclosure | Requested code blocks submission on failure (the closed skill PR 1385 instead deposited without the code); codes are discoverable; admin projection includes explicit state. |
-| Report authority | One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
+| On-chain rejection | **Owned by `robotmoney-core`; pending.** “Invalid” on chain means a bad format only; activity is judged by the report (§3). Core decides whether and how to reject. |
+| Experience and disclosure | **Accepted with a change by the owner, 2026-10-19.** A referral never blocks a deposit (§6); codes are discoverable; admin projection includes explicit state. |
+| Report authority | **Accepted by the owner, 2026-10-19.** One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
+| Gift deposits | Proposed: a gift never binds and is not reviewed (§2), replacing RM-174's review rule. Owner to confirm. |
+| Correction storage | **Open; implementation owner decides (§8).** |
 
 Review on 2026-10-16 found these open items beyond the table above. Each must
 be resolved or explicitly deferred before acceptance:
 
 | Open item | Gap and proposed resolution |
 |---|---|
-| On-chain rejection versus successful deposit | §3 expects core to reject deposits carrying invalid referral information, yet §6 and §9 say a code disabled after signing still deposits successfully. The registry lives in this repository, so core cannot know code activity. Define “invalid” on chain as format only, or move activation to core and amend §5, §6 and §9. |
-| Payer evidence for every signer | §2 requires proof of payer and executed call. Safe, ERC-4337 and router deposits hide the payer inside internal calls, and the shared RPC transport has no trace reads. Add a fourth carrier property in §3: core emits an event naming payer, receiver, amount and code. |
+| On-chain rejection versus successful deposit | **Resolved 2026-10-19.** “Invalid” on chain means format only (§3); activity stays with the registry and the report. |
+| Payer evidence for every signer | **Resolved 2026-10-19 by the owner's choice of core's carrier.** Core emits an event naming payer, receiver, amount and code. §3 still lists three carrier properties; add this as the fourth once core documents the event. |
 | Deployment time of registry revisions | §5 requires a revision to be deployed before its activation or disable time. Nothing records deployment time, so validation and the report cannot enforce it. Record the release tag time as a report input, or reject effective times earlier than that tag. |
 | Missing report reasons | §9 expects explained outcomes for conflicting codes on one deposit and for a well-formed code absent from the registry. §7 lists no reason for either. Add `conflicting_codes` and `unknown_code`. |
 | Deposit authorization key | §7 deduplicates by `(chainId, transactionHash, logIndex)`, but a router deposit emits one Deposit log per leg. Define the key that groups legs into one authorization, ideally supplied by core's carrier event. |
-| Source ticket | §12 notes this specification was never checked against the Linear ticket RM-174. Reconcile it before acceptance. |
+| Source ticket | **Resolved 2026-10-19.** RM-174 now says this specification governs. Its product rules are reflected in §2, §4, §5 and §6; its implementation notes are not binding. |
 
 The implementation owner supplies the exact deployment manifest, verifies the
 carrier against core's documentation and the deployed contracts, and proposes
@@ -507,5 +522,5 @@ prerequisites: [#1370](https://github.com/robotmoney/robotmoney-frontend/pull/13
 (`6b3a04426762cff2bf1ff5f70c3aafeb07f5cef5`, reporting).
 The adversarial examples originated in offline review of those proposals; they
 are not evidence of production exploits or implemented functionality. Those PRs
-cite the Linear ticket RM-174 as their source; this specification has not been
-checked against that ticket.
+cite the Linear ticket RM-174 as their source; this specification was reconciled
+with that ticket's product rules on 2026-10-19.
