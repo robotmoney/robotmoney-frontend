@@ -170,8 +170,13 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await openHome(page);
 
   const hero = page.locator(".hm-hero");
-  await expect(hero.locator("h1")).toContainText("The model portfolio for crypto.");
+  await expect(hero.locator("h1")).toContainText("The model portfolio for AI-native firms, DAOs, wealth managers, robots and crypto funds.");
   await expect(hero.locator("h1")).toContainText("Made by a swarm of AI agents.");
+  // The audience word turns in an aria-hidden copy drawn from data-ch, so the
+  // sentence above stays whole while it moves.
+  await expect(hero.locator(".hm-rot.is-live .hm-rot__vis")).toHaveAttribute("aria-hidden", "true");
+  await expect.poll(() => hero.locator(".hm-rot__w:last-child .hm-rot__l").evaluateAll((ls) => ls.map((l) => (l as HTMLElement).dataset.ch).join("")), { timeout: 8_000 })
+    .toBe("DAOs");
   await expect(hero.locator(".hm-hero__cta .btn-primary")).toHaveAttribute("href", "/deposit");
   await expect(hero.locator(".hm-hero__cta .btn-primary")).toContainText("Deposit USDC");
   await expect(hero.locator(".hm-hero__cta .rr-btn")).toHaveAttribute("href", "/allocation");
@@ -328,7 +333,7 @@ test("members API down: Roster unavailable, and the copy still reads", async ({ 
 
   await expect(page.locator(".hm-crew__empty")).toContainText("Roster unavailable");
   await expect(page.locator(".hm-crew li")).toHaveCount(0);
-  await expect(page.locator(".hm-hero__h")).toContainText("The model portfolio for crypto.");
+  await expect(page.locator(".hm-hero__h")).toContainText("The model portfolio for AI-native firms, DAOs, wealth managers, robots and crypto funds.");
 
   await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
 });
@@ -425,8 +430,10 @@ test("reduced motion holds a still frame and does not hide copy", async ({ page 
   await expect(page.locator(".hm-hero__still")).toBeVisible();
   const motion = await page.locator(".hm-hero__h").evaluate((el) => getComputedStyle(el).animationName);
   expect(motion === "none" || motion === "").toBe(true);
-  await expect(page.locator(".hm-hero__h")).toContainText("The model portfolio for crypto.");
+  await expect(page.locator(".hm-hero__h")).toContainText("The model portfolio for AI-native firms, DAOs, wealth managers, robots and crypto funds.");
   await expect(page.locator(".hm-hero__lede")).toBeVisible();
+  await expect(page.locator(".hm-rot")).not.toHaveClass(/is-live/);
+  await expect(page.locator(".hm-rot__static")).toHaveText("AI-native firms");
 
   await expectNoBrowserErrors(errors);
 });

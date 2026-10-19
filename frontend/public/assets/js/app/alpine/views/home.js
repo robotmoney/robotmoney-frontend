@@ -23,6 +23,7 @@ import { fmtDate, vaultForBucket } from "../../lib/vault-data.js";
 import { loadLatestRecommendation } from "../../lib/vault-source.js";
 import { createMonument } from "../../home/scene.js";
 import { runHero } from "../../home/loop.js";
+import { runRotator } from "../../home/rotator.js";
 import { mountPlate } from "../../home/plate.js";
 import { STILL_AT } from "../../home/story.js";
 
@@ -76,6 +77,7 @@ export function registerHomeView(Alpine) {
     // Imperative handles: never bound in the markup.
     /** @type {any} */ _hero: null,
     /** @type {null | (() => void)} */ _stopLoop: null,
+    /** @type {null | (() => void)} */ _stopRotor: null,
     /** @type {(() => void)[]} */ _plates: [],
     /** @type {IntersectionObserver | null} */ _reveal: null,
     /** @type {null | (() => void)} */ _onLeave: null,
@@ -229,6 +231,11 @@ export function registerHomeView(Alpine) {
         this._stopLoop = runHero(this._hero, { stage, host, stillAt: STILL_AT, reduce });
         this._debugHook();
       }
+      // The audience word starts turning once the entrance has settled.
+      this._stopRotor = runRotator(root.querySelector(".hm-rot"), {
+        host, hover: root.querySelector(".hm-hero__h"), reduce,
+        delay: Math.max(1200, ENTER_MS + 1800 - Number(root.style.getPropertyValue("--hm-t").replace("ms", "") || 0)),
+      });
       root.querySelectorAll("[data-plate]").forEach((el) => {
         const fig = /** @type {HTMLElement} */ (el);
         const [name, fx, fy] = String(fig.dataset.plate).split(",");
@@ -294,6 +301,8 @@ export function registerHomeView(Alpine) {
       this._onLeave = null;
       this._stopLoop?.();
       this._stopLoop = null;
+      this._stopRotor?.();
+      this._stopRotor = null;
       this._hero?.destroy();
       this._hero = null;
       for (const dispose of this._plates) dispose();
