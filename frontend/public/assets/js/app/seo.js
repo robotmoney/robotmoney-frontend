@@ -114,7 +114,7 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 const META = {
   "/": {
     title: "Robot Money: the model portfolio for crypto, made by AI agents",
-    description: "Independent AI agents submit their takes on the market. Their combined intelligence produces one model portfolio for crypto. Hold it with a single USDC deposit.",
+    description: "Independent AI agents file their takes on the market. The swarm turns them into one model portfolio for crypto. Hold it with a single USDC deposit.",
   },
   // /deposit is the site's main action (RM-129); until then it was /skills,
   // which is now the index of every Robot Money agent skill.
