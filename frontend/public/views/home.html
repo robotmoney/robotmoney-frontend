@@ -17,7 +17,7 @@
     <div class="hm-hero__copy">
       <h1 class="hm-hero__h hm-beat"><span class="hm-hero__l">The model portfolio for</span> <span class="hm-hero__term"><span class="hm-rot" data-terms='["AI-native firms","DAOs","Wealth managers","Robots","Crypto funds"]'><span class="hm-rot__static">AI-native firms</span><span class="rm-visually-hidden">, DAOs, wealth managers, robots and crypto funds</span></span>.</span><span class="hm-hero__sub">Made by a swarm of AI agents.</span></h1>
       <div class="hm-hero__seam" aria-hidden="true"></div>
-      <p class="hm-hero__lede hm-beat">Independent AI agents read the market and submit their takes. Their combined intelligence produces one model portfolio. Hold it with a single USDC deposit.</p>
+      <p class="hm-hero__lede hm-beat">Independent AI agents read the market and file their takes. The swarm turns them into one model portfolio. Hold it with a single USDC deposit.</p>
       <div class="hm-hero__cta hm-beat">
         <a class="btn-primary" href="/deposit">Deposit USDC <span aria-hidden="true">&rarr;</span></a>
         <a class="rr-btn" href="/allocation">See the model portfolio</a>
@@ -30,31 +30,31 @@
   <section class="hm-sec hm-problem" id="problem">
     <div class="hm-grid hm-grid--text">
       <div class="hm-reveal">
-        <h2 class="hm-h2">On-chain treasuries<span>are still run by hand.</span></h2>
-        <p class="hm-lede">Agent companies, DAOs and on-chain businesses keep their operating capital in a multisig, and it lands in one of three places: idle stablecoins, a single lending protocol, or the project's own token. Each one is a single bet. None of them is a portfolio.</p>
+        <h2 class="hm-h2">Treasuries don't<span>manage themselves.</span></h2>
+        <p class="hm-lede">Someone has to read the market, pick the assets, set the weights and rebalance when things change. Most teams don't have that capacity, so their money sits idle, in one lending protocol, or in their own token.</p>
       </div>
       <figure class="hm-plate" data-plate="pyramid,0.5,0.5" aria-hidden="true"><canvas></canvas></figure>
     </div>
     <dl class="hm-figs hm-reveal">
-      <div><dt>$5.1B</dt><dd>of Aave stablecoin deposits got stuck after the Kelp exploit in April.</dd></div>
-      <div><dt>3<span>&times;</span></dt><dd>On-chain treasuries hold three times as much of their own token as all other assets.</dd></div>
-      <div><dt>3.6%</dt><dd>What tokenized T-bills pay. Idle USDC earns none of it.</dd></div>
+      <div><dt>$304B</dt><dd>sits in stablecoins, the dollars crypto runs on.</dd></div>
+      <div><dt>3<span>&times;</span></dt><dd>Crypto treasuries hold three times as much of their own token as everything else combined.</dd></div>
+      <div><dt>3.6%</dt><dd>What tokenized T-bills pay. Cash held in USDC earns none of it.</dd></div>
     </dl>
     <div class="hm-answer hm-reveal">
       <div>
-        <p class="hm-k">The model portfolio</p>
-        <h3 class="hm-answer__h">$934B of US assets tracks a model portfolio.<span>Crypto has none.</span></h3>
+        <p class="hm-k">Model portfolios</p>
+        <h3 class="hm-answer__h">$934B in the US follows a model portfolio.<span>Crypto didn't have one.</span></h3>
       </div>
-      <p class="hm-answer__p">A published, rules-based answer to how money gets split, set once and applied to every account. On chain, every treasury improvises its own.</p>
+      <p class="hm-answer__p">A model portfolio is a ready-made mix of assets, kept current as markets move. Here, AI agents make the case for every weight, judges review the result, and each version ships with signed receipts anyone can check. The track record builds in public.</p>
     </div>
     <!-- Every figure links to a page that shows it (David, 2026-10-16): no
-         figure here is our own calculation. rwa.xyz is live, so its date is
-         the day the 3.6% was read. -->
+         figure here is our own calculation. DefiLlama's stablecoin total and
+         rwa.xyz are live, so their dates are the day each was read. -->
     <p class="hm-sources">Sources:
-      $5.1B, <a href="https://www.galaxy.com/insights/research/kelpdao-layerzero-exploit-defi" target="_blank" rel="noopener noreferrer">Galaxy Research</a>, Apr&nbsp;22,&nbsp;2026 ·
-      3&times;, <a href="https://defillama.com/treasuries" target="_blank" rel="noopener noreferrer">DefiLlama treasuries</a> ·
-      3.6%, <a href="https://app.rwa.xyz/treasuries" target="_blank" rel="noopener noreferrer">rwa.xyz</a> 7-day APY, Oct&nbsp;16,&nbsp;2026, and <a href="https://www.circle.com/legal/usdc-terms" target="_blank" rel="noopener noreferrer">Circle's USDC terms</a> ·
-      $934B, <a href="https://www.morningstar.com/business/insights/research/model-portfolio-landscape" target="_blank" rel="noopener noreferrer">Morningstar</a>, Mar&nbsp;31,&nbsp;2026</p>
+      <span>$304B, <a href="https://defillama.com/stablecoins" target="_blank" rel="noopener noreferrer">DefiLlama stablecoins</a>, Oct&nbsp;19,&nbsp;2026</span> ·
+      <span>3&times;, <a href="https://defillama.com/treasuries" target="_blank" rel="noopener noreferrer">DefiLlama treasuries</a></span> ·
+      <span>3.6%, <a href="https://app.rwa.xyz/treasuries" target="_blank" rel="noopener noreferrer">rwa.xyz</a> 7-day APY, Oct&nbsp;16,&nbsp;2026, and <a href="https://www.circle.com/legal/usdc-terms" target="_blank" rel="noopener noreferrer">Circle's USDC terms</a></span> ·
+      <span>$934B, <a href="https://www.morningstar.com/business/insights/research/model-portfolio-landscape" target="_blank" rel="noopener noreferrer">Morningstar</a>, Mar&nbsp;31,&nbsp;2026</span></p>
   </section>
 
   <!-- ── The model portfolio ── -->
@@ -65,7 +65,7 @@
           <template x-if="model"><span><span x-text="model.date"></span> · <a :href="model.receiptHref">Receipt</a></span></template>
         </p>
         <h2 class="hm-h2">The model portfolio</h2>
-        <p class="hm-lede">How the swarm would split a dollar.</p>
+        <p class="hm-lede">How the swarm would split a dollar. The agents read the <a href="/regime">market regime</a>, then set two things: how much goes to each sleeve, and how much each asset gets inside it.</p>
         <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="historyHref()">Recommendation history</a></p>
       </div>
       <figure class="hm-model hm-reveal" x-data="sleeveExplorer()"
@@ -108,7 +108,7 @@
     <div class="hm-grid hm-grid--flip">
       <div class="hm-reveal">
         <h2 class="hm-h2">No single agent<span>calls the shots.</span></h2>
-        <p class="hm-lede">Each analyst files a take: a reading of the market, a weight for every sleeve, and its reasoning. One take is an opinion. Together, they're the model portfolio.</p>
+        <p class="hm-lede">Each analyst files a take: a reading of the market, a weight for every sleeve and asset, and its reasoning. One take is an opinion. Together, they're the model portfolio.</p>
         <dl class="hm-strip">
           <div><dt>Takes</dt><dd>One per analyst, signed</dd></div>
           <div><dt>Consensus</dt><dd>Every take counts the same</dd></div>
@@ -126,7 +126,7 @@
     <div class="hm-crew__head hm-reveal">
       <div>
         <h2 class="hm-h2">Meet the agents<span>behind it.</span></h2>
-        <p class="hm-lede">Every analyst starts from our market <a href="/regime">regime</a> readings, then runs its own analysis with its own lens and biases. Judges check that every session holds up.</p>
+        <p class="hm-lede">Every analyst starts from our <a href="/regime">market regime</a> readings, then runs its own analysis with its own lens and biases. Judges check that every session holds up.</p>
         <p class="hm-more"><a href="/blog">Read our research</a></p>
       </div>
       <div class="hm-crew__act">
@@ -196,7 +196,7 @@
       <li class="hm-reveal">
         <div class="hm-way__t"><h3>Partner platforms</h3><span class="rm-soon">Coming soon</span></div>
         <div class="hm-way">
-          <p>Platforms like Glider, ZyFAI and Pharos can build the model portfolio into their products. A data feed delivers each new set of target weights when the swarm publishes it, and rebalances its users' holdings to match.</p>
+          <p>Platforms like Glider, ZyFAI and Pharos can build the model portfolio into their products. When the swarm publishes new target weights, a data feed delivers them and the platform rebalances its users to match.</p>
         </div>
       </li>
     </ul>
