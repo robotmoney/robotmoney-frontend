@@ -127,6 +127,10 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   evidence, and approval for future releases.
 - [Credential doctor](../runbooks/credential-doctor.md) — legacy GitHub secret
   utility, not the adopted deployment credential path.
+- [Referral attribution spec](../technical/referrals-spec.md) — referral codes,
+  how a code is tied to a deposit, attribution rules, admin corrections, the
+  public code lookup and the attribution report. Draft for acceptance under
+  issue #1358; implementation is issue #1371.
 - [Investment Swarm to On-Chain Governance](../technical/committee-to-chain.md) —
   the canonical cross-repository contract from signed takes to an executed
   router-weight update.

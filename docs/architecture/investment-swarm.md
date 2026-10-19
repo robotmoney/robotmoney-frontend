@@ -308,3 +308,12 @@ The Phase 5 build order and prototype reconciliation are historical. The feature
 is implemented; current product behavior is described in §§9.1–9.8 and its
 current contracts. Recover the original plan from Git when investigating the
 implementation history.
+
+### 9.10 Referral attribution
+
+A depositor can name the swarm member or team channel that referred them by
+attaching a referral code to a deposit. Codes, how a code is tied to a deposit,
+the attribution rules, admin corrections, the public code lookup and the
+attribution report are governed by the
+[referral attribution spec](../technical/referrals-spec.md), a draft for
+acceptance under issue #1358. Nothing is implemented until #1371.
