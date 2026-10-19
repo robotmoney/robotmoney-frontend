@@ -1,7 +1,8 @@
-// A home section's photograph, lit (RM-175). It comes into view behind a
-// vertical front of light that crosses it once, with a thin Beam fringe; after
-// that a soft sheen passes now and then, and the pointer carries a faint torch
-// and a little parallax. Every tone is the photograph's own plus light.
+// A home section's photograph, lit (RM-175). It develops once, the first time
+// it is seen, the way an eye adjusts to the dark: the brightest light in the
+// picture first, then the mid-tones, the shadows last. After that it holds
+// still but for a slow settle tied to the scroll, a slight zoom that eases out
+// as its section passes. Every tone is the photograph's own.
 //
 // The image is fetched only when the figure first nears the viewport, so a
 // visitor who never scrolls never pays for it. Without WebGL (or with a shader
@@ -14,34 +15,25 @@ precision mediump float;
 uniform sampler2D uTex;
 uniform vec2 uRes;
 uniform vec4 uFit;
-uniform vec2 uPar;
 uniform float uReveal;
-uniform float uTime;
-uniform vec3 uPtr;
-uniform float uDpr;
-const vec3 FRINGE = vec3(0.55, 0.95, 1.0);
 void main() {
   vec2 q = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
-  vec2 uv = (q - uFit.xy + uPar) / uFit.zw;
+  vec2 uv = (q - uFit.xy) / uFit.zw;
   vec3 c = texture2D(uTex, clamp(uv, vec2(0.001), vec2(0.999))).rgb;
-  // The reveal: a front of light crossing left to right, slightly slanted.
-  float x = q.x / uRes.x + (q.y / uRes.y - 0.5) * 0.08;
-  float front = uReveal * 1.25 - 0.1;
-  float shown = smoothstep(front, front - 0.06, x);
-  float edge = exp(-pow((x - front) * 70.0, 2.0));
-  vec3 col = c * shown + edge * mix(vec3(1.0), FRINGE, 0.6) * 0.9 * step(0.001, uReveal) * (1.0 - step(1.0, uReveal));
-  // A sheen every few seconds, along the diagonal.
-  float s = fract(uTime / 7.0) * 2.4 - 0.7;
-  float sheen = exp(-pow((x + q.y / uRes.y * 0.3 - s) * 9.0, 2.0)) * 0.07;
-  col += c * sheen * 3.0 * shown;
-  // The torch.
-  float r = length(q - uPtr.xy);
-  col += c * uPtr.z * 0.45 * exp(-(r * r) / (220.0 * 220.0 * uDpr * uDpr));
-  gl_FragColor = vec4(col, 1.0);
+  // A threshold falls from white to below black; each pixel comes up as it
+  // passes, over a soft band, so the light leads and the dark follows.
+  float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  float th = 1.0 - uReveal * 1.45;
+  float shown = smoothstep(th, th + 0.45, lum);
+  gl_FragColor = vec4(c * shown, 1.0);
 }`;
 
-const UNIFORMS = ["uTex", "uRes", "uFit", "uPar", "uReveal", "uTime", "uPtr", "uDpr"];
+const UNIFORMS = ["uTex", "uRes", "uFit", "uReveal"];
+const REVEAL_MS = 1800;
+// How far past its resting size the picture starts, before the scroll settles it.
+const DRIFT = 0.06;
 const clamp = (/** @type {number} */ v, /** @type {number} */ a, /** @type {number} */ b) => (v < a ? a : v > b ? b : v);
+const easeOut = (/** @type {number} */ t) => 1 - Math.pow(1 - t, 3);
 
 /** @param {WebGLRenderingContext} gl */
 function compile(gl) {
@@ -92,15 +84,15 @@ export function mountPlate(figure, src, { fx = 0.5, fy = 0.5, reduce = false, on
   let loc = null;
   if (gl) { try { loc = compile(gl); } catch { loc = null; } }
 
-  let started = false, visible = false, done = false, revealedSent = false;
+  let started = false, visible = false, due = false, done = false, revealedSent = false;
   /** @type {WebGLTexture | null} */
   let tex = null;
   let W = 1, H = 1, dpr = 1, t0 = 0, raf = 0;
   /** @type {{ ox: number, oy: number, dw: number, dh: number } | null} */
   let fit = null;
-  /** @type {{ x: number, y: number } | null} */
-  let ptr = null;
-  const par = { x: 0, y: 0 };
+  // The drift follows the section, not the figure: a sticky plate's own box
+  // stands still while its section scrolls past.
+  const track = /** @type {HTMLElement} */ (figure.closest("section") || figure);
   const img = new Image();
   img.decoding = "async";
 
@@ -111,28 +103,35 @@ export function mountPlate(figure, src, { fx = 0.5, fy = 0.5, reduce = false, on
     dpr = Math.min(window.devicePixelRatio || 1, 1.6);
     canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
     const iw = img.naturalWidth || 1672, ih = img.naturalHeight || 941;
-    const s = Math.max(W / iw, H / ih) * 1.04, dw = iw * s, dh = ih * s;
+    const s = Math.max(W / iw, H / ih), dw = iw * s, dh = ih * s;
     fit = { ox: (W - dw) * fx, oy: (H - dh) * fy, dw, dh };
   };
 
   const frame = (/** @type {number} */ now) => {
     raf = 0;
     if (done || !tex || !fit || !gl || !loc || !canvas) return;
-    const reveal = reduce ? 1 : t0 ? clamp((now - t0) / 1600, 0, 1) : 0;
-    if (reveal >= 1 && !revealedSent) { revealedSent = true; onRevealed?.(); }
-    const tp = ptr ? { x: ptr.x / W - 0.5, y: ptr.y / H - 0.5 } : { x: 0, y: 0 };
-    par.x += (tp.x * 18 - par.x) * 0.08; par.y += (tp.y * 10 - par.y) * 0.08;
+    // The clock starts on the first frame drawn in view, not when the figure
+    // crossed the line: a slow image would otherwise arrive half developed.
+    if (due && !t0) t0 = now;
+    const linear = reduce ? 1 : t0 ? clamp((now - t0) / REVEAL_MS, 0, 1) : 0;
+    if (linear >= 1 && !revealedSent) { revealedSent = true; onRevealed?.(); }
+    let zoom = 1;
+    if (!reduce) {
+      const r = track.getBoundingClientRect();
+      const p = clamp((window.innerHeight - r.top) / (window.innerHeight + r.height), 0, 1);
+      zoom = 1 + DRIFT * (1 - easeOut(p));
+    }
+    // Scaled about the focal point, so the subject stays where it was framed.
+    const dw = fit.dw * zoom, dh = fit.dh * zoom;
+    const ox = fit.ox + (fit.dw - dw) * fx, oy = fit.oy + (fit.dh - dh) * fy;
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform1i(loc.uTex, 0);
     gl.uniform2f(loc.uRes, canvas.width, canvas.height);
-    gl.uniform4f(loc.uFit, fit.ox * dpr, fit.oy * dpr, fit.dw * dpr, fit.dh * dpr);
-    gl.uniform2f(loc.uPar, par.x * dpr, par.y * dpr);
-    gl.uniform1f(loc.uReveal, reveal >= 1 ? 1.0001 : reveal);
-    gl.uniform1f(loc.uTime, reduce ? 0 : now / 1000);
-    gl.uniform3f(loc.uPtr, (ptr?.x ?? -1e4) * dpr, (ptr?.y ?? -1e4) * dpr, ptr ? 1 : 0);
-    gl.uniform1f(loc.uDpr, dpr);
+    gl.uniform4f(loc.uFit, ox * dpr, oy * dpr, dw * dpr, dh * dpr);
+    gl.uniform1f(loc.uReveal, easeOut(linear));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    if (visible && !reduce) raf = requestAnimationFrame(frame);
+    // Frames run only while it develops; after that the scroll asks for them.
+    if (visible && (linear < 1 || !t0)) raf = requestAnimationFrame(frame);
   };
   const kick = () => { if (!done && !raf) raf = requestAnimationFrame(frame); };
 
@@ -158,30 +157,24 @@ export function mountPlate(figure, src, { fx = 0.5, fy = 0.5, reduce = false, on
 
   const near = new IntersectionObserver(([e]) => { if (e.isIntersecting) { start(); near.disconnect(); } }, { rootMargin: "400px 0px" });
   near.observe(figure);
+  // Drawn from its first pixel on screen, so the drift never jumps; it starts
+  // to develop once a quarter of it is in view.
   const seen = new IntersectionObserver(([e]) => {
     visible = e.isIntersecting;
-    if (visible && !t0) t0 = performance.now();
+    if (e.intersectionRatio >= 0.25) due = true;
     if (visible) kick();
-  }, { threshold: 0.25 });
+  }, { threshold: [0, 0.25] });
   seen.observe(figure);
   const ro = new ResizeObserver(() => { if (tex) { size(); kick(); } });
   if (canvas) ro.observe(canvas);
-  const onMove = (/** @type {PointerEvent} */ e) => {
-    if (!canvas) return;
-    const b = canvas.getBoundingClientRect();
-    ptr = { x: e.clientX - b.left, y: e.clientY - b.top };
-    kick();
-  };
-  const onLeave = () => { ptr = null; kick(); };
-  figure.addEventListener("pointermove", onMove, { passive: true });
-  figure.addEventListener("pointerleave", onLeave);
+  const onScroll = () => { if (visible && !reduce) kick(); };
+  window.addEventListener("scroll", onScroll, { passive: true });
 
   return () => {
     done = true;
     near.disconnect(); seen.disconnect(); ro.disconnect();
     if (raf) cancelAnimationFrame(raf);
-    figure.removeEventListener("pointermove", onMove);
-    figure.removeEventListener("pointerleave", onLeave);
+    window.removeEventListener("scroll", onScroll);
     gl?.getExtension("WEBGL_lose_context")?.loseContext();
   };
 }
