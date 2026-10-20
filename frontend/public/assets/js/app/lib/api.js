@@ -115,16 +115,22 @@ async function request(method, route, { query, body, headers } = {}) {
     const qs = new URLSearchParams(query).toString();
     if (qs) url += `?${qs}`;
   }
+  // A Blob (an admin avatar upload, RM-184) is sent as its own bytes with its
+  // own type; anything else is a JSON body.
+  const raw = typeof Blob !== "undefined" && body instanceof Blob;
   // Merge any caller-supplied headers (e.g. the admin X-Admin-Token) with the
-  // Content-Type we set for a JSON body.
-  const merged = { ...(body ? { "Content-Type": "application/json" } : {}), ...headers };
+  // Content-Type we set for the body.
+  const merged = {
+    ...(raw ? { "Content-Type": body.type || "application/octet-stream" } : body ? { "Content-Type": "application/json" } : {}),
+    ...headers,
+  };
 
   let res;
   try {
     res = await fetch(url, {
       method,
       headers: Object.keys(merged).length ? merged : undefined,
-      body: body ? JSON.stringify(body) : undefined,
+      body: raw ? body : body ? JSON.stringify(body) : undefined,
       credentials: "include",
     });
   } catch (cause) {
@@ -208,4 +214,6 @@ export const api = {
     headers: token == null ? undefined : { "X-Admin-Token": token },
   }),
   adminPatch: (route, token, body) => request("PATCH", route, { body, headers: { "X-Admin-Token": token } }),
+  // Raw bytes, not JSON: the avatar route reads the body as the image (RM-184).
+  adminUpload: (route, token, file) => request("POST", route, { body: file, headers: { "X-Admin-Token": token } }),
 };
