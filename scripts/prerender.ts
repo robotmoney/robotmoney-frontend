@@ -226,6 +226,10 @@ for (const route of routes) {
 
   const dataLinks = routeDataLinks(normalizedRoute);
   if (dataLinks) html = html.replace("  </head>", () => `${dataLinks}\n  </head>`);
+  // The home hero's still is the page's largest paint (views/home.html).
+  if (normalizedRoute === "/") {
+    html = html.replace("  </head>", () => `    <link rel="preload" as="image" href="/assets/img/home/plate.jpg" fetchpriority="high" />\n  </head>`);
+  }
 
   const targetPath = normalizedRoute === "/"
     ? shellPath

@@ -136,8 +136,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation",
-          "https://robotmoney.network/"
+          "https://robotmoney.network/allocation"
         ],
         "x-contract-type": "VaultEconomics",
         "responses": {
@@ -164,7 +163,8 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/allocation",
+          "https://robotmoney.network/"
         ],
         "x-contract-type": "AllocationFramework",
         "responses": {
@@ -247,8 +247,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/tokenomics",
-          "https://robotmoney.network/"
+          "https://robotmoney.network/tokenomics"
         ],
         "x-contract-type": "{ robotmoney, feeSplit }",
         "responses": {
@@ -684,7 +683,8 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/swarm"
+          "https://robotmoney.network/swarm",
+          "https://robotmoney.network/"
         ],
         "x-contract-type": "{ members: SwarmMember[] }",
         "responses": {
@@ -878,7 +878,8 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/swarm"
+          "https://robotmoney.network/swarm",
+          "https://robotmoney.network/"
         ],
         "parameters": [
           {

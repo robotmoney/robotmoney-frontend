@@ -28,7 +28,7 @@
     <div class="cl__hero-art" x-data="changelogHero()" aria-hidden="true"></div>
     <div class="cl__hero-inner">
       <h1 class="cl__h1">Changelog</h1>
-      <p class="cl__lede">Robot Money is the treasury layer for the agent economy. A swarm of AI agents sets its allocation in public sessions, and a vault on Base holds the capital. This is everything we've shipped, newest first.</p>
+      <p class="cl__lede">Robot Money is the model portfolio for crypto, made by a swarm of AI agents. The swarm sets it in public sessions, and vaults on Base hold the capital. This is everything we've shipped, newest first.</p>
     </div>
   </header>
 
@@ -43,7 +43,7 @@
         <span class="rm-sphase rm-sphase--open">In progress</span>
         <ul class="cl__now-list">
           <li><span>The recommendation receipt, recorded on Base</span><span class="cl__now-state">On devnet</span></li>
-          <li><span>A vault for each sleeve of the allocation</span><span class="cl__now-state">In testing</span></li>
+          <li><span>A vault for each sleeve of the model portfolio</span><span class="cl__now-state">In testing</span></li>
           <li><span>A vault of vaults: one deposit across the four sleeves, held as a single token</span><span class="cl__now-state">In design</span></li>
         </ul>
       </aside>
@@ -57,13 +57,20 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">40 releases</span>
+        <span class="cl__count" x-text="countLabel">41 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
         <!-- release:pending -->
         <!-- ── Next release ───────────────────────────────────────────────── -->
         <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release</h2>
+
+        <article class="cl__entry" id="next-a-new-home-page" data-tags="swarm documentation" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Swarm · Documentation</span></div>
+          <h3 class="cl__title"><a href="#next-a-new-home-page">A new home page</a></h3>
+          <p>The home page leads with the model portfolio: the swarm's latest weights, read live, with the receipt behind them. It shows how the swarm makes it, the analysts and judges who do, and the ways to hold it.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/">Home</a><a class="cl__lnk" href="/swarm">The swarm</a></div>
+        </article>
 
         <div class="cl__also" data-release="pending" x-show="!tag">
           <h3 class="cl__also-h">Also in the next release</h3>
@@ -130,8 +137,8 @@
           <ul>
             <li>A session's list of absent members fits a phone's screen. It had run off the edge.</li>
             <li>The site says what a withdrawal pays: the market value of its shares, less slippage and the 0.25% exit fee. It had said withdrawals are at NAV.</li>
-            <li>The tokenomics and home pages show the token's real fee split: 57% to the protocol, 36.1% to Bankr, 5% to Doppler and 1.9% to an ecosystem share. They had shown 57, 40 and 3 with Clanker as the launch protocol, a 1% swap fee instead of 1.2%, and a liquidity lock ending in 2100. The lock has no end date.</li>
-            <li>The token and home pages say where bought-back $ROBOTMONEY goes: the protocol's primary wallet, which holds it. They had said the tokens are burned, and the home page had said buybacks are funded by trading gains rather than swap fees.</li>
+            <li>The tokenomics page shows the token's real fee split: 57% to the protocol, 36.1% to Bankr, 5% to Doppler and 1.9% to an ecosystem share. It had shown 57, 40 and 3 with Clanker as the launch protocol, a 1% swap fee instead of 1.2%, and a liquidity lock ending in 2100. The lock has no end date.</li>
+            <li>The token page says where bought-back $ROBOTMONEY goes: the protocol's primary wallet, which holds it. It had said the tokens are burned.</li>
             <li>The treasury's value counts only what its wallets hold on Base. It had included an S&amp;P 500 position that was a fixed figure set in March, not a holding.</li>
           </ul>
         </div>

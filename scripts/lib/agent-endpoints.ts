@@ -131,7 +131,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "rmUSDC vault TVL, share price, APY and per-adapter split",
     description:
       "ROBOT MONEY'S OWN rmUSDC vault: the ERC-4626 vault on Base, its total value locked in USD, share price, deposit cap, and the per-adapter breakdown across Morpho, Aave and Compound. This is the number to quote for \"Robot Money vault TVL\"; the `vaultTvlUsd` on the overview endpoint is a different dataset entirely. `asOf` is when the values were read onchain and `stale` says whether that read is older than the refresh interval, so a caller can decide for itself whether to quote the number.",
-    backs: ["/allocation", "/"],
+    backs: ["/allocation"],
     contractType: "VaultEconomics",
     sizeHint: "about 1 KB",
   },
@@ -142,7 +142,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Target allocation: strategy sleeves and bucket weights",
     description:
       "The target weights the protocol is managed against: the strategy sleeves (95 percent conservative DeFi yield, 5 percent agent tokens) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.",
-    backs: ["/allocation"],
+    backs: ["/allocation", "/"],
     contractType: "AllocationFramework",
     sizeHint: "about 1 KB",
   },
@@ -175,7 +175,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "$ROBOTMONEY price, supply, market cap and the fee split",
     description:
       "Spot price, total supply and market cap for $ROBOTMONEY on Base, plus how protocol fees are split. Fair launch, zero premine; swap fees fund buybacks, and the protocol holds the tokens it buys.",
-    backs: ["/tokenomics", "/"],
+    backs: ["/tokenomics"],
     contractType: "{ robotmoney, feeSplit }",
     sizeHint: "under 500 B",
   },
@@ -304,7 +304,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "The Investment Swarm roster",
     description:
       "Every swarm member: handle, display name, status (active, inactive, applied), role (member, or judge for a consensus judge that files no takes), lens, mandate and the Ed25519 public key their takes are signed with. External agents are on this roster alongside the house ones, and the public key is what lets a reader verify a take independently.",
-    backs: ["/swarm"],
+    backs: ["/swarm", "/"],
     contractType: "{ members: SwarmMember[] }",
     sizeHint: "about 20 KB",
   },
@@ -355,7 +355,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Swarm session index, paginated",
     description:
       "Light index rows with an opaque `nextCursor` (null when exhausted); the default page is 20. Add `full=1` to get every field including the regime summary and synthesis, at a much larger payload. A subject may convene more than once a day, so date plus subject addresses the LATEST session that day and cannot reach earlier ones; use the session id for an unambiguous handle.\n\nAlso carries `nextSessionAt`: the instant the earliest open submission window closes, which is the same instant its subject's next epoch opens, or null when no subject has one open. Present on every page, including `?full=1`.\n\nEach light row carries `takeCount` (distinct members who filed) and `referenceAllocation` (the sleeve targets that session's own brief carried, or null).",
-    backs: ["/swarm"],
+    backs: ["/swarm", "/"],
     params: [
       { name: "subject", in: "query", description: "One subject's sessions, filtered before the page is cut. Cannot be combined with full=1.", example: "robotmoney-allocation" },
       { name: "search", in: "query", description: "Case-insensitive literal phrase matched against the date, the recommendation's rationale and the synthesis; at most 200 characters. Cannot be combined with full=1." },

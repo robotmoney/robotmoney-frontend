@@ -121,10 +121,10 @@ test("release 2 after release 1, in the same browser, with scripts cached for 4 
   const first = await loadAndCollect(page, "/");
   expect(first.seen.every((s) => s.url.endsWith(`?v=${v1}`))).toBe(true);
 
-  // Release 2: ONE script changes (substrate.js, which main.js imports at the top of the graph).
+  // Release 2: ONE script changes (site-nav.js, which main.js imports at the top of the graph).
   const marker = "/* release-2-marker */";
   root = assemble("release-2", (dir) => {
-    const f = join(dir, "assets/js/app/alpine/substrate.js");
+    const f = join(dir, "assets/js/app/alpine/site-nav.js");
     writeFileSync(f, `${readFileSync(f, "utf8")}\n${marker}\n`);
   });
   const v2 = stampOf(root);
@@ -133,7 +133,7 @@ test("release 2 after release 1, in the same browser, with scripts cached for 4 
   hits.length = 0;
   const bodies: Record<string, string> = {};
   page.on("response", async (r) => {
-    if (r.url().includes("/alpine/substrate.js")) bodies[r.url()] = await r.text().catch(() => "");
+    if (r.url().includes("/alpine/site-nav.js")) bodies[r.url()] = await r.text().catch(() => "");
   });
   const second = await loadAndCollect(page, "/");
 
@@ -142,8 +142,8 @@ test("release 2 after release 1, in the same browser, with scripts cached for 4 
   const stale = [...requested].filter((h) => h.endsWith(`?v=${v1}`));
   expect(stale, "the browser asked for no release-1 module").toEqual([]);
   expect(second.seen.length, "the whole graph was fetched, none of it served from the cache").toBe(requested.size);
-  const substrate = Object.entries(bodies).find(([u]) => u.endsWith(`?v=${v2}`));
-  expect(substrate?.[1], "the changed script's new bytes were the ones loaded").toContain(marker);
+  const siteNav = Object.entries(bodies).find(([u]) => u.endsWith(`?v=${v2}`));
+  expect(siteNav?.[1], "the changed script's new bytes were the ones loaded").toContain(marker);
   await context.close();
 });
 
@@ -155,7 +155,7 @@ test("CONTROL: the same release switch WITHOUT stamping serves the old script fr
   await loadAndCollect(page, "/"); // release 1 is now cached for 4 hours
 
   root = assemble("control-2", (dir) => {
-    const f = join(dir, "assets/js/app/alpine/substrate.js");
+    const f = join(dir, "assets/js/app/alpine/site-nav.js");
     writeFileSync(f, `${readFileSync(f, "utf8")}\n${marker}\n`);
   }, { stamp: false });
 
@@ -164,7 +164,7 @@ test("CONTROL: the same release switch WITHOUT stamping serves the old script fr
   const asked = hits.filter((h) => h.startsWith("/assets/js/app/"));
   expect(asked, "without a stamp the reload asks the server for none of the cached scripts").toEqual([]);
   // The page is release 2's, the scripts it runs are release 1's: the mixed state that breaks components.
-  const served = await page.evaluate(async () => (await (await fetch("/assets/js/app/alpine/substrate.js")).text()));
+  const served = await page.evaluate(async () => (await (await fetch("/assets/js/app/alpine/site-nav.js")).text()));
   expect(served, "the cached (old) script, not release 2's").not.toContain(marker);
   await context.close();
 });

@@ -118,8 +118,8 @@
              that session's brief carried, never today's. -->
         <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
           <div class="rr-sec__head">
-            <h2 class="rr-sec__h" id="alloc-h">Allocation recommendation</h2>
-            <a class="rr-sec__aside" :href="allocationHref()">All allocation recommendations</a>
+            <h2 class="rr-sec__h" id="alloc-h">Model portfolio</h2>
+            <a class="rr-sec__aside" :href="allocationHref()">Recommendation history</a>
           </div>
           <!-- Newer sessions that published no weights held the target: the
                ring keeps the weights that stand, and the newest is named. -->
@@ -174,7 +174,7 @@
                             </div>
                             <template x-if="panelRow().assets.length">
                               <table class="rr-table rr-x__assets">
-                                <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
+                                <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of portfolio</th></tr></thead>
                                 <tbody>
                                   <template x-for="a in panelRow().assets" :key="a.key">
                                     <tr>
@@ -364,7 +364,7 @@
             <div>
               <p class="rr-k">Step 1</p>
               <p class="rr-steps__t">A session opens</p>
-              <p class="rr-steps__d">Each session convenes on one subject: the allocation framework or a portfolio. Every analyst gets the same brief: the day's regime read, the subject's own record, and any research signals filed that day.</p>
+              <p class="rr-steps__d">Each session convenes on one subject: the model portfolio or a portfolio it reviews. Every analyst gets the same brief: the day's regime read, the subject's own record, and any research signals filed that day.</p>
             </div>
             <div>
               <p class="rr-k">Step 2</p>

@@ -156,6 +156,10 @@ async function render(pathname) {
   // (the robots directive in projects.spec.ts) went red as soon as CI moved to
   // ephemeral runners with cold asset caches.
   window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname } }));
+  // The same moment, as state rather than an event, for an observer that
+  // arrives after it: a spec that navigates as soon as the page's load event
+  // fires would otherwise race the boot render it never saw finish.
+  document.documentElement.dataset.routed = pathname;
 }
 
 // A fragment breathes rather than sitting flush against the viewport edge.

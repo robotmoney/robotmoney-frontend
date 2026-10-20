@@ -35,6 +35,10 @@ export async function navigate(
   path: string,
   { timeoutMs = NAVIGATION_TIMEOUT_MS }: NavigateOptions = {},
 ) {
+  // The boot render can still be in flight when page.goto() resolves on load;
+  // pushing a route over it destroyed the execution context on CI. Wait for
+  // the router to mark its first render done (router.js, data-routed).
+  await page.waitForFunction(() => document.documentElement.hasAttribute("data-routed"), null, { timeout: NAVIGATION_TIMEOUT_MS });
   await page.evaluate(
     ([p, timeoutMs]) =>
       new Promise<void>((resolve, reject) => {
