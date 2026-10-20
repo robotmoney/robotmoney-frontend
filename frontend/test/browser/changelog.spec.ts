@@ -184,20 +184,29 @@ test("pending entries read Next release, styled as a date", async ({ page }) => 
   const pending = frame.locator('.cl__entry[data-release="pending"]');
   const n = await pending.count();
   // Once the release is stamped there is nothing pending: then nothing on the
-  // page may still carry the mark or the label.
-  if (n === 0) {
+  // page may still carry the mark or the label. The heading says whether a
+  // block is open, since a block can hold Also lines and no entry.
+  if ((await frame.locator('.cl__month-h[data-release="pending"]').count()) === 0) {
     await expect(frame.locator('[data-release="pending"], .cl__pending')).toHaveCount(0);
     await expectNoBrowserErrors(errors);
     return;
   }
   // The heading and the Also block are marked too, and the heading comes first.
-  // A release can ship with no smaller changes, so the Also block is optional.
+  // A release can ship with no smaller changes, so the Also block is optional,
+  // and with only smaller changes the entries are.
   await expect(frame.locator('.cl__month-h[data-release="pending"]')).toHaveText("Next release");
   await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
   const also = frame.locator('.cl__also[data-release="pending"]');
   if (await also.count()) await expect(also.locator(".cl__also-h")).toHaveText("Also in the next release");
   // The hero carries no "Updated" line: the top entry's date already says it.
   await expect(frame.locator(".cl__updated")).toHaveCount(0);
+  if (n === 0) {
+    // An open block with no entry holds Also lines, and no date label is left.
+    await expect(also).toHaveCount(1);
+    await expect(frame.locator(".cl__pending")).toHaveCount(0);
+    await expectNoBrowserErrors(errors);
+    return;
+  }
 
   const read = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
