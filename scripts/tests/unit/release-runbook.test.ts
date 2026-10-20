@@ -208,4 +208,11 @@ describe("a release's scope", () => {
     const c24 = text.indexOf('  - id: "C24-maintenance-fallback"');
     expect(() => parseReleaseRunbook(text.slice(0, c23) + text.slice(c24), "v0.6.2")).toThrow("Q35-subject-spacing has no production twin named subject-spacing");
   });
+
+  test("v0.6.3's one product change, the avatar upload (1393), has its version step and a production twin", () => {
+    const v063 = loadReleaseRunbook("v0.6.3");
+    const added = v063.steps.filter((s) => (s as RunbookStep).added === "v0.6.3").map((s) => s.id);
+    expect(added).toEqual(["Q35-member-avatar", "C23-member-avatar"]);
+    expect(v063.scope.find((e) => e.pr === 1393)?.check).toBe("Q35-member-avatar");
+  });
 });
