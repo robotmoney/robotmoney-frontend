@@ -19,6 +19,7 @@
 import { api, ROUTES, path } from "../../../lib/api.js";
 import { memberAvatarMarkup } from "../../../lib/member-mark.js";
 import { isUploadedAvatar, memberAvatarSrc, memberLogo } from "../../../lib/member-logos.js";
+import { helpers } from "../../static-views.js";
 import { adminAuthState, apiErrorText, fmtUtc, redactForDisplay } from "./shared.js";
 
 // ── Avatar upload (RM-184) ──────────────────────────────────────────────────
@@ -195,8 +196,7 @@ export function registerAdminSwarmMember(Alpine) {
     avatarMarkup() {
       const m = this.member;
       if (!m) return "";
-      const initials = (n) => String(n || "").slice(0, 2).toUpperCase() || "SW";
-      return memberAvatarMarkup(memberAvatarSrc(m.handle, m.avatar?.path), m.keyFingerprint || m.id, m.name, 80, initials);
+      return memberAvatarMarkup(memberAvatarSrc(m.handle, m.avatar?.path), m.keyFingerprint || m.id, m.name, 80, (n) => helpers.initials(n));
     },
 
     pickAvatar(event) {
@@ -244,8 +244,11 @@ export function registerAdminSwarmMember(Alpine) {
       }
     },
 
-    // Clears the pointer through the versioned profile edit, which accepts
-    // `avatar: null`. The member falls back to its curated logo, or its mark.
+    // Clears the POINTER through the versioned profile edit, which accepts
+    // `avatar: null`, so the member falls back to its curated logo or its mark.
+    // The bytes stay in swarm_member_avatars (rm_app cannot DELETE there) and
+    // the old URL still serves them until the next upload overwrites the row.
+    // Hence the button says "Stop showing", not "Delete".
     async removeAvatar() {
       this.avatarBusy = true;
       this.avatarError = null;

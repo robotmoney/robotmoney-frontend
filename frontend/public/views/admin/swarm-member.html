@@ -97,7 +97,7 @@
                   class="adm-input" @change="pickAvatar($event)" aria-label="Avatar image" data-testid="member-avatar-input" />
                 <button type="button" class="adm-btn" :disabled="!avatarFile || avatarBusy" @click="uploadAvatar()" data-testid="member-avatar-upload">Upload</button>
                 <button type="button" class="adm-btn adm-btn--ghost" x-show="avatarFile" @click="clearAvatarPick()">Cancel</button>
-                <button type="button" class="adm-btn adm-btn--ghost" x-show="!avatarFile && avatarSource() === 'upload'" :disabled="avatarBusy" @click="removeAvatar()" data-testid="member-avatar-remove">Remove upload</button>
+                <button type="button" class="adm-btn adm-btn--ghost" x-show="!avatarFile && avatarSource() === 'upload'" :disabled="avatarBusy" @click="removeAvatar()" data-testid="member-avatar-remove">Stop showing upload</button>
               </div>
               <p class="adm-dim">PNG, JPEG, WebP or GIF, up to 5 MB. Square with a solid background reads best at small sizes.</p>
             </div>
