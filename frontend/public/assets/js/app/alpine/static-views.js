@@ -11,7 +11,7 @@ import { CATEGORICAL, SERIES, REGIME } from "../lib/chart-theme.js";
 import { forgetApplication, rememberApplication } from "../lib/application-memory.js";
 import { SWARM_DISCLAIMER } from "../lib/swarm-disclaimer.js";
 import { memberAvatarMarkup } from "../lib/member-mark.js";
-import { memberLogo } from "../lib/member-logos.js";
+import { memberAvatarSrc } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
@@ -473,15 +473,15 @@ export const helpers = {
       .map((s) => s[0].toUpperCase())
       .join("") || "SW";
   },
-  // Avatar precedence (#625, RM-100): the curated operator logo, then the
-  // projection's avatar.path, then the derived identity mark (#560), then the
-  // initials above when there is no seed either. The logo wins because every
-  // seeded path production serves 404s and one of them points at the wrong
-  // member; see lib/member-logos.js. Bound with x-html: memberAvatarMarkup()
+  // Avatar precedence (#625, RM-100, RM-184): an admin upload, then the
+  // curated operator logo, then any other avatar.path, then the derived
+  // identity mark (#560), then the initials above when there is no seed
+  // either. The logo beats a seeded path because every one production serves
+  // 404s and one points at the wrong member; see lib/member-logos.js. Bound with x-html: memberAvatarMarkup()
   // only ever writes a path it was handed and a derived-mark/initials string
   // that cannot carry markup from a member name, so neither can inject.
   memberMark(seed, name, size = 40, avatarPath, handle) {
-    const src = memberLogo({ handle }) || avatarPath || null;
+    const src = memberAvatarSrc(handle, avatarPath);
     return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
   },
   // Same derivation /swarm uses, so a session cannot read "closed" there and

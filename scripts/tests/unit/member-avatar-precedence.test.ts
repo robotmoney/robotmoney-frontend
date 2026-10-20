@@ -19,6 +19,7 @@
 // implementation of the contract pinned here, not a divergent one.
 import { describe, expect, test } from "bun:test";
 import { memberAvatarMarkup, memberMark } from "../../../frontend/public/assets/js/app/lib/member-mark.js";
+import { isUploadedAvatar, MEMBER_LOGOS, memberAvatarSrc } from "../../../frontend/public/assets/js/app/lib/member-logos.js";
 
 const initials = (name: string) => (name || "").slice(0, 2).toUpperCase() || "SW";
 
@@ -91,5 +92,43 @@ describe("memberAvatarMarkup() precedence (#625)", () => {
     const out = memberAvatarMarkup(hostile, "athena", "Athena", 40, initials);
     expect(out).not.toContain("<script>");
     expect(out).toContain("&quot;&gt;&lt;script&gt;");
+  });
+});
+
+// RM-184: which image a member wears. An admin upload (#626) outranks the
+// curated logo map; the map outranks a seeded avatar.path, which is what keeps
+// the noop-analyst repair. Without the first case, dropping the upload check
+// silently restores "logo always wins": the admin page would say "Uploaded
+// here" while /swarm kept showing the repo mark.
+describe("memberAvatarSrc() precedence (RM-184)", () => {
+  const UUID = "56090a36-b006-461f-8c70-1d3dd8b883e4";
+  const UPLOAD = `/api/swarm/members/${UUID}/avatar?v=ab12cd34`;
+
+  test("an admin upload wins over a handle in MEMBER_LOGOS", () => {
+    expect(MEMBER_LOGOS.zyfai).toBeTruthy();
+    expect(memberAvatarSrc("zyfai", UPLOAD)).toBe(UPLOAD);
+  });
+
+  test("a seeded /avatars/ path still loses to the map", () => {
+    expect(memberAvatarSrc("woon", "/avatars/committee/woon.jpg")).toBe(MEMBER_LOGOS.woon);
+  });
+
+  test("off the map, a seeded path is used, and nothing at all falls to the derived mark", () => {
+    expect(memberAvatarSrc("noop-analyst", "/avatars/committee/woon.jpg")).toBe("/avatars/committee/woon.jpg");
+    expect(memberAvatarSrc("allscale", null)).toBeNull();
+  });
+
+  test("isUploadedAvatar accepts the upload route's shape and rejects near misses", () => {
+    expect(isUploadedAvatar(UPLOAD)).toBe(true);
+    expect(isUploadedAvatar(`/api/swarm/members/${UUID}/avatar`)).toBe(true);
+    for (const near of [
+      "/avatars/swarm/zyfai.png",
+      `https://robotmoney.network/api/swarm/members/${UUID}/avatar`,
+      `/api/swarm/members/${UUID}`,
+      `/api/swarm/members/${UUID}/avatar-old`,
+      `/api/swarm/members/${UUID}/takes/avatar`,
+      "",
+      null,
+    ]) expect(isUploadedAvatar(near)).toBe(false);
   });
 });
