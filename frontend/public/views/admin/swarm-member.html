@@ -72,6 +72,40 @@
           <button type="button" class="adm-btn adm-btn--ghost" x-show="canReject()" @click="openConfirm('reject')" data-testid="member-reject">Reject</button>
         </div>
 
+        <!-- Avatar (RM-184): uploads through the #626 route, stored in the
+             database, so a logo needs no PR. Both slots use the public pages'
+             own .sv__avatar box, so the preview is what visitors will see. -->
+        <section x-show="!editing" class="adm-avatar" data-testid="member-avatar">
+          <h2 class="adm-h2 adm-h2--flush">Avatar</h2>
+          <div class="adm-avatar__row">
+            <figure class="adm-avatar__slot">
+              <div class="sv__avatar sv__avatar--mark sv__avatar--xl" x-html="avatarMarkup()" data-testid="member-avatar-current"></div>
+              <figcaption class="adm-dim">Current</figcaption>
+            </figure>
+            <figure class="adm-avatar__slot" x-show="avatarPreview" x-cloak>
+              <div class="sv__avatar sv__avatar--mark sv__avatar--xl">
+                <img class="sv__mark-img" :src="avatarPreview" alt="" data-testid="member-avatar-preview" />
+              </div>
+              <figcaption class="adm-dim">New</figcaption>
+            </figure>
+          </div>
+          <p class="adm-dim" x-text="avatarSourceLabel()" data-testid="member-avatar-source"></p>
+          <template x-if="canUploadAvatar()">
+            <div>
+              <div class="adm-toolbar">
+                <input type="file" x-ref="avatarInput" accept="image/png,image/jpeg,image/webp,image/gif"
+                  class="adm-input" @change="pickAvatar($event)" aria-label="Avatar image" data-testid="member-avatar-input" />
+                <button type="button" class="adm-btn" :disabled="!avatarFile || avatarBusy" @click="uploadAvatar()" data-testid="member-avatar-upload">Upload</button>
+                <button type="button" class="adm-btn adm-btn--ghost" x-show="avatarFile" @click="clearAvatarPick()">Cancel</button>
+                <button type="button" class="adm-btn adm-btn--ghost" x-show="!avatarFile && avatarSource() === 'upload'" :disabled="avatarBusy" @click="removeAvatar()" data-testid="member-avatar-remove">Remove upload</button>
+              </div>
+              <p class="adm-dim">PNG, JPEG, WebP or GIF, up to 5 MB. Square with a solid background reads best at small sizes.</p>
+            </div>
+          </template>
+          <p class="adm-dim" x-show="!canUploadAvatar()">This member's id predates uploads. Its logo is set in the repo.</p>
+          <span x-show="avatarError" x-text="avatarError" class="rm-error adm-msg" data-testid="member-avatar-error"></span>
+        </section>
+
         <!-- Profile edit (#567). Everything here is a correction an operator
              makes to a record the member itself cannot change: `name`, `lens`
              and `contactEmail` are refused by the self-service profile route

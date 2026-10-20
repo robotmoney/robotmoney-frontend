@@ -17,7 +17,28 @@
 // - Every action's credential comes back as a top-level `token`, not
 //   `credential.token`.
 import { api, ROUTES, path } from "../../../lib/api.js";
+import { memberAvatarMarkup } from "../../../lib/member-mark.js";
+import { isUploadedAvatar, memberAvatarSrc, memberLogo } from "../../../lib/member-logos.js";
 import { adminAuthState, apiErrorText, fmtUtc, redactForDisplay } from "./shared.js";
+
+// ── Avatar upload (RM-184) ──────────────────────────────────────────────────
+// The bytes go to the #626 route, which stores them in Postgres so they
+// survive a redeploy, and points avatar.path at the public GET that serves
+// them. An upload outranks the curated logo map (lib/member-logos.js), so this
+// is how a logo is set or replaced without a PR. The type list and the size
+// limit are the server's (AVATAR_CONTENT_TYPES, AVATAR_MAX_BYTES in
+// swarm/admin.ts): no SVG, because a served SVG is a document, not a picture.
+const AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+// The server refuses any other id shape with a 404 (MEMBER_ID_RE), so the
+// legacy handle-shaped ids (themis) keep their curated mark and get no picker.
+const UPLOADABLE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const AVATAR_SOURCE_LABELS = {
+  upload: "Uploaded here. It replaces any curated logo.",
+  logo: "Curated logo from the repo. An upload replaces it.",
+  path: "Seeded path. An upload replaces it.",
+  mark: "Derived mark. No logo is set.",
+};
 
 // Actions that require the operator to type a reason before the dialog will
 // submit. APPROVE IS DELIBERATELY ABSENT (RM-45).
@@ -112,6 +133,11 @@ export function registerAdminSwarmMember(Alpine) {
     credentialReveal: null, // { token } — cleared on dismiss/navigate
     fmtUtc,
 
+    avatarFile: null, // the picked File, held until Upload
+    avatarPreview: null, // a data: URL of it (the CSP's img-src allows data:, not blob:)
+    avatarError: null,
+    avatarBusy: false,
+
     async init() {
       this.memberId = location.pathname.split("/").filter(Boolean).pop();
       await this.bootWithStoredToken(() => this.load());
@@ -149,6 +175,97 @@ export function registerAdminSwarmMember(Alpine) {
     memberJson() { return JSON.stringify(redactForDisplay(this.member), null, 2); },
 
     memberBiases() { return Array.isArray(this.member?.biases) ? this.member.biases : []; },
+
+    // ── Avatar (RM-184) ──────────────────────────────────────────────────────
+    canUploadAvatar() {
+      return Boolean(ROUTES.swarm.admin.memberAvatar) && UPLOADABLE_ID_RE.test(this.member?.id || "");
+    },
+
+    avatarSource() {
+      const p = this.member?.avatar?.path;
+      if (isUploadedAvatar(p)) return "upload";
+      if (memberLogo({ handle: this.member?.handle })) return "logo";
+      return String(p || "").trim() ? "path" : "mark";
+    },
+
+    avatarSourceLabel() { return AVATAR_SOURCE_LABELS[this.avatarSource()]; },
+
+    // The same chain and markup the public pages render, so what shows here
+    // is what a visitor sees.
+    avatarMarkup() {
+      const m = this.member;
+      if (!m) return "";
+      const initials = (n) => String(n || "").slice(0, 2).toUpperCase() || "SW";
+      return memberAvatarMarkup(memberAvatarSrc(m.handle, m.avatar?.path), m.keyFingerprint || m.id, m.name, 80, initials);
+    },
+
+    pickAvatar(event) {
+      const file = event.target.files?.[0] || null;
+      this.avatarError = null;
+      this.avatarFile = null;
+      this.avatarPreview = null;
+      if (!file) return;
+      if (!AVATAR_TYPES.includes(file.type)) {
+        this.avatarError = "PNG, JPEG, WebP or GIF only. SVG is not accepted.";
+        event.target.value = "";
+        return;
+      }
+      if (file.size > AVATAR_MAX_BYTES) {
+        this.avatarError = "The image must be 5 MB or smaller.";
+        event.target.value = "";
+        return;
+      }
+      this.avatarFile = file;
+      const reader = new FileReader();
+      reader.onload = () => { if (this.avatarFile === file) this.avatarPreview = String(reader.result); };
+      reader.readAsDataURL(file);
+    },
+
+    clearAvatarPick() {
+      this.avatarFile = null;
+      this.avatarPreview = null;
+      this.avatarError = null;
+      if (this.$refs.avatarInput) this.$refs.avatarInput.value = "";
+    },
+
+    async uploadAvatar() {
+      if (!this.avatarFile) return;
+      this.avatarBusy = true;
+      this.avatarError = null;
+      try {
+        await api.adminUpload(path(ROUTES.swarm.admin.memberAvatar, { id: this.memberId }), this._token(), this.avatarFile);
+        this.clearAvatarPick();
+        await this.load();
+      } catch (e) {
+        if (e.status === 403) return this._handle403();
+        this.avatarError = apiErrorText(e);
+      } finally {
+        this.avatarBusy = false;
+      }
+    },
+
+    // Clears the pointer through the versioned profile edit, which accepts
+    // `avatar: null`. The member falls back to its curated logo, or its mark.
+    async removeAvatar() {
+      this.avatarBusy = true;
+      this.avatarError = null;
+      try {
+        await api.adminPost(path(ROUTES.swarm.admin.memberUpdate, { id: this.memberId }), this._token(), {
+          expectedVersion: this.member.version,
+          avatar: null,
+          reason: "Removed the uploaded avatar.",
+        });
+        await this.load();
+      } catch (e) {
+        if (e.status === 403) return this._handle403();
+        const message = apiErrorText(e);
+        this.avatarError = message === "stale_version"
+          ? "This member changed since you loaded it (stale version). Reload and try again."
+          : message;
+      } finally {
+        this.avatarBusy = false;
+      }
+    },
 
     // The route ships with #567. Until the vendored contract carries it, the
     // page renders without the edit affordance instead of posting to
