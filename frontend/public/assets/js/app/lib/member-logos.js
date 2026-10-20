@@ -12,10 +12,15 @@
 //
 // So this map is the curated rung: assets committed to the repo, reviewed in a
 // diff, identical in demo, staging and production, and immune to a DB reseed.
-// It takes precedence over `avatar.path` deliberately, which is also what
-// repairs the noop-analyst mistake without a backend write. A member absent
-// from the map falls through to `avatar.path`, then to the derived mark, then
-// to initials -- the chain member-mark.js already implements.
+// It takes precedence over a seeded `avatar.path` deliberately, which is also
+// what repairs the noop-analyst mistake without a backend write.
+//
+// One `avatar.path` outranks the map: an admin upload (#626, RM-184). The
+// upload route points it at `/api/swarm/members/:id/avatar`, a path no seed
+// ever wrote, so it is told apart by shape and nothing else. That is what lets
+// an admin set or replace a logo from the admin panel without a PR. The full
+// chain, in memberAvatarSrc() below: upload, curated logo, any other
+// `avatar.path`, then the derived mark and initials member-mark.js implements.
 //
 // PROVENANCE.
 //
@@ -87,4 +92,31 @@ export const MEMBER_LOGOS = {
 export function memberLogo(member) {
   const handle = String(member?.handle || "").trim().toLowerCase();
   return (handle && MEMBER_LOGOS[handle]) || null;
+}
+
+// The path the admin upload route writes (#626): the public GET that serves
+// the stored bytes, with a ?v= cache-bust token.
+const UPLOADED_AVATAR_RE = /^\/api\/swarm\/members\/[^/?#]+\/avatar(?:[?#]|$)/;
+
+/**
+ * Whether an `avatar.path` is an admin upload rather than a seeded path.
+ *
+ * @param {string | null | undefined} avatarPath
+ * @returns {boolean}
+ */
+export function isUploadedAvatar(avatarPath) {
+  return UPLOADED_AVATAR_RE.test(String(avatarPath || "").trim());
+}
+
+/**
+ * The image a member wears, or null for the derived mark: an admin upload,
+ * then the curated logo, then any other `avatar.path`.
+ *
+ * @param {string | null | undefined} handle
+ * @param {string | null | undefined} avatarPath
+ * @returns {string | null}
+ */
+export function memberAvatarSrc(handle, avatarPath) {
+  if (isUploadedAvatar(avatarPath)) return String(avatarPath).trim();
+  return memberLogo({ handle }) || avatarPath || null;
 }

@@ -1,5 +1,9 @@
 # Investment Swarm
 
+> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
+> covers member/team referral codes, eligibility and beneficiary history.
+> It is not accepted or shipped; the existing boundaries below remain authoritative.
+
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 
 ## 9. Investment Swarm (feature architecture)
