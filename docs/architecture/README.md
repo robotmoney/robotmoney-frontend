@@ -139,6 +139,13 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   [original-app](../bot-analytics-ui-port/inventory-original.md) and
   [current-repo](../bot-analytics-ui-port/inventory-current.md) inventories.
 
+## Proposed specifications
+
+- [Referral specification](../technical/referrals-spec.md) — proposed goals,
+  consent, eligibility, code lifecycle, public/admin contracts and reproducible
+  reporting. Not accepted or shipped; existing canonical boundaries retain
+  authority until owner acceptance.
+
 ## Reviews and investigations
 
 Point-in-time review artifacts live under [`code-review/`](../code-review/).

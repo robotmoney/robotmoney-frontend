@@ -23,7 +23,7 @@ import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { sessionSummary } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
-import { memberLogo } from "../../lib/member-logos.js";
+import { memberAvatarSrc } from "../../lib/member-logos.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { helpers, loadArchiveMember, loadArchiveSession, loadArchiveSubject, KNOWN_ARCHIVE_MEMBERS,
   referenceWeights, targetsInForce, withinBucketsFor, explorerAssets, normKeyOf, camelTake } from "../static-views.js";
@@ -719,13 +719,12 @@ export function registerSwarmView(Alpine) {
         .map((s) => s[0].toUpperCase())
         .join("") || "SW";
     },
-    // Avatar precedence (#625, RM-100); see the twin in static-views.js. The
-    // curated logo wins over the projection's `avatar.path` because every path
-    // production serves 404s and one of them points at the wrong member.
+    // Avatar precedence (#625, RM-100, RM-184); see the twin in
+    // static-views.js and memberAvatarSrc() in lib/member-logos.js.
     // x-html is safe here: memberAvatarMarkup() never interpolates the seed,
     // and initials() is already stripped to letters and digits.
     memberMark(seed, name, size = 40, avatarPath, handle) {
-      const src = memberLogo({ handle }) || avatarPath || null;
+      const src = memberAvatarSrc(handle, avatarPath);
       return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
     },
     stanceEntries(s) { return Object.entries(s.swarmRecommendation?.stances || {}); },
