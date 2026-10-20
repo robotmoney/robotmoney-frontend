@@ -1633,13 +1633,14 @@ footer {
         <td><strong>Judge</strong></td>
         <td>With judge mode <code>off</code> nothing waits. With <code>enforce</code>,
           <code>epochs/request-judging</code> stores an absolute deadline from the subject's
-          <code>judging_duration_seconds</code>, and <code>epochs/consensus</code> records the judge of record's
-          judgement with its acceptance instant.</td>
+          <code>judging_duration_seconds</code>. Every eligible judge files a signed answer, saved with its
+          accepted time and marked on time or late; an answer publishes nothing (D71).</td>
       </tr>
       <tr>
         <td><strong>Finalize</strong></td>
-        <td><code>epochs/finalize</code> — decides <code>judged</code>, <code>no_consensus</code> or
-          <code>not_judged</code> from stored instants, then publishes. No consensus is ever fabricated.</td>
+        <td><code>epochs/finalize</code> — refused before the judging deadline. After it, draws one on-time
+          answer at random and decides <code>judged</code>, <code>no_consensus</code> or
+          <code>not_judged</code>, then publishes. No consensus is ever fabricated.</td>
       </tr>
     </tbody>
   </table>

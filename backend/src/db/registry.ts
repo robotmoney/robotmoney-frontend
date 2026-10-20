@@ -537,8 +537,6 @@ function describe(declaration: QueryDeclaration): string {
 export const OBJECTLESS_SHAPES = Object.freeze({
   /** The database clock as lossless text (scheduler spec §4.2: one present per transaction). */
   clockText: "SELECT clock_timestamp()::text AS at",
-  /** The database clock as a timestamp, read at the moment of a comparison or a write. */
-  clockTimestamp: "SELECT clock_timestamp() AS at",
   /** A connection check: does the pool still answer (the api's /health `db` field)? */
   connectionCheck: "SELECT 1",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */

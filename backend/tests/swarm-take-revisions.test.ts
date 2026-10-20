@@ -311,7 +311,9 @@ test("`judged` freezes takes exactly as `aggregated` does (#752) — by the wind
   const { result: judged } = await judgeViaParticipant(session.id);
   expect(judged.ok, JSON.stringify(judged)).toBe(true);
   const row = (await sql`SELECT state, window_closes_at FROM swarm_sessions WHERE id = ${session.id}`)[0] as any;
-  expect(row.state).toBe("judged");
+  // An answer leaves the session `judging` (D71); the legacy `judged` state is
+  // frozen by the same window rule.
+  expect(row.state).toBe("judging");
   // The advertised deadline has NOT passed, so this refusal can only come from
   // the state conjunct — the same proof shape the `aggregated` case uses.
   expect(new Date(row.window_closes_at).getTime()).toBeGreaterThan(Date.now());

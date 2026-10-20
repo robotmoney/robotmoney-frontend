@@ -79,8 +79,10 @@ const EXPECTED_RECEIPT_REFUSALS = new Set([
   // Judging was requested and no eligible consensus was recorded by the
   // deadline: §4.4 publishes the session with no certificate, by design.
   "no_consensus",
-  // Judgements are on file but none reached the session: they came from a judge
-  // that is not the judge of record, or after publication (late evidence).
+  // Judgements are on file but none reached the session: the session published
+  // with no drawn judgement (`no_consensus`, or judging `off`), or the answers
+  // came after publication (late evidence). A DRAWN session is not here: see
+  // `finalizeAndAttest`, where a drawn session that fails this binding is a failure.
   "judgement_not_adopted",
   // A member filed a first take after aggregation — consensus-receipt.ts calls
   // this "ordinary product behaviour rather than corruption".
@@ -113,7 +115,11 @@ async function finalizeAndAttest(sessionId: string) {
   if (receipt.ok) return { ...finalized, consensusReceipt: { published: true } };
 
   const consensusReceipt = { published: false, reason: receipt.error };
-  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error)) {
+  // A session whose draw picked a judgement (outcome `judged`) carries that
+  // opinion by construction, so a receipt that cannot bind to it is a failure,
+  // never the expected `judgement_not_adopted` refusal (D71).
+  const drawnButUnbound = finalized.outcome === "judged" && receipt.error === "judgement_not_adopted";
+  if (EXPECTED_RECEIPT_REFUSALS.has(receipt.error) && !drawnButUnbound) {
     return { ...finalized, consensusReceipt };
   }
   // An assembly FAILURE — `no_takes`, `schema_invalid`, the `weights_*` family,
@@ -189,14 +195,12 @@ export async function handleSwarmAdmin(
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
         return fromResult(await epoch.requestJudging(sessionId));
       }
-      // THERE IS NO `consensus` ROUTE. A consensus is recorded by exactly one
-      // path: `submitJudgement`, in the transaction that writes the judge of
-      // record's signed, applied judgement (§4.4, criterion 102: "through part
-      // 1's transition rather than a second copy"). A route that took a bare
-      // judgement id would let a scheduler token record ANY row — a second
-      // judge's, or one that never reached the session — as the consensus, and
-      // finalize would then publish `judged` over a session carrying no adopted
-      // opinion. `epochs/consensus` therefore falls through to the 404 below.
+      // THERE IS NO `consensus` ROUTE. A consensus is decided by exactly one
+      // path: `finalizeEpoch`, which draws one on-time answer after the judging
+      // deadline (D71). A route that took a bare judgement id would let a
+      // scheduler token name ANY row as the consensus, and finalize would then
+      // publish `judged` over a session carrying no drawn opinion.
+      // `epochs/consensus` therefore falls through to the 404 below.
       case "finalize": {
         const sessionId = str("sessionId");
         if (!sessionId) return { status: 400, body: { error: "sessionId required" } };

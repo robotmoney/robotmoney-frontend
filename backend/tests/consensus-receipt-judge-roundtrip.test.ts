@@ -150,6 +150,21 @@ test("a ONE-position model answer parses, and the receipt schema accepts it verb
   expect(canonicalizeReceipt(receipt, spec)).toContain(JSON.stringify(ALPHA_BODY).slice(1, -1));
 });
 
+test("the receipt carries the drawn answer's opinion in the unchanged byte format: nothing about the draw is in the signed bytes (D71)", () => {
+  // Whichever of several answers wins the draw, the receipt's judge block is that
+  // answer's opinion plus the two envelope fields. The draw lives on the session
+  // record and in the audit log, never in the receipt: D42 decision 2 keeps judge
+  // identity out of schema 1.0.
+  const winner = parseJudgeResponse(ONE_POSITION_ANSWER, input);
+  const receipt = assembleReceipt(winner, "model");
+  assertAnchorable(receipt);
+  expect(Object.keys(receipt.judge)).toEqual(schema.properties.judge.required);
+  const bytes = canonicalizeReceipt(receipt, spec);
+  for (const word of ["judgement_id", "random_value", "drawn_index", "candidate_", "draw_rule", "drawn_at"]) {
+    expect(bytes).not.toContain(word);
+  }
+});
+
 test("the two lower bounds coincide: zero positions is refused by the parser AND by the schema", () => {
   const empty = JSON.stringify({
     rationale: "A rationale.",

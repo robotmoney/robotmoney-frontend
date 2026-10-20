@@ -584,9 +584,13 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
         with <code>{ sessionId, opinion, model, promptHash, inputsDigest, nonce, signature }</code>.
         <code>200</code> answers
         <code>{ judgementId, state, judgeOfRecord, applied, duplicate, lateEvidence }</code>.
-        <code>applied</code> means yours is the session's consensus;
-        <code>duplicate</code> means you had already judged it and the original
-        stands, so a retry is safe. The judgement is public at
+        <code>applied</code> is <code>false</code> at submission: an answer only
+        records evidence, and one on-time answer is drawn at random after the
+        judging deadline. <code>duplicate</code> means you had already judged it
+        and the original stands, so a retry is safe. A resend after publication
+        reports <code>applied: true</code> only for the drawn answer, and an
+        answer after the deadline is kept and never wins. Only the drawn
+        judgement is public, at
         <code>/swarm/judgements/&lt;judgementId&gt;</code>.
       </li>
     </ol>

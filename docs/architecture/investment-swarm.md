@@ -36,8 +36,8 @@ sessions on one date. A session is identified by its id, not by a date; the
 only uniqueness the database enforces is at most one `collecting` session per
 subject ([scheduler spec §2.1](../technical/system-scheduler-spec.md#21-the-model)).
 Each session advances through
-`collecting → window_closed → aggregated → [judging → judged] → published`
-(§9.4). `judged` is optional — see §9.7. A member may amend its signed **recommendation** (a "take") while the window
+`collecting → window_closed → aggregated → [judging] → published`
+(§9.4). `judged` is a legacy state only (an older version left sessions there) — see §9.7. A member may amend its signed **recommendation** (a "take") while the window
 is open, and exactly one of its takes per session is final ([D51](../decisions.md#d51)); a non-submitting member is recorded **absent**, never fabricated. The
 plurals (members / subjects / sessions / takes) are the moving parts — they are
 **not** multiple swarms.
@@ -119,8 +119,12 @@ is [system-scheduler-spec §§2–4](../technical/system-scheduler-spec.md#2-epo
 this is the summary, not a second copy:
 
 ```
-collecting → window_closed → aggregated → [judging → judged] → published
+collecting → window_closed → aggregated → [judging] → published
 ```
+
+`judged` is a legacy state: an older version left a session there between a
+consensus being recorded and finalize. A new session goes `judging → published`
+and records `judged` only as its outcome ([D71](../decisions.md#d71), §9.7).
 
 - **Epochs.** A subject's sessions run back to back, closing on a fixed
   wall-clock **grid**: `epoch_anchor + k × epoch_duration`. Those two columns
@@ -154,8 +158,8 @@ collecting → window_closed → aggregated → [judging → judged] → publish
   **judge** under the mode captured at turnover (`off` or `enforce`, D48;
   under `enforce` the API stores an absolute deadline and pushes the request
   to the judge participants) → **finalize** → **publish**.
-- **Judging outcome** is decided once by finalize from stored instants and is
-  one of `judged`, `no_consensus`, `not_judged`. It is recorded on the session
+- **Judging outcome** is decided once by finalize, after the judging deadline,
+  and is one of `judged`, `no_consensus`, `not_judged`. It is recorded on the session
   separately from the lifecycle state, which ends at `published` in every case.
   Nothing is fabricated for a missing consensus.
 - **Recovery.** The scheduler is either provably current (live stream, no
@@ -263,6 +267,28 @@ The portfolio allocation remains the deterministic output of
 rewrite weights. A valid model-authored judgement is a separate, attributable
 record. If judging is unavailable, the session may publish without a judgement;
 the system must never manufacture a template opinion.
+
+**Every judge judges; one answer is drawn ([D71](../decisions.md#d71)).** Every
+eligible judge is asked to judge every session. Each may send one signed answer
+before the judging deadline, which is the moment judging is requested plus the
+subject's judging duration, captured at turnover. The take window does not apply
+to judges. An answer is evidence only: it is saved with its accepted time (one
+reading of the database clock), marked on time or late at that moment, and it
+publishes nothing. A request to publish before the judging deadline is refused.
+At the deadline, finalize lists the on-time answers, keeps one per judge, drops
+judges that were removed or switched off since they answered, and draws one at
+random with the operating system's secure source (rule `rejection-u32-v1`: draw
+a 32-bit value, reject values at or above `floor(2^32 / n) * n`, then take it
+modulo `n`). The drawn answer becomes the session's judgement and its judge the
+judge of record. The session's consensus time is that answer's accepted time. The
+session record names the winning answer and holds the full list, the random
+number and the rule, and the audit log stores the same facts, so anyone can
+recompute the pick. The random number is trusted: commit-reveal is out of scope.
+With no on-time answer the session publishes with no consensus, and nothing is
+made up. A late answer is kept as a record and never changes the winner. The
+receipt carries the winner's opinion in its unchanged byte format. The draw runs
+in one transaction with the publication, and the session row lock makes two
+finalizes at the same moment give one draw.
 
 The accepted go-forward mode is `off | enforce` ([D48](../decisions.md#d48)).
 Existing code may still expose `shadow` until that accepted change ships;

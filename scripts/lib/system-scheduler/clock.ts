@@ -26,8 +26,9 @@
 //      duration" would reintroduce exactly the drift the grid exists to remove.
 //
 //   2. THE SETTLEMENT CHAIN. A state machine over §4.4's steps, driven step by
-//      step as each call returns, parking at the judging wait and woken by
-//      either the deadline timer or the `session.judged` event.
+//      step as each call returns, parking at the judging wait and woken by the
+//      deadline timer ALONE (D71): an answer that lands early decides nothing,
+//      so nothing the stream says shortens the wait.
 //
 //   3. §4.6's RETRY AND DEGRADATION. One wrapper around every call, which is
 //      the only place that decides retry-or-not, and the only place that writes
@@ -334,7 +335,8 @@ export class SchedulerClock {
   /**
    * Apply one stream event.
    *
-   * Only the three kinds §6.2 names do anything; an unknown kind is ignored
+   * Only the two kinds §6.2 now names do anything (a `session.judged` event from
+   * an older api is ignored, D71); an unknown kind is ignored
    * rather than treated as a reason to rebuild, because §3.1 makes a rebuild
    * the answer to a PROVABLE loss of currency, and a kind this build does not
    * know about is not that.
@@ -346,8 +348,10 @@ export class SchedulerClock {
         return this.#onSubjectChanged(event);
       case "epoch.turned_over":
         return this.#onTurnedOver(event);
+      // `session.judged` is retired (D71): an answer publishes nothing, so no
+      // early result exists to wait for. An older api may still write one, and
+      // the deadline timer finalizes that session all the same.
       case "session.judged":
-        return this.#onJudged(event);
       default:
         return;
     }
@@ -477,22 +481,6 @@ export class SchedulerClock {
         }),
       );
     }
-  }
-
-  /**
-   * §4.4: "The event is a wake-up and nothing more … It lets the scheduler
-   * finalize the moment consensus lands instead of waiting out the deadline. It
-   * decides nothing. Its arrival time is never compared to anything."
-   *
-   * Nothing below compares `now` to the deadline, and nothing passes a time to
-   * the API. The outcome is decided by finalize from stored instants.
-   */
-  async #onJudged(event: StreamEventFrame): Promise<void> {
-    const sessionId = event.sessionId;
-    if (!sessionId) return;
-    if (this.#published.has(sessionId)) return;
-    this.#clearDeadline(sessionId);
-    await this.#track(this.#finalizeChain(sessionId, event.subjectId ?? undefined));
   }
 
   // ───────────────────────────────────────────────────────────────────────────

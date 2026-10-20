@@ -751,8 +751,8 @@ describe("the two clocks are not the same clock (§4.2)", () => {
   });
 });
 
-describe("the judged event is a wake-up and nothing more (§4.4)", () => {
-  test("`session.judged` finalizes at once instead of waiting out the deadline", async () => {
+describe("the scheduler waits for the judging deadline alone (§4.4, D71)", () => {
+  test("an answer that lands early publishes nothing: the session stays judging until the deadline timer fires", async () => {
     const { timers, api, boot } = world();
     api.addSubject("sub-a", 600);
     api.addSession({
@@ -769,67 +769,64 @@ describe("the judged event is a wake-up and nothing more (§4.4)", () => {
     expect(clock.deadlineAt("old")).toBe(T0 + 900_000);
 
     await timers.advanceTo(T0 + 100_000);
-    api.recordConsensus("old");
-    await clock.applyEvent(judgedEvent(1, "old", "sub-a"));
+    api.recordAnswer("old");
     await clock.idle();
+    // Nothing woke the scheduler, and the timer is still parked on the stored instant.
+    expect(api.countCalls("finalize")).toBe(0);
+    expect(api.sessions.get("old")!.state).toBe("judging");
+    expect(clock.deadlineAt("old")).toBe(T0 + 900_000);
 
-    expect(api.sessions.get("old")!.outcome).toBe("judged");
-    // The deadline timer was dropped, so it cannot fire a second finalize.
-    expect(clock.deadlineAt("old")).toBeNull();
-    await timers.advanceTo(T0 + 2_000_000);
-    await clock.idle();
-    expect(api.countCalls("finalize")).toBe(1);
-  });
-
-  test("a DUPLICATE `session.judged` changes no outcome and drives no second finalize", async () => {
-    const { timers, api, boot } = world();
-    api.addSubject("sub-a", 600);
-    api.addSession({
-      sessionId: "old",
-      subjectId: "sub-a",
-      state: "judging",
-      judgeMode: "enforce",
-      judgingDeadlineAt: T0 + 900_000,
-    });
-    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
-    const clock = boot();
-    await clock.rebuild(await api.fullRead());
-    await clock.idle();
-
-    await timers.advanceTo(T0 + 100_000);
-    api.recordConsensus("old");
-    await clock.applyEvent(judgedEvent(1, "old", "sub-a"));
-    await clock.idle();
-    const finalizes = api.countCalls("finalize");
-
-    await clock.applyEvent(judgedEvent(2, "old", "sub-a"));
-    await clock.idle();
-
-    expect(api.countCalls("finalize")).toBe(finalizes);
-    expect(api.sessions.get("old")!.outcome).toBe("judged");
-  });
-
-  test("a LOST `session.judged` changes no outcome: the deadline finalizes it instead", async () => {
-    const { timers, api, boot } = world();
-    api.addSubject("sub-a", 600);
-    api.addSession({
-      sessionId: "old",
-      subjectId: "sub-a",
-      state: "judging",
-      judgeMode: "enforce",
-      judgingDeadlineAt: T0 + 900_000,
-    });
-    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
-    const clock = boot();
-    await clock.rebuild(await api.fullRead());
-    await clock.idle();
-
-    await timers.advanceTo(T0 + 100_000);
-    api.recordConsensus("old"); // the event is dropped at the hop
     await timers.advanceTo(T0 + 900_000);
     await clock.idle();
-
     expect(api.countCalls("finalize")).toBe(1);
     expect(api.sessions.get("old")!.outcome).toBe("judged");
+  });
+
+  test("a `session.judged` event from an older api is ignored: no finalize, and the deadline timer is kept", async () => {
+    const { timers, api, boot } = world();
+    api.addSubject("sub-a", 600);
+    api.addSession({
+      sessionId: "old",
+      subjectId: "sub-a",
+      state: "judging",
+      judgeMode: "enforce",
+      judgingDeadlineAt: T0 + 900_000,
+    });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
+    const clock = boot();
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+
+    await timers.advanceTo(T0 + 100_000);
+    api.recordAnswer("old");
+    await clock.applyEvent(judgedEvent(1, "old", "sub-a"));
+    await clock.idle();
+
+    expect(api.countCalls("finalize")).toBe(0);
+    expect(clock.deadlineAt("old")).toBe(T0 + 900_000);
+
+    await timers.advanceTo(T0 + 900_000);
+    await clock.idle();
+    expect(api.countCalls("finalize")).toBe(1);
+    expect(api.sessions.get("old")!.outcome).toBe("judged");
+  });
+
+  test("with no answer on file the deadline publishes no_consensus", async () => {
+    const { timers, api, boot } = world();
+    api.addSubject("sub-a", 600);
+    api.addSession({
+      sessionId: "old",
+      subjectId: "sub-a",
+      state: "judging",
+      judgeMode: "enforce",
+      judgingDeadlineAt: T0 + 900_000,
+    });
+    api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
+    const clock = boot();
+    await clock.rebuild(await api.fullRead());
+    await clock.idle();
+    await timers.advanceTo(T0 + 900_000);
+    await clock.idle();
+    expect(api.sessions.get("old")!.outcome).toBe("no_consensus");
   });
 });
