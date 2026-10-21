@@ -5098,6 +5098,8 @@ prevent.
 
 ## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
 
+> **Superseded in part by [D73](#d73) on 2026-10-21.** The bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated" no longer hold. The API now serves the record as it was, under the D73 load limits. The rest of this decision stands.
+
 **Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
 no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
 (`asset_prices`; the `prices` table from migration 0002 is dead and is not served),
@@ -5844,3 +5846,51 @@ Out of scope: skipping a judge's own operator's portfolio and the in-house
 exemption (issue 1335), judges voting or merging answers, verifiable randomness,
 turning outside judging on in production (issue 1396) and filling in draw records
 for sessions published earlier.
+
+---
+
+<a id="d72"></a>
+## D72 — Archive format 1 is the one archive format for analytics data (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.5.
+
+**Decision.**
+
+1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+2. **Write-once.** An archive never changes after it is written. Its checksum names it. A backup only adds archives.
+3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
+4. **Same bytes.** The API and the database replica write byte-identical archives for the same state.
+
+**Why.** An analyst, the backup job and the API must agree on one record. One write-once format lets a repo clone and an API download produce the same local copy.
+
+---
+
+<a id="d73"></a>
+## D73 — The public analytics API serves the record as it was, under fixed load limits (supersedes the D58 bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated"; owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` sections 4.4, 4.6 and 4.8. The rest of D58 stands: the public prefix, GET only, the contract, the grant and the data terms.
+
+**Decision.**
+
+1. **The record as it was.** The API serves source data as the external party published it when we collected it, with every later revision as a new version. It serves each run's published report byte for byte, with its vintage. A later run adds a report and never edits an earlier one.
+2. **No recomputation.** The API never computes a calculated indicator. Calculated indicators reach it only inside a published report.
+3. **Archives.** The API serves archives in format 1 (D72), grouped by backup, with watermarks.
+4. **Load limits.** At most 2 public queries at once, a 5 second statement timeout, a cost-weighted limit of 100 tokens a minute per client, a byte budget of 50 MB a minute per client, gzip off the event loop, immutable caching keyed on checksums and a bounded edge cache. A query that is gated or times out answers 503 with `Retry-After`.
+5. **Client identity.** The rate limit keys on `X-Client-IP`, which the web server sets and the caller cannot. Only the web server reaches the api port. No CDN rule is involved.
+
+**Why.** An analyst can check a published regime only against the data and the report as they were at the time. The current tables change after publication. Public traffic must never starve the site, and the D58 limits counted requests, not cost.
+
+---
+
+<a id="d74"></a>
+## D74 — Every source series has one id, `<provider>:<symbol>` (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.1 and `docs/definitions.md`.
+
+**Decision.**
+
+1. **One id.** A source series is named `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. The database, the API, the archives and the input file use that id.
+2. **No aliases.** No layer renames a series. No id names the code that reads it. The `backtest:` keys and the `SPX`, `ETH` and `TBILL3M` input ids are retired, together with the `LEDGER_EXTRA_KEYS` map that translated between them.
+3. **Ratio legs.** Each leg of a ratio is a source series with its own id. A ratio is a calculated indicator and is never stored as source data.
+
+**Why.** The same series carried three names: the provider symbol, the ledger key and the SDK input id. A table existed only to translate them, and the ledger key named its consumer. One id removes the table and lets every layer read the others' data without a map.

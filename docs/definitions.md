@@ -9,6 +9,7 @@ Datapoints that come from external sources. Prices, rates and ratios that an ext
 - An external party can revise source data. We never revise it ourselves.
 - When we store source data, a changed value is a new version of the value. It is never an edit.
 - Source data is stored as the source gives it. We do not combine or adjust it before storing.
+- Each source series has one id, `<provider>:<symbol>` (for example `yahoo:^GSPC` or `fred:DTB3`). Every layer uses that id. No layer renames it, and the id never names the code that reads it.
 - Examples: a daily close from Yahoo, a rate from FRED, a total value locked from DefiLlama.
 
 ## Calculated indicators
@@ -43,6 +44,9 @@ A specific file artifact. It collects reports in one CSV file.
 | Backtest | A replay of a weight schedule over past source data. |
 | Value series | The result of a backtest: the portfolio value for each day. A calculated indicator (a backtested price). |
 | Period statistics | Growth, volatility, drawdown and Sharpe ratio of a value series over a date range. A window and a market phase are both date ranges. |
+| Turnover | The share of the portfolio that a trade moves: the sum of absolute weight changes, halved. |
+| Buy-and-hold | A schedule with one entry and no trades. The weights drift with prices. |
+| Constant mix | A schedule that holds fixed weights by trading back to them whenever they drift. |
 
 Choosing the weights is not part of a backtest. A backtest takes a weight schedule as input.
 
@@ -54,6 +58,18 @@ These terms support the four above.
 | ---- | ------- |
 | Backup | A directory of archives written at one moment, named by that moment (the backup id). Its `backup.json` describes it. |
 | Format 1 | The layout of a backup, as robotmoney/csv-backups writes it. |
+| Version | One collected value of source data, with the time we observed it. A revision by the external party adds a version. It never edits one. |
+| Published report | The report one analytics run created. It is kept byte for byte and never changes. |
+| Vintage | The record of one run: the source data versions it read and the report it published. A later run adds a vintage. The sequence of vintages is the revision history of the reports. |
+| Source id | The one name of a source series, `<provider>:<symbol>`, for example `yahoo:^GSPC`. |
+| Leg | One of the two source series a ratio divides. |
+| Run | One execution of the analytics module, named by its run key. It reads one vintage of source data and publishes one report. |
+| As-of | The last date a run may use. Source data dated later is ignored. |
+| Local copy | The backups on an analyst's machine. |
+| Fill | A way to bring the local copy up to date: from the csv-backups repo, from the API or from the database. |
+| Watermark | The last id or time the local copy holds for one table. A fill fetches only what is past it. |
+| Input file | A report of source data for one run, written from the local copy. The analyst SDK computes from it. |
+| Manifest | The sidecar of an input file. It names the backup, the run, the as-of date, the fill, the row count and the input file's checksum. |
 
 ## Terms these definitions replace
 
@@ -63,6 +79,9 @@ These terms support the four above.
 | floor, persisted-real floor | `regime-engine.md` | stored source data |
 | transformed value, percentile, aligned value | `regime-engine.md` | calculated indicator |
 | indicator (the series) | registry, code | source data when it is the input, calculated indicator when it is a result |
+| ledger key, extras, `SPX`, `ETH`, `TBILL3M`, `backtest:` keys | `LEDGER_EXTRA_KEYS`, ledger | the source id, for example `yahoo:^GSPC` |
+| frozen run output, report snapshot, output snapshot | `analytics_output_snapshots`, issue 1182, section 4.8 | published report |
+| blend hodl | `computeBacktest` (`blend_hodl`) | constant mix |
 
 A table or a field called `raw_...` holds source data.
 

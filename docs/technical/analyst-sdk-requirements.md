@@ -18,19 +18,20 @@ Non-goals:
 
 ## 2. Principles
 
-- **Pure computation.** `src/` calls no network, reads no database and reads no environment. Tests run with `fetch` replaced by a thrower.
+- **Pure computation.** The computation calls no network, reads no database and reads no environment. Only the source clients in `src/extract/` fetch, and only through `src/extract/http.ts`. Tests run with `fetch` replaced by a thrower.
 - **Files only at the edge.** The command line is the only place that reads or writes a file.
 - **Install alone.** The package installs from a sparse clone of its own directory.
 - **No archive import.** The SDK never imports the archive tool. The archive tool may import the SDK.
+- **The archive tool fetches.** csvb owns the local copy, every fill and the download client. The SDK reads only the input file.
 
 ## 3. The local copy
 
-The local copy is a set of backups on the analyst's machine, in the archive format of [analytics requirements section 4.4](analytics-requirements.md).
+The local copy is a set of backups on the analyst's machine, in the archive format of [analytics requirements section 4.5](analytics-requirements.md). It holds every collected version of source data and every published report, with the vintages that link them. An analyst can therefore compare a rerun with the report the run published.
 
 **Default fill, for holders of repo access.** The recommended path has two steps:
 
 1. Download the backups from the robotmoney/csv-backups repo. A clone brings every backup up to the newest one.
-2. Resume from the checkpoint. The tool reads the newest backup's watermarks and fetches only what is newer, as archives from the public API.
+2. Resume from the checkpoint with `csvb backup --source api`. The tool reads the newest backup's watermarks and fetches only what is newer, as archives from the public API.
 
 The default exists so an analyst gets up and running faster. The repo gives the bulk in one transfer, with no long run of paced API requests. The API gives the increment, so a second run costs only what changed. A past state is pinned by naming a backup id.
 
@@ -38,8 +39,8 @@ The default exists so an analyst gets up and running faster. The repo gives the 
 
 | Fill | When | How |
 | ---- | ---- | --- |
-| API only | No access to the repo. This is the path for outside analysts. | Fetch every archive from the public API, within the client rules in section 5. |
-| Replica | Operators only. | `csvb backup --source db`. |
+| API only | No access to the repo. This is the path for outside analysts. | `csvb backup --source api` into an empty directory fetches every archive from the public API, within the client rules in section 5. |
+| Replica | Operators only. | `csvb backup`. Reading the database is the default source. |
 | Original sources | To audit the API. | The source clients in `src/extract/` fetch source data directly and return it to the caller. They write no archives. |
 
 The SDK does not fetch from the original sources by default. The API serves source data that the backend has already cleaned.
@@ -50,19 +51,19 @@ The SDK does not fetch from the original sources by default. The API serves sour
 
 The SDK computes from a derived report of source data, not from the archives.
 
-- **Format.** A CSV with exactly the header `date,indicator,value,source`, or the same rows as JSON. The rules are in [analytics requirements section 4.1](analytics-requirements.md).
-- **Content.** `csvb inputs --archive <dir> --run <run_key>` writes the source data in a run's vintage. `SPX`, `ETH` and `TBILL3M` are rows in the same file. The mapping from ledger keys to SDK ids (`backtest:^GSPC` to `SPX`, `backtest:ETH-USD` to `ETH`, `backtest:DTB3` to `TBILL3M`) lives in `LEDGER_EXTRA_KEYS`.
-- **Legs.** A ratio indicator is two rows of source data, one per leg ([section 4.2 of the analytics requirements](analytics-requirements.md)).
+- **Format.** A CSV with exactly the header `date,series,value`, or the same rows as JSON. Each `series` is a source id. Dates are real calendar dates and values are plain decimals. The rules are in [analytics requirements sections 4.1 and 4.2](analytics-requirements.md).
+- **Content.** `csvb inputs --archive <dir> --run <run_key>` writes the source data in a run's vintage, under the same source ids the archives use. The series the correlations and the backtest read are rows in the same file.
+- **Legs.** A ratio indicator is two rows of source data, one per leg ([section 4.3 of the analytics requirements](analytics-requirements.md)).
 - **Manifest.** The input file gets a sidecar `inputs.manifest.json`. It records the backup id, the run key, the as-of date, the source (`api` or `db`), the row count and the sha256 of the input file. The command line reads it at the edge and copies it into the output. The computation does not read it.
 - **Why the file is derived.** It is cheap to regenerate from the backups, and the backups are the record. A file without a manifest still runs. Its output says the source data is not pinned.
 
 ## 5. Download client
 
-The download client is a polite, resumable reader. It fetches archives under the server limits in [analytics requirements section 4.7](analytics-requirements.md).
+The download client is a polite, resumable reader. It fetches archives under the server limits in [analytics requirements section 4.8](analytics-requirements.md).
 
 - **One at a time.** One request in flight, at most 1 request a second.
 - **Retries.** Honour `Retry-After` exactly on 429 and 503. Otherwise back off with full jitter from 1 to 60 seconds, at most 5 retries per request. Do not retry any other 4xx.
-- **Identity.** Send a `User-Agent` that names the tool and its version.
+- **Identity.** Send a `User-Agent` that names the tool and its version. The version is read from the tool's `package.json`. The SDK's source clients follow the same rule with the SDK's version.
 - **Estimate first.** Print the number of requests before the first one. Refuse a plan over `--max-requests` (default 500).
 - **Resumable.** An interrupted download adds no partial archive. The next run starts from the last committed watermark.
 - **Verified.** Each archive is checked against its served checksum before it joins the local copy.
@@ -71,15 +72,26 @@ The download client is a polite, resumable reader. It fetches archives under the
 
 `bun run regime <input-file>` reads one file and prints the regime report as JSON. It takes `--start`, `--asof`, `--factor` and `--full`. The package README documents the options. A run with `--asof` replays the regime as of that day.
 
+- **Paths.** A relative path resolves from the folder the analyst ran the command in.
+- **Bad arguments.** The command exits non-zero with a message on any of these: a second input file, a repeated option, an unknown option, a `--start` after every input row, or an input with no series the run reads.
+- **Pinning.** The output carries the manifest under `manifest`. With no manifest it carries `pinned: false`.
+
 ## 7. Success criteria and tests
 
-- From a clean sparse clone, `bun install` and `bun run regime <file>` return a regime report.
-- The default report matches `tests/golden/regime-report.json`.
-- `bun test` passes with `fetch` replaced by a thrower.
-- `bunx tsc --noEmit` is clean.
-- An API-only fill and a repo fill give the same local copy for the same backup id.
-- The download client never has two requests in flight, waits `Retry-After`, stays inside the retry bounds, and adds no partial archive when interrupted.
-- Two runs on the same input file give the same output, and the output names the manifest.
+Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative to the robotmoney/csv-backups repo.
+
+| Criterion | Test |
+| --------- | ---- |
+| From a clean sparse clone, `bun install` and `bun run regime <file>` return a regime report. | `scripts/tests/unit/analyst-sdk-sparse-install.test.ts` |
+| The command line, run as a process, prints the report in `tests/golden/regime-report.json`. | `tests/cli.test.ts` |
+| The command line rejects bad arguments and resolves relative paths from the caller's folder. | `tests/cli.test.ts` |
+| Two runs on the same input file give the same output, and the output names the manifest or says `pinned: false`. | `tests/cli.test.ts` |
+| `bun test` passes with `fetch` replaced by a thrower. | `tests/no-network.ts` (preload) |
+| `bunx tsc --noEmit` is clean. | the package `typecheck` script |
+| The SDK never imports csvb, and only `src/extract/http.ts` calls `fetch`. | `scripts/tests/unit/analyst-sdk-purity.test.ts` |
+| An API-only fill and a repo fill give the same local copy for the same backup id. | csvb `tests/fill-parity.test.ts` |
+| The download client never has two requests in flight, waits `Retry-After`, stays inside the retry bounds, and adds no partial archive when interrupted. | csvb `tests/download-client.test.ts` |
+| A rerun of a vintage from the local copy matches the report that run published. The Yahoo-sourced series are the stated exception. | csvb `tests/rerun-vintage.test.ts` |
 
 ## 8. Open decisions
 
@@ -90,4 +102,4 @@ None beyond those in the analytics requirements.
 - [`../definitions.md`](../definitions.md)
 - [`analytics-requirements.md`](analytics-requirements.md)
 - `packages/analyst-sdk/README.md`
-- Decisions D57 (the package as a shared seam), D58 (data terms), D71 (archive format 1)
+- Decisions D57 (the package as a shared seam), D58 (data terms), D72 (archive format 1), D73 (the public analytics API serves the record), D74 (one source id)

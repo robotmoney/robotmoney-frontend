@@ -1,8 +1,9 @@
 # @robotmoney/analyst-sdk
 
 Pure regime analytics for Robot Money. Give it source data, get back the
-regime label, per-indicator ranks and weights, correlations and the backtest. It
-never calls the network, never reads a database and never reads the environment.
+regime label, per-indicator ranks and weights, correlations and the backtest. The
+computation never calls the network, never reads a database and never reads the
+environment. Only the optional source clients in `src/extract/` fetch.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
 
@@ -48,7 +49,7 @@ The input is a report of source data: a CSV with exactly this header, in this or
 
 ```csv
 date,indicator,value,source
-2024-01-02,VIX,13.2,fred
+2024-01-02,VIX,13.2,yahoo
 2024-01-02,BTC_MVRV,1.84,coinmetrics
 ```
 
@@ -137,6 +138,9 @@ to cut it at the day you mean.
 
 Each regime run is recorded in the immutable run ledger. To check a published figure,
 replay that run's inputs, not the current table.
+
+These steps read the production database, so they need operator access. The public
+API does not yet serve the source data versions or the published reports they read.
 
 1. Take the run's payload from `analytics_output_snapshots` (columns `run_id`,
    `artifact_kind`, `payload_bytes` (bytea), `checksum`; `payload_json` exists only in
