@@ -401,7 +401,7 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalJudgeConfig(row("gpt-9")).status).toBe("FAIL");
     expect(evalJudgeConfig(row(null)).status).toBe("FAIL");
     expect(evalJudgeConfig(row(PINNED_JUDGE_MODEL, "off")).status).toBe("FAIL");
-    expect(evalJudgeConfig(row(PINNED_JUDGE_MODEL, "enforce", true)).status).toBe("FAIL");
+    expect(evalJudgeConfig(row(PINNED_JUDGE_MODEL, "enforce", true)).status).toBe("PASS"); // the owner runs third_party_enabled on
     expect(evalJudgeConfig(undefined).status).toBe("FAIL");
   });
   test("R8.r grades each of the three grants on an external stack", () => {

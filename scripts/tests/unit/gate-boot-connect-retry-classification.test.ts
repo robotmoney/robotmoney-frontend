@@ -70,3 +70,16 @@ describe("RED CONTROLS: the rule stays narrow", () => {
     }
   });
 });
+
+describe("a worker waiting for the api is expected (issue 1378)", () => {
+  const WAIT = "[analytics-<n>] api not ready at http://api:<n>/health: Unable to connect. Is the computer able to access the url?; retrying";
+  test("the v0.6.3 stage line on a worker container is classified expected", () => {
+    const [g] = groupsOf([WAIT]);
+    expect(g!.rule?.id).toBe("expected-worker-waits-for-api");
+    expect(inventoryVerdict(groupsOf([WAIT]), "baseline", "v0.6.3").failures).toEqual([]);
+  });
+  test("RED CONTROLS: the same line from the api, or a different wait message, stays unclassified", () => {
+    expect(groupsOf([WAIT], "rm_prod_stack-api-1")[0]!.rule).toBeNull();
+    expect(groupsOf(["[analytics-<n>] api not ready at http://api:<n>/health: HTTP 503; retrying"])[0]!.rule).toBeNull();
+  });
+});
