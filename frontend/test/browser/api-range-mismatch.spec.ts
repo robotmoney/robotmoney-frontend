@@ -123,8 +123,8 @@ test.describe("the page's API range check at load", () => {
     const session = await open(page, "/", GOLDENS.routes["/api/version"]);
 
     await expect(page.locator("nav.nav")).toBeVisible({ timeout: 15_000 });
-    // The home page reads the allocation framework (terminalBoot and the
-    // architecture sleeves). Seeing that request is the proof the gate opened.
+    // The home page reads the allocation framework for the hero's universe
+    // and each sleeve's assets. Seeing that request is the proof the gate opened.
     await expect.poll(() => session.apiCalls.includes("/api/dashboards/allocation"), { timeout: 15_000 }).toBe(true);
     await page.waitForLoadState("networkidle");
 

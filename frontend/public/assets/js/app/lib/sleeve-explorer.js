@@ -32,6 +32,9 @@
 //   so a pointer skimming the edge does not collapse the panel under it.
 // - The breakdown stays mounted and animates its height (0fr to 1fr), and it
 //   keeps showing the last sleeve while it closes rather than emptying first.
+// - Intent and the swap fade exist for the breakdown. An explorer without one
+//   (the home page's ring and legend) switches on the same frame: a wait there
+//   protects nothing and reads as lag (David, 2026-10-16).
 export const INTENT_MS = 60;
 export const LEAVE_MS = 180;
 const SWAP_MS = 80;
@@ -57,6 +60,8 @@ export function sleeveExplorer() {
   let swap;
   /** @param {any} root */
   const endSwap = (root) => { clearTimeout(swap); root?.removeAttribute?.("data-swap"); };
+  /** @param {any} root */
+  const hasDrawer = (root) => !!root?.querySelector?.(".rr-x__drawer");
   return {
     /** @type {string | null} */
     pinned: null,
@@ -99,7 +104,7 @@ export function sleeveExplorer() {
       endSwap(root);
       // What the panel will show: the hovered sleeve, or the rest one.
       const next = key ?? this.rest;
-      if (!next || !root || this.active() === null || next === this.shown) {
+      if (!next || !root || this.active() === null || next === this.shown || !hasDrawer(root)) {
         this.hovered = key;
         if (next) this.shown = next;
         return;
@@ -117,8 +122,9 @@ export function sleeveExplorer() {
       clearTimeout(leaving);
       if (this.pinned !== null || this.hovered === key) return;
       clearTimeout(intent);
-      // Keyboard focus and the first pointer preview are immediate.
-      if (!ev || this.hovered === null) { this.set(key); return; }
+      // Keyboard focus, the first pointer preview and an explorer with no
+      // breakdown to protect are immediate.
+      if (!ev || this.hovered === null || !hasDrawer(/** @type {any} */ (this).$root)) { this.set(key); return; }
       intent = setTimeout(() => { if (this.pinned === null) this.set(key); }, INTENT_MS);
     },
     // The pointer left a sleeve before resting on it: it was passing over.
@@ -128,7 +134,8 @@ export function sleeveExplorer() {
       clearTimeout(leaving);
       endSwap(/** @type {any} */ (this).$root);
       if (this.pinned !== null) return;
-      leaving = setTimeout(() => { if (this.pinned === null) this.set(null); }, LEAVE_MS);
+      const grace = hasDrawer(/** @type {any} */ (this).$root) ? LEAVE_MS : 0;
+      leaving = setTimeout(() => { if (this.pinned === null) this.set(null); }, grace);
     },
     /** @param {string} key */
     toggle(key) {

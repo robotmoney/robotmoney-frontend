@@ -66,11 +66,12 @@ lifecycle, the scheduler spec governs and this list only summarizes it:
 - “Topic” is the UI term; `swarm_subjects` remains the database and API
   domain term.
 - The target lifecycle states for a new session are `collecting`,
-  `window_closed`, `aggregated`, `judging`, `judged` and `published`
-  ([scheduler spec §4](../technical/system-scheduler-spec.md#4-the-session-lifecycle)).
+  `window_closed`, `aggregated`, `judging` and `published`; `judged` is a legacy
+  state only, left by an older version ([D71](../decisions.md#d71),
+  [scheduler spec §4](../technical/system-scheduler-spec.md#4-the-session-lifecycle)).
   A session is `collecting` from the instant it opens; there is no
   `scheduled` state, no `brief_published` state, and no `cancelled` state for
-  new epochs. `judging` and `judged` appear only under judge mode `enforce`;
+  new epochs. `judging` appears only under judge mode `enforce`;
   `aggregated → published` remains legal under `off`. The judging **outcome**
   (`judged`, `no_consensus`, `not_judged`) is a separate field on the
   published session, not a lifecycle state. Historical rows in `scheduled` or
@@ -343,13 +344,12 @@ Acceptance:
   seats, is never seated on a session roster, and has every take refused. It
   judges only while third-party judging is on
   (`swarm_judge_config.third_party_enabled`, off by default); an agent whose
-  operator is `robotmoney` skips that gate. While the judge of record is the
-  eligible judge with the lowest member id (`judgeOfRecordTx`), a newly eligible
-  judge whose id sorts below Themis's becomes the judge of record on every
-  session. If its agent is not running the judge participant, those sessions
-  publish without an adopted judgement; takes and the aggregate still publish.
-  Keep third-party judging off until judge selection no longer depends on member
-  id (#1336).
+  operator is `robotmoney` skips that gate. Every eligible judge is asked to judge
+  every session, and one on-time answer is drawn at random after the judging
+  deadline ([D71](../decisions.md#d71)). A newly eligible judge is a candidate on
+  every session. If its agent is not running the judge participant, it simply
+  does not answer and is not drawn; takes and the aggregate still publish. The
+  judge of record is the judge whose answer was drawn.
 - Manual add requires name, public key, and optional profile/contact fields. It
   creates an active member, one active key, and returns a bearer token exactly
   once. It does NOT take a member id (issue #690): the id is generated with
@@ -442,7 +442,7 @@ This surface shows the transitions that contract produced. Summary:
 | turn over (`expected_session_id`) | closes the named `collecting` session (absences recorded), opens the next epoch, records the turnover — one transaction | the named session must be the topic's current `collecting` one; otherwise the original result or a reasoned no-op (§4.3) |
 | aggregate | `window_closed → aggregated`, deterministic, over accepted takes only | state guard (§5) |
 | request judging | `aggregated → judging`; stores the absolute deadline | mode captured at turnover is `enforce`; under `off` finalize is called directly (§4.4) |
-| finalize | decides the outcome from stored instants and publishes: `→ published` | state-guarded and time-guarded: under `enforce` with no eligible consensus it refuses until the deadline (§4.4) |
+| finalize | after the judging deadline, draws one on-time answer, decides the outcome and publishes: `→ published` | state-guarded and time-guarded: under `enforce` it refuses before the judging deadline, whatever answers exist (§4.4, D71) |
 
 There is no reopen, no cancel and no `shadow` mode in the target
 ([D48](../decisions.md#d48)). A repeated call for a transition that already
@@ -877,8 +877,9 @@ Before wiring UI controls, bring the domain in line with
   `swarm_session_members`, and use the latest subject snapshot at or before
   the open instant.
 - Request-judging must store the request instant and the absolute deadline;
-  finalize must decide `judged` / `no_consensus` / `not_judged` from stored
-  instants only, be time-guarded under `enforce`, and never re-decide.
+  finalize must decide `judged` / `no_consensus` / `not_judged` after the
+  judging deadline from stored answers (drawing one on-time answer once), be
+  time-guarded under `enforce`, and never re-decide.
 - Every transition must return the original result when repeated.
 - `registerMember` remains a smoke helper and is not used for production admin
   workflows. It is idempotent by member id (`ON CONFLICT (id) DO UPDATE`,
@@ -959,8 +960,9 @@ Add tests proving:
 - each legal state transition, every illegal transition (including reopen,
   cancel and `shadow`, which return 409), and repeated calls returning the
   original result;
-- finalize decides `judged` / `no_consensus` / `not_judged` from stored
-  instants and is refused early under `enforce` with no eligible consensus;
+- finalize draws one on-time answer after the judging deadline, decides
+  `judged` / `no_consensus` / `not_judged`, and is refused before the judging
+  deadline under `enforce` even when answers are on file;
 - deactivating a topic leaves its open window collecting until its boundary,
   where the turnover opens no successor;
   the scheduler-side gates themselves are

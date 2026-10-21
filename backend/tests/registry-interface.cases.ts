@@ -406,8 +406,8 @@ describe("registerStatement — the object-less kind (D55 (13)), a closed list o
 
   test("runs a template that equals its shape, whitespace aside", async () => {
     const { db, ran } = recorder();
-    const registered = registerStatement(statement({ shape: "clockTimestamp" }));
-    await onStatement(db, registered)`SELECT   clock_timestamp()
+    const registered = registerStatement(statement({ shape: "clockText" }));
+    await onStatement(db, registered)`SELECT   clock_timestamp()::text
       AS at`;
     expect(ran).toHaveLength(1);
   });

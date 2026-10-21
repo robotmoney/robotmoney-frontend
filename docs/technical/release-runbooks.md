@@ -298,6 +298,14 @@ contract, so a runbook needs no step to drain or clean the queue by hand:
   exit 0. A container that exits 137, or a job the reaper requeues after a
   stop, is a finding to triage, not expected noise.
 
+**A session in `judging` during the swap (D71).** Every eligible judge judges, and one on-time answer
+is drawn at the judging deadline. The rolling boot replaces the api before `system-scheduler`, and both
+version mixes finalize at the judging deadline: an old scheduler already arms that timer, and a new one
+waits for nothing else. Answers an old api filed during the swap are tagged `not_judge_of_record`, so they
+are not candidates and that one session may publish `no_consensus`. Start the upgrade with no session in
+`judging` where possible. Rolling back reads only `applied`, so drawn sessions look unjudged in the gates
+and on the public page until the roll forward. No data is lost.
+
 ### 4.7.1. Product verification
 
 Verification asks whether the product does what it claims; postflight asks whether the migration

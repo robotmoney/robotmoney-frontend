@@ -100,10 +100,9 @@ const MAX_BIAS_LEN = 200;
 //
 // The in-house operator is REFUSED here, not exempted. `robotmoney` makes an
 // agent in-house, and an in-house judge skips the third-party gate: it becomes
-// eligible at once and, if its id sorts below Themis's, its judgement is the one
-// adopted on every session (judgeOfRecordTx, lowest member id). Approved by
-// mistake onto an agent that is not running the judge loop, that leaves every
-// session unjudged. In-house agents are seeded, not approved; an admin who
+// eligible at once and is asked to judge every session, and its answer can be the
+// one drawn (D71). Approved by mistake onto an agent that is not running the
+// judge loop, it is asked and never answers. In-house agents are seeded, not approved; an admin who
 // means it sets the operator from Edit profile first.
 const IN_HOUSE_OPERATOR = "robotmoney";
 const MAX_OPERATOR_LEN = 200; // requiredString(body, "operator", 200) in api/validation.ts

@@ -5,7 +5,7 @@
 // web-client gate by default, and one that needs a real api fails there until
 // its author stubs the call or lists it below. Each excluded spec states why.
 import { readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { repoRoot } from "./version.ts";
 
 export const SPEC_DIR = join(repoRoot, "frontend", "test", "browser");
@@ -33,4 +33,11 @@ export function allSpecs(dir: string = SPEC_DIR): string[] {
 
 export function staticSpecs(dir: string = SPEC_DIR): string[] {
   return allSpecs(dir).filter((s) => !(s in NOT_STATIC));
+}
+
+// Playwright reads each argument as a regex over a file's absolute path, so a
+// bare name like "home" also matches /home/runner/... on CI and loads every
+// spec, admin-live included. The gate passes repo-relative paths instead.
+export function staticSpecFiles(dir: string = SPEC_DIR): string[] {
+  return staticSpecs(dir).map((s) => relative(repoRoot, join(dir, `${s}.spec.ts`)));
 }

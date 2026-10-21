@@ -148,6 +148,38 @@
 }
 .footer__legal-link:hover { color: var(--color-link); }
 
+/* The contract row: the token's address with Copy and BaseScan beside it. */
+.footer__contract {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  padding-block: 1.25rem;
+}
+.footer__addr {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.footer__copy {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--color-border-light);
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: border-color 100ms var(--ease-out-expo);
+}
+.footer__copy:hover { border-color: var(--color-text); }
+.footer__scan { font-size: 0.8125rem; }
+
 /* ── md: breakpoint (Tailwind md = 768px) ── */
 @media (min-width: 768px) {
   .footer__brand { flex-direction: row; align-items: center; gap: 1.5rem; }

@@ -1,9 +1,10 @@
 // The consensus judge's public record: a judgement is its own record with its
-// own page, as a take is, and a judge's member page lists its judgements. A
-// session has one judge of record: the active judge with the lowest member id
-// that filed no take in it, an outside judge only once the third-party gate is
-// on. Another judge's judgement stays on file and forms no consensus. The
-// session's page shows the judge of record's opinion.
+// own page, as a take is, and a judge's member page lists its judgements. Every
+// eligible judge judges a session (an outside judge only once the third-party
+// gate is on), and one on-time answer is drawn at random after the judging
+// deadline. The drawn judgement is the session's consensus and the only public
+// one: another judge's answer stays on file and forms no consensus. The
+// session's page shows the drawn judge's opinion.
 //
 // What a judgement is NOT, and what every surface below must not imply: it
 // never edits or scores a take, and it never sets a weight (the weights are

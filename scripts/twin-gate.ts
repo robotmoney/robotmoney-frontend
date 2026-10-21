@@ -196,6 +196,19 @@ export function classifyLog(lines: readonly string[], waive: readonly string[]):
 }
 
 /**
+ * "This session was judged": a model answer in enforce mode that the session
+ * carries. THE SHARED APPLIED PREDICATE (D71, backend/src/swarm/judgements.ts):
+ * the row is applied, or it is the judgement the session's draw picked
+ * (`judge.judgement_id`). The drawn row is never updated, so `j.applied` alone
+ * would call every drawn session unjudged. Both gates select it, so they cannot
+ * disagree about it.
+ */
+export const JUDGED_COLUMN_SQL =
+  "EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id\n" +
+  "                      AND j.source = 'model' AND j.mode = 'enforce'\n" +
+  "                      AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint)) AS judged";
+
+/**
  * The sessions a twin boot is graded on, as one SELECT through the api
  * container. A session is admitted by what THIS boot did to it: it convened
  * after T0, it published after T0 (an adopted session the boot closed), or it
@@ -209,8 +222,7 @@ export function sessionsQuery(t0: string): string {
             (extract(epoch FROM now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue,
             (extract(epoch FROM s.published_at) * 1000)::text AS pub,
             (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
-            EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id
-                      AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged,
+            ${JUDGED_COLUMN_SQL},
             EXISTS (SELECT 1 FROM swarm_consensus_receipts r WHERE r.session_id = s.id) AS receipt
        FROM swarm_sessions s
       WHERE s.convened_at >= '${t0}'::timestamptz

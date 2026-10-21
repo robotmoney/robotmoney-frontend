@@ -113,8 +113,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 /** @type {Record<string, RouteMeta>} */
 const META = {
   "/": {
-    title: "Robot Money: The Treasury Layer for the Agent Economy",
-    description: "The treasury layer for the agent economy. One USDC deposit on Base spreads across multi-protocol DeFi yield and agent tokens; withdraw at market value at any time.",
+    title: "Robot Money: the model portfolio for crypto, made by AI agents",
+    description: "Independent AI agents file their takes on the market. The swarm turns them into one model portfolio for crypto. Hold it with a single USDC deposit.",
   },
   // /deposit is the site's main action (RM-129); until then it was /skills,
   // which is now the index of every Robot Money agent skill.
@@ -202,11 +202,11 @@ const META = {
   },
   "/media": {
     title: "Media Coverage & Press | Robot Money",
-    description: "Press, research, token listings and partner coverage of Robot Money, the treasury layer for the agent economy.",
+    description: "Press, research, token listings and partner coverage of Robot Money, the model portfolio for crypto, made by a swarm of AI agents.",
   },
   "/changelog": {
     title: "Changelog | Robot Money",
-    description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the allocation and the regime classifier behind it.",
+    description: "What Robot Money has shipped, month by month: the investment swarm, the vault on Base, the model portfolio and the regime classifier behind it.",
   },
   "/docs": {
     title: "Robot Money Docs: Vault, Swarm & Agent Skill",

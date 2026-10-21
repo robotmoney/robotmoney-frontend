@@ -176,7 +176,7 @@ describe("the real frontend/public tree", () => {
     const a = copyOfSite();
     const b = copyOfSite();
     const c = copyOfSite();
-    writeFileSync(join(b, "assets/js/app/alpine/substrate.js"), `${readFileSync(join(b, "assets/js/app/alpine/substrate.js"), "utf8")}\n// changed\n`);
+    writeFileSync(join(b, "assets/js/app/alpine/site-nav.js"), `${readFileSync(join(b, "assets/js/app/alpine/site-nav.js"), "utf8")}\n// changed\n`);
     writeFileSync(join(c, "assets/css/views.css"), `${readFileSync(join(c, "assets/css/views.css"), "utf8")}\n/* changed */\n`);
     const [sa, sb, sc] = [stampSite(a).stamp, stampSite(b).stamp, stampSite(c).stamp];
     expect(sb).not.toBe(sa);

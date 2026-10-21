@@ -1452,12 +1452,17 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 }
 .sv__input:focus { outline: none; border-color: var(--color-accent); }
 .sv__textarea { resize: vertical; min-height: 4rem; font-family: var(--font-sans); }
-/* The primary button, as .btn-primary draws it. */
+/* The primary button, as .btn-primary draws it: the plane and its Beam seam. */
 .sv__submit {
+  position: relative;
   align-self: flex-start; cursor: pointer; font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500;
   text-transform: uppercase; letter-spacing: 0.1em; padding: 0.6rem 1.4rem; border-radius: var(--radius);
-  color: var(--color-void); background: var(--color-accent); border: none;
+  color: var(--color-void); background: var(--color-text); border: none;
   transition: background-color 0.3s;
+}
+.sv__submit::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 2px;
+  background: var(--color-accent); pointer-events: none;
 }
 .sv__submit:hover:not(:disabled) { background: #fff; }
 .sv__submit:disabled { opacity: 0.5; cursor: default; }
@@ -1788,7 +1793,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-sec { padding: 2.25rem 0; border-bottom: 1px solid var(--color-border); scroll-margin-top: 6rem; }
 .rr-sec:last-of-type { border-bottom: 0; }
 .rr-sec__head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1.5rem; margin: 0 0 1.5rem; }
-.rr-sec__h { margin: 0; font-family: var(--font-display); font-weight: 700;
+.rr-sec__h { margin: 0; font-family: var(--font-display); font-stretch: var(--font-display-stretch); font-weight: 700;
   font-size: 1.6875rem; line-height: 1.15; letter-spacing: -0.015em; text-transform: uppercase; color: var(--color-text); }
 .rr-sec__aside { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
 /* A block's title inside a section (Wallets, Positions, the chart): the

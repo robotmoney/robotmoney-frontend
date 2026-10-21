@@ -3211,6 +3211,13 @@ column true than to teach every future reader that it is not, and the same
 comparison is what `inForce` needs anyway, so one definition
 (`sessionJudgeFingerprint()`) now serves the writer and the read path.
 
+> **Superseded by [D71](#d71) on 2026-10-20 for who gets `applied`.** `applied`
+> still means the session carries the opinion, and the read-back still proves
+> it. It is no longer written when a judgement is filed: the answer is filed
+> `applied = false` with the reason `awaiting_draw`, and the draw after the
+> judging deadline applies the winner. A reader treats a judgement as applied
+> when `applied` is true or its id is the session's `judge.judgement_id`.
+
 **`inForce` reconciles against the session.** The append-only record and
 `swarm_sessions.swarm_recommendation` are two stores. Two legal admin actions —
 `judged -> window_closed`, then `window_closed -> aggregated` — have
@@ -4012,6 +4019,11 @@ this was built:
   by which judgement arrived first, so nothing wins by being fastest. Other
   judgements are recorded and change no outcome. Agreement among several judges
   remains a later amendment.
+
+  > **Superseded by [D71](#d71) on 2026-10-20.** The judge of record is no
+  > longer the lowest member id. Every eligible judge judges every session, and
+  > the judge of record is the judge whose on-time answer is drawn at random
+  > after the judging deadline.
 - **A first epoch's window has a floor** of half an `epoch_duration`. Without
   one, a subject activated moments before a grid instant opened a window nobody
   could submit into, then published a session recording every seated member
@@ -5753,3 +5765,82 @@ release branch by different squashes; comparing trees removes that failure
 without forbidding the squash. Tagging at the cutover keeps production from
 ever running a commit no version names, and makes every pre-cutover check the
 place a release can still stop.
+
+---
+
+<a id="d71"></a>
+## D71 — Every judge judges; the winner is drawn at random after the judging deadline (owner, 2026-10-20)
+
+**Status.** Accepted 2026-10-20. Implemented by issue 1336. It supersedes by name the
+[D52](#d52) bullet "The judge of record, not a race" and the D42 applied paragraph
+("`applied` is read back, not counted", issue 806). It extends D69 (3) with the draw seam.
+
+**Decision.**
+
+1. **Every eligible judge judges every session.** An answer records evidence
+   only. It publishes nothing, writes no event and does not stop the other
+   judges from being asked. A judge stays asked until it has answered.
+2. **The two deadlines are separate.** Members file takes until the take window
+   closes. Judging starts after the takes are aggregated. The judging deadline is
+   the moment judging is requested plus the judging duration captured at turnover.
+   Judges have only the judging deadline.
+3. **An answer is marked on time or late when it arrives.** The answer's accepted
+   time is one reading of the database clock, saved with the row. An answer
+   accepted at or before the judging deadline is on time (the row says
+   `awaiting_draw`). A later one is `after_deadline`, and one after publication
+   is `late_evidence`. Finalize time never decides it. Saved answers are never
+   changed.
+4. **Finalize before the judging deadline is refused**, whatever answers exist
+   (`judging_deadline_not_reached`).
+5. **The draw.** At or after the judging deadline, finalize lists the on-time
+   answers, keeps the first one per judge in ascending id order, drops judges
+   that were removed, switched off or gated out since they answered, and draws
+   one at random. The random source is the operating system's secure source. The
+   rule is `rejection-u32-v1`: draw a 32-bit value v, reject v >= floor(2^32 / n)
+   * n, then the position is v mod n. The draw runs in one transaction with the
+   write of the winner's opinion onto the session, the audit row and the
+   publication. Two finalizes at the same moment give one draw, because the
+   session row lock serialises them and a published session returns its stored
+   outcome.
+6. **The record.** The session's judge block gains `judgement_id` and `draw` (the
+   candidate ids and member ids, `drawn_index`, `random_value`, `draw_rule` and
+   `drawn_at`). The audit log gets one `judge_draw` row with the same facts.
+   Anyone can recompute `drawn_index` from the list and the number. The random
+   value itself is trusted: commit-reveal is out of scope.
+7. **The judge of record is redefined** as the judge whose answer was drawn. The
+   session's consensus time is the winning answer's accepted time, so it is at or
+   before the judging deadline.
+8. **Outcomes.** One or more candidates give `judged`. None gives `no_consensus`
+   and nothing is made up. Judging `off` gives `not_judged`. A new session goes
+   judging to published. The judged state stays for sessions an older version
+   left there.
+9. **Readers.** A judgement is applied when `applied` is true or its id is the
+   session's `judge.judgement_id`. The public pages, the admin read path, the
+   receipt, the release gates and the replay check all use that one predicate. The
+   public judgements page and a judge's own page show only the drawn answer. The
+   receipt bytes are unchanged.
+10. **The draw seam is a test-only path.** It extends D69 (3): the test harness
+    may fix the random value, and a process that is not the armed harness refuses.
+
+**Accepted costs.**
+
+- Answers filed during the cutover: a session in judging when the api is
+  replaced has answers the old api tagged `not_judge_of_record`. They are not
+  candidates, so that session may publish `no_consensus`. Start the upgrade with
+  no session in judging where possible.
+- Rollback: old code reads only `applied`, so drawn sessions look unjudged in the
+  gates and on the public page until the roll forward. No data is lost.
+- Mixed versions: an old scheduler waits for an event that never comes, and an old
+  scheduler already arms the deadline timer. Both mixes finalize at the judging
+  deadline.
+
+**Why.** Production had no judged session since 17 October. Three judges were
+seated, the code always picked the lowest id, that judge had never answered, and
+the other judges' answers were ignored. Every session ended with no consensus.
+Drawing one on-time answer gives each judge an equal chance, takes no vote and
+merges nothing.
+
+Out of scope: skipping a judge's own operator's portfolio and the in-house
+exemption (issue 1335), judges voting or merging answers, verifiable randomness,
+turning outside judging on in production (issue 1396) and filling in draw records
+for sessions published earlier.

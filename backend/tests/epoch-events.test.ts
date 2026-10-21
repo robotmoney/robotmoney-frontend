@@ -28,8 +28,8 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, recordConsensus, rid, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
-import { inHouseJudge } from "./support/stub-judge.ts";
+import { activeMember, activeSubject, rid, sessionDate, sessionRow, setJudgeMode, submitTake } from "./support/epoch-fixtures.ts";
+import { inHouseJudge, seatJudge, submitSigned } from "./support/stub-judge.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -136,11 +136,15 @@ test("a transition whose transaction aborts leaves no event and no state change"
   expect(s.successor_session_id).toBeNull();
 });
 
-test("recording a consensus publishes session.judged; late evidence after publication publishes nothing", async () => {
+test("a judge's answer writes NO event: nothing the clock waits on changed, before or after publication", async () => {
   await setJudgeMode("enforce");
+  // The author exists BEFORE the epoch opens, so the epoch seats it.
+  const author = await activeMember();
   const subjectId = await activeSubject("ev_judged", 600);
   const opened = await epoch.openEpoch(subjectId);
   if (!opened.ok) throw new Error("openEpoch failed");
+  const took = await submitTake(author, sessionDate(await sessionRow(opened.sessionId)), subjectId, { body: "a take to judge" });
+  if (took.status !== 201) throw new Error(`submitTake failed: ${JSON.stringify(took)}`);
   const turned = await epoch.turnOverEpoch(subjectId, opened.sessionId);
   if (!turned.ok) throw new Error("turnOverEpoch failed");
   const sessionId = turned.closedSessionId;
@@ -148,23 +152,23 @@ test("recording a consensus publishes session.judged; late evidence after public
   await epoch.requestJudging(sessionId);
 
   const head = await epoch.streamHeadSequence();
-  const judgementId = await plantJudgement(sessionId);
-  const recorded = await recordConsensus(sessionId, judgementId);
-  expect(recorded.ok).toBe(true);
+  const answered = await submitSigned(await inHouseJudge(), sessionId);
+  expect(answered, JSON.stringify(answered)).toMatchObject({ ok: true, applied: false, state: "judging" });
+  // The answer is evidence only: no early-publish event, and the session waits.
+  expect((await eventsAbove(head)).length).toBe(0);
+  expect(await epoch.streamHeadSequence()).toBe(head);
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 
-  const rows = await eventsAbove(head);
-  expect(rows.length).toBe(1);
-  expect(rows[0].kind).toBe("session.judged");
-  expect(rows[0].session_id).toBe(sessionId);
-
-  // Publish, then let a second consensus land. Nothing the clock waits on
-  // changed, so nothing is published.
+  // The draw publishes the session, and still writes no judged event.
+  await sql`UPDATE swarm_sessions SET judging_deadline_at = clock_timestamp() WHERE id = ${sessionId}`;
   await epoch.finalizeEpoch(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("published");
+  expect((await eventsAbove(head)).filter((r) => r.kind === "session.judged")).toHaveLength(0);
+
+  // A second judge's answer after publication is late evidence and publishes nothing.
   const afterPublish = await epoch.streamHeadSequence();
-  const late = await recordConsensus(sessionId, await plantJudgement(sessionId));
-  expect(late.ok).toBe(true);
-  if (late.ok) expect(late.lateEvidence).toBe(true);
+  const late = await submitSigned(await seatJudge({ prefix: "judge_late" }), sessionId);
+  expect(late).toMatchObject({ ok: true, lateEvidence: true });
   expect((await eventsAbove(afterPublish)).length).toBe(0);
 });
 
@@ -266,20 +270,3 @@ test("a refused subject edit publishes nothing", async () => {
   expect(stale.status).toBe(409);
   expect((await eventsAbove(head)).length).toBe(0);
 });
-
-/**
- * A judgement row authored by the session's judge of record — the only author
- * `recordJudgingConsensusTx` accepts as a consensus (§4.4). The in-house judge
- * is seated once and reused, so it stays the lowest-id eligible judge.
- */
-async function plantJudgement(sessionId: string): Promise<number> {
-  const judge = await inHouseJudge();
-  const [j] = await sql<{ id: string }[]>`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
-            ${judge.id}, ${judge.id})
-    RETURNING id`;
-  return Number(j.id);
-}

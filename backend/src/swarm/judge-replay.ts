@@ -24,6 +24,7 @@ import {
   buildRationale, judgeInputFromFrozen, latestJudgement, loadFrozenTakeSet, majorityStance, meanTakeWeights,
 } from "./domain.ts";
 import { DIGEST_SCHEME, inputsDigest } from "./judge.ts";
+import { DRAW_RULE, recomputeDrawnIndex } from "./judge-draw.ts";
 import { getJudgeConfig } from "./judge-config.ts";
 
 // Registered queries (smoke-production-spec.md §7.1), all reads of
@@ -73,6 +74,35 @@ const ladderCandidates = registerQuery({
         AND jsonb_typeof(swarm_recommendation -> 'rationale') = 'string'
       ORDER BY date DESC, id LIMIT $1`,
     params: [5000],
+  },
+});
+
+const drawnJudgement = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.drawn",
+  purpose: "Read the judgement the session's draw picked, by the id its judge block names.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id, inputs_digest, min_takes, digest_scheme, source, fallback_reason, model
+      FROM swarm_session_judgements WHERE id = $1::bigint AND session_id = $2::uuid`,
+    params: [1, SAMPLE_SESSION],
+  },
+});
+
+const timelyAnswers = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/judge-replay:replaySessionJudge.timely",
+  purpose: "Read the on-time answers a session's draw chose from: model answers filed awaiting the draw, oldest first.",
+  callers: [REPLAY_CLI],
+  probe: {
+    statement: `SELECT id, judged_by_member_id FROM swarm_session_judgements
+      WHERE session_id = $1::uuid AND mode = 'enforce' AND source = 'model' AND applied_skipped_reason = 'awaiting_draw'
+      ORDER BY id`,
+    params: [SAMPLE_SESSION],
   },
 });
 
@@ -214,6 +244,53 @@ export interface JudgeReplayResult {
   judgementFallbackReason: string | null;
   /** That row's model, or null. */
   judgementModel: string | null;
+
+  // ── 6. The stored draw (issue #1336, D71), recomputed read-only.
+  /**
+   * `verified` when the stored random value and list recompute to the stored winner and every
+   * listed answer is an on-time row on file; `mismatch` when they do not; `not_applicable` for a
+   * session with no draw (published before it, `no_consensus`, or `not_judged`).
+   */
+  drawVerdict: DrawVerdict;
+  /** What failed to verify, empty unless `drawVerdict` is `mismatch`. */
+  drawProblems: string[];
+}
+
+export type DrawVerdict = "verified" | "mismatch" | "not_applicable";
+
+/**
+ * Re-verify a stored draw from its own record and the on-time rows (read-only).
+ *
+ * Anyone can recompute the pick from the list and the number: the accepted
+ * random value `v` is not rejected by the stored rule, `v mod n` is the stored
+ * `drawn_index`, and the answer at that position in the list is the one the
+ * session names. The list itself must be ascending, one per judge, and made of
+ * on-time rows that are on file. The random value is trusted, not verified
+ * (commit-reveal is out of scope).
+ */
+export function verifyStoredDraw(
+  judge: Record<string, unknown> | null,
+  timely: { id: string; judged_by_member_id: string | null }[],
+): { verdict: DrawVerdict; problems: string[] } {
+  const draw = (judge?.draw ?? null) as Record<string, unknown> | null;
+  if (!judge || !draw) return { verdict: "not_applicable", problems: [] };
+  const problems: string[] = [];
+  const ids = Array.isArray(draw.candidate_judgement_ids) ? draw.candidate_judgement_ids.map(Number) : [];
+  const members = Array.isArray(draw.candidate_member_ids) ? draw.candidate_member_ids.map(String) : [];
+  if (draw.draw_rule !== DRAW_RULE) problems.push(`unknown draw rule ${String(draw.draw_rule)}`);
+  if (ids.length === 0 || ids.length !== members.length) problems.push("candidate lists are empty or differ in length");
+  if (new Set(members).size !== members.length) problems.push("a judge is listed twice");
+  if (ids.some((id, i) => i > 0 && id <= ids[i - 1]!)) problems.push("candidate ids are not ascending");
+  const index = recomputeDrawnIndex(Number(draw.random_value), ids.length);
+  if (index === null) problems.push("random value is rejected by the rule");
+  else if (index !== Number(draw.drawn_index)) problems.push(`random value picks position ${index}, record says ${String(draw.drawn_index)}`);
+  if (ids[Number(draw.drawn_index)] !== Number(judge.judgement_id)) problems.push("the winner is not the answer at the drawn position");
+  const onFile = new Map(timely.map((r) => [Number(r.id), r.judged_by_member_id]));
+  ids.forEach((id, i) => {
+    if (!onFile.has(id)) problems.push(`candidate ${id} is not an on-time answer on file`);
+    else if (onFile.get(id) !== members[i]) problems.push(`candidate ${id} names a different judge than the list`);
+  });
+  return { verdict: problems.length === 0 ? "verified" : "mismatch", problems };
 }
 
 /**
@@ -302,9 +379,26 @@ export async function replaySessionJudge(
   // for this session's latest judgement, recomputed over the SAME frozen set
   // already loaded above, and reported as a comparison rather than printed
   // as a bare value.
-  const judgement = await latestJudgement(sessionId) as
+  //
+  // THE JUDGEMENT ON FILE is the one the session names (`judge.judgement_id`,
+  // D71) when it names one, and the newest row otherwise: a session published
+  // before the draw existed has no id, and the newest row is what it always meant.
+  const judgeBlock = (rec.judge ?? null) as Record<string, unknown> | null;
+  const drawnId = judgeBlock?.judgement_id == null ? null : Number(judgeBlock.judgement_id);
+  const judgement = (drawnId !== null && Number.isInteger(drawnId)
+    ? (await on(sql, drawnJudgement)`
+        SELECT id, inputs_digest, min_takes, digest_scheme, source, fallback_reason, model
+          FROM swarm_session_judgements WHERE id = ${drawnId}::bigint AND session_id = ${sessionId}::uuid`)[0] ?? null
+    : await latestJudgement(sessionId)) as
     | { inputs_digest: unknown; min_takes: unknown; digest_scheme: unknown; source?: unknown; fallback_reason?: unknown; model?: unknown }
     | null;
+  const timely = judgeBlock?.draw
+    ? (await on(sql, timelyAnswers)`
+        SELECT id, judged_by_member_id FROM swarm_session_judgements
+         WHERE session_id = ${sessionId}::uuid AND mode = 'enforce' AND source = 'model' AND applied_skipped_reason = 'awaiting_draw'
+         ORDER BY id`) as unknown as { id: string; judged_by_member_id: string | null }[]
+    : [];
+  const drawCheck = verifyStoredDraw(judgeBlock, timely);
   // Same row, read for §5 as well: the auditor reports the judgement ON FILE.
   const judgementRow = judgement;
   let digestStored: string | null = null;
@@ -370,6 +464,8 @@ export async function replaySessionJudge(
     judgementSource: judgementRow?.source == null ? null : String(judgementRow.source),
     judgementFallbackReason: judgementRow?.fallback_reason == null ? null : String(judgementRow.fallback_reason),
     judgementModel: judgementRow?.model == null ? null : String(judgementRow.model),
+    drawVerdict: drawCheck.verdict,
+    drawProblems: drawCheck.problems,
   };
 }
 

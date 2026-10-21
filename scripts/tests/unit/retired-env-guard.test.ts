@@ -187,6 +187,7 @@ describe("3. the test seam is armed by the harness preload and by nothing else",
       "backend/src/db/worker-client.ts",
       "backend/src/projects/access/select.ts",
       "backend/src/swarm/domain.ts",
+      "backend/src/swarm/judge-draw.ts",
     ]) {
       expect(`${file}: ${/\btestSeamArmed\(\)/.test(readFileSync(join(repoRoot, file), "utf8"))}`).toBe(`${file}: true`);
     }

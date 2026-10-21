@@ -55,3 +55,45 @@ test("add and restore still send the reason", async () => {
     expect((await submit(op)).body).toEqual({ memberId: "nova", reason: "a reason of enough length" });
   }
 });
+
+function sessionView(): Record<string, any> {
+  let factory!: () => Record<string, any>;
+  registerAdminSwarmSession({ data: (_n: string, f: () => Record<string, any>) => (factory = f) });
+  return factory();
+}
+
+test("the admin session page labels the winning answer as drawn, never 'NOT applied (awaiting_draw)' (D71)", () => {
+  const view = sessionView();
+  view.session = { state: "published" };
+  const winner = { mode: "enforce", applied: true, drawn: true, appliedSkippedReason: null, carriedBySession: true };
+  expect(view.judgementEffect(winner)).toBe("drawn — this answer is the session's judgement");
+  // A drawn row whose session no longer carries it reads as superseded, still as drawn.
+  expect(view.judgementEffect({ ...winner, carriedBySession: false, supersededReason: "recommendation_overwritten" })).toContain("drawn, then SUPERSEDED");
+});
+
+test("an on-time answer that lost the draw reads as recorded and not drawn, and before the draw as awaiting it", () => {
+  const view = sessionView();
+  const loser = { mode: "enforce", applied: false, drawn: false, appliedSkippedReason: "awaiting_draw" };
+  view.session = { state: "published" };
+  expect(view.judgementEffect(loser)).toBe("recorded on time, not drawn");
+  expect(view.judgementEffect(loser)).not.toContain("NOT applied");
+  view.session = { state: "judging" };
+  expect(view.judgementEffect(loser)).toContain("awaiting the draw");
+});
+
+test("an answer after the deadline and a session published before the draw read as they always did", () => {
+  const view = sessionView();
+  view.session = { state: "published" };
+  expect(view.judgementEffect({ mode: "enforce", applied: false, appliedSkippedReason: "after_deadline" })).toBe("recorded, NOT applied (after_deadline)");
+  expect(view.judgementEffect({ mode: "enforce", applied: true, carriedBySession: true })).toBe("applied to the session");
+});
+
+test("a drawn session skips the legacy 'judged' step on the lifecycle", () => {
+  const view = sessionView();
+  view.session = { state: "published" };
+  view.judgements = [{ drawn: true }];
+  const steps = Object.fromEntries(view.lifecycleSteps().map((s: { state: string; status: string }) => [s.state, s.status]));
+  expect(steps.judging).toBe("done");
+  expect(steps.judged).toBe("skipped");
+  expect(steps.published).toBe("current");
+});

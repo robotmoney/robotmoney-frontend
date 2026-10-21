@@ -9,6 +9,7 @@
 // main.js's boot import (`import { registerViews } from "./alpine/views.js"`)
 // unchanged — factories must still be registered at boot, before Alpine
 // processes the DOM, because views inject via innerHTML.
+import { registerHomeView } from "./views/home.js";
 import { registerProjectsView } from "./views/projects.js";
 import { registerRegimeView } from "./views/regime.js";
 import { registerResearchView } from "./views/research.js";
@@ -45,6 +46,7 @@ import { registerVaultProfileView } from "./views/dash-vault-profile.js";
 import { registerWalletProfileView } from "./views/dash-wallet-profile.js";
 
 export function registerViews(Alpine) {
+  registerHomeView(Alpine);
   registerProjectsView(Alpine);
   registerRegimeView(Alpine);
   registerResearchView(Alpine);
