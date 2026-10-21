@@ -688,6 +688,67 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   expect(body.body.receipt.judge.release_safety).toEqual(record.swarm_recommendation.release_safety);
 });
 
+// Issue #1407: the receipt links to the judgement the draw chose, by id.
+async function judgedByJudges(prefix: string, judges: Awaited<ReturnType<typeof seatJudge>>[], o: { lateJudge?: Awaited<ReturnType<typeof seatJudge>>; random: number }) {
+  const s = await collectingSession(prefix, [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
+  expect((await verbs.closeSessionAdmin(s.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(s.sessionId, undefined)).ok).toBe(true);
+  await requestJudgingFor(s.sessionId);
+  const ids: string[] = [];
+  for (const j of judges) {
+    const r = await submitSigned(j, s.sessionId);
+    expect(r).toMatchObject({ ok: true });
+    ids.push(String((r as any).judgementId));
+  }
+  if (o.lateJudge) {
+    await sql`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id = ${s.sessionId}`;
+    const late = await submitSigned(o.lateJudge, s.sessionId);
+    expect(late).toMatchObject({ ok: true, applied: false });
+    ids.push(String((late as any).judgementId));
+  }
+  expect((await drawNow(s.sessionId, { random: o.random })).ok).toBe(true);
+  const [rec] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${s.sessionId}`) as any[];
+  return { ...s, ids, drawnId: String(rec.swarm_recommendation.judge.judgement_id) };
+}
+
+test("the receipt links to the drawn judgement when two on-time answers carry identical opinions", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  // random 0 draws the first candidate, the LOWER id: `ORDER BY id DESC` would pick the other one.
+  const s = await judgedByJudges("recdrawn", [a, b], { random: 0 });
+  expect(s.drawnId).toBe(s.ids[0]!);
+  expect((await admin.publishConsensusReceiptAdmin(s.sessionId)).ok).toBe(true);
+  const [stored] = (await sql`SELECT judgement_id FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(String(stored.judgement_id)).toBe(s.drawnId);
+  expect(String(stored.judgement_id)).not.toBe(s.ids[1]!);
+});
+
+test("the receipt links to the drawn judgement when a late copy of the winning opinion exists", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const late = await seatJudge({ prefix: "judge_late" });
+  const s = await judgedByJudges("reclatecopy", [a], { lateJudge: late, random: 0 });
+  expect(s.ids.length).toBe(2);
+  expect(s.drawnId).toBe(s.ids[0]!);
+  expect((await admin.publishConsensusReceiptAdmin(s.sessionId)).ok).toBe(true);
+  const [stored] = (await sql`SELECT judgement_id FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(String(stored.judgement_id)).toBe(s.drawnId);
+});
+
+test("a drawn judgement id that names no row fails the receipt and never falls back", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  const s = await judgedByJudges("recmissing", [a, b], { random: 0 });
+  await sql`
+    UPDATE swarm_sessions
+       SET swarm_recommendation = jsonb_set(swarm_recommendation, '{judge,judgement_id}', '999999999'::jsonb)
+     WHERE id = ${s.sessionId}`;
+  const refused = await admin.publishConsensusReceiptAdmin(s.sessionId);
+  expect(refused.ok).toBe(false);
+  expect((refused as any).error).toBe("judgement_not_adopted");
+  const [none] = (await sql`SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(none.n).toBe(0);
+});
+
 // Issue #1019: an adopted judgement with `source='fallback'` must never reach a
 // receipt. Nothing writes one any more — the judge refuses rather than fakes,
 // and the API refuses an unusable answer at submission — but the append-only
