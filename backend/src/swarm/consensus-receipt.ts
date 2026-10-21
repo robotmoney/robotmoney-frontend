@@ -85,8 +85,8 @@ const readAuthoredJudgement = registerQuery({
   callers: PUBLISH_CALLERS,
   probe: {
     statement:
-      "SELECT source, fallback_reason FROM swarm_session_judgements WHERE session_id = $1 AND mode = 'enforce' " +
-      "AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC LIMIT 1",
+      "SELECT id, source, fallback_reason FROM swarm_session_judgements WHERE session_id = $1 AND mode = 'enforce' " +
+      "AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC",
     params: [SESSION_ID_PROBE, "probe", "probe"],
   },
 });
@@ -760,7 +760,14 @@ async function loadAssemblyInput(
   // attest to one session state while being validated against another. So the
   // fields are read off `rec`, and this comment is here so the duplication is
   // not "consolidated" back into a second query later.
-  const adopted = (rec.judge ?? null) as { prompt_hash?: unknown; inputs_digest?: unknown } | null;
+  const adopted = (rec.judge ?? null) as { prompt_hash?: unknown; inputs_digest?: unknown; judgement_id?: unknown } | null;
+  // THE DRAWN ROW (D71, issue #1407). After the judge draw many judges answer
+  // over the same inputs, so prompt_hash + inputs_digest + an equal opinion can
+  // match a losing answer or a late copy of the winning opinion. The session
+  // names the winner in `judge.judgement_id`; when it does, only that row can be
+  // the receipt's judgement and no other row is ever a fallback. A session judged
+  // before the draw existed names none, and keeps the older match.
+  const drawnId = adopted && adopted.judgement_id != null ? String(adopted.judgement_id) : null;
   if (!adopted || typeof adopted.prompt_hash !== "string" || typeof adopted.inputs_digest !== "string") {
     throw new ConsensusReceiptRefusal(
       "judgement_not_adopted",
@@ -776,15 +783,16 @@ async function loadAssemblyInput(
   // pre-#969 history can carry one; nothing writes it now. The refusal is kept
   // separate from `judgement_not_adopted` because it names a different fact.
   const authored = (await on(sql, readAuthoredJudgement)`
-    SELECT source, fallback_reason FROM swarm_session_judgements
+    SELECT id, source, fallback_reason FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
       AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
-    ORDER BY id DESC LIMIT 1`) as unknown as { source: string; fallback_reason: string | null }[];
-  if (authored[0] && authored[0].source !== "model") {
+    ORDER BY id DESC`) as unknown as { id: string | number; source: string; fallback_reason: string | null }[];
+  const authoredRow = drawnId === null ? authored[0] : authored.find((row) => String(row.id) === drawnId);
+  if (authoredRow && authoredRow.source !== "model") {
     throw new ConsensusReceiptRefusal(
       "judgement_not_authored",
-      `session ${sessionId}'s adopted judgement has source='${authored[0].source}'` +
-        `${authored[0].fallback_reason ? ` (${authored[0].fallback_reason})` : ""} — its opinion is TEMPLATE PROSE, not a model's. ` +
+      `session ${sessionId}'s adopted judgement has source='${authoredRow.source}'` +
+        `${authoredRow.fallback_reason ? ` (${authoredRow.fallback_reason})` : ""} — its opinion is TEMPLATE PROSE, not a model's. ` +
         "A consensus receipt attests that the judge read the takes and wrote this; publishing one over a template would make that false. " +
         "Nothing writes a fallback row any more (the judge is a participant that refuses rather than fakes); this row is pre-#969 history.",
     );
@@ -805,7 +813,7 @@ async function loadAssemblyInput(
     disagreements: rec.disagreements ?? null,
     release_safety: rec.release_safety ?? null,
   });
-  const judgement = candidates.find((row) => stableJson({
+  const judgement = candidates.find((row) => (drawnId === null || String(row.id) === drawnId) && stableJson({
     rationale: row.opinion?.rationale ?? null,
     disagreements: row.opinion?.disagreements ?? null,
     release_safety: row.opinion?.release_safety ?? null,
@@ -813,7 +821,7 @@ async function loadAssemblyInput(
   if (!judgement) {
     throw new ConsensusReceiptRefusal(
       "judgement_not_adopted",
-      `session ${sessionId} has ${onFile.n} judgement(s) on file but none of them is the one the session adopted — no enforce-mode row matches the session's own judge prompt_hash/inputs_digest AND carries the rationale, disagreements and release_safety the session serves. ` +
+      `session ${sessionId} has ${onFile.n} judgement(s) on file but none of them is the one the session adopted${drawnId === null ? "" : ` (drawn judgement ${drawnId} is missing or does not match the session)`} — no enforce-mode row matches the session's own judge prompt_hash/inputs_digest AND carries the rationale, disagreements and release_safety the session serves. ` +
         "The receipt embeds the session's judge block or it embeds nothing; re-judge the session in `enforce` mode.",
       [`session judge prompt_hash ${adopted.prompt_hash}`, `session judge inputs_digest ${adopted.inputs_digest}`],
     );
