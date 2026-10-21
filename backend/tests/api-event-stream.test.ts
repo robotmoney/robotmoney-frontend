@@ -42,8 +42,7 @@ import {
 } from "../src/api/routes/swarm-stream.ts";
 import { provisionAutomationToken } from "../src/db/automation-tokens.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, recordConsensus, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
-import { inHouseJudge } from "./support/stub-judge.ts";
+import { activeSubject, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { bootApi, writeTokenFile, type ApiProcess } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -263,9 +262,9 @@ test("the full read returns every closed-but-unpublished session with its state"
   const judging = await judgingSession("fr_judging");
   wanted.set(judging.sessionId, "judging");
 
+  // `judged` is the state an OLDER version left behind (D71); the full read still carries it.
   const judged = await judgingSession("fr_judged");
-  const judgementId = await plantJudgement(judged.sessionId);
-  await recordConsensus(judged.sessionId, judgementId);
+  await sql`UPDATE swarm_sessions SET state = 'judged', consensus_recorded_at = clock_timestamp() WHERE id = ${judged.sessionId}`;
   wanted.set(judged.sessionId, "judged");
 
   const read = await stream.fullRead();
@@ -1101,20 +1100,6 @@ test("the stream routes own only their own paths", async () => {
 });
 
 const url = (p: string) => new URL(`http://test${p}`);
-
-// Authored by the session's judge of record: `recordJudgingConsensusTx` refuses
-// a consensus from anyone else (§4.4, issue #1026 wave 2).
-async function plantJudgement(sessionId: string): Promise<number> {
-  const judge = await inHouseJudge();
-  const [j] = await sql<{ id: string }[]>`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
-            ${judge.id}, ${judge.id})
-    RETURNING id`;
-  return Number(j.id);
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §6.3 overflow, behind a REAL socket: resync, then close — never a silent skip

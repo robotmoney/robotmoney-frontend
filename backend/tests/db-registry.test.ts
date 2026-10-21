@@ -935,7 +935,6 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
    *  in the same change, with a reason: a shape added to only one fails a test. */
   const PINNED_SHAPES: Readonly<Record<string, string>> = {
     clockText: "SELECT clock_timestamp()::text AS at",
-    clockTimestamp: "SELECT clock_timestamp() AS at",
     connectionCheck: "SELECT 1",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
     sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -1160,6 +1159,9 @@ describe("registered functions with no production caller stay deleted (D55 (13))
   const DELETED = [
     "getRosterCapacityStatus",
     "recordJudgingConsensus",
+    // D71: an answer records no consensus, and the judge of record is the one drawn.
+    "recordJudgingConsensusTx",
+    "judgeOfRecordTx",
     "canonicalSha256",
     "buildCanonicalWalletSnapshotManifest",
     "validateWalletSnapshotExactSets",

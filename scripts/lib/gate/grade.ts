@@ -97,7 +97,7 @@ export function evaluateSessions(
         warnings.push(`session ${r.id} (${r.subject}) published no_consensus: an acceptable outcome, not counted as a good session`);
       } else {
         if (r.outcome !== "judged") failures.push(`session ${r.id} (${r.subject}) published unjudged (judging outcome '${r.outcome ?? "none"}')`);
-        if (!r.judged) failures.push(`session ${r.id} (${r.subject}) published without an applied model/enforce judgement`);
+        if (!r.judged) failures.push(`session ${r.id} (${r.subject}) published without a judged model/enforce answer (applied or drawn)`);
         if (!r.receipt) failures.push(`session ${r.id} (${r.subject}) published without a consensus receipt`);
       }
       if (r.takes < need) warnings.push(`session ${r.id} (${r.subject}) published with ${r.takes} take(s), under ${need} of ${activeAnalysts} active`);

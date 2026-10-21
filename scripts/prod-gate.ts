@@ -51,7 +51,7 @@ import { classify, inventory, inventoryVerdict, renderInventory, validateRules, 
 import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
 import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
-import { CLASSIFICATIONS_PATH, toSessionRow } from "./twin-gate.ts";
+import { CLASSIFICATIONS_PATH, JUDGED_COLUMN_SQL, toSessionRow } from "./twin-gate.ts";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NAME = "prod:gate";
@@ -134,6 +134,24 @@ export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { err
     i++;
   }
   return out;
+}
+
+/**
+ * The sessions the prod gate grades: published in the window (whenever
+ * convened), or still open. `judged` is the shared applied predicate, so a
+ * drawn session counts as judged (D71).
+ */
+export function sessionsQuery(since: string): string {
+  return `SELECT s.id, s.subject_id AS subject, s.state, s.judging_outcome AS outcome,
+            coalesce(extract(epoch FROM now() - s.convened_at) / 60, 0)::text AS age,
+            (extract(epoch FROM now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue,
+            (extract(epoch FROM s.published_at) * 1000)::text AS pub,
+            (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
+            ${JUDGED_COLUMN_SQL},
+            EXISTS (SELECT 1 FROM swarm_consensus_receipts r WHERE r.session_id = s.id) AS receipt
+       FROM swarm_sessions s
+      WHERE s.published_at >= '${since}'::timestamptz OR s.state NOT IN ('published', 'cancelled')
+      ORDER BY s.convened_at`;
 }
 
 export interface CapacityVerdict { status: CheckRecord["status"]; detail: string[] }
@@ -242,17 +260,7 @@ async function main(): Promise<number> {
       `${dead.reduce((a, d) => a + Number(d.n), 0)} dead job(s) in the window`]);
 
   // sessions: published in the window (whenever convened), or still open
-  const raw = dbQuery<Parameters<typeof toSessionRow>[0]>(api,
-    `SELECT s.id, s.subject_id AS subject, s.state, s.judging_outcome AS outcome,
-            coalesce(extract(epoch FROM now() - s.convened_at) / 60, 0)::text AS age,
-            (extract(epoch FROM now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue,
-            (extract(epoch FROM s.published_at) * 1000)::text AS pub,
-            (SELECT count(DISTINCT r.member_id) FROM swarm_recommendations r WHERE r.session_id = s.id)::text AS takes,
-            EXISTS (SELECT 1 FROM swarm_session_judgements j WHERE j.session_id = s.id AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged,
-            EXISTS (SELECT 1 FROM swarm_consensus_receipts r WHERE r.session_id = s.id) AS receipt
-       FROM swarm_sessions s
-      WHERE s.published_at >= '${since}'::timestamptz OR s.state NOT IN ('published', 'cancelled')
-      ORDER BY s.convened_at`);
+  const raw = dbQuery<Parameters<typeof toSessionRow>[0]>(api, sessionsQuery(since));
   const rows: SessionRow[] = raw.map(toSessionRow);
   const [{ n: activeRaw } = { n: "0" }] = dbQuery<{ n: string }>(api, "SELECT count(*)::text AS n FROM swarm_members WHERE status = 'active' AND role = 'member'");
   const active = Number(activeRaw);

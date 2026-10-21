@@ -53,8 +53,10 @@ const LIFECYCLE_STEPS = [
   { state: "collecting", label: "Collecting — the submission window is open" },
   { state: "window_closed", label: "Window closed — turned over, absences recorded" },
   { state: "aggregated", label: "Aggregated — takes rolled up" },
-  { state: "judging", label: "Judging requested — deadline stored" },
-  { state: "judged", label: "Judged — the judge of record's consensus recorded" },
+  { state: "judging", label: "Judging requested — every judge is asked; the draw follows the deadline" },
+  // Retired by D71: an answer no longer records a consensus. Only a session an
+  // older version left `judged` passes through it; a drawn session skips it.
+  { state: "judged", label: "Judged — legacy: a consensus recorded on arrival (before the draw)" },
   { state: "published", label: "Published — finalized" },
 ];
 const STEP_INDEX = Object.fromEntries(LIFECYCLE_STEPS.map((s, i) => [s.state, i]));
@@ -266,9 +268,24 @@ export function registerAdminSwarmSession(Alpine) {
     // session no longer carried, which is the one sentence an operator grading a
     // soak must be able to trust. `carriedBySession` is the backend's
     // reconciliation of the row against the session as it stands now.
+    //
+    // A DRAWN session (D71) names its winner: every eligible judge's on-time
+    // answer is recorded, and one is drawn at random after the judging deadline.
+    // The winner is labelled as drawn. The others read "on time, not drawn".
     judgementEffect(j) {
       if (!j) return "—";
       if (j.mode !== "enforce") return "recorded only (shadow)";
+      if (j.drawn === true) {
+        if (j.carriedBySession === false) {
+          return `drawn, then SUPERSEDED — the session no longer carries it (${j.supersededReason || "unknown reason"})`;
+        }
+        return "drawn — this answer is the session's judgement";
+      }
+      if (j.appliedSkippedReason === "awaiting_draw") {
+        return this.session?.state === "published"
+          ? "recorded on time, not drawn"
+          : "recorded on time, awaiting the draw after the judging deadline";
+      }
       if (!j.applied) return `recorded, NOT applied (${j.appliedSkippedReason || "unknown reason"})`;
       // `=== false` on purpose: a response from before this field existed leaves
       // it undefined, and that must read as the old answer rather than as loss.
@@ -360,12 +377,17 @@ export function registerAdminSwarmSession(Alpine) {
       const state = this.session?.state;
       const current = STEP_INDEX[state];
       const judged = this.judgements.length > 0;
+      // A drawn session went judging -> published: the legacy `judged` step never ran.
+      const drawn = this.judgements.some((j) => j.drawn === true);
       return LIFECYCLE_STEPS.map((step, i) => {
         let status = "pending";
         if (state === "cancelled") status = "skipped";
         else if (current === undefined) status = "pending";
         else if (i === current) status = "current";
-        else if (i < current) status = (step.state === "judging" || step.state === "judged") && !judged ? "skipped" : "done";
+        else if (i < current) {
+          const skipped = (step.state === "judging" && !judged) || (step.state === "judged" && (!judged || drawn));
+          status = skipped ? "skipped" : "done";
+        }
         return { ...step, status };
       });
     },

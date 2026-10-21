@@ -17,9 +17,12 @@
 //      named members that the mode exists to keep off public surfaces
 //      (docs/decisions.md D42, "A soak nobody can read is not a soak"). Serving
 //      it here would publish, through the read path, what the mode withholds.
-//   2. `applied`. The opinion actually reached the session (issue #767). An
-//      `enforce` row that lost the race to a publish never did, so it is no
-//      more public than a shadow one. (Migration 0041's CHECK already refuses
+//   2. `applied`, or DRAWN (D71). The opinion actually reached the session
+//      (issue #767). An `enforce` row that lost the race to a publish, or lost
+//      the draw, never did, so it is no more public than a shadow one. A drawn
+//      session names its winner in `judge.judgement_id`; a session published
+//      before the draw existed has an `applied` row instead. One predicate
+//      covers both: `j.applied OR j.id = judge.judgement_id`. (Migration 0041's CHECK already refuses
 //      a shadow row that claims `applied`, so (2) implies (1) today; (1) is
 //      still spelled out because it is the rule, not a consequence of one.)
 //   3. The session is `published`. Before that the swarm has not spoken, and a
@@ -63,7 +66,7 @@ const PUBLIC_SET_HEAD = `SELECT * FROM (
                    END AS recommends_weights
         FROM swarm_session_judgements j
         JOIN swarm_sessions s ON s.id = j.session_id
-       WHERE j.mode = 'enforce' AND j.applied AND s.state = 'published'
+       WHERE j.mode = 'enforce' AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint) AND s.state = 'published'
          AND `;
 const PUBLIC_SET_TAIL = `
        ORDER BY j.session_id, j.judged_by, j.id DESC
@@ -234,7 +237,7 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
                    END AS recommends_weights
         FROM swarm_session_judgements j
         JOIN swarm_sessions s ON s.id = j.session_id
-       WHERE j.mode = 'enforce' AND j.applied AND s.state = 'published'
+       WHERE j.mode = 'enforce' AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint) AND s.state = 'published'
          AND j.session_id = ${scope.sessionId}
        ORDER BY j.session_id, j.judged_by, j.id DESC
     ) public_judgements
@@ -256,7 +259,7 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
                    END AS recommends_weights
         FROM swarm_session_judgements j
         JOIN swarm_sessions s ON s.id = j.session_id
-       WHERE j.mode = 'enforce' AND j.applied AND s.state = 'published'
+       WHERE j.mode = 'enforce' AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint) AND s.state = 'published'
          AND j.judged_by = ${scope.memberId}
        ORDER BY j.session_id, j.judged_by, j.id DESC
     ) public_judgements
@@ -277,7 +280,7 @@ async function publicJudgements(scope: JudgementScope, limit?: number): Promise<
                    END AS recommends_weights
         FROM swarm_session_judgements j
         JOIN swarm_sessions s ON s.id = j.session_id
-       WHERE j.mode = 'enforce' AND j.applied AND s.state = 'published'
+       WHERE j.mode = 'enforce' AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint) AND s.state = 'published'
          AND (j.session_id, j.judged_by) = (SELECT session_id, judged_by FROM swarm_session_judgements WHERE id = ${scope.id})
        ORDER BY j.session_id, j.judged_by, j.id DESC
     ) public_judgements

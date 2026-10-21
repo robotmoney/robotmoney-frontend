@@ -74,9 +74,10 @@ describe("the sessions query", () => {
     expect(sessionsQuery("2026-10-03T00:00:00.000Z")).toContain("now() - coalesce(s.judging_deadline_at, s.window_closes_at)) / 60)::text AS overdue");
   });
 
-  test("judged means an applied model judgement in enforce mode, not any judgement row", () => {
+  test("judged means a model judgement in enforce mode that the session carries (applied, or drawn), not any judgement row", () => {
     const q = sessionsQuery("2026-10-03T00:00:00.000Z");
-    expect(q).toContain("AND j.source = 'model' AND j.mode = 'enforce' AND j.applied) AS judged");
+    expect(q).toContain("AND j.source = 'model' AND j.mode = 'enforce'");
+    expect(q).toContain("AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint)) AS judged");
   });
 
   test("a database row becomes a SessionRow", () => {

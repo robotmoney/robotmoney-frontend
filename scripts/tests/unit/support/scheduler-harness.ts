@@ -789,12 +789,15 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
     };
   }
 
-  /** A judge's consensus landing, as the participant route would record it. */
-  recordConsensus(sessionId: string): void {
+  /**
+   * A judge's on-time answer landing, as the participant route records it (D71).
+   * It records evidence only: the session stays `judging` and publishes nothing.
+   * A session an OLDER api left `judged` is made with `addSession({ state: "judged", consensusAt })`.
+   */
+  recordAnswer(sessionId: string): void {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    s.consensusAt = this.#dbNow();
-    if (s.state === "judging") s.state = "judged";
+    s.consensusAt ??= this.#dbNow();
     this.#seq += 1;
   }
 
@@ -816,7 +819,11 @@ export class FakeSchedulerApi implements TransitionApi, SchedulerTransport {
     const deadline = s.judgingDeadlineAt;
     if (deadline == null) return { ok: false, status: 409, error: "judging_not_requested", transient: false };
     const eligible = s.consensusAt != null && s.consensusAt <= deadline;
-    if (!eligible && this.#dbNow() < deadline) {
+    // D71: before the judging deadline finalize is refused whatever answers exist.
+    // The one exception is a session an older api left `judged`, which keeps the
+    // consensus it recorded on arrival.
+    const early = s.state === "judged" && eligible;
+    if (!early && this.#dbNow() < deadline) {
       // §4.4's time guard: a reasoned no-op, never a retryable error.
       // The REAL code, verbatim from backend/src/swarm/domain.ts's
       // finalizeEpoch. It was spelled `deadline_not_reached` here at first, and

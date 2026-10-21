@@ -78,7 +78,7 @@ test("a judgement's reported usage is written to the four spend columns, in the 
     usage: { inputTokens: 1834, outputTokens: 412, totalTokens: 2246, costUsd: 0.01234567 },
   });
   expect(res.status, JSON.stringify(res.body)).toBe(200);
-  expect(res.body.applied).toBe(true);
+  expect(res.body.applied).toBe(false); // evidence only until the draw (D71)
 
   const rows = await spendRows(sessionId);
   expect(rows).toHaveLength(1);

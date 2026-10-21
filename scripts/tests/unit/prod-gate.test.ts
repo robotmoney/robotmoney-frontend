@@ -1,7 +1,8 @@
 // prod:gate's pure decisions (scripts/prod-gate.ts). Each case is something
 // production actually did on 2026-09-24/25 that no runbook step caught.
 import { describe, expect, test } from "bun:test";
-import { evaluateCapacity, parseProdGateArgs, renderProdReport } from "../../prod-gate.ts";
+import { evaluateCapacity, parseProdGateArgs, renderProdReport, sessionsQuery } from "../../prod-gate.ts";
+import { sessionsQuery as twinSessionsQuery } from "../../twin-gate.ts";
 
 const GB = 1024 ** 3;
 
@@ -106,5 +107,25 @@ describe("the report", () => {
     expect(md).toContain("| Instance | `rm_prod` |");
     expect(md).toContain("| a | published | no_consensus |");
     expect(md).toContain("participant (judge)");
+  });
+});
+
+describe("the prod gate's sessions query", () => {
+  test("judged is the shared applied predicate: applied, or the judgement the session's draw picked", () => {
+    const q = sessionsQuery("2026-10-20T00:00:00.000Z");
+    expect(q).toContain("AND j.source = 'model' AND j.mode = 'enforce'");
+    expect(q).toContain("AND (j.applied OR j.id = (s.swarm_recommendation->'judge'->>'judgement_id')::bigint)) AS judged");
+  });
+
+  test("it carries the same predicate text as the twin gate", () => {
+    const predicate = (q: string) => /EXISTS \(SELECT 1 FROM swarm_session_judgements j WHERE j\.session_id = s\.id[\s\S]*?\) AS judged/.exec(q)?.[0];
+    expect(predicate(sessionsQuery("2026-10-20T00:00:00.000Z"))).toBeDefined();
+    expect(predicate(sessionsQuery("2026-10-20T00:00:00.000Z"))).toBe(predicate(twinSessionsQuery("2026-10-20T00:00:00.000Z")));
+  });
+
+  test("it grades sessions published in the window or still open", () => {
+    const q = sessionsQuery("2026-10-20T00:00:00.000Z");
+    expect(q).toContain("WHERE s.published_at >= '2026-10-20T00:00:00.000Z'::timestamptz OR s.state NOT IN ('published', 'cancelled')");
+    expect(q).toContain("s.judging_outcome AS outcome");
   });
 });

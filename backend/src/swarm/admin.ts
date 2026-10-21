@@ -1800,7 +1800,7 @@ export async function setJudgeConfigAdmin(
 //
 // Built for the `shadow` soak, which D53 retired; it stays because it is the
 // only place an operator can read every judgement a session received — the
-// judge of record's, a second seated judge's that changed no outcome, late
+// drawn judge's, the other judges' answers that lost the draw, late
 // evidence after publication, and historical `shadow` rows — beside what the
 // session itself carries.
 //
@@ -1818,7 +1818,7 @@ export async function setJudgeConfigAdmin(
  */
 function toJudgementAdmin(
   r: Record<string, unknown>,
-  carried: { promptHash: string; inputsDigest: string; judgedByMemberId: string | null } | null,
+  carried: { promptHash: string; inputsDigest: string; judgedByMemberId: string | null; judgementId: string | null } | null,
 ) {
   const dropped = { positions: Number(r.dropped_positions ?? 0), disagreements: Number(r.dropped_disagreements ?? 0) };
   // Does the session STILL carry this opinion? (issue #806.) `applied` is a
@@ -1831,12 +1831,22 @@ function toJudgementAdmin(
   // instead of trusting the column.
   //
   // The JUDGE is compared too: two seated judges reading the same take set
-  // under the same prompt share both digests, and only the judge of record's
-  // judgement is on the session (system-scheduler-spec.md §4.4).
+  // under the same prompt share both digests, and only the drawn judgement is
+  // on the session (`judge.judgement_id`, D71; system-scheduler-spec.md §4.4).
+  //
+  // THE SHARED APPLIED PREDICATE (D71): a row is applied when its own column says
+  // so, or when it is the judgement the session's draw picked
+  // (`judge.judgement_id`). The drawn row is never updated, so the column alone
+  // would call the winner unapplied. A drawn session is reconciled by that id; a
+  // session published before the draw existed is reconciled by the fingerprint.
+  const drawn = carried?.judgementId != null && carried.judgementId === String(r.id);
+  const applied = r.applied === true || drawn;
   const carriedBySession = carried != null
-    && carried.inputsDigest === String(r.inputs_digest)
-    && carried.promptHash === String(r.prompt_hash)
-    && carried.judgedByMemberId === ((r.judged_by_member_id as string | null) ?? null);
+    && (carried.judgementId != null
+      ? drawn
+      : carried.inputsDigest === String(r.inputs_digest)
+        && carried.promptHash === String(r.prompt_hash)
+        && carried.judgedByMemberId === ((r.judged_by_member_id as string | null) ?? null));
   return {
     id: String(r.id),
     mode: String(r.mode),
@@ -1845,8 +1855,10 @@ function toJudgementAdmin(
     // enforce-only, and the reason a recorded opinion did NOT reach the session
     // (it published while the model was thinking). `mode: 'enforce'` alone was
     // never evidence that the prose landed.
-    applied: r.applied === true,
-    appliedSkippedReason: (r.applied_skipped_reason as string | null) ?? null,
+    applied,
+    // The winner of a draw keeps the reason it was filed under ('awaiting_draw') on its row.
+    appliedSkippedReason: drawn ? null : ((r.applied_skipped_reason as string | null) ?? null),
+    drawn,
     model: (r.model as string | null) ?? null,
     promptHash: String(r.prompt_hash),
     inputsDigest: String(r.inputs_digest),
@@ -1872,7 +1884,7 @@ function toJudgementAdmin(
     // Only an `applied` row can be SUPERSEDED — an unapplied row (a second
     // judge's, late evidence, a historical shadow row) was never on the
     // session, and saying "superseded" about it would invent a loss.
-    supersededReason: r.applied === true && !carriedBySession
+    supersededReason: applied && !carriedBySession
       ? (carried == null ? "recommendation_overwritten" : "session_carries_a_different_opinion")
       : null,
   };
@@ -1889,7 +1901,7 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
     // by `id DESC` (the only ordering that agrees with the order the session was
     // actually written in), so `latest` is simply `rows[0] ?? null` rather than
     // a separate query.
-    const latest = rows[0] ?? null;
+    let latest = rows[0] ?? null;
     // …but "newest row" is not "what the session carries" (issue #806). The
     // append-only record and the session are two different stores, and the
     // sanctioned `judged -> window_closed -> aggregated` re-run rewrites the
@@ -1897,6 +1909,10 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
     // and reconcile every row against it, so `inForce` can report SUPERSEDED
     // rather than "applied to the session" for prose the session no longer has.
     const carried = await sessionJudgeFingerprint(tx, sessionId);
+    // A drawn session (D71) is in force by the judgement its record names, not by the newest row.
+    if (carried?.judgementId != null) {
+      latest = rows.find((r) => String((r as Record<string, unknown>).id) === carried.judgementId) ?? latest;
+    }
     return {
       ok: true,
       status: 200,
@@ -1930,8 +1946,8 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
 // the receipt's bytes stay immutable and anchored. A session an operator may
 // still want to reopen must be reopened BEFORE its receipt exists.
 //
-// AND IT MUST HAVE A CONSENSUS. Only the judge of record's judgement reaches the
-// session's own record; any other judgement (a second judge's, late evidence,
+// AND IT MUST HAVE A CONSENSUS. Only the drawn judgement reaches the
+// session's own record; any other judgement (a judge that lost the draw, late evidence,
 // a historical `shadow` row) is never on the session, so there is nothing for a
 // receipt to attest to (`judgement_not_adopted`): the receipt embeds the
 // session's own judge block or it embeds nothing.

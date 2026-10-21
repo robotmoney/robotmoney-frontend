@@ -765,7 +765,7 @@ async function loadAssemblyInput(
     throw new ConsensusReceiptRefusal(
       "judgement_not_adopted",
       `session ${sessionId} has ${onFile.n} judgement(s) on file but carries no judge block on its own record, so no opinion has ever reached it. ` +
-        "Only the judge of record's judgement reaches the session; a second judge's, late evidence after publication and a historical " +
+        "Only the drawn judgement reaches the session; one that lost the draw, late evidence after publication and a historical " +
         "`shadow` row never do, and the receipt carries only an opinion the session adopted.",
     );
   }

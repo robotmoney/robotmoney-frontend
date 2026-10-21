@@ -2,7 +2,8 @@
 // test process tells backend code it may use test-only paths: re-point a
 // long-lived pool (db/client.ts, db/worker-client.ts setDatabase), serve the
 // fixture projects source (projects/access/select.ts), write synthetic regime
-// rows (swarm/domain.ts backfillRegimeHistory).
+// rows (swarm/domain.ts backfillRegimeHistory), fix the judge draw's random
+// value (swarm/judge-draw.ts setJudgeDrawSourceForTests, D71).
 //
 // Why a module and not an environment variable. `RM_ENV=ephemeral` used to be
 // what opened every one of those paths, and an environment variable is ambient:

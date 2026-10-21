@@ -404,17 +404,44 @@ export interface SwarmRecommendationJudge {
   judged_by?: string;
   /** Set only when the judge is a seated member; equals `judged_by` then. */
   judged_by_member_id?: string;
+  /**
+   * The id of the judgement the draw picked (D71). Present on a session judged
+   * after the judging deadline; absent on a session published before the draw existed.
+   */
+  judgement_id?: number;
+  /** How the winner was drawn. Anyone can recompute `drawn_index` from `random_value` and the list. */
+  draw?: SwarmJudgeDraw;
+}
+
+/**
+ * The draw that picked a session's judgement (D71, investment-swarm.md §9.7).
+ * Rule `rejection-u32-v1`: reject a 32-bit `random_value` that is >=
+ * floor(2^32 / n) * n, where n is the list length, then `drawn_index` is
+ * `random_value mod n`. The winner is `candidate_judgement_ids[drawn_index]`.
+ * The random value itself is trusted: commit-reveal is out of scope.
+ */
+export interface SwarmJudgeDraw {
+  /** The on-time answers, one per judge, in ascending id order. */
+  candidate_judgement_ids: number[];
+  /** The judge of each listed answer, in the same order. */
+  candidate_member_ids: string[];
+  drawn_index: number;
+  random_value: number;
+  draw_rule: "rejection-u32-v1";
+  /** When the draw ran, an ISO timestamp at or after the judging deadline. */
+  drawn_at: string;
 }
 
 /**
  * One consensus judge's PUBLIC opinion on one published session — its own
  * record, with its own permalink, like a take.
  *
- * Public means: recorded in `enforce` mode, it reached the session (`applied`),
- * the session is `published`, and it is the newest such opinion from its judging
+ * Public means: recorded in `enforce` mode, it reached the session (`applied`,
+ * or it is the answer the draw picked: a public judgement is the drawn one), the
+ * session is `published`, and it is the newest such opinion from its judging
  * party on that session. `shadow` opinions are never public (docs/decisions.md
- * D42: that mode exists to keep them off public surfaces). A session judged by
- * several judges has one public judgement per judge.
+ * D42: that mode exists to keep them off public surfaces). Every eligible judge
+ * judges a session, and a drawn session has one public judgement: the winner.
  */
 export interface SwarmJudgement {
   id: string;

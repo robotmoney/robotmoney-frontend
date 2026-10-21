@@ -21,7 +21,7 @@ Only the last step changes weights. Everything before it is signalling.
 | --- | --- | --- | --- |
 | Take | `backend/src/swarm/domain.ts` | Accepts one signed take per analyst: stance, confidence, and a weight vector over the 4 buckets. Up to 5 revisions. Rejects replayed nonces and late takes. | Analyst Ed25519 key |
 | Mean | `aggregateSession()` | Normalizes each vector to 1, averages per bucket, rounds to 8 decimals. Unweighted: confidence and stance do not affect weights. | None (code) |
-| Judge | `judge.ts` | Writes prose only: rationale, disagreements, `release_safety` (`safe` or `hold`). Rejects any model output containing weights. Does not sign. | None |
+| Judge | judge participants (`scripts/agent/participant/judge-client.ts`), answers checked by `finalizeEpoch()` | Every eligible judge writes prose only: rationale, disagreements, `release_safety` (`safe` or `hold`), and signs its answer. One on-time answer is drawn at random after the judging deadline (D71). Model output containing weights is rejected. | Judge Ed25519 key |
 | Receipt | `consensus-receipt.ts` | Builds schema-1.0 receipt from a `published` session. Immutable once stored. | None (code) |
 | Anchor | `rmpc receipt submit` | Verifies the receipt offline, then calls `Gateway.consensusRecordReceipt(receiptId, digest, uri)`. | EOA with `AGENT_ROLE` and `COMMITTEE_AGENT_ROLE` |
 | Register | `ConsensusRecommendationReceipt` | Stores id, digest, URI, submitter. Stores no weights. One record per `receiptId`. | Gateway only |
@@ -36,7 +36,7 @@ Only the last step changes weights. Everything before it is signalling.
 - **Disagreement becomes an average.** No median, trimming, or outlier rejection.
 - **No minimum take count is enforced.** One signed take can publish. The judge sets `hold` below 3 takes (`min_takes`), and that is advice only.
 - **Release is a human call.** A `hold` receipt can still be released. `draft-proposal` does not read `release_safety`.
-- **Judge opinion is required.** Assembly needs an adopted `enforce`-mode, model-authored judgement over the current takes. A fallback or stale judgement blocks the receipt.
+- **Judge opinion is required.** Assembly needs the drawn judgement: an `enforce`-mode, model-authored judgement over the current takes that the session adopted when its draw ran. A fallback or stale judgement blocks the receipt, and a session with no drawn judgement gets no receipt.
 - **A weightless take ruins the session.** Every take must carry the 4-bucket vector. The fix is the audited forced excuse (`roster_excuse_forced`).
 
 ## Receipt format

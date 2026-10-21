@@ -43,7 +43,6 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import {
   activeMember,
   activeSubject,
-  recordConsensus,
   refusedByDatabase,
   sessionDate,
   sessionRow,
@@ -51,6 +50,7 @@ import {
   submitTake,
 } from "./support/epoch-fixtures.ts";
 import { inHouseJudge, seatJudge, type TestJudge } from "./support/stub-judge.ts";
+import { setJudgeDrawSourceForTests } from "../src/swarm/judge-draw.ts";
 
 // Per TEST: a judge of record is the LOWEST-id eligible judge in the whole
 // database, and the eligibility cases below seat extra judges — a judge left
@@ -73,24 +73,44 @@ async function setDeadline(sessionId: string, at: Date) {
   await sql`UPDATE swarm_sessions SET judging_deadline_at = ${at} WHERE id = ${sessionId}`;
 }
 
-/** A judgement row by `judge` (the session's judge of record unless a test says otherwise). */
-async function plantJudgement(sessionId: string, judge?: TestJudge): Promise<number> {
+const OPINION = '{"rationale":"r","disagreements":[],"release_safety":{"release":"safe","concerns":[]}}';
+
+/**
+ * An answer row by `judge`, filed the way `submitJudgement` files it (D71): an
+ * enforce, model-authored row, `applied = false`, tagged by WHEN it was accepted.
+ * `awaiting_draw` is an on-time answer; `after_deadline` and `late_evidence`
+ * are late ones. `at` is its accepted time: now, exactly the judging deadline, or
+ * a microsecond after it.
+ */
+async function plantJudgement(
+  sessionId: string,
+  judge?: TestJudge,
+  o: { reason?: string; at?: "now" | "deadline" | "deadline+1us" } = {},
+): Promise<number> {
   const by = judge ?? await inHouseJudge();
   const [j] = await sql<{ id: string }[]>`
     INSERT INTO swarm_session_judgements
       (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
-            ${by.id}, ${by.id})
+       judged_by, judged_by_member_id, applied, applied_skipped_reason, created_at)
+    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, ${OPINION}::jsonb,
+            ${by.id}, ${by.id}, false, ${o.reason ?? "awaiting_draw"},
+            CASE ${o.at ?? "now"}::text
+              WHEN 'deadline' THEN (SELECT judging_deadline_at FROM swarm_sessions WHERE id = ${sessionId})
+              WHEN 'deadline+1us' THEN (SELECT judging_deadline_at + interval '1 microsecond' FROM swarm_sessions WHERE id = ${sessionId})
+              ELSE clock_timestamp() END)
     RETURNING id`;
   return Number(j.id);
 }
 
-/** Record the judge of record's consensus, then pin its acceptance instant. */
-async function recordConsensusAt(sessionId: string, at: Date) {
-  const r = await recordConsensus(sessionId, await plantJudgement(sessionId));
-  await sql`UPDATE swarm_sessions SET consensus_recorded_at = ${at} WHERE id = ${sessionId}`;
-  return r;
+/** Fix the draw's random value for the length of `run`, and count how often the source was read. */
+async function withRandom<T>(value: number, run: () => Promise<T>): Promise<{ result: T; reads: number }> {
+  let reads = 0;
+  setJudgeDrawSourceForTests(() => { reads += 1; return value; });
+  try {
+    return { result: await run(), reads };
+  } finally {
+    setJudgeDrawSourceForTests(null);
+  }
 }
 
 /** Rows in the queue tables — settlement must add none (§4.4: "not scheduled"). */
@@ -182,35 +202,54 @@ test("enforce: finalize before the deadline with no eligible consensus is refuse
   expect(s).toEqual(before);
 });
 
-test("enforce: finalize before the deadline WITH an eligible consensus publishes judged at once", async () => {
+test("enforce: a request to publish before the judging deadline is refused even when on-time answers are on file", async () => {
   const { sessionId } = await closedEpoch("st_early_ok", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const recorded = await recordConsensus(sessionId, await plantJudgement(sessionId));
-  expect(recorded.ok).toBe(true);
-  expect((await sessionRow(sessionId)).state).toBe("judged");
+  await plantJudgement(sessionId);
+  const before = await sessionRow(sessionId);
 
-  const r = await epoch.finalizeEpoch(sessionId);
-  expect(r.ok).toBe(true);
-  if (!r.ok) return;
-  expect(r.outcome).toBe("judged");
-  expect((await sessionRow(sessionId)).state).toBe("published");
+  const { result: r, reads } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(r.ok).toBe(false);
+  if (r.ok) return;
+  expect(r.error).toBe("judging_deadline_not_reached");
+  // Nothing moved, nothing was drawn, and nothing was audited.
+  expect(reads).toBe(0);
+  expect(await sessionRow(sessionId)).toEqual(before);
+  expect(await sql`SELECT 1 FROM audit_log WHERE action = 'judge_draw'`).toHaveLength(0);
 });
 
-test("enforce: a consensus recorded at the EXACT deadline instant is eligible, and finalize is accepted at it", async () => {
+test("enforce: an answer accepted at the EXACT judging deadline can win", async () => {
   const { sessionId } = await closedEpoch("st_exact", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  // The instant has passed by the database clock, so finalize is accepted "at
-  // or after" it; the consensus lands exactly ON it, so it is eligible.
-  const instant = new Date(Date.now() - 1000);
-  await setDeadline(sessionId, instant);
-  await recordConsensusAt(sessionId, instant);
+  // The deadline has passed by the database clock, so finalize is accepted "at
+  // or after" it; the answer was accepted exactly ON it, so it is on time.
+  await setDeadline(sessionId, new Date(Date.now() - 1000));
+  await plantJudgement(sessionId, undefined, { at: "deadline" });
 
-  const r = await epoch.finalizeEpoch(sessionId);
+  const { result: r } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
   expect(r.ok).toBe(true);
   if (!r.ok) return;
   expect(r.outcome).toBe("judged");
+  // The session's consensus time is the winning answer's accepted time, exactly.
+  const [row] = await sql<{ same: boolean }[]>`
+    SELECT consensus_recorded_at = judging_deadline_at AS same FROM swarm_sessions WHERE id = ${sessionId}`;
+  expect(row.same).toBe(true);
+});
+
+test("enforce: an answer accepted a microsecond AFTER the judging deadline cannot win", async () => {
+  const { sessionId } = await closedEpoch("st_micro", "enforce");
+  await epoch.aggregateEpoch(sessionId);
+  await epoch.requestJudging(sessionId);
+  await setDeadline(sessionId, new Date(Date.now() - 1000));
+  await plantJudgement(sessionId, undefined, { reason: "after_deadline", at: "deadline+1us" });
+
+  const { result: r, reads } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.outcome).toBe("no_consensus");
+  expect(reads).toBe(0);
 });
 
 test("enforce: after the deadline with no consensus, no_consensus publishes and EVERY row written is inspected", async () => {
@@ -258,114 +297,84 @@ test("enforce: after the deadline with no consensus, no_consensus publishes and 
   expect((s.swarm_recommendation as Record<string, unknown>).judge).toBeUndefined();
 });
 
-test("a consensus recorded AFTER the deadline but before finalize is retained and yields no_consensus", async () => {
+test("a late answer is kept as a record and never changes the winner: a session with only a late answer is no_consensus", async () => {
   const { sessionId } = await closedEpoch("st_late", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const deadline = new Date(Date.now() - 60_000);
-  await setDeadline(sessionId, deadline);
-  await recordConsensusAt(sessionId, new Date(deadline.getTime() + 1000));
+  await setDeadline(sessionId, new Date(Date.now() - 60_000));
+  await plantJudgement(sessionId, undefined, { reason: "after_deadline" });
 
   const r = await epoch.finalizeEpoch(sessionId);
   expect(r.ok).toBe(true);
   if (!r.ok) return;
   expect(r.outcome).toBe("no_consensus");
-  // Kept as a record, and no certificate published from it.
-  expect((await sessionRow(sessionId)).consensus_recorded_at).not.toBeNull();
+  // Kept as a record, never a consensus, and no certificate published from it.
+  const s = await sessionRow(sessionId);
+  expect(s.consensus_recorded_at).toBeNull();
+  expect((s.swarm_recommendation as Record<string, unknown>).judge).toBeUndefined();
   expect((await sql`SELECT 1 FROM swarm_session_judgements WHERE session_id = ${sessionId}`).length).toBe(1);
   expect((await sql`SELECT 1 FROM swarm_consensus_receipts WHERE session_id = ${sessionId}`).length).toBe(0);
 });
 
-test("the consensus acceptance instant is the database clock at the write, never the transaction's start", async () => {
-  // §4.2: the instant compared against the deadline is `clock_timestamp()`. A
-  // consensus whose transaction began before the deadline and reached the
-  // write after it was ACCEPTED after it, and yields no_consensus.
-  const { sessionId } = await closedEpoch("st_consensus_clock", "enforce");
+test("a late answer beside an on-time one never changes the winner, whatever the random value", async () => {
+  const { sessionId } = await closedEpoch("st_late_beside", "enforce");
+  const onTime = await seatJudge({ prefix: "judge_on_time" });
+  const late = await seatJudge({ prefix: "judge_late" });
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  await sql`UPDATE swarm_sessions SET judging_deadline_at = clock_timestamp() + interval '300 milliseconds'
-             WHERE id = ${sessionId}`;
-  const judgementId = await plantJudgement(sessionId);
-  const recorded = await sql.begin(async (tx) => {
-    await tx`SELECT 1`;
-    await tx`SELECT pg_sleep(0.5)`;
-    return epoch.recordJudgingConsensusTx(tx, sessionId, judgementId);
-  });
-  expect(recorded.ok).toBe(true);
-  const [row] = await sql<{ late: boolean }[]>`
-    SELECT consensus_recorded_at > judging_deadline_at AS late FROM swarm_sessions WHERE id = ${sessionId}`;
-  expect(row.late).toBe(true);
-  const fin = await epoch.finalizeEpoch(sessionId);
-  expect(fin.ok).toBe(true);
-  if (fin.ok) expect(fin.outcome).toBe("no_consensus");
-});
+  const winnerRow = await plantJudgement(sessionId, onTime);
+  await setDeadline(sessionId, new Date(Date.now() - 1000));
+  await plantJudgement(sessionId, late, { reason: "after_deadline" });
 
-// ── the judge of record ─────────────────────────────────────────────────────
-
-test("only the judge of record's judgement can become the consensus: every other author is refused and changes nothing", async () => {
-  // §4.4: "An eligible judgement is signed by an active member holding the
-  // `judge` role that has no take in that session, and it passes the
-  // third-party gate … chosen deterministically by member id." The same
-  // eligibility `submitJudgement` applies, enforced where the consensus is
-  // recorded, so no caller can record one the product would refuse.
-  const { sessionId } = await closedEpoch("st_of_record", "enforce");
-  // Two in-house judges: the judge of record is the LOWER id, whichever
-  // answers first.
-  const a = await seatJudge({ prefix: "judge_a" });
-  const b = await seatJudge({ prefix: "judge_b" });
-  const [ofRecord, other] = a.id < b.id ? [a, b] : [b, a];
-  // A third-party judge (no in-house operator) while third-party judging is off.
-  const thirdParty = await seatJudge({ prefix: "judge_0_third", operator: "someone-else" });
-  // A judge that is NOT active.
-  const inactive = await seatJudge({ prefix: "judge_0_inactive" });
-  await sql`UPDATE swarm_members SET status = 'inactive' WHERE id = ${inactive.id}`;
-  await epoch.aggregateEpoch(sessionId);
-  await epoch.requestJudging(sessionId);
-
-  // The non-record judge answers FIRST: recorded as evidence, never the consensus.
-  for (const author of [other, thirdParty, inactive]) {
-    const r = await recordConsensus(sessionId, await plantJudgement(sessionId, author));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe("judgement_not_from_judge_of_record");
-  }
-  // A row naming no member at all (the retired in-house shape) is refused too.
-  const [anonymous] = await sql<{ id: string }[]>`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/x', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb)
-    RETURNING id`;
-  const anon = await recordConsensus(sessionId, Number(anonymous.id));
-  expect(anon.ok).toBe(false);
-  let s = await sessionRow(sessionId);
-  expect(s.state).toBe("judging");
-  expect(s.consensus_recorded_at).toBeNull();
-
-  // The judge of record's own judgement is the consensus.
-  const r = await recordConsensus(sessionId, await plantJudgement(sessionId, ofRecord));
+  const { result: r } = await withRandom(7, () => epoch.finalizeEpoch(sessionId));
   expect(r.ok).toBe(true);
-  s = await sessionRow(sessionId);
-  expect(s.state).toBe("judged");
+  const rec = (await sessionRow(sessionId)).swarm_recommendation as any;
+  expect(rec.judge.judgement_id).toBe(winnerRow);
+  expect(rec.judge.draw.candidate_judgement_ids).toEqual([winnerRow]);
 });
 
-test("a judge that holds a take in the session is not eligible, and the next judge by id becomes the judge of record", async () => {
-  const { subjectId, sessionId } = await closedEpoch("st_judge_take", "enforce");
-  const low = await seatJudge({ prefix: "judge_a_low" });
-  const high = await seatJudge({ prefix: "judge_z_high" });
-  // A take on file for the low judge in THIS session (planted: the take path
-  // refuses judges outright, so this is the state a role change after the take
-  // leaves behind).
+// ── who may be drawn ────────────────────────────────────────────────────────
+
+test("only on-time answers from eligible judges are drawn: every other author is dropped from the list", async () => {
+  // D71: the candidate list is the first on-time answer per judge, and a judge
+  // must STILL be an active judge with no take, passing the third-party gate,
+  // when finalize runs.
+  const { subjectId, sessionId } = await closedEpoch("st_candidates", "enforce");
+  const good = await seatJudge({ prefix: "judge_good" });
+  const twice = await seatJudge({ prefix: "judge_twice" });
+  const thirdParty = await seatJudge({ prefix: "judge_third", operator: "someone-else" });
+  const inactive = await seatJudge({ prefix: "judge_inactive" });
+  const taker = await seatJudge({ prefix: "judge_taker" });
+  const notAJudge = await seatJudge({ prefix: "judge_demoted" });
+  await epoch.aggregateEpoch(sessionId);
+  await epoch.requestJudging(sessionId);
+
+  const goodId = await plantJudgement(sessionId, good);
+  const twiceFirst = await plantJudgement(sessionId, twice);
+  await plantJudgement(sessionId, twice); // a second answer by the same judge never counts
+  // Planted as on time, then the judge became ineligible before the draw.
+  // A third-party judge is refused at submission while the flag is off; the
+  // row below stands for one filed while the flag was on.
+  await plantJudgement(sessionId, thirdParty);
+  await plantJudgement(sessionId, inactive);
+  await sql`UPDATE swarm_members SET status = 'inactive' WHERE id = ${inactive.id}`;
+  await plantJudgement(sessionId, taker);
   const date = sessionDate(await sessionRow(sessionId));
   await sql`INSERT INTO swarm_recommendations
               (session_id, member_id, subject_id, date, nonce, stance, confidence, payload, signature, verified, revision)
-            VALUES (${sessionId}, ${low.id}, ${subjectId}, ${date}, ${`n_${crypto.randomUUID()}`}, 'neutral', 0.5,
+            VALUES (${sessionId}, ${taker.id}, ${subjectId}, ${date}, ${`n_${crypto.randomUUID()}`}, 'neutral', 0.5,
                     '{}'::jsonb, 'sig', true, 1)`;
-  await epoch.aggregateEpoch(sessionId);
-  await epoch.requestJudging(sessionId);
+  await plantJudgement(sessionId, notAJudge);
+  await sql`UPDATE swarm_members SET role = 'member' WHERE id = ${notAJudge.id}`;
+  await setDeadline(sessionId, new Date(Date.now() - 1000));
 
-  const refused = await recordConsensus(sessionId, await plantJudgement(sessionId, low));
-  expect(refused.ok).toBe(false);
-  const accepted = await recordConsensus(sessionId, await plantJudgement(sessionId, high));
-  expect(accepted.ok).toBe(true);
+  const { result: r } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.outcome).toBe("judged");
+  const draw = ((await sessionRow(sessionId)).swarm_recommendation as any).judge.draw;
+  expect(draw.candidate_judgement_ids).toEqual([goodId, twiceFirst]);
+  expect(draw.candidate_member_ids).toEqual([good.id, twice.id]);
 });
 
 // ── outcomes are decided once, from stored facts ────────────────────────────
@@ -382,8 +391,8 @@ test("a repeated finalize returns the outcome already decided and never re-decid
   expect(first.outcome).toBe("no_consensus");
   const publishedAt = (await sessionRow(sessionId)).published_at;
 
-  // A consensus arriving after publication must not change the answer.
-  await recordConsensusAt(sessionId, new Date(Date.now() - 5000));
+  // An answer arriving after publication must not change the answer.
+  await plantJudgement(sessionId, undefined, { reason: "late_evidence" });
   const second = await epoch.finalizeEpoch(sessionId);
   expect(second.ok).toBe(true);
   if (!second.ok) return;
@@ -394,46 +403,65 @@ test("a repeated finalize returns the outcome already decided and never re-decid
   expect(String(s.published_at)).toBe(String(publishedAt));
 });
 
-test("a LOST session.judged changes no outcome: finalize on the deadline alone reads the stored consensus", async () => {
-  // §4.4: "A late event, a duplicate event, or a lost event changes no
-  // outcome: the scheduler finalizes on the deadline instead, and finalize
-  // reads the same stored facts." Nothing here reads the event: the consensus
-  // was recorded before the deadline, the scheduler never heard, the deadline
-  // fired, and finalize says `judged`.
-  const { sessionId } = await closedEpoch("st_lost_event", "enforce");
+test("an answer on file before the deadline yields judged at the deadline, decided by stored data alone", async () => {
+  // Nothing here reads an event: the answer was recorded before the deadline,
+  // the deadline fired, and finalize says `judged`.
+  const { sessionId } = await closedEpoch("st_stored", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const deadline = new Date(Date.now() - 1000);
-  await setDeadline(sessionId, deadline);
-  await recordConsensusAt(sessionId, new Date(deadline.getTime() - 5000));
-  const r = await epoch.finalizeEpoch(sessionId);
+  const winner = await plantJudgement(sessionId);
+  await setDeadline(sessionId, new Date(Date.now() + 5));
+  await sql`SELECT pg_sleep(0.05)`;
+  const { result: r } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
   expect(r.ok).toBe(true);
   if (r.ok) expect(r.outcome).toBe("judged");
+  const s = await sessionRow(sessionId);
+  expect((s.swarm_recommendation as any).judge.judgement_id).toBe(winner);
+  expect(s.state).toBe("published");
 });
 
-test("a DUPLICATED session.judged changes no outcome: the second finalize it triggers replays the first", async () => {
-  const { sessionId } = await closedEpoch("st_dup_event", "enforce");
+test("two finalizes at the same moment produce ONE draw", async () => {
+  const { sessionId } = await closedEpoch("st_concurrent", "enforce");
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
-  const recorded = await recordConsensus(sessionId, await plantJudgement(sessionId));
-  expect(recorded.ok).toBe(true);
-  // The same consensus delivered twice: the second is the original result,
-  // and writes no second event.
-  const head = await epoch.streamHeadSequence();
-  const [{ id: firstJudgement }] = await sql<{ id: string }[]>`
-    SELECT id FROM swarm_session_judgements WHERE session_id = ${sessionId} ORDER BY id LIMIT 1`;
-  const again = await recordConsensus(sessionId, Number(firstJudgement));
-  expect(again.ok).toBe(true);
-  expect(await epoch.streamHeadSequence()).toBe(head);
+  await plantJudgement(sessionId, a);
+  await plantJudgement(sessionId, b);
+  await setDeadline(sessionId, new Date(Date.now() - 1000));
 
-  const [a, b] = [await epoch.finalizeEpoch(sessionId), await epoch.finalizeEpoch(sessionId)];
-  expect(a.ok && b.ok).toBe(true);
-  if (!a.ok || !b.ok) return;
-  expect([a.outcome, b.outcome]).toEqual(["judged", "judged"]);
-  expect([a.replayed, b.replayed]).toEqual([false, true]);
+  const { result: [x, y], reads } = await withRandom(1, () =>
+    Promise.all([epoch.finalizeEpoch(sessionId), epoch.finalizeEpoch(sessionId)]));
+  expect(x.ok && y.ok).toBe(true);
+  if (!x.ok || !y.ok) return;
+  expect([x.outcome, y.outcome]).toEqual(["judged", "judged"]);
+  expect([x.replayed, y.replayed].sort()).toEqual([false, true]);
+  // The random source was read once, and one audit row was written.
+  expect(reads).toBe(1);
+  expect(await sql`SELECT 1 FROM audit_log WHERE action = 'judge_draw' AND target_id = ${sessionId}`).toHaveLength(1);
+  // Publishing again later gives the same winner and never reads the source.
+  const before = ((await sessionRow(sessionId)).swarm_recommendation as any).judge;
+  const { result: again, reads: readsAgain } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(again.ok && again.replayed).toBe(true);
+  expect(readsAgain).toBe(0);
+  expect(((await sessionRow(sessionId)).swarm_recommendation as any).judge).toEqual(before);
 });
 
-test("a consensus arriving after publication is recorded as late evidence and changes neither state nor outcome", async () => {
+test("a session an older version left `judged` still publishes on its recorded consensus, before the deadline", async () => {
+  const { sessionId } = await closedEpoch("st_legacy", "enforce");
+  await epoch.aggregateEpoch(sessionId);
+  await epoch.requestJudging(sessionId);
+  // The shape the old api left: `judged`, with a consensus recorded inside the deadline.
+  await sql`UPDATE swarm_sessions SET state = 'judged', consensus_recorded_at = clock_timestamp() WHERE id = ${sessionId}`;
+  const { result: r, reads } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.outcome).toBe("judged");
+  expect(reads).toBe(0);
+  expect((await sessionRow(sessionId)).state).toBe("published");
+});
+
+test("an answer arriving after publication is late evidence and changes neither state nor outcome", async () => {
   const { sessionId } = await closedEpoch("st_after_publish", "enforce");
   await epoch.aggregateEpoch(sessionId);
   await epoch.requestJudging(sessionId);
@@ -441,14 +469,22 @@ test("a consensus arriving after publication is recorded as late evidence and ch
   await epoch.finalizeEpoch(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("published");
 
-  const late = await recordConsensus(sessionId, await plantJudgement(sessionId));
-  expect(late.ok).toBe(true);
-  if (!late.ok) return;
-  expect(late.lateEvidence).toBe(true);
+  await plantJudgement(sessionId, undefined, { reason: "late_evidence" });
   const s = await sessionRow(sessionId);
   expect(s.state).toBe("published");
   expect(s.judging_outcome).toBe("no_consensus");
   expect((await sql`SELECT 1 FROM swarm_session_judgements WHERE session_id = ${sessionId}`).length).toBe(1);
+});
+
+test("judging off: the session is published as not_judged and the draw never runs", async () => {
+  const { sessionId } = await closedEpoch("st_off_draw", "off");
+  await epoch.aggregateEpoch(sessionId);
+  await plantJudgement(sessionId);
+  const { result: r, reads } = await withRandom(0, () => epoch.finalizeEpoch(sessionId));
+  expect(r.ok).toBe(true);
+  if (r.ok) expect(r.outcome).toBe("not_judged");
+  expect(reads).toBe(0);
+  expect(((await sessionRow(sessionId)).swarm_recommendation as any).judge).toBeUndefined();
 });
 
 test("no_consensus and not_judged are OUTCOMES, never lifecycle states: the database refuses them as a state", async () => {
