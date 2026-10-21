@@ -1,10 +1,12 @@
 # @robotmoney/analyst-sdk
 
-Pure regime analytics for Robot Money. Give it a raw indicator history, get back the
+Pure regime analytics for Robot Money. Give it source data, get back the
 regime label, per-indicator ranks and weights, correlations and the backtest. It
 never calls the network, never reads a database and never reads the environment.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
+
+What this package is specified to do: [`docs/technical/analytics-requirements.md`](../../docs/technical/analytics-requirements.md) (the module the backend and the SDK share) and [`docs/technical/analyst-sdk-requirements.md`](../../docs/technical/analyst-sdk-requirements.md) (the client side). Terms (source data, calculated indicators, report, archive) are defined in [`docs/definitions.md`](../../docs/definitions.md).
 
 What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
 `transforms.ts`, `indicators.ts`, `backtest.ts`, `correlations.ts`) lives here; the
@@ -40,9 +42,9 @@ bun install
 
 Requires [bun](https://bun.sh) 1.2 or newer.
 
-## Input: raw indicator history
+## Input: source data
 
-A CSV with exactly this header, in this order:
+The input is a report of source data: a CSV with exactly this header, in this order:
 
 ```csv
 date,indicator,value,source
@@ -54,7 +56,7 @@ date,indicator,value,source
 | ----------- | ------------------------------------------------------------------------------ |
 | `date`      | `YYYY-MM-DD`                                                                   |
 | `indicator` | an indicator id from the registry in `src/analyze/indicators.ts` (for example `VIX`) |
-| `value`     | the raw, pre-transform value, a finite number                                  |
+| `value`     | the source data value, before any transform, a finite number                   |
 | `source`    | where the value came from (free text, kept for provenance, not used in compute) |
 
 Rules:
@@ -126,7 +128,7 @@ const asOf = buildReport(
 ### Current-month values (MNA)
 
 The current month's value of a monthly series such as `MNA` (EDGAR filing counts) is
-stored at its month-end date and updated through the month. A raw history can
+stored at its month-end date and updated through the month. A source data report can
 therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
@@ -192,7 +194,7 @@ which is below the 0.67 `risk_on` bucket, and the label changed from `risk_on` t
 ## Public data API
 
 Optional, and independent of the SDK: the SDK never calls the network and the API
-never needs the SDK. A free, tokenless, read-only JSON API serves the raw inputs
+never needs the SDK. A free, tokenless, read-only JSON API serves source data and its revisions
 under `/api/public/analytics/`. Every route is GET only (any other method is a
 `405`), needs no `Authorization` header (a token changes nothing), and answers
 cross-origin requests (`Access-Control-Allow-Origin: *`). The routes, in the contract
@@ -201,7 +203,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 
 | route | serves | filters |
 | ----- | ------ | ------- |
-| `/api/public/analytics/raw-history` | raw indicator history, `date,indicator,value,source` | `indicator`, `from`, `to` |
+| `/api/public/analytics/raw-history` | source data for the indicators, `date,indicator,value,source` | `indicator`, `from`, `to` |
 | `/api/public/analytics/asset-prices` | daily asset closes in USD | `symbol`, `from`, `to` |
 | `/api/public/analytics/vintages` | frozen data vintages: run, methodology, cutoffs, digest, members | `run_key`, `tool_id`, `include=members` |
 | `/api/public/analytics/overwrite-events` | every recorded revision of a stored row | `table_name` |
@@ -209,7 +211,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 ```sh
 API=https://robotmoney.network
 
-# raw indicator history for one indicator, from a date (the SDK's CSV is this, as columns)
+# source data for one indicator, from a date (the SDK's CSV is this, as columns)
 curl -s "$API/api/public/analytics/raw-history?indicator=T10Y2Y&from=2024-01-01&limit=5"
 
 # asset prices
@@ -269,7 +271,7 @@ the data. Check each provider's terms before you republish what you download.
 src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
 src/input/       CSV and JSON loader
-src/run.ts       raw history in, regime report out
+src/run.ts       source data in, regime report out
 bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 ```
 
@@ -277,6 +279,6 @@ bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 from the backend. `scripts/tests/unit/analyst-sdk-purity.test.ts` in the repository
 root enforces it.
 
-## Rebuilding inputs from raw sources (optional)
+## Rebuilding source data from the original sources (optional)
 
 `src/extract/` holds the keyless source clients (FRED, Yahoo, DefiLlama, blockchain.com, Coin Metrics, Shiller, EDGAR) and the indicator-to-fetch map. They are the only SDK code that touches the network, and only through `src/extract/http.ts`. Pass your own `fetch` with `configureHttp({ fetch })`. Add `cache` and `recordFetch` hooks to wrap each GET. With no hooks they use `globalThis.fetch` directly. The geckoterminal source needs a host adapter (`SourceExtensions`) and throws without one.
