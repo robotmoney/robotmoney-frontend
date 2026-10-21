@@ -49,3 +49,44 @@ describe("member-avatar (1393)", () => {
     expect(p).toContain("answered 500, not 404");
   });
 });
+
+import { judgeDrawProblems, type JudgeDrawObservation } from "../../release/version-checks/v0.6.3/judge-draw.ts";
+import { homeProblems, type HomeObservation } from "../../release/version-checks/v0.6.3/home-monument.ts";
+
+describe("judge-draw (1406)", () => {
+  const OK: JudgeDrawObservation = {
+    module: { code: 0, count: 3 },
+    openapi: { status: 200, text: readFileSync(join(PUB, "openapi.json"), "utf8") },
+    skill: { status: 200, text: readFileSync(join(PUB, "skills/swarm-onboarding/SKILL.md"), "utf8") },
+  };
+  test("the committed openapi and skill, and a module with the rule, pass", () => {
+    expect(judgeDrawProblems(OK)).toEqual([]);
+  });
+  test("red: no api container, a module without the rule, the pre-1406 openapi and skill, a 404", () => {
+    expect(judgeDrawProblems({ ...OK, module: null }).join()).toContain("no running api container");
+    expect(judgeDrawProblems({ ...OK, module: { code: 1, count: 0 } }).join()).toContain("does not carry the rule");
+    const old = judgeDrawProblems({
+      ...OK,
+      openapi: { status: 200, text: "A session has one judge of record: the active judge that comes first by member id" },
+      skill: { status: 200, text: "One judgement per session is adopted" },
+    }).join();
+    expect(old).toContain("does not describe the draw");
+    expect(old).toContain("lowest member id");
+    expect(old).toContain("drawn at random");
+    expect(judgeDrawProblems({ ...OK, openapi: { status: 404, text: "" } }).join()).toContain("/openapi.json answered 404");
+  });
+});
+
+describe("home-monument (1388)", () => {
+  const OK: HomeObservation = { view: served("assets/js/app/alpine/views/home.js"), scene: { status: 200 }, image: { status: 200 } };
+  test("the committed home view and 200 assets pass", () => {
+    expect(homeProblems(OK)).toEqual([]);
+  });
+  test("red: the home view that still resolves avatars by the curated logo only, a 404 scene and image", () => {
+    const before = OK.view.text.replaceAll("memberAvatarSrc", "memberLogo");
+    expect(homeProblems({ ...OK, view: { status: 200, text: before } }).join()).toContain("memberAvatarSrc");
+    const p = homeProblems({ ...OK, scene: { status: 404 }, image: { status: 404 } }).join();
+    expect(p).toContain("scene.js answered 404");
+    expect(p).toContain("pyramid.jpg answered 404");
+  });
+});

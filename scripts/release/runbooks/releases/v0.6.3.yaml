@@ -12,18 +12,29 @@ notes: |
   checkout (/root/rm-063), the same instance. Before the run, the target files' `release` reads
   v0.6.3 and prod's `checkout` names the new folder.
 
-  Scope. Four PRs merged into main after v0.6.2 (route (a), merge 2026-10-20). One changes the
-  product: the admin avatar upload (1393), which is site files only. The other three are docs,
-  two of them pages the site serves.
+  Scope. Six PRs merged into main after v0.6.2 (route (a), merges 2026-10-20 and 2026-10-21).
+  Three change the product: the admin avatar upload (1393) and the Monument home page (1388), which
+  are site files only, and the judge draw (1406, D71), which is backend code with no migration. The
+  other three are docs, two of them pages the site serves.
+
+  Judge draw (1406). The rolling boot replaces the api before system-scheduler; both version mixes
+  finalize at the judging deadline (release-runbooks.md §4.7). Answers an old api files during the swap are
+  tagged not_judge_of_record, so one session in judging may publish no_consensus. Start the upgrade with
+  no session in judging where possible; the soak's session report grades it.
 
   Migrations. None. C05-migrate applies nothing; P07-state-baseline still proves the ledger
   reconciles and that nothing is pending.
 
+  QA session 2026-10-20 (branches qa/0.6.x-2026-10-20, then qa/0.6.x-2026-10-20-2 after main moved).
+  Fixes made on the branch: a classification for worker-analytics waiting for the api at boot (it logs
+  the wait and goes on, 1378), and R8.q no longer grades third_party_enabled, which production runs on
+  (owner, 2026-10-21). The home view resolves avatars through memberAvatarSrc (1393 meets 1388).
+
   Website. website-server/ is unchanged since v0.6.2. C12-site ships the new site files by atomic
-  switch and graceful reload; the site never goes down. The backend images rebuild at the same
-  backend source, so C10-rolling-boot replaces each service with an equal one.
+  switch and graceful reload; the site never goes down. The backend images rebuild with the judge
+  draw (1406), and C10-rolling-boot replaces each service one at a time.
 recovery: |
-  v0.6.3 carries no migration and no backend change.
+  v0.6.3 carries no migration. Its one backend change is the judge draw (1406).
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
     and cut v0.6.3-rc.(N+1).
   - A failed C05-migrate: resume at C05-migrate; v0.6.2 keeps serving, and the website stays up.
@@ -34,9 +45,11 @@ scope:
   # Every PR v0.6.3 ships (v0.6.2..the QA commit), each with its check or why none
   # (Q05-scope proves the list complete). General checks are the soak's (Q26 to Q34 on stage, C14 to C22 on production).
   - {pr: 1390, what: "docs: referral consent, attribution and reporting spec", none: "docs only"}
+  - {pr: 1388, what: "the Monument home page", check: "Q37-home-monument"}
   - {pr: 1393, what: "an admin uploads a swarm member's avatar from the member page", check: "Q35-member-avatar"}
   - {pr: 1394, what: "docs: the judge seat guide (the feed, the answer, the digest, the signature)", none: "site docs and skill wording: C12-site ships the files; no product behavior changes"}
   - {pr: 1395, what: "docs: date the changelog entries for v0.6.0 to v0.6.2", none: "site page: held by its browser spec (changelog.spec.ts) in CI, and C12-site ships the files"}
+  - {pr: 1406, what: "every judge judges; the winner is drawn after the judging deadline (D71)", check: "Q36-judge-draw"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).
@@ -488,6 +501,34 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q36-judge-draw"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.6.3"
+    description: "Judge draw (1406, D71): the running api carries the draw module with its rule rejection-u32-v1, and the served openapi.json and swarm skill describe a draw after the judging deadline"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "judge-draw", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-judge-draw.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q37-home-monument"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.6.3"
+    description: "Monument home page (1388): the home view and its scene answer 200, the view resolves a member's avatar through memberAvatarSrc, and the hero image answers"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "home-monument", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-home-monument.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
@@ -870,6 +911,34 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-member-avatar.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C24-judge-draw"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.6.3"
+    description: "Judge draw (1406, D71): the running api carries the draw module with its rule rejection-u32-v1, and the served openapi.json and swarm skill describe a draw after the judging deadline"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "judge-draw", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-judge-draw.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C25-home-monument"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.6.3"
+    description: "Monument home page (1388): the home view and its scene answer 200, the view resolves a member's avatar through memberAvatarSrc, and the hero image answers"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "home-monument", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-home-monument.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}

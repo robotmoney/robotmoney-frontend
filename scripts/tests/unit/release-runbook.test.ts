@@ -209,10 +209,12 @@ describe("a release's scope", () => {
     expect(() => parseReleaseRunbook(text.slice(0, c23) + text.slice(c24), "v0.6.2")).toThrow("Q35-subject-spacing has no production twin named subject-spacing");
   });
 
-  test("v0.6.3's one product change, the avatar upload (1393), has its version step and a production twin", () => {
+  test("v0.6.3's three product changes (1393, 1406, 1388) each have a version step and a production twin", () => {
     const v063 = loadReleaseRunbook("v0.6.3");
     const added = v063.steps.filter((s) => (s as RunbookStep).added === "v0.6.3").map((s) => s.id);
-    expect(added).toEqual(["Q35-member-avatar", "C23-member-avatar"]);
+    expect(added).toEqual(["Q35-member-avatar", "Q36-judge-draw", "Q37-home-monument", "C23-member-avatar", "C24-judge-draw", "C25-home-monument"]);
     expect(v063.scope.find((e) => e.pr === 1393)?.check).toBe("Q35-member-avatar");
+    expect(v063.scope.find((e) => e.pr === 1406)?.check).toBe("Q36-judge-draw");
+    expect(v063.scope.find((e) => e.pr === 1388)?.check).toBe("Q37-home-monument");
   });
 });
