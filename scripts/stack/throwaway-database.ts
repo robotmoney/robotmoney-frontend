@@ -54,10 +54,7 @@ export function throwawayStackDatabase(paths: InstancePaths): StackDatabase {
   const target: HostTarget = { host: "postgres", port: POSTGRES_CONTAINER_PORT, database: DEFAULT_STACK_DATABASE.name, sslmode: "disable" };
   return {
     ...DEFAULT_STACK_DATABASE,
-    roleUrls: {
-      app: roleUrl(target, "rm_app", passwords.rm_app),
-      worker: roleUrl(target, "rm_worker", passwords.rm_worker),
-    },
+    roleUrls: { app: roleUrl(target, "rm_app", passwords.rm_app) },
   };
 }
 

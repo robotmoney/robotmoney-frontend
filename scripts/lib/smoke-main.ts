@@ -464,18 +464,19 @@ if (!composePostgres && dataPath.kind === "external") console.warn(bannerFor(dat
 // hand containers that URL and what makes scripts/stack drop the postgres
 // service (stack.ts keys off `Boolean(cfg.database.url)`).
 //
-// The containers get the RUNTIME roles and nothing else (§3, §7.3): `api`
-// rm_app, the pipeline worker rm_worker. A local mode's are the instance's
-// generated passwords (set by the `instance` preparation, or read back), the
-// remote database's are `~/.env`'s. The local superuser is never handed to one.
+// The containers get the RUNTIME role and nothing else (§3, §7.3): `api`
+// rm_app. The pipeline worker holds no database credential (issue 1034, D75).
+// A local mode's is the instance's generated password (set by the `instance`
+// preparation, or read back), the remote database's is `~/.env`'s. The local
+// superuser is never handed to one.
 let rolePasswords: GeneratedRolePasswords | undefined;
-function containerRoleUrls(dp: ResolvedDataPath): { app: string; worker: string } {
-  if (dp.kind === "external") return { app: dp.url, worker: remote!.workerUrl };
+function containerRoleUrls(dp: ResolvedDataPath): { app: string } {
+  if (dp.kind === "external") return { app: dp.url };
   if (!rolePasswords) throw new Error("the instance's role passwords are not loaded yet");
   const target: HostTarget = dp.kind === "smoke-twin"
     ? { host: new URL(dp.url).hostname, port: Number(new URL(dp.url).port), database: decodeURIComponent(new URL(dp.url).pathname.slice(1)), sslmode: "disable" }
     : { host: "postgres", port: 5432, database: DEFAULT_STACK_DATABASE.name, sslmode: "disable" };
-  return { app: roleUrl(target, "rm_app", rolePasswords.rm_app), worker: roleUrl(target, "rm_worker", rolePasswords.rm_worker) };
+  return { app: roleUrl(target, "rm_app", rolePasswords.rm_app) };
 }
 const databaseFor = (dp: ResolvedDataPath) => {
   const roleUrls = containerRoleUrls(dp);
@@ -498,12 +499,11 @@ const DB_NAME = DEFAULT_STACK_DATABASE.name;
 const remote = dataPath.kind === "external"
   ? (() => {
       const readerUrl = urlForRole(homeEnv, "rm_readonly");
-      const workerUrl = urlForRole(homeEnv, "rm_worker");
-      if (!readerUrl || !workerUrl) {
-        return fatal(`the remote database needs rm_readonly and rm_worker lines in ${homeEnvFilePath()} (spec §3), beside the connection values and rm_app.`);
+      if (!readerUrl) {
+        return fatal(`the remote database needs an rm_readonly line in ${homeEnvFilePath()} (spec §3), beside the connection values and rm_app.`);
       }
       const target: HostTarget = { host: homeEnv.host!, port: Number(homeEnv.port ?? "5432"), database: databaseName(homeEnv)!, sslmode: homeEnv.sslmode ?? "require" };
-      return { readerUrl, workerUrl, target };
+      return { readerUrl, target };
     })()
   : undefined;
 const remoteState: TargetState | undefined = remote
@@ -674,7 +674,7 @@ function urlPassword(url: string | undefined): string[] {
  * plan choke point (computePlanId, renderPlan, openJournal, writeReceipt). The
  * shape heuristic alone misses a shapeless secret, which is why the VALUES are
  * passed. Role passwords: the instance's saved set (§5, rm_owner's included),
- * the remote database's three from `~/.env`, a restored dump's superuser
+ * the remote database's from `~/.env`, a restored dump's superuser
  * (added once it is restored), and `~/.env`'s unused `rm_owner`/`doadmin` (D61). Service tokens: whatever the instance
  * already holds, plus each one `prepare (tokens)` provisions. Participant keys:
  * every credential-file entry's key, bearer and model key.
@@ -683,8 +683,9 @@ const runSecrets: string[] = [
   ...heldTokens(),
   ...urlPassword(dataPath.kind === "external" ? dataPath.url : undefined),
   ...urlPassword(remote?.readerUrl),
-  ...urlPassword(remote?.workerUrl),
-  ...[homeEnv.rm_owner, homeEnv.doadmin].filter((value): value is string => value !== undefined && value !== ""),
+  // A stray `rm_worker` line (off the allowlist since issue 1034) is still a
+  // password, and is scrubbed like one.
+  ...[homeEnv.rm_owner, homeEnv.doadmin, homeEnv.rm_worker].filter((value): value is string => value !== undefined && value !== ""),
   ...(() => {
     if (!existsSync(paths.rolePasswordsFile)) return [];
     try {

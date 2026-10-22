@@ -340,10 +340,11 @@ export function stateRoot(env: Record<string, string | undefined>): string {
 }
 
 /**
- * The three holders of a service token (spec §3): `system-scheduler`,
- * `analytics-producer`, and the operator (the admin routes).
+ * The holders of a service token (spec §3): `system-scheduler`,
+ * `analytics-producer`, the operator (the admin routes), and the pipeline
+ * worker (the /api/pipeline/** routes, issue 1034, D75).
  */
-export const SERVICE_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
+export const SERVICE_TOKEN_HOLDERS = ["system-scheduler", "analytics-producer", "operator", "pipeline-worker"] as const;
 export type ServiceTokenHolder = (typeof SERVICE_TOKEN_HOLDERS)[number];
 
 /** The one file name inside each holder's token directory. */
