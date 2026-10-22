@@ -7,22 +7,35 @@
 // GET <origin>/api/version must carry the release commit; GET
 // <origin>/version.json must name it too. Neither may say `+dirty` or
 // `+unknown`. When `--ref` is the rc tag the go named (a production run,
-// D64), /api/version must carry it as `tag`: the boot's RM_BUILD_TAG, from
-// the tag P01-checkout fetched. Writes identity-check.json to --receipt-dir.
+// D64), GET <origin>/version must carry it as `tag`: the boot's RM_BUILD_TAG,
+// from the tag P01-checkout fetched. /version is buildIdentityJson(), the
+// resolver /health reads; /api/version stays `{api, commit}` (D55 (1)) and
+// never serves the tag. Writes identity-check.json to --receipt-dir.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** PURE. Every way the served identity is not the release's. `ref` is the go's ref; a tag must be served as `tag`. */
-export function identityProblems(apiText: string | null, siteText: string | null, commit: string, ref: string = commit): string[] {
+/**
+ * PURE. Every way the served identity is not the release's. `ref` is the go's
+ * ref; a tag must be served as `tag` at /version (`versionText`). A commit ref
+ * (stage) compares no tag, so /version is not read.
+ */
+export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit): string[] {
   const out: string[] = [];
   const tag = ref === commit ? undefined : ref;
   if (apiText === null) out.push("/api/version did not answer 200");
   else {
-    let body: { api?: unknown; commit?: unknown; tag?: unknown } | null = null;
-    try { body = JSON.parse(apiText) as { api?: unknown; commit?: unknown; tag?: unknown }; } catch { out.push("/api/version is not JSON"); }
+    let body: { api?: unknown; commit?: unknown } | null = null;
+    try { body = JSON.parse(apiText) as { api?: unknown; commit?: unknown }; } catch { out.push("/api/version is not JSON"); }
     if (body && body.commit !== commit) out.push(`/api/version commit is ${String(body.commit)}, expected ${commit}`);
-    if (body && tag !== undefined && body.tag !== tag) out.push(`/api/version tag is ${String(body.tag ?? null)}, expected ${tag} (RM_BUILD_TAG: the host must hold the rc tag at the boot)`);
     if (/\+(dirty|unknown)/.test(apiText)) out.push("/api/version carries +dirty or +unknown");
+  }
+  if (tag !== undefined) {
+    if (versionText === null) out.push("/version did not answer 200");
+    else {
+      let version: { tag?: unknown } | null = null;
+      try { version = JSON.parse(versionText) as { tag?: unknown }; } catch { out.push("/version is not JSON"); }
+      if (version && version.tag !== tag) out.push(`/version tag is ${String(version.tag ?? null)}, expected ${tag} (RM_BUILD_TAG: the host must hold the rc tag at the boot)`);
+    }
   }
   if (siteText === null) out.push("/version.json did not answer 200");
   else {
@@ -63,12 +76,14 @@ async function main(): Promise<number> {
     return 2;
   }
   const apiText = await get(`${origin}/api/version`);
+  const versionText = await get(`${origin}/version`);
   const siteText = await get(`${origin}/version.json`);
-  const problems = identityProblems(apiText, siteText, commit, ref);
+  const problems = identityProblems(apiText, versionText, siteText, commit, ref);
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
-  writeFileSync(file, `${JSON.stringify({ step: "S01-verify-version", origin, commit, ref, api: apiText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "S01-verify-version", origin, commit, ref, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[identity-check] ${origin}/api/version: ${apiText ?? "(no answer)"}`);
+  console.log(`[identity-check] ${origin}/version: ${versionText ?? "(no answer)"}`);
   console.log(`[identity-check] receipt: ${file}`);
   for (const p of problems) console.error(`[identity-check] FAIL: ${p}`);
   return problems.length === 0 ? 0 : 1;

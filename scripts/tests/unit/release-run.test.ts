@@ -52,6 +52,8 @@ import { nextRcTag, rcStageProblems, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, paritySweepScheduleProblems, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
 import { identityProblems } from "../../release/identity-check.ts";
+import { apiVersionBody } from "../../../backend/src/ops/api-version.ts";
+import { buildIdentityJson, resolveBuildIdentity } from "../../../backend/src/ops/build-identity.ts";
 import { IDENTITY_MIGRATION, preconditionProblems } from "../../release/precondition.ts";
 import { D61_ENV_ALLOWLIST, D61_REQUIRED_KEYS, PRE_CUTOVER_REQUIRED_KEYS, RUN_WRITTEN_KEYS, confirmTargetOf, preCutoverKeyProblems } from "../../release/env-keys.ts";
 
@@ -1057,21 +1059,64 @@ describe("host guards, the rolling cutover and identity (C05-migrate, S01-verify
   });
 
   test("identity: the commit must be served, without +dirty", () => {
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), `{"commit":"${SHA}"}`, SHA)).toEqual([]);
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: OTHER_SHA }), `{"commit":"${SHA}+dirty"}`, SHA).length).toBe(2);
+    const site = `{"commit":"${SHA}"}`;
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA }), null, site, SHA)).toEqual([]);
+    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: OTHER_SHA }), null, `{"commit":"${SHA}+dirty"}`, SHA).length).toBe(2);
     // The site stamps a short commit: a 7+ hex prefix of the release commit names it.
-    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"version":"0.1.0","commit":"${SHA.slice(0, 8)}","apiRange":"^0.5.0"}`, SHA)).toEqual([]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `{"version":"0.1.0","commit":"${SHA.slice(0, 8)}","apiRange":"^0.5.0"}`, SHA)).toEqual([]);
     // red controls: a short commit of another release, a 6-character prefix, a non-JSON body.
-    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA)).toHaveLength(1);
-    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `{"commit":"${SHA.slice(0, 6)}"}`, SHA)).toHaveLength(1);
-    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), `<html>${SHA}</html>`, SHA)).toHaveLength(1);
-    expect(identityProblems(null, null, SHA).length).toBe(2);
-    // D64: with the rc tag as the ref, /api/version must carry it as tag (RM_BUILD_TAG).
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: TAG }), `{"commit":"${SHA}"}`, SHA, TAG)).toEqual([]);
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: null }), `{"commit":"${SHA}"}`, SHA, TAG).join()).toContain(`tag is null, expected ${TAG}`);
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: `${RELEASE}-rc.1` }), `{"commit":"${SHA}"}`, SHA, TAG)).toHaveLength(1);
-    // A commit ref (stage) asks nothing of the tag.
-    expect(identityProblems(JSON.stringify({ api: "1.0.0", commit: SHA, tag: null }), `{"commit":"${SHA}"}`, SHA, SHA)).toEqual([]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA)).toHaveLength(1);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `{"commit":"${SHA.slice(0, 6)}"}`, SHA)).toHaveLength(1);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `<html>${SHA}</html>`, SHA)).toHaveLength(1);
+    expect(identityProblems(null, null, null, SHA).length).toBe(2);
+  });
+
+  // D64: with the rc tag as the ref, the tag is read from /version (buildIdentityJson, the
+  // resolver /health uses). /api/version is {api, commit} (D55 (1)) and never carries it (issue 1389).
+  test("identity: an rc ref reads the tag from /version, built from the real api bodies", () => {
+    const env = { RM_BUILD_COMMIT: SHA, RM_BUILD_TAG: TAG };
+    const apiText = JSON.stringify(apiVersionBody(env));
+    expect(JSON.parse(apiText)).not.toHaveProperty("tag");
+    const versionText = JSON.stringify(buildIdentityJson(resolveBuildIdentity(env)));
+    const site = `{"commit":"${SHA}"}`;
+    expect(identityProblems(apiText, versionText, site, SHA, TAG)).toEqual([]);
+    // red: /version names another tag, or none; the problem names the served tag and the expected one.
+    const other = `${RELEASE}-rc.1`;
+    const wrong = identityProblems(apiText, JSON.stringify(buildIdentityJson(resolveBuildIdentity({ ...env, RM_BUILD_TAG: other }))), site, SHA, TAG);
+    expect(wrong).toHaveLength(1);
+    expect(wrong[0]).toContain(`/version tag is ${other}, expected ${TAG}`);
+    const untagged = identityProblems(apiText, JSON.stringify(buildIdentityJson(resolveBuildIdentity({ RM_BUILD_COMMIT: SHA }))), site, SHA, TAG);
+    expect(untagged.join()).toContain(`/version tag is null, expected ${TAG}`);
+    expect(identityProblems(apiText, null, site, SHA, TAG).join()).toContain("/version did not answer 200");
+    // A commit ref (stage) compares no tag: /version is not read.
+    expect(identityProblems(apiText, null, site, SHA, SHA)).toEqual([]);
+    expect(identityProblems(apiText, JSON.stringify(buildIdentityJson(resolveBuildIdentity({ RM_BUILD_COMMIT: SHA }))), site, SHA, SHA)).toEqual([]);
+  });
+
+  test("identity: main() fetches /version and writes its body to the receipt", async () => {
+    const env = { RM_BUILD_COMMIT: SHA, RM_BUILD_TAG: TAG };
+    const versionText = JSON.stringify(buildIdentityJson(resolveBuildIdentity(env)));
+    const server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const path = new URL(req.url).pathname;
+        if (path === "/api/version") return Response.json(apiVersionBody(env));
+        if (path === "/version") return new Response(versionText, { headers: { "content-type": "application/json" } });
+        if (path === "/version.json") return Response.json({ commit: SHA.slice(0, 8) });
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const receipts = mkdtempSync(join(tmpdir(), "rm-identity-check-"));
+    try {
+      const proc = Bun.spawn(["bun", join(repoRoot, "scripts/release/identity-check.ts"), "--origin", `http://127.0.0.1:${server.port}`, "--commit", SHA, "--ref", TAG, "--receipt-dir", receipts], { stdout: "pipe", stderr: "pipe" });
+      const code = await proc.exited;
+      expect(code, await new Response(proc.stderr).text()).toBe(0);
+      const receipt = JSON.parse(readFileSync(join(receipts, "identity-check.json"), "utf8")) as { version: string | null; problems: string[] };
+      expect(receipt.version).toBe(versionText);
+      expect(receipt.problems).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
   });
 });
 
