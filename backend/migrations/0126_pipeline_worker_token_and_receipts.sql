@@ -84,4 +84,7 @@ GRANT SELECT, INSERT, UPDATE ON
   asset_price_floors, asset_prices, buyback_scan_state, token_market_samples
 TO rm_app;
 GRANT SELECT, INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence, buyback_swaps TO rm_app;
+-- The evidence copies are written once and never changed: rm_app holds no
+-- UPDATE on them (grants.sql lists both with the insert-only ledgers).
+REVOKE UPDATE ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence FROM rm_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_app;
