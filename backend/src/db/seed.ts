@@ -711,10 +711,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 // 0014_wallet_balance_samples.sql).
 //
 // Lives HERE (not in worker/handlers/wallet.ts) because it is migrate/seed
-// tooling on the migration pool: issue #106 gave the worker its own
-// queue-scoped pool (db/worker-client.ts), and a seed that queried through that
-// second pool would leave `bun run migrate` with open sockets it never closes
-// (the smoke's migrate one-shot would hang forever).
+// tooling on the migration pool, and the pipeline worker holds no database
+// connection at all (issue 1034).
 export async function backfillWalletHistory(db: RegistryDb = sql): Promise<number> {
   const rows = walletHistorySeedRows();
   for (const r of rows) {

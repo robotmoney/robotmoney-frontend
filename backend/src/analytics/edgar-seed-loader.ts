@@ -1,6 +1,6 @@
 // EDGAR/MNA seed loader + offline repopulation client (issue #108). Both
 // operations only ever talk to the authenticated analytics HTTP boundary
-// (issue #106) — NEVER db/client.ts, db/worker-client.ts, or an analytics
+// (issue #106) — NEVER db/client.ts or an analytics
 // store writer (enforced by tests/analytics-api-boundary.test.ts, which scans
 // this whole directory minus store/ and report/).
 //

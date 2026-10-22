@@ -35,19 +35,16 @@
 //    container runs with fsync=off (preload.ts): DROP DATABASE ... WITH (FORCE)
 //    measures 5-30ms here, against the ~10s once observed under fsync.
 import { afterAll, beforeAll, beforeEach } from "bun:test";
-// Both long-lived pools have to move together, or the API side and the queue
-// side of a test end up in different databases. Held as namespaces, not
-// destructured: `sql` is a live binding that setDatabase() reassigns, and
-// destructuring freezes the view at the old pool.
+// The one long-lived pool. The pipeline worker holds none of its own (issue
+// 1034): its queue calls and writes reach the api's pipeline router in process
+// (tests/support/pipeline-in-process.ts), on this same pool. Held as a
+// namespace, not destructured: `sql` is a live binding that setDatabase()
+// reassigns, and destructuring freezes the view at the old pool.
 import * as client from "../../src/db/client.ts";
-import * as workerClient from "../../src/db/worker-client.ts";
 import { adminConnection } from "./cluster.ts";
 
-// Captured at import, before any file has swapped the pool. Each pool keeps ITS
-// OWN login: the api pool is the shared database's api login, the queue pool is
-// `rm_worker` (tests/preload.ts), so a clone is reached as the same two roles.
+// Captured at import, before any file has swapped the pool.
 const baseUrl = required("DATABASE_URL");
-const workerBaseUrl = required("WORKER_DATABASE_URL");
 // Two templates: the snapshot bootstrap `rm_owner` provisioned (the default), and
 // the migration-built one (tests/preload.ts step 4) for the files about history.
 const templates = { snapshot: required("RM_TEST_TEMPLATE_DB"), migrated: required("RM_TEST_MIGRATED_TEMPLATE_DB") } as const;
@@ -68,7 +65,7 @@ function urlFor(database: string, base: string = baseUrl): string {
   return url.toString();
 }
 
-// The shared database's own name — what both pools must be back on once a file
+// The shared database's own name — what the pool must be back on once a file
 // that opted in has finished. Parsed here rather than hardcoded so it tracks
 // whatever preload.ts set.
 const sharedDatabase = new URL(baseUrl).pathname.replace(/^\//, "");
@@ -86,7 +83,7 @@ function databaseName(testFile: string): string {
   return `rmt_${slug}_${++created}`;
 }
 
-// The clone both pools are currently pointing at, so the next swap can release
+// The clone the pool is currently pointing at, so the next swap can release
 // it. Module-global because `bun test` runs every file in one process, one file
 // at a time — at most one clone is ever live.
 let live: string | null = null;
@@ -104,19 +101,14 @@ async function drop(admin: ReturnType<typeof adminConnection>, database: string)
   await admin.unsafe(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
 }
 
-// The invariant the whole harness rests on. `cloneAndUse` moves two independent
-// pools in sequence, with no transaction around the pair: if the first swap
-// throws, the API side and the queue side are left in DIFFERENT databases and
-// nothing downstream notices — the failure shape is a FALSE GREEN, because
-// "the worker left nothing behind" assertions (worker-shutdown.test.ts,
-// worker-lease.test.ts) pass trivially against a database the worker never
-// wrote to. Ask both handles where they actually are.
-async function assertBothPoolsAgree(expected: string): Promise<void> {
+// The invariant the whole harness rests on: the pool is where this file asked
+// for it. A swap that silently failed would leave a file asserting against a
+// database it never wrote to, a FALSE GREEN. Ask the handle where it is.
+async function assertPoolIsOn(expected: string): Promise<void> {
   const [api] = (await client.sql`SELECT current_database() AS db`) as unknown as { db: string }[];
-  const [queue] = (await workerClient.sql`SELECT current_database() AS db`) as unknown as { db: string }[];
-  if (api.db !== expected || queue.db !== expected) {
+  if (api.db !== expected) {
     throw new Error(
-      `tests/support/clean-db.ts: pools disagree — api=${api.db} queue=${queue.db}, expected ${expected}. ` +
+      `tests/support/clean-db.ts: the pool is on ${api.db}, expected ${expected}. ` +
         "Every assertion in this file would be running against the wrong database.",
     );
   }
@@ -143,11 +135,10 @@ async function cloneAndUse(testFile: string, options: CleanDatabaseOptions = {})
     live = database;
     try {
       await client.setDatabase(urlFor(database));
-      await workerClient.setDatabase(urlFor(database, workerBaseUrl));
-      await assertBothPoolsAgree(database);
+      await assertPoolIsOn(database);
     } finally {
       // In `finally`, not after the assertion: the previous clone is idle either
-      // way — both pools were told to move off it, and drop() is WITH (FORCE)
+      // way — the pool was told to move off it, and drop() is WITH (FORCE)
       // precisely so a handle that did not let go is terminated rather than
       // allowed to block cleanup. Leaving it behind because the NEW clone failed
       // its check leaks a database for a reason that has nothing to do with it.
@@ -161,31 +152,15 @@ async function cloneAndUse(testFile: string, options: CleanDatabaseOptions = {})
 async function restoreSharedDatabase(): Promise<void> {
   const previous = live;
   try {
-    // BOTH swaps are attempted, and `live` is cleared only once they have been.
-    // Ordering matters here in a way it does not read as if it does: clearing
-    // `live` first and then letting the api swap throw would leave the QUEUE
-    // pool still pointing at `previous` — a clone this function is about to
-    // DROP — which is the same api/queue divergence assertBothPoolsAgree()
-    // exists to catch, on the one path that never called it. Collect and
-    // rethrow rather than short-circuit, so one failing swap cannot decide that
-    // the other never happens.
-    const failures: unknown[] = [];
-    for (const swap of [() => client.setDatabase(baseUrl), () => workerClient.setDatabase(workerBaseUrl)]) {
-      try {
-        await swap();
-      } catch (err) {
-        failures.push(err);
-      }
-    }
-    live = null;
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "tests/support/clean-db.ts: restoring the shared database failed");
+    // `live` is cleared only once the swap has been attempted.
+    try {
+      await client.setDatabase(baseUrl);
+    } finally {
+      live = null;
     }
     // The invariant, asserted on teardown too. A file that opted in has to hand
-    // the next file BOTH pools on the shared database; until now that was only
-    // checked on the way in, so a divergence introduced on the way out would
-    // surface as an inexplicable failure in some later file instead of here.
-    await assertBothPoolsAgree(sharedDatabase);
+    // the next file the pool on the shared database.
+    await assertPoolIsOn(sharedDatabase);
   } finally {
     if (previous) {
       const admin = adminConnection();

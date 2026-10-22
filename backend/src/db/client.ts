@@ -219,9 +219,7 @@ export const sql: postgresTypes.Sql<{}> = new Proxy(function () {} as unknown as
 // Moving `config.databaseUrl` (and DATABASE_URL with it) is not incidental:
 // db/handle-namespace.ts builds its guard client from `config.databaseUrl` at
 // CALL time, so a redirect that skipped it would leave that one client talking
-// to the database everyone else just left. db/worker-client.ts owns a second
-// long-lived pool and exports its own setDatabase() for the same reason —
-// worker/** may not import this module, so it cannot be rebuilt from here.
+// to the database everyone else just left.
 //
 // REFUSED UNLESS THE TEST SEAM IS ARMED (backend/src/test-seam.ts). Being a
 // test seam is a claim about where it may run, and an exported function that
