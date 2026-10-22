@@ -192,10 +192,11 @@ export async function runStandingChecks(io: StandingIo, o: StandingOpts): Promis
   // R8.r  roles and grants (production only: a twin's dump carries none)
   if (o.dbMode !== "external") out.push(...evalGrants(o.dbMode, undefined));
   else {
-    const g = attempt("R8.r", "grants", out, () => q(`SELECT (SELECT bool_and(has_table_privilege('rm_worker', t, 'INSERT')) FROM unnest(ARRAY[${CHAIN_STATE_TABLES.map((t) => `'${t}'`).join(", ")}]) AS t) AS worker_insert,
+    const g = attempt("R8.r", "grants", out, () => q(`SELECT (SELECT bool_and(has_table_privilege('rm_app', t, 'INSERT')) FROM unnest(ARRAY[${CHAIN_STATE_TABLES.map((t) => `'${t}'`).join(", ")}]) AS t) AS app_insert,
+        (SELECT bool_or(has_table_privilege('rm_worker', t, 'INSERT')) FROM unnest(ARRAY[${CHAIN_STATE_TABLES.map((t) => `'${t}'`).join(", ")}]) AS t) AS worker_insert,
         current_user::text AS who,
         (SELECT coalesce(bool_and(has_sequence_privilege('rm_readonly', c.oid, 'SELECT')), true) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S') AS readonly_seq`)[0]);
-    if (g !== FAILED) out.push(...evalGrants(o.dbMode, g && { workerInsert: g.worker_insert as boolean | null, currentUser: g.who === null ? null : String(g.who), readonlySeq: g.readonly_seq as boolean | null }));
+    if (g !== FAILED) out.push(...evalGrants(o.dbMode, g && { appInsert: g.app_insert as boolean | null, workerInsert: g.worker_insert as boolean | null, currentUser: g.who === null ? null : String(g.who), readonlySeq: g.readonly_seq as boolean | null }));
   }
 
   // R8.s / R8.t  api health, the judgements route, openedAt

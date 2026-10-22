@@ -25,10 +25,28 @@ the assembled `_static/` (bind-mounted, never baked into the image) with a
 `/health` through to the `api` service so the pair still present as one
 same-origin surface (no CORS, no client change) wherever nothing else fronts
 them — this repo's own local dev/smoke/e2e harness included.
-- `src/db/` — connection pools (`client.ts` for the API/migrations;
-  `worker-client.ts` for the worker's queue-scoped access, honoring
-  `WORKER_DATABASE_URL` → the restricted `rm_worker` role of migration
-  `0016_worker_role.sql`) and the migration runner (`migrate.ts`).
+- `src/db/` — connection pools (`client.ts` for the API and migrations) and
+  the migration runner (`migrate.ts`). The api is the only process holding a
+  database credential ([D75](../decisions.md#d75)): the pipeline worker
+  claims, renews and settles jobs and reads and writes its data through
+  `/api/pipeline/**` (`src/api/routes/pipeline.ts`, the stores under
+  `src/pipeline/`), with the pipeline-worker service token, an
+  `Idempotency-Key` on every write and its lease `(jobId, workerId, attempt)`
+  as a fence. Those routes run on the batch pool behind a per-token admission
+  gate (`PIPELINE_TOKEN_CONCURRENCY`, default 2) and refuse a write above
+  1,000 rows or 1 MiB with 413.
+  At boot the api derives its connection budget from the server's
+  `max_connections` minus the reserved slots and a headroom
+  (`connection-budget.ts`), and refuses to start when an override does not
+  fit. It then runs three pools: a **request** pool for public, member and
+  admin routes, whose statement, lock, idle-in-transaction and connect timeouts
+  sit below the 10 s request deadline; a **batch** pool for the analytics
+  provider's bulk routes, with the long bulk timeouts; and one connection for
+  the `/health` probe, so health never waits behind a busy pool. Each pool has
+  an admission gate (`pool-gate.ts`): a query that finds no free connection
+  within `PG_ADMISSION_WAIT_MS` is answered `503 db_saturated` with
+  `Retry-After`, a statement or lock timeout is answered `503 db_timeout`, and
+  `/health` reports each pool's counts under `db_pool` (issue 1034).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
 - `migrations/` — forward-only numbered `*.sql`, applied once each, tracked in
   `schema_migrations`. In production a migration is its own operator step
@@ -40,8 +58,9 @@ them — this repo's own local dev/smoke/e2e harness included.
   All database access under the adopted design goes through one registered
   query interface that declares `(role, object, privilege)` at the call site
   ([smoke-production-spec §7.1](../technical/smoke-production-spec.md#71-registry-enforced-structurally));
-  the roles are `rm_owner` (schema owner, `LOGIN`, migration only), `rm_app`,
-  `rm_worker` and `rm_readonly`, and there is no separate migration role
+  the roles are `rm_owner` (schema owner, `LOGIN`, migration only), `rm_app`
+  and `rm_readonly` (`rm_worker` still exists but holds nothing since 0127,
+  [D75](../decisions.md#d75)), and there is no separate migration role
   ([§3](../technical/smoke-production-spec.md#3-roles-and-credentials)).
 
 ### Authentication & authorization
@@ -61,15 +80,15 @@ Four distinctions, kept deliberately separate:
   (This is the on-chain seam: later only the signature is anchored.)
 - **Four credential kinds.** Signing keys (Ed25519) are held by participants
   only, each in its own `credential.json` entry. API bearer tokens are each
-  participant's bearer (in its entry) and three service tokens — scheduler,
-  analytics producer and operator admin — which are per-instance files whose
-  hashes and rights sit in the API's token store. Database role passwords are
-  held at runtime by `api` and the pipeline worker. Model keys are held by the
-  agents and judges that call a model. `system-scheduler` holds only its
-  service token. No secret or env file lives in repository source. See
+  participant's bearer (in its entry) and four service tokens — scheduler,
+  analytics producer, operator admin and pipeline worker — which are
+  per-instance files whose hashes and rights sit in the API's token store.
+  Database role passwords are held at runtime by `api` alone. Model keys are
+  held by the agents and judges that call a model. `system-scheduler` and the
+  pipeline worker hold only their service tokens. No secret or env file lives in repository source. See
   [system-scheduler-spec §7](../technical/system-scheduler-spec.md#7-credentials)
   and [smoke-production-spec §3](../technical/smoke-production-spec.md#3-roles-and-credentials).
-  The pipeline worker's `rm_worker` role is governed by smoke spec §7.2.
+  The pipeline worker's startup check is governed by smoke spec §7.2.
 - **Credential exchange and membership are separate.** Active members exchange
   their member ID and bearer credential by signing a server-issued key-proof
   challenge (`token-claim/challenge` → `token-claim`, issue #205). Swarm
@@ -81,12 +100,11 @@ Four distinctions, kept deliberately separate:
   service token — the admin service token and member bearers are never
   substitutes),
   `system-scheduler` only session lifecycle transitions under its automation
-  token (scheduler spec §7), the public reads only — enforced in the API layer
-  (`src/api/auth.ts` holds the shared constant-time credential checks). The
-  worker's own database role is restricted too: migration `0016_worker_role.sql`
-  provisions `rm_worker`, which can run the queue lifecycle and the non-analytics
-  samplers but is DENIED insert/update/delete on the analytics data tables, so
-  the API boundary is backed by database permissions. Migration
+  token (scheduler spec §7), the pipeline worker only `/api/pipeline/**`
+  under its own token, whose operations are a fixed table
+  (`src/pipeline/ops.ts`) that names values, never a statement, the public
+  reads only — enforced in the API layer (`src/api/auth.ts` holds the shared
+  constant-time credential checks). Migration
   `0007_committee_rls_stub.sql` documents deferred Postgres RLS; it is
   intentionally not active until requests use transaction-scoped database roles.
 - **Raw analytics reads are public** (D58, issue #1095). Raw indicator history,

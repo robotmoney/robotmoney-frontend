@@ -78,7 +78,7 @@ describe("1. no runtime module reads RM_ENV (issue #973)", () => {
       "backend/src/worker/index.ts",
       "backend/src/worker/runtime.ts",
       "backend/src/db/client.ts",
-      "backend/src/db/worker-client.ts",
+      "backend/src/worker/pipeline-client.ts",
       "backend/src/projects/access/select.ts",
       "backend/src/projects/seed/roster-seed.ts",
       "backend/src/swarm/domain.ts",
@@ -184,7 +184,7 @@ describe("3. the test seam is armed by the harness preload and by nothing else",
   test("every seam-guarded path consults testSeamArmed()", () => {
     for (const file of [
       "backend/src/db/client.ts",
-      "backend/src/db/worker-client.ts",
+      "backend/src/worker/pipeline-client.ts",
       "backend/src/projects/access/select.ts",
       "backend/src/swarm/domain.ts",
       "backend/src/swarm/judge-draw.ts",

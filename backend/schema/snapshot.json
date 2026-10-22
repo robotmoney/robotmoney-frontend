@@ -126,7 +126,9 @@
     "0122_swarm_dormancy_baseline.sql",
     "0123_analytics_parity_sweep_daily.sql",
     "0124_deactivate_bankr_token_vaults.sql",
-    "0125_job_schedules_latest_only_catchup.sql"
+    "0125_job_schedules_latest_only_catchup.sql",
+    "0126_pipeline_worker_token_and_receipts.sql",
+    "0127_rm_worker_retired.sql"
   ],
   "exclusions": {
     "roles": [
@@ -138,7 +140,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "39020a40d8831c0a9088312244043dd29e8fb73de1ecc5ddcb91c2e54722a8f4",
+  "contentHash": "853cc5cc292d6e79614872961b48fb08873a744e3273b2df2d2c5aca12a1c243",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -1668,6 +1670,31 @@
     "column public.openclaw_agents.x402_volume_usd": {
       "type": "numeric",
       "notnull": "no"
+    },
+    "column public.pipeline_ingest_receipts.body_sha256": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.pipeline_ingest_receipts.idempotency_key": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.pipeline_ingest_receipts.job_id": {
+      "type": "bigint",
+      "notnull": "no"
+    },
+    "column public.pipeline_ingest_receipts.operation": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.pipeline_ingest_receipts.recorded_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "now()"
+    },
+    "column public.pipeline_ingest_receipts.response": {
+      "type": "jsonb",
+      "notnull": "yes"
     },
     "column public.prices.id": {
       "type": "bigint",
@@ -4176,10 +4203,10 @@
       "definition": "CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text))"
     },
     "constraint public.automation_tokens.automation_tokens_holder_check": {
-      "definition": "CHECK ((holder = ANY (ARRAY['system-scheduler'::text, 'analytics-producer'::text, 'operator'::text])))"
+      "definition": "CHECK ((holder = ANY (ARRAY['system-scheduler'::text, 'analytics-producer'::text, 'operator'::text, 'pipeline-worker'::text])))"
     },
     "constraint public.automation_tokens.automation_tokens_holder_rights_check": {
-      "definition": "CHECK ((((holder = 'system-scheduler'::text) AND (rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])) OR ((holder = 'analytics-producer'::text) AND (rights <@ ARRAY['analytics_ingestion'::text])) OR ((holder = 'operator'::text) AND (rights <@ ARRAY['admin'::text]))))"
+      "definition": "CHECK ((((holder = 'system-scheduler'::text) AND (rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])) OR ((holder = 'analytics-producer'::text) AND (rights <@ ARRAY['analytics_ingestion'::text])) OR ((holder = 'operator'::text) AND (rights <@ ARRAY['admin'::text])) OR ((holder = 'pipeline-worker'::text) AND (rights <@ ARRAY['pipeline_queue'::text, 'pipeline_ingest'::text]))))"
     },
     "constraint public.automation_tokens.automation_tokens_instance_check": {
       "definition": "CHECK ((instance ~ '^[a-z0-9][a-z0-9_-]{2,63}$'::text))"
@@ -4188,7 +4215,7 @@
       "definition": "PRIMARY KEY (instance, holder)"
     },
     "constraint public.automation_tokens.automation_tokens_rights_known_check": {
-      "definition": "CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text, 'analytics_ingestion'::text, 'admin'::text]))"
+      "definition": "CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text, 'analytics_ingestion'::text, 'admin'::text, 'pipeline_queue'::text, 'pipeline_ingest'::text]))"
     },
     "constraint public.automation_tokens.automation_tokens_rights_nonempty_check": {
       "definition": "CHECK ((cardinality(rights) > 0))"
@@ -4309,6 +4336,15 @@
     },
     "constraint public.openclaw_agents.openclaw_agents_project_id_fkey": {
       "definition": "FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE SET NULL"
+    },
+    "constraint public.pipeline_ingest_receipts.pipeline_ingest_receipts_body_sha256_check": {
+      "definition": "CHECK ((body_sha256 ~ '^[0-9a-f]{64}$'::text))"
+    },
+    "constraint public.pipeline_ingest_receipts.pipeline_ingest_receipts_idempotency_key_check": {
+      "definition": "CHECK (((length(idempotency_key) >= 1) AND (length(idempotency_key) <= 200)))"
+    },
+    "constraint public.pipeline_ingest_receipts.pipeline_ingest_receipts_pkey": {
+      "definition": "PRIMARY KEY (idempotency_key)"
     },
     "constraint public.prices.prices_pkey": {
       "definition": "PRIMARY KEY (id)"
@@ -4950,10 +4986,10 @@
       "definition": "FOREIGN KEY (snapshot_run_id) REFERENCES public.wallet_aum_snapshot_runs(run_id) DEFERRABLE INITIALLY DEFERRED"
     },
     "default privileges for rm_owner in schema public on sequences": {
-      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
+      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner"
     },
     "default privileges for rm_owner in schema public on tables": {
-      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner,rm_worker=r/rm_owner"
+      "privileges": "rm_app=r/rm_owner,rm_readonly=r/rm_owner"
     },
     "function public.rm_analytics_cutover_immutable()": {
       "owner": "rm_owner",
@@ -5327,6 +5363,9 @@
     },
     "index public.openclaw_agents_project_name_idx": {
       "definition": "CREATE UNIQUE INDEX openclaw_agents_project_name_idx ON public.openclaw_agents USING btree (project_id, name)"
+    },
+    "index public.pipeline_ingest_receipts_pkey": {
+      "definition": "CREATE UNIQUE INDEX pipeline_ingest_receipts_pkey ON public.pipeline_ingest_receipts USING btree (idempotency_key)"
     },
     "index public.prices_pkey": {
       "definition": "CREATE UNIQUE INDEX prices_pkey ON public.prices USING btree (id)"
@@ -6267,6 +6306,9 @@
       "owner": "rm_owner"
     },
     "table public.openclaw_agents": {
+      "owner": "rm_owner"
+    },
+    "table public.pipeline_ingest_receipts": {
       "owner": "rm_owner"
     },
     "table public.prices": {

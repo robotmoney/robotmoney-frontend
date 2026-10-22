@@ -170,9 +170,11 @@ describe("rows written before the migration read NULL after it", () => {
 });
 
 describe("the pre-tombstone code's statements against the new columns (spec §8.4)", () => {
-  test("rm_worker's wallet upserts run unchanged and leave superseded_at NULL; the repair pass's delete-the-day is refused 42501 — full replay, blank bootstrap, snapshot N + migrate", async () => {
+  // The wallet writes ran as rm_worker when wave 5 landed; they run in the api
+  // as rm_app since issue 1034 (D75), and rm_worker holds nothing after 0127.
+  test("the wallet upserts (rm_app's since 0126) run unchanged and leave superseded_at NULL; the repair pass's delete-the-day is refused 42501 — full replay, blank bootstrap, snapshot N + migrate", async () => {
     for (const db of [migrated, fresh, advanced]) {
-      const outcome = await asRole(db, "rm_worker", async (tx) => {
+      const outcome = await asRole(db, "rm_app", async (tx) => {
         // src/worker/handlers/wallet.ts sampleWalletBalances / sampleWalletSleeves,
         // twice, so the second write takes the ON CONFLICT path: the total
         // constraint is still the arbiter, not the partial index.
@@ -295,8 +297,8 @@ describe("the tombstone writes wave 5 makes need no new privilege", () => {
     expect(outcome).toEqual({ live: 0, first: 1, second: 0 });
   });
 
-  test("rm_worker supersedes a live sample by UPDATE, and the upsert wave 5 writes revives it in place", async () => {
-    const outcome = await asRole(migrated, "rm_worker", async (tx) => {
+  test("rm_app (the wallet writes' role since 0126, D75) supersedes a live sample by UPDATE, and the upsert wave 5 writes revives it in place", async () => {
+    const outcome = await asRole(migrated, "rm_app", async (tx) => {
       await tx`
         INSERT INTO wallet_balance_samples (sample_date, symbol, amount, value_usd, provenance, sampled_at)
         VALUES (${DAY}, 'SUPERSEDE', 1, 1, 'live', now())`;

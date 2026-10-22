@@ -125,9 +125,10 @@ x-worker-healthcheck: &worker-healthcheck
   interval: 15s
   timeout: 10s
   retries: 3
-  # First-boot cover. A lane records its first heartbeat before touching the
-  # database, so this only has to span container start; failures inside it are
-  # not counted (acceptance: a slow start is not a failure).
+  # First-boot cover. A lane records its first heartbeat after its startup
+  # check reaches the api, so this only has to span container start and the
+  # api's own boot; failures inside it are not counted (acceptance: a slow start
+  # is not a failure).
   start_period: 40s
 
 x-worker-base: &worker-base
@@ -139,8 +140,9 @@ x-worker-base: &worker-base
       RM_BUILD_COMMIT: ${RM_BUILD_COMMIT:-}
       RM_BUILD_TAG: ${RM_BUILD_TAG:-}
   command: ["bun", "run", "src/worker/index.ts"]
+  # The worker reaches the database only through the api (issue 1034, D75).
   depends_on:
-    postgres:
+    api:
       condition: service_healthy
   restart: unless-stopped
   logging: *default-logging
@@ -150,17 +152,15 @@ x-worker-base: &worker-base
 # worker needs PROJECTS_SOURCE=live (fail-closed — unset throws in every
 # deployed process; the offline fixture is test-harness-only, issues #1208, #973).
 x-worker-env: &worker-env
-  # THE PIPELINE WORKER HOLDS rm_worker AND NOTHING ELSE (smoke-production-spec
-  # §7.2: "the pipeline worker running the vault, wallet, buyback and project
-  # jobs as `rm_worker`"). Both of the backend's pools — config.ts's DATABASE_URL
-  # and db/worker-client.ts's WORKER_DATABASE_URL — are the worker credential,
-  # which scripts/stack/config.ts buildComposeEnv() emits from the stack's own
-  # role URLs. There is NO fallback to the api's DATABASE_URL: that fallback is
-  # how every lane used to run on the api's rm_app login. Unset, the worker's
-  # DATABASE_URL is empty and config.ts refuses to start — loudly, never on
-  # someone else's credential.
-  DATABASE_URL: ${WORKER_DATABASE_URL:-}
-  WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
+  # THE PIPELINE WORKER HOLDS NO DATABASE CREDENTIAL (issue 1034, decision D75;
+  # smoke-production-spec.md §7.2). Only `api` does. The worker claims, renews
+  # and settles its jobs, reads the state its handlers need and writes their
+  # rows through the api's /api/pipeline/** routes, presenting its
+  # pipeline-worker token (worker-analytics below mounts it). There is no
+  # DATABASE_URL, WORKER_DATABASE_URL or pool setting here, and the worker
+  # refuses to start if one reaches it (src/worker/index.ts).
+  # scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts
+  # holds every composition to it.
   PROJECTS_SOURCE: ${PROJECTS_SOURCE:-}
   # The paid CoinGecko plan's key (issue #1047). projects.refresh_coins sends
   # it to the Pro host as x-cg-pro-api-key; blank keeps the keyless public
@@ -239,7 +239,6 @@ services:
     labels: *smoke-labels
     logging: *default-logging
     environment:
-      PG_POOL_MAX: "2"
       POSTGRES_USER: ${POSTGRES_USER:-robotmoney}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-robotmoney}
       POSTGRES_DB: ${POSTGRES_DB:-robotmoney}
@@ -469,27 +468,23 @@ services:
     <<: *worker-base
     labels: *smoke-labels
     environment:
-      PG_POOL_MAX: "2"
       <<: *worker-env
       WORKER_LANE: analytics
-      # `analytics.parity_sweep` (issue #979 fix) claims on this lane and now
-      # calls the API process over authenticated HTTP (analytics/api-client.ts
-      # triggerParitySweep()) instead of holding its own rm_app-credentialed
-      # pool. It presents the analytics ingestion token, the one holder that
-      # carries the `analytics_ingestion` right (smoke spec §3), read from the
-      # analytics-producer holder's directory mounted read-only below. Declared
-      # HERE (not the shared *worker-env anchor) so the credential stays scoped
-      # to the one lane whose job kinds need it.
-      ANALYTICS_API_URL: http://api:8787
-      ANALYTICS_TOKEN_FILE: /run/rm-token/token
+      # Every queue call, read and write goes to the api (issue 1034, D75),
+      # including `analytics.parity_sweep`, which is a pipeline write now. The
+      # worker presents ONE credential, the pipeline-worker token (smoke spec
+      # §3: a file in the instance's state directory, per holder, mounted
+      # read-only below), which the api accepts on /api/pipeline/** and
+      # nowhere else.
+      PIPELINE_API_URL: http://api:8787
+      PIPELINE_TOKEN_FILE: /run/rm-token/token
     volumes:
-      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/analytics-producer:/run/rm-token:ro
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/tokens/pipeline-worker:/run/rm-token:ro
     # Issue 1378. The rolling boot starts services with --no-deps, so this
     # gate alone does not hold there; the worker also waits for the api's
-    # /health in process before its first claim (src/worker/runtime.ts).
+    # /health in process before its startup check and its first claim
+    # (src/worker/startup-check.ts, src/worker/runtime.ts).
     depends_on:
-      postgres:
-        condition: service_healthy
       api:
         condition: service_healthy
     # Issue 1378: the worker releases its claimed job within 30 s of SIGTERM

@@ -18,61 +18,10 @@
 //      already enqueued (scheduler.ts, 'latest-only' and 'collapse-per-bucket'
 //      enqueue one slot for a backlog).
 //   3. sweepStaleBacklog: every older slot still queued is cancelled.
-import { sql } from "../db/worker-client.ts";
-import { on, registerQuery } from "../db/registry.ts";
-
-const WORKER_ENTRY = "src/worker/index";
+import { sweepStaleBacklog as sweep } from "./pipeline-client.ts";
 
 // The reason a superseded row carries in last_error. Tests and operators grep it.
 export const SUPERSEDED_REASON = "superseded at worker start";
-
-// One statement, two declarations: it updates jobs and reads job_schedules for
-// each kind's catch-up policy.
-const SWEEP_PROBE = {
-  statement: `WITH policy AS (
-      SELECT kind, min(catchup_policy) AS catchup_policy FROM job_schedules
-      WHERE enabled GROUP BY kind
-      HAVING count(DISTINCT catchup_policy) = 1 AND min(catchup_policy) IN ('latest-only', 'collapse-per-bucket')
-    ), live AS (
-      SELECT j.id, j.kind, p.catchup_policy,
-        coalesce(j.payload->>'slotAt', to_char(j.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) AS slot
-      FROM jobs j JOIN policy p ON p.kind = j.kind
-      WHERE j.status = 'pending' OR (j.status = 'running' AND j.locked_at < now() - ($1 || ' seconds')::interval)
-    ), ranked AS (
-      SELECT id, row_number() OVER (
-        PARTITION BY kind, CASE WHEN catchup_policy = 'collapse-per-bucket' THEN left(slot, 10) END
-        ORDER BY slot DESC, id DESC) AS rn
-      FROM live
-    )
-    UPDATE jobs j SET status = 'cancelled', locked_at = NULL, locked_by = NULL,
-      last_error = 'superseded at worker start', updated_at = now()
-    FROM ranked
-    WHERE j.id = ranked.id AND ranked.rn > 1
-      AND (j.status = 'pending' OR (j.status = 'running' AND j.locked_at < now() - ($2 || ' seconds')::interval))
-    RETURNING j.id, j.kind`,
-  params: [300, 300],
-};
-
-const sweepJobs = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  // SELECT because the WHERE, the CTE and RETURNING read the rows.
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/boot:sweepStaleBacklog",
-  purpose: "Cancel every queued slot of a latest-only or collapse-per-bucket kind that a newer slot supersedes, before the first claim.",
-  callers: [WORKER_ENTRY],
-  probe: SWEEP_PROBE,
-});
-
-const sweepSchedules = registerQuery({
-  role: "rm_worker",
-  object: "job_schedules",
-  privileges: ["SELECT"],
-  site: "src/worker/boot:sweepStaleBacklog.policy",
-  purpose: "Read each kind's catch-up policy for the worker-start backlog sweep.",
-  callers: [WORKER_ENTRY],
-  probe: SWEEP_PROBE,
-});
 
 /**
  * Cancel every superseded slot still queued, before the first claim.
@@ -86,34 +35,12 @@ const sweepSchedules = registerQuery({
  * A slot is the payload's slotAt, or for a row enqueued by hand its created_at.
  * A running row whose lease is live belongs to a working worker and is never
  * touched. No row is deleted: each one is settled 'cancelled' with
- * SUPERSEDED_REASON in last_error.
+ * SUPERSEDED_REASON in last_error (pipeline/queue-store.ts spells it).
  */
 export async function sweepStaleBacklog(): Promise<{ id: number; kind: string }[]> {
-  const leaseSeconds = Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300);
-  const cancelled = await on(sql, sweepJobs, sweepSchedules)<{ id: number; kind: string }>`
-    WITH policy AS (
-      SELECT kind, min(catchup_policy) AS catchup_policy FROM job_schedules
-      WHERE enabled GROUP BY kind
-      HAVING count(DISTINCT catchup_policy) = 1 AND min(catchup_policy) IN ('latest-only', 'collapse-per-bucket')
-    ), live AS (
-      SELECT j.id, j.kind, p.catchup_policy,
-        coalesce(j.payload->>'slotAt', to_char(j.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) AS slot
-      FROM jobs j JOIN policy p ON p.kind = j.kind
-      WHERE j.status = 'pending' OR (j.status = 'running' AND j.locked_at < now() - (${leaseSeconds} || ' seconds')::interval)
-    ), ranked AS (
-      SELECT id, row_number() OVER (
-        PARTITION BY kind, CASE WHEN catchup_policy = 'collapse-per-bucket' THEN left(slot, 10) END
-        ORDER BY slot DESC, id DESC) AS rn
-      FROM live
-    )
-    UPDATE jobs j SET status = 'cancelled', locked_at = NULL, locked_by = NULL,
-      last_error = 'superseded at worker start', updated_at = now()
-    FROM ranked
-    WHERE j.id = ranked.id AND ranked.rn > 1
-      AND (j.status = 'pending' OR (j.status = 'running' AND j.locked_at < now() - (${leaseSeconds} || ' seconds')::interval))
-    RETURNING j.id, j.kind
-  `;
-  return [...cancelled];
+  // The api runs the one UPDATE (pipeline/queue-store.ts sweepStaleBacklog,
+  // issue 1034); the lease window is this worker's own setting.
+  return sweep(Number(process.env.JOB_VISIBILITY_TIMEOUT ?? 300));
 }
 
 export interface ApiReadyOptions {
@@ -157,13 +84,13 @@ export async function waitForApiReady(healthUrl: string, opts: ApiReadyOptions =
 
 /**
  * The api's /health URL this worker waits for, or null when it waits for none.
- * WORKER_API_HEALTH_URL wins; else ANALYTICS_API_URL (worker-analytics calls the
- * api for analytics.parity_sweep, docker-compose.yml) + /health. A worker given
- * neither has no api to wait for (tests that drive startWorker in-process).
+ * WORKER_API_HEALTH_URL wins; else PIPELINE_API_URL (every queue call goes to
+ * the api, issue 1034) or ANALYTICS_API_URL, + /health. A worker given none has
+ * no api to wait for (tests that drive startWorker in-process).
  */
 export function resolveApiHealthUrl(env: Record<string, string | undefined> = process.env): string | null {
   const explicit = env.WORKER_API_HEALTH_URL?.trim();
   if (explicit) return explicit;
-  const base = env.ANALYTICS_API_URL?.trim();
+  const base = env.PIPELINE_API_URL?.trim() || env.ANALYTICS_API_URL?.trim();
   return base ? `${base.replace(/\/+$/, "")}/health` : null;
 }

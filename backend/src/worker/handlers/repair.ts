@@ -20,9 +20,10 @@
 // per-IP RPC budget shared with the live sampler. A wide gap closes over
 // successive runs, and what a run deferred is REPORTED in its output rather than
 // silently dropped.
-import { sql } from "../../db/worker-client.ts";
-import { on, registerQuery } from "../../db/registry.ts";
-import { detectAllGaps } from "../../ops/gap-detector.ts";
+// Every read and write goes to the api (pipeline/ops.ts, issue 1034): this
+// worker holds no database credential.
+import { enqueueJob, pipelineRead } from "../pipeline-client.ts";
+import type { GapReport } from "../../ops/gap-detector.ts";
 import {
   assertRpcBudgetConfigured,
   backfillWalletDay as runBackfillDay,
@@ -35,49 +36,10 @@ import {
 const BACKFILL_KIND = "wallet.backfill_day";
 const WINDOW_KIND = "wallet.backfill_window";
 
-// Registered queries (smoke-production-spec.md §7.1), on the worker's own
-// pool. This handler module is the entry: the job loop dispatches
-// `ops.repair_gaps` to it, and it enqueues the class-C backfill window.
-const REPAIR_HANDLER = "src/worker/handlers/repair";
-
-const liveWindowJobs = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["SELECT"],
-  site: "src/worker/handlers/repair:repairGaps.liveWindow",
-  purpose: "Count backfill-window jobs still pending or running, so a second window is never enqueued beside one.",
-  callers: [REPAIR_HANDLER],
-  probe: {
-    statement: "SELECT count(*)::int AS n FROM jobs WHERE kind = $1 AND status IN ('pending', 'running')",
-    params: [WINDOW_KIND],
-  },
-});
-
-const liveDayJobs = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["SELECT"],
-  site: "src/worker/handlers/repair:repairGaps.liveDays",
-  purpose: "List the days a pending or running per-day backfill job already claims.",
-  callers: [REPAIR_HANDLER],
-  probe: {
-    statement: "SELECT payload->>'asof' AS asof FROM jobs WHERE kind = $1 AND status IN ('pending', 'running')",
-    params: [BACKFILL_KIND],
-  },
-});
-
-const enqueueWindow = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["INSERT"],
-  site: "src/worker/handlers/repair:repairGaps.enqueue",
-  purpose: "Enqueue one backfill-window job for the unclaimed missing days.",
-  callers: [REPAIR_HANDLER],
-  probe: {
-    statement: "INSERT INTO jobs (kind, payload) VALUES ($1, $2::jsonb)",
-    params: [WINDOW_KIND, "{\"dates\":[]}"],
-  },
-});
+/** Every registered series' gap report, from the api's detector (pipeline/ops.ts `gaps.reports`). */
+function detectAllGaps(): Promise<GapReport[]> {
+  return pipelineRead<GapReport[]>("gaps.reports", null, new Date());
+}
 
 /** Whether this deployment may dispatch repair work. See the note in
  *  repairGaps: under a live RPC source the shared rate budget must be
@@ -125,7 +87,7 @@ export async function repairGaps(): Promise<unknown> {
   // BASE_RPC_MAX_CALLS_PER_SEC=0. Rather than let each enqueued day discover
   // that and fail, the dispatcher checks once and reports it.
   if (!backfillEnabled()) {
-    const reports = await detectAllGaps(sql);
+    const reports = await detectAllGaps();
     return {
       ok: true,
       status: "skipped",
@@ -135,7 +97,7 @@ export async function repairGaps(): Promise<unknown> {
     };
   }
 
-  const reports = await detectAllGaps(sql);
+  const reports = await detectAllGaps();
   const dirty = reports.filter((r) => !r.clean);
 
   const classC = dirty.filter((r) => r.remediationClass === "C").map((r) => r.key);
@@ -149,7 +111,7 @@ export async function repairGaps(): Promise<unknown> {
   const covered = new Set<string>(BACKFILLED_SERIES);
   const unhandledClassC = classC.filter((k) => !covered.has(k));
 
-  const plan = await planWalletBackfill(sql);
+  const plan = await planWalletBackfill();
 
   // ONE WINDOW JOB, NOT N DAY JOBS — because the provider meters HTTP hits and
   // the two costs a day carries are both shareable. Ten separate day jobs each
@@ -174,35 +136,23 @@ export async function repairGaps(): Promise<unknown> {
     console.warn(`wallet-backfill: ${b.date} remains BLOCKED on shared leg '${b.leg}' — ${b.detail ?? "no detail"}`);
   }
 
-  const [liveWindow] = await on(sql, liveWindowJobs)<{ n: number }>`
-    SELECT count(*)::int AS n
-      FROM jobs
-     WHERE kind = ${WINDOW_KIND}
-       AND status IN ('pending', 'running')
-  `;
   // Legacy per-day rows may still be in flight from a pre-upgrade dispatcher.
   // Their days are excluded rather than repaired twice.
-  const liveDays = await on(sql, liveDayJobs)<{ asof: string }>`
-    SELECT payload->>'asof' AS asof
-      FROM jobs
-     WHERE kind = ${BACKFILL_KIND}
-       AND status IN ('pending', 'running')
-  `;
-  const claimed = new Set(liveDays.map((r) => r.asof));
-  const days = (liveWindow?.n ?? 0) > 0 ? [] : plan.days.filter((d) => !claimed.has(d));
+  const claimed = new Set(await pipelineRead<(string | null)[]>("queue.live_payload_field", BACKFILL_KIND, "asof"));
+  const days = plan.days.filter((d) => !claimed.has(d));
   let enqueued = 0;
   if (days.length > 0) {
-    await on(sql, enqueueWindow)`
-      INSERT INTO jobs (kind, payload)
-      VALUES (${WINDOW_KIND}, ${sql.json({ dates: days })})
-    `;
-    enqueued = 1;
+    // `unlessLive`: the api enqueues nothing while a window job is pending or
+    // running, in the same statement as the insert (pipeline/queue-store.ts
+    // enqueueJob), so a second window is never enqueued beside one.
+    const id = await enqueueJob({ kind: WINDOW_KIND, payload: { dates: days }, unlessLive: true });
+    enqueued = id === null ? 0 : 1;
   }
 
   return {
     ok: true,
     dirtySeries: dirty.map((r) => r.key),
-    dispatched: { classC: days, enqueued, kind: WINDOW_KIND },
+    dispatched: { classC: enqueued > 0 ? days : [], enqueued, kind: WINDOW_KIND },
     deferredDays: plan.deferred,
     totalMissingDays: plan.totalMissing,
     retryingDays: plan.retrying,
@@ -250,7 +200,7 @@ export async function backfillWalletDay(payload: Record<string, unknown> = {}): 
   // `ok === false`, and the wallet samplers' inability to do this is exactly the
   // alerting gap #651 records — a chain-read storm that recorded
   // status='succeeded' with no retry and no alert.
-  return await runBackfillDay(sql, asof);
+  return await runBackfillDay(undefined, asof);
 }
 
 /**
@@ -274,7 +224,7 @@ export async function backfillWalletWindow(payload: Record<string, unknown> = {}
       throw new Error(`${WINDOW_KIND}: payload.dates entries must be ISO calendar days, got ${JSON.stringify(d)}`);
     }
   }
-  const results = await runBackfillWindow(sql, dates as string[]);
+  const results = await runBackfillWindow(undefined, dates as string[]);
   const failed = results.filter((r) => !r.ok);
   return {
     ok: failed.length === 0,

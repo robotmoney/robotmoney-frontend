@@ -100,7 +100,8 @@ describe("D55 (6): tombstone writes and the breaking revoke ship in one release"
     const writers = tombstoneWriters(sources);
     expect(writers).toContain("src/api/routes/admin.ts");
     expect(writers).toContain("src/api/routes/admin-webauthn.ts");
-    expect(writers).toContain("src/ops/wallet-backfill.ts");
+    // The wallet repair's supersede runs in the api since issue 1034 (D75).
+    expect(writers).toContain("src/pipeline/stores/wallet-backfill.ts");
   });
 
   test("0107 is the breaking revoke, numbered after the migrations that add the tombstone columns", () => {

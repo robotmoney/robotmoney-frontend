@@ -23,8 +23,10 @@
 // row keeps its last good reading with that reading's true age; the api bounds
 // the age it will serve (chain/token-metrics.ts). Under PRICE_SOURCE=stub the
 // api serves fixtures and never reads this table, so nothing is sampled.
-import { sql } from "../../db/worker-client.ts";
-import { on, registerQuery } from "../../db/registry.ts";
+// The row goes to the api (pipeline/stores/token-market.ts, issue 1034): this
+// worker holds no database credential.
+import { pipelineIngest } from "../pipeline-client.ts";
+import type { TokenMarketReading } from "../../pipeline/stores/token-market.ts";
 import { ROBOTMONEY_DOPPLER, resolvePriceSource, resolveTrackedAssets } from "../../config.ts";
 import {
   fetchAssetPriceUsd,
@@ -38,34 +40,6 @@ export const TOKEN_MARKET_TOKEN = "ROBOTMONEY";
 // The pool moves slowly and its endpoints share the keyless host's small
 // per-IP quota, so ten minutes between attempts.
 export const POOL_INTERVAL_MS = 10 * 60_000;
-
-const upsertTokenMarket = registerQuery({
-  role: "rm_worker",
-  object: "token_market_samples",
-  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target, the
-  // existing row and EXCLUDED are read.
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/worker/handlers/token-market:sampleTokenMarket",
-  purpose: "Upsert the token page's market reading (prices and pool), keeping each failed leg's last good value.",
-  callers: ["src/worker/handlers/index"],
-  probe: {
-    statement: `INSERT INTO token_market_samples
-        (token, price_usd, price_at, weth_usd, weth_at, liquidity_usd, volume_24h_usd, volume_30d_usd, pool_at, sampled_at)
-      SELECT $1, $2::numeric, $3::timestamptz, $4::numeric, $5::timestamptz,
-             $6::numeric, $7::numeric, $8::numeric, $9::timestamptz, now() WHERE false
-      ON CONFLICT (token) DO UPDATE SET
-        price_usd = CASE WHEN EXCLUDED.price_at IS NULL THEN token_market_samples.price_usd ELSE EXCLUDED.price_usd END,
-        price_at = COALESCE(EXCLUDED.price_at, token_market_samples.price_at),
-        weth_usd = CASE WHEN EXCLUDED.weth_at IS NULL THEN token_market_samples.weth_usd ELSE EXCLUDED.weth_usd END,
-        weth_at = COALESCE(EXCLUDED.weth_at, token_market_samples.weth_at),
-        liquidity_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.liquidity_usd ELSE EXCLUDED.liquidity_usd END,
-        volume_24h_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.volume_24h_usd ELSE EXCLUDED.volume_24h_usd END,
-        volume_30d_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.volume_30d_usd ELSE EXCLUDED.volume_30d_usd END,
-        pool_at = COALESCE(EXCLUDED.pool_at, token_market_samples.pool_at),
-        sampled_at = EXCLUDED.sampled_at`,
-    params: ["PROBE", 1, "2000-01-01T00:00:00Z", 1, "2000-01-01T00:00:00Z", 1, 1, 1, "2000-01-01T00:00:00Z"],
-  },
-});
 
 export interface TokenMarketDeps {
   priceUsd(symbol: "ROBOTMONEY" | "WETH"): Promise<number>;
@@ -119,7 +93,7 @@ async function readPrice(deps: TokenMarketDeps, symbol: "ROBOTMONEY" | "WETH"): 
 
 export async function sampleTokenMarket(
   deps: TokenMarketDeps = defaultDeps,
-  db: typeof sql = sql,
+  write: (reading: TokenMarketReading) => Promise<unknown> = (reading) => pipelineIngest("token_market.sample", reading),
   now: () => number = Date.now,
 ): Promise<TokenMarketSampleResult> {
   if (resolvePriceSource() === "stub") return { skipped: "stub" };
@@ -144,23 +118,17 @@ export async function sampleTokenMarket(
     }
   }
 
-  await on(db, upsertTokenMarket)`
-    INSERT INTO token_market_samples
-      (token, price_usd, price_at, weth_usd, weth_at, liquidity_usd, volume_24h_usd, volume_30d_usd, pool_at, sampled_at)
-    VALUES
-      (${TOKEN_MARKET_TOKEN}, ${price}, ${priceAt}, ${weth}, ${wethAt},
-       ${pool?.liquidityUsd ?? null}, ${pool?.volume24hUsd ?? null}, ${pool?.volume30dUsd ?? null}, ${poolAt}, now())
-    ON CONFLICT (token) DO UPDATE SET
-      price_usd = CASE WHEN EXCLUDED.price_at IS NULL THEN token_market_samples.price_usd ELSE EXCLUDED.price_usd END,
-      price_at = COALESCE(EXCLUDED.price_at, token_market_samples.price_at),
-      weth_usd = CASE WHEN EXCLUDED.weth_at IS NULL THEN token_market_samples.weth_usd ELSE EXCLUDED.weth_usd END,
-      weth_at = COALESCE(EXCLUDED.weth_at, token_market_samples.weth_at),
-      liquidity_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.liquidity_usd ELSE EXCLUDED.liquidity_usd END,
-      volume_24h_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.volume_24h_usd ELSE EXCLUDED.volume_24h_usd END,
-      volume_30d_usd = CASE WHEN EXCLUDED.pool_at IS NULL THEN token_market_samples.volume_30d_usd ELSE EXCLUDED.volume_30d_usd END,
-      pool_at = COALESCE(EXCLUDED.pool_at, token_market_samples.pool_at),
-      sampled_at = EXCLUDED.sampled_at
-  `;
+  await write({
+    token: TOKEN_MARKET_TOKEN,
+    priceUsd: price,
+    priceAt,
+    wethUsd: weth,
+    wethAt,
+    liquidityUsd: pool?.liquidityUsd ?? null,
+    volume24hUsd: pool?.volume24hUsd ?? null,
+    volume30dUsd: pool?.volume30dUsd ?? null,
+    poolAt,
+  });
 
   return {
     price: price == null ? "failed" : "ok",

@@ -7,43 +7,33 @@
 //   0062_rm_readonly_sequence_select      already recorded in production;
 //     carried so code and database agree (its own test file covers it).
 //   0063_swarm_judge_model_default        production's judge had no model.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import postgres from "postgres";
 import { sql } from "../src/db/client.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
 
 const MIGRATIONS = join(import.meta.dir, "..", "migrations");
-describe("0061 — rm_worker may write the wallet-backfill driver's own tables", () => {
-  let worker: postgres.Sql<{}>;
-
-  beforeAll(() => {
-    // The harness provisions rm_worker's login (preload-roles.test.ts), and the
-    // test connection may not ALTER a role it has no ADMIN OPTION on.
-    worker = postgres(process.env.WORKER_DATABASE_URL!, { max: 1, onnotice: () => {} });
-  });
-
-  afterAll(async () => {
-    await worker?.end({ timeout: 5 });
-  });
+// 0061 gave rm_worker these writes. The wallet-backfill driver's writes run in
+// the api as rm_app since issue 1034 (0126 grants them), and 0127 took every
+// privilege back from rm_worker (D75), so the file's effect is asserted as the
+// role that now holds it, beside the role that no longer does.
+describe("0061 — the wallet-backfill driver's own tables are writable by the role that runs its writes", () => {
+  const holds = async (role: string, table: string, priv: string): Promise<boolean> => {
+    const [row] = await sql<{ ok: boolean }[]>`SELECT has_table_privilege(${role}, ${`public.${table}`}, ${priv}) AS ok`;
+    return row!.ok;
+  };
 
   for (const table of ["wallet_backfill_state", "chain_day_blocks", "chain_address_floors"]) {
     // No DELETE: 0107 (D55) leaves DELETE and TRUNCATE to rm_owner alone.
     for (const priv of ["INSERT", "UPDATE"]) {
-      test(`${priv} on ${table}`, async () => {
-        const [row] = await worker`SELECT has_table_privilege(current_user, ${`public.${table}`}, ${priv}) AS ok`;
-        expect(row!.ok).toBe(true);
+      test(`${priv} on ${table}: rm_app holds it, rm_worker does not (0127)`, async () => {
+        expect({ app: await holds("rm_app", table, priv), worker: await holds("rm_worker", table, priv) }).toEqual({ app: true, worker: false });
       });
     }
   }
-
-  test("and nothing broader: rm_worker still cannot write a table 0054 kept from it", async () => {
-    const [row] = await worker`SELECT has_table_privilege(current_user, 'public.swarm_session_judgements', 'INSERT') AS ok`;
-    expect(row!.ok).toBe(false);
-  });
 });
 
 describe("0063 — the judge has a model", () => {

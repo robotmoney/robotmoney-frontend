@@ -11,7 +11,9 @@
 // everyday SQLSTATEs a handler bug produces — are as load-bearing as the
 // positive ones.
 import { describe, expect, test } from "bun:test";
-import { isDatabaseUnavailable } from "../src/db/client.ts";
+import { classifyDbFailure, isDatabaseUnavailable } from "../src/db/client.ts";
+import { DbSaturatedError } from "../src/db/pool-gate.ts";
+import { dbFailureResponse } from "../src/api/db-failure.ts";
 
 // Shape of what actually arrives: postgres.js surfaces the socket error
 // verbatim (verified against a refused connection — `code: "ECONNREFUSED"`,
@@ -82,5 +84,46 @@ describe("isDatabaseUnavailable", () => {
     expect(isDatabaseUnavailable(undefined)).toBe(false);
     expect(isDatabaseUnavailable(null)).toBe(false);
     expect(isDatabaseUnavailable("ECONNREFUSED")).toBe(false);
+  });
+});
+
+// Issue 1034: a busy database is a 503 too, with its own name, because it
+// tells the caller to retry rather than that the database is gone. A
+// statement the server cancelled (57014) or a lock it gave up on (55P03) is
+// `db_timeout`; a query the api's pool refused to queue is `db_saturated`.
+// Handler bugs keep their 500.
+describe("classifyDbFailure", () => {
+  test("57014 and 55P03 classify as db_timeout", () => {
+    expect(classifyDbFailure(pgError("57014"))).toBe("db_timeout");
+    expect(classifyDbFailure(pgError("55P03"))).toBe("db_timeout");
+  });
+
+  test("a refused admission classifies as db_saturated", () => {
+    expect(classifyDbFailure(new DbSaturatedError("request", 500))).toBe("db_saturated");
+  });
+
+  test("an outage still classifies as database unavailable", () => {
+    expect(classifyDbFailure(pgError("ECONNREFUSED"))).toBe("database unavailable");
+    expect(classifyDbFailure(pgError("57P03"))).toBe("database unavailable");
+  });
+
+  test("42703 and 42P01 still classify as 500", () => {
+    for (const code of ["42703", "42P01", "42601", "23505", "53300"]) {
+      expect(classifyDbFailure(pgError(code)), code).toBeNull();
+      expect(dbFailureResponse(pgError(code)), code).toBeNull();
+    }
+  });
+
+  test("the response is 503 with the reason, and Retry-After for the busy cases only", async () => {
+    const timeout = dbFailureResponse(pgError("57014"))!;
+    expect(timeout.status).toBe(503);
+    expect(await timeout.json()).toEqual({ error: "db_timeout" });
+    expect(timeout.headers.get("retry-after")).toBe("1");
+    const saturated = dbFailureResponse(new DbSaturatedError("request", 500))!;
+    expect(await saturated.json()).toEqual({ error: "db_saturated" });
+    expect(saturated.headers.get("retry-after")).toBe("1");
+    const outage = dbFailureResponse(pgError("ECONNREFUSED"))!;
+    expect(await outage.json()).toEqual({ error: "database unavailable" });
+    expect(outage.headers.get("retry-after")).toBeNull();
   });
 });

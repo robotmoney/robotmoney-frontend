@@ -363,7 +363,6 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
   // passwords (StackDatabase.roleUrls).
   const LOCAL_ROLES = {
     app: "postgres://rm_app:generated-app@postgres:5432/robotmoney?sslmode=disable",
-    worker: "postgres://rm_worker:generated-worker@postgres:5432/robotmoney?sslmode=disable",
   };
   const cfg = (env: Record<string, string | undefined>): StackConfig => ({
     repoRoot: "/repo",
@@ -381,7 +380,8 @@ describe("a --local boot hands compose no remote connection (criterion 32, spawn
     expect(warning).toContain("MIGRATE_DATABASE_URL");
     const spawn = buildSpawnEnv(cfg(env), env);
     expect(spawn.DATABASE_URL).toBe(LOCAL_ROLES.app);
-    expect(spawn.WORKER_DATABASE_URL).toBe(LOCAL_ROLES.worker);
+    // The worker holds no database credential (issue 1034, D75).
+    expect(spawn).not.toHaveProperty("WORKER_DATABASE_URL");
     expect(spawn).not.toHaveProperty("MIGRATE_DATABASE_URL");
     expect(Object.entries(spawn).filter(([, v]) => v.includes(REMOTE_HOST))).toEqual([]);
   });

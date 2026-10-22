@@ -470,7 +470,7 @@ export function requestsReuse(argv: readonly string[]): boolean {
 }
 
 /**
- * Does this boot mint the three service tokens (`prepare (tokens)`)? Only for a
+ * Does this boot mint the four service tokens (`prepare (tokens)`)? Only for a
  * database it created or restored: `blank`, or `dump` WITHOUT `--reuse`. A
  * `--reuse` boot adopts a twin that already holds this instance's tokens, so it
  * reuses the files like `volume` and a remote target. Minting there rotated the

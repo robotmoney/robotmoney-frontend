@@ -299,7 +299,7 @@ describe("instancePaths — the per-instance layout every W1 module agrees on", 
     const paths = instancePaths(freshRoot(), "alpha", { create: true });
     expect(Object.keys(paths.tokenFiles).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
     expect(Object.keys(paths.tokenDirs).sort()).toEqual([...SERVICE_TOKEN_HOLDERS].sort());
-    expect([...SERVICE_TOKEN_HOLDERS].sort()).toEqual(["analytics-producer", "operator", "system-scheduler"]);
+    expect([...SERVICE_TOKEN_HOLDERS].sort()).toEqual(["analytics-producer", "operator", "pipeline-worker", "system-scheduler"]);
     for (const holder of SERVICE_TOKEN_HOLDERS) {
       expect(paths.tokenDirs[holder]).toBe(join(paths.tokensDir, holder));
       expect(paths.tokenFiles[holder]).toBe(join(paths.tokenDirs[holder], TOKEN_FILE_NAME));

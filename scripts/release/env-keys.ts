@@ -24,7 +24,6 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   "dbname",
   "sslmode",
   "rm_app",
-  "rm_worker",
   "rm_readonly",
   "rm_owner",
   "RM_ENV",

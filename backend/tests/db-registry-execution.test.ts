@@ -760,9 +760,9 @@ describe("every registered query runs as its declared role on a disposable datab
     // (Postgres lets any role change its OWN password, so a runtime role's
     // own password shape is left out; rm_owner's adds LOGIN, which it may not
     // grant itself, so it stays in.)
-    const own: Record<string, string> = { rm_app: "appPasswordSet", rm_worker: "workerPasswordSet", rm_readonly: "readonlyPasswordSet" };
+    const own: Record<string, string> = { rm_app: "appPasswordSet", rm_readonly: "readonlyPasswordSet" };
     for (const role of ROLES) {
-      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "workerPasswordSet", "readonlyPasswordSet"] as const) {
+      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "readonlyPasswordSet"] as const) {
         if (own[role] === shape) continue;
         const outcome = await runProbe(login(role), { statement: provisioningProbeText(shape) });
         expect(outcome.ok ? "ran" : outcome.code, `${role} ${shape}`).toBe("42501");

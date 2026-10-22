@@ -380,6 +380,27 @@ export const ROUTES = {
     overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
   },
 
+  // The pipeline worker's only way to the database (issue 1034, decision D75).
+  // Every route requires the pipeline-worker store token: `pipeline_queue` for
+  // the queue routes and `whoami`, `pipeline_ingest` for `read` and `ingest`.
+  // All are POST. `:op` names one operation of backend/src/pipeline/ops.ts; the
+  // worker sends values only, never a statement. Writes carry an
+  // Idempotency-Key and their lease (jobId, workerId, attempt), at most 1,000
+  // rows and 1 MiB.
+  pipeline: {
+    claim: "/api/pipeline/queue/claim",
+    renew: "/api/pipeline/queue/renew",
+    settle: "/api/pipeline/queue/settle",
+    release: "/api/pipeline/queue/release",
+    reap: "/api/pipeline/queue/reap",
+    sweep: "/api/pipeline/queue/sweep",
+    enqueue: "/api/pipeline/queue/enqueue",
+    tick: "/api/pipeline/schedule/tick",
+    whoami: "/api/pipeline/whoami",
+    read: "/api/pipeline/read/:op",
+    ingest: "/api/pipeline/ingest/:op",
+  },
+
   // Analytics-provider ingestion boundary (issue #106). Every route requires an
   // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before

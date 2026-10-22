@@ -20,7 +20,7 @@
 //     image's own entrypoint, holding one credential: an automation token file.
 //     Its environment carries no database URL at all (§7).
 //
-// The three service tokens are provisioned by the ONE module that writes them
+// The four service tokens are provisioned by the ONE module that writes them
 // (backend/scripts/provision-tokens.ts, the same call `bun smoke`'s `prepare
 // (tokens)` and `bun scripts/prod-init.ts provision-tokens` make), into files a
 // holder reads: the scheduler its own, the test's admin calls the operator's.
@@ -76,11 +76,12 @@ let healthPort = 0;
 let databaseUrl = "";
 let stateDir = "";
 let tokenFile = "";
-/** This instance's three token files, as provisioning writes them. */
-let tokenFiles: Record<"system-scheduler" | "analytics-producer" | "operator", string> = {
+/** This instance's four token files, as provisioning writes them. */
+let tokenFiles: Record<"system-scheduler" | "analytics-producer" | "operator" | "pipeline-worker", string> = {
   "system-scheduler": "",
   "analytics-producer": "",
   operator: "",
+  "pipeline-worker": "",
 };
 /** The operator's token (the admin right), read from its file. */
 let operatorToken = "";
@@ -156,7 +157,7 @@ async function runBackend(code: string): Promise<string> {
 
 /**
  * Provision this instance's holders through the provisioning entry module, the
- * secrets landing in `tokenFiles`. All three by default; one holder is a
+ * secrets landing in `tokenFiles`. Every holder by default; one holder is a
  * rotation of that holder alone.
  */
 async function provision(holders?: readonly string[]): Promise<void> {
@@ -291,6 +292,7 @@ beforeAll(async () => {
     "system-scheduler": tokenFile,
     "analytics-producer": join(stateDir, "tokens", "analytics-producer", "token"),
     operator: join(stateDir, "tokens", "operator", "token"),
+    "pipeline-worker": join(stateDir, "tokens", "pipeline-worker", "token"),
   };
 
   const up = Bun.spawnSync([

@@ -14,9 +14,10 @@
 //                                   list (the operator token's `admin` right) and
 //                                   the public list of `collecting` sessions.
 //   pipeline-worker-startup         each worker container's Docker health plus the
-//                                   last `startup_preflight:` line it logged (§7.2:
-//                                   the worker writes no heartbeat until checks
-//                                   1-3 pass, and logs the refusal and exits 1).
+//                                   last `pipeline_startup:` line it logged (the
+//                                   worker's HTTP startup check, issue 1034: no
+//                                   heartbeat until it passes, and a refusal is
+//                                   logged before exit 1).
 //   analytics-producer-authenticated  the PHASE of the producer's own heartbeat, as
 //                                   its last Docker healthcheck printed it
 //                                   (`docker inspect` .State.Health.Log; the check
@@ -182,9 +183,9 @@ export function readProducerAuth(run: ProbeRunner, id: string | undefined): Prod
 }
 
 /**
- * One worker container: its health and its last startup-preflight line.
+ * One worker container: its health and its last startup line.
  *
- * THE WHOLE LOG, NOT A TAIL. The worker prints its `startup_preflight` line
+ * THE WHOLE LOG, NOT A TAIL. The worker prints its `pipeline_startup` line
  * once, first, and then works: on a production-sized dump the buyback indexer
  * alone wrote 580 lines in the readiness window (eth_getLogs 413 splits and a
  * refused write's stack trace), so a `--tail 400` read never contained line 1

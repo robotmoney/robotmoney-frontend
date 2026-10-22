@@ -23,11 +23,10 @@ x-worker-base: &worker-base
     start_period: 40s
 
 x-worker-env: &worker-env
-  DATABASE_URL: ${STACK_SECRET_DATABASE_URL:-}
-  # Optional queue-scoped restricted role (migrations/0016_worker_role.sql).
-  # Not a stack secret: it names the same external Postgres via a different
-  # role, so it carries no separate credential of its own here.
-  WORKER_DATABASE_URL: ${WORKER_DATABASE_URL:-}
+  # NO DATABASE CREDENTIAL (issue 1034, decision D75). The worker reaches the
+  # database only through the api's /api/pipeline/** routes, with its
+  # pipeline-worker token (worker-analytics below); it refuses to start with a
+  # database URL in its environment (src/worker/index.ts).
   # No non-empty inline default here (or anywhere below): forwarding-only means
   # an operator must set a value via --config, so an inline literal here can
   # never shadow that (field guide §5).
@@ -62,6 +61,12 @@ services:
     environment:
       <<: *worker-env
       WORKER_LANE: analytics
+      # The pipeline-worker token as a FILE (smoke spec §3), its holder's own
+      # directory mounted read-only below, like the producer's.
+      PIPELINE_API_URL: http://api:8787
+      PIPELINE_TOKEN_FILE: /run/rm-token/token
+    volumes:
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required}/tokens/pipeline-worker:/run/rm-token:ro
 
   # Independent external producer (issue #361 Phase 4): no DATABASE_URL, no
   # queue access, no admin right.

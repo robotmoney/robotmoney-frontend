@@ -314,8 +314,8 @@ const readRawSeries = registerQuery({
   probe: {
     statement:
       "SELECT date::text AS date, value, source FROM raw_indicator_history WHERE indicator = $1 " +
-      "AND ($2::date IS NULL OR date >= $3) AND ($4::date IS NULL OR date <= $5) ORDER BY date DESC LIMIT $6",
-    params: ["probe", null, null, null, null, 1],
+      "AND date >= COALESCE($2::date, '-infinity'::date) AND date <= COALESCE($3::date, 'infinity'::date) ORDER BY date DESC LIMIT $4",
+    params: ["probe", null, null, 1],
   },
 });
 
@@ -934,12 +934,14 @@ export async function handleAdmin(
       return { status: 200, body: { indicator, points } };
     }
     // `source` (issue #397): row-level provenance — null on every pre-migration
-    // row (genuinely unknown, never fabricated).
+    // row (genuinely unknown, never fabricated). The bounds are concrete ranges
+    // (±infinity when absent), not `$x IS NULL OR date >= $x`, so the planner
+    // can use them as index conditions (issue 1034).
     const points = await on(sql, readRawSeries)<Row>`
       SELECT date::text AS date, value, source FROM raw_indicator_history
        WHERE indicator = ${indicator}
-         AND (${from || null}::date IS NULL OR date >= ${from || null})
-         AND (${to || null}::date IS NULL OR date <= ${to || null})
+         AND date >= COALESCE(${from || null}::date, '-infinity'::date)
+         AND date <= COALESCE(${to || null}::date, 'infinity'::date)
        ORDER BY date DESC LIMIT ${limit}`;
     return { status: 200, body: { indicator, points } };
   }

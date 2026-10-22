@@ -1305,10 +1305,10 @@ CREATE TABLE public.automation_tokens (
     note text,
     holder text DEFAULT 'system-scheduler'::text NOT NULL,
     CONSTRAINT automation_tokens_hash_shape_check CHECK ((token_hash ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT automation_tokens_holder_check CHECK ((holder = ANY (ARRAY['system-scheduler'::text, 'analytics-producer'::text, 'operator'::text]))),
-    CONSTRAINT automation_tokens_holder_rights_check CHECK ((((holder = 'system-scheduler'::text) AND (rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])) OR ((holder = 'analytics-producer'::text) AND (rights <@ ARRAY['analytics_ingestion'::text])) OR ((holder = 'operator'::text) AND (rights <@ ARRAY['admin'::text])))),
+    CONSTRAINT automation_tokens_holder_check CHECK ((holder = ANY (ARRAY['system-scheduler'::text, 'analytics-producer'::text, 'operator'::text, 'pipeline-worker'::text]))),
+    CONSTRAINT automation_tokens_holder_rights_check CHECK ((((holder = 'system-scheduler'::text) AND (rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text])) OR ((holder = 'analytics-producer'::text) AND (rights <@ ARRAY['analytics_ingestion'::text])) OR ((holder = 'operator'::text) AND (rights <@ ARRAY['admin'::text])) OR ((holder = 'pipeline-worker'::text) AND (rights <@ ARRAY['pipeline_queue'::text, 'pipeline_ingest'::text])))),
     CONSTRAINT automation_tokens_instance_check CHECK ((instance ~ '^[a-z0-9][a-z0-9_-]{2,63}$'::text)),
-    CONSTRAINT automation_tokens_rights_known_check CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text, 'analytics_ingestion'::text, 'admin'::text])),
+    CONSTRAINT automation_tokens_rights_known_check CHECK ((rights <@ ARRAY['read_subjects'::text, 'read_sessions'::text, 'lifecycle_transitions'::text, 'analytics_ingestion'::text, 'admin'::text, 'pipeline_queue'::text, 'pipeline_ingest'::text])),
     CONSTRAINT automation_tokens_rights_nonempty_check CHECK ((cardinality(rights) > 0))
 );
 
@@ -1331,14 +1331,14 @@ COMMENT ON COLUMN public.automation_tokens.instance IS 'The deployment instance 
 -- Name: COLUMN automation_tokens.rights; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.automation_tokens.rights IS 'What the bearer may do, a subset of its holder''s list: system-scheduler read_subjects/read_sessions/lifecycle_transitions; analytics-producer analytics_ingestion; operator admin.';
+COMMENT ON COLUMN public.automation_tokens.rights IS 'What the bearer may do, a subset of its holder''s list: system-scheduler read_subjects/read_sessions/lifecycle_transitions; analytics-producer analytics_ingestion; operator admin; pipeline-worker pipeline_queue/pipeline_ingest.';
 
 
 --
 -- Name: COLUMN automation_tokens.holder; Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON COLUMN public.automation_tokens.holder IS 'Who presents this token: system-scheduler, analytics-producer or operator (smoke spec §3). Bounds the rights the row may carry.';
+COMMENT ON COLUMN public.automation_tokens.holder IS 'Who presents this token: system-scheduler, analytics-producer, operator or pipeline-worker (smoke spec §3). Bounds the rights the row may carry.';
 
 
 --
@@ -1869,6 +1869,29 @@ CREATE TABLE public.openclaw_agents (
     source_confidence text,
     enriched_at timestamp with time zone
 );
+
+
+--
+-- Name: pipeline_ingest_receipts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pipeline_ingest_receipts (
+    idempotency_key text NOT NULL,
+    operation text NOT NULL,
+    body_sha256 text NOT NULL,
+    response jsonb NOT NULL,
+    job_id bigint,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT pipeline_ingest_receipts_body_sha256_check CHECK ((body_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT pipeline_ingest_receipts_idempotency_key_check CHECK (((length(idempotency_key) >= 1) AND (length(idempotency_key) <= 200)))
+);
+
+
+--
+-- Name: TABLE pipeline_ingest_receipts; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.pipeline_ingest_receipts IS 'One row per pipeline write the api accepted (issue 1034): the Idempotency-Key, the sha256 of the request body and the response sent. A replay with the same key and body is answered from here and writes nothing.';
 
 
 --
@@ -4180,6 +4203,14 @@ ALTER TABLE ONLY public.maintenance_windows
 
 ALTER TABLE ONLY public.openclaw_agents
     ADD CONSTRAINT openclaw_agents_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: pipeline_ingest_receipts pipeline_ingest_receipts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pipeline_ingest_receipts
+    ADD CONSTRAINT pipeline_ingest_receipts_pkey PRIMARY KEY (idempotency_key);
 
 
 --

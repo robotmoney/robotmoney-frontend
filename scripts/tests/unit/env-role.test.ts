@@ -85,8 +85,8 @@ describe("the file's identity — ONE file, its name, its one location", () => {
     expect([...CONNECTION_TOKENS]).toEqual(["host", "port", "database", "sslmode"]);
   });
 
-  test("ROLES is the one taxonomy this family can assemble", () => {
-    expect([...ROLES]).toEqual(["rm_app", "rm_worker", "rm_readonly"]);
+  test("ROLES is the one taxonomy this family can assemble (rm_worker has no line since D75)", () => {
+    expect([...ROLES]).toEqual(["rm_app", "rm_readonly"]);
   });
 });
 
@@ -218,8 +218,8 @@ describe("D61 — the privileged lines in ~/.env", () => {
     expect(urlForRole(env, "rm_readonly")).toBe("postgres://rm_readonly:ro-pw@db.example.com:25060/defaultdb?sslmode=require");
   });
 
-  test("ROLES stays the three runtime roles: the privileged lines are read by name, never iterated with them", () => {
-    expect([...ROLES]).toEqual(["rm_app", "rm_worker", "rm_readonly"]);
+  test("ROLES stays the runtime roles with a ~/.env line: the privileged lines are read by name, never iterated with them", () => {
+    expect([...ROLES]).toEqual(["rm_app", "rm_readonly"]);
   });
 
   test("redactedTarget of an owner URL names the role and never the password", () => {

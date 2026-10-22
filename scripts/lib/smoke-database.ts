@@ -148,7 +148,8 @@ ${PROVISIONING_DEFAULT_PRIVILEGES_SQL}`;
  * `select_for_runtime` on all three — on whichever of them the restored
  * version has, and nothing else. Every other grant is the roles-and-grants
  * reconciliation's, run by `--migrate` as `rm_owner` (§8.1, §8.3); no write,
- * DELETE or TRUNCATE is granted here (D55 (6)).
+ * DELETE or TRUNCATE is granted here (D55 (6)). `rm_worker` gets nothing: it
+ * holds no privilege after 0127 and nothing logs in as it (D75).
  */
 export function dumpOwnershipSql(passwords: GeneratedRolePasswords, database: string): string {
   return `${localSuperuserSql(passwords, database)}
@@ -182,13 +183,13 @@ BEGIN
     EXECUTE format('ALTER FUNCTION %s OWNER TO rm_owner', r.object_name);
   END LOOP;
 END $rm_own$;
-GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
+GRANT USAGE ON SCHEMA public TO rm_app, rm_readonly;
 DO $rm_read$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[${TARGET_STATE_TABLES.map((t) => `'${t}'`).join(", ")}] LOOP
     IF to_regclass('public.' || t) IS NOT NULL THEN
-      EXECUTE format('GRANT SELECT ON public.%I TO rm_app, rm_worker, rm_readonly', t);
+      EXECUTE format('GRANT SELECT ON public.%I TO rm_app, rm_readonly', t);
     END IF;
   END LOOP;
 END $rm_read$;

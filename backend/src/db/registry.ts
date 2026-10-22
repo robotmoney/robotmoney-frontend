@@ -539,6 +539,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   clockText: "SELECT clock_timestamp()::text AS at",
   /** A connection check: does the pool still answer (the api's /health `db` field)? */
   connectionCheck: "SELECT 1",
+  /** The server's connection limits the api's boot budget is derived from (db/connection-budget.ts, issue 1034). */
+  connectionBudget: "SELECT current_setting('max_connections')::int AS max_connections, current_setting('superuser_reserved_connections')::int AS superuser_reserved, current_setting('reserved_connections')::int AS reserved",
   /** The one lock protocol for every writer of a wallet snapshot date (ops/wallet-snapshot-manifest.ts). */
   walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
   /** One transaction lock per source key, so competing revisions of one series serialize (analytics source ledger). */
@@ -606,8 +608,6 @@ export const PROVISIONING_SHAPES = Object.freeze({
   ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
   /** DDL: rm_app's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
   appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
-  /** DDL: rm_worker's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
-  workerPasswordSet: "ALTER ROLE rm_worker WITH PASSWORD $1",
   /** DDL: rm_readonly's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
   readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
 } as const);
@@ -618,7 +618,6 @@ export type ProvisioningShape = keyof typeof PROVISIONING_SHAPES;
 export const VERIFIER_SLOT_SHAPES: readonly ProvisioningShape[] = Object.freeze([
   "ownerPasswordSet",
   "appPasswordSet",
-  "workerPasswordSet",
   "readonlyPasswordSet",
 ] as const);
 

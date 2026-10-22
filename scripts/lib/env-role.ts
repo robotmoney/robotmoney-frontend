@@ -89,8 +89,10 @@ export function databaseName(env: Record<string, string | undefined>): string | 
   return undefined;
 }
 
-/** The role taxonomy this family can assemble. */
-export const ROLES = ["rm_app", "rm_worker", "rm_readonly"] as const;
+/** The role taxonomy this family can assemble: the runtime roles with a
+ *  `~/.env` line. Not `rm_worker`, which holds no privilege and no container
+ *  logs in as (D75, issue 1034). */
+export const ROLES = ["rm_app", "rm_readonly"] as const;
 
 /** `$HOME/.env` — the ONE credential file every member of this family reads. */
 export function homeEnvFilePath(home: string = homedir()): string {

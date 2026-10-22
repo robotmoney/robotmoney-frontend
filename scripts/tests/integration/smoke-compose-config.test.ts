@@ -586,14 +586,16 @@ describe("member-agent compose template — zero ambient model configuration", (
     expect("AGENT_MODEL" in env).toBe(false);
   });
 
-  test("the producer's own token directory is mounted into the producer (and its analytics client), never the member-agent or the api", () => {
+  test("the producer's own token directory is mounted into the producer only, never the worker, the member-agent or the api", () => {
     const cfg = composeConfig({});
     const holderDir = "tokens/analytics-producer";
     expect(cfg.services["analytics-producer"]?.environment?.ANALYTICS_TOKEN_FILE).toBe("/run/rm-token/token");
     const mounts = (svc: string) => JSON.stringify(cfg.services[svc]?.volumes ?? []);
     expect(mounts("analytics-producer")).toContain(holderDir);
-    expect(mounts("worker-analytics")).toContain(holderDir);
-    for (const svc of ["member-agent", "api", "system-scheduler", "website-server"]) {
+    // The pipeline worker presents its own holder's token and nothing else
+    // (issue 1034, D75).
+    expect(mounts("worker-analytics")).toContain("tokens/pipeline-worker");
+    for (const svc of ["worker-analytics", "member-agent", "api", "system-scheduler", "website-server"]) {
       expect({ svc, mounted: mounts(svc).includes(holderDir) }).toEqual({ svc, mounted: false });
     }
     // The scheduler mounts its own holder's directory and nothing else of the instance.

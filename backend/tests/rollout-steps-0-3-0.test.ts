@@ -299,12 +299,13 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   });
 
   test("BACKFILL_PROVENANCE matches what the executor writes", () => {
-    // ops/wallet-backfill.ts tags repaired rows with this exact string; §7.1's
+    // The executor's writes (pipeline/stores/wallet-backfill.ts since issue
+    // 1034, run in the api) tag repaired rows with this exact string; §7.1's
     // completion observation and postflight's strategy-nav-column both filter on
     // the copy. A drift here makes a working repair look like it wrote nothing.
     // The executor writes it as a SQL literal in the VALUES list of both series'
     // upserts, so assert the literal appears at least twice — once per table.
-    const backfill = readSrc("ops", "wallet-backfill.ts");
+    const backfill = readSrc("pipeline", "stores", "wallet-backfill.ts");
     const literals = [...backfill.matchAll(new RegExp(`'${BACKFILL_PROVENANCE}'`, "g"))].length;
     expect({ atLeastTwoWrites: literals >= 2 }).toEqual({ atLeastTwoWrites: true });
   });
