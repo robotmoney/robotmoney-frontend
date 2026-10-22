@@ -29,6 +29,18 @@ them — this repo's own local dev/smoke/e2e harness included.
   `worker-client.ts` for the worker's queue-scoped access, honoring
   `WORKER_DATABASE_URL` → the restricted `rm_worker` role of migration
   `0016_worker_role.sql`) and the migration runner (`migrate.ts`).
+  At boot the api derives its connection budget from the server's
+  `max_connections` minus the reserved slots and a headroom
+  (`connection-budget.ts`), and refuses to start when an override does not
+  fit. It then runs three pools: a **request** pool for public, member and
+  admin routes, whose statement, lock, idle-in-transaction and connect timeouts
+  sit below the 10 s request deadline; a **batch** pool for the analytics
+  provider's bulk routes, with the long bulk timeouts; and one connection for
+  the `/health` probe, so health never waits behind a busy pool. Each pool has
+  an admission gate (`pool-gate.ts`): a query that finds no free connection
+  within `PG_ADMISSION_WAIT_MS` is answered `503 db_saturated` with
+  `Retry-After`, a statement or lock timeout is answered `503 db_timeout`, and
+  `/health` reports each pool's counts under `db_pool` (issue 1034).
 - `src/lib/` — small helpers (e.g. `keys.ts`, sha256 access-key hashing).
 - `migrations/` — forward-only numbered `*.sql`, applied once each, tracked in
   `schema_migrations`. In production a migration is its own operator step
