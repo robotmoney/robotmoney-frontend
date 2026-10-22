@@ -62,7 +62,7 @@
 //                     (backend/scripts/set-identity.ts). It writes no row: a
 //                     target enrolled otherwise refuses before any credential
 //                     is read.
-//   provision-tokens  §9.1 step 5. The three service tokens — hash and rights in
+//   provision-tokens  §9.1 step 5. The four service tokens — hash and rights in
 //                     the store, the secret in `tokens/<holder>/token` under the
 //                     instance's state directory — through the one module that
 //                     writes them (backend/scripts/provision-tokens.ts), inside
