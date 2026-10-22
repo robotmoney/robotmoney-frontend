@@ -5923,3 +5923,47 @@ Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
 `CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
 pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
 connection pooler.
+
+---
+
+<a id="d76"></a>
+## D76 — Referral attribution: the accepted specification governs; codes and admin corrections are reviewed config, not tables (implementation owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22 as the implementation-owner decision the
+[referral specification](technical/referrals-spec.md) §8 and §11 left open
+("Correction storage: implementation owner decides"). Implemented by issue 1371.
+The specification itself was accepted by the owner on 2026-10-19 (PR 1390).
+
+**Decision.**
+
+1. **Policy authority.** `docs/technical/referrals-spec.md` governs referral
+   attribution in this repository. Attribution only: no payment, fee or reward
+   logic lives here. A policy change returns to owner review first.
+2. **Codes are reviewed configuration.** The registry
+   (`backend/src/referrals/config/registry.json`: codes, lifecycle times, the one
+   launch block) changes only by a reviewed change shipped in a release. No
+   environment variable grants attribution.
+3. **Admin corrections are an append-only reviewed config log**
+   (`backend/src/referrals/config/corrections.json`), not a new table and not an
+   admin-route write. D66 makes every production data change a migration and
+   rejects an admin-route write with an audit row; a table with an insert-only
+   grant would need its own owner sign-off. Review supplies the "who"; each entry
+   records `recordedBy`, `recordedAt`, `reason` and its evidence, and a revocation
+   is a later entry. The admin panel verifies and shows the log read-only.
+4. **The previous accepted revision is committed data.** `accepted-revisions.json`
+   holds the registry, correction log and manifest as they stood at each
+   production version tag (D64, D70), with the tag time as that revision's
+   deployment time. A revision is validated against its predecessor at its own tag
+   time: no deleted history, no reassignment, no retroactive edit, and no newly
+   introduced effective time earlier than the deployment. CI validates the working
+   files against the last accepted revision with "now" as the earliest deployment,
+   because its checkout has no git history.
+5. **The carrier is robotmoney-core's.** The report decodes core's event (payer,
+   receiver, amount, code, owner choice 2026-10-19) in one adapter,
+   `backend/src/referrals/carrier.ts`. Until core publishes the event's ABI the
+   adapter decodes a clearly marked placeholder; conformance is checked at
+   launch (spec §10), never as a merge gate, and needs no contract change here.
+
+**Accepted costs.** A code or correction shipped by a release always takes effect
+no earlier than that release's tag; an urgent correction waits for a release. A
+scheduled activation that misses its release fails CI until it is rescheduled.

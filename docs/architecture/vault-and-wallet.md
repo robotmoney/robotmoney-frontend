@@ -1,8 +1,15 @@
 # Vault economics and wallet balances
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers deposit consent, supported execution paths and reproducible historical snapshots.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371). Deposit consent is the owner's explicit
+> code request in the deposit skill; a referral never blocks a deposit. The private
+> attribution report (`bun run --cwd backend referrals:report`) reads deposit
+> evidence and pinned-block holdings through this page's shared RPC transport
+> (`chain/base-rpc-client.ts`, one token bucket, `blockTag` reads, `0x` is a
+> failure) and never through a dashboard handler. The dashboard indexing and the
+> boundaries below are unchanged. The on-chain code carrier is
+> `robotmoney-core`'s; this repository decodes it in one adapter,
+> `backend/src/referrals/carrier.ts`, marked core conformance pending.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 

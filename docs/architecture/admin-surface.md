@@ -1,8 +1,15 @@
 # Admin Surface: Research and Investment Swarm
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers a read-only member referral-code projection, admin corrections and their admin UI integration.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371). The member page
+> (`views/admin/swarm-member.html`) shows `AdminMember.referral`: code, state
+> (`draft`, `scheduled`, `active`, `disabled`), terms version and both times, and
+> says it is read-only. The swarm overview's **Referral corrections** tab
+> (`views/admin/swarm.html`) lists the correction log from
+> `GET /api/admin/referrals/corrections` read-only, with each entry's signature,
+> nonce, expiry and code checks and any revocation. Neither page writes: codes and
+> corrections change only by a reviewed config change shipped in a release (D66,
+> [D76](../decisions.md#d76)).
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 
