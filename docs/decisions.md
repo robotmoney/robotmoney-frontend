@@ -3996,6 +3996,12 @@ data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
 `rm_worker` and runs preflight checks 1-3; the research lane, which serves only
 retired rows, is removed.
 
+> **Superseded in part by [D75](#d75) on 2026-10-22.** Decision 2's `rm_worker`
+> carve-out no longer holds. The pipeline worker holds no database credential:
+> it reaches the database only through the api's `/api/pipeline/**` routes with
+> its pipeline-worker token, its startup check is HTTP, and `rm_worker` holds no
+> privilege (migration 0127).
+
 **Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
 close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
 windows, downtime skips to the next future grid instant, and a duration change
@@ -5844,3 +5850,76 @@ Out of scope: skipping a judge's own operator's portfolio and the in-house
 exemption (issue 1335), judges voting or merging answers, verifiable randomness,
 turning outside judging on in production (issue 1396) and filling in draw records
 for sessions published earlier.
+
+<a id="d75"></a>
+## D75 — Only the api holds a database credential; the pipeline worker writes through /api/pipeline/** (supersedes D52 decision 2's rm_worker carve-out; owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22. Implemented by issue 1034. It supersedes in part
+[D52](#d52): decision 2's sentence "The pipeline worker keeps `rm_worker` and runs
+preflight checks 1-3". It amends smoke-production-spec.md §3 and §7.2.
+
+**Decision.**
+
+1. **No service other than `api` holds a database credential.** No composition
+   hands any other service `DATABASE_URL`, `WORKER_DATABASE_URL`, a `PG*`
+   connection key, a `postgres://` value or a pool setting.
+   `scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts`
+   renders every composition and asserts it, with a planted red control.
+2. **The pipeline worker reaches the database only through `/api/pipeline/**`.**
+   It claims, renews and settles jobs, ticks the schedules, reaps expired leases
+   and enqueues follow-up jobs through the queue routes, reads the state its
+   handlers need through the read routes, and writes their rows through the
+   ingestion routes. Its import graph reaches no database module. It refuses to
+   start with a database key in its environment, and its startup check is HTTP:
+   the api answers and accepts its token with both rights (`pipeline_startup:
+   passed`).
+3. **It holds one credential, the `pipeline-worker` service token.** The token
+   lives in the api's automation-token store like the other holders (smoke spec
+   §3), with two rights: `pipeline_queue` and `pipeline_ingest`. It is refused on
+   every route outside `/api/pipeline/**`, and every other token is refused inside
+   it.
+4. **Every pipeline write is bounded, idempotent and fenced.** A request carries
+   at most 1,000 rows and 1 MiB (413 otherwise). It carries an `Idempotency-Key`:
+   a replay with the same body returns the recorded response and writes nothing,
+   and the same key with another body answers 409. It carries its lease
+   `(jobId, workerId, attempt)`: the api locks the job row and writes only while
+   the lease holds, so a reaped lease or a stale attempt answers 409 `lease_lost`
+   and writes nothing.
+5. **Pipeline work runs on the api's batch pool, capped per token.** A token
+   holds `PIPELINE_TOKEN_CONCURRENCY` requests at once (default 2). One more waits
+   `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated` with `Retry-After`, which
+   the worker honours. Public and member routes keep their own request pool.
+6. **`rm_worker` holds no privilege.** Migration 0127 revokes every table,
+   sequence and schema privilege and rm_owner's default grants to it, and
+   `backend/schema/grants.sql` re-asserts that on every migrate run. Its
+   password leaves the `~/.env` allowlist (preflight check 4).
+
+**Accepted costs.**
+
+- Migration 0127 is `compat: breaking`: a worker built before this release
+  needs `rm_worker`'s grants, and an api built before it refuses to boot beside
+  it (spec §8.4). A release that carries 0127 follows spec §8.5's breaking
+  order. To keep the rolling upgrade, 0127 can ship one release after 0126 and
+  the new worker: by then nothing connects as `rm_worker`.
+- Each existing `~/.env` holds an `rm_worker` line that is now off the
+  allowlist. Check 4 warns on stage and refuses on prod until the line goes.
+  The release runner's env rewrite moves it out.
+- `projects.discover` writes its roster in requests of at most 1,000 rows, each
+  its own transaction, instead of one transaction. Every write is an idempotent
+  upsert, and deactivation runs only after every request landed, so a run that
+  stops between requests leaves rows the next run rewrites.
+- The retired `regime.classify` and `research.refresh` kinds still have
+  handlers that present the analytics token. The worker no longer holds that
+  token, so a job of either kind enqueued by hand fails. No schedule enqueues
+  them (D25).
+
+**Why.** Production answered nginx 502s while the api logged its 10 s request
+timeout at about 1% CPU. Every worker lane opened its own pools, so no one place
+bounded concurrency, timeouts or query budgets. With the api as the only client,
+the connection budget is one sum the api checks at boot, and bulk pipeline
+work can exhaust only the batch pool.
+
+Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
+`CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
+pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
+connection pooler.
