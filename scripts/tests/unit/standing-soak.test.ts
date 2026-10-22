@@ -436,6 +436,21 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalBuyback(["answered HTTP 413, halving"]).status).toBe("PASS");
     expect(evalBuyback(["live index failed"]).status).toBe("FAIL");
   });
+  test("R8.v warns on a Base RPC 429 and fails on any other live index failure (issue 1387)", () => {
+    // The shape of the line stage QA run 20261016T054239Z hit at boot on the public endpoint.
+    const r429 = "buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 (https://mainnet.base.org): request limit reached";
+    const other = "buyback-logs: live index failed, leaving persisted rows in place: Error: Base RPC error -32000: header not found";
+    const w = evalBuyback([r429, "answered HTTP 413, halving"]);
+    expect(w.status).toBe("WARN");
+    expect(w.detail[0]).toContain("1 'live index failed' on a Base RPC rate limit");
+    expect(w.detail[0]).toContain("1 HTTP 413 answers");
+    expect(evalBuyback(["buyback-logs: live index failed, leaving persisted rows in place: request limit reached"]).status).toBe("WARN");
+    const mixed = evalBuyback([r429, other]);
+    expect(mixed.status).toBe("FAIL");
+    expect(mixed.detail[0]).toContain("2 'live index failed', 1 not a Base RPC rate limit");
+    expect(evalBuyback([other]).status).toBe("FAIL");
+    expect(evalBuyback(["answered HTTP 413, halving", "answered HTTP 413, halving"]).status).toBe("PASS");
+  });
   test("R8.w: the tier must match the key", () => {
     const g = (hasKey: boolean, lines: string[]) => evalGecko({ hasKey, geckoLines: lines, unredactedLedgerRows: 0, keyEnvHits: 0 }).find((c) => c.id === "R8.w")!.status;
     expect(g(true, ["[gecko] x via pro tier (h)"])).toBe("PASS");
