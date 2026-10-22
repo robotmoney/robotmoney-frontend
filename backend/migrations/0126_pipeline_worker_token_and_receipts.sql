@@ -76,15 +76,34 @@ COMMENT ON TABLE pipeline_ingest_receipts IS
 GRANT SELECT, INSERT ON pipeline_ingest_receipts TO rm_app;
 GRANT SELECT ON pipeline_ingest_receipts TO rm_readonly;
 
-GRANT SELECT, INSERT, UPDATE ON
-  agent_revenue_daily, agent_vaults, chain_address_floors, chain_day_blocks, daily_agent_snapshots,
-  daily_coin_snapshots, daily_tvl_snapshots, daily_wallet_snapshots, job_runs, job_schedules, jobs,
-  lobster_coins, openclaw_agents, projects, tracked_wallets, vault_adapter_samples,
-  vault_share_price_history, wallet_backfill_state, wallet_balance_samples, wallet_sleeve_samples,
-  asset_price_floors, asset_prices, buyback_scan_state, token_market_samples
-TO rm_app;
-GRANT SELECT, INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence, buyback_swaps TO rm_app;
--- The evidence copies are written once and never changed: rm_app holds no
--- UPDATE on them (grants.sql lists both with the insert-only ledgers).
-REVOKE UPDATE ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence FROM rm_app;
+-- Each grant is guarded by to_regclass: a table a database does not have
+-- (a replay that skips an older release's files) is passed over, never an
+-- error. Production has every one of them.
+DO $rm_pipeline_grants$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'agent_revenue_daily', 'agent_vaults', 'chain_address_floors', 'chain_day_blocks', 'daily_agent_snapshots',
+    'daily_coin_snapshots', 'daily_tvl_snapshots', 'daily_wallet_snapshots', 'job_runs', 'job_schedules', 'jobs',
+    'lobster_coins', 'openclaw_agents', 'projects', 'tracked_wallets', 'vault_adapter_samples',
+    'vault_share_price_history', 'wallet_backfill_state', 'wallet_balance_samples', 'wallet_sleeve_samples',
+    'asset_price_floors', 'asset_prices', 'buyback_scan_state', 'token_market_samples'
+  ] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE ON public.%I TO rm_app', t);
+    END IF;
+  END LOOP;
+  -- The evidence copies are written once and never changed: rm_app holds no
+  -- UPDATE on them (grants.sql lists both with the insert-only ledgers).
+  FOREACH t IN ARRAY ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence', 'buyback_swaps'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('GRANT SELECT, INSERT ON public.%I TO rm_app', t);
+    END IF;
+  END LOOP;
+  FOREACH t IN ARRAY ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'] LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('REVOKE UPDATE ON public.%I FROM rm_app', t);
+    END IF;
+  END LOOP;
+END $rm_pipeline_grants$;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_app;

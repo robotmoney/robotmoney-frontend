@@ -507,7 +507,7 @@ test("1034: the pipeline-worker token is refused on every route outside /api/pip
 test("1034: inside /api/pipeline/**, the scheduler, analytics and operator tokens and a member bearer are refused, and the pipeline token is admitted", async () => {
   const entries = ENTRIES.filter((e) => e.family === "pipeline");
   expect(entries.map((e) => e.key).sort()).toEqual([
-    "pipeline.claim", "pipeline.enqueue", "pipeline.ingest", "pipeline.reap", "pipeline.read", "pipeline.release",
+    "pipeline.claim", "pipeline.enqueue", "pipeline.ingest", "pipeline.read", "pipeline.reap", "pipeline.release",
     "pipeline.renew", "pipeline.settle", "pipeline.sweep", "pipeline.tick", "pipeline.whoami",
   ]);
   for (const token of [scheduler, analytics, operator]) {

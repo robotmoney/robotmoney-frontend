@@ -73,7 +73,8 @@ beforeAll(async () => {
 }, 120_000);
 
 test("the raw-history/gaps scan reads raw_indicator_history through an index condition", async () => {
-  for (const site of ["src/ops/gap-detector:detectGaps.raw_indicator_history.app", "src/ops/gap-detector:detectGaps.raw_indicator_history.worker"]) {
+  // One site since issue 1034: the worker's gap reports run in the api as rm_app (D75).
+  for (const site of ["src/ops/gap-detector:detectGaps.raw_indicator_history.app"]) {
     const nodes = await explain(probeOf(site), ["2018-01-01"]);
     expect(indexConds(nodes).length, site).toBeGreaterThan(0);
     expect(nodes.some((n) => n["Node Type"] === "Seq Scan"), site).toBe(false);
