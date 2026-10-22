@@ -104,6 +104,7 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/projects/{slug}`: One project dossier. About 7 KB.
 - [https://robotmoney.network/api/dashboards/activity](https://robotmoney.network/api/dashboards/activity): Agent activity feed. Under 1 KB while empty.
 - [https://robotmoney.network/api/comments](https://robotmoney.network/api/comments): Public comments. Under 1 KB.
+- `https://robotmoney.network/api/referrals/codes/{code}`: Whether one referral code is active right now. Under 200 B.
 
 <!-- END GENERATED ENDPOINTS -->
 

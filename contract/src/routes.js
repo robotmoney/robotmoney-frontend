@@ -401,6 +401,14 @@ export const ROUTES = {
     ingest: "/api/pipeline/ingest/:op",
   },
 
+  // Issue 1371 (docs/technical/referrals-spec.md §6): the public referral-code
+  // lookup. Unauthenticated, GET only, one code per request: an active code
+  // answers 200 ReferralCodeCheck, every other code the identical 404. No list,
+  // prefix or wildcard route exists. Cacheable 60 s, 100 requests/min per ip.
+  referrals: {
+    code: "/api/referrals/codes/:code", // GET → ReferralCodeCheck
+  },
+
   // Analytics-provider ingestion boundary (issue #106). Every route requires an
   // analytics-provider store token (D52); updater processes call
   // these instead of writing SQL. Mutations validate the whole payload before
@@ -515,6 +523,10 @@ export const ROUTES = {
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — retired; 409 because the independent producer owns execution
+    // Issue 1371 (docs/technical/referrals-spec.md §4): the referral correction
+    // log, read-only. Corrections are recorded by a reviewed config change, never
+    // by an admin-route write (D66); the panel verifies and shows them.
+    referralCorrections: "/api/admin/referrals/corrections", // GET → AdminReferralCorrectionsResponse
   },
 
   // Swarm operations surface (issue #159 UI over issue #152/PR #169's
