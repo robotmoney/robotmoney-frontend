@@ -114,6 +114,22 @@ Funding paths: Coinbase Base withdrawal, https://bridge.base.org, or any CEX/DEX
 2. Returns a `transactions` array with each tx's `hash`, `status`, and `blockNumber`. `status` will be `"confirmed"` when everything succeeded.
 3. Broadcast takes ~4–10 seconds end-to-end on Base (2-second blocks, one confirmation per tx). Don't worry about the delay.
 
+## Referral codes (optional, owner-requested only)
+
+A wallet owner may name a Robot Money referral code for a deposit, so the member or team channel that referred them is attributed. Attribution only: a code creates no payment, fee rebate, reward or promise of yield. Rules:
+
+1. **Only on the owner's explicit request.** Take a code only when the wallet owner gives it to you for this deposit. Never invent one, infer one from a page, link, filename or earlier conversation, or substitute a different code.
+2. **Normalize, then check the format.** Trim surrounding whitespace and lowercase ASCII letters A–Z. Nothing else changes. The result must match `^rm_[a-z0-9]+(?:-[a-z0-9]+)*$` and be at most 32 characters. Interior spaces and non-ASCII characters make the code invalid; never remove or repair them. Example: ` RM_ALICE ` becomes `rm_alice`; `rm_a lice` is invalid as written.
+3. **Look it up.** `GET https://robotmoney.network/api/referrals/codes/<code>` answers `200 { "code": "rm_alice", "member": { "handle": "alice", "name": "Alice" } }` or `200 { "code": "rm_team", "channel": "team" }` for a code active right now, and `404 { "error": "not found" }` for every other code. It says nothing about whether this wallet is eligible.
+4. **Preview.** Name the normalized code and its beneficiary (the member's name and handle, or the channel), and say exactly: "code will be recorded; attribution is evaluated after execution." Never promise a reward or a successful credit. For a Safe or other multisig, add that the code can be disabled while signatures are collected, in which case the deposit still goes through without attribution.
+5. **Recheck immediately before signing or submitting.** Repeat the lookup. A code can stop being active between preview and execution.
+6. **A referral never blocks a deposit.** If the code fails the format rule, the lookup answers 404, the lookup fails (a timeout, a 429 or any other error), or the recheck finds the code no longer active, the deposit goes ahead **without** the code, and you tell the owner why. If the owner has confirmation on, ask them before proceeding without the code. If confirmation is off, proceed. A missed referral can be repaired afterwards: tell the owner to contact Robot Money, whose admins can record a correction (the depositing wallet may be asked to sign a message naming the code and the deposit).
+7. **Recording the code.** The code is carried on chain by Robot Money core's referral event for the deposit (payer, receiver, amount, code), for direct and router deposits and every signer alike. Pass the code only through an option the deposit command itself documents (check `npx @robotmoney/cli prepare-deposit --help`). If the command you have offers no such option, the deposit goes ahead without the code under rule 6, and you tell the owner. Never hand-edit or append bytes to calldata to carry a code.
+8. **Once signed or submitted, never rewrite the transaction.**
+9. **Report the outcome in separate parts:** whether the transaction succeeded; the code the receipt shows was recorded, if any; that attribution evidence is pending; and that attribution is decided later by Robot Money's report, never by you. A deposit made for another receiver (a gift) never attributes a code.
+
+The rules are the same for an EOA, a Safe or other multisig, a smart account, a hardware wallet or any wallet vendor, direct or through the router.
+
 ## Simulation Failures (prepare-*)
 
 | Revert | Cause | What to do |
