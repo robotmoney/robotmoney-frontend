@@ -33,14 +33,13 @@ export function isAcceptanceBoot(standingStack: boolean, policy: "prod" | "stage
 //     boot's target lock (backend/scripts/smoke-prepare.ts, migrate-run.ts
 //     migrateCommand), so no container is ever handed a migration credential.
 //
-//   * WORKER_DATABASE_URL is STACK-OWNED. It is the pipeline worker's rm_worker
-//     URL, emitted by buildComposeEnv() from the stack's own role URLs
-//     (scripts/stack/config.ts StackDatabase.roleUrls) — the smoke's generated
-//     rm_worker password for a local mode, `~/.env`'s for the remote database.
-//     It is not on the shell allowlist: a deployment `.env` once forwarded the
-//     persistent stack's `…@postgres:5432` value into every lane of a twin boot
-//     that has no `postgres` service (ffa431b6), and every lane died in DNS. An
-//     exported value is reported and ignored (shadowingStackEnvWarnings below).
+//   * WORKER_DATABASE_URL is RETIRED (D75, issue 1034). The pipeline worker
+//     holds no database credential and refuses to start with one; it reaches
+//     the database through the api's /api/pipeline/** routes. It is not on the
+//     shell allowlist: a deployment `.env` once forwarded the persistent
+//     stack's `…@postgres:5432` value into every lane of a twin boot (ffa431b6).
+//     An exported value is reported and ignored (shadowingStackEnvWarnings
+//     below).
 export const DEMO_COMPOSE_PASSTHROUGH: readonly string[] = Object.freeze([...LEAF_COMPOSE_PASSTHROUGH]);
 
 /**
@@ -147,10 +146,8 @@ export function homeEnvComposeEnv(homeEnv: Record<string, string | undefined>): 
 const SHADOWING_STACK_ENV_VARS: ReadonlyArray<readonly [string, string]> = [
   [
     "WORKER_DATABASE_URL",
-    "the worker lanes take the stack's own rm_worker URL (the instance's generated password for a local " +
-      "mode, ~/.env's for the remote database). Forwarding a deployment's rm_worker URL pointed them at a " +
-      "`postgres` host this stack does not have, and every lane died in DNS while the boot reported only " +
-      "unhealthy workers",
+    "the worker lanes hold no database credential (D75): they reach the database through the api's " +
+      "/api/pipeline/** routes with the pipeline-worker token, and a worker handed a database URL refuses to start",
   ],
 ];
 

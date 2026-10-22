@@ -1144,6 +1144,18 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
 ]);
 
 /**
+ * Keys §3 listed once and no longer does. Production's `~/.env` still holds an
+ * `rm_worker` line from before D75 (issue 1034), and the release's
+ * C07-env-rewrite moves it out. Until then check 4 WARNS on such a key in every
+ * environment and never refuses, so the rolling upgrade that retires the role
+ * is not stopped by the line it is about to move. Any other off-list key is
+ * still refused on prod.
+ */
+export const ENV_FILE_RETIRED_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  rm_worker: "the retired rm_worker password (D75: no container logs in as rm_worker; C07-env-rewrite moves the line out)",
+});
+
+/**
  * Check 4 — `~/.env` holds only the keys §3 lists.
  *
  * Input: the context (for `envFilePath`, `env` and `connection`). Output:
@@ -1221,6 +1233,14 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
       continue;
     }
     if (allowed.has(line.key)) continue;
+    if (line.plain && Object.hasOwn(ENV_FILE_RETIRED_KEYS, line.key)) {
+      findings.push({
+        check: "env_credentials",
+        severity: "warn",
+        message: `${path} holds ${line.key}, ${ENV_FILE_RETIRED_KEYS[line.key]} — §3 no longer lists it`,
+      });
+      continue;
+    }
     if (!line.plain) {
       // Not printed: a key holding `:`, spaces or quotes may be half a secret.
       const reason = dangerousTokenReason(line.key);
