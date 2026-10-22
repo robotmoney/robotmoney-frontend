@@ -244,7 +244,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 ## 9. Invariants
 
 - **A transition transaction never spans a network call, a model call, or a wait on another service.** It does database work and commits. The event counter (§6.3) therefore serializes only database work, bounded by the slowest single transition. Without this rule, one transition holding its transaction open would stall every other subject's.
-- Exactly two running services hold a database credential: `api`, and the pipeline worker running the vault, wallet, buyback and project jobs as `rm_worker` (`smoke-production-spec.md` §7.2). A third is a defect. The pipeline worker's move to the same no-database model is a later document.
+- Exactly one running service holds a database credential: `api` ([D75](../decisions.md#d75), `smoke-production-spec.md` §7.2). The pipeline worker runs the vault, wallet, buyback and project jobs through the api's `/api/pipeline/**` routes with its own service token. A second is a defect.
 - A subject's scheduling columns are set once by bootstrap and afterwards only by a migration on a deployed stack, or by the admin API on an ephemeral one (§2.3).
 - Every window closes on its subject's grid. A late turnover never shifts later windows.
 - Event sequence numbers are gapless and assigned in commit order.
