@@ -7,6 +7,8 @@ environment. Only the optional source clients in `src/extract/` fetch.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
 
+The refactor preserves one shared calculation: identical effective inputs and report options produce byte-identical report payloads in the backend and SDK, before and after refactoring. This includes every backtest statistic, date, null, field order and number formatting. Calculation-methodology changes and a separate backend compatibility engine are outside its scope. Provider collection and archive downloads finish during extract; all later stages run from supplied data without HTTP, including on missing inputs.
+
 What this package is specified to do: [`docs/technical/analytics-requirements.md`](../../docs/technical/analytics-requirements.md) (the module the backend and the SDK share) and [`docs/technical/analyst-sdk-requirements.md`](../../docs/technical/analyst-sdk-requirements.md) (the client side). Terms (source data, calculated indicators, report, archive) are defined in [`docs/definitions.md`](../../docs/definitions.md).
 
 What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
@@ -14,20 +16,7 @@ What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
 backend files are one-line re-exports of these, so the backend runs the same source
 files. On the audited run (ledger run 390, 3066 of 3066 days, 5232 of 5232 correlation
 and backtest leaves) the composite, the panel indices, the percentiles, the labels, the
-correlations and the backtest reproduced bit-exactly from the persisted inputs. The
-Yahoo-sourced indicators are the exception and can drift on another run: they are
-persisted only to a relative tolerance (1e-6 for float32 series, 5e-6 for ratios of
-two series; decision D56, `backend/src/analytics/source-tolerance.ts`), while a run
-computes from the freshly fetched values. A replay can therefore differ, by an
-amount that is not bounded by that tolerance. The tolerance applies to `VIX`, `SPX_TREND`, `ETH_TREND` (float32) and
-`COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`,
-`XLP_XLY` (ratios) in the registry, and to the `backtest:^GSPC` and `backtest:ETH-USD`
-price series. Observed on one audited run: `factor_index` differed on some days by up
-to 1.4e-4 (30 to 100 times the tolerance, amplified through ranking and weights), and
-the last-day weights differed by up to 1.2e-6. The size of the drift on another run is
-unknown. The fetched values are not stored, so that
-cause is an inference, not a measurement. See "Reproducing a published run" and
-"What changes after publication, and why" below.
+correlations and the backtest reproduced bit-exactly from the persisted inputs. Source-update jitter filtering belongs to ingestion (D56). The required input contract is that backend and SDK consume the exact committed values and versions for a run. There is no Yahoo exception or numerical tolerance in downstream calculations or report comparisons. The code review tracks the existing backend handoff gap where fresh in-memory observations can differ from the retained database values.
 
 ## Get the source
 
@@ -173,9 +162,7 @@ API does not yet serve the source data versions or the published reports they re
    bun run regime run-inputs.csv --asof 2026-10-05 --full
    ```
 
-The composite, panel indices, percentiles, labels, correlations and backtest then match
-the payload on the audited run (390); the Yahoo-sourced series are the exception, as
-above.
+The composite, panel indices, percentiles, labels, correlations and backtest matched the payload on the audited run (390). Replay requires the exact values actually used by that run. The code review identifies the existing committed-input handoff gap; it must not be treated as permission to compare reports with a tolerance.
 
 ## What changes after publication, and why
 

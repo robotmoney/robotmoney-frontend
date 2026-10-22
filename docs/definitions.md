@@ -43,10 +43,12 @@ A specific file artifact. It collects reports in one CSV file.
 | Weight schedule | The weights in force for each date. |
 | Backtest | A replay of a weight schedule over past source data. |
 | Value series | The result of a backtest: the portfolio value for each day. A calculated indicator (a backtested price). |
-| Period statistics | Growth, volatility, drawdown and Sharpe ratio of a value series over a date range. A window and a market phase are both date ranges. |
+| Period statistics | Growth, volatility, drawdown and Sharpe over a date range, using the established values, original pre-cost returns and date conventions. A window and a market phase are both date ranges. |
 | Turnover | The share of the portfolio that a trade moves: the sum of absolute weight changes, halved. |
 | Buy-and-hold | A schedule with one entry and no trades. The weights drift with prices. |
 | Constant mix | A schedule that holds fixed weights by trading back to them whenever they drift. |
+
+These descriptive terms do not change existing reference calculations. In particular, `blend_hodl` retains its historical key and fixed-target daily behavior. This refactor does not add a drifting-holdings simulator.
 
 Choosing the weights is not part of a backtest. A backtest takes a weight schedule as input.
 
@@ -63,7 +65,7 @@ These terms support the four above.
 | Vintage | The record of one run: the source data versions it read and the report it published. A later run adds a vintage. The sequence of vintages is the revision history of the reports. |
 | Source id | The canonical code and public contract name of a source series, `<provider>:<symbol>`, for example `yahoo:^GSPC`. |
 | Leg | One of the two source series a ratio divides. |
-| Methodology | The identified calculation rules used by a run. Replay also records the exact code revision. A structural refactor preserves results for identical inputs under the same methodology. |
+| Methodology | The identified calculation rules used by a run. Replay also records the exact code revision. This refactor preserves one shared calculation: identical inputs and options produce byte-identical report payloads in backend and SDK before and after it. Methodology metadata records provenance and does not select alternative calculation rules. |
 | Run | One execution of the analytics module, named by its run key. It reads one vintage of source data and publishes one report. |
 | As-of | The last date a run may use. Source data dated later is ignored. |
 | Local copy | The backups on an analyst's machine. |

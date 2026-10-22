@@ -10,18 +10,20 @@ Two consumers use the module: the backend analytics run and the analyst SDK clie
 
 Non-goals:
 
-- Changing how the regime is computed.
+- Changing any regime, correlation, research-signal or backtest calculation methodology, including correcting numerical edge cases as part of the refactor.
 - Optimizers, return forecasts, intraday data and live trading.
 - A user interface. Output is JSON and CSV.
 - Scoring a swarm member's submission. That is a backend feature.
 
 ## 2. Principles
 
-- **Pure.** The computation calls no network, reads no database and reads no environment. The purity test in `scripts/tests/unit/analyst-sdk-purity.test.ts` enforces it.
+- **Pure.** The computation calls no network, reads no database and reads no environment.
+- **HTTP only during extract.** Extract is the acquisition stage: it collects provider data or downloads archived data before computation starts. After extract, input preparation, alignment, transforms, ratio calculation, regime calculation, research signals, allocation policies, backtesting, statistics and report generation make no outbound HTTP requests. This applies to their callbacks, adapters and transitive dependencies, including when inputs are missing. SDK provider requests go only through `src/extract/http.ts`; csvb archive requests belong to the acquisition stage. A local input run does not start or invoke acquisition.
+- **Committed inputs.** Source-update jitter handling belongs to ingestion. After the update commits, extract supplies the exact committed values and versions to every downstream consumer. Fresh provider values discarded as jitter never enter calculation. Backend, archives and SDK use the same committed observations for a run.
 - **JSON in, JSON out.** Every function takes plain data and returns plain data.
-- **Same inputs, same numbers.** Two runs on the same inputs give the same output.
+- **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, both before and after the refactor.
 - **One source of truth.** The backend runs the package's source files.
-- **Report compatibility.** A structural refactor preserves the complete report for identical pinned inputs and methodology: values, dates, labels, nulls and output shape. A numerical change requires a separately identified methodology and explicit approval before production adopts it. All capabilities in this specification remain in scope.
+- **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every value, date, label, null, field and serialized byte, including field ordering and number formatting. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
 
 ## 3. Components
 
@@ -53,6 +55,7 @@ The input is a report of source data. It is a CSV with exactly the header `date,
 - **Values.** A value is a plain decimal number, with an optional sign and exponent. Hex, padding and non-finite values reject the file.
 - **Unread series.** Source ids that no indicator, correlation or backtest reads are ignored. They do not set the date axis.
 - **Date axis.** Without `asof`, the run ends on the latest date of any series the run reads.
+- **Input coverage.** Extract supplies every source series required by the requested workflow and date range before downstream work begins. Coverage includes ratio legs, asset prices, lending yields, benchmark rates and research inputs wherever the workflow uses them. Missing data is an acquisition or input-coverage gap; downstream code never repairs it with an HTTP request. Required missing inputs cause an explicit error naming the missing series and affected range. Optional missing inputs follow the documented missing-result rules below.
 - **Missing series.** An indicator with no rows for a source id it reads counts as missing and carries no weight.
 - **Correlations and backtest.** The correlations need `yahoo:^GSPC` and `yahoo:ETH-USD`. The backtest also needs `fred:DTB3`. A section whose series are missing is `null`.
 
@@ -68,7 +71,7 @@ Eight indicators are ratios of two Yahoo series: `COPPER_GOLD`, `IWM_SPY`, `BTC_
 
 A row keyed by a ratio id is a calculated value, not source data. The loader rejects it. New source collections store and serve the legs. Historical stored ratios remain calculated indicators and are retained as original replay inputs with their provenance; they are never relabelled as source data or reconstructed from newly downloaded legs. The historical replay path accepts those inputs under the recorded methodology, separately from the source-only input contract.
 
-Ratio calculation preserves the established operation order and precision, without additional rounding. Before changing production to calculation from legs, comparison against pinned original inputs must demonstrate identical ratios and complete reports. A difference in alignment, missing values, collection time or precision requires an explicit methodology change. Missing historical legs are recorded as unavailable.
+Ratio calculation preserves the established operation order and precision, without additional rounding. Before changing production to calculation from legs, comparison against pinned original inputs must demonstrate identical ratios and complete reports. A difference in alignment, missing values, collection time or precision blocks the refactor cutover; it cannot be accepted by selecting another methodology or widening a tolerance. Missing historical legs are recorded as unavailable.
 
 ### 4.4 The public API
 
@@ -116,7 +119,7 @@ The API serves archives in format 1. A client downloads archives and writes them
 - **Same bytes.** The API and the replica produce byte-identical archives for the same state.
 - **Coverage.** Every report in a backup is served with full history. That includes the source data the correlations and the backtest read (`yahoo:^GSPC`, `yahoo:ETH-USD` and `fred:DTB3`).
 
-Model portfolio inputs (eight years of asset prices, lending yields and the T-bill rate) are out of scope for this document.
+The acquisition details for model portfolio inputs (asset prices, lending yields and the T-bill rate) are specified separately. Any workflow using them receives them as supplied data and follows the same extract-only HTTP boundary; their absence never authorizes a downstream request.
 
 ### 4.7 Chunking
 
@@ -154,75 +157,52 @@ The backtest replays a portfolio over past source data. It answers: what would t
 
 The backtest does not choose weights. It takes them as input.
 
-### 5.2 Methodology and weights
+### 5.2 Calculation rules and weights
 
-The backtest identifies its methodology. Production report compatibility uses the established calculation rules: daily returns use the previous target weights without carrying holding drift; costs apply when target weights change; a date without a label is skipped; baselines start at their first priced date while strategies start at their first labelled date. The mixed baseline applies fixed weights daily without charging for that daily reset. Its meaning is constant mix, even where the historical output key is `blend_hodl`.
+The backend and SDK run one shared backtest calculation. Generalizing the API preserves the established production results byte for byte. The following behaviors are part of that contract, including numerical edge cases.
 
-Historical statistics retain their original conventions, including a zero Sharpe for zero volatility and the out-of-sample starting value from the first point after the split date. Historical field names and shapes are preserved.
-
-The simulator and period statistics below also support the specified drifting-holdings methodology and its date and null rules. Those rules define a distinct methodology. SDK callers select it explicitly; production adoption requires approval and does not reinterpret prior reports. Historical replay selects the recorded methodology and code revision.
-
-### 5.2.1 Weights and schedule
-
-- **Weights.** A list of shares of the portfolio, one per asset id. Cash is an entry. No share is negative. The shares sum to 1.
-- **Weight schedule.** The weights in force for each date.
-- **Any assets.** An asset id is any source id that has a price series in the input. The module has no list of assets.
+- **Weights.** Nonnegative shares per asset id, cash included, summing to 1. An asset id is any source id with supplied prices; the module has no fixed asset list.
+- **Schedule.** Supplies the target weights for each date. Reference schedules preserve the existing label-to-weight mapping and dates with missing labels.
+- **Returns.** Each active day's asset return uses the previous active target weights and that day's price change against the preceding calendar date. Target weights are reapplied in daily return calculations; holding drift is not carried between dates.
+- **Missing weights.** A date with no applicable weights is skipped, including that day's market move. It does not acquire data or introduce a new hold-through-gap rule.
+- **Trading costs.** A change in target weights at the close deducts one-sided turnover times the cost rate. Turnover is the sum of absolute target-weight changes, halved. Unchanged target weights incur no cost. Preserve the established operation order.
+- **Cash.** Uses the previous calendar day's annual yield in percent, converted with `(1 + yield / 100) ** (1 / 365) - 1`. Missing earlier yields earn zero.
+- **Prices.** Gaps are forward-filled using the existing rules. The existing treatment of invalid or nonpositive prices is preserved.
+- **Start.** Values start at 1. Reference baselines begin on their first priced date; strategies begin on their first applicable labelled date. Preserve each path's original dates and normalization.
 
 ### 5.3 Simulator
 
-`simulatePortfolio(dateAxis, schedule, prices, cashRate, options)` returns the value series.
+`simulatePortfolio(dateAxis, schedule, prices, cashRate, options)` exposes the shared simulation for supplied schedules and assets, using section 5.2 without a methodology option.
 
 | Input | Meaning |
 | ----- | ------- |
 | `dateAxis` | The days to replay. |
-| `schedule` | Weights for each date. |
-| `prices` | A report of source data for each asset id: daily price levels. |
-| `cashRate` | A report of source data: the annual cash yield in percent. |
-| `options.methodology` | Identifies the compatibility or drifting-holdings rules. Production defaults to compatibility; drifting holdings require explicit selection. |
-| `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points. |
+| `schedule` | Applicable target weights per date. |
+| `prices` | Supplied daily price levels per asset id. |
+| `cashRate` | Supplied annual cash yield in percent. |
+| `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points, matching existing reports. |
 
-| Output | Meaning |
-| ------ | ------- |
-| value series | The portfolio value for each day. It starts at 1. |
-| trades | The number of dates on which the weights changed. |
-| cost | The total cost as a fraction of value. |
+The result includes the daily value series, trade count, cost evidence and the pre-cost daily returns needed by period statistics. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization remain byte-identical.
 
-The following rules describe the drifting-holdings methodology; compatibility follows section 5.2:
-
-- **No peeking.** Weights set for a date earn from the next day. A day's return uses the previous day's weights.
-- **Cost.** When the weights change at a day's close, the portfolio pays the cost on one-sided turnover: the sum of absolute weight changes, halved.
-- **Cash.** Cash earns the previous day's annual yield, compounded over 365 days. Cash earns nothing on a day with no earlier yield row.
-- **Start.** The series starts on the first date on which every asset in the schedule has a price and the schedule has weights.
-- **Gaps.** A price gap is filled forward from the last price. A date with no weights keeps the previous weights, so the portfolio still earns that day's move and pays no cost.
-- **Drift.** Between trades, each holding moves with its price, so the weights drift. A trade resets the weights to the schedule. Turnover is measured from the drifted weights to the new ones.
-- **Pure.** The same inputs give the same output. The module reads no file and no network.
+Weights set at today's close apply to later returns; changing today's target can change today's cost, but cannot change today's pre-cost return or earlier values. Computation reads no file and makes no HTTP request.
 
 ### 5.4 Period statistics
 
-`periodStats(valueSeries, from, to, options)` uses the explicitly identified methodology, defaulting to compatibility. For the drifting-holdings methodology it returns, for any date range:
+`periodStats(valueSeries, from, to, options)` uses the same statistics calculation as production. `options` supplies the simulator's original pre-cost daily returns and date-boundary evidence where required; there is no methodology selector. A net value series alone cannot reproduce existing Sharpe, because values include trading costs and the daily returns used for Sharpe do not.
 
-- total return,
-- annualised growth,
-- volatility,
-- maximum drawdown inside the range,
-- Sharpe ratio: the mean daily return over its standard deviation, annualised over 365 days, as `computeBacktest` reports it.
+- Total return and annualized growth use the established values, operation order and elapsed-time conventions. CAGR uses years of 365.25 days.
+- Volatility and Sharpe use the original pre-cost return observations and sample standard deviation. Sharpe is annualized over 365 days with no risk-free subtraction and returns 0 when standard deviation is zero.
+- Maximum drawdown uses the established net values and peak calculation.
+- In-sample and out-of-sample statistics preserve the existing boundary conventions. Out-of-sample growth uses the first value after the split date and elapsed time from the split date.
+- Empty, short and non-finite cases preserve existing zero/null behavior; the refactor does not standardize them to new defaults.
 
-A trailing window and a market phase are the same call with different dates. The list of windows and phases is input, not part of the module. A range of fewer than two days returns nulls. A range with zero volatility returns a null Sharpe ratio.
-
-An in-sample and out-of-sample split is a pair of `periodStats` calls on either side of the split date. The out-of-sample range starts on the split date, and its growth is measured from the value on that date.
+Windows and market phases are supplied date ranges. Additional statistics must not alter existing fields. Full-range values and every existing split statistic must exactly reproduce the established output through both backend and SDK entry points.
 
 ### 5.5 Reference portfolios
 
-The reference portfolios are data:
+The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existing regime weight tables and baselines, plus the all-cash baseline. Single-asset hold baselines retain their existing behavior. The mixed baseline retains the `blend_hodl` key and its existing fixed-target daily calculation without charging for daily resets; its descriptive meaning is constant mix.
 
-- `eth`, `sp500` and `mixed`, each with a weights table per regime label,
-- the buy-and-hold baselines: a schedule with one entry on the start date and no trades after it,
-- the constant-mix baseline: fixed weights, restored by a trade on every date the weights drift,
-- the all-cash baseline.
-
-Under the drifting-holdings methodology, every baseline starts on the start date of the strategies it is compared with, so their values and growth compare directly. Compatibility reports preserve their original start dates.
-
-`scheduleFromLabels(labels, table)` turns a regime label report and a weights table into a weight schedule. The reference portfolios run through `simulatePortfolio`. Under the compatibility methodology they give the same value series and statistics as `computeBacktest`; the drifting-holdings methodology is checked against its own stated rules.
+`scheduleFromLabels(labels, table)` preserves the established label-to-weight mapping, including missing labels. Running those schedules through `simulatePortfolio` and `periodStats` gives the same daily values, statistics and serialized reference report as `computeBacktest`. Baselines and strategies retain their original respective start dates.
 
 ### 5.6 Consumers
 
@@ -240,9 +220,9 @@ Under the drifting-holdings methodology, every baseline starts on the start date
 - **As-of runs.** `runRegime` takes `asof`. Source data dated after it is ignored. Missing values are forward-filled, capped at `MAX_FORWARD_FILL_DAYS` (120). Semantics are in `regime-engine.md` section 8.1.
 - **Pinned source data.** A run is only reproducible against pinned source data. An unpinned read can differ from a published run, because external parties revise source data.
 - **Run manifest.** A run records the input files it used and their hashes, its vintage id, methodology id and exact code revision. Historical runs retain their recorded identity; any supplemental replay metadata is stored separately from immutable reports.
-- **Compatibility evidence.** Representative published runs across market regimes, dates and missing-data patterns provide pinned inputs and complete expected outputs. Comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values and every statistic. Identical inputs under the same methodology must match exactly. The documented Yahoo persistence tolerance describes differences between collected and persisted inputs; it does not excuse differences introduced by a refactor on identical inputs.
+- **Compatibility evidence.** Representative published runs across market regimes, dates and missing-data patterns provide pinned inputs and complete expected outputs. Comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values and every statistic. Identical inputs and report options must produce byte-identical serialized reports through the pre-refactor backend, pre-refactor SDK, refactored backend and refactored SDK. Changes to floating-point operation order, serialization, null handling or dates are regressions even when differences are small. Report comparison is byte for byte; no numerical tolerance applies.
 - **Replay.** The ledger starts on 2026-09-21. A published run is replayed from the source data in force at its vintage cutoff, not from the current table.
-- **Known drift.** Yahoo-sourced source data is persisted to a relative tolerance (D56). A replay can differ on those series. The README documents the observed drift.
+- **Source updates.** Ingestion applies D56 when deciding whether a provider value changes the stored record. Once committed, values are used exactly throughout preparation, calculation, archives and SDK inputs. No source-specific tolerance applies to downstream calculations or report comparison.
 - **What changes after publication.** The current table is not the record. Source data lags and restatements by external parties, and the final-day weight refresh, can move a calculated indicator. Labels amplify small composite changes.
 
 ## 7. Success criteria and tests
@@ -254,19 +234,20 @@ Package paths are relative to `packages/analyst-sdk/`.
 | The default regime report matches `tests/golden/regime-report.json`. | `tests/regime.test.ts` |
 | `bun test` passes with `fetch` replaced by a thrower. | `tests/no-network.ts` (preload) |
 | `bunx tsc --noEmit` is clean. | the package `typecheck` script |
-| The computation reads no network, database or environment. Only `src/extract/http.ts` calls `fetch`. | `scripts/tests/unit/analyst-sdk-purity.test.ts` |
+| After extract, all requested downstream stages complete from supplied data with HTTP disabled, including injected callbacks and dependencies. Missing required inputs fail explicitly and optional missing inputs return their documented missing results, with no acquisition fallback. | `tests/no-network.ts` (preload), `tests/input-rule.test.ts`, `scripts/tests/unit/analyst-sdk-purity.test.ts` |
+| The computation reads no network, database or environment. Static checks forbid downstream imports of acquisition clients and HTTP APIs, not only direct calls to `fetch`; SDK provider HTTP goes through `src/extract/http.ts`. | `scripts/tests/unit/analyst-sdk-purity.test.ts` |
 | The input rules of section 4.2 hold: bad dates and values reject the file, unread series are ignored and set no date axis, missing series give `null` sections. | `tests/input-rule.test.ts` |
 | The source-only loader calculates ratios from legs and rejects ratio-id rows; historical replay preserves original ratio inputs. | `tests/prepare.test.ts` |
 | Every exported function has a test. | `tests/*.test.ts` |
-| Under the compatibility methodology, reference portfolios give identical daily values and statistics through `simulatePortfolio` and `computeBacktest`. | `tests/backtest.test.ts` |
-| Complete reports for representative pinned production inputs match the established methodology exactly, including nulls and output shape. | `backend/tests/regime-replay-published.test.ts` |
+| Reference portfolios give byte-identical reports and identical daily values through the pre-refactor and refactored backend and SDK, including `simulatePortfolio` and `computeBacktest`. | `tests/backtest.test.ts` |
+| Complete serialized reports for representative pinned production inputs match byte for byte across backend and SDK before and after refactoring, including field order, formatting and nulls. | `backend/tests/regime-replay-published.test.ts` |
 | Storage key translation preserves values, dates, ordering and vintage membership; ambiguous mappings reject. | `tests/input-rule.test.ts` |
 | Historical ratio inputs replay unchanged; calculation from pinned legs preserves ratios before production adoption. | `tests/prepare.test.ts` |
-| No peeking: changing a date's weights does not change the value series up to and including that date. | `tests/backtest.test.ts` |
-| Under the drifting-holdings methodology, a date with no weights keeps the previous weights and earns that day's move. | `tests/backtest.test.ts` |
-| Under the drifting-holdings methodology, a schedule with one entry and no trades gives the buy-and-hold series. | `tests/backtest.test.ts` |
-| Under the same methodology, `periodStats` over the full range matches the simulator's own totals. | `tests/backtest.test.ts` |
-| A replay of a published run reproduces the composite, panel indices, labels, correlations and backtest. The Yahoo-sourced series are the stated exception. | `backend/tests/regime-replay-published.test.ts` |
+| Changing a date's weights does not change earlier values or that date's pre-cost return; its close-of-day cost follows the established rules. | `tests/backtest.test.ts` |
+| A date with no applicable weights preserves the established skip behavior and daily return observations. | `tests/backtest.test.ts` |
+| Reference baselines retain their existing target-weight behavior, keys and start dates without introducing holding drift. | `tests/backtest.test.ts` |
+| `periodStats` with original pre-cost returns and boundary evidence reproduces existing full-range and split statistics, including Sharpe on a path with costs. | `tests/backtest.test.ts` |
+| A replay with the original effective inputs reproduces the complete published report byte for byte. The run uses the exact committed input versions; source-update jitter handling provides no replay exception. | `backend/tests/regime-replay-published.test.ts` |
 | As-of regime labels match the published record from 2026-09-21 (issue 1182). | `backend/tests/regime-replay-published.test.ts` |
 | The API and the replica write byte-identical archives for the same state. | `backend/tests/api/public-analytics-archives.test.ts` |
 | A report served for a run is byte-identical on every request, and its checksum matches the stored one. | `backend/tests/api/public-analytics.test.ts` |
