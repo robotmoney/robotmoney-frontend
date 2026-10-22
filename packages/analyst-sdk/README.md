@@ -1,30 +1,22 @@
 # @robotmoney/analyst-sdk
 
-Pure regime analytics for Robot Money. Give it a raw indicator history, get back the
-regime label, per-indicator ranks and weights, correlations and the backtest. It
-never calls the network, never reads a database and never reads the environment.
+Pure regime analytics for Robot Money. Give it source data, get back the
+regime label, per-indicator ranks and weights, correlations and the backtest. The
+computation never calls the network, never reads a database and never reads the
+environment. Only the optional source clients in `src/extract/` fetch.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
+
+The refactor preserves one shared calculation: identical effective inputs and report options produce byte-identical report payloads in the backend and SDK, before and after refactoring. This includes every backtest statistic, date, null, field order and number formatting. Calculation-methodology changes and a separate backend compatibility engine are outside its scope. Provider collection and archive downloads finish during extract; all later stages run from supplied data without HTTP, including on missing inputs.
+
+What this package is specified to do: [`docs/technical/analytics-requirements.md`](../../docs/technical/analytics-requirements.md) (the module the backend and the SDK share) and [`docs/technical/analyst-sdk-requirements.md`](../../docs/technical/analyst-sdk-requirements.md) (the client side). Terms (source data, calculated indicators, report, archive) are defined in [`docs/definitions.md`](../../docs/definitions.md).
 
 What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
 `transforms.ts`, `indicators.ts`, `backtest.ts`, `correlations.ts`) lives here; the
 backend files are one-line re-exports of these, so the backend runs the same source
 files. On the audited run (ledger run 390, 3066 of 3066 days, 5232 of 5232 correlation
 and backtest leaves) the composite, the panel indices, the percentiles, the labels, the
-correlations and the backtest reproduced bit-exactly from the persisted inputs. The
-Yahoo-sourced indicators are the exception and can drift on another run: they are
-persisted only to a relative tolerance (1e-6 for float32 series, 5e-6 for ratios of
-two series; decision D56, `backend/src/analytics/source-tolerance.ts`), while a run
-computes from the freshly fetched values. A replay can therefore differ, by an
-amount that is not bounded by that tolerance. The tolerance applies to `VIX`, `SPX_TREND`, `ETH_TREND` (float32) and
-`COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`,
-`XLP_XLY` (ratios) in the registry, and to the `backtest:^GSPC` and `backtest:ETH-USD`
-price series. Observed on one audited run: `factor_index` differed on some days by up
-to 1.4e-4 (30 to 100 times the tolerance, amplified through ranking and weights), and
-the last-day weights differed by up to 1.2e-6. The size of the drift on another run is
-unknown. The fetched values are not stored, so that
-cause is an inference, not a measurement. See "Reproducing a published run" and
-"What changes after publication, and why" below.
+correlations and the backtest reproduced bit-exactly from the persisted inputs. Source-update jitter filtering belongs to ingestion (D56). The required input contract is that backend and SDK consume the exact committed values and versions for a run. There is no Yahoo exception or numerical tolerance in downstream calculations or report comparisons. The code review tracks the existing backend handoff gap where fresh in-memory observations can differ from the retained database values.
 
 ## Get the source
 
@@ -40,13 +32,13 @@ bun install
 
 Requires [bun](https://bun.sh) 1.2 or newer.
 
-## Input: raw indicator history
+## Input: source data
 
-A CSV with exactly this header, in this order:
+The input is a report of source data: a CSV with exactly this header, in this order:
 
 ```csv
 date,indicator,value,source
-2024-01-02,VIX,13.2,fred
+2024-01-02,VIX,13.2,yahoo
 2024-01-02,BTC_MVRV,1.84,coinmetrics
 ```
 
@@ -54,7 +46,7 @@ date,indicator,value,source
 | ----------- | ------------------------------------------------------------------------------ |
 | `date`      | `YYYY-MM-DD`                                                                   |
 | `indicator` | an indicator id from the registry in `src/analyze/indicators.ts` (for example `VIX`) |
-| `value`     | the raw, pre-transform value, a finite number                                  |
+| `value`     | the source data value, before any transform, a finite number                   |
 | `source`    | where the value came from (free text, kept for provenance, not used in compute) |
 
 Rules:
@@ -126,7 +118,7 @@ const asOf = buildReport(
 ### Current-month values (MNA)
 
 The current month's value of a monthly series such as `MNA` (EDGAR filing counts) is
-stored at its month-end date and updated through the month. A raw history can
+stored at its month-end date and updated through the month. A source data report can
 therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
@@ -135,6 +127,9 @@ to cut it at the day you mean.
 
 Each regime run is recorded in the immutable run ledger. To check a published figure,
 replay that run's inputs, not the current table.
+
+These steps read the production database, so they need operator access. The public
+API does not yet serve the source data versions or the published reports they read.
 
 1. Take the run's payload from `analytics_output_snapshots` (columns `run_id`,
    `artifact_kind`, `payload_bytes` (bytea), `checksum`; `payload_json` exists only in
@@ -167,9 +162,7 @@ replay that run's inputs, not the current table.
    bun run regime run-inputs.csv --asof 2026-10-05 --full
    ```
 
-The composite, panel indices, percentiles, labels, correlations and backtest then match
-the payload on the audited run (390); the Yahoo-sourced series are the exception, as
-above.
+The composite, panel indices, percentiles, labels, correlations and backtest matched the payload on the audited run (390). Replay requires the exact values actually used by that run. The code review identifies the existing committed-input handoff gap; it must not be treated as permission to compare reports with a tolerance.
 
 ## What changes after publication, and why
 
@@ -192,7 +185,7 @@ which is below the 0.67 `risk_on` bucket, and the label changed from `risk_on` t
 ## Public data API
 
 Optional, and independent of the SDK: the SDK never calls the network and the API
-never needs the SDK. A free, tokenless, read-only JSON API serves the raw inputs
+never needs the SDK. A free, tokenless, read-only JSON API serves source data and its revisions
 under `/api/public/analytics/`. Every route is GET only (any other method is a
 `405`), needs no `Authorization` header (a token changes nothing), and answers
 cross-origin requests (`Access-Control-Allow-Origin: *`). The routes, in the contract
@@ -201,7 +194,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 
 | route | serves | filters |
 | ----- | ------ | ------- |
-| `/api/public/analytics/raw-history` | raw indicator history, `date,indicator,value,source` | `indicator`, `from`, `to` |
+| `/api/public/analytics/raw-history` | source data for the indicators, `date,indicator,value,source` | `indicator`, `from`, `to` |
 | `/api/public/analytics/asset-prices` | daily asset closes in USD | `symbol`, `from`, `to` |
 | `/api/public/analytics/vintages` | frozen data vintages: run, methodology, cutoffs, digest, members | `run_key`, `tool_id`, `include=members` |
 | `/api/public/analytics/overwrite-events` | every recorded revision of a stored row | `table_name` |
@@ -209,7 +202,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 ```sh
 API=https://robotmoney.network
 
-# raw indicator history for one indicator, from a date (the SDK's CSV is this, as columns)
+# source data for one indicator, from a date (the SDK's CSV is this, as columns)
 curl -s "$API/api/public/analytics/raw-history?indicator=T10Y2Y&from=2024-01-01&limit=5"
 
 # asset prices
@@ -269,7 +262,7 @@ the data. Check each provider's terms before you republish what you download.
 src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
 src/input/       CSV and JSON loader
-src/run.ts       raw history in, regime report out
+src/run.ts       source data in, regime report out
 bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 ```
 
@@ -277,6 +270,6 @@ bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 from the backend. `scripts/tests/unit/analyst-sdk-purity.test.ts` in the repository
 root enforces it.
 
-## Rebuilding inputs from raw sources (optional)
+## Rebuilding source data from the original sources (optional)
 
 `src/extract/` holds the keyless source clients (FRED, Yahoo, DefiLlama, blockchain.com, Coin Metrics, Shiller, EDGAR) and the indicator-to-fetch map. They are the only SDK code that touches the network, and only through `src/extract/http.ts`. Pass your own `fetch` with `configureHttp({ fetch })`. Add `cache` and `recordFetch` hooks to wrap each GET. With no hooks they use `globalThis.fetch` directly. The geckoterminal source needs a host adapter (`SourceExtensions`) and throws without one.

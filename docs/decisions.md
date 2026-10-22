@@ -5098,6 +5098,8 @@ prevent.
 
 ## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
 
+> **Superseded in part by [D73](#d73) on 2026-10-21.** The bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated" no longer hold. The API now serves the record as it was, under the D73 load limits. The rest of this decision stands.
+
 **Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
 no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
 (`asset_prices`; the `prices` table from migration 0002 is dead and is not served),
@@ -5844,3 +5846,71 @@ Out of scope: skipping a judge's own operator's portfolio and the in-house
 exemption (issue 1335), judges voting or merging answers, verifiable randomness,
 turning outside judging on in production (issue 1396) and filling in draw records
 for sessions published earlier.
+
+---
+
+<a id="d72"></a>
+## D72 — Archive format 1 is the one archive format for analytics data (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.5.
+
+**Decision.**
+
+1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+2. **Write-once.** An archive never changes after it is written. Its checksum names it. A backup only adds archives.
+3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
+4. **Same bytes.** The API and the database replica write byte-identical archives for the same state.
+
+**Why.** An analyst, the backup job and the API must agree on one record. One write-once format lets a repo clone and an API download produce the same local copy.
+
+---
+
+<a id="d73"></a>
+## D73 — The public analytics API serves the record as it was, under fixed load limits (supersedes the D58 bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated"; owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` sections 4.4, 4.6 and 4.8. The rest of D58 stands: the public prefix, GET only, the contract, the grant and the data terms.
+
+**Decision.**
+
+1. **The record as it was.** The API serves source data as the external party published it when we collected it, with every later revision as a new version. It serves each run's published report byte for byte, with its vintage. A later run adds a report and never edits an earlier one.
+2. **No recomputation.** The API never computes a calculated indicator. Calculated indicators reach it only inside a published report.
+3. **Archives.** The API serves archives in format 1 (D72), grouped by backup, with watermarks.
+4. **Load limits.** At most 2 public queries at once, a 5 second statement timeout, a cost-weighted limit of 100 tokens a minute per client, a byte budget of 50 MB a minute per client, gzip off the event loop, immutable caching keyed on checksums and a bounded edge cache. A query that is gated or times out answers 503 with `Retry-After`.
+5. **Client identity.** The rate limit keys on `X-Client-IP`, which the web server sets and the caller cannot. Only the web server reaches the api port. No CDN rule is involved.
+
+**Why.** An analyst can check a published regime only against the data and the report as they were at the time. The current tables change after publication. Public traffic must never starve the site, and the D58 limits counted requests, not cost.
+
+---
+
+<a id="d74"></a>
+## D74 — Every source series has one id, `<provider>:<symbol>` (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.1 and `docs/definitions.md`.
+
+**Decision.**
+
+1. **One id.** A source series is named `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input files and new public API contracts use that id. Existing database and historical archive keys may remain behind one shared storage-boundary mapping. Immutable archives and vintage references are preserved.
+2. **One mapping.** No canonical id names the code that reads it. Computation uses canonical ids rather than `backtest:`, `SPX`, `ETH` or `TBILL3M` aliases. Existing storage keys are translated through one shared mapping, including the reverse mapping for existing writes. The mapping preserves values, dates, ordering and vintage membership and rejects ambiguity; a database rename is not required.
+3. **Ratio legs.** Each leg of a ratio is a source series with its own id. A ratio is a calculated indicator and is never stored as source data.
+
+**Why.** The same series carried three names: the provider symbol, the ledger key and the SDK input id. A table existed only to translate them, and the ledger key named its consumer. One canonical identity removes competing names from computation. One shared storage mapping preserves the historical record without requiring a database migration.
+
+### Analytics report compatibility (owner clarification, 2026-10-22)
+
+The analytics and analyst SDK refactor uses one shared calculation. Identical effective input observations, dates, schedules and report options produce byte-identical report payloads through backend and SDK before and after the refactor. This includes values, labels, nulls, field order and number formatting. There is no alternative methodology selector or backend-only engine for old results. Changes to numerical methodology are outside this refactor.
+
+A run records methodology and code revision as provenance. Public simulation and statistics APIs expose and generalize the established rules, including target-weight returns, missing-label behavior, baseline start dates, pre-cost Sharpe and split-date conventions. They do not introduce holding drift, risk-free subtraction or revised edge-case defaults. Original reports and historical ratio inputs remain immutable.
+
+Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
+
+### No migrations and no retroactive change (owner clarification, 2026-10-22)
+
+The analytics and analyst SDK work adds no database migration. No table, column, trigger, index or grant changes. Each feature works within the existing schema and grants. A requirement that cannot be met that way stops for an owner decision; a migration is never the fallback.
+
+No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
+
+This settles three points.
+
+1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
+2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, the revision capture waits for an owner decision.
+3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
