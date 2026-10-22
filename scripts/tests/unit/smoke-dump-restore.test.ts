@@ -77,11 +77,12 @@ describe("dumpOwnershipSql: the runtime roles read the target state the lock rea
     expect(read).toEqual([...TARGET_STATE_TABLES].sort());
   });
 
-  test("grants SELECT on each target-state table the restored version has, to the three runtime roles", () => {
+  test("grants SELECT on each target-state table the restored version has, to the two runtime roles in service (not rm_worker, D75)", () => {
     for (const table of TARGET_STATE_TABLES) expect(sql).toContain(`'${table}'`);
     expect(sql).toContain("IF to_regclass('public.' || t) IS NOT NULL THEN");
-    expect(sql).toContain("GRANT SELECT ON public.%I TO rm_app, rm_worker, rm_readonly");
-    expect(sql).toContain("GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;");
+    expect(sql).toContain("GRANT SELECT ON public.%I TO rm_app, rm_readonly");
+    expect(sql).toContain("GRANT USAGE ON SCHEMA public TO rm_app, rm_readonly;");
+    expect(sql).not.toMatch(/GRANT[^\n]*rm_worker/);
   });
 
   test("grants no write, DELETE or TRUNCATE to any runtime role (D55 (6)); every other grant is --migrate's reconciliation", () => {
