@@ -437,9 +437,14 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalBuyback(["live index failed"]).status).toBe("FAIL");
   });
   test("R8.v warns on a Base RPC 429 and fails on any other live index failure (issue 1387)", () => {
-    // The shape of the line stage QA run 20261016T054239Z hit at boot on the public endpoint.
-    const r429 = "buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 (https://mainnet.base.org): request limit reached";
+    // The line liveIndexFailedLine (backend/src/chain/buyback-indexer.ts) writes for a BaseRpcHttpError(429);
+    // backend/tests/buyback-logs-batching.test.ts asserts the formatter yields exactly this text.
+    const r429 = "buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 request limit reached";
     const other = "buyback-logs: live index failed, leaving persisted rows in place: Error: Base RPC error -32000: header not found";
+    // Before the fix, Bun printed the error on later lines (a source excerpt follows the message). That
+    // first line names no status, so it stays a FAIL: an unclassified failure is never downgraded.
+    const oldShape = ["buyback-logs: live index failed, leaving persisted rows in place: 598 | } catch (err) {", "BaseRpcHttpError: Base RPC HTTP 429", " status: 429,"];
+    expect(evalBuyback(oldShape).status).toBe("FAIL");
     const w = evalBuyback([r429, "answered HTTP 413, halving"]);
     expect(w.status).toBe("WARN");
     expect(w.detail[0]).toContain("1 'live index failed' on a Base RPC rate limit");
