@@ -24,6 +24,7 @@ Non-goals:
 - **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, both before and after the refactor.
 - **One source of truth.** The backend runs the package's source files.
 - **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every value, date, label, null, field and serialized byte, including field ordering and number formatting. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
+- **No migrations, no retroactive change.** This work adds no database migration: no table, column, trigger, index or grant changes. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled (D74 clarification, 2026-10-22).
 
 ## 3. Components
 
@@ -43,7 +44,7 @@ Non-goals:
 
 ### 4.1 Source ids
 
-Every source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input reports and new public API contracts use that id. No id names the code that reads it. Existing database keys and historical archive keys may remain unchanged. One shared mapping at the storage boundary translates them to canonical source ids; existing writes use the reverse mapping where needed. The mapping preserves values, dates, ordering, provenance and vintage membership. Ambiguous mappings are rejected. Historical references and immutable archives are never rewritten merely to rename a series.
+Every source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input reports and new public API contracts use that id. No id names the code that reads it. Existing database keys and historical archive keys may remain unchanged. One shared mapping at the storage boundary translates them to canonical source ids; existing writes use the reverse mapping where needed. The mapping preserves values, dates, ordering, provenance and vintage membership. The mapping is per consumer: each consumer keeps reading the storage keys it reads today. Two storage keys may hold different streams for one source id, for example `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` for `yahoo:^GSPC`. They are never merged, and the storage key travels with each observation as provenance. A mapping is ambiguous, and rejected, when one consumer would read two storage keys for one source id. Historical references and immutable archives are never rewritten merely to rename a series.
 
 The indicator registry names the source ids each indicator reads. The correlations and the backtest name the source ids they read: `yahoo:^GSPC` and `yahoo:ETH-USD` (price levels) and `fred:DTB3` (a rate).
 
@@ -119,7 +120,7 @@ The API serves archives in format 1. A client downloads archives and writes them
 - **Same bytes.** The API and the replica produce byte-identical archives for the same state.
 - **Coverage.** Every report in a backup is served with full history. That includes the source data the correlations and the backtest read (`yahoo:^GSPC`, `yahoo:ETH-USD` and `fred:DTB3`).
 
-The acquisition details for model portfolio inputs (asset prices, lending yields and the T-bill rate) are specified separately. Any workflow using them receives them as supplied data and follows the same extract-only HTTP boundary; their absence never authorizes a downstream request.
+Model portfolio inputs (asset prices, lending yields and the T-bill rate) are source data under sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Any workflow using them receives them as supplied data and follows the same extract-only HTTP boundary; their absence never authorizes a downstream request.
 
 ### 4.7 Chunking
 
@@ -138,7 +139,7 @@ Public traffic must never starve the site. These limits apply to every public an
 - **Concurrency gate.** At most 2 public-analytics queries run at once, process-wide. Beyond that the API answers 503 with `Retry-After`. Public traffic holds at most 2 of the 10 pool connections.
 - **Statement timeout.** Every public query runs with a 5 second timeout. A timed-out query answers 503 with `Retry-After`, never 500, and frees its connection.
 - **Cost-weighted rate limit.** 100 tokens a minute per client ip. A list request costs 1. A heavy request costs 10: an archive of a large table, or a frozen run output.
-- **Byte budget.** 50 MB served a minute per client ip.
+- **Byte budget.** 50 MB served a minute per client ip. An archive request is admitted when the client has any budget left. The full archive is charged and the budget may go negative; later requests answer 429 with `Retry-After` until it recovers. Existing archives are never re-chunked to fit the budget.
 - **Async compression.** Gzip runs off the event loop, so a large response cannot stall other routes.
 - **Caching.** A served archive is immutable. Its ETag is its checksum, read by a metadata query before any bytes. A matching `If-None-Match` answers 304 without reading the archive. A 200 carries `Cache-Control: public, max-age=31536000, immutable`. Lists carry `max-age=300`.
 - **Edge cache.** The web server caches `GET /api/public/analytics/*` with a lock, so concurrent misses reach the API once. The cache is bounded (256 MB) and sets `X-Cache-Status`.
@@ -241,7 +242,7 @@ Package paths are relative to `packages/analyst-sdk/`.
 | Every exported function has a test. | `tests/*.test.ts` |
 | Reference portfolios give byte-identical reports and identical daily values through the pre-refactor and refactored backend and SDK, including `simulatePortfolio` and `computeBacktest`. | `tests/backtest.test.ts` |
 | Complete serialized reports for representative pinned production inputs match byte for byte across backend and SDK before and after refactoring, including field order, formatting and nulls. | `backend/tests/regime-replay-published.test.ts` |
-| Storage key translation preserves values, dates, ordering and vintage membership; ambiguous mappings reject. | `tests/input-rule.test.ts` |
+| Storage key translation preserves values, dates, ordering and vintage membership; each consumer reads the same storage keys as before; two streams for one source id stay separate; ambiguous mappings reject. | `tests/input-rule.test.ts` |
 | Historical ratio inputs replay unchanged; calculation from pinned legs preserves ratios before production adoption. | `tests/prepare.test.ts` |
 | Changing a date's weights does not change earlier values or that date's pre-cost return; its close-of-day cost follows the established rules. | `tests/backtest.test.ts` |
 | A date with no applicable weights preserves the established skip behavior and daily return observations. | `tests/backtest.test.ts` |
