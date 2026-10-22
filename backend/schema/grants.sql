@@ -104,7 +104,10 @@ DECLARE
     'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
     'analytics_parity_observations', 'maintenance_windows',
     -- 0126 (issue 1034): a pipeline write's idempotency receipt is recorded once and never changed.
-    'pipeline_ingest_receipts'
+    'pipeline_ingest_receipts',
+    -- 0109's evidence copies, which rm_app writes since 0126 (issue 1034, D75):
+    -- a replaced sample's evidence row is written once and never changed.
+    'wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'
   ];
   rel record;
   usurped text;
