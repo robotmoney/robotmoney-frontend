@@ -102,7 +102,7 @@ const rowsOf = (db: postgres.Sql<{}>) =>
 const secretOf = (file: string) => readFileSync(file, "utf8").trim();
 
 describe("provisioning stores a hash and the holder's rights, and delivers the secret as the holder's file", () => {
-  test("three holders, one fenced rm_owner transaction: HOLDER_RIGHTS, hash only, files 0600 in 0700 directories", async () => {
+  test("every holder (four since issue 1034), one fenced rm_owner transaction: HOLDER_RIGHTS, hash only, files 0600 in 0700 directories", async () => {
     await withDatabase(async ({ name, db }) => {
       const { paths } = stateFor("rm_it_tokens");
       const result = await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_tokens", tokenFiles: paths.tokenFiles });
@@ -129,7 +129,7 @@ describe("provisioning stores a hash and the holder's rights, and delivers the s
       }
       // Three distinct secrets: no holder's file validates as another's.
       const hashes = new Set(rows.map((r) => r.token_hash));
-      expect(hashes.size).toBe(3);
+      expect(hashes.size).toBe(SERVICE_TOKEN_HOLDERS.length);
     });
   }, 60_000);
 
@@ -168,7 +168,7 @@ describe("re-provisioning replaces one holder's row in place (D55 (6)) and leave
       // In place: still exactly one row per (instance, holder), the rotated one
       // carrying the new hash — an upsert, never a delete and a second insert.
       const after = await rowsOf(db);
-      expect(after.length).toBe(6);
+      expect(after.length).toBe(2 * SERVICE_TOKEN_HOLDERS.length);
       const newScheduler = secretOf(a.paths.tokenFiles["system-scheduler"]);
       expect(newScheduler).not.toBe(oldScheduler);
       // The old token is rejected on its next lookup: no row carries its hash.
@@ -226,7 +226,7 @@ describe("a release keeps every valid token (keep: rolling upgrade, owner 2026-1
       writeFileSync(a.paths.tokenFiles.operator, `rmat_${randomBytes(32).toString("base64url")}\n`, { mode: 0o600 });
       rmSync(a.paths.tokenFiles["system-scheduler"]);
       const mixed = await provisionServiceTokens({ ownerUrl: urlFor(name, OWNER), instance: "rm_it_keep", tokenFiles: a.paths.tokenFiles, keep: true });
-      expect(mixed.kept).toEqual(["analytics-producer"]);
+      expect(mixed.kept).toEqual(["analytics-producer", "pipeline-worker"]);
       expect(mixed.holders.sort()).toEqual(["operator", "system-scheduler"]);
       expect(secretOf(a.paths.tokenFiles["analytics-producer"])).toBe(before["analytics-producer"]!);
       for (const h of SERVICE_TOKEN_HOLDERS) {
@@ -246,7 +246,7 @@ describe("a release keeps every valid token (keep: rolling upgrade, owner 2026-1
 });
 
 describe("provisioning is a fenced mutation — a competitor's fence holds it until it commits (§2, criterion 35)", () => {
-  test("no row is written while the competitor holds the fence; all three land after it commits", async () => {
+  test("no row is written while the competitor holds the fence; every holder lands after it commits", async () => {
     await withDatabase(async ({ name, db }) => {
       const { paths } = stateFor("rm_it_fence");
       const order: string[] = [];
@@ -265,7 +265,7 @@ describe("provisioning is a fenced mutation — a competitor's fence holds it un
       await competitor;
       await provisioning;
       expect(order).toEqual(["competitor:start", "competitor:saw 0", "competitor:commit", "tokens:committed"]);
-      expect((await rowsOf(db)).length).toBe(3);
+      expect((await rowsOf(db)).length).toBe(SERVICE_TOKEN_HOLDERS.length);
     });
   }, 60_000);
 });
@@ -298,7 +298,7 @@ describe("the direct-run form `bun smoke` starts", () => {
     return paths;
   }
 
-  test("under the boot's held target lock it provisions all three holders and reports paths, never a secret", async () => {
+  test("under the boot's held target lock it provisions every holder and reports paths, never a secret", async () => {
     await withDatabase(async ({ name, db }) => {
       const root = mkdtempSync(join(tmpdir(), "rm-tokens-run-"));
       roots.push(root);
