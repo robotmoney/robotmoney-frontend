@@ -75,22 +75,21 @@ describe("rolePasswordsWith", () => {
   test("every line present and working: all kept, zero ALTERs, nothing persisted (the idempotent rerun)", async () => {
     const s = seam();
     const result = await rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen);
-    expect(result).toEqual({ roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" }, ownerLoginBefore: true });
+    expect(result).toEqual({ roles: { rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" }, ownerLoginBefore: true });
     expect(s.calls.filter((c) => ALTERS.test(c))).toEqual([]);
-    expect(s.calls).toEqual(["read", "prove:rm_owner", "prove:rm_app", "prove:rm_worker", "prove:rm_readonly"]);
+    expect(s.calls).toEqual(["read", "prove:rm_owner", "prove:rm_app", "prove:rm_readonly"]);
   });
 
   test("absent lines are set: lock, the role's ALTER with a vetted verifier literal, persist, prove with the new password", async () => {
     const s = seam({ lines: ["rm_app"], login: { rm_owner: false } });
     const result = await rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen);
-    expect(result).toEqual({ roles: { rm_app: "kept", rm_owner: "set", rm_worker: "set", rm_readonly: "set" }, ownerLoginBefore: false });
+    expect(result).toEqual({ roles: { rm_app: "kept", rm_owner: "set", rm_readonly: "set" }, ownerLoginBefore: false });
     expect(s.calls).toEqual([
       "read", "prove:rm_app",
       "lock", "set:rm_owner", "persist:rm_owner", "prove:rm_owner:new",
-      "lock", "set:rm_worker", "persist:rm_worker", "prove:rm_worker:new",
       "lock", "set:rm_readonly", "persist:rm_readonly", "prove:rm_readonly:new",
     ]);
-    expect(s.persisted).toEqual([["rm_owner", gen("rm_owner"), false], ["rm_worker", gen("rm_worker"), false], ["rm_readonly", gen("rm_readonly"), false]]);
+    expect(s.persisted).toEqual([["rm_owner", gen("rm_owner"), false], ["rm_readonly", gen("rm_readonly"), false]]);
     for (const [role, literal] of s.literals) {
       expect(isVettedVerifierLiteral(literal)).toBe(true);
       expect(literal.sql).not.toContain(gen(role));
@@ -100,7 +99,7 @@ describe("rolePasswordsWith", () => {
   });
 
   test("RED CONTROL: a line that does not log in refuses, names --rotate, and changes nothing at all", async () => {
-    const s = seam({ lines: ["rm_owner", "rm_app", "rm_worker"], failing: ["rm_app"] });
+    const s = seam({ lines: ["rm_owner", "rm_app"], failing: ["rm_app"] });
     const error = await rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(RolePasswordRefused);
     expect((error as Error).message).toMatch(/rm_app could not log in/);
@@ -112,9 +111,9 @@ describe("rolePasswordsWith", () => {
 
   test("--rotate: the role gets a new password and its old line is retired, even though the line works", async () => {
     const s = seam();
-    const result = await rolePasswordsWith(s.seam, { roles: ALL, rotate: ["rm_owner", "rm_worker"] }, gen);
-    expect(result.roles).toEqual({ rm_app: "kept", rm_readonly: "kept", rm_owner: "rotated", rm_worker: "rotated" });
-    expect(s.persisted).toEqual([["rm_owner", gen("rm_owner"), true], ["rm_worker", gen("rm_worker"), true]]);
+    const result = await rolePasswordsWith(s.seam, { roles: ALL, rotate: ["rm_owner", "rm_readonly"] }, gen);
+    expect(result.roles).toEqual({ rm_app: "kept", rm_owner: "rotated", rm_readonly: "rotated" });
+    expect(s.persisted).toEqual([["rm_owner", gen("rm_owner"), true], ["rm_readonly", gen("rm_readonly"), true]]);
   });
 
   test("--rotate is what replaces a failing line", async () => {
@@ -126,8 +125,8 @@ describe("rolePasswordsWith", () => {
   test("a kept rm_owner that is NOLOGIN: the others are proven first, then LOGIN, then its proof", async () => {
     const s = seam({ login: { rm_owner: false } });
     const result = await rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen);
-    expect(result).toEqual({ roles: { rm_app: "kept", rm_worker: "kept", rm_readonly: "kept", rm_owner: "kept" }, ownerLoginBefore: false });
-    expect(s.calls).toEqual(["read", "prove:rm_app", "prove:rm_worker", "prove:rm_readonly", "lock", "enableOwnerLogin", "prove:rm_owner"]);
+    expect(result).toEqual({ roles: { rm_app: "kept", rm_readonly: "kept", rm_owner: "kept" }, ownerLoginBefore: false });
+    expect(s.calls).toEqual(["read", "prove:rm_app", "prove:rm_readonly", "lock", "enableOwnerLogin", "prove:rm_owner"]);
   });
 
   test("a kept rm_owner whose line fails after LOGIN refuses, saying the password was not changed", async () => {
@@ -141,7 +140,8 @@ describe("rolePasswordsWith", () => {
     await expect(rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen)).rejects.toThrow(RolePasswordRefused);
     expect(s.calls).not.toContain("enableOwnerLogin");
     expect(PASSWORD_SET_SQL.rm_app).not.toMatch(/LOGIN|SUPERUSER|CREATE/);
-    expect(PASSWORD_SET_SQL.rm_worker).not.toMatch(/LOGIN|SUPERUSER|CREATE/);
+    // rm_worker has no password ALTER at all since D75 (issue 1034).
+    expect("rm_worker" in PASSWORD_SET_SQL).toBe(false);
     expect(PASSWORD_SET_SQL.rm_readonly).not.toMatch(/LOGIN|SUPERUSER|CREATE/);
     expect(PASSWORD_SET_SQL.rm_owner).toBe("ALTER ROLE rm_owner WITH LOGIN PASSWORD $1");
   });
@@ -154,8 +154,8 @@ describe("rolePasswordsWith", () => {
   });
 
   test("a missing role refuses with nothing run", async () => {
-    const s = seam({ missing: ["rm_worker"] });
-    await expect(rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen)).rejects.toThrow(/pg_roles has no rm_worker/);
+    const s = seam({ missing: ["rm_readonly"] });
+    await expect(rolePasswordsWith(s.seam, { roles: ALL, rotate: [] }, gen)).rejects.toThrow(/pg_roles has no rm_readonly/);
     expect(s.calls).toEqual(["read"]);
   });
 
@@ -172,7 +172,7 @@ describe("rolePasswordsWith", () => {
     await rolePasswordsWith(s.seam, { roles: ALL, rotate: [] });
     const passwords = s.persisted.map(([, p]) => p);
     for (const p of passwords) expect(p).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(new Set(passwords).size).toBe(4);
+    expect(new Set(passwords).size).toBe(3);
   });
 });
 
@@ -190,11 +190,9 @@ describe("the statements, read from source", () => {
       "admin:enableOwner",
       "admin:setOwnerPassword",
       "admin:setAppPassword",
-      "admin:setWorkerPassword",
       "admin:setReadonlyPassword",
       "db:proveOwner",
       "db:proveApp",
-      "db:proveWorker",
       "db:proveReadonly",
     ]);
   });
@@ -209,11 +207,9 @@ describe("the statements, read from source", () => {
       ["enableOwnerLogin", "doadmin", "ownerLoginEnable"],
       ["setOwnerPassword", "doadmin", "ownerPasswordSet"],
       ["setAppPassword", "doadmin", "appPasswordSet"],
-      ["setWorkerPassword", "doadmin", "workerPasswordSet"],
       ["setReadonlyPassword", "doadmin", "readonlyPasswordSet"],
       ["proveOwnerLogin", "rm_owner", "connectionCheck"],
       ["proveAppLogin", "rm_app", "connectionCheck"],
-      ["proveWorkerLogin", "rm_worker", "connectionCheck"],
       ["proveReadonlyLogin", "rm_readonly", "connectionCheck"],
     ]);
   });

@@ -973,12 +973,13 @@ describe("env rewrite key partition (C07-env-rewrite)", () => {
 
   test("allowlisted keys and comments stay; everything else moves", () => {
     const p = partitionEnv(text);
-    expect(p.keptKeys).toEqual(["host", "port", "database", "sslmode", "rm_app", "rm_worker", "rm_readonly", "rm_owner", "RM_CREDENTIALS"]);
-    // A stray doadmin line moves out like any other key off the list (D61 amendment).
-    expect(p.retiredKeys).toEqual(["doadmin", "OPENCODE_API_KEY", "ADMIN_TOKEN", "(line 14)"]);
+    expect(p.keptKeys).toEqual(["host", "port", "database", "sslmode", "rm_app", "rm_readonly", "rm_owner", "RM_CREDENTIALS"]);
+    // A stray doadmin line moves out like any other key off the list (D61 amendment),
+    // and so does the retired rm_worker line (D75).
+    expect(p.retiredKeys).toEqual(["rm_worker", "doadmin", "OPENCODE_API_KEY", "ADMIN_TOKEN", "(line 14)"]);
     expect(p.keptText).toContain("# connection");
     expect(p.keptText).not.toContain("doadmin");
-    expect(p.retiredText).toBe("doadmin=d\nOPENCODE_API_KEY=z\nexport ADMIN_TOKEN=t\na bare value\n");
+    expect(p.retiredText).toBe("rm_worker=w\ndoadmin=d\nOPENCODE_API_KEY=z\nexport ADMIN_TOKEN=t\na bare value\n");
     expect(p.missingRequired).toEqual([]);
   });
   test("red: a file without rm_owner or RM_CREDENTIALS reports them; doadmin is never required", () => {

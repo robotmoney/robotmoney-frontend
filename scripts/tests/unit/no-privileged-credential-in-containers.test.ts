@@ -68,13 +68,12 @@ const SHELL_ENV: Record<string, string> = {
 /** The stack config the smoke builds for the remote database (smoke-main.ts makeStackConfig). */
 function remoteStackConfig(): StackConfig {
   const app = urlForRole(HOME_ENV, "rm_app")!;
-  const worker = urlForRole(HOME_ENV, "rm_worker")!;
   return {
     repoRoot: "/repo",
     project: "rm_smoke_stack_0123456789",
     profile: "full",
     composeFiles: DEFAULT_COMPOSE_FILES,
-    database: { ...DEFAULT_STACK_DATABASE, url: app, roleUrls: { app, worker } },
+    database: { ...DEFAULT_STACK_DATABASE, url: app, roleUrls: { app } },
     environment: { class: "local", hash: "0123456789" },
     extraComposeEnv: { ...homeEnvComposeEnv(HOME_ENV), ...smokePassthroughEnv(SHELL_ENV) },
   };
@@ -96,10 +95,11 @@ describe("D61: no container receives rm_owner or doadmin", () => {
     expect(leaks(buildSpawnEnv(remoteStackConfig(), SHELL_ENV))).toEqual([]);
   });
 
-  test("red control: the same assembly DOES carry the runtime roles it is allowed to forward", () => {
+  test("red control: the same assembly DOES carry the runtime role it is allowed to forward, and no other", () => {
     const env = Object.values(buildSpawnEnv(remoteStackConfig(), SHELL_ENV)).join("\n");
     expect(env).toContain(APP);
-    expect(env).toContain(WORKER);
+    // rm_worker reaches no container (D75, issue 1034), even with a stray ~/.env line.
+    expect(env).not.toContain(WORKER);
   });
 
   test("red control: the leak check itself fires on a privileged value", () => {
@@ -121,8 +121,8 @@ describe("D61: no container receives rm_owner or doadmin", () => {
     expect(Object.keys(child).sort()).toEqual(["HOME", "PATH"]);
   });
 
-  test("the roles the preparation child assembles from ~/.env are exactly the three runtime roles", () => {
-    expect([...RUNTIME_ROLES]).toEqual(["rm_app", "rm_worker", "rm_readonly"]);
+  test("the roles the preparation child assembles from ~/.env are exactly the runtime roles with a line", () => {
+    expect([...RUNTIME_ROLES]).toEqual(["rm_app", "rm_readonly"]);
   });
 
   test("no committed compose file interpolates rm_owner or doadmin", () => {

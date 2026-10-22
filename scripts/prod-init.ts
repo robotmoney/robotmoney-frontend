@@ -31,8 +31,8 @@
 //                     `--doadmin-stdin` (never a file), against the target
 //                     `~/.env` names (backend/scripts/role-passwords.ts,
 //                     scripts/lib/home-env-secret.ts). For each role in
-//                     `--roles` (default: rm_owner, rm_app, rm_worker,
-//                     rm_readonly): a `~/.env` line that logs in is `kept`
+//                     `--roles` (default: rm_owner, rm_app, rm_readonly;
+//                     rm_worker has no line since D75): a `~/.env` line that logs in is `kept`
 //                     with no ALTER; an absent line is `set` (a password
 //                     generated on the host, sent to the server only as its
 //                     SCRAM-SHA-256 verifier, written into `~/.env` atomically,
@@ -121,7 +121,7 @@ import { DOADMIN_STDIN_FLAG, readDoadminPassword } from "./lib/doadmin-input.ts"
 
 /** The roles role-passwords manages, in order (backend/scripts/role-passwords.ts PASSWORD_ROLES; repeated
  *  here because that module is loaded lazily, and pinned equal by scripts/tests/unit/prod-init-role-passwords.test.ts). */
-export const ROLE_PASSWORD_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
+export const ROLE_PASSWORD_ROLES = ["rm_owner", "rm_app", "rm_readonly"] as const;
 
 export const PROD_INIT_COMMANDS = ["role-passwords", "set-identity", "provision-tokens", "rebind-members"] as const;
 export type ProdInitCommand = (typeof PROD_INIT_COMMANDS)[number];
