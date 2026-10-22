@@ -26,7 +26,8 @@ import {
   multicall3Aggregate3,
   type RpcCallOptions,
 } from "../../chain/base-rpc-client.ts";
-import { persistedFallbackWalletPriceReader, readChainAmountsBatched } from "../../chain/wallet-valuation.ts";
+import { readChainAmountsBatched } from "../../chain/wallet-valuation.ts";
+import { persistedFallbackWalletPriceReader } from "../../worker/persisted-price.ts";
 import type { CoinGeckoMarketRow, DexPayload } from "../transforms.ts";
 import {
   PermanentVaultReadError,

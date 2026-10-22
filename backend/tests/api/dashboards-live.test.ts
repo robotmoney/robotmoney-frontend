@@ -26,7 +26,8 @@ import {
 } from "../../src/config.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result, type Aggregate3Result } from "../../src/chain/base-rpc-client.ts";
 import { getBuybacks, getTokenMetrics, getWalletSleeves, getAllocation } from "../../src/api/routes/dashboards.ts";
-import { _resetBuybackCacheForTests, indexBuybacks } from "../../src/chain/buyback-logs.ts";
+import { _resetBuybackCacheForTests } from "../../src/chain/buyback-logs.ts";
+import { indexBuybacks } from "../../src/chain/buyback-indexer.ts";
 import { _resetTokenMetricsCacheForTests } from "../../src/chain/token-metrics.ts";
 import { TOKEN_FEE_INCOME_SELECTORS } from "../../src/chain/token-fee-income.ts";
 import { sampleWalletSleeves } from "../../src/worker/handlers/wallet.ts";

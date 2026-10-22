@@ -122,6 +122,19 @@ export const ROUTES: {
     vintages: string;
     overwriteEvents: string;
   };
+  pipeline: {
+    claim: string;
+    renew: string;
+    settle: string;
+    release: string;
+    reap: string;
+    sweep: string;
+    enqueue: string;
+    tick: string;
+    whoami: string;
+    read: string;
+    ingest: string;
+  };
   analytics: {
     readiness: string;
     rawHistory: string;

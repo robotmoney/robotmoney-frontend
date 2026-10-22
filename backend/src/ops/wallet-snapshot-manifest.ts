@@ -5,33 +5,6 @@ import {
   type TrackedAsset,
 } from "../config.ts";
 import { SLEEVE_DEFS, sleeveSymbols } from "../chain/wallet-valuation.ts";
-import type postgresTypes from "postgres";
-import { onStatement, registerStatement } from "../db/registry.ts";
-
-/**
- * One lock protocol for every writer that can touch a wallet snapshot date.
- *
- * Row locks cannot protect a natural key that does not exist yet. Without this
- * advisory lock, a live INSERT could commit after repair copied the old rows
- * but before its DELETE, and that newly committed row would be deleted without
- * ever reaching evidence. Both live samplers and historical repair acquire
- * this transaction-scoped lock before writing a date.
- */
-export async function lockWalletSnapshotDate(
-  db: postgresTypes.TransactionSql<{}>,
-  sampleDate: string,
-): Promise<void> {
-  await onStatement(db, snapshotDateLock)`SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext(${sampleDate}))`;
-}
-
-// Object-less (D55 (13)): an advisory lock names no relation.
-const snapshotDateLock = registerStatement({
-  role: "rm_worker",
-  shape: "walletSnapshotLock",
-  site: "src/ops/wallet-snapshot-manifest:lockWalletSnapshotDate",
-  purpose: "Serialize every live sampler and historical repair writing one wallet snapshot date.",
-  callers: ["src/worker/handlers/wallet", "src/worker/handlers/repair"],
-});
 
 export interface WalletSleeveManifestKey {
   walletIndex: number;

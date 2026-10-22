@@ -5,8 +5,9 @@
 // settles its jobs through the queue routes, reads the state its handlers need
 // through the read routes, and writes its samples through the ingestion routes,
 // all with its pipeline-worker token. This module is the part both sides must
-// agree on: the paths, the limits and the JSON encoding. It imports nothing, so
-// the worker can import it without reaching a database module.
+// agree on: the paths (from the contract), the limits and the JSON encoding. It
+// imports no database module, so the worker can import it.
+import { ROUTES } from "@robotmoney/contract";
 
 /** The most rows one ingestion request may carry. A larger request answers 413. */
 export const PIPELINE_MAX_ROWS = 1_000;
@@ -32,19 +33,20 @@ export interface PipelineLease {
 
 export const PIPELINE_PREFIX = "/api/pipeline/";
 
+/** The routes, from the contract (contract/src/routes.js `pipeline`), with the operation filled in for `read` and `ingest`. */
 export const PIPELINE_ROUTES = {
-  claim: "/api/pipeline/queue/claim",
-  renew: "/api/pipeline/queue/renew",
-  settle: "/api/pipeline/queue/settle",
-  release: "/api/pipeline/queue/release",
-  reap: "/api/pipeline/queue/reap",
-  sweep: "/api/pipeline/queue/sweep",
-  enqueue: "/api/pipeline/queue/enqueue",
-  tick: "/api/pipeline/schedule/tick",
+  claim: ROUTES.pipeline.claim,
+  renew: ROUTES.pipeline.renew,
+  settle: ROUTES.pipeline.settle,
+  release: ROUTES.pipeline.release,
+  reap: ROUTES.pipeline.reap,
+  sweep: ROUTES.pipeline.sweep,
+  enqueue: ROUTES.pipeline.enqueue,
+  tick: ROUTES.pipeline.tick,
   /** The worker's startup check: the token is valid and holds both rights. */
-  whoami: "/api/pipeline/whoami",
-  read: (op: string) => `/api/pipeline/read/${op}`,
-  ingest: (op: string) => `/api/pipeline/ingest/${op}`,
+  whoami: ROUTES.pipeline.whoami,
+  read: (op: string) => ROUTES.pipeline.read.replace(":op", op),
+  ingest: (op: string) => ROUTES.pipeline.ingest.replace(":op", op),
 } as const;
 
 /** How a claimed job ended, as the settle route records it. */

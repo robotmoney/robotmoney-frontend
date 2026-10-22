@@ -4,7 +4,7 @@
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal, toRegimeSummary } from "../../analytics/report/projections.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
-import { fetchPersistedWalletBalances } from "../../chain/wallet-balances.ts";
+import { fetchPersistedWalletBalances } from "../../chain/wallet-balances-store.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
 // cache + degrade-to-stale/seed logic, so these handlers stay thin adapters.
 // The module functions share names with our handlers, so import them aliased.

@@ -21,9 +21,19 @@
 --    runtime: rm_app holds SELECT and INSERT (grants.sql lists the table with
 --    the insert-only ledgers), and pruning is an rm_owner step (D55 (6)).
 --
--- ADDITIVE (spec §8.4). The CHECKs only widen and the table is new. Code built
--- before this file never presents the new holder and never reads the table.
--- IDEMPOTENT: every statement is guarded or a re-assertion.
+-- 3. rm_app WRITES WHAT THE WORKER WROTE. The api now runs the statements the
+--    worker ran as rm_worker, so rm_app needs the same writes on the same
+--    tables. backend/schema/grants.sql already gives rm_app SELECT, INSERT and
+--    UPDATE on every ordinary table on each migrate run; this file carries the
+--    grants for the tables created after 0053 whose migrations granted only
+--    rm_worker (0061, 0109, 0113, 0115 among them), so a database that has
+--    applied the ledger holds them without waiting for a reconciliation, as
+--    0113 did for the same class of gap. No DELETE or TRUNCATE (D55 (6)).
+--
+-- ADDITIVE (spec §8.4). The CHECKs only widen, the table is new and the grants
+-- only widen. Code built before this file never presents the new holder and
+-- never reads the table. IDEMPOTENT: every statement is guarded or a
+-- re-assertion.
 
 ALTER TABLE automation_tokens DROP CONSTRAINT IF EXISTS automation_tokens_holder_check;
 ALTER TABLE automation_tokens ADD CONSTRAINT automation_tokens_holder_check
@@ -65,3 +75,13 @@ COMMENT ON TABLE pipeline_ingest_receipts IS
 
 GRANT SELECT, INSERT ON pipeline_ingest_receipts TO rm_app;
 GRANT SELECT ON pipeline_ingest_receipts TO rm_readonly;
+
+GRANT SELECT, INSERT, UPDATE ON
+  agent_revenue_daily, agent_vaults, chain_address_floors, chain_day_blocks, daily_agent_snapshots,
+  daily_coin_snapshots, daily_tvl_snapshots, daily_wallet_snapshots, job_runs, job_schedules, jobs,
+  lobster_coins, openclaw_agents, projects, tracked_wallets, vault_adapter_samples,
+  vault_share_price_history, wallet_backfill_state, wallet_balance_samples, wallet_sleeve_samples,
+  asset_price_floors, asset_prices, buyback_scan_state, token_market_samples
+TO rm_app;
+GRANT SELECT, INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence, buyback_swaps TO rm_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rm_app;

@@ -6,7 +6,8 @@
 // docs/technical/markets-asset-pricing-ingest.md §8.1.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
-import { backfillAssetPricesForCleanDays } from "../src/ops/asset-prices.ts";
+import { backfillAssetPricesForCleanDays } from "../src/ops/asset-price-backfill.ts";
+import { assetPriceBackfillDbStore } from "../src/ops/asset-prices.ts";
 import { loadHistoricalPrices, type HistoricalPriceTable } from "../src/chain/historical-prices.ts";
 import { resolveTrackedAssets, resolvePropWallets } from "../src/config.ts";
 import { SLEEVE_DEFS, sleeveSymbols } from "../src/chain/wallet-valuation.ts";
@@ -107,7 +108,7 @@ test("backfillAssetPricesForCleanDays writes asset_prices for a complete clean d
   expect(before[0]!.n).toBe(0);
 
   // Run the backfill with mock deps
-  const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
+  const result = await backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(sql), NOW, happyHistoricalDeps());
 
   expect(result.daysProcessed).toBe(1);
   expect(result.rowsWritten).toBeGreaterThan(0);
@@ -145,7 +146,7 @@ test("backfillAssetPricesForCleanDays skips incomplete days", async () => {
   `;
   // Only one symbol — incomplete
 
-  const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
+  const result = await backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(sql), NOW, happyHistoricalDeps());
 
   expect(result.daysProcessed).toBe(1);
   expect(result.rowsWritten).toBe(0);
@@ -169,7 +170,7 @@ test("backfillAssetPricesForCleanDays skips quarantined days", async () => {
   }
   await insertCompleteSleeveSamples(D1, "backfilled-quarantined", new Date(BLOCK_TS * 1000).toISOString());
 
-  const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
+  const result = await backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(sql), NOW, happyHistoricalDeps());
 
   // Quarantined days are excluded from candidateDays query entirely, so daysProcessed = 0
   expect(result.daysProcessed).toBe(0);
@@ -194,7 +195,7 @@ test("backfillAssetPricesForCleanDays does not process today or future days", as
     }
   }
 
-  const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
+  const result = await backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(sql), NOW, happyHistoricalDeps());
 
   // Should not process today or tomorrow (they're not closed)
   expect(result.daysProcessed).toBe(0);
@@ -218,7 +219,7 @@ test("backfillAssetPricesForCleanDays handles multiple days", async () => {
 
   // NOW is 2026-04-07, so cutoff is 2026-04-06. Only D1 (2026-04-05) is < cutoff.
   // D2 (2026-04-06) equals cutoff, so it's not processed.
-  const result = await backfillAssetPricesForCleanDays(sql, NOW, happyHistoricalDeps());
+  const result = await backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(sql), NOW, happyHistoricalDeps());
 
   expect(result.daysProcessed).toBe(1);
   expect(result.rowsWritten).toBe(assets.length);

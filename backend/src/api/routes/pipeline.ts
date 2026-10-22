@@ -124,10 +124,11 @@ export async function handlePipeline(req: Request, url: URL): Promise<Response> 
   const declared = Number(req.headers.get("Content-Length") ?? 0);
   if (declared > PIPELINE_MAX_BODY_BYTES) return reply(tooLarge);
 
+  // Another holder's token is answered exactly as a forged one is, so no
+  // token tells a caller anything about the routes it may not use.
   const grant = await automationTokenGrant(req);
-  if (!grant) return reply({ status: 401, body: { error: "unauthorized" } });
-  if (grant.holder !== "pipeline-worker" || !grant.rights.includes(right)) {
-    return reply({ status: 403, body: { error: "forbidden" } });
+  if (!grant || grant.holder !== "pipeline-worker" || !grant.rights.includes(right)) {
+    return reply({ status: 401, body: { error: "unauthorized" } });
   }
 
   const text = await req.text();

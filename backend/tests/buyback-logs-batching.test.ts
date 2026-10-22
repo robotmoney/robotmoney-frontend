@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { indexBuybacks, _resetBuybackScanCachesForTests, _resetBuybackRangeCapForTests, rangeCapFromError } from "../src/chain/buyback-logs.ts";
+import { indexBuybacks, _resetBuybackScanCachesForTests, _resetBuybackRangeCapForTests, rangeCapFromError } from "../src/chain/buyback-indexer.ts";
 import { BaseRpcHttpError } from "../src/chain/base-rpc-client.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";

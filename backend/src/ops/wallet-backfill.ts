@@ -45,7 +45,6 @@
 //     CAUSING new gaps while repairing old ones (#651's 2026-08-10 storm). Every
 //     read here goes through chain/base-rpc-client.ts's single shared token
 //     bucket.
-import type postgresTypes from "postgres";
 import {
   config,
   pinnedPoolForToken,
@@ -58,6 +57,7 @@ import { resolveRpcRateBudget, toBlockTag, type RpcCallOptions } from "../chain/
 import {
   resolveDayBlock,
   resolveDayBlocks,
+  type CachedDayBlockProof,
   type DayBlockCache,
   type DayBlockOutcome,
   type ResolvedDayBlock,
@@ -71,512 +71,119 @@ import { loadHistoricalPrices, resolvePoolForToken, type HistoricalPriceTable } 
 import {
   readChainAmountsAtBlocks,
   readChainAmountsBatched,
-  QUARANTINED_PROVENANCE,
   type ChainAmount,
   type ChainReadOptions,
   type KeyedAssetRead,
 } from "../chain/wallet-valuation.ts";
-import { detectGaps } from "./gap-detector.ts";
-import { getSeriesDef } from "./series-registry.ts";
-import {
-  lockWalletSnapshotDate,
-  resolveWalletSnapshotManifest,
-  sleeveManifestKey,
-  type WalletSnapshotManifest,
-} from "./wallet-snapshot-manifest.ts";
-import { assetPricesDisagree, writeAssetPrice, type AssetPriceDisagreement, type AssetPriceSource } from "./asset-prices.ts";
+import type { GapReport } from "./gap-detector.ts";
+import { resolveWalletSnapshotManifest, type WalletSnapshotManifest } from "./wallet-snapshot-manifest.ts";
+import type { AssetPriceDisagreement, AssetPriceSource, AssetPriceWrite } from "./asset-price-types.ts";
+import { pipelineIngest, pipelineRead } from "../worker/pipeline-client.ts";
 
-type Db = postgresTypes.Sql<{}>;
+// ── THE STORE (issue 1034, D75) ─────────────────────────────────────────────
+//
+// The repair pass runs in the pipeline worker, which holds no database
+// credential. Every read and write it makes goes through WalletBackfillStore:
+// by default the api's pipeline operations (pipelineWalletBackfillStore below,
+// served by pipeline/stores/wallet-backfill.ts, which holds the statements this
+// module used to run). The chain reads, the block resolution and the price
+// loads stay here.
 
-import { on, registerQuery } from "../db/registry.ts";
+/** The manifest's keys, as the completeness check reads them. */
+export interface ManifestKeys {
+  balanceSymbols: string[];
+  sleeveKeys: { walletAddress: string; symbol: string }[];
+}
 
-// Every statement here is the repair pass's: the dispatcher's repair handler
-// runs it as rm_worker (D55 (6): it upserts and supersedes, it never deletes).
-const REPAIR = ["src/worker/handlers/repair"];
+export function manifestKeys(manifest: WalletSnapshotManifest): ManifestKeys {
+  return {
+    balanceSymbols: manifest.balanceAssets.map((a) => a.symbol),
+    sleeveKeys: manifest.sleeveKeys.map((k) => ({ walletAddress: k.walletAddress, symbol: k.asset.symbol })),
+  };
+}
 
-const readDayBlock = registerQuery({
-  role: "rm_worker",
-  object: "chain_day_blocks",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:dayBlockCache.get",
-  purpose: "Read the permanent block proof for a sample date.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT block_number, block_hash, block_timestamp,
-               boundary_next_block_number, boundary_next_block_hash,
-               boundary_next_block_timestamp
-          FROM chain_day_blocks
-         WHERE sample_date = $1::date`,
-    params: ["2000-01-01"],
-  },
-});
+/** One wallet_backfill_state row, as the plan reads it. */
+export interface PlanStateRow {
+  sample_date: Date;
+  status: string;
+  defer_leg: string | null;
+  defer_leg_at: Date | null;
+  detail: string | null;
+}
 
-const writeDayBlock = registerQuery({
-  role: "rm_worker",
-  object: "chain_day_blocks",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:dayBlockCache.set",
-  purpose: "Record or replace the permanent block proof for a sample date.",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO chain_day_blocks
-          (sample_date, block_number, block_hash, block_timestamp,
-           boundary_next_block_number, boundary_next_block_hash,
-           boundary_next_block_timestamp)
-        SELECT $1::date, $2::bigint, $3, $4::timestamptz, $5::bigint, $6, $7::timestamptz WHERE false
-        ON CONFLICT (sample_date) DO UPDATE SET
-          block_number = EXCLUDED.block_number,
-          block_hash = EXCLUDED.block_hash,
-          block_timestamp = EXCLUDED.block_timestamp,
-          boundary_next_block_number = EXCLUDED.boundary_next_block_number,
-          boundary_next_block_hash = EXCLUDED.boundary_next_block_hash,
-          boundary_next_block_timestamp = EXCLUDED.boundary_next_block_timestamp,
-          resolved_at = now()`,
-    params: ["2000-01-01", 1, "probe", "2000-01-01T00:00:00Z", null, null, null],
-  },
-});
+/** One settled checkpoint of a window's day. */
+export interface PriorStateRow {
+  sample_date: string;
+  status: BackfillDayStatus;
+  block_number: number | null;
+  balance_rows: number;
+  sleeve_rows: number;
+  detail: string | null;
+}
 
-const readAddressFloor = registerQuery({
-  role: "rm_worker",
-  object: "chain_address_floors",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:addressFloorCache.get",
-  purpose: "Read the permanent first-code block for an address.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT floor_block FROM chain_address_floors WHERE address = $1`,
-    params: ["probe"],
-  },
-});
+/** A day's rows, read at its block and priced at its date, for the one-transaction day write. */
+export interface RepairedDayWrite {
+  date: string;
+  blockNumber: number;
+  sampledAt: Date;
+  keys: ManifestKeys;
+  balances: { symbol: string; amount: number; valueUsd: number; assetPrice: AssetPriceWrite }[];
+  sleeves: { walletAddress: string; symbol: string; amount: number; valueUsd: number }[];
+}
 
-const writeAddressFloor = registerQuery({
-  role: "rm_worker",
-  object: "chain_address_floors",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:addressFloorCache.set",
-  purpose: "Record or advance the permanent first-code block for an address.",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO chain_address_floors (address, floor_block)
-        SELECT $1, $2::bigint WHERE false
-        ON CONFLICT (address) DO UPDATE SET
-          floor_block = EXCLUDED.floor_block,
-          resolved_at = now()`,
-    params: ["probe", 1],
-  },
-});
+/** What the day write committed. */
+export interface RepairedDayResult {
+  status: BackfillDayStatus;
+  balanceRows: number;
+  sleeveRows: number;
+  detail: string | null;
+  priceDisagreements: AssetPriceDisagreement[];
+}
 
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const inspectBalances = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:inspectWalletSnapshot.balances",
-  purpose: "Read a day's live balance rows to judge the snapshot complete.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT symbol, provenance
-      FROM wallet_balance_samples
-     WHERE sample_date = $1::date
-       AND superseded_at IS NULL`,
-    params: ["2000-01-01"],
-  },
-});
+/** Every database step the repair pass takes. */
+export interface WalletBackfillStore {
+  /** The gap detector's reports for `keys` (every series when null), as of `now`. */
+  gapReports(keys: readonly string[] | null, now: Date): Promise<GapReport[]>;
+  planState(): Promise<PlanStateRow[]>;
+  priorState(dates: readonly string[]): Promise<PriorStateRow[]>;
+  dayBlockGet(date: string): Promise<CachedDayBlockProof | null>;
+  dayBlockSet(date: string, proof: CachedDayBlockProof): Promise<void>;
+  addressFloorGet(address: string): Promise<number | null>;
+  addressFloorSet(address: string, floorBlock: number): Promise<void>;
+  inspect(date: string, keys: ManifestKeys): Promise<WalletSnapshotCompleteness>;
+  readAttempts(date: string): Promise<number>;
+  recordState(
+    date: string,
+    status: BackfillDayStatus,
+    blockNumber: number | null,
+    balanceRows: number,
+    sleeveRows: number,
+    detail: string | null,
+    attempts: number | null,
+  ): Promise<void>;
+  bumpDeferStreak(date: string, leg: string, now: Date, debounceMs: number): Promise<number>;
+  deferDay(date: string, status: BackfillDayStatus, blockNumber: number | null, detail: string): Promise<void>;
+  writeRepairedDay(input: RepairedDayWrite): Promise<RepairedDayResult>;
+}
 
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const inspectBalancesLocked = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT", "UPDATE"],
-  site: "src/ops/wallet-backfill:inspectWalletSnapshot.balancesLocked",
-  purpose: "Read and row-lock a day's live balance rows before their values are archived.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT symbol, provenance
-      FROM wallet_balance_samples
-     WHERE sample_date = $1::date
-       AND superseded_at IS NULL
-     FOR UPDATE`,
-    params: ["2000-01-01"],
-  },
-});
-
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const inspectSleeves = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:inspectWalletSnapshot.sleeves",
-  purpose: "Read a day's live sleeve rows to judge the snapshot complete.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT wallet_address, symbol, provenance
-      FROM wallet_sleeve_samples
-     WHERE sample_date = $1::date
-       AND superseded_at IS NULL`,
-    params: ["2000-01-01"],
-  },
-});
-
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const inspectSleevesLocked = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["SELECT", "UPDATE"],
-  site: "src/ops/wallet-backfill:inspectWalletSnapshot.sleevesLocked",
-  purpose: "Read and row-lock a day's live sleeve rows before their values are archived.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT wallet_address, symbol, provenance
-      FROM wallet_sleeve_samples
-     WHERE sample_date = $1::date
-       AND superseded_at IS NULL
-     FOR UPDATE`,
-    params: ["2000-01-01"],
-  },
-});
-
-const deferDayUpdate = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:deferDay.update",
-  purpose: "Record a deferred day's status without charging its attempt.",
-  callers: REPAIR,
-  probe: {
-    statement: `UPDATE wallet_backfill_state
-       SET status = $1, block_number = $2::bigint, detail = $3, attempted_at = now()
-     WHERE sample_date = $4::date`,
-    params: ["failed", null, "probe", "2000-01-01"],
-  },
-});
-
-const bumpStreak = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:bumpDeferStreak.upsert",
-  purpose: "Advance or start a day's shared-leg consecutive-refusal streak.",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO wallet_backfill_state (sample_date, status, defer_leg, defer_streak, defer_leg_at)
-    SELECT $1::date, 'failed', $2::text, 1, $3::timestamptz WHERE false
-    ON CONFLICT (sample_date) DO UPDATE SET
-      defer_streak = CASE
-        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM $2::text THEN 1
-        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
-             AND wallet_backfill_state.defer_leg_at > $3::timestamptz - ($4::text || ' milliseconds')::interval
-          THEN wallet_backfill_state.defer_streak
-        ELSE wallet_backfill_state.defer_streak + 1
-      END,
-      defer_leg = $2::text,
-      defer_leg_at = CASE
-        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM $2::text THEN $3::timestamptz
-        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
-             AND wallet_backfill_state.defer_leg_at > $3::timestamptz - ($4::text || ' milliseconds')::interval
-          THEN wallet_backfill_state.defer_leg_at
-        ELSE $3::timestamptz
-      END
-    RETURNING defer_streak`,
-    params: ["2000-01-01", "probe", "2000-01-01T00:00:00Z", 1000],
-  },
-});
-
-const readPlanState = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:planWalletBackfill.state",
-  purpose: "Read every day's checkpoint for the repair plan.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT sample_date, status, defer_leg, defer_leg_at, detail FROM wallet_backfill_state`,
-  },
-});
-
-const readPriorState = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletWindow.priorState",
-  purpose: "Read the settled checkpoints of the days in this window.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT sample_date::text AS sample_date, status, block_number, balance_rows, sleeve_rows, detail
-      FROM wallet_backfill_state
-     WHERE sample_date = ANY($1::date[])
-       AND status IN ('filled', 'skipped', 'exhausted')`,
-    params: ["{}"],
-  },
-});
-
-const readExistingState = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.existingState",
-  purpose: "Read one day's checkpoint status inside the write transaction.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT status FROM wallet_backfill_state WHERE sample_date = $1::date`,
-    params: ["2000-01-01"],
-  },
-});
-
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const EVIDENCE_BALANCES_PROBE = {
-  statement: `INSERT INTO wallet_balance_sample_evidence
-            (original_id, sample_date, symbol, amount, price_usd, value_usd,
-             provenance, sampled_at, strategy_nav_idle_only, evidence_reason,
-             replacement_block_number, snapshot_run_id, amount_observed_at,
-             price_observed_at, recorded_at)
-          SELECT id, sample_date, symbol, amount, price_usd, value_usd,
-                 provenance, sampled_at, strategy_nav_idle_only,
-                 CASE WHEN provenance = $1
-                      THEN 'quarantined-replacement'
-                      ELSE 'incomplete-snapshot-replacement' END,
-                 $2::bigint, snapshot_run_id, amount_observed_at,
-                 price_observed_at, recorded_at
-            FROM wallet_balance_samples
-           WHERE sample_date = $3::date
-             AND superseded_at IS NULL`,
-    params: [QUARANTINED_PROVENANCE, 1, "2000-01-01"],
-} as const;
-
-const evidenceBalances = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_sample_evidence",
-  privileges: ["INSERT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.evidenceBalances",
-  purpose: "Archive every live balance row before it is rewritten or superseded.",
-  callers: REPAIR,
-  probe: EVIDENCE_BALANCES_PROBE,
-});
-
-const evidenceBalancesSource = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.evidenceBalancesSource",
-  purpose: "Read the live balance rows the evidence copy archives.",
-  callers: REPAIR,
-  probe: EVIDENCE_BALANCES_PROBE,
-});
-
-// counts-quarantined: DELIBERATE — this statement reads quarantined rows as evidence, never as coverage.
-const EVIDENCE_SLEEVES_PROBE = {
-  statement: `INSERT INTO wallet_sleeve_sample_evidence
-            (original_id, sample_date, wallet_address, symbol, amount, price_usd,
-             value_usd, provenance, sampled_at, evidence_reason,
-             replacement_block_number, snapshot_run_id, amount_observed_at,
-             price_observed_at, recorded_at)
-          SELECT id, sample_date, wallet_address, symbol, amount, price_usd,
-                 value_usd, provenance, sampled_at,
-                 CASE WHEN provenance = $1
-                      THEN 'quarantined-replacement'
-                      ELSE 'incomplete-snapshot-replacement' END,
-                 $2::bigint, snapshot_run_id, amount_observed_at,
-                 price_observed_at, recorded_at
-            FROM wallet_sleeve_samples
-           WHERE sample_date = $3::date
-             AND superseded_at IS NULL`,
-    params: [QUARANTINED_PROVENANCE, 1, "2000-01-01"],
-} as const;
-
-const evidenceSleeves = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_sample_evidence",
-  privileges: ["INSERT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.evidenceSleeves",
-  purpose: "Archive every live sleeve row before it is rewritten or superseded.",
-  callers: REPAIR,
-  probe: EVIDENCE_SLEEVES_PROBE,
-});
-
-const evidenceSleevesSource = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.evidenceSleevesSource",
-  purpose: "Read the live sleeve rows the evidence copy archives.",
-  callers: REPAIR,
-  probe: EVIDENCE_SLEEVES_PROBE,
-});
-
-const readPriorSamples = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.priorSamples",
-  purpose: "Read the prices a prior pass wrote for a day, to report a disagreement.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT symbol, price_usd FROM wallet_balance_samples
-           WHERE sample_date = $1::date AND provenance <> $2
-             AND superseded_at IS NULL`,
-    params: ["2000-01-01", QUARANTINED_PROVENANCE],
-  },
-});
-
-const upsertBalance = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.upsertBalance",
-  purpose: "Replace a day's balance row in place on its natural key (D55 (6)).",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO wallet_balance_samples
-              (sample_date, symbol, amount, value_usd, provenance, sampled_at)
-            SELECT $1::date, $2, $3::numeric, $4::numeric, 'backfilled', $5::timestamptz WHERE false
-            ON CONFLICT (sample_date, symbol) DO UPDATE SET
-              id                     = EXCLUDED.id,
-              amount                 = EXCLUDED.amount,
-              price_usd              = EXCLUDED.price_usd,
-              value_usd              = EXCLUDED.value_usd,
-              provenance             = EXCLUDED.provenance,
-              sampled_at             = EXCLUDED.sampled_at,
-              strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
-              snapshot_run_id        = EXCLUDED.snapshot_run_id,
-              amount_observed_at     = EXCLUDED.amount_observed_at,
-              price_observed_at      = EXCLUDED.price_observed_at,
-              recorded_at            = EXCLUDED.recorded_at,
-              superseded_at          = EXCLUDED.superseded_at`,
-    params: ["2000-01-01", "probe", 1, 1, "2000-01-01T00:00:00Z"],
-  },
-});
-
-const upsertSleeve = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.upsertSleeve",
-  purpose: "Replace a day's sleeve row in place on its natural key (D55 (6)).",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO wallet_sleeve_samples
-              (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
-            SELECT $1::date, $2, $3, $4::numeric, $5::numeric, 'backfilled', $6::timestamptz WHERE false
-            ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
-              id                 = EXCLUDED.id,
-              amount             = EXCLUDED.amount,
-              price_usd          = EXCLUDED.price_usd,
-              value_usd          = EXCLUDED.value_usd,
-              provenance         = EXCLUDED.provenance,
-              sampled_at         = EXCLUDED.sampled_at,
-              snapshot_run_id    = EXCLUDED.snapshot_run_id,
-              amount_observed_at = EXCLUDED.amount_observed_at,
-              price_observed_at  = EXCLUDED.price_observed_at,
-              recorded_at        = EXCLUDED.recorded_at,
-              superseded_at      = EXCLUDED.superseded_at`,
-    params: ["2000-01-01", "probe", "probe", 1, 1, "2000-01-01T00:00:00Z"],
-  },
-});
-
-const supersedeBalances = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.supersedeBalances",
-  purpose: "Supersede the day's live balance rows this pass did not write (D55 (6)).",
-  callers: REPAIR,
-  probe: {
-    statement: `UPDATE wallet_balance_samples
-             SET superseded_at = now()
-           WHERE sample_date = $1::date
-             AND superseded_at IS NULL
-             AND symbol <> ALL($2::text[])`,
-    params: ["2000-01-01", "{}"],
-  },
-});
-
-const supersedeSleeves = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.supersedeSleeves",
-  purpose: "Supersede the day's live sleeve rows this pass did not write (D55 (6)).",
-  callers: REPAIR,
-  probe: {
-    statement: `UPDATE wallet_sleeve_samples AS s
-             SET superseded_at = now()
-           WHERE s.sample_date = $1::date
-             AND s.superseded_at IS NULL
-             AND NOT EXISTS (
-                   SELECT 1
-                     FROM unnest($2::text[], $3::text[])
-                          AS w(wallet_address, symbol)
-                    WHERE w.wallet_address = s.wallet_address
-                      AND w.symbol = s.symbol
-                 )`,
-    params: ["2000-01-01", "{}", "{}"],
-  },
-});
-
-const writeFilledState = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:backfillWalletDay.writeState",
-  purpose: "Commit a day's checkpoint with the rows that produced it.",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO wallet_backfill_state
-          (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
-        SELECT $1::date, $2, $3::bigint, $4::integer, $5::integer, $6, now(), NULL, 0, NULL WHERE false
-        ON CONFLICT (sample_date) DO UPDATE SET
-          status       = EXCLUDED.status,
-          block_number = EXCLUDED.block_number,
-          balance_rows = EXCLUDED.balance_rows,
-          sleeve_rows  = EXCLUDED.sleeve_rows,
-          detail       = EXCLUDED.detail,
-          attempted_at = EXCLUDED.attempted_at,
-          defer_leg    = NULL,
-          defer_streak = 0,
-          defer_leg_at = NULL`,
-    params: ["2000-01-01", "filled", 1, 1, 1, null],
-  },
-});
-
-const readAttempts = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["SELECT"],
-  site: "src/ops/wallet-backfill:bumpAttempts.select",
-  purpose: "Read a day's attempt counter.",
-  callers: REPAIR,
-  probe: {
-    statement: `SELECT attempts FROM wallet_backfill_state WHERE sample_date = $1::date`,
-    params: ["2000-01-01"],
-  },
-});
-
-const recordStateUpsert = registerQuery({
-  role: "rm_worker",
-  object: "wallet_backfill_state",
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/ops/wallet-backfill:recordState.upsert",
-  purpose: "Checkpoint a day that produced no rows.",
-  callers: REPAIR,
-  probe: {
-    statement: `INSERT INTO wallet_backfill_state
-      (sample_date, status, block_number, balance_rows, sleeve_rows, attempts, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
-    SELECT $1::date, $2, $3::bigint, $4::integer, $5::integer, $6::integer, $7, now(), NULL, 0, NULL WHERE false
-    ON CONFLICT (sample_date) DO UPDATE SET
-      status       = EXCLUDED.status,
-      block_number = EXCLUDED.block_number,
-      balance_rows = EXCLUDED.balance_rows,
-      sleeve_rows  = EXCLUDED.sleeve_rows,
-      attempts     = COALESCE($8::integer, wallet_backfill_state.attempts),
-      detail       = EXCLUDED.detail,
-      attempted_at = EXCLUDED.attempted_at,
-      defer_leg    = NULL,
-      defer_streak = 0,
-      defer_leg_at = NULL`,
-    params: ["2000-01-01", "failed", null, 0, 0, 0, null, null],
-  },
-});
-
+/** The store, through the api (pipeline/ops.ts `gaps.reports` and `wallet_backfill.*`). */
+export const pipelineWalletBackfillStore: WalletBackfillStore = {
+  gapReports: (keys, now) => pipelineRead<GapReport[]>("gaps.reports", keys === null ? null : [...keys], now),
+  planState: () => pipelineRead<PlanStateRow[]>("wallet_backfill.plan_state"),
+  priorState: (dates) => pipelineRead<PriorStateRow[]>("wallet_backfill.prior_state", [...dates]),
+  dayBlockGet: (date) => pipelineRead<CachedDayBlockProof | null>("wallet_backfill.day_block_get", date),
+  dayBlockSet: async (date, proof) => void (await pipelineIngest("wallet_backfill.day_block_set", date, proof)),
+  addressFloorGet: (address) => pipelineRead<number | null>("wallet_backfill.address_floor_get", address),
+  addressFloorSet: async (address, floor) => void (await pipelineIngest("wallet_backfill.address_floor_set", address, floor)),
+  inspect: (date, keys) => pipelineRead<WalletSnapshotCompleteness>("wallet_backfill.inspect", date, keys),
+  readAttempts: (date) => pipelineRead<number>("wallet_backfill.read_attempts", date),
+  recordState: async (date, status, blockNumber, balanceRows, sleeveRows, detail, attempts) =>
+    void (await pipelineIngest("wallet_backfill.record_state", date, status, blockNumber, balanceRows, sleeveRows, detail, attempts)),
+  bumpDeferStreak: (date, leg, now, debounceMs) => pipelineIngest<number>("wallet_backfill.bump_defer_streak", date, leg, now, debounceMs),
+  deferDay: async (date, status, blockNumber, detail) =>
+    void (await pipelineIngest("wallet_backfill.defer_day", date, status, blockNumber, detail)),
+  writeRepairedDay: (input) => pipelineIngest<RepairedDayResult>("wallet_backfill.write_day", input),
+};
 
 /** The two Class C series one backfilled day writes. Both are filled by the
  *  same job because both are read from the SAME multicall batch — splitting
@@ -743,24 +350,21 @@ export interface WalletBackfillPlan {
  * or the repair and the report drift apart and the dashboard starts disagreeing
  * with the thing that is supposed to be fixing it.
  */
-export async function planWalletBackfill(db: Db, now: Date = new Date()): Promise<WalletBackfillPlan> {
+export async function planWalletBackfill(
+  store: WalletBackfillStore = pipelineWalletBackfillStore,
+  now: Date = new Date(),
+): Promise<WalletBackfillPlan> {
   const cutoff = lastClosedDay(now);
   const missing = new Set<string>();
-  for (const key of BACKFILLED_SERIES) {
-    const def = getSeriesDef(key);
-    if (!def) continue;
-    for (const day of missingDaysFromReport(await detectGaps(def, db, now), cutoff)) missing.add(day);
+  for (const report of await store.gapReports([...BACKFILLED_SERIES], now)) {
+    for (const day of missingDaysFromReport(report, cutoff)) missing.add(day);
   }
   const ordered = [...missing].sort();
   if (ordered.length === 0) {
     return { days: [], totalMissing: 0, deferred: 0, retrying: 0, exhausted: [], blocked: [], blockedDetail: [] };
   }
 
-  const rows = await on(db, readPlanState)<
-    { sample_date: Date; status: string; defer_leg: string | null; defer_leg_at: Date | null; detail: string | null }
-  >`
-    SELECT sample_date, status, defer_leg, defer_leg_at, detail FROM wallet_backfill_state
-  `;
+  const rows = await store.planState();
   const byStatus = new Map(rows.map((r) => [isoDay(new Date(r.sample_date).getTime()), r.status]));
   // A 'blocked' day is let back into candidates only once its cooldown has
   // elapsed since the leg's last refusal — the one automatic probe per
@@ -842,86 +446,14 @@ export function selectBackfillDays(
   };
 }
 
-// ── The permanent date→block cache, backed by Postgres ───────────────────────
+// ── The permanent date→block and address→floor caches, in the store ─────────
 
-export function dayBlockCache(db: Db): DayBlockCache {
-  return {
-    async get(date) {
-      const rows = await on(db, readDayBlock)<{
-        block_number: string;
-        block_hash: string | null;
-        block_timestamp: Date;
-        boundary_next_block_number: string | null;
-        boundary_next_block_hash: string | null;
-        boundary_next_block_timestamp: Date | null;
-      }>`
-        SELECT block_number, block_hash, block_timestamp,
-               boundary_next_block_number, boundary_next_block_hash,
-               boundary_next_block_timestamp
-          FROM chain_day_blocks
-         WHERE sample_date = ${date}
-      `;
-      const row = rows[0];
-      if (!row) return null;
-      return {
-        blockNumber: Number(row.block_number),
-        blockHash: row.block_hash,
-        blockTimestampSec: Math.floor(new Date(row.block_timestamp).getTime() / 1000),
-        boundaryNextBlockNumber:
-          row.boundary_next_block_number === null ? null : Number(row.boundary_next_block_number),
-        boundaryNextBlockHash: row.boundary_next_block_hash,
-        boundaryNextBlockTimestampSec: row.boundary_next_block_timestamp === null
-          ? null
-          : Math.floor(new Date(row.boundary_next_block_timestamp).getTime() / 1000),
-      };
-    },
-    async set(date, proof) {
-      await on(db, writeDayBlock)`
-        INSERT INTO chain_day_blocks
-          (sample_date, block_number, block_hash, block_timestamp,
-           boundary_next_block_number, boundary_next_block_hash,
-           boundary_next_block_timestamp)
-        VALUES
-          (${date}, ${proof.blockNumber}, ${proof.blockHash},
-           ${new Date(proof.blockTimestampSec * 1000)},
-           ${proof.boundaryNextBlockNumber}, ${proof.boundaryNextBlockHash},
-           ${proof.boundaryNextBlockTimestampSec === null
-             ? null
-             : new Date(proof.boundaryNextBlockTimestampSec * 1000)})
-        ON CONFLICT (sample_date) DO UPDATE SET
-          block_number = EXCLUDED.block_number,
-          block_hash = EXCLUDED.block_hash,
-          block_timestamp = EXCLUDED.block_timestamp,
-          boundary_next_block_number = EXCLUDED.boundary_next_block_number,
-          boundary_next_block_hash = EXCLUDED.boundary_next_block_hash,
-          boundary_next_block_timestamp = EXCLUDED.boundary_next_block_timestamp,
-          resolved_at = now()
-      `;
-    },
-  };
+export function dayBlockCache(store: WalletBackfillStore): DayBlockCache {
+  return { get: (date) => store.dayBlockGet(date), set: (date, proof) => store.dayBlockSet(date, proof) };
 }
 
-// ── The permanent address→floor cache, backed by Postgres (issue #760) ──────
-
-export function addressFloorCache(db: Db): AddressFloorCache {
-  return {
-    async get(address) {
-      const rows = await on(db, readAddressFloor)<{ floor_block: string }>`
-        SELECT floor_block FROM chain_address_floors WHERE address = ${address}
-      `;
-      const row = rows[0];
-      return row ? Number(row.floor_block) : null;
-    },
-    async set(address, floorBlock) {
-      await on(db, writeAddressFloor)`
-        INSERT INTO chain_address_floors (address, floor_block)
-        VALUES (${address}, ${floorBlock})
-        ON CONFLICT (address) DO UPDATE SET
-          floor_block = EXCLUDED.floor_block,
-          resolved_at = now()
-      `;
-    },
-  };
+export function addressFloorCache(store: WalletBackfillStore): AddressFloorCache {
+  return { get: (address) => store.addressFloorGet(address), set: (address, floor) => store.addressFloorSet(address, floor) };
 }
 
 /** Tracked assets whose block-addressed reads use CODE PRESENCE as the
@@ -1055,7 +587,7 @@ export function buildDayReads(
   return { reads, sleeveTargets };
 }
 
-interface WalletSnapshotCompleteness {
+export interface WalletSnapshotCompleteness {
   complete: boolean;
   missingBalanceSymbols: string[];
   missingSleeveKeys: string[];
@@ -1063,85 +595,19 @@ interface WalletSnapshotCompleteness {
   sleeveRows: number;
 }
 
-/** Inspect active rows against the same manifest the writer uses.
- *
- * "Active" is live: a row a repair pass superseded (D55 (6), migration 0104)
- * is neither coverage nor a row awaiting archival — it was archived when it
- * was live, before the pass that superseded it wrote anything.
- *
- * counts-quarantined: DELIBERATE — quarantined rows are selected so they can be
- * counted as occupied evidence awaiting archival, but they are excluded from
- * the present-key sets and therefore can never make a snapshot complete. */
-async function inspectWalletSnapshot(
-  db: Db,
-  date: string,
-  manifest: WalletSnapshotManifest,
-  lockRows = false,
-): Promise<WalletSnapshotCompleteness> {
-  const balances = lockRows
-    ? await on(db, inspectBalancesLocked)<{ symbol: string; provenance: string }>`
-    SELECT symbol, provenance
-      FROM wallet_balance_samples
-     WHERE sample_date = ${date}
-       AND superseded_at IS NULL
-     FOR UPDATE
-  `
-    : await on(db, inspectBalances)<{ symbol: string; provenance: string }>`
-    SELECT symbol, provenance
-      FROM wallet_balance_samples
-     WHERE sample_date = ${date}
-       AND superseded_at IS NULL
-  `;
-  // counts-quarantined: DELIBERATE — same evidence/coverage distinction above.
-  const sleeves = lockRows
-    ? await on(db, inspectSleevesLocked)<{ wallet_address: string; symbol: string; provenance: string }>`
-    SELECT wallet_address, symbol, provenance
-      FROM wallet_sleeve_samples
-     WHERE sample_date = ${date}
-       AND superseded_at IS NULL
-     FOR UPDATE
-  `
-    : await on(db, inspectSleeves)<{ wallet_address: string; symbol: string; provenance: string }>`
-    SELECT wallet_address, symbol, provenance
-      FROM wallet_sleeve_samples
-     WHERE sample_date = ${date}
-       AND superseded_at IS NULL
-  `;
-  const balanceSymbols = new Set(
-    balances.filter((row) => row.provenance !== QUARANTINED_PROVENANCE).map((row) => row.symbol),
-  );
-  const sleeveKeys = new Set(
-    sleeves
-      .filter((row) => row.provenance !== QUARANTINED_PROVENANCE)
-      .map((row) => sleeveManifestKey(row.wallet_address, row.symbol)),
-  );
-  const missingBalanceSymbols = manifest.balanceAssets
-    .map((asset) => asset.symbol)
-    .filter((symbol) => !balanceSymbols.has(symbol));
-  const missingSleeveKeys = manifest.sleeveKeys
-    .map((key) => sleeveManifestKey(key.walletAddress, key.asset.symbol))
-    .filter((key) => !sleeveKeys.has(key));
-  return {
-    complete: missingBalanceSymbols.length === 0 && missingSleeveKeys.length === 0,
-    missingBalanceSymbols,
-    missingSleeveKeys,
-    balanceRows: balances.length,
-    sleeveRows: sleeves.length,
-  };
-}
-
 /** Record a day's refusal. Lifted out of the executor unchanged so the window
  *  and the single-day path cannot drift in how a failure is written down. */
 async function failDay(
-  db: Db,
+  store: WalletBackfillStore,
   date: string,
   detail: string,
   blockNumber: number | null = null,
 ): Promise<BackfillDayResult> {
-  const attempts = await bumpAttempts(db, date);
+  // Read-and-increment this day's attempt counter: the NEW count.
+  const attempts = (await store.readAttempts(date)) + 1;
   const exhausted = attempts >= maxAttemptsPerDay();
   const status: BackfillDayStatus = exhausted ? "exhausted" : "failed";
-  await recordState(db, date, status, blockNumber, 0, 0, detail, attempts);
+  await store.recordState(date, status, blockNumber, 0, 0, detail, attempts);
   console.warn(`wallet-backfill: ${date} refused (attempt ${attempts}${exhausted ? ", exhausted" : ""}) — ${detail}`);
   // An exhausted day returns ok:true so the QUEUE stops retrying it — the day
   // itself is still an unrepaired, still-reported gap; what has stopped is the
@@ -1188,25 +654,21 @@ async function failDay(
  *  cooldown elapses (planWalletBackfill), which is what makes a corrected leg
  *  heal its days without hand-written SQL. */
 async function deferDay(
-  db: Db,
+  store: WalletBackfillStore,
   date: string,
   detail: string,
   leg: string,
   now: Date,
   blockNumber: number | null = null,
 ): Promise<BackfillDayResult> {
-  const streak = await bumpDeferStreak(db, date, leg, now);
+  const streak = await bumpDeferStreak(store, date, leg, now);
   const blocked = streak >= legTerminalThreshold();
   const status: BackfillDayStatus = blocked ? "blocked" : "failed";
   const fullDetail = blocked
     ? `${detail} — BLOCKED: shared leg '${leg}' refused ${streak} consecutive times; retried automatically ` +
       `once ${Math.round(legRetryCooldownMs() / 60_000)}m have passed since the last refusal, no SQL needed`
     : detail;
-  await on(db, deferDayUpdate)`
-    UPDATE wallet_backfill_state
-       SET status = ${status}, block_number = ${blockNumber}, detail = ${fullDetail}, attempted_at = now()
-     WHERE sample_date = ${date}
-  `;
+  await store.deferDay(date, status, blockNumber, fullDetail);
   console.warn(
     `wallet-backfill: ${date} ${blocked ? "BLOCKED" : "deferred"} (shared leg '${leg}', attempt not charged, streak ${streak}) — ${detail}`,
   );
@@ -1238,39 +700,17 @@ async function deferDay(
  * A leg change resets the streak to 1: a different symptom is a different
  * incident, not a continuation of the old one.
  */
-async function bumpDeferStreak(db: Db, date: string, leg: string, now: Date): Promise<number> {
-  const debounceMs = legDebounceMs();
-  const [row] = await on(db, bumpStreak)<{ defer_streak: number }>`
-    INSERT INTO wallet_backfill_state (sample_date, status, defer_leg, defer_streak, defer_leg_at)
-    VALUES (${date}, 'failed', ${leg}, 1, ${now})
-    ON CONFLICT (sample_date) DO UPDATE SET
-      defer_streak = CASE
-        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM ${leg} THEN 1
-        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
-             AND wallet_backfill_state.defer_leg_at > ${now}::timestamptz - (${debounceMs}::text || ' milliseconds')::interval
-          THEN wallet_backfill_state.defer_streak
-        ELSE wallet_backfill_state.defer_streak + 1
-      END,
-      defer_leg = ${leg},
-      defer_leg_at = CASE
-        WHEN wallet_backfill_state.defer_leg IS DISTINCT FROM ${leg} THEN ${now}::timestamptz
-        WHEN wallet_backfill_state.defer_leg_at IS NOT NULL
-             AND wallet_backfill_state.defer_leg_at > ${now}::timestamptz - (${debounceMs}::text || ' milliseconds')::interval
-          THEN wallet_backfill_state.defer_leg_at
-        ELSE ${now}::timestamptz
-      END
-    RETURNING defer_streak
-  `;
-  return row!.defer_streak;
+async function bumpDeferStreak(store: WalletBackfillStore, date: string, leg: string, now: Date): Promise<number> {
+  return store.bumpDeferStreak(date, leg, now, legDebounceMs());
 }
 
 async function skipDay(
-  db: Db,
+  store: WalletBackfillStore,
   date: string,
   detail: string,
   blockNumber: number | null = null,
 ): Promise<BackfillDayResult> {
-  await recordState(db, date, "skipped", blockNumber, 0, 0, detail, null);
+  await store.recordState(date, "skipped", blockNumber, 0, 0, detail, null);
   return { ok: true, sampleDate: date, status: "skipped", blockNumber, balanceRows: 0, sleeveRows: 0, detail };
 }
 
@@ -1296,7 +736,7 @@ async function skipDay(
  * is written for it and it stays in the gap report.
  */
 export async function backfillWalletWindow(
-  db: Db,
+  store: WalletBackfillStore = pipelineWalletBackfillStore,
   dates: readonly string[],
   deps: WalletBackfillDeps = defaultWalletBackfillDeps,
   now: Date = new Date(),
@@ -1306,7 +746,7 @@ export async function backfillWalletWindow(
   const closed: string[] = [];
   for (const date of dates) {
     if (date > cutoff) {
-      out.set(date, await skipDay(db, date, `${date} has not closed yet — the live sampler owns the current day`));
+      out.set(date, await skipDay(store, date, `${date} has not closed yet — the live sampler owns the current day`));
       continue;
     }
     closed.push(date);
@@ -1336,23 +776,18 @@ export async function backfillWalletWindow(
   // metadata, not permission to suppress repair. Complete live/seed days need
   // no historical RPC at all; exhausted incomplete days remain disclosed but
   // keep their existing budget stop.
-  const priorState = await on(db, readPriorState)<{ sample_date: string; status: BackfillDayStatus; block_number: number | null; balance_rows: number; sleeve_rows: number; detail: string | null }>`
-    SELECT sample_date::text AS sample_date, status, block_number, balance_rows, sleeve_rows, detail
-      FROM wallet_backfill_state
-     WHERE sample_date = ANY(${closed}::date[])
-       AND status IN ('filled', 'skipped', 'exhausted')
-  `;
+  const priorState = await store.priorState(closed);
   const settled = new Map(priorState.map((r) => [r.sample_date, r]));
   const pending: string[] = [];
   for (const date of closed) {
     const s = settled.get(date);
-    const completeness = await inspectWalletSnapshot(db, date, manifest);
+    const completeness = await store.inspect(date, manifestKeys(manifest));
     if (!completeness.complete && s?.status !== "exhausted") {
       pending.push(date);
       continue;
     }
     if (!s) {
-      out.set(date, await skipDay(db, date, "already populated with a complete expected balance+sleeve snapshot"));
+      out.set(date, await skipDay(store, date, "already populated with a complete expected balance+sleeve snapshot"));
       continue;
     }
     out.set(date, {
@@ -1372,7 +807,7 @@ export async function backfillWalletWindow(
   assertRpcBudgetConfigured();
 
   // 1. dates → blocks. Permanent cache, so a re-run over the same window is free.
-  const resolvedByDate = await resolveWindowBlocks(db, closed, deps, now);
+  const resolvedByDate = await resolveWindowBlocks(store, closed, deps, now);
   let readable: { date: string; resolved: ResolvedDayBlock }[] = [];
   for (const date of closed) {
     const r = resolvedByDate.get(date);
@@ -1382,7 +817,7 @@ export async function backfillWalletWindow(
       const detail = `block resolution failed: ${r ? r.error : "no outcome"}`;
       out.set(
         date,
-        r && !r.ok && r.shared ? await deferDay(db, date, detail, "block-resolve-head", now) : await failDay(db, date, detail),
+        r && !r.ok && r.shared ? await deferDay(store, date, detail, "block-resolve-head", now) : await failDay(store, date, detail),
       );
       continue;
     }
@@ -1411,7 +846,7 @@ export async function backfillWalletWindow(
     const floorAssets = floorEligibleAssets(assets);
     const addresses = [...new Set(floorAssets.map((a) => a.address))];
     const floors = addresses.length > 0
-      ? await deps.resolveAddressFloors(addresses, opts, addressFloorCache(db))
+      ? await deps.resolveAddressFloors(addresses, opts, addressFloorCache(store))
       : new Map<string, AddressFloor>();
     const stillReadable: { date: string; resolved: ResolvedDayBlock }[] = [];
     for (const { date, resolved } of readable) {
@@ -1423,7 +858,7 @@ export async function backfillWalletWindow(
         const detail = `below earliest-valid-block floor: ${below
           .map((a) => `${a.symbol} (${a.address}) floors at block ${floors.get(a.address)!.floorBlock}`)
           .join(", ")}`;
-        out.set(date, await skipDay(db, date, detail, resolved.blockNumber));
+        out.set(date, await skipDay(store, date, detail, resolved.blockNumber));
         continue;
       }
       stillReadable.push({ date, resolved });
@@ -1447,7 +882,7 @@ export async function backfillWalletWindow(
     // Shared leg: one load covers every day in the window, so its failure is not
     // any one day's fault and charges none of them an attempt. See deferDay().
     for (const { date, resolved } of readable) {
-      out.set(date, await deferDay(db, date, `historical price load failed: ${String(err)}`, "price-load", now, resolved.blockNumber));
+      out.set(date, await deferDay(store, date, `historical price load failed: ${String(err)}`, "price-load", now, resolved.blockNumber));
     }
     return settle();
   }
@@ -1475,7 +910,7 @@ export async function backfillWalletWindow(
       for (const { date, resolved } of readable) {
         out.set(
           date,
-          await deferDay(db, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, "chain-read-window", now, resolved.blockNumber),
+          await deferDay(store, date, `chain read failed at block ${resolved.blockNumber}: ${String(err)}`, "chain-read-window", now, resolved.blockNumber),
         );
       }
       return settle();
@@ -1484,7 +919,7 @@ export async function backfillWalletWindow(
 
   for (const { date, resolved } of readable) {
     const pre = amountsByTag?.get(toBlockTag(resolved.blockNumber)) ?? null;
-    out.set(date, await repairResolvedDay(db, date, resolved, prices, wallets, assets, deps, pre, now));
+    out.set(date, await repairResolvedDay(store, date, resolved, prices, wallets, assets, deps, pre, now));
   }
   return settle();
 }
@@ -1495,12 +930,12 @@ export async function backfillWalletWindow(
  * honest, and the day-atomic write path is the last place to accept that.
  */
 export async function backfillWalletDay(
-  db: Db,
+  store: WalletBackfillStore = pipelineWalletBackfillStore,
   date: string,
   deps: WalletBackfillDeps = defaultWalletBackfillDeps,
   now: Date = new Date(),
 ): Promise<BackfillDayResult> {
-  return (await backfillWalletWindow(db, [date], deps, now))[0]!;
+  return (await backfillWalletWindow(store, [date], deps, now))[0]!;
 }
 
 /**
@@ -1521,13 +956,13 @@ type WindowBlockOutcome =
   | { ok: false; error: string; shared?: boolean };
 
 async function resolveWindowBlocks(
-  db: Db,
+  store: WalletBackfillStore,
   dates: readonly string[],
   deps: WalletBackfillDeps,
   now: Date,
 ): Promise<Map<string, WindowBlockOutcome>> {
   const opts = { rpcUrl: config.baseRpcUrl };
-  const cache = dayBlockCache(db);
+  const cache = dayBlockCache(store);
   const out = new Map<string, WindowBlockOutcome>();
 
   if (deps.resolveBlocks) {
@@ -1565,7 +1000,7 @@ async function resolveWindowBlocks(
  * stays in the gap report.
  */
 async function repairResolvedDay(
-  db: Db,
+  store: WalletBackfillStore,
   date: string,
   resolved: ResolvedDayBlock,
   prices: HistoricalPriceTable,
@@ -1583,7 +1018,7 @@ async function repairResolvedDay(
   now: Date = new Date(),
 ): Promise<BackfillDayResult> {
   const fail = (detail: string, blockNumber: number | null = null): Promise<BackfillDayResult> =>
-    failDay(db, date, detail, blockNumber);
+    failDay(store, date, detail, blockNumber);
   const blockTag = toBlockTag(resolved.blockNumber);
 
   // 2. Read every leg AT THAT BLOCK, with the silent-zero rail armed.
@@ -1649,7 +1084,7 @@ async function repairResolvedDay(
     const refused = unpriced.filter((s) => !prices.has(s));
     if (refused.length > 0) {
       return deferDay(
-        db,
+        store,
         date,
         `no price source for ${refused.join(", ")} — the pool refused to price it for the whole window`,
         `price-pool:${[...refused].sort().join(",")}`,
@@ -1679,21 +1114,18 @@ async function repairResolvedDay(
   //    writes is upserted on its natural key, and each live row it no longer
   //    writes is marked `superseded_at` (D55 (6): nothing here deletes).
   //    Archive, replacement, supersession, completeness proof and checkpoint
-  //    are one transaction; any failure restores the original state.
+  //    are one transaction in the api (pipeline/stores/wallet-backfill.ts
+  //    writeRepairedDay); any failure restores the original state.
   const sampledAt = new Date(resolved.blockTimestampSec * 1000);
   const manifest = resolveWalletSnapshotManifest(assets, wallets);
-  let balanceRows = 0;
-  let sleeveRows = 0;
-  let status: BackfillDayStatus = "filled";
-  let detail: string | null = null;
 
-  // The asset_prices dual-write (issue #849; markets §5.6) — resolved OUTSIDE
-  // the transaction below, once per symbol, since `resolvePoolKey` may reach
-  // the network (a fallback pool ranking for an unpinned asset) and a
-  // transaction holding `lockWalletSnapshotDate` is the wrong place to make a
-  // caller wait on that. Metadata only: a resolution failure never fails the
-  // day the amounts write already succeeded for (defaultWalletBackfillDeps
-  // catches internally; this map simply ends up with `null` for that symbol).
+  // The asset_prices dual-write (issue #849; markets §5.6) — resolved BEFORE
+  // the write, once per symbol, since `resolvePoolKey` may reach the network
+  // (a fallback pool ranking for an unpinned asset) and a transaction holding
+  // the snapshot date lock is the wrong place to make a caller wait on that.
+  // Metadata only: a resolution failure never fails the day the amounts write
+  // already succeeded for (defaultWalletBackfillDeps catches internally; this
+  // map simply ends up with `null` for that symbol).
   const poolKeyBySymbol = new Map<string, string | null>();
   if (deps.resolvePoolKey) {
     for (const r of reads) {
@@ -1701,293 +1133,60 @@ async function repairResolvedDay(
       poolKeyBySymbol.set(r.asset.symbol, await deps.resolvePoolKey(r.asset));
     }
   }
-  let priceDisagreements: AssetPriceDisagreement[] = [];
 
+  // The day's rows. Every amount was checked above, so each leg is read, finite
+  // and priced. `source` is the PROVIDER, never the provenance vocabulary:
+  // SP500 (`priceKind: 'yahoo'`) never reaches here, because `reads` is built
+  // from `manifest.balanceAssets`, which already excludes
+  // `valuationKind === 'config'` (markets §3.2, §5.6).
+  const balances: RepairedDayWrite["balances"] = [];
+  for (const r of reads) {
+    if (!r.key.startsWith("agg:")) continue;
+    const amount = amounts.get(r.key)!;
+    if (!amount.ok) continue; // unreachable: checked above
+    const priceUsd = priceFor(r.asset.symbol)!;
+    const source: AssetPriceSource = r.asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+    const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(r.asset.symbol) ?? null);
+    balances.push({
+      symbol: r.asset.symbol,
+      amount: amount.amount,
+      valueUsd: amount.amount * priceUsd,
+      assetPrice: {
+        priceDate: date,
+        symbol: r.asset.symbol,
+        priceUsd,
+        source,
+        poolKey,
+        tokenAddress: source === "pinned" ? null : r.asset.address,
+        observedAt: dayCloseInstant(date),
+        fetchedAt: now,
+        configIdentity: source === "pinned"
+          ? "pinned:usd:1.00"
+          : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+      },
+    });
+  }
+  const sleeves: RepairedDayWrite["sleeves"] = [];
+  for (const t of sleeveTargets) {
+    const amount = amounts.get(t.key)!;
+    if (!amount.ok) continue; // unreachable: checked above
+    const priceUsd = priceFor(t.asset.symbol)!;
+    sleeves.push({ walletAddress: t.walletAddress, symbol: t.asset.symbol, amount: amount.amount, valueUsd: amount.amount * priceUsd });
+  }
+
+  let written: RepairedDayResult;
   try {
-    await db.begin(async (tx) => {
-      const txDb = tx as unknown as Db;
-      balanceRows = 0;
-      sleeveRows = 0;
-      status = "filled";
-      detail = null;
-      priceDisagreements = [];
-
-      // Serialize every repair/live writer for this date. Row locks alone do
-      // not cover a missing natural key that a concurrent sampler could insert
-      // between the evidence copy and the rewrite below.
-      await lockWalletSnapshotDate(tx, date);
-      // Lock every live row whose value may be archived. Without this, a
-      // concurrent UPDATE could commit after the evidence SELECT but before the
-      // rewrite, replacing a version that was never preserved.
-      const before = await inspectWalletSnapshot(txDb, date, manifest, true);
-
-      if (before.complete) {
-        const [existingState] = await on(tx, readExistingState)<{ status: BackfillDayStatus }>`
-          SELECT status FROM wallet_backfill_state WHERE sample_date = ${date}
-        `;
-        status = existingState?.status === "filled" ? "filled" : "skipped";
-        balanceRows = status === "filled" ? manifest.balanceAssets.length : 0;
-        sleeveRows = status === "filled" ? manifest.sleeveKeys.length : 0;
-        detail = "already populated with a complete expected balance+sleeve snapshot";
-      } else {
-        // counts-quarantined: DELIBERATE. Every original live row is copied
-        // before it is rewritten or superseded; quarantined rows receive the
-        // more specific reason. A row an EARLIER pass superseded is not copied
-        // again: it was live, and so archived, before that pass rewrote the
-        // day, and supersession changed nothing but its tombstone.
-        await on(tx, evidenceBalances, evidenceBalancesSource)`
-          INSERT INTO wallet_balance_sample_evidence
-            (original_id, sample_date, symbol, amount, price_usd, value_usd,
-             provenance, sampled_at, strategy_nav_idle_only, evidence_reason,
-             replacement_block_number, snapshot_run_id, amount_observed_at,
-             price_observed_at, recorded_at)
-          SELECT id, sample_date, symbol, amount, price_usd, value_usd,
-                 provenance, sampled_at, strategy_nav_idle_only,
-                 CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
-                      THEN 'quarantined-replacement'
-                      ELSE 'incomplete-snapshot-replacement' END,
-                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
-                 price_observed_at, recorded_at
-            FROM wallet_balance_samples
-           WHERE sample_date = ${date}
-             AND superseded_at IS NULL
-        `;
-        // counts-quarantined: DELIBERATE — same evidence-preserving transition.
-        await on(tx, evidenceSleeves, evidenceSleevesSource)`
-          INSERT INTO wallet_sleeve_sample_evidence
-            (original_id, sample_date, wallet_address, symbol, amount, price_usd,
-             value_usd, provenance, sampled_at, evidence_reason,
-             replacement_block_number, snapshot_run_id, amount_observed_at,
-             price_observed_at, recorded_at)
-          SELECT id, sample_date, wallet_address, symbol, amount, price_usd,
-                 value_usd, provenance, sampled_at,
-                 CASE WHEN provenance = ${QUARANTINED_PROVENANCE}
-                      THEN 'quarantined-replacement'
-                      ELSE 'incomplete-snapshot-replacement' END,
-                 ${resolved.blockNumber}, snapshot_run_id, amount_observed_at,
-                 price_observed_at, recorded_at
-            FROM wallet_sleeve_samples
-           WHERE sample_date = ${date}
-             AND superseded_at IS NULL
-        `;
-        // Captured BEFORE the rewrite so the asset_prices dual-write below can
-        // report a disagreement against the sample row a prior pass wrote for
-        // this (date, symbol) — D41 phase 2's "a check reports rows that
-        // disagree", read literally as sample row vs. price row. `before`
-        // above answers "is this snapshot complete"; this answers "what did it
-        // already say", which `before` never needed to know. Quarantined rows
-        // are excluded (QUARANTINED_PROVENANCE): they are exactly the rows
-        // whose price describes a different asset, so a "disagreement" against
-        // one would be noise, not a finding.
-        const priorSampleRows = await on(tx, readPriorSamples)<{ symbol: string; price_usd: string | null }>`
-          SELECT symbol, price_usd FROM wallet_balance_samples
-           WHERE sample_date = ${date} AND provenance <> ${QUARANTINED_PROVENANCE}
-             AND superseded_at IS NULL
-        `;
-        const priorSamplePriceBySymbol = new Map(
-          priorSampleRows.map((row) => [row.symbol, row.price_usd === null ? null : Number(row.price_usd)]),
-        );
-
-        // The natural keys this pass writes. Every live row on the date outside
-        // them is superseded below, after the upserts.
-        const writtenSymbols: string[] = [];
-        const writtenSleeveWallets: string[] = [];
-        const writtenSleeveSymbols: string[] = [];
-
-        for (const r of reads) {
-          if (!r.key.startsWith("agg:")) continue;
-          const amount = amounts.get(r.key)!;
-          if (!amount.ok) continue; // unreachable: checked above
-          const priceUsd = priceFor(r.asset.symbol)!;
-          // D41 phase 4 (markets §5.6): price_usd is NOT written here. asset_prices
-          // is the sole write target for price data now that #850 switched every
-          // read site to the join; leaving this column NULL on a repaired row is
-          // deliberate, not an oversight, and value_usd still carries the fused
-          // amount*price product a caller may need before the join lands its row.
-          //
-          // D55 (6): an upsert that replaces the row in place, never a delete
-          // and re-insert. The conflict branch sets EVERY column to its EXCLUDED
-          // value — the value the INSERT gives a fresh row, which is the
-          // column's default for each one the INSERT does not name — so the
-          // replaced row reads exactly as the old delete-and-insert left it:
-          // price_usd stays NULL, a prior snapshot identity is cleared, a row an
-          // earlier pass superseded is live again, and `id` is the fresh
-          // sequence value EXCLUDED drew. The new id is load-bearing, not
-          // cosmetic: the evidence tables hold UNIQUE (original_id), one archived
-          // copy per VERSION, so a key rewritten by a second pass must present a
-          // new version's id or its archive collides with the first (the delete
-          // and re-insert got this for free).
-          // rm_wallet_aum_snapshot_constituent_guard (0038) still refuses this
-          // UPDATE with 0A000 on a row of a complete or degraded run, exactly as
-          // it refused the DELETE.
-          await on(tx, upsertBalance)`
-            INSERT INTO wallet_balance_samples
-              (sample_date, symbol, amount, value_usd, provenance, sampled_at)
-            VALUES
-              (${date}, ${r.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
-            ON CONFLICT (sample_date, symbol) DO UPDATE SET
-              id                     = EXCLUDED.id,
-              amount                 = EXCLUDED.amount,
-              price_usd              = EXCLUDED.price_usd,
-              value_usd              = EXCLUDED.value_usd,
-              provenance             = EXCLUDED.provenance,
-              sampled_at             = EXCLUDED.sampled_at,
-              strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
-              snapshot_run_id        = EXCLUDED.snapshot_run_id,
-              amount_observed_at     = EXCLUDED.amount_observed_at,
-              price_observed_at      = EXCLUDED.price_observed_at,
-              recorded_at            = EXCLUDED.recorded_at,
-              superseded_at          = EXCLUDED.superseded_at
-          `;
-          writtenSymbols.push(r.asset.symbol);
-          balanceRows += 1;
-
-          // The literal "sample row vs. price row" reading of D41 phase 2's
-          // verify step: what a PRIOR pass wrote to wallet_balance_samples for
-          // this (date, symbol), captured above before the rewrite, compared
-          // against what this pass just computed. Reported, never a reason to
-          // change what gets written — the freshly-verified chain read/price
-          // is authoritative here regardless (nothing reads asset_prices yet).
-          const priorSamplePrice = priorSamplePriceBySymbol.get(r.asset.symbol);
-          if (priorSamplePrice != null && assetPricesDisagree(priorSamplePrice, priceUsd)) {
-            priceDisagreements.push({
-              priceDate: date,
-              symbol: r.asset.symbol,
-              previousPriceUsd: priorSamplePrice,
-              freshPriceUsd: priceUsd,
-              against: "sample_row",
-            });
-          }
-
-          // D41 phase 2 — dual-write the price row alongside the sample row,
-          // once per (date, symbol) from the AGGREGATE leg (sleeve rows carry
-          // no symbol the aggregate does not already have — see
-          // ops/wallet-snapshot-manifest.ts). `source` is the PROVIDER, never
-          // the provenance vocabulary above: SP500 (`priceKind: 'yahoo'`)
-          // never reaches here at all, because `reads` is built from
-          // `manifest.balanceAssets`, which already excludes `valuationKind
-          // === 'config'` (markets §3.2, §5.6).
-          const source: AssetPriceSource = r.asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
-          const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(r.asset.symbol) ?? null);
-          const disagreement = await writeAssetPrice(txDb, {
-            priceDate: date,
-            symbol: r.asset.symbol,
-            priceUsd,
-            source,
-            poolKey,
-            tokenAddress: source === "pinned" ? null : r.asset.address,
-            observedAt: dayCloseInstant(date),
-            fetchedAt: now,
-            configIdentity: source === "pinned"
-              ? "pinned:usd:1.00"
-              : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
-          });
-          if (disagreement) priceDisagreements.push(disagreement);
-        }
-
-        for (const t of sleeveTargets) {
-          const amount = amounts.get(t.key)!;
-          if (!amount.ok) continue; // unreachable: checked above
-          const priceUsd = priceFor(t.asset.symbol)!;
-          // D41 phase 4 (markets §5.6): same rationale as the balance insert above —
-          // price_usd is left unwritten; value_usd still carries the fused product.
-          // D55 (6): the same in-place upsert as the balance row above, on the
-          // sleeve natural key, every column (id included) from EXCLUDED.
-          await on(tx, upsertSleeve)`
-            INSERT INTO wallet_sleeve_samples
-              (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
-            VALUES
-              (${date}, ${t.walletAddress}, ${t.asset.symbol}, ${amount.amount}, ${amount.amount * priceUsd}, 'backfilled', ${sampledAt})
-            ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
-              id                 = EXCLUDED.id,
-              amount             = EXCLUDED.amount,
-              price_usd          = EXCLUDED.price_usd,
-              value_usd          = EXCLUDED.value_usd,
-              provenance         = EXCLUDED.provenance,
-              sampled_at         = EXCLUDED.sampled_at,
-              snapshot_run_id    = EXCLUDED.snapshot_run_id,
-              amount_observed_at = EXCLUDED.amount_observed_at,
-              price_observed_at  = EXCLUDED.price_observed_at,
-              recorded_at        = EXCLUDED.recorded_at,
-              superseded_at      = EXCLUDED.superseded_at
-          `;
-          writtenSleeveWallets.push(t.walletAddress);
-          writtenSleeveSymbols.push(t.asset.symbol);
-          sleeveRows += 1;
-        }
-
-        // D55 (6): the day's live rows this pass did not write — a symbol no
-        // longer tracked, a sleeve wallet no longer configured, a key spelled
-        // differently from the one the pass writes — are superseded, not
-        // deleted. Their content is already in evidence (copied above), every
-        // reader filters them out, and a later write of the same key (this
-        // pass's upsert or the live sampler's) clears the tombstone. The
-        // constituent guard refuses this UPDATE on a row of a complete or
-        // degraded run, as it refused the DELETE. Key matching is exact (no
-        // case folding): the old DELETE removed every row on the date, so any
-        // row whose key differs from the one written here must leave the
-        // live set.
-        await on(tx, supersedeBalances)`
-          UPDATE wallet_balance_samples
-             SET superseded_at = now()
-           WHERE sample_date = ${date}
-             AND superseded_at IS NULL
-             AND symbol <> ALL(${writtenSymbols}::text[])
-        `;
-        await on(tx, supersedeSleeves)`
-          UPDATE wallet_sleeve_samples AS s
-             SET superseded_at = now()
-           WHERE s.sample_date = ${date}
-             AND s.superseded_at IS NULL
-             AND NOT EXISTS (
-                   SELECT 1
-                     FROM unnest(${writtenSleeveWallets}::text[], ${writtenSleeveSymbols}::text[])
-                          AS w(wallet_address, symbol)
-                    WHERE w.wallet_address = s.wallet_address
-                      AND w.symbol = s.symbol
-                 )
-        `;
-
-        const after = await inspectWalletSnapshot(txDb, date, manifest);
-        if (
-          !after.complete ||
-          after.balanceRows !== manifest.balanceAssets.length ||
-          after.sleeveRows !== manifest.sleeveKeys.length
-        ) {
-          throw new Error(
-            `snapshot completeness validation failed: missing balances [${after.missingBalanceSymbols.join(", ")}], ` +
-              `missing sleeves [${after.missingSleeveKeys.join(", ")}], rows ${after.balanceRows}/${after.sleeveRows}`,
-          );
-        }
-        detail = before.balanceRows + before.sleeveRows > 0
-          ? `replaced incomplete snapshot; archived ${before.balanceRows} balance and ${before.sleeveRows} sleeve row(s)`
-          : null;
-      }
-
-      // `filled` is written only after both active key sets passed validation,
-      // and it commits with the evidence and replacement rows. A successful
-      // write clears any shared-leg streak this date was carrying — whatever
-      // leg it was, it was not the reason this attempt succeeded.
-      await on(tx, writeFilledState)`
-        INSERT INTO wallet_backfill_state
-          (sample_date, status, block_number, balance_rows, sleeve_rows, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
-        VALUES
-          (${date}, ${status}, ${resolved.blockNumber}, ${balanceRows}, ${sleeveRows}, ${detail}, now(), NULL, 0, NULL)
-        ON CONFLICT (sample_date) DO UPDATE SET
-          status       = EXCLUDED.status,
-          block_number = EXCLUDED.block_number,
-          balance_rows = EXCLUDED.balance_rows,
-          sleeve_rows  = EXCLUDED.sleeve_rows,
-          detail       = EXCLUDED.detail,
-          attempted_at = EXCLUDED.attempted_at,
-          defer_leg    = NULL,
-          defer_streak = 0,
-          defer_leg_at = NULL
-      `;
+    written = await store.writeRepairedDay({
+      date,
+      blockNumber: resolved.blockNumber,
+      sampledAt,
+      keys: manifestKeys(manifest),
+      balances,
+      sleeves,
     });
   } catch (err) {
     return deferDay(
-      db,
+      store,
       date,
       `transactional snapshot write failed: ${err instanceof Error ? err.message : String(err)}`,
       "snapshot-write",
@@ -1995,6 +1194,8 @@ async function repairResolvedDay(
       resolved.blockNumber,
     );
   }
+  const { status, balanceRows, sleeveRows, priceDisagreements } = written;
+  let detail = written.detail;
 
   // A price disagreement is a reconciliation finding, never a refusal: this is
   // the EXPAND half of the cutover (issue #849) and nothing reads asset_prices
@@ -2017,51 +1218,4 @@ async function repairResolvedDay(
     sleeveRows,
     detail,
   };
-}
-
-/** Read-and-increment this day's attempt counter, returning the NEW count. */
-async function bumpAttempts(db: Db, date: string): Promise<number> {
-  const rows = await on(db, readAttempts)<{ attempts: number }>`
-    SELECT attempts FROM wallet_backfill_state WHERE sample_date = ${date}
-  `;
-  return (rows[0]?.attempts ?? 0) + 1;
-}
-
-// The checkpoint write for a day that produced NO rows. Kept out of the
-// transaction above because there is no transaction in those paths — the day
-// failed or was skipped before any write was attempted. `attempts` of null
-// leaves the existing counter alone (a skip is not a failed attempt).
-//
-// Every caller of this function (failDay, skipDay) writes a DAY-SPECIFIC
-// outcome, never a shared-leg one, so it always clears the shared-leg streak
-// (issue #761): whatever leg a prior run blamed, this day's own problem is a
-// different incident, and a day that just succeeded or was skipped is not
-// mid-streak with anything.
-async function recordState(
-  db: Db,
-  date: string,
-  status: BackfillDayStatus,
-  blockNumber: number | null,
-  balanceRows: number,
-  sleeveRows: number,
-  detail: string | null,
-  attempts: number | null,
-): Promise<void> {
-  await on(db, recordStateUpsert)`
-    INSERT INTO wallet_backfill_state
-      (sample_date, status, block_number, balance_rows, sleeve_rows, attempts, detail, attempted_at, defer_leg, defer_streak, defer_leg_at)
-    VALUES
-      (${date}, ${status}, ${blockNumber}, ${balanceRows}, ${sleeveRows}, ${attempts ?? 0}, ${detail}, now(), NULL, 0, NULL)
-    ON CONFLICT (sample_date) DO UPDATE SET
-      status       = EXCLUDED.status,
-      block_number = EXCLUDED.block_number,
-      balance_rows = EXCLUDED.balance_rows,
-      sleeve_rows  = EXCLUDED.sleeve_rows,
-      attempts     = COALESCE(${attempts}, wallet_backfill_state.attempts),
-      detail       = EXCLUDED.detail,
-      attempted_at = EXCLUDED.attempted_at,
-      defer_leg    = NULL,
-      defer_streak = 0,
-      defer_leg_at = NULL
-  `;
 }
