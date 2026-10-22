@@ -26,6 +26,7 @@ import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
 import { handlePipeline } from "./routes/pipeline.ts";
+import { handleReferrals, REFERRALS_PREFIX } from "./routes/referrals.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
@@ -456,6 +457,13 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     // per ip, and the handler answers every request itself.
     if (pathname.startsWith("/api/public/analytics/")) {
       return handlePublicAnalytics(req, url, clientIp);
+    }
+
+    // Public referral-code lookup (issue 1371, referrals-spec §6). The handler
+    // owns the whole prefix and answers every request under it, rate limited
+    // per trusted client ip by its own limiter instance.
+    if (pathname.startsWith(REFERRALS_PREFIX)) {
+      return handleReferrals(req, url, clientIp);
     }
 
     // Analytics ingestion boundary (issue #106): the analytics-provider-only

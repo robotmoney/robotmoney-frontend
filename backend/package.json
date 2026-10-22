@@ -25,6 +25,8 @@
     "regime-independent-reference:regenerate": "bun run scripts/regime-independent-reference-regenerate.ts",
     "weighting-comparison:regenerate": "bun run scripts/weighting-comparison-regenerate.ts",
     "swarm-judge:replay": "bun run scripts/swarm-judge-replay.ts",
+    "referrals:report": "bun run scripts/referrals-report.ts",
+    "referrals:accept-revision": "bun run scripts/referrals-accept-revision.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
