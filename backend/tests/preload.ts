@@ -159,6 +159,19 @@ process.env.RM_TEST_PG_CONTAINER = name;
   const { armTestSeam } = await import("../src/test-seam.ts");
   armTestSeam();
 }
+// THE PIPELINE WORKER'S TRANSPORT (issue 1034, D75). The worker holds no
+// database credential: its queue calls, reads and writes go to the api's
+// /api/pipeline/** routes. In this process there is no api listening, so the
+// worker's client dispatches each request to the api's pipeline router on the
+// test database (tests/support/pipeline-in-process.ts). A short retry deadline:
+// a 503 here is a test's own saturation, and a test that wants the worker to
+// wait longer sets its own.
+{
+  const { setPipelineTransport } = await import("../src/worker/pipeline-client.ts");
+  const { inProcessPipelineTransport } = await import("./support/pipeline-in-process.ts");
+  setPipelineTransport(inProcessPipelineTransport);
+  process.env.PIPELINE_RETRY_DEADLINE_MS ??= "3000";
+}
 
 const up = Bun.spawnSync([
   "docker", "run", "-d", "--rm", "--name", name,

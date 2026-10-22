@@ -25,6 +25,7 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
+import { handlePipeline } from "./routes/pipeline.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
@@ -471,6 +472,13 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     // Admin task-queue dashboard (read-only over jobs/job_schedules/job_runs).
+    // The pipeline worker's queue, read and ingestion routes (issue 1034, D75).
+    // Batch pool, like the analytics routes: bulk pipeline work can exhaust
+    // only that pool, never the one public and member routes use.
+    if (pathname.startsWith("/api/pipeline/")) {
+      return runOnBatchPool(() => handlePipeline(req, url));
+    }
+
     if (pathname.startsWith("/api/admin/webauthn/")) {
       const r = await handleAdminWebauthn(req, url);
       if (r) return json(r.body, r.status);

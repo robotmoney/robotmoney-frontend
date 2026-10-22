@@ -1,183 +1,15 @@
-import { jsonValue, sql } from "../db/worker-client.ts";
-import { on, registerQuery } from "../db/registry.ts";
+// Claim one job, run its handler under its lease, settle it (issue #107; the
+// queue moved behind the api in issue 1034, decision D75).
+//
+// Every queue statement runs in the api (pipeline/queue-store.ts), reached
+// through /api/pipeline/** (worker/pipeline-client.ts). This module keeps the
+// worker's half: which lane it claims for, the lease renewal while a handler
+// runs, how a handler's result maps to an outcome, and the log lines.
 import { config } from "../config.ts";
 import { getHandler } from "./handlers/index.ts";
 import { LANES, type Lane } from "./lanes.ts";
-
-// Registered queries (smoke-production-spec.md §7.1). The queue lifecycle
-// runs on the worker's own pool (db/worker-client.ts, WORKER_DATABASE_URL), so
-// every site declares `rm_worker`; the worker process entry drives the loop.
-const WORKER_ENTRY = "src/worker/index";
-
-const claimJob = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  // UPDATE for the claim itself and for FOR UPDATE SKIP LOCKED; SELECT for
-  // the candidate scan, the WHERE and RETURNING.
-  privileges: ["SELECT", "UPDATE"],
-  site: "src/worker/loop:processOneJob.claim",
-  purpose: "Claim the lane's highest-priority due pending job, skipping rows another worker holds.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `WITH claimed AS (
-        SELECT id FROM jobs
-        WHERE status = 'pending' AND run_after <= now()
-          AND kind LIKE ANY($1::text[]) AND kind NOT LIKE ALL($2::text[])
-        ORDER BY priority DESC, run_after, id
-        FOR UPDATE SKIP LOCKED
-        LIMIT 1
-      )
-      UPDATE jobs j SET status = 'running', attempts = attempts + 1, locked_at = now(), locked_by = $3, updated_at = now()
-      FROM claimed WHERE j.id = claimed.id
-      RETURNING j.id, j.kind, j.payload, j.attempts, j.max_attempts`,
-    params: ["{%}", "{}", "probe-worker"],
-  },
-});
-
-const renewLease = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  // SELECT because the WHERE and RETURNING read the row.
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.renew",
-  purpose: "Renew the claimed job's lease while its handler runs, noticing if the reaper took it.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs SET locked_at = now(), updated_at = now()
-      WHERE id = $1 AND locked_by = $2 AND status = 'running' RETURNING id`,
-    params: [0, "probe-worker"],
-  },
-});
-
-// SETTLING A CLAIMED JOB. Each outcome is its own statement, so each is its
-// own site: tests/db-registry-execution.test.ts holds a probe to its call
-// site's exact text, and one declaration may not stand for statements that
-// differ. Every settle is guarded on this worker still holding the job, and
-// SELECT is declared because the WHERE and RETURNING read the row.
-const SETTLE_GUARD = "WHERE id = $2 AND locked_by = $3 AND status = 'running' RETURNING id";
-
-const settleRetry = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.settleRetry",
-  purpose: "Put a failed or degraded job back to pending after its backoff, only while this worker still holds it.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs
-      SET status = 'pending',
-          run_after = now() + ($1 || ' seconds')::interval,
-          locked_at = NULL, locked_by = NULL,
-          last_error = $2, updated_at = now()
-      WHERE id = $3 AND locked_by = $4 AND status = 'running' RETURNING id`,
-    params: [2, "probe", 0, "probe-worker"],
-  },
-});
-
-const settleFailed = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.settleFailed",
-  purpose: "Settle an exhausted or terminal degrade as failed, only while this worker still holds it.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs SET status = 'failed', locked_at = NULL, locked_by = NULL,
-      last_error = $1, updated_at = now() ${SETTLE_GUARD}`,
-    params: ["probe", 0, "probe-worker"],
-  },
-});
-
-const settleSucceeded = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.settleSucceeded",
-  purpose: "Settle a job whose handler returned as succeeded, only while this worker still holds it.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
-      WHERE id = $1 AND locked_by = $2 AND status = 'running' RETURNING id`,
-    params: [0, "probe-worker"],
-  },
-});
-
-const settleDead = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:processOneJob.settleDead",
-  purpose: "Settle a job that threw on its last attempt as dead, only while this worker still holds it.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs SET status = 'dead', locked_at = NULL, locked_by = NULL,
-      last_error = $1, updated_at = now() ${SETTLE_GUARD}`,
-    params: ["probe", 0, "probe-worker"],
-  },
-});
-
-// RECORDING THE RUN, in the same transaction as the settle: one site per
-// column set. Each probe inserts from a query yielding no row, because
-// job_id is a foreign key to a real job and the database is blank.
-const recordDegradedRun = registerQuery({
-  role: "rm_worker",
-  object: "job_runs",
-  privileges: ["INSERT"],
-  site: "src/worker/loop:processOneJob.recordDegradedRun",
-  purpose: "Record a degraded (or terminally refused) run with its error and the handler's output.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
-      SELECT $1::bigint, $2, $3::timestamptz, now(), $4, $5, $6::jsonb WHERE false`,
-    params: [0, "noop", "2026-01-01T00:00:00Z", "degraded", "probe", "{}"],
-  },
-});
-
-const recordSucceededRun = registerQuery({
-  role: "rm_worker",
-  object: "job_runs",
-  privileges: ["INSERT"],
-  site: "src/worker/loop:processOneJob.recordSucceededRun",
-  purpose: "Record a succeeded run with the handler's output.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
-      SELECT $1::bigint, $2, $3::timestamptz, now(), 'succeeded', $4::jsonb WHERE false`,
-    params: [0, "noop", "2026-01-01T00:00:00Z", "{}"],
-  },
-});
-
-const recordFailedRun = registerQuery({
-  role: "rm_worker",
-  object: "job_runs",
-  privileges: ["INSERT"],
-  site: "src/worker/loop:processOneJob.recordFailedRun",
-  purpose: "Record a run whose handler threw, as failed (a retry follows) or dead.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
-      SELECT $1::bigint, $2, $3::timestamptz, now(), $4, $5 WHERE false`,
-    params: [0, "noop", "2026-01-01T00:00:00Z", "failed", "probe"],
-  },
-});
-
-const releaseJobs = registerQuery({
-  role: "rm_worker",
-  object: "jobs",
-  // SELECT because the WHERE and RETURNING read the rows.
-  privileges: ["UPDATE", "SELECT"],
-  site: "src/worker/loop:releaseOwnedJobs",
-  purpose: "Hand this worker's running jobs back to pending on a clean shutdown.",
-  callers: [WORKER_ENTRY],
-  probe: {
-    statement: `UPDATE jobs SET status = 'pending', locked_at = NULL, locked_by = NULL,
-          last_error = COALESCE(last_error, '') || ' [released: worker shutdown]', updated_at = now()
-      WHERE status = 'running' AND locked_by = $1 RETURNING id`,
-    params: ["probe-worker"],
-  },
-});
-
-const MAX_BACKOFF_SECONDS = 3600;
+import { claimJob, renewLease, releaseOwnedJobs as releaseJobs, runWithLease, settleJob } from "./pipeline-client.ts";
+import type { PipelineLease, SettleOutcome } from "../lib/pipeline-wire.ts";
 
 // Lease-renewal cadence (issue #107): while a handler is live its owner renews
 // `locked_at` on this interval so the reaper's visibility timeout only ever
@@ -192,27 +24,15 @@ function leaseRenewMs(): number {
   return Math.max(1000, Math.floor((visibilitySeconds * 1000) / 3));
 }
 
-interface JobRow {
-  id: number;
-  kind: string;
-  payload: Record<string, unknown>;
-  attempts: number;
-  max_attempts: number;
-}
-
 // A handler signals a degraded (non-fatal) run by returning `{ ok:false }`
 // instead of throwing — it kept the last-persisted rows and wrote nothing.
 function isDegradedResult(output: unknown): output is { ok: false; error?: unknown } {
   return output != null && typeof output === "object" && (output as { ok?: unknown }).ok === false;
 }
 
-// A degrade a RETRY CANNOT CHANGE THE ANSWER TO (T21). The seam is the same
-// question the session handlers already applied to benign skips, asked in
-// the other direction: a consensus receipt refused because a FROZEN take set
-// carries no weight vector will be refused identically on every attempt, so
-// five identical red rows are five copies of one fact and a wasted backoff
-// window. The handler says so explicitly with `terminal: true`; everything else
-// keeps the exponential-backoff retry, because most degrades ARE transient.
+// A degrade a RETRY CANNOT CHANGE THE ANSWER TO (T21). The handler says so
+// explicitly with `terminal: true`; everything else keeps the
+// exponential-backoff retry, because most degrades ARE transient.
 function isTerminalDegrade(output: unknown): boolean {
   return output != null && typeof output === "object" && (output as { terminal?: unknown }).terminal === true;
 }
@@ -237,73 +57,47 @@ export interface ClaimOptions {
   onClaim?: (job: { id: number; kind: string }) => void;
 }
 
-// Claim exactly one due job WITHIN THE LANE'S KIND ALLOWLIST, lock it, run its
-// handler, and record the outcome. Concurrency-safe across N workers via
-// FOR UPDATE SKIP LOCKED (the lane predicate only narrows which kinds are
-// visible to this worker; it never weakens ownership). Priority is preserved
-// WITHIN the lane (ORDER BY priority DESC applies to the lane-filtered set).
-//
-// `, id` IS LOAD-BEARING (issue #806), not cosmetic. `run_after` is a
-// millisecond instant and jobs routinely share one: the retired session-lifecycle
-// rows were all priority 0, and `createSessionAdmin`'s clamp collapsed the
-// aggregate and judge steps onto an IDENTICAL run_after for any window under ~2s.
-// The rows are gone but the tie is not theirs alone, and without a
-// tiebreak the claim order among equals is whatever the plan returns, and
-// executed against a real Postgres the judge lost it: `aggregate` and `publish`
-// both drained first and the judge burned all five attempts on
-// `terminal_state:published` — final state `published`, zero judgement rows, in
-// `shadow` mode. It does NOT self-heal, because the window that collapses the
-// instants is the same window that puts the publish inside the judge's first
-// backoff. `id` is insertion order, which is the order the enqueuer intended.
-// Returns true if a job was processed (caller can poll faster when busy).
+/**
+ * Claim exactly one due job WITHIN THE LANE'S KIND ALLOWLIST, run its handler,
+ * and record the outcome. Returns true if a job was processed (the caller polls
+ * faster when busy).
+ *
+ * The api claims with FOR UPDATE SKIP LOCKED, priority first and `id` as the
+ * load-bearing tiebreak (issue #806). The handler runs under the claim's lease
+ * (jobId, workerId, attempt): every write it sends is fenced by it, so a handler
+ * whose lease the reaper took writes nothing, and its settle is discarded.
+ *
+ * Outcomes (settled by the api, pipeline/queue-store.ts settleJob):
+ *   - `{ ok:false }` DEGRADED: the handler kept the last-persisted rows. A
+ *     'degraded' run, retried with exponential backoff; once attempts are
+ *     exhausted it settles 'failed' (R16: 'failed' is the honest terminal for
+ *     "asked N times, never answered"; 'dead' is never used here). A degrade
+ *     with `terminal: true` skips the retries and is recorded red.
+ *   - any other return: 'succeeded'.
+ *   - a throw: 'failed' and retried with backoff, or 'dead' on the last attempt.
+ */
 export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
   const lane = opts.lane ?? LANES.generic;
   const workerId = opts.workerId ?? config.workerId;
-  const claimed = await on(sql, claimJob)<JobRow>`
-    WITH claimed AS (
-      SELECT id FROM jobs
-      WHERE status = 'pending' AND run_after <= now()
-        AND kind LIKE ANY(${[...lane.include]})
-        AND kind NOT LIKE ALL(${[...lane.exclude]})
-      -- The ", id" tiebreak is LOAD-BEARING (issue #806) and is explained in
-      -- the comment above this function: run_after is a millisecond instant
-      -- that same-priority jobs routinely share, and without a tiebreak the
-      -- the judge step measurably lost the tie to its own publish.
-      ORDER BY priority DESC, run_after, id
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1
-    )
-    UPDATE jobs j
-       SET status = 'running',
-           attempts = attempts + 1,
-           locked_at = now(),
-           locked_by = ${workerId},
-           updated_at = now()
-      FROM claimed
-     WHERE j.id = claimed.id
-     RETURNING j.id, j.kind, j.payload, j.attempts, j.max_attempts
-  `;
-
-  const job = claimed[0];
+  const job = await claimJob(lane, workerId);
   if (!job) return false;
   opts.onClaim?.({ id: job.id, kind: job.kind });
 
+  const lease: PipelineLease = { jobId: job.id, workerId, attempt: job.attempts };
   const startedAt = new Date();
   const handler = getHandler(job.kind);
 
   // Lease renewal: keep `locked_at` fresh while the handler is live so the
-  // reaper only reaps abandoned owners. If a renewal finds the lock gone (we
-  // were reaped anyway / an operator requeued the job), the run is CANCELED in
-  // effect: we cannot abort an in-flight await, but every terminal write below
-  // is ownership-guarded, so the zombie's result is discarded and no duplicate
-  // job_runs row can be written.
+  // reaper only reaps abandoned owners. A renewal that finds the lease gone
+  // (we were reaped / an operator requeued the job) CANCELS the run in effect:
+  // we cannot abort an in-flight await, but every write and the settle below
+  // are fenced by the lease, so the zombie's result is discarded. A renewal the
+  // api answered 503 is retried inside renewLease, so a saturated api never
+  // costs a live job its lease.
   const renewTimer = setInterval(() => {
     void (async () => {
       try {
-        const kept = await on(sql, renewLease)`
-          UPDATE jobs SET locked_at = now(), updated_at = now()
-           WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
-        if (kept.length === 0) {
+        if (!(await renewLease(lease))) {
           clearInterval(renewTimer);
           console.warn(`job ${job.id} (${job.kind}) lease lost during execution — run canceled (terminal write will be discarded)`);
         }
@@ -311,120 +105,42 @@ export async function processOneJob(opts: ClaimOptions = {}): Promise<boolean> {
     })();
   }, leaseRenewMs());
 
-  // Terminal writes are guarded by continued ownership: if the reaper requeued
-  // this job (we overran the visibility timeout) another worker now owns it, so
-  // we must NOT stomp its row or write a duplicate job_runs. A 0-row UPDATE means
-  // we lost the lock — bail without recording.
+  let outcome: SettleOutcome;
   try {
     if (!handler) throw new Error(`no handler registered for kind "${job.kind}"`);
     // Pass the claimed job's id so handlers that persist their own telemetry
-    // (e.g. analytics regime/research runs → research_pipeline_runs.job_id,
-    // issue #179) can link output rows back to the originating job.
-    const output = await handler(job.payload, job.id);
-
-    // A handler that returns { ok:false } DEGRADED (a live provider was
-    // unreachable/slow, so it kept the last-persisted rows and wrote nothing).
-    // Recording that as 'succeeded' is dishonest: it hides every silent no-op
-    // from job_runs alerting and never re-tries the transient blip. Give it a
-    // distinct durable job_runs.status ('degraded') and engage the same
-    // exponential-backoff retry as a hard failure so a transient blip recovers
-    // before the next (up to daily) cron tick. Never escalate to 'dead' —
-    // last-persisted data is already intact and the schedule must keep firing.
-    //
-    // AN EXHAUSTED DEGRADE SETTLES 'failed', NOT 'succeeded' (R16). It used to
-    // settle 'succeeded' on the reasoning that the next cron slot re-enqueues a
-    // fresh attempt — which is true, and is unaffected by the status, because
-    // the scheduler enqueues NEW rows. What the old status did do was make the
-    // row lie: staging job 83 read `succeeded, attempts 5, last_error
-    // judge_unavailable` for a judging that never happened, and the admin
-    // overview's kind health, the operator's queue counts and
-    // `swarm/receipt-gap.ts` all had to work around a green row for work that
-    // was never done. 'failed' is the honest terminal for "asked N times, never
-    // answered"; 'dead' is still never used here, so an operator requeue and
-    // the next cron slot both stay available.
-    //
-    // A TERMINAL degrade skips the retries entirely — see isTerminalDegrade.
-    if (isDegradedResult(output)) {
-      const errText = degradedError(output);
-      const terminal = isTerminalDegrade(output);
-      const canRetry = !terminal && job.attempts < job.max_attempts;
-      const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
-      const recorded = await sql.begin(async (tx) => {
-        const upd = canRetry
-          ? await on(tx, settleRetry)`UPDATE jobs
-                        SET status = 'pending',
-                            run_after = now() + (${backoff} || ' seconds')::interval,
-                            locked_at = NULL, locked_by = NULL,
-                            last_error = ${errText}, updated_at = now()
-                      WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-          : await on(tx, settleFailed)`UPDATE jobs
-                        SET status = 'failed', locked_at = NULL, locked_by = NULL,
-                            last_error = ${errText}, updated_at = now()
-                      WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
-        if (upd.length === 0) return false;
-        // The RUN keeps the 'degraded' status that distinguishes "kept the
-        // last-persisted rows" from a thrown failure — except for a terminal
-        // refusal, which is not a degradation of anything and is recorded red.
-        await on(tx, recordDegradedRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error, output)
-                 VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${terminal ? "failed" : "degraded"}, ${errText}, ${tx.json(jsonValue(output ?? null))})`;
-        return true;
-      });
-      if (!recorded) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — degraded result discarded`);
-      else if (terminal) console.error(`job ${job.id} (${job.kind}) REFUSED TERMINALLY — no retry can change the answer, settled FAILED: ${errText.split("\n")[0]}`);
-      else console.warn(`job ${job.id} (${job.kind}) DEGRADED — kept last-persisted${canRetry ? `, retry in ${backoff}s` : " (attempts exhausted; settled FAILED, next cron re-enqueues)"}: ${errText.split("\n")[0]}`);
-      return true;
-    }
-
-    const ok = await sql.begin(async (tx) => {
-      const upd = await on(tx, settleSucceeded)`UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL, last_error = NULL, updated_at = now()
-                           WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
-      if (upd.length === 0) return false;
-      await on(tx, recordSucceededRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, output)
-               VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), 'succeeded', ${tx.json(jsonValue(output ?? null))})`;
-      return true;
-    });
-    if (!ok) console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — result discarded`);
-    return true;
+    // can link output rows back to the originating job (issue #179).
+    const output = await runWithLease(lease, () => handler(job.payload, job.id));
+    outcome = isDegradedResult(output)
+      ? { kind: "degraded", error: degradedError(output), terminal: isTerminalDegrade(output), output: output ?? null }
+      : { kind: "succeeded", output: output ?? null };
   } catch (err) {
-    const message = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
-    const canRetry = job.attempts < job.max_attempts;
-    const backoff = Math.min(MAX_BACKOFF_SECONDS, Math.pow(2, job.attempts));
-    await sql.begin(async (tx) => {
-      const upd = canRetry
-        ? await on(tx, settleRetry)`UPDATE jobs
-                      SET status = 'pending',
-                          run_after = now() + (${backoff} || ' seconds')::interval,
-                          locked_at = NULL, locked_by = NULL,
-                          last_error = ${message}, updated_at = now()
-                    WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`
-        : await on(tx, settleDead)`UPDATE jobs
-                      SET status = 'dead', locked_at = NULL, locked_by = NULL,
-                          last_error = ${message}, updated_at = now()
-                    WHERE id = ${job.id} AND locked_by = ${workerId} AND status = 'running' RETURNING id`;
-      if (upd.length === 0) return; // lost the lock — don't record a duplicate run
-      await on(tx, recordFailedRun)`INSERT INTO job_runs (job_id, kind, started_at, finished_at, status, error)
-               VALUES (${job.id}, ${job.kind}, ${startedAt}, now(), ${canRetry ? "failed" : "dead"}, ${message})`;
-    });
-    console.error(`job ${job.id} (${job.kind}) failed${canRetry ? `, retry in ${backoff}s` : " — DEAD"}: ${message.split("\n")[0]}`);
-    return true;
+    outcome = { kind: "failed", error: err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err) };
   } finally {
     clearInterval(renewTimer);
   }
+
+  const result = await settleJob(lease, outcome, startedAt);
+  if (!result.settled) {
+    console.warn(`job ${job.id} (${job.kind}) lost its lock before completion (reaped) — ${outcome.kind} result discarded`);
+    return true;
+  }
+  const retry = result.status === "pending" ? `, retry in ${result.backoffSeconds}s` : "";
+  if (outcome.kind === "degraded") {
+    const first = outcome.error.split("\n")[0];
+    if (outcome.terminal) console.error(`job ${job.id} (${job.kind}) REFUSED TERMINALLY — no retry can change the answer, settled FAILED: ${first}`);
+    else console.warn(`job ${job.id} (${job.kind}) DEGRADED — kept last-persisted${retry || " (attempts exhausted; settled FAILED, next cron re-enqueues)"}: ${first}`);
+  } else if (outcome.kind === "failed") {
+    console.error(`job ${job.id} (${job.kind}) failed${retry || " — DEAD"}: ${outcome.error.split("\n")[0]}`);
+  }
+  return true;
 }
 
 // Release every job still owned by `workerId` back to 'pending' (lock cleared).
 // Used by bounded shutdown (runtime.ts): when a hung handler outlives the
 // shutdown deadline its job must not survive as an orphaned 'running' row owned
-// by a stopped worker. The ownership guards above then discard the abandoned
-// handler's eventual terminal write, so no duplicate job_runs row is possible.
+// by a stopped worker. The lease fence then discards the abandoned handler's
+// eventual writes and settle, so no duplicate job_runs row is possible.
 export async function releaseOwnedJobs(workerId: string): Promise<number> {
-  const released = await on(sql, releaseJobs)`
-    UPDATE jobs
-       SET status = 'pending',
-           locked_at = NULL, locked_by = NULL,
-           last_error = COALESCE(last_error, '') || ' [released: worker shutdown]',
-           updated_at = now()
-     WHERE status = 'running' AND locked_by = ${workerId}
-     RETURNING id`;
-  return released.length;
+  return releaseJobs(workerId);
 }
