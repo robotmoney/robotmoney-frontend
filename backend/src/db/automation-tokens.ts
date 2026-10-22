@@ -4,7 +4,8 @@
 // docs/technical/system-scheduler-spec.md §7. Migration 0087 is the table; this
 // module is the only thing that writes it and the only thing that reads it.
 // Migration 0095 keyed it on (instance, holder) for §3's three holders: the
-// scheduler, the analytics producer and the operator.
+// scheduler, the analytics producer and the operator. Migration 0126 adds a
+// fourth, the pipeline worker (issue 1034, D75).
 //
 // WHY PROVISIONING LIVES HERE AND NOT IN A SCRIPT. The secret is generated,
 // hashed and stored in one place, so no caller ever holds a path by which the
@@ -19,12 +20,13 @@ import { on, registerQuery, type RegistryDb } from "./registry.ts";
 import { hashKey } from "../lib/keys.ts";
 
 /**
- * Who presents a service token — smoke spec §3's three holders.
+ * Who presents a service token — smoke spec §3's holders, and the pipeline
+ * worker D75 adds.
  *
  * `system-scheduler` was the store's only holder until migration 0095. It is
  * still the default, so a caller that names no holder means what it always did.
  */
-export const AUTOMATION_HOLDERS = ["system-scheduler", "analytics-producer", "operator"] as const;
+export const AUTOMATION_HOLDERS = ["system-scheduler", "analytics-producer", "operator", "pipeline-worker"] as const;
 export type AutomationHolder = (typeof AUTOMATION_HOLDERS)[number];
 
 /**
@@ -33,27 +35,32 @@ export type AutomationHolder = (typeof AUTOMATION_HOLDERS)[number];
  * `system-scheduler`: "read subjects and sessions, perform lifecycle
  * transitions" (scheduler spec §7). `analytics-producer`: "the analytics
  * ingestion routes". The operator: "the admin routes; this replaces the
- * `ADMIN_TOKEN` environment variable" (smoke spec §3). The first two "hold one
- * API credential and no other kind", so a right from another holder's list is
- * refused rather than recorded. Migration 0095's
- * `automation_tokens_holder_rights_check` holds the same table, so a value that
- * gets past this module is still refused by the database.
+ * `ADMIN_TOKEN` environment variable" (smoke spec §3). `pipeline-worker`: the
+ * /api/pipeline/** queue routes (`pipeline_queue`) and its read and ingestion
+ * routes (`pipeline_ingest`), and nothing outside them (D75). The scheduler,
+ * the producer and the pipeline worker "hold one API credential and no other
+ * kind", so a right from another holder's list is refused rather than
+ * recorded. Migration 0126's `automation_tokens_holder_rights_check` holds the
+ * same table, so a value that gets past this module is still refused by the
+ * database.
  */
 export const HOLDER_RIGHTS = {
   "system-scheduler": ["read_subjects", "read_sessions", "lifecycle_transitions"],
   "analytics-producer": ["analytics_ingestion"],
   operator: ["admin"],
+  "pipeline-worker": ["pipeline_queue", "pipeline_ingest"],
 } as const satisfies Record<AutomationHolder, readonly string[]>;
 
 /**
  * Every right any holder may carry. The scheduler's three come first, in the
- * order migration 0087 declared them; migration 0095's
+ * order migration 0087 declared them; migration 0126's
  * `automation_tokens_rights_known_check` holds the same list.
  */
 export const AUTOMATION_RIGHTS = [
   ...HOLDER_RIGHTS["system-scheduler"],
   ...HOLDER_RIGHTS["analytics-producer"],
   ...HOLDER_RIGHTS.operator,
+  ...HOLDER_RIGHTS["pipeline-worker"],
 ] as const;
 export type AutomationRight = (typeof AUTOMATION_RIGHTS)[number];
 
@@ -106,6 +113,7 @@ const lookupToken = registerQuery({
     "src/api/routes/admin",
     "src/api/routes/admin-webauthn",
     "src/api/routes/analytics",
+    "src/api/routes/pipeline",
     "src/api/routes/projects",
     "src/api/routes/swarm",
     "src/api/routes/swarm-admin",

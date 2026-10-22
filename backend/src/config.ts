@@ -1,5 +1,5 @@
-// Central environment configuration. The only required input is DATABASE_URL.
-// There is no environment class here (issue #973 retired RM_ENV from the
+// Central environment configuration. The only required input is DATABASE_URL,
+// and only for a process that opens a pool (config.databaseUrl below). There is no environment class here (issue #973 retired RM_ENV from the
 // runtime): the connection is always driven by DATABASE_URL, every protected
 // route always requires its configured credential, and the test-only paths are
 // opened by backend/src/test-seam.ts, never by an environment value.
@@ -645,15 +645,30 @@ export function resolveSwarmPublicBaseUrl(
 // the runtime, so there is no env field here to branch on. The one connection
 // rule that used to hang off `RM_ENV=prod` holds everywhere: the api never
 // runs as the cluster superuser.
-const databaseUrl = required("DATABASE_URL");
-if (new URL(databaseUrl).username === "doadmin") {
-  throw new Error("DATABASE_URL must use the rm_app runtime role, never doadmin");
+//
+// READ ON FIRST USE, NOT AT IMPORT (issue 1034, D75). Only the api holds a
+// database credential. The pipeline worker imports this module for its chain,
+// price and vault settings and carries no DATABASE_URL, so the variable is
+// required where a pool is built (db/client.ts, the boot guards), not by every
+// importer.
+let databaseUrl: string | null = null;
+function resolveDatabaseUrl(): string {
+  const url = required("DATABASE_URL");
+  if (new URL(url).username === "doadmin") {
+    throw new Error("DATABASE_URL must use the rm_app runtime role, never doadmin");
+  }
+  return url;
 }
 
 export const config = {
   // Trust X-Forwarded-For for client-ip (rate limiting) only behind a known proxy.
   trustProxy: process.env.TRUST_PROXY === "1",
-  databaseUrl,
+  get databaseUrl(): string {
+    return (databaseUrl ??= resolveDatabaseUrl());
+  },
+  set databaseUrl(url: string) {
+    databaseUrl = url;
+  },
   apiPort: Number(process.env.API_PORT ?? 8787),
   // Origins allowed to call this API cross-origin (issue #871): a split-repo
   // frontend deployed as its own container is no longer same-origin, so it
