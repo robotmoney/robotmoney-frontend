@@ -175,12 +175,14 @@ describe("the breaking revoke closes rollback to code that ignores the tombstone
     expect(boot.outcome).toBe("exited");
     expect(boot.code).toBe(1);
     expect(await portIsBound(boot.port)).toBe(false);
-    // One refusal per breaking row, exactly these three: 0110 (the fault-injection
-    // table's drop, D55 (3)) is also breaking and also unknown to this old code.
+    // One refusal per breaking row, exactly these four: 0110 (the fault-injection
+    // table's drop, D55 (3)) and 0127 (rm_worker retired, D75) are also breaking
+    // and also unknown to this old code.
     expect(boot.lines).toEqual([
       `startup_preflight: refused check 3: ${SLOTS}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
       `startup_preflight: refused check 3: ${REVOKE}: declared breaking — code-only rollback past it is closed, explicitly (§8.4).`,
       "startup_preflight: refused check 3: 0110_drop_swarm_judge_fault_injection.sql: declared breaking — code-only rollback past it is closed, explicitly (§8.4).",
+      "startup_preflight: refused check 3: 0127_rm_worker_retired.sql: declared breaking — code-only rollback past it is closed, explicitly (§8.4).",
     ]);
   }, 120_000);
 });
