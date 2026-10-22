@@ -327,11 +327,14 @@ const read_raw_indicator_history_app = registerQuery({
   purpose: "Read the distinct persisted slots of the raw_indicator_history series for the gap report.",
   callers: ["src/api/routes/admin", "src/api/routes/analytics"],
   probe: {
-    statement: `SELECT DISTINCT date::timestamptz AS slot
-      FROM raw_indicator_history
-     WHERE date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
+    statement: `WITH RECURSIVE slots AS (
+        (SELECT date FROM raw_indicator_history WHERE date >= $1::date ORDER BY date LIMIT 1)
+        UNION ALL
+        SELECT (SELECT r.date FROM raw_indicator_history r WHERE r.date > s.date ORDER BY r.date LIMIT 1)
+          FROM slots s WHERE s.date IS NOT NULL
+      )
+      SELECT date AS slot FROM slots WHERE date IS NOT NULL`,
+    params: ["2000-01-01"],
   },
 });
 
@@ -343,11 +346,14 @@ const read_raw_indicator_history_worker = registerQuery({
   purpose: "Read the distinct persisted slots of the raw_indicator_history series for the gap report.",
   callers: ["src/worker/handlers/repair"],
   probe: {
-    statement: `SELECT DISTINCT date::timestamptz AS slot
-      FROM raw_indicator_history
-     WHERE date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
+    statement: `WITH RECURSIVE slots AS (
+        (SELECT date FROM raw_indicator_history WHERE date >= $1::date ORDER BY date LIMIT 1)
+        UNION ALL
+        SELECT (SELECT r.date FROM raw_indicator_history r WHERE r.date > s.date ORDER BY r.date LIMIT 1)
+          FROM slots s WHERE s.date IS NOT NULL
+      )
+      SELECT date AS slot FROM slots WHERE date IS NOT NULL`,
+    params: ["2000-01-01"],
   },
 });
 
@@ -420,11 +426,23 @@ const SLOT_READERS: Readonly<Record<string, SlotReader>> = {
      WHERE date::timestamptz >= ${since}
      ORDER BY slot
   `,
+  // A LOOSE INDEX SCAN (issue 1034). The old form de-duplicated
+  // `date::timestamptz`, an expression no index holds, so every call scanned all
+  // ~117k rows (one per indicator per day) on the api's pool to find ~3,000
+  // distinct days. This walks the (date, indicator) primary key instead: each
+  // step is one index probe for the next date after the last, so the cost is
+  // one probe per stored DAY, not one row per indicator. A daily series'
+  // `since` is a UTC midnight (truncateToSlot), so comparing its date is the
+  // same predicate, and a `date` value reads back as that UTC midnight, the slot
+  // detectGaps keys on.
   raw_indicator_history: (db, since) => on(db, read_raw_indicator_history_app, read_raw_indicator_history_worker)<SlotRow>`
-    SELECT DISTINCT date::timestamptz AS slot
-      FROM raw_indicator_history
-     WHERE date::timestamptz >= ${since}
-     ORDER BY slot
+    WITH RECURSIVE slots AS (
+        (SELECT date FROM raw_indicator_history WHERE date >= ${since.toISOString().slice(0, 10)}::date ORDER BY date LIMIT 1)
+        UNION ALL
+        SELECT (SELECT r.date FROM raw_indicator_history r WHERE r.date > s.date ORDER BY r.date LIMIT 1)
+          FROM slots s WHERE s.date IS NOT NULL
+      )
+      SELECT date AS slot FROM slots WHERE date IS NOT NULL
   `,
 };
 
