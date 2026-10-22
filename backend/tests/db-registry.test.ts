@@ -936,6 +936,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
   const PINNED_SHAPES: Readonly<Record<string, string>> = {
     clockText: "SELECT clock_timestamp()::text AS at",
     connectionCheck: "SELECT 1",
+    connectionBudget: "SELECT current_setting('max_connections')::int AS max_connections, current_setting('superuser_reserved_connections')::int AS superuser_reserved, current_setting('reserved_connections')::int AS reserved",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
     sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
