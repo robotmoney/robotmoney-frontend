@@ -497,7 +497,7 @@ describe("drift guards against main", () => {
     has("backend/src/api/request-timing.ts", "timed out after");
     has("backend/src/api/request-timing.ts", "[api] slow request");
     has("backend/src/api/request-timing.ts", "request ran past");
-    has("backend/src/chain/buyback-logs.ts", "live index failed");
+    has("backend/src/chain/buyback-indexer.ts", "live index failed");
     has("backend/src/chain/gecko-endpoint.ts", "[gecko]");
     has("backend/src/chain/gecko-endpoint.ts", "answered HTTP");
     has("backend/src/analytics/index.ts", "regime asof");

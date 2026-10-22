@@ -755,14 +755,15 @@ function flattenRoutes(node: unknown, out: string[] = []): string[] {
 /**
  * Fail when the catalogue has drifted from ROUTES.
  *
- * Admin, analytics-provider and health-adjacent namespaces are skipped wholesale:
+ * Admin, analytics-provider, pipeline-worker (issue 1034, D75) and
+ * health-adjacent namespaces are skipped wholesale:
  * they are credentialed surfaces that must never be advertised to an anonymous
  * reader. Everything else must be either catalogued or excluded with a reason.
  */
 export function assertCatalogCoversRoutes(): string[] {
   const catalogued = new Set(PUBLIC_ENDPOINTS.map((e) => e.path));
   const excluded = new Set(Object.keys(EXCLUDED_ROUTES));
-  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
+  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/") || p.startsWith("/api/pipeline/");
 
   const missing = flattenRoutes(ROUTES)
     .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)

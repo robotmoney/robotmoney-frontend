@@ -106,7 +106,7 @@ describe("rm_worker after migration 0127", () => {
     const defaults = await sql<{ acl: string }[]>`
       SELECT d.defaclacl::text AS acl FROM pg_default_acl d
        WHERE d.defaclrole = 'rm_owner'::regrole AND d.defaclacl::text LIKE '%rm_worker=%'`;
-    expect(defaults).toEqual([]);
+    expect([...defaults]).toEqual([]);
   });
 
   test("re-applying migration 0127 is a no-op", async () => {

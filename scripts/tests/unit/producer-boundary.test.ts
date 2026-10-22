@@ -63,11 +63,12 @@ describe("issue #361 independent producer credential boundary, as service-token 
       expect(tokenReuseRefusal(paths, "volume")).toContain("--local volume");
       // One holder present is not enough: every missing one is named.
       writeFileSync(paths.tokenFiles.operator, "rmat_operator\n", { mode: 0o600 });
-      expect(missingTokenFiles(paths)).toEqual(["system-scheduler", "analytics-producer"]);
+      expect(missingTokenFiles(paths)).toEqual(["system-scheduler", "analytics-producer", "pipeline-worker"]);
       expect(tokenReuseRefusal(paths, "remote")).not.toContain(paths.tokenFiles.operator);
       // An empty file is a missing token, not a present one.
       writeFileSync(paths.tokenFiles["system-scheduler"], "\n", { mode: 0o600 });
       writeFileSync(paths.tokenFiles["analytics-producer"], "rmat_producer\n", { mode: 0o600 });
+      writeFileSync(paths.tokenFiles["pipeline-worker"], "rmat_pipeline\n", { mode: 0o600 });
       expect(missingTokenFiles(paths)).toEqual(["system-scheduler"]);
       writeFileSync(paths.tokenFiles["system-scheduler"], "rmat_scheduler\n", { mode: 0o600 });
       expect(tokenReuseRefusal(paths, "remote")).toBeNull();
