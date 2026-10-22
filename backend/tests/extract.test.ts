@@ -64,12 +64,27 @@ test("parseYahoo: prefers adjclose over close, falls back to close when NaN", ()
 
 test("parseFredCsv: DATE,VALUE rows; '.' (missing) dropped; header skipped", () => {
   const csv = "DATE,T10Y2Y\n2018-01-02,0.55\n2018-01-03,.\n2018-01-04,0.60\n";
-  expect(parseFredCsv(csv)).toEqual([
+  expect(parseFredCsv(csv, "T10Y2Y")).toEqual([
     { date: "2018-01-02", value: 0.55 },
     { date: "2018-01-04", value: 0.6 },
   ]);
-  expect(parseFredCsv("DATE,X\n")).toEqual([]); // header only
-  expect(parseFredCsv("")).toEqual([]);
+  expect(parseFredCsv("DATE,X\n", "X")).toEqual([]); // header only
+  expect(parseFredCsv("", "X")).toEqual([]);
+});
+
+test("parseFredCsv drops a row whose date is not YYYY-MM-DD even when its value is numeric (issue #1413)", () => {
+  const csv = [
+    "observation_date,UMCSENT",
+    "2024-01-01,69.7",
+    '<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,700" rel="stylesheet">',
+    "2024/02/01,76.9",
+    "2024-3-01,79.4",
+    "2024-04-01,77.2",
+  ].join("\n");
+  expect(parseFredCsv(csv, "UMCSENT")).toEqual([
+    { date: "2024-01-01", value: 69.7 },
+    { date: "2024-04-01", value: 77.2 },
+  ]);
 });
 
 test("parseBlockchainChart: values[{x,y}] → Point[], drops non-finite, throws on garbage", () => {

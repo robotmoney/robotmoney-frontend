@@ -272,11 +272,11 @@
   },
   {
     "id": "known-db-write-500",
-    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP <n>",
+    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP 5\\d\\d\\b",
     "class": "known-issue",
     "issue": "1035",
     "fixedIn": "0.5.2",
-    "reason": "The api's analytics writes fail while the cluster is read-only or full; the api's own PostgresError is classified separately."
+    "reason": "The api's analytics writes fail with a 5xx while the cluster is read-only or full; the api's own PostgresError is classified separately. A 4xx is a payload rejection and stays unclassified (issue 1413)."
   },
   {
     "id": "known-upstream-closed",
