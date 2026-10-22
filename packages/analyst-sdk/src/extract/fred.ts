@@ -20,15 +20,22 @@ export const fredUrl = (seriesId: string) =>
   `${BASE}?id=${encodeURIComponent(seriesId)}&cosd=${COSD}`;
 
 // Parse FRED's two-column CSV (DATE,VALUE). "." (missing) rows are dropped.
-export function parseFredCsv(text: string): Point[] {
+// FRED answers its maintenance page as HTTP 200 HTML (issue #1413), so a body
+// whose first line is not a two-column `DATE|observation_date,<column>` header
+// throws, and a row is kept only with an ISO YYYY-MM-DD date and a finite value.
+const HEADER = /^(date|observation_date),[^,<>\s]+$/i;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function parseFredCsv(text: string, seriesId: string): Point[] {
   const lines = text.trim().split("\n");
-  if (lines.length < 2) return [];
+  if (lines[0] === "") return [];
+  if (!HEADER.test(lines[0].trim())) throw new Error(`FRED ${seriesId}: response is not CSV`);
   const out: Point[] = [];
   for (let i = 1; i < lines.length; i++) {
     const comma = lines[i].indexOf(",");
     if (comma < 0) continue;
     const date = lines[i].slice(0, comma).trim();
-    if (!date) continue;
+    if (!ISO_DATE.test(date)) continue;
     const v = parseFloat(lines[i].slice(comma + 1));
     if (!Number.isFinite(v)) continue; // FRED uses "." for missing
     out.push({ date, value: v });
@@ -38,5 +45,5 @@ export function parseFredCsv(text: string): Point[] {
 
 export async function fetchFred(seriesId: string, timeoutMs = 15000): Promise<Point[]> {
   const text = await fetchText(fredUrl(seriesId), timeoutMs);
-  return parseFredCsv(text);
+  return parseFredCsv(text, seriesId);
 }
