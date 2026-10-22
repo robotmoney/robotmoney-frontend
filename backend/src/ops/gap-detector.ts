@@ -29,7 +29,7 @@ const read_wallet_balance_samples_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.wallet_balance_samples.app",
   purpose: "Read the distinct persisted slots of the wallet_balance_samples series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT sample_date::timestamptz AS slot, symbol
       FROM wallet_balance_samples
@@ -41,23 +41,6 @@ const read_wallet_balance_samples_app = registerQuery({
   },
 });
 
-const read_wallet_balance_samples_worker = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.wallet_balance_samples.worker",
-  purpose: "Read the distinct persisted slots of the wallet_balance_samples series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT sample_date::timestamptz AS slot, symbol
-      FROM wallet_balance_samples
-     WHERE sample_date::timestamptz >= $1
-       AND provenance <> $2
-       AND superseded_at IS NULL
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z", QUARANTINED_PROVENANCE],
-  },
-});
 
 const read_wallet_sleeve_samples_app = registerQuery({
   role: "rm_app",
@@ -65,7 +48,7 @@ const read_wallet_sleeve_samples_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.wallet_sleeve_samples.app",
   purpose: "Read the distinct persisted slots of the wallet_sleeve_samples series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT sample_date::timestamptz AS slot, wallet_address, symbol
       FROM wallet_sleeve_samples
@@ -77,23 +60,6 @@ const read_wallet_sleeve_samples_app = registerQuery({
   },
 });
 
-const read_wallet_sleeve_samples_worker = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.wallet_sleeve_samples.worker",
-  purpose: "Read the distinct persisted slots of the wallet_sleeve_samples series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT sample_date::timestamptz AS slot, wallet_address, symbol
-      FROM wallet_sleeve_samples
-     WHERE sample_date::timestamptz >= $1
-       AND provenance <> $2
-       AND superseded_at IS NULL
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z", QUARANTINED_PROVENANCE],
-  },
-});
 
 const read_vault_share_price_history_app = registerQuery({
   role: "rm_app",
@@ -101,7 +67,7 @@ const read_vault_share_price_history_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.vault_share_price_history.app",
   purpose: "Read the distinct persisted slots of the vault_share_price_history series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT sample_hour::timestamptz AS slot
       FROM vault_share_price_history
@@ -111,21 +77,6 @@ const read_vault_share_price_history_app = registerQuery({
   },
 });
 
-const read_vault_share_price_history_worker = registerQuery({
-  role: "rm_worker",
-  object: "vault_share_price_history",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.vault_share_price_history.worker",
-  purpose: "Read the distinct persisted slots of the vault_share_price_history series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT sample_hour::timestamptz AS slot
-      FROM vault_share_price_history
-     WHERE sample_hour::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_vault_adapter_samples_app = registerQuery({
   role: "rm_app",
@@ -133,7 +84,7 @@ const read_vault_adapter_samples_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.vault_adapter_samples.app",
   purpose: "Read the distinct persisted slots of the vault_adapter_samples series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT sample_hour::timestamptz AS slot
       FROM vault_adapter_samples
@@ -143,21 +94,6 @@ const read_vault_adapter_samples_app = registerQuery({
   },
 });
 
-const read_vault_adapter_samples_worker = registerQuery({
-  role: "rm_worker",
-  object: "vault_adapter_samples",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.vault_adapter_samples.worker",
-  purpose: "Read the distinct persisted slots of the vault_adapter_samples series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT sample_hour::timestamptz AS slot
-      FROM vault_adapter_samples
-     WHERE sample_hour::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_daily_coin_snapshots_app = registerQuery({
   role: "rm_app",
@@ -165,7 +101,7 @@ const read_daily_coin_snapshots_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.daily_coin_snapshots.app",
   purpose: "Read the distinct persisted slots of the daily_coin_snapshots series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_coin_snapshots
@@ -175,21 +111,6 @@ const read_daily_coin_snapshots_app = registerQuery({
   },
 });
 
-const read_daily_coin_snapshots_worker = registerQuery({
-  role: "rm_worker",
-  object: "daily_coin_snapshots",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.daily_coin_snapshots.worker",
-  purpose: "Read the distinct persisted slots of the daily_coin_snapshots series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
-      FROM daily_coin_snapshots
-     WHERE snapshot_date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_daily_agent_snapshots_app = registerQuery({
   role: "rm_app",
@@ -197,7 +118,7 @@ const read_daily_agent_snapshots_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.daily_agent_snapshots.app",
   purpose: "Read the distinct persisted slots of the daily_agent_snapshots series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_agent_snapshots
@@ -207,21 +128,6 @@ const read_daily_agent_snapshots_app = registerQuery({
   },
 });
 
-const read_daily_agent_snapshots_worker = registerQuery({
-  role: "rm_worker",
-  object: "daily_agent_snapshots",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.daily_agent_snapshots.worker",
-  purpose: "Read the distinct persisted slots of the daily_agent_snapshots series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
-      FROM daily_agent_snapshots
-     WHERE snapshot_date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_daily_wallet_snapshots_app = registerQuery({
   role: "rm_app",
@@ -229,7 +135,7 @@ const read_daily_wallet_snapshots_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.daily_wallet_snapshots.app",
   purpose: "Read the distinct persisted slots of the daily_wallet_snapshots series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_wallet_snapshots
@@ -239,21 +145,6 @@ const read_daily_wallet_snapshots_app = registerQuery({
   },
 });
 
-const read_daily_wallet_snapshots_worker = registerQuery({
-  role: "rm_worker",
-  object: "daily_wallet_snapshots",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.daily_wallet_snapshots.worker",
-  purpose: "Read the distinct persisted slots of the daily_wallet_snapshots series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
-      FROM daily_wallet_snapshots
-     WHERE snapshot_date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_daily_tvl_snapshots_app = registerQuery({
   role: "rm_app",
@@ -261,7 +152,7 @@ const read_daily_tvl_snapshots_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.daily_tvl_snapshots.app",
   purpose: "Read the distinct persisted slots of the daily_tvl_snapshots series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_tvl_snapshots
@@ -271,21 +162,6 @@ const read_daily_tvl_snapshots_app = registerQuery({
   },
 });
 
-const read_daily_tvl_snapshots_worker = registerQuery({
-  role: "rm_worker",
-  object: "daily_tvl_snapshots",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.daily_tvl_snapshots.worker",
-  purpose: "Read the distinct persisted slots of the daily_tvl_snapshots series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT snapshot_date::timestamptz AS slot
-      FROM daily_tvl_snapshots
-     WHERE snapshot_date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_research_signals_app = registerQuery({
   role: "rm_app",
@@ -293,7 +169,7 @@ const read_research_signals_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.research_signals.app",
   purpose: "Read the distinct persisted slots of the research_signals series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `SELECT DISTINCT date::timestamptz AS slot
       FROM research_signals
@@ -303,21 +179,6 @@ const read_research_signals_app = registerQuery({
   },
 });
 
-const read_research_signals_worker = registerQuery({
-  role: "rm_worker",
-  object: "research_signals",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.research_signals.worker",
-  purpose: "Read the distinct persisted slots of the research_signals series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `SELECT DISTINCT date::timestamptz AS slot
-      FROM research_signals
-     WHERE date::timestamptz >= $1
-     ORDER BY slot`,
-    params: ["2000-01-01T00:00:00Z"],
-  },
-});
 
 const read_raw_indicator_history_app = registerQuery({
   role: "rm_app",
@@ -325,7 +186,7 @@ const read_raw_indicator_history_app = registerQuery({
   privileges: ["SELECT"],
   site: "src/ops/gap-detector:detectGaps.raw_indicator_history.app",
   purpose: "Read the distinct persisted slots of the raw_indicator_history series for the gap report.",
-  callers: ["src/api/routes/admin", "src/api/routes/analytics"],
+  callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/pipeline"],
   probe: {
     statement: `WITH RECURSIVE slots AS (
         (SELECT date FROM raw_indicator_history WHERE date >= $1::date ORDER BY date LIMIT 1)
@@ -338,24 +199,6 @@ const read_raw_indicator_history_app = registerQuery({
   },
 });
 
-const read_raw_indicator_history_worker = registerQuery({
-  role: "rm_worker",
-  object: "raw_indicator_history",
-  privileges: ["SELECT"],
-  site: "src/ops/gap-detector:detectGaps.raw_indicator_history.worker",
-  purpose: "Read the distinct persisted slots of the raw_indicator_history series for the gap report.",
-  callers: ["src/worker/handlers/repair"],
-  probe: {
-    statement: `WITH RECURSIVE slots AS (
-        (SELECT date FROM raw_indicator_history WHERE date >= $1::date ORDER BY date LIMIT 1)
-        UNION ALL
-        SELECT (SELECT r.date FROM raw_indicator_history r WHERE r.date > s.date ORDER BY r.date LIMIT 1)
-          FROM slots s WHERE s.date IS NOT NULL
-      )
-      SELECT date AS slot FROM slots WHERE date IS NOT NULL`,
-    params: ["2000-01-01"],
-  },
-});
 
 type SlotRow = Record<string, unknown> & { slot: Date };
 type SlotReader = (db: DbHandle, since: Date) => Promise<SlotRow[]>;
@@ -365,10 +208,10 @@ type SlotReader = (db: DbHandle, since: Date) => Promise<SlotRow[]>;
 // slot must hold, so each of them is a statement of its own with its own
 // declaration (spec §7.1). The table and column are not values a registry
 // declaration can take, which is why this is not one statement over
-// `def.table`. The api reads them as rm_app and the repair handler as
-// rm_worker, so each declares both.
+// `def.table`. Every reader is the api, as rm_app: the repair handler asks for
+// its gap reports over /api/pipeline/** (issue 1034, D75).
 const SLOT_READERS: Readonly<Record<string, SlotReader>> = {
-  wallet_balance_samples: (db, since) => on(db, read_wallet_balance_samples_app, read_wallet_balance_samples_worker)<SlotRow>`
+  wallet_balance_samples: (db, since) => on(db, read_wallet_balance_samples_app)<SlotRow>`
     SELECT DISTINCT sample_date::timestamptz AS slot, symbol
       FROM wallet_balance_samples
      WHERE sample_date::timestamptz >= ${since}
@@ -376,7 +219,7 @@ const SLOT_READERS: Readonly<Record<string, SlotReader>> = {
        AND superseded_at IS NULL
      ORDER BY slot
   `,
-  wallet_sleeve_samples: (db, since) => on(db, read_wallet_sleeve_samples_app, read_wallet_sleeve_samples_worker)<SlotRow>`
+  wallet_sleeve_samples: (db, since) => on(db, read_wallet_sleeve_samples_app)<SlotRow>`
     SELECT DISTINCT sample_date::timestamptz AS slot, wallet_address, symbol
       FROM wallet_sleeve_samples
      WHERE sample_date::timestamptz >= ${since}
@@ -384,43 +227,43 @@ const SLOT_READERS: Readonly<Record<string, SlotReader>> = {
        AND superseded_at IS NULL
      ORDER BY slot
   `,
-  vault_share_price_history: (db, since) => on(db, read_vault_share_price_history_app, read_vault_share_price_history_worker)<SlotRow>`
+  vault_share_price_history: (db, since) => on(db, read_vault_share_price_history_app)<SlotRow>`
     SELECT DISTINCT sample_hour::timestamptz AS slot
       FROM vault_share_price_history
      WHERE sample_hour::timestamptz >= ${since}
      ORDER BY slot
   `,
-  vault_adapter_samples: (db, since) => on(db, read_vault_adapter_samples_app, read_vault_adapter_samples_worker)<SlotRow>`
+  vault_adapter_samples: (db, since) => on(db, read_vault_adapter_samples_app)<SlotRow>`
     SELECT DISTINCT sample_hour::timestamptz AS slot
       FROM vault_adapter_samples
      WHERE sample_hour::timestamptz >= ${since}
      ORDER BY slot
   `,
-  daily_coin_snapshots: (db, since) => on(db, read_daily_coin_snapshots_app, read_daily_coin_snapshots_worker)<SlotRow>`
+  daily_coin_snapshots: (db, since) => on(db, read_daily_coin_snapshots_app)<SlotRow>`
     SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_coin_snapshots
      WHERE snapshot_date::timestamptz >= ${since}
      ORDER BY slot
   `,
-  daily_agent_snapshots: (db, since) => on(db, read_daily_agent_snapshots_app, read_daily_agent_snapshots_worker)<SlotRow>`
+  daily_agent_snapshots: (db, since) => on(db, read_daily_agent_snapshots_app)<SlotRow>`
     SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_agent_snapshots
      WHERE snapshot_date::timestamptz >= ${since}
      ORDER BY slot
   `,
-  daily_wallet_snapshots: (db, since) => on(db, read_daily_wallet_snapshots_app, read_daily_wallet_snapshots_worker)<SlotRow>`
+  daily_wallet_snapshots: (db, since) => on(db, read_daily_wallet_snapshots_app)<SlotRow>`
     SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_wallet_snapshots
      WHERE snapshot_date::timestamptz >= ${since}
      ORDER BY slot
   `,
-  daily_tvl_snapshots: (db, since) => on(db, read_daily_tvl_snapshots_app, read_daily_tvl_snapshots_worker)<SlotRow>`
+  daily_tvl_snapshots: (db, since) => on(db, read_daily_tvl_snapshots_app)<SlotRow>`
     SELECT DISTINCT snapshot_date::timestamptz AS slot
       FROM daily_tvl_snapshots
      WHERE snapshot_date::timestamptz >= ${since}
      ORDER BY slot
   `,
-  research_signals: (db, since) => on(db, read_research_signals_app, read_research_signals_worker)<SlotRow>`
+  research_signals: (db, since) => on(db, read_research_signals_app)<SlotRow>`
     SELECT DISTINCT date::timestamptz AS slot
       FROM research_signals
      WHERE date::timestamptz >= ${since}
@@ -435,7 +278,7 @@ const SLOT_READERS: Readonly<Record<string, SlotReader>> = {
   // `since` is a UTC midnight (truncateToSlot), so comparing its date is the
   // same predicate, and a `date` value reads back as that UTC midnight, the slot
   // detectGaps keys on.
-  raw_indicator_history: (db, since) => on(db, read_raw_indicator_history_app, read_raw_indicator_history_worker)<SlotRow>`
+  raw_indicator_history: (db, since) => on(db, read_raw_indicator_history_app)<SlotRow>`
     WITH RECURSIVE slots AS (
         (SELECT date FROM raw_indicator_history WHERE date >= ${since.toISOString().slice(0, 10)}::date ORDER BY date LIMIT 1)
         UNION ALL

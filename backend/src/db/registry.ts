@@ -608,8 +608,6 @@ export const PROVISIONING_SHAPES = Object.freeze({
   ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
   /** DDL: rm_app's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
   appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
-  /** DDL: rm_worker's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
-  workerPasswordSet: "ALTER ROLE rm_worker WITH PASSWORD $1",
   /** DDL: rm_readonly's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
   readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
 } as const);
@@ -620,7 +618,6 @@ export type ProvisioningShape = keyof typeof PROVISIONING_SHAPES;
 export const VERIFIER_SLOT_SHAPES: readonly ProvisioningShape[] = Object.freeze([
   "ownerPasswordSet",
   "appPasswordSet",
-  "workerPasswordSet",
   "readonlyPasswordSet",
 ] as const);
 
