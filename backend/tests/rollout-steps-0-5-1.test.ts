@@ -243,6 +243,8 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0123_analytics_parity_sweep_daily.sql",
     "0124_deactivate_bankr_token_vaults.sql",
     "0125_job_schedules_latest_only_catchup.sql",
+    "0126_pipeline_worker_token_and_receipts.sql",
+    "0127_rm_worker_retired.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {
