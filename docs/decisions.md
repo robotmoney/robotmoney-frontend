@@ -5889,8 +5889,16 @@ for sessions published earlier.
 
 **Decision.**
 
-1. **One id.** A source series is named `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. The database, the API, the archives and the input file use that id.
-2. **No aliases.** No layer renames a series. No id names the code that reads it. The `backtest:` keys and the `SPX`, `ETH` and `TBILL3M` input ids are retired, together with the `LEDGER_EXTRA_KEYS` map that translated between them.
+1. **One id.** A source series is named `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input files and new public API contracts use that id. Existing database and historical archive keys may remain behind one shared storage-boundary mapping. Immutable archives and vintage references are preserved.
+2. **One mapping.** No canonical id names the code that reads it. Computation uses canonical ids rather than `backtest:`, `SPX`, `ETH` or `TBILL3M` aliases. Existing storage keys are translated through one shared mapping, including the reverse mapping for existing writes. The mapping preserves values, dates, ordering and vintage membership and rejects ambiguity; a database rename is not required.
 3. **Ratio legs.** Each leg of a ratio is a source series with its own id. A ratio is a calculated indicator and is never stored as source data.
 
-**Why.** The same series carried three names: the provider symbol, the ledger key and the SDK input id. A table existed only to translate them, and the ledger key named its consumer. One id removes the table and lets every layer read the others' data without a map.
+**Why.** The same series carried three names: the provider symbol, the ledger key and the SDK input id. A table existed only to translate them, and the ledger key named its consumer. One canonical identity removes competing names from computation. One shared storage mapping preserves the historical record without requiring a database migration.
+
+### Analytics report compatibility (owner clarification, 2026-10-22)
+
+The analytics and analyst SDK refactor preserves complete production reports for identical pinned inputs and methodology. All specified capabilities remain in scope. Storage renaming, ratio preparation and API extraction must demonstrate parity before production switches.
+
+A run identifies its methodology and exact code revision. The general backtest supports the established production rules for compatibility and the specified drifting-holdings rules as a distinct methodology. Production adoption of changed numerical rules requires explicit approval. Published reports remain immutable and replay uses their original rules and inputs, including historical stored ratios where legs are unavailable.
+
+Acceptance comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values, statistics, nulls and report shape across representative pinned runs. Known Yahoo persistence differences do not permit refactor drift on identical inputs. Provenance accompanies reports without changing their original payloads.

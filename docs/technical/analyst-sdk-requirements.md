@@ -52,10 +52,10 @@ The SDK does not fetch from the original sources by default. The API serves sour
 The SDK computes from a derived report of source data, not from the archives.
 
 - **Format.** A CSV with exactly the header `date,series,value`, or the same rows as JSON. Each `series` is a source id. Dates are real calendar dates and values are plain decimals. The rules are in [analytics requirements sections 4.1 and 4.2](analytics-requirements.md).
-- **Content.** `csvb inputs --archive <dir> --run <run_key>` writes the source data in a run's vintage, under the same source ids the archives use. The series the correlations and the backtest read are rows in the same file.
+- **Content.** `csvb inputs --archive <dir> --run <run_key>` writes the source data in a run's vintage, under canonical source ids, using the shared storage mapping when archives carry historical keys. Historical replay also preserves original calculated ratio inputs through the replay contract defined in the analytics requirements; it does not invent missing legs. The series the correlations and the backtest read are rows in the same file.
 - **Legs.** A ratio indicator is two rows of source data, one per leg ([section 4.3 of the analytics requirements](analytics-requirements.md)).
-- **Manifest.** The input file gets a sidecar `inputs.manifest.json`. It records the backup id, the run key, the as-of date, the source (`api` or `db`), the row count and the sha256 of the input file. The command line reads it at the edge and copies it into the output. The computation does not read it.
-- **Why the file is derived.** It is cheap to regenerate from the backups, and the backups are the record. A file without a manifest still runs. Its output says the source data is not pinned.
+- **Manifest.** The input file gets a sidecar `inputs.manifest.json`. It records the backup id, the run key, the as-of date, the source (`api` or `db`), the row count, the sha256 of the input file, the methodology id and exact code revision. The command line reads it at the edge and supplies the identified methodology to the run. The computation does not read the sidecar. Provenance accompanies the report in an explicit envelope; the original report payload retains its shape.
+- **Why the file is derived.** It is cheap to regenerate from the backups, and the backups are the record. A file without a manifest still runs. Its provenance envelope says the source data is not pinned.
 
 ## 5. Download client
 
@@ -74,7 +74,8 @@ The download client is a polite, resumable reader. It fetches archives under the
 
 - **Paths.** A relative path resolves from the folder the analyst ran the command in.
 - **Bad arguments.** The command exits non-zero with a message on any of these: a second input file, a repeated option, an unknown option, a `--start` after every input row, or an input with no series the run reads.
-- **Pinning.** The output carries the manifest under `manifest`. With no manifest it carries `pinned: false`.
+- **Pinning.** An explicit provenance output envelope carries the report and its `manifest`. With no manifest the envelope carries `pinned: false`. The existing report-only output retains its shape.
+- **Methodology.** Replay uses the recorded methodology and code revision. A new backtest methodology requires explicit selection and never silently changes a compatibility report.
 
 ## 7. Success criteria and tests
 
@@ -85,12 +86,14 @@ Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative t
 | From a clean sparse clone, `bun install` and `bun run regime <file>` return a regime report. | `scripts/tests/unit/analyst-sdk-sparse-install.test.ts` |
 | The command line, run as a process, prints the report in `tests/golden/regime-report.json`. | `tests/cli.test.ts` |
 | The command line rejects bad arguments and resolves relative paths from the caller's folder. | `tests/cli.test.ts` |
-| Two runs on the same input file give the same output, and the output names the manifest or says `pinned: false`. | `tests/cli.test.ts` |
+| Two runs on the same input file give the same output, and the provenance envelope names the manifest or says `pinned: false`, without changing the report payload. | `tests/cli.test.ts` |
 | `bun test` passes with `fetch` replaced by a thrower. | `tests/no-network.ts` (preload) |
 | `bunx tsc --noEmit` is clean. | the package `typecheck` script |
 | The SDK never imports csvb, and only `src/extract/http.ts` calls `fetch`. | `scripts/tests/unit/analyst-sdk-purity.test.ts` |
 | An API-only fill and a repo fill give the same local copy for the same backup id. | csvb `tests/fill-parity.test.ts` |
 | The download client never has two requests in flight, waits `Retry-After`, stays inside the retry bounds, and adds no partial archive when interrupted. | csvb `tests/download-client.test.ts` |
+| Canonical input generation preserves stored values, dates and vintage membership, including historical replay inputs. | csvb `tests/rerun-vintage.test.ts` |
+| Complete reports from identical pinned inputs match the compatibility baseline exactly, including daily backtest values and statistics. | `tests/regime.test.ts`, `tests/backtest.test.ts` |
 | A rerun of a vintage from the local copy matches the report that run published. The Yahoo-sourced series are the stated exception. | csvb `tests/rerun-vintage.test.ts` |
 
 ## 8. Open decisions

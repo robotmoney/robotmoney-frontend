@@ -9,7 +9,7 @@ Datapoints that come from external sources. Prices, rates and ratios that an ext
 - An external party can revise source data. We never revise it ourselves.
 - When we store source data, a changed value is a new version of the value. It is never an edit.
 - Source data is stored as the source gives it. We do not combine or adjust it before storing.
-- Each source series has one id, `<provider>:<symbol>` (for example `yahoo:^GSPC` or `fred:DTB3`). Every layer uses that id. No layer renames it, and the id never names the code that reads it.
+- Each source series has one id, `<provider>:<symbol>` (for example `yahoo:^GSPC` or `fred:DTB3`). Computation, SDK inputs and new public API contracts use that id. Existing storage keys may remain behind a shared boundary mapping that preserves historical references. The id never names the code that reads it.
 - Examples: a daily close from Yahoo, a rate from FRED, a total value locked from DefiLlama.
 
 ## Calculated indicators
@@ -61,15 +61,16 @@ These terms support the four above.
 | Version | One collected value of source data, with the time we observed it. A revision by the external party adds a version. It never edits one. |
 | Published report | The report one analytics run created. It is kept byte for byte and never changes. |
 | Vintage | The record of one run: the source data versions it read and the report it published. A later run adds a vintage. The sequence of vintages is the revision history of the reports. |
-| Source id | The one name of a source series, `<provider>:<symbol>`, for example `yahoo:^GSPC`. |
+| Source id | The canonical code and public contract name of a source series, `<provider>:<symbol>`, for example `yahoo:^GSPC`. |
 | Leg | One of the two source series a ratio divides. |
+| Methodology | The identified calculation rules used by a run. Replay also records the exact code revision. A structural refactor preserves results for identical inputs under the same methodology. |
 | Run | One execution of the analytics module, named by its run key. It reads one vintage of source data and publishes one report. |
 | As-of | The last date a run may use. Source data dated later is ignored. |
 | Local copy | The backups on an analyst's machine. |
 | Fill | A way to bring the local copy up to date: from the csv-backups repo, from the API or from the database. |
 | Watermark | The last id or time the local copy holds for one table. A fill fetches only what is past it. |
 | Input file | A report of source data for one run, written from the local copy. The analyst SDK computes from it. |
-| Manifest | The sidecar of an input file. It names the backup, the run, the as-of date, the fill, the row count and the input file's checksum. |
+| Manifest | The sidecar of an input file. It names the backup, the run, the as-of date, the fill, the row count, the input file's checksum, the methodology id and exact code revision. |
 
 ## Terms these definitions replace
 
@@ -83,10 +84,12 @@ These terms support the four above.
 | frozen run output, report snapshot, output snapshot | `analytics_output_snapshots`, issue 1182, section 4.8 | published report |
 | blend hodl | `computeBacktest` (`blend_hodl`) | constant mix |
 
-A table or a field called `raw_...` holds source data.
+The name `raw_...` denotes source data in new contracts. Historical storage names do not reclassify calculated values as source data.
 
 ## Ratios
 
 A ratio of two source series is a calculated indicator. We build it, so we store the two source series and calculate the ratio from them.
 
 `COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY` and `XLP_XLY` are calculated indicators. Each has two source series as inputs. A ratio that an external party publishes as one series is source data.
+
+Historical stored ratios remain calculated indicators. They are preserved as original replay inputs with provenance when the original legs are unavailable. New source collection stores the legs; historical replay never substitutes newly downloaded data.
