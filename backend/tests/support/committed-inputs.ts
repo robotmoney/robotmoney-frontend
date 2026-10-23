@@ -32,7 +32,10 @@ export interface Observations {
   research: Omit<ResearchInputs, "mna" | "mnaRefresh">;
 }
 
-const scale = (pts: readonly Point[], f: number) => pts.map((p) => ({ date: p.date, value: p.value * f }));
+// Alternating-sign jitter: every point moves by a relative JITTER, and tied
+// values (VIX closes repeat to the cent) come apart, so a computation from the
+// jittered values really differs (a uniform scale would leave every rank intact).
+const jitter = (pts: readonly Point[]) => pts.map((p, i) => ({ date: p.date, value: p.value * (1 + (i % 2 === 0 ? JITTER : -JITTER)) }));
 const bumpLast = (pts: readonly Point[], f: (v: number) => number) =>
   pts.map((p, i) => (i === pts.length - 1 ? { date: p.date, value: f(p.value) } : { ...p }));
 
@@ -53,11 +56,11 @@ export function secondObservations(base: Observations): Observations {
     mna: base.mna,
     registry: {
       ...base.registry,
-      VIX: scale(base.registry.VIX!, 1 + JITTER),
+      VIX: jitter(base.registry.VIX!),
       T10Y2Y: bumpLast(base.registry.T10Y2Y!, (x) => x + 0.25),
     },
-    extras: { ...base.extras, spx: scale(base.extras.spx, 1 + JITTER), eth: bumpLast(base.extras.eth, (x) => x * 1.01) },
-    research: { ...base.research, btc: scale(base.research.btc, 1 + JITTER), qqq: bumpLast(base.research.qqq, (x) => x * 1.01) },
+    extras: { ...base.extras, spx: jitter(base.extras.spx), eth: bumpLast(base.extras.eth, (x) => x * 1.01) },
+    research: { ...base.research, btc: jitter(base.research.btc), qqq: bumpLast(base.research.qqq, (x) => x * 1.01) },
   };
 }
 
