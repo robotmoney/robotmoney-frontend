@@ -8,7 +8,9 @@ database table for it.
 ## Set it up
 
 1. In Google Drive on `david@robotmoney.net`, create a sheet named
-   `Early access`. Share it with the team only.
+   `Early access` and set its time zone (File, Settings) to the script's,
+   Europe/Madrid, so timestamps read the same in both. Share it with the team
+   only.
 2. In that sheet: Extensions, Apps Script. Replace `Code.gs` with the script
    below and save.
 3. Deploy, New deployment, type Web app. Execute as: Me. Who has access:
@@ -29,8 +31,8 @@ One row per handle, on a tab named `Requests`:
 
 | Column | Notes |
 | -- | -- |
-| Received | First sign-up, UTC |
-| Updated | Last sign-up from the same handle |
+| Received | First sign-up, in the Sheet's time zone (Europe/Madrid) |
+| Updated | Last sign-up from the same handle, same time zone |
 | Handle | `@name`; a pasted t.me or x.com link is stored as its handle |
 | Email | Optional |
 | Wallet | Optional, EIP-55 checksummed |
