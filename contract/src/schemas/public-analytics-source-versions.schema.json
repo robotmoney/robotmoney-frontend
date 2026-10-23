@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotmoney.network/contract/schemas/public-analytics-source-versions.schema.json",
+  "title": "GET /api/public/analytics/source-versions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "limit",
+    "asof",
+    "rows",
+    "nextCursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "asof": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "series",
+          "market_date",
+          "market_instant",
+          "value",
+          "revision_kind",
+          "prior_version_id",
+          "knowledge_time"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "series": {
+            "type": "string"
+          },
+          "market_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "market_instant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "value": {
+            "type": "number"
+          },
+          "revision_kind": {
+            "enum": [
+              "legacy_baseline",
+              "initial",
+              "unchanged",
+              "revision"
+            ]
+          },
+          "prior_version_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "knowledge_time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

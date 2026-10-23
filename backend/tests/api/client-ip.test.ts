@@ -104,3 +104,21 @@ test("a genuine IPv6 peer (no IPv4-mapped prefix) passes through untouched", () 
   expect(resolveClientIp(PEER, true, null, "2001:db8::1")).toBe("2001:db8::1");
   expect(resolveClientIp(LOOPBACK, true, "2001:db8::1")).toBe("2001:db8::1");
 });
+
+// Issue 1422: X-Client-IP, the vendor-neutral identity website-server SETS on
+// every proxied request (replacing any the caller sent), is read first. The
+// nginx half (the header is always overwritten, so a caller cannot choose it)
+// is graded against the real image by
+// scripts/tests/integration/public-archive-proxy.test.ts.
+test("trustProxy true: X-Client-IP is the client, ahead of CF-Connecting-IP and X-Forwarded-For", () => {
+  expect(resolveClientIp(PEER, true, null, null, "203.0.113.20")).toBe("203.0.113.20");
+  expect(resolveClientIp(PEER, true, "9.9.9.9", "198.51.100.1", "203.0.113.20")).toBe("203.0.113.20");
+  expect(resolveClientIp(LOOPBACK, true, "9.9.9.9", null, "2001:db8::20")).toBe("2001:db8::20");
+  expect(resolveClientIp(PEER, true, null, null, "::ffff:203.0.113.20")).toBe("203.0.113.20");
+});
+
+test("trustProxy false: X-Client-IP is not read; one that is not an ip address is ignored", () => {
+  expect(resolveClientIp(PEER, false, null, null, "203.0.113.20")).toBe(PEER);
+  expect(resolveClientIp(PEER, true, null, "198.51.100.1", "not-an-ip")).toBe("198.51.100.1");
+  expect(resolveClientIp(PEER, true, null, null, "1.1.1.1, 2.2.2.2")).toBe(PEER);
+});

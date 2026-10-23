@@ -121,6 +121,10 @@ export const ROUTES: {
     assetPrices: string;
     vintages: string;
     overwriteEvents: string;
+    sourceVersions: string;
+    reports: string;
+    archiveBackups: string;
+    archiveFiles: string;
   };
   pipeline: {
     claim: string;

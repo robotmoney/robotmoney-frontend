@@ -34,6 +34,10 @@ import { validateJsonSchema } from "../support/json-schema.ts";
 useCleanDatabase(import.meta.file);
 
 const P = ROUTES.publicAnalytics;
+// Every route that answers a bare GET with a JSON page. archiveFiles is a
+// prefix, not a route: what sits under it is a backup's files
+// (tests/api/public-analytics-archives.test.ts).
+const LIST_ROUTES = [P.rawHistory, P.assetPrices, P.vintages, P.overwriteEvents, P.sourceVersions, P.reports, P.archiveBackups];
 const CONTRACT_SRC = join(import.meta.dir, "..", "..", "..", "contract", "src");
 
 function schemaFor(route: string): Record<string, any> {
@@ -157,7 +161,7 @@ describe("every route: 200 with no Authorization header, a body that validates a
 
 describe("GET only", () => {
   test("POST, PUT, PATCH, DELETE and HEAD under the prefix answer 405 with Allow: GET, on every route", async () => {
-    for (const route of Object.values(P)) {
+    for (const route of [...LIST_ROUTES, `${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`]) {
       for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD"]) {
         const res = await get(route, { method, body: method === "POST" || method === "PUT" || method === "PATCH" ? "{}" : undefined });
         expect(res.status, `${method} ${route}`).toBe(405);
@@ -561,11 +565,11 @@ describe("rate limit", () => {
     expect((await get(`${P.rawHistory}?limit=1`, {}, "203.0.113.78")).status).toBe(200);
   });
 
-  test("the budget is shared across the four routes, and a 405 counts against it", async () => {
+  test("the budget is shared across the list routes, and a 405 counts against it", async () => {
     const ip = "203.0.113.90";
-    const routes = Object.values(P);
+    const routes = LIST_ROUTES;
     for (let i = 0; i < 100; i++) {
-      const res = await get(`${routes[i % 4]}?limit=1`, i % 25 === 0 ? { method: "POST" } : {}, ip);
+      const res = await get(`${routes[i % routes.length]}?limit=1`, i % 25 === 0 ? { method: "POST" } : {}, ip);
       expect([200, 405]).toContain(res.status);
     }
     expect((await get(P.assetPrices, {}, ip)).status).toBe(429);
@@ -593,7 +597,7 @@ describe("through the real api process", () => {
   afterAll(() => api?.stop());
 
   test("GET answers 200 over HTTP as rm_app with no token, cross-origin readable, and the schema holds", async () => {
-    for (const route of Object.values(P)) {
+    for (const route of LIST_ROUTES) {
       const res = await fetch(`${api.base}${route}?limit=3`, { headers: { Origin: "https://elsewhere.example" } });
       expect(res.status, route).toBe(200);
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
@@ -628,6 +632,10 @@ describe("through the real api process", () => {
       expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThanOrEqual(1);
       // A different CF-Connecting-IP is a different client.
       expect((await hit({ "CF-Connecting-IP": "203.0.113.6" })).status).toBe(200);
+      // Issue 1422: X-Client-IP, which website-server sets, is read first.
+      for (let i = 0; i < 100; i++) expect((await hit({ "X-Client-IP": "203.0.113.7", "CF-Connecting-IP": "203.0.113.6" })).status).toBe(200);
+      expect((await hit({ "X-Client-IP": "203.0.113.7", "CF-Connecting-IP": "203.0.113.6" })).status).toBe(429);
+      expect((await hit({ "X-Client-IP": "203.0.113.8", "CF-Connecting-IP": "203.0.113.5" })).status).toBe(200);
     } finally {
       proxied.stop();
     }

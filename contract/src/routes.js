@@ -378,6 +378,15 @@ export const ROUTES = {
     assetPrices: "/api/public/analytics/asset-prices", // GET ?symbol=&from=&to=&limit=&cursor= → asset_prices rows
     vintages: "/api/public/analytics/vintages", // GET ?run_key=&tool_id=&include=members&limit=&cursor= → frozen data vintages
     overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
+    // Issue 1422: every collected version of source data, and each run's published report byte for byte.
+    sourceVersions: "/api/public/analytics/source-versions", // GET ?series=&from=&to=&asof=&limit=&cursor= → source_value_versions rows
+    reports: "/api/public/analytics/reports", // GET ?limit=&cursor= → report list; ?run=<run_key> or ?vintage=<id> → the exact report bytes
+    // Issue 1422: format 1 archives (the robotmoney/csv-backups layout). The
+    // listing names each sealed backup; a backup's `backup.json` and every file
+    // it lists are served at archiveFiles + the record's own `path`
+    // (csv/<backup id>/backup.json, csv/<backup id>/data/<table>.<start>_<end>.csv.gz).
+    archiveBackups: "/api/public/analytics/archive/backups", // GET ?limit=&cursor= → sealed backup ids
+    archiveFiles: "/api/public/analytics/archive/", // GET <prefix>csv/<backup id>/backup.json | <prefix>csv/<backup id>/data/<file>.csv.gz
   },
 
   // The pipeline worker's only way to the database (issue 1034, decision D75).
