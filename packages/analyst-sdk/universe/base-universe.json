@@ -1,0 +1,123 @@
+{
+  "exported": "2026-10-23",
+  "source": "Seed, not the sheet: the nine holdings and the caps of the reference rule R1 in prototype PR 1397 (rules/R1.json, the engine's per-instrument caps, scripts/allocate-data.py for the series), with token addresses from robotmoney-core config/protocol-assets.json and testing/fork-e2e-rust/src/addresses.rs. Liquidity and yield are null until the Base Permissionless Asset Universe sheet is exported; scripts/export-universe.ts rebuilds this file from that export.",
+  "assets": [
+    {
+      "id": "USDC",
+      "name": "USDC (Circle, native on Base)",
+      "sleeve": "cash",
+      "chain": "base",
+      "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 100,
+      "series": "yahoo:USDC-USD"
+    },
+    {
+      "id": "SUSDS",
+      "name": "sUSDS (Sky savings USDS)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 35,
+      "series": "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72"
+    },
+    {
+      "id": "SPARK",
+      "name": "Spark USDC vault (Morpho)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c"
+    },
+    {
+      "id": "GT",
+      "name": "Gauntlet USDC vault (Morpho)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469"
+    },
+    {
+      "id": "STEAK",
+      "name": "Steakhouse USDC vault (Morpho V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c"
+    },
+    {
+      "id": "AAVE",
+      "name": "Aave v3 USDC (aBasUSDC)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x4e65fe4dba92790696d040ac24aa414708f5c0ab",
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 35,
+      "series": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84"
+    },
+    {
+      "id": "COMP",
+      "name": "Compound v3 USDC (Comet)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xb125e6687d4313864e53df431d5425969c15eb2f",
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19"
+    },
+    {
+      "id": "GOLD",
+      "name": "DGLD (gold)",
+      "sleeve": "gold",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 6,
+      "series": "yahoo:GLD"
+    },
+    {
+      "id": "BTC",
+      "name": "cbBTC (Coinbase Wrapped BTC)",
+      "sleeve": "bitcoin",
+      "chain": "base",
+      "contract": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": "yahoo:BTC-USD"
+    }
+  ],
+  "groups": [
+    { "id": "sky", "name": "Sky", "members": ["SUSDS", "SPARK"], "cap": 35 },
+    { "id": "aave", "name": "Aave", "members": ["AAVE"], "cap": 35 },
+    { "id": "morpho", "name": "Morpho", "members": ["SPARK", "GT", "STEAK"], "cap": 30 },
+    { "id": "morpho_v2", "name": "Morpho V2", "members": ["STEAK"], "cap": 12 },
+    { "id": "compound", "name": "Compound", "members": ["COMP"], "cap": 10 },
+    { "id": "bitcoin", "name": "Bitcoin", "members": ["BTC"], "cap": 10 },
+    { "id": "gold", "name": "Gold", "members": ["GOLD"], "cap": 6 }
+  ]
+}

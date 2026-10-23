@@ -11,3 +11,4 @@ export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
 export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";
 export * from "./series-ids.ts";
 export { CoverageError, assertRequiredCoverage } from "./coverage.ts";
+export * from "./allocate/universe.ts";
