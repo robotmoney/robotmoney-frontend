@@ -12,6 +12,7 @@ import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckotermin
 import { captureSourceAcquisition, payloadChecksum, type AcquisitionSink } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -525,4 +526,111 @@ test("re-acquiring a series stays fast as its revision history deepens", async (
   // history. 4x the first acquisition is far looser than the ~7x a linear scan
   // would cost here, so this fails on the regression without being timing-flaky.
   expect(sixth).toBeLessThan(Math.max(first * 4, 1_500));
+});
+
+// ── Issue 1398: the model portfolio inputs ──────────────────────────────────
+// Recorded responses from packages/analyst-sdk/tests/fixtures/extract/model-portfolio
+// (provenance in packages/analyst-sdk/tests/model-portfolio.test.ts). A missing
+// fixture fails the file loudly at import.
+const MP_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/model-portfolio/", import.meta.url);
+const mpGz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, MP_FIX)).arrayBuffer())));
+const MP_BASE = "7e0661bf-8cf3-45e6-9424-31916d4c7b84";
+const MP_ETH = "aa70268e-4b52-42bf-a116-608b370f9501";
+// Every series the inventory collects under its own id, with its recorded body.
+const MP_IDS = loadInventory().series.filter(collectedByInventory).map((s) => s.id);
+const mpBodies: [string, string][] = [];
+for (const s of loadInventory().series.filter(collectedByInventory)) {
+  const fragment = s.provider === "yahoo" ? `/v8/finance/chart/${encodeURIComponent(s.symbol)}?` : `yields.llama.fi/chart/${s.symbol}`;
+  mpBodies.push([fragment, await mpGz(`${s.id.replace(":", "-")}.json.gz`)]);
+}
+const mpExpected = JSON.parse(await mpGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+
+test("issue 1398: a price, then a changed price for the same date, are both recoverable from source_value_versions under the source id, as rm_app within the existing grants", async () => {
+  // The write runs as rm_app (the harness's session role), with the grants it
+  // has today: SELECT and INSERT on the append-only ledger, nothing more. No
+  // migration, no new grant: this is the table and the privilege set as they are.
+  expect((await sql`SELECT current_user AS u`)[0]!.u).toBe("rm_app");
+  const [priv] = await sql`
+    SELECT has_table_privilege('rm_app', 'source_value_versions', 'INSERT') AS ins,
+           has_table_privilege('rm_app', 'source_value_versions', 'SELECT') AS sel,
+           has_table_privilege('rm_app', 'source_value_versions', 'UPDATE') AS upd,
+           has_table_privilege('rm_app', 'source_value_versions', 'DELETE') AS del`;
+  expect(priv).toEqual({ ins: true, sel: true, upd: false, del: false });
+
+  for (const value of [125.1500015258789, 126.5]) {
+    await captureSourceAcquisition({ provider: "yahoo", sourceKey: "yahoo:GLD", parserVersion: "yahoo:1", cacheIdentity: `GLD:${value}` }, sink,
+      async () => [{ date: "2018-01-02", value }]);
+  }
+  const rows = await sql`
+    SELECT id, market_date::text AS d, value, revision_kind, prior_version_id, knowledge_time
+    FROM source_value_versions WHERE source_key = 'yahoo:GLD' ORDER BY id`;
+  expect(rows.map((r) => [r.d, Number(r.value), r.revision_kind])).toEqual([
+    ["2018-01-02", 125.1500015258789, "initial"],
+    ["2018-01-02", 126.5, "revision"],
+  ]);
+  expect(String(rows[1]!.prior_version_id)).toBe(String(rows[0]!.id));
+  // The head is the newer observation; the older one stays readable.
+  const [head] = await sql`
+    SELECT value FROM source_value_versions WHERE source_key = 'yahoo:GLD' AND market_date = '2018-01-02'
+    ORDER BY knowledge_time DESC, id DESC LIMIT 1`;
+  expect(Number(head!.value)).toBe(126.5);
+  // Updating the first observation is refused: the earlier value cannot be lost.
+  const update = await sql`UPDATE source_value_versions SET value = 1 WHERE id = ${rows[0]!.id}`.then(() => "updated", (e: Error) => e.message);
+  expect(update).toBe("permission denied for table source_value_versions");
+});
+
+test("issue 1398: collectModelPortfolioInputs records every new inventory series from recorded responses under its source id, and fetches no series another collector holds", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  const urls: string[] = [];
+  globalThis.fetch = ((input: URL | RequestInfo) => {
+    const url = String(input);
+    urls.push(url);
+    const hit = mpBodies.find(([f]) => url.includes(f));
+    if (!hit) return Promise.reject(new Error(`unrecorded URL ${url}`));
+    return Promise.resolve(new Response(hit[1], { headers: { "content-type": "application/json" } }));
+  }) as typeof fetch;
+  const warnings: string[] = [];
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn: (m) => warnings.push(m), error() {} }, sink, 77);
+
+  const ids = MP_IDS;
+  expect(ids).toContain("yahoo:GLD");
+  expect(ids).toContain("yahoo:USDC-USD");
+  expect(ids.length).toBe(9);
+  expect(out.map((c) => c.id)).toEqual(ids);
+  expect(out.every((c) => c.error === null && c.storageKey === c.id)).toBe(true);
+  expect(urls).toHaveLength(ids.length); // ^GSPC, ETH-USD, BTC-USD and DTB3 are not fetched again
+  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD)\?|fredgraph/.test(u))).toBe(false);
+  for (const id of ids) {
+    const rows = await sql`
+      SELECT market_date::text AS date, value FROM source_value_versions
+      WHERE source_key = ${id} AND acquisition_id IN (SELECT id FROM source_acquisitions WHERE requested_by_run_id = 77)
+      ORDER BY market_date`;
+    expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(mpExpected[id]!);
+  }
+  const acq = await sql`SELECT provider, cache_identity, requested_by_run_id FROM source_acquisitions WHERE requested_by_run_id = 77 ORDER BY provider, cache_identity`;
+  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), "yahoo", "yahoo"]);
+  // The late Base inception is reported, not repaired.
+  expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start 2018-01-01`))).toBe(true);
+
+  // A second collection of the same responses adds no version.
+  const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n;
+  await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 78);
+  expect((await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n).toBe(before);
+});
+
+test("issue 1398: one failed model portfolio series is reported by id and drops only that series", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  globalThis.fetch = ((input: URL | RequestInfo) => {
+    const url = String(input);
+    if (url.includes(MP_ETH)) return Promise.resolve(Response.json({ status: "success", data: [] }));
+    const hit = mpBodies.find(([f]) => url.includes(f));
+    return hit ? Promise.resolve(new Response(hit[1])) : Promise.reject(new Error(`unrecorded URL ${url}`));
+  }) as typeof fetch;
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 79);
+  const eth = out.find((c) => c.id === `defillama-yields:${MP_ETH}`)!;
+  expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from 2018-01-01`);
+  expect(eth.rows).toBe(0);
+  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(MP_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
 });

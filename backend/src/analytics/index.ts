@@ -329,6 +329,13 @@ export async function runAnalytics(
     const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
     extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
     collector.stage("access", "ok", `fetched backtest extras from the ${sourceLabel} source`, t0);
+    // Issue 1398: the model portfolio inputs are collected into the source
+    // ledger in extract, on the same run. The regime reads none of them, so
+    // the outcome is only logged and no number downstream changes.
+    if (source.collectModelPortfolioInputs) {
+      const collected = await source.collectModelPortfolioInputs(logger, acquisitionSink, jobId ?? null);
+      logger.log?.(`[analytics] model portfolio inputs: ${collected.map((c) => `${c.id}=${c.error ? "FAILED" : c.rows}`).join(" ")}`);
+    }
   }
 
   if (want("channel-divergence") || want("late-cycle-signals")) {

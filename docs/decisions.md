@@ -4767,10 +4767,22 @@ observed off) if either would change.
 | `backtest:^GSPC` | yahoo | relative 1e-6 |
 | `backtest:ETH-USD` | yahoo | relative 1e-6 |
 | `backtest:DTB3` | fred | exact |
+| `yahoo:GLD` | yahoo | relative 1e-6 |
+| `defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84` | defillama-yields | exact |
+| `defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501` | defillama-yields | exact |
+| `yahoo:USDC-USD` | yahoo | relative 1e-6 |
+| `defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72` | defillama-yields | exact |
+| `defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c` | defillama-yields | exact |
+| `defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469` | defillama-yields | exact |
+| `defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c` | defillama-yields | exact |
+| `defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19` | defillama-yields | exact |
 
 `backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
 capture call site under `src/analytics/extract` and `src/analytics/access`, and
-fails if one has no entry here or in `SOURCE_TOLERANCES`.
+fails if one has no entry here or in `SOURCE_TOLERANCES`. The last nine rows
+are the model portfolio inputs recorded under their own source id (issue 1398),
+including the Base universe assets; the test reads them from
+`packages/analyst-sdk/inventory/model-portfolio.json`.
 
 **Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
 is Yahoo's. Its chart API serves float32-derived numbers

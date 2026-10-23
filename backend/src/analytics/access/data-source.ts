@@ -22,6 +22,7 @@ import {
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
+import { loadInventory, collectedByInventory, fetchInventorySeries, describeCoverage } from "../extract/model-portfolio.ts";
 
 export type Logger = {
   log?: (m: string) => void;
@@ -89,6 +90,17 @@ export interface FetchIndicatorsOptions {
   provenance?: string;
 }
 
+// Issue 1398: one inventory series' collection outcome. `rows` is what the
+// provider served (recorded in source_value_versions under `storageKey` when it
+// differs from the head); `limitations` and `error` are the coverage report.
+export interface ModelPortfolioCollection {
+  id: string;
+  storageKey: string;
+  rows: number;
+  limitations: string[];
+  error: string | null;
+}
+
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
   fetchIndicators(
@@ -106,6 +118,10 @@ export interface AnalyticsDataSource {
   // Backtest/correlations overlays (SPX/ETH price levels + DTB3 yield). A failed
   // fetch returns [] (logged) → that leg is simply excluded downstream.
   fetchBacktestExtras(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<BacktestExtras>;
+  // Model portfolio inputs (issue 1398): record every inventory series that no
+  // other collector holds into the source ledger. Collection only: the regime
+  // reads none of it. Optional, so a fixture or hermetic source collects nothing.
+  collectModelPortfolioInputs?(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<ModelPortfolioCollection[]>;
 }
 
 const CHANNEL_START = "2018-01-01";
@@ -202,5 +218,26 @@ export const liveDataSource: AnalyticsDataSource = {
       safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
     ]);
     return { spx, eth, tbill3m };
+  },
+
+  async collectModelPortfolioInputs(logger = console, acquisitionSink, requestedByRunId): Promise<ModelPortfolioCollection[]> {
+    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+    // The inventory names each series' storage key. A series another collector
+    // already holds (backtest:^GSPC, research:BTC-USD, ...) is not fetched
+    // twice; the rest are recorded under their own source id (D74). Each is
+    // one acquisition, so one bounded request to the ingestion route, and a
+    // failure drops only that series.
+    const entries = loadInventory().series.filter(collectedByInventory);
+    return Promise.all(entries.map(async (entry): Promise<ModelPortfolioCollection> => {
+      try {
+        const points = await captureSourceAcquisition({ provider: entry.provider, sourceKey: entry.storageKey, parserVersion: `${entry.provider}:1`, cacheIdentity: `${entry.symbol}:${entry.requestedStart}`, requestedByRunId }, acquisitionSink, () => fetchInventorySeries(entry));
+        const coverage = describeCoverage(entry, points);
+        for (const l of coverage.limitations) logger.warn?.(`[extract] model portfolio ${l}`);
+        return { id: entry.id, storageKey: entry.storageKey, rows: points.length, limitations: coverage.limitations, error: null };
+      } catch (e: any) {
+        logger.error?.(`[extract] model portfolio ${entry.id} FAILED: ${e?.message ?? e}`);
+        return { id: entry.id, storageKey: entry.storageKey, rows: 0, limitations: [], error: String(e?.message ?? e) };
+      }
+    }));
   },
 };
