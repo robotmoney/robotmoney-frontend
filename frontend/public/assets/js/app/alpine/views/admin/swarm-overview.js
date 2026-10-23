@@ -74,7 +74,7 @@ function validateManualMember(form) {
 export function registerAdminSwarmOverview(Alpine) {
   Alpine.data("adminSwarmOverview", () => ({
     ...adminAuthState(),
-    tab: "topics", // topics | members | sessions
+    tab: "topics", // topics | members | sessions | referrals
     loading: false,
     error: null,
     topics: [],
@@ -84,6 +84,11 @@ export function registerAdminSwarmOverview(Alpine) {
     // request — see loadAll().
     silenceFlags: {},
     sessions: [],
+    // Referral correction log (issue 1371), read-only, loaded when its tab opens.
+    corrections: [],
+    correctionsDigest: null,
+    correctionsLoading: false,
+    correctionsError: null,
     memberFilter: "active", // applied | active | inactive
 
     topicForm: emptyTopicForm(),
@@ -104,7 +109,29 @@ export function registerAdminSwarmOverview(Alpine) {
       await this.bootWithStoredToken(() => this.loadAll());
     },
 
-    setTab(tab) { this.tab = tab; },
+    setTab(tab) {
+      this.tab = tab;
+      if (tab === "referrals") this.loadCorrections();
+    },
+
+    // GET /api/admin/referrals/corrections. Its own request, not part of
+    // loadAll(): an EIP-1271 entry costs a chain read, so it runs only when
+    // an operator opens the tab.
+    async loadCorrections() {
+      this.correctionsLoading = true;
+      this.correctionsError = null;
+      try {
+        const res = await api.adminGet(ROUTES.admin.referralCorrections, this._token());
+        if (!Array.isArray(res.corrections)) throw new Error("referral corrections response missing 'corrections' array");
+        this.corrections = res.corrections;
+        this.correctionsDigest = res.logDigest || null;
+      } catch (e) {
+        if (e.status === 403) this._handle403();
+        else this.correctionsError = apiErrorText(e);
+      } finally {
+        this.correctionsLoading = false;
+      }
+    },
 
     async loadAll() {
       this.loading = true;

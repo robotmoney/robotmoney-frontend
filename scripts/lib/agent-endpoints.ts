@@ -684,6 +684,18 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     contractType: "{ comments: Comment[] }",
     sizeHint: "under 1 KB",
   },
+  {
+    id: "lookupReferralCode",
+    method: "GET",
+    path: ROUTES.referrals.code,
+    summary: "Whether one referral code is active right now",
+    description:
+      "Check a referral code a wallet owner asked for before it goes on a deposit. An active member code answers its normalized `code` and the member's `handle` and `name`; an active team channel code answers its `code` and `channel`. Every other code (unknown, malformed, not yet active, disabled, or a departed member's) answers the same 404. It says nothing about a wallet's eligibility, launch status or credit; attribution is evaluated after the deposit executes. One code per request: nothing lists codes or members. Cacheable for 60 seconds (a change can take up to a minute to show), at most 100 requests a minute per client.",
+    backs: [],
+    params: [{ name: "code", in: "path", required: true, description: "The referral code: `rm_` plus a lowercase slug, 32 characters at most. Surrounding spaces are trimmed and ASCII letters lowercased; nothing else is changed.", example: "rm_site" }],
+    contractType: "ReferralCodeCheck",
+    sizeHint: "under 200 B",
+  },
 ];
 
 // Routes deliberately absent from the public catalogue, each with the reason.

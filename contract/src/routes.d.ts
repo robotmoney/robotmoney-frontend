@@ -135,6 +135,9 @@ export const ROUTES: {
     read: string;
     ingest: string;
   };
+  referrals: {
+    code: string;
+  };
   analytics: {
     readiness: string;
     rawHistory: string;
@@ -173,6 +176,7 @@ export const ROUTES: {
     researchRawSeries: string;
     researchSignal: string;
     researchRerun: string;
+    referralCorrections: string;
   };
 };
 

@@ -1840,3 +1840,65 @@ test("swarm admin: a failed review after the operator saved says so and keeps th
   await expect(page.getByTestId("member-approve-role")).toHaveValue("judge");
   await expect(page.getByTestId("member-action-submit")).toHaveText("Approve as judge");
 });
+
+// Issue 1371 (docs/technical/referrals-spec.md §4, §5, §6): the admin member page
+// shows the member's referral code, state, terms and both times, read-only, and
+// the swarm overview's Referral corrections tab shows the correction log
+// read-only. Mocked API; synthetic codes.
+test("swarm admin: the member page shows the referral code read-only, with its state and times", async ({ page }) => {
+  await mockSwarmApi(page);
+  const referral = { code: "rm_athena", state: "scheduled", enabled: false, termsVersion: "2026-10", enabledAt: "2027-01-01T00:00:00Z", disabledAt: null };
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
+    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, referral }, MEMBER_INACTIVE] })));
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByTestId("member-referral-code")).toHaveText("rm_athena");
+  await expect(page.getByTestId("member-referral-state")).toHaveText("Scheduled (not active yet)");
+  await expect(page.getByTestId("member-referral-terms")).toHaveText("2026-10");
+  await expect(page.getByTestId("member-referral-enabled-at")).toHaveText("2027-01-01 00:00:00 UTC");
+  await expect(page.getByTestId("member-referral-disabled-at")).toHaveText("—");
+  await expect(page.getByTestId("member-referral-readonly")).toContainText("Read-only");
+  // Nothing on the section is a control.
+  await expect(page.getByTestId("member-referral").locator("button, input, select, textarea")).toHaveCount(0);
+});
+
+test("swarm admin: a member with no referral code says so", async ({ page }) => {
+  await mockSwarmApi(page);
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
+    route.fulfill(jsonReply({ members: [MEMBER_APPLIED, { ...MEMBER_ACTIVE, referral: null }, MEMBER_INACTIVE] })));
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByTestId("member-referral-none")).toBeVisible();
+  await expect(page.getByTestId("member-referral-code")).toHaveCount(0);
+});
+
+test("swarm admin: the Referral corrections tab lists the log read-only with each entry's check", async ({ page }) => {
+  await mockSwarmApi(page);
+  const requests: string[] = [];
+  await page.route("**/api/admin/referrals/corrections", (route) => {
+    requests.push(route.request().method());
+    return route.fulfill(jsonReply({
+      logDigest: "a".repeat(64),
+      corrections: [
+        {
+          id: "c-1", kind: "verified", chainId: 8453, wallet: "0x" + "11".repeat(20), code: "rm_athena",
+          deposit: { transactionHash: "0x" + "ab".repeat(32), logIndex: 2 }, recordedAt: "2027-01-02T00:00:00Z", recordedBy: "ops", reason: "lookup timed out",
+          signature: { scheme: "eip191", expiresAt: "2027-02-01T00:00:00Z", nonce: "n-1", message: "Robot Money referral correction", signature: "0x" + "22".repeat(65) },
+          revocation: null, check: { status: "accepted", problems: [] },
+        },
+        {
+          id: "o-1", kind: "override", chainId: 8453, wallet: "0x" + "33".repeat(20), code: "rm_site",
+          deposit: { transactionHash: "0x" + "cd".repeat(32), logIndex: 4 }, recordedAt: "2027-01-03T00:00:00Z", recordedBy: "ops", reason: "confirmed in our 1:1 channel",
+          signature: null, revocation: { id: "r-1", recordedAt: "2027-01-04T00:00:00Z", recordedBy: "ops", reason: "withdrawn" }, check: { status: "rejected", problems: ["code rm_site is not in the registry"] },
+        },
+      ],
+    }));
+  });
+  await signIn(page, "/admin/swarm");
+  await page.getByTestId("tab-referrals").click();
+  await expect(page.getByTestId("referral-correction-row")).toHaveCount(2);
+  await expect(page.getByTestId("referral-corrections")).toContainText("verified (eip191)");
+  await expect(page.getByTestId("referral-corrections")).toContainText("not in the registry");
+  await expect(page.getByTestId("referral-corrections")).toContainText("2027-01-04 00:00:00 UTC by ops: withdrawn");
+  await expect(page.getByTestId("referral-corrections-readonly")).toContainText("nothing here writes");
+  await expect(page.getByTestId("referral-corrections").locator("button, input, select, textarea")).toHaveCount(0);
+  expect(requests).toEqual(["GET"]);
+});

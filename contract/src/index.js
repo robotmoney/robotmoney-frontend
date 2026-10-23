@@ -10,6 +10,15 @@ export {
   PUBLIC_ANALYTICS_SCHEMAS,
   PUBLIC_ANALYTICS_SCHEMA_VERSION,
 } from "./public-analytics.js";
+export {
+  REFERRAL_CODE_MAX_LENGTH,
+  REFERRAL_CODE_PATTERN,
+  REFERRAL_LOOKUP_CACHE_CONTROL,
+  REFERRAL_LOOKUP_RATE_MAX,
+  REFERRAL_LOOKUP_RATE_WINDOW_MS,
+  isNormalizedReferralCode,
+  normalizeReferralCode,
+} from "./referrals.js";
 export { REGIME_RISK_OFF, REGIME_RISK_ON, REGIME_METHOD, classifyRegime } from "./regime.js";
 export {
   BPS_DENOMINATOR,

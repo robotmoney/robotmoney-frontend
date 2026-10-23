@@ -1,8 +1,14 @@
 # Investment Swarm
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers member/team referral codes, eligibility and beneficiary history.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371). A member's referral code is `rm_` plus
+> the member's handle at issue time (a rejoin adds a `-suffix`); a later rename
+> never changes it, and the code's beneficiary id and display snapshot are
+> immutable. A departing member's code is disabled prospectively in the registry;
+> a deactivated member's code answers the public lookup's uniform 404, and
+> historical bindings keep the snapshot. Referral fields appear only on the admin
+> member projection, never on a public member DTO. Signed-recommendation roles are
+> unchanged.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 
