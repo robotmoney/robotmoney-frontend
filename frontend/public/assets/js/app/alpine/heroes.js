@@ -1,5 +1,6 @@
 // Alpine.data factories for animated page-hero canvases.
 import { p5Lifecycle } from "./p5-lifecycle.js";
+import { mountLitPlate } from "../lib/lit-plate.js";
 
 export function registerHeroes(Alpine) {
   Alpine.data("blogHero", () => ({
@@ -1650,5 +1651,21 @@ export function registerHeroes(Alpine) {
       };
       this._p5 = new p5Constructor(sketch, container);
     },
+  }));
+
+  // A photograph lit as the home page's are (lib/lit-plate.js): the
+  // early-access hero. The element holds the still <img> and a <canvas>;
+  // `fx`/`fy` are the crop's focal point, matching the still's object-position.
+  Alpine.data("litPlateHero", (fx = 0.5, fy = 0.5) => ({
+    _cleanup: null,
+    init() {
+      const host = this.$el.closest("header") || this.$el;
+      const canvas = this.$el.querySelector("canvas");
+      const still = this.$el.querySelector("img");
+      if (!canvas || !still) return;
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      this._cleanup = mountLitPlate(host, canvas, still, { fx, fy, reduce });
+    },
+    destroy() { if (this._cleanup) this._cleanup(); },
   }));
 }

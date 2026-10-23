@@ -290,6 +290,12 @@ const META = {
     title: "Privacy Policy | Robot Money",
     description: "What data the Robot Money website collects, what it does not, and how onchain data is treated as public.",
   },
+  // The early-access form (RM-189): interest in depositing before the vault
+  // opens to outside depositors.
+  "/early-access": {
+    title: "Early Access to the Model Portfolio | Robot Money",
+    description: "Request early access to the Robot Money vault on Base: the swarm's model portfolio in one non-custodial deposit, opening to depositors in small groups.",
+  },
   // A placeholder hub nothing links to since the footer became the site index
   // (RM-124), and out of sitemap.xml: noindexed like the stubs below.
   "/visualizations": {

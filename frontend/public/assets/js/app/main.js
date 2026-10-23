@@ -7,6 +7,7 @@ import { registerHeroes } from "./alpine/heroes.js";
 import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
 import { registerSiteNav } from "./alpine/site-nav.js";
+import { registerSelect } from "./alpine/select.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
 import { initHeadingAnchors } from "./lib/heading-anchors.js";
@@ -15,6 +16,11 @@ import { startAnalytics } from "./analytics.js";
 import { apiUrl, gateApiOn, ROUTES } from "./lib/api.js";
 import { checkApiCompat, renderReloadNotice } from "./lib/api-compat.js";
 import { showMaintenance } from "./lib/maintenance-notice.js";
+import { captureReferral } from "./lib/referral.js";
+
+// A referral link (`?ref=rm_<handle>`) can point at any page, so its code is
+// read here on landing, before the router can move the address bar.
+captureReferral();
 
 // Is the API one this page was built for? (D54) Started first, before the
 // router renders anything or Alpine asks for data, and every lib/api.js call
@@ -49,6 +55,7 @@ document.addEventListener("alpine:init", () => {
   applyChartDefaults();
 
   registerSiteNav(Alpine);
+  registerSelect(Alpine);
   registerViews(Alpine);
   registerHeroes(Alpine);
   registerStaticViews(Alpine);

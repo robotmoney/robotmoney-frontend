@@ -1,0 +1,258 @@
+<!-- Early access (RM-189): register interest in depositing before the vault
+     opens to outside depositors. Named early access, never a whitelist: the
+     vault is permissionless, so a whitelist would be a claim we cannot back.
+
+     A referral link (?ref=rm_<handle>, on any page) is read at boot and held
+     for the session by lib/referral.js; the form sends it unseen.
+
+     The options are written out here (rmSelect, alpine/select.js, reads them
+     from the page) rather than with x-for, so the prerendered page carries them for a reader that runs no JavaScript. Their
+     `value`s are what is stored. Factory: earlyAccessForm()
+     (alpine/views/early-access.js).
+
+     The hero is a photograph in the home page's series: basalt steps on the
+     salt flat rising to a lit doorway in a monolith, lit as the home page's
+     plates are: it develops once from its own light, then leans a few pixels
+     toward the pointer. litPlateHero() (alpine/heroes.js, lib/lit-plate.js). -->
+
+<section class="ea" x-data="earlyAccessForm()">
+
+  <header class="a2-hero">
+    <div class="a2-hero__viz ea-hero__viz" x-data="litPlateHero(0.74, 0.3)" aria-hidden="true">
+      <img class="ea-hero__still" src="/assets/img/early-access/stairs.jpg" alt="" width="1672" height="941" fetchpriority="high" decoding="async" />
+      <canvas class="ea-hero__canvas"></canvas>
+    </div>
+    <div class="a2-hero__inner">
+      <h1 class="a2-hero__title">Early access</h1>
+      <p class="a2-hero__lede">The swarm's model portfolio, in one deposit. We open the vault in small groups. Tell us who you are and we will reach you when yours opens.</p>
+    </div>
+  </header>
+
+  <div class="ea__body">
+    <div class="ea__grid">
+
+      <div class="ea__main">
+        <form class="ea__form" novalidate @submit.prevent="submit()" x-show="!sent" aria-label="Request early access">
+          <p class="ea__privacy">A handle and a wallet together tie you to that wallet's holdings. This list stays private, used only for access and referral credit. <a href="/privacy">Privacy policy</a></p>
+
+          <div class="ea__field">
+            <label class="ea__label" for="ea-handle">Telegram or X handle</label>
+            <input class="ea__input" id="ea-handle" name="handle" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="@yourname" maxlength="64" required
+                   x-model="draft.handle" @input="revalidate()"
+                   :aria-invalid="errors.handle ? 'true' : 'false'" aria-describedby="ea-handle-err" />
+            <p class="ea__err" id="ea-handle-err" x-show="errors.handle" x-text="errors.handle" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" for="ea-email">Email <span class="ea__opt-tag">Optional</span></label>
+            <input class="ea__input" id="ea-email" name="email" type="email" autocomplete="email" spellcheck="false"
+                   placeholder="you@company.com"
+                   x-model="draft.email" @input="revalidate()"
+                   :aria-invalid="errors.email ? 'true' : 'false'" aria-describedby="ea-email-err" />
+            <p class="ea__err" id="ea-email-err" x-show="errors.email" x-text="errors.email" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" for="ea-wallet">EVM wallet <span class="ea__opt-tag">Optional</span></label>
+            <input class="ea__input ea__input--mono" id="ea-wallet" name="wallet" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="0x…" maxlength="42"
+                   x-model="draft.wallet" @input="revalidate()"
+                   :aria-invalid="errors.wallet ? 'true' : 'false'" aria-describedby="ea-wallet-hint ea-wallet-err" />
+            <p class="ea__hint" id="ea-wallet-hint">The address you would deposit from.</p>
+            <p class="ea__err" id="ea-wallet-err" x-show="errors.wallet" x-text="errors.wallet" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" id="ea-business-l" for="ea-business">What best describes you</label>
+            <div class="rm-select" x-data="rmSelect('Choose one')" x-modelable="value" x-model="draft.businessType"
+                 @rm-select-change="revalidate()" @click.outside="close(false)">
+              <button class="rm-select__btn" id="ea-business" type="button" aria-haspopup="listbox"
+                      :aria-expanded="open ? 'true' : 'false'" aria-labelledby="ea-business-l ea-business"
+                      :aria-invalid="errors.businessType ? 'true' : 'false'" aria-describedby="ea-business-err"
+                      @click="toggle()" @keydown="onButtonKey($event)">
+                <span class="rm-select__v" :class="{ 'is-empty': !label() }" x-text="label() || placeholder">Choose one</span>
+                <span class="rm-select__chev" aria-hidden="true"></span>
+              </button>
+              <ul class="rm-select__list" role="listbox" tabindex="-1" aria-labelledby="ea-business-l"
+                  :class="{ 'is-open': open }" :aria-activedescendant="activeId()" @keydown="onListKey($event)">
+                <li role="option" class="rm-select__opt" data-value="dao">DAO</li>
+                <li role="option" class="rm-select__opt" data-value="agentic-company">Agentic company</li>
+                <li role="option" class="rm-select__opt" data-value="wealth-manager">Wealth manager</li>
+                <li role="option" class="rm-select__opt" data-value="robotics-company">Robotics company</li>
+                <li role="option" class="rm-select__opt" data-value="individual">Individual</li>
+              </ul>
+            </div>
+            <p class="ea__err" id="ea-business-err" x-show="errors.businessType" x-text="errors.businessType" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" id="ea-deposit-l" for="ea-deposit">How much would you deposit</label>
+            <div class="rm-select" x-data="rmSelect('Choose one')" x-modelable="value" x-model="draft.intendedDeposit"
+                 @rm-select-change="revalidate()" @click.outside="close(false)">
+              <button class="rm-select__btn" id="ea-deposit" type="button" aria-haspopup="listbox"
+                      :aria-expanded="open ? 'true' : 'false'" aria-labelledby="ea-deposit-l ea-deposit"
+                      :aria-invalid="errors.intendedDeposit ? 'true' : 'false'" aria-describedby="ea-deposit-err"
+                      @click="toggle()" @keydown="onButtonKey($event)">
+                <span class="rm-select__v" :class="{ 'is-empty': !label() }" x-text="label() || placeholder">Choose one</span>
+                <span class="rm-select__chev" aria-hidden="true"></span>
+              </button>
+              <ul class="rm-select__list" role="listbox" tabindex="-1" aria-labelledby="ea-deposit-l"
+                  :class="{ 'is-open': open }" :aria-activedescendant="activeId()" @keydown="onListKey($event)">
+                <li role="option" class="rm-select__opt" data-value="under-10k">Under $10k</li>
+                <li role="option" class="rm-select__opt" data-value="10k-100k">$10k to $100k</li>
+                <li role="option" class="rm-select__opt" data-value="100k-1m">$100k to $1M</li>
+                <li role="option" class="rm-select__opt" data-value="over-1m">Over $1M</li>
+              </ul>
+            </div>
+            <p class="ea__err" id="ea-deposit-err" x-show="errors.intendedDeposit" x-text="errors.intendedDeposit" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" id="ea-share-l" for="ea-share">Share of your treasury you would hold outside stablecoins</label>
+            <div class="rm-select" x-data="rmSelect('Choose one')" x-modelable="value" x-model="draft.nonStableShare"
+                 @rm-select-change="revalidate()" @click.outside="close(false)">
+              <button class="rm-select__btn" id="ea-share" type="button" aria-haspopup="listbox"
+                      :aria-expanded="open ? 'true' : 'false'" aria-labelledby="ea-share-l ea-share"
+                      :aria-invalid="errors.nonStableShare ? 'true' : 'false'" aria-describedby="ea-share-err"
+                      @click="toggle()" @keydown="onButtonKey($event)">
+                <span class="rm-select__v" :class="{ 'is-empty': !label() }" x-text="label() || placeholder">Choose one</span>
+                <span class="rm-select__chev" aria-hidden="true"></span>
+              </button>
+              <ul class="rm-select__list" role="listbox" tabindex="-1" aria-labelledby="ea-share-l"
+                  :class="{ 'is-open': open }" :aria-activedescendant="activeId()" @keydown="onListKey($event)">
+                <li role="option" class="rm-select__opt" data-value="0">0%</li>
+                <li role="option" class="rm-select__opt" data-value="under-10">Under 10%</li>
+                <li role="option" class="rm-select__opt" data-value="10-30">10% to 30%</li>
+                <li role="option" class="rm-select__opt" data-value="over-30">Over 30%</li>
+              </ul>
+            </div>
+            <p class="ea__err" id="ea-share-err" x-show="errors.nonStableShare" x-text="errors.nonStableShare" x-cloak></p>
+          </div>
+
+          <!-- The honeypot: hidden from people and from assistive tech. -->
+          <div class="ea__hp" aria-hidden="true">
+            <label for="ea-website">Website</label>
+            <input id="ea-website" name="website" type="text" tabindex="-1" autocomplete="off" x-model="draft.website" />
+          </div>
+
+          <div class="ea__send">
+            <button class="btn-primary ea__submit" type="submit" :disabled="sending" x-text="sending ? 'Sending' : 'Request early access'">Request early access</button>
+            <p class="ea__err" role="alert" x-show="failed" x-cloak>Not sent. Try again, or message us on <a href="https://t.me/+aFxo8CRpkI80YmM0" target="_blank" rel="noopener noreferrer">Telegram</a>.</p>
+          </div>
+        </form>
+
+        <div class="ea__done" x-show="sent" x-cloak role="status">
+          <h2 class="ea__done-h">You are on the list</h2>
+          <p class="ea__done-p">We will reach you at <b x-text="sentHandle"></b> when your group opens. Every take behind the portfolio is public on <a href="/swarm">the swarm page</a>.</p>
+        </div>
+      </div>
+
+      <aside class="ea__aside" aria-label="About the vault">
+        <dl class="ea__facts">
+          <div class="ea__fact">
+            <dt>Non-custodial</dt>
+            <dd>You deposit and withdraw yourself. Nobody at Robot Money holds your funds.</dd>
+          </div>
+          <div class="ea__fact">
+            <dt>One portfolio for everyone</dt>
+            <dd>The swarm publishes one allocation, with every take behind it <a href="/swarm">in public</a>.</dd>
+          </div>
+          <div class="ea__fact">
+            <dt>No promised returns</dt>
+            <dd>The portfolio moves with its markets. This is not investment advice.</dd>
+          </div>
+        </dl>
+      </aside>
+
+    </div>
+  </div>
+</section>
+
+<style>
+.ea { background: var(--color-void); color: var(--color-text); padding: 0 0 5rem; font-family: var(--font-sans); }
+
+/* Hero: full-bleed and flat. The shared rules in components.css pin its
+   headline's size and offset. */
+.a2-hero {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+}
+.a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
+/* The still holds the photograph until the lit canvas takes over; it stays
+   alone where WebGL is missing. Same crop as the canvas's cover fit. */
+.ea-hero__still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 74% 30%; }
+.ea-hero__canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 0; }
+.a2-hero.is-lit .ea-hero__canvas { opacity: 1; }
+.a2-hero__inner { position: relative; z-index: 2; width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
+.a2-hero__title { margin: 0 0 1.25rem; }
+.a2-hero__lede { margin: 0; max-width: 44rem; font-size: 1.0625rem; line-height: 1.65; color: var(--color-text-muted); }
+
+.ea__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; }
+.ea__grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 4rem; padding-top: 3rem; }
+
+.ea__form { display: flex; flex-direction: column; gap: 1.75rem; }
+.ea__privacy { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-muted); }
+.ea__privacy a, .ea__err a, .ea__done-p a, .ea__fact a {
+  color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 3px;
+}
+.ea__privacy a:hover, .ea__err a:hover, .ea__done-p a:hover, .ea__fact a:hover { text-decoration-color: var(--color-link); }
+
+.ea__field { display: flex; flex-direction: column; gap: 0.5rem; }
+.ea__label { padding: 0; font-size: 0.9375rem; font-weight: 500; line-height: 1.4; color: var(--color-text); }
+.ea__opt-tag { margin-left: 0.5rem; font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400;
+  text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
+.ea__hint { margin: 0; font-size: 0.8125rem; line-height: 1.5; color: var(--color-text-muted); }
+.ea__err { margin: 0; font-size: 0.8125rem; line-height: 1.5; color: var(--color-warn); }
+
+.ea__input {
+  width: 100%; min-height: 44px; padding: 0.65rem 0.8rem; border-radius: 0;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  color: var(--color-text); font-family: var(--font-sans); font-size: 0.9375rem;
+  transition: border-color .16s ease;
+}
+.ea__input--mono { font-family: var(--font-mono); font-size: 0.875rem; }
+.ea__input::placeholder { color: var(--color-text-muted); opacity: 0.7; }
+.ea__input:hover { border-color: var(--color-border-light); }
+.ea__input:focus { outline: none; border-color: var(--color-accent); }
+.ea__input[aria-invalid="true"] { border-color: var(--color-text-muted); }
+
+.ea__hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.ea__send { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding-top: 0.5rem; }
+.ea__submit { border: 0; cursor: pointer; }
+.ea__submit:disabled { opacity: 0.6; cursor: default; }
+
+.ea__done { padding: 2rem 0; }
+.ea__done-h { margin: 0 0 0.75rem; font-family: var(--font-display); font-stretch: var(--font-display-stretch);
+  font-weight: 700; text-transform: uppercase; font-size: 1.75rem; line-height: 1.1; }
+.ea__done-p { margin: 0; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
+.ea__done-p b { color: var(--color-text); font-weight: 500; overflow-wrap: anywhere; }
+
+.ea__aside { border-left: 1px solid var(--color-border); padding-left: 2rem; }
+.ea__facts { margin: 0; display: flex; flex-direction: column; gap: 1.75rem; }
+.ea__fact dt { margin: 0 0 0.4rem; font-family: var(--font-mono); font-size: 0.6875rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--color-text); }
+.ea__fact dd { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-muted); }
+
+@media (max-width: 900px) {
+  .ea__grid { grid-template-columns: minmax(0, 1fr); gap: 3rem; padding-top: 2rem; }
+  .ea__aside { border-left: 0; border-top: 1px solid var(--color-border); padding: 2rem 0 0; }
+}
+@media (max-width: 640px) {
+  .ea__body { padding: 0 1rem; }
+  .a2-hero__inner { padding-inline: 1rem; }
+  /* Stacked on a phone: the copy on the dark sky, then the photograph whole
+     beneath it, so the opening's light never sits behind the text. */
+  .a2-hero { flex-direction: column; min-height: 0; }
+  .ea-hero__viz { position: relative; inset: auto; order: 2; width: 100%; aspect-ratio: 4 / 3; }
+}
+</style>

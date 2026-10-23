@@ -22,6 +22,7 @@ import { registerVaultView } from "./views/vault.js";
 import { registerSwarmView } from "./views/swarm.js";
 import { registerCommentsThread } from "./views/comments.js";
 import { registerApplyForm } from "./views/apply-form.js";
+import { registerEarlyAccessForm } from "./views/early-access.js";
 import { registerAdminSurfaceView } from "./views/admin-surface.js";
 import { registerAdminSwarmOverview } from "./views/admin/swarm-overview.js";
 import { registerAdminSwarmSubject } from "./views/admin/swarm-subject.js";
@@ -59,6 +60,7 @@ export function registerViews(Alpine) {
   registerSwarmView(Alpine);
   registerCommentsThread(Alpine);
   registerApplyForm(Alpine);
+  registerEarlyAccessForm(Alpine);
   registerAdminSurfaceView(Alpine);
   registerAdminSwarmOverview(Alpine);
   registerAdminSwarmSubject(Alpine);

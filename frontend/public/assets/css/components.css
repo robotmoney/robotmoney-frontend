@@ -1220,3 +1220,54 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
 .md-hero__lede, .cl__lede, .sk__lede, .blog-idx__lede {
   color: #aeb6c6 !important;
 }
+
+/* ════════ Select (alpine/select.js) ════════
+   A button that opens a listbox. Closed, it is the text input's box; open, the
+   list is the nav's dropdown card: the same glass, border and drop-in, its rows
+   in the nav items' type. The chosen row carries a hairline check drawn as the
+   nav's chevron is. No hue: cyan is only the focus line, as on an input. */
+.rm-select { position: relative; }
+.rm-select__btn {
+  display: flex; align-items: center; gap: 0.75rem; width: 100%; min-height: 44px;
+  padding: 0.65rem 0.9rem; border-radius: 0; cursor: pointer; text-align: left;
+  background: var(--color-surface); border: 1px solid var(--color-border);
+  color: var(--color-text); font-family: var(--font-sans); font-size: 0.9375rem;
+  transition: border-color 0.16s;
+}
+.rm-select__btn:hover { border-color: var(--color-border-light); }
+.rm-select__btn:focus-visible { outline: none; border-color: var(--color-accent); }
+.rm-select__btn[aria-expanded="true"] { border-color: var(--color-text-muted); }
+.rm-select__btn[aria-invalid="true"] { border-color: var(--color-text-muted); }
+.rm-select__v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-select__v.is-empty { color: var(--color-text-muted); }
+.rm-select__chev {
+  flex: none; width: 6px; height: 6px; margin: -3px 0.15rem 0 0;
+  border-right: 1px solid var(--color-text-muted); border-bottom: 1px solid var(--color-text-muted);
+  transform: rotate(45deg); transition: transform 0.2s, margin 0.2s;
+}
+.rm-select__btn[aria-expanded="true"] .rm-select__chev { transform: rotate(-135deg); margin-top: 3px; }
+
+.rm-select__list {
+  display: none; position: absolute; z-index: 20; top: calc(100% + 0.375rem); left: 0; right: 0;
+  max-height: 18rem; overflow-y: auto; margin: 0; padding: 0.375rem 0; list-style: none;
+  background: rgba(11, 14, 20, 0.97); backdrop-filter: blur(20px);
+  border: 1px solid var(--color-border);
+}
+.rm-select__list.is-open { display: block; animation: navCardIn 0.18s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.rm-select__list:focus { outline: none; }
+.rm-select__opt {
+  position: relative; display: flex; align-items: center; min-height: 40px;
+  padding: 0.5rem 2.5rem 0.5rem 0.9rem; cursor: pointer;
+  font-family: var(--font-sans); font-size: 0.9375rem; letter-spacing: 0.005em; color: var(--color-text-soft);
+  transition: background-color 0.16s, color 0.16s;
+}
+.rm-select__opt.is-active { background: var(--color-surface); color: var(--color-text); }
+.rm-select__opt[aria-selected="true"] { color: var(--color-text); }
+.rm-select__opt[aria-selected="true"]::after {
+  content: ""; position: absolute; right: 1rem; top: 50%; width: 4px; height: 8px; margin-top: -6px;
+  border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rm-select__chev { transition: none; }
+  .rm-select__list.is-open { animation: none; }
+}
