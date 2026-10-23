@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { SOURCE_TOLERANCES, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
+import { EXTRA_WRITE_KEYS } from "../src/analytics/extras.ts";
 
 const srcDir = join(import.meta.dir, "..", "src", "analytics");
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -37,6 +38,9 @@ function resolve(expression: string, file: string): string[] {
   if (literal) return [literal[1]!];
   if (e === "`raw_indicator_history:${ind.id}`") return INDICATORS.map((i) => `raw_indicator_history:${i.id}`);
   if (e === "`research:${sym}`") return TOP7.map((sym) => `research:${sym}`);
+  // data-source.ts writes the backtest extras through the D74 reverse mapping (issue 1423).
+  const write = /^W\.(spx|eth|tbill3m)$/.exec(e);
+  if (write) return [EXTRA_WRITE_KEYS[write[1] as keyof typeof EXTRA_WRITE_KEYS]];
   throw new Error(
     `${file}: a capture call site names its source_key as \`${e}\`, which this test cannot resolve. ` +
       "Teach resolve() what it expands to, and give every resulting key an entry in SOURCE_TOLERANCES and D56.",
