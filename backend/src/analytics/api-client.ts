@@ -21,6 +21,7 @@ import type {
 } from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
 import type { TerminalRunPackageInput } from "./output-snapshots.ts";
+import type { SaveSourceAcquisitionResult } from "./source-ledger.ts";
 import { readFileSync } from "node:fs";
 import { ALL_PARITY_DOMAINS, type ParityDomain } from "./cutover/parity-domains.ts";
 
@@ -139,7 +140,7 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       return await call<TerminalRunPackageResult>("POST", ROUTES.analytics.runPackage, { package: wire });
     },
     async saveSourceAcquisition(acquisition) {
-      return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
+      return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);

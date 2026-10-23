@@ -14,7 +14,7 @@
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
-import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
+import type { SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
 import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
@@ -87,11 +87,16 @@ export interface AnalyticsPersistence {
   // durably frozen must not read as quiet success.
   submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult>;
   // Append one complete provider acquisition atomically. The producer-generated
-  // UUID is the replay key; prior evidence is never mutated on replay.
-  saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;
+  // UUID is the replay key; prior evidence is never mutated on replay. The
+  // result's `committed` is the ledger head of every submitted value after the
+  // D56 tolerance decision (issue 1421): what downstream must compute from.
+  saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<SaveSourceAcquisitionResult>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
-  // Upsert merged raw history on (date, indicator); fetched wins on overlap.
+  // Upsert merged raw history on (date, indicator); fetched wins on overlap
+  // unless it is within the D56 tolerance of the stored value. The orchestrator
+  // reads the committed floor back with loadRawHistory before computing
+  // (issue 1421), so a skipped jitter rewrite never reaches downstream.
   // `source` (issue #397) tags the whole batch's provenance ('live' |
   // 'hermetic' | 'fixture'); omitted defaults to 'live' at the store.
   saveRawHistory(byIndicator: RawIndicatorHistory, source?: string): Promise<void>;
