@@ -27,6 +27,7 @@ import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { mergeSeries } from "../src/analytics/transform/math.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
+import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 const srcDir = join(import.meta.dir, "..", "src", "analytics");
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -52,6 +53,8 @@ function resolve(expression: string, file: string): string[] {
   // data-source.ts writes the backtest extras through the D74 reverse mapping (issue 1423).
   const write = /^W\.(spx|eth|tbill3m)$/.exec(e);
   if (write) return [EXTRA_WRITE_KEYS[write[1] as keyof typeof EXTRA_WRITE_KEYS]];
+  // access/data-source.ts collectModelPortfolioInputs (issue 1398).
+  if (e === "entry.storageKey") return loadInventory().series.filter(collectedByInventory).map((s) => s.storageKey);
   throw new Error(
     `${file}: a capture call site names its source_key as \`${e}\`, which this test cannot resolve. ` +
       "Teach resolve() what it expands to, and give every resulting key an entry in SOURCE_TOLERANCES and D56.",

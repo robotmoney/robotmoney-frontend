@@ -4767,10 +4767,15 @@ observed off) if either would change.
 | `backtest:^GSPC` | yahoo | relative 1e-6 |
 | `backtest:ETH-USD` | yahoo | relative 1e-6 |
 | `backtest:DTB3` | fred | exact |
+| `yahoo:GLD` | yahoo | relative 1e-6 |
+| `defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84` | defillama-yields | exact |
+| `defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501` | defillama-yields | exact |
 
 `backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
 capture call site under `src/analytics/extract` and `src/analytics/access`, and
-fails if one has no entry here or in `SOURCE_TOLERANCES`.
+fails if one has no entry here or in `SOURCE_TOLERANCES`. The last three rows
+are the model portfolio inputs recorded under their own source id (issue 1398);
+the test reads them from `packages/analyst-sdk/inventory/model-portfolio.json`.
 
 **Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
 is Yahoo's. Its chart API serves float32-derived numbers

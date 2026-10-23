@@ -104,6 +104,12 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "backtest:^GSPC": YAHOO_FLOAT32,
   "backtest:ETH-USD": YAHOO_FLOAT32,
   "backtest:DTB3": EXACT, // fred
+
+  // access/data-source.ts collectModelPortfolioInputs — the inventory series
+  // recorded under their own source id (packages/analyst-sdk/inventory/model-portfolio.json, issue 1398).
+  "yahoo:GLD": YAHOO_FLOAT32,
+  "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84": EXACT, // Aave v3 USDC on Base, apyBase
+  "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501": EXACT, // Aave v3 USDC on Ethereum, apyBase
 };
 
 export function toleranceFor(sourceKey: string): SourceTolerance {
