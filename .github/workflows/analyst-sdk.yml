@@ -45,6 +45,8 @@ jobs:
           filters: |
             analyst-sdk:
               - 'packages/analyst-sdk/**'
+              # The suite guard the job runs (issue 1421).
+              - 'scripts/checks/assert-junit-suites.ts'
 
   analyst-sdk:
     needs: [changes]
@@ -66,7 +68,14 @@ jobs:
         run: bunx tsc --noEmit
       - name: SDK tests (fetch is a thrower)
         working-directory: packages/analyst-sdk
-        run: bun test
+        run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/analyst-sdk.junit.xml"
+      # Issue 1423: the series-identity proofs ran with at least their number of
+      # cases and none skipped; a renamed or emptied file is red, never green.
+      - name: Series identity proofs ran (issue 1423)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/input-rule.test.ts:10
+          tests/regime.test.ts:22
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
