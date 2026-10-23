@@ -16,3 +16,4 @@ export {
   loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, CALENDAR_SLACK_DAYS, INVENTORY_FIELDS,
   type Inventory, type InventorySeries, type InventoryProxy, type CoverageGap,
 } from "./inventory.ts";
+export * from "./allocate/labels.ts";
