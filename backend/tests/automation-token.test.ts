@@ -397,7 +397,8 @@ function familyOf(key: string): Family | null {
   if (MEMBER.has(key)) return "member";
   // publicAnalytics.* (issue #1095, D58): the tokenless raw-data reads. Public by
   // construction, and under /api/public/, which no credential gate matches.
-  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.") || key.startsWith("publicAnalytics.")) return "public";
+  // referrals.* (issue 1371, referrals-spec §6): the tokenless one-code lookup.
+  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.") || key.startsWith("publicAnalytics.") || key.startsWith("referrals.")) return "public";
   return null;
 }
 
