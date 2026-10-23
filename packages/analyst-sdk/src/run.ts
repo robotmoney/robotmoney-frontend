@@ -15,6 +15,7 @@ import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
+import { assertRequiredCoverage } from "./coverage.ts";
 
 export const BACKFILL_START = "2018-01-01";
 // Indicator ids in the input that carry price levels for correlations/backtest.
@@ -90,6 +91,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     const rows = raw[id]!;
     if (rows.length && rows[rows.length - 1]!.date > maxDate) maxDate = rows[rows.length - 1]!.date;
   }
+  // Required data is supplied or the run stops with a named error; a
+  // downstream run never fetches (issue 1421, src/coverage.ts).
+  assertRequiredCoverage(raw, asof ?? maxDate);
   const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof: asof ?? maxDate });
   const result = computeRegime(transformed, dateAxis, PANELS, ages);
   const out: RunResult = { dateAxis, result };

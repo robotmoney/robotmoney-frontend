@@ -1,7 +1,7 @@
 import type { TransactionSql } from "postgres";
 import { sql, jsonValue } from "../../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
-import type { SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
+import type { CommittedSourceValue, SaveSourceAcquisitionResult, SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
 import { withinTolerance } from "../source-tolerance.ts";
 
 // Issue #1035: what one re-observation adds to the ledger, given the head it is
@@ -211,15 +211,33 @@ const priorInstants = registerQuery({
   },
 });
 
+// Issue 1421 (review finding AN-15): the ledger head of every submitted value,
+// read inside the same transaction after the tolerance decision, so the caller
+// computes from what the ledger holds rather than from what the provider just
+// served. A value within tolerance of its head wrote no row, so its head is the
+// stored version. One indexed round trip per representation (resolvePriors).
+async function committedHeads(
+  tx: TransactionSql<{}>,
+  values: SourceAcquisitionEvidence["values"],
+): Promise<CommittedSourceValue[]> {
+  if (values.length === 0) return [];
+  const heads = await resolvePriors(tx, values.map((v, i) => ({ idx: i + 1, v })));
+  return values.map((v, i) => {
+    const head = heads.get(i + 1);
+    if (!head) throw new Error(`${v.sourceKey} ${v.marketDate ?? v.marketInstant}: no ledger head after the acquisition was saved`);
+    return { versionId: String(head.id), value: head.value };
+  });
+}
+
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
-): Promise<{ acquisitionId: string; replayed: boolean }> {
+): Promise<SaveSourceAcquisitionResult> {
   return sql.begin(async (tx) => {
     // The producer-generated acquisition UUID is the idempotency key. A replay
     // is a read-only success; a partially persisted acquisition is impossible
     // because every first submission is one transaction.
     const existing = await on(tx, findAcquisition)`SELECT id FROM source_acquisitions WHERE id = ${evidence.id}::uuid`;
-    if (existing.length > 0) return { acquisitionId: evidence.id, replayed: true };
+    if (existing.length > 0) return { acquisitionId: evidence.id, replayed: true, committed: await committedHeads(tx, evidence.values) };
 
     await on(tx, insertAcquisition)`
       INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity, requested_by_run_id)
@@ -362,6 +380,6 @@ export async function saveSourceAcquisition(
       }
     }
 
-    return { acquisitionId: evidence.id, replayed: false };
+    return { acquisitionId: evidence.id, replayed: false, committed: await committedHeads(tx, evidence.values) };
   });
 }

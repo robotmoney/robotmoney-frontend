@@ -206,5 +206,18 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/extras-key-map.test.ts:10
-          tests/analytics-offline-replay.test.ts:2
+          tests/analytics-offline-replay.test.ts:3
           tests/analyst-sdk-golden-reference.test.ts:4
+      # Issue 1421: the report-parity, committed-input and replay proofs. Each
+      # named file must appear in the JUnit report with at least its number of
+      # behaviour cases and none skipped. A renamed, excluded or unloadable file
+      # (the Postgres preload throws when Docker is absent) is red here.
+      - name: Analytics parity and committed-input proofs ran (issue 1421)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/regime-fidelity.test.ts:7
+          tests/backtest-correlations-fidelity.test.ts:7
+          tests/regime-replay-published.test.ts:1
+          tests/analytics-offline-replay.test.ts:3
+          tests/analytics-source-tolerance.test.ts:8

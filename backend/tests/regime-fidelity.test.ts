@@ -58,7 +58,24 @@
 // BTC_MVRV's real ~9.3% onchain-panel weight), not just internal
 // consistency. The TRACKING test's tolerances are unchanged and still
 // provide real regression protection going forward.
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
+import { sql } from "../src/db/client.ts";
+import { runAnalytics } from "../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
+import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
+import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.ts";
+import type { BacktestPayload } from "../src/analytics/analyze/backtest.ts";
+import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { variantInputs, variantSource } from "./support/originals-source.ts";
+import {
+  VARIANTS,
+  bytesEqual,
+  firstDifference,
+  originalFile,
+  readOriginal,
+  sharedAnalysisBytes,
+} from "../../packages/analyst-sdk/tests/support/originals.ts";
 import {
   loadRawIndicatorHistory,
   loadRegimeHistory,
@@ -310,4 +327,58 @@ test("regime fidelity (TRACKING): full history tracks the frozen regime-history.
   expect(pctWithin).toBeGreaterThan(0.94); // ≈95.5% of rows track within 1e-3
   expect(pctLabel).toBeGreaterThan(0.995); // ≈99.7% regime-label agreement
   expect(maxComposite).toBeLessThan(0.08);
+});
+
+// ── Issue 1421: backend report bytes equal the pre-refactor originals ─────────
+// The production orchestrator (runAnalytics, toolId "regime") over each input
+// variant, through the REAL persistence against ephemeral Postgres, must store
+// exactly the bytes the pre-refactor code produced: the regime_snapshots output
+// artifact and the report (originals captured at 4b4414c0 by
+// backend/scripts/capture-analytics-originals.ts, provenance verified by
+// packages/analyst-sdk/tests/originals-provenance.test.ts). The latest row's
+// correlations and backtest, serialised as the shared artifact, must equal the
+// SAME original bytes the SDK's report-parity test uses. The variants cover the
+// production data, missing composite labels (AN-9) and zero volatility
+// (Sharpe 0). Byte equality only: no tolerance.
+describe("issue 1421: backend report bytes equal the original captured bytes", () => {
+  useCleanDatabasePerTest(import.meta.file);
+  for (const v of VARIANTS) {
+    test(`${v}: stored regime_snapshots artifact, report and shared artifact equal the originals`, async () => {
+      const inputs = variantInputs(v);
+      const submitted: TerminalRunPackageInput[] = [];
+      const persistence: AnalyticsPersistence = {
+        ...directAnalyticsPersistence,
+        async submitTerminalRunPackage(input) {
+          submitted.push(input);
+          return directAnalyticsPersistence.submitTerminalRunPackage(input);
+        },
+      };
+      const results = await runAnalytics(inputs.asof, "regime", variantSource(inputs), persistence, noopTelemetrySink);
+      const runId = (results as any).__runLedger.runId as string;
+
+      const [artifact] = await sql<{ payload_bytes: Uint8Array }[]>`
+        SELECT payload_bytes FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint AND artifact_kind = 'regime_snapshots'`;
+      const [report] = await sql<{ report_bytes: Uint8Array }[]>`
+        SELECT report_bytes FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
+      const storedRows = new TextDecoder().decode(artifact!.payload_bytes);
+      const storedReport = new TextDecoder().decode(report!.report_bytes);
+      expect(firstDifference(storedRows, readOriginal(originalFile.backendRows(v)))).toBeNull();
+      expect(bytesEqual(storedRows, readOriginal(originalFile.backendRows(v)))).toBe(true);
+      expect(bytesEqual(storedReport, readOriginal(originalFile.backendReport(v)))).toBe(true);
+
+      const rows = submitted[0]!.regimeSnapshots!;
+      const last = rows[rows.length - 1]!;
+      expect(last.date).toBe(inputs.asof);
+      expect(bytesEqual(sharedAnalysisBytes({ correlations: last.correlations, backtest: last.backtest }), readOriginal(originalFile.sharedAnalysis(v)))).toBe(true);
+      if (v === "zero-volatility") {
+        const sharpes = Object.values(last.backtest as BacktestPayload).flatMap((p) => Object.values(p).map((m) => m.sharpe));
+        expect(new Set(sharpes)).toEqual(new Set([0]));
+      }
+      if (v === "missing-label") {
+        // Unlabelled days are not published as rows (buildSnapshotRows skips them).
+        const dates = new Set(rows.map((r) => r.date));
+        expect(dates.has("2024-08-31")).toBe(false);
+      }
+    }, 180_000);
+  }
 });

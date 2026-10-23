@@ -125,8 +125,8 @@ test("source acquisition ingestion is provider-only, validates before mutation, 
   expect((await call(req("POST", A.sourceAcquisitions, body)))?.status).toBe(401);
   expect((await call(req("POST", A.sourceAcquisitions, body, ADMIN)))?.status).toBe(403);
   expect((await call(req("POST", A.sourceAcquisitions, body, "member-token")))?.status).toBe(403);
-  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: false });
-  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: true });
+  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: false, committed: [{ versionId: expect.any(String), value: 1 }] });
+  expect((await call(req("POST", A.sourceAcquisitions, body, TOKEN)))?.body).toEqual({ acquisitionId: body.acquisition.id, replayed: true, committed: [{ versionId: expect.any(String), value: 1 }] });
   const [{ acquisitions, fetches, values }] = await sql`
     SELECT (SELECT count(*) FROM source_acquisitions)::int AS acquisitions,
            (SELECT count(*) FROM source_fetches)::int AS fetches,

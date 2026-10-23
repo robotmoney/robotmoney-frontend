@@ -45,8 +45,26 @@ export interface SourceAcquisitionEvidence {
   values: SourceValueEvidence[];
 }
 
+// Issue 1421 (review finding AN-15): what the ledger HOLDS for each submitted
+// value once the D56 tolerance decision is made, aligned index for index with
+// `evidence.values`. A re-observation within tolerance keeps the stored head,
+// so `value` is the stored value and `versionId` the stored version, not the
+// fresh number the provider just served. Downstream computation consumes
+// these, never the collected values.
+export interface CommittedSourceValue {
+  versionId: string;
+  value: number;
+}
+
+export interface SaveSourceAcquisitionResult {
+  acquisitionId: string;
+  replayed: boolean;
+  /** Absent only from a sink that does not report it (an older API); see captureSourceAcquisition. */
+  committed?: CommittedSourceValue[];
+}
+
 export interface AcquisitionSink {
-  saveSourceAcquisition(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;
+  saveSourceAcquisition(evidence: SourceAcquisitionEvidence): Promise<SaveSourceAcquisitionResult>;
 }
 
 interface ActiveAcquisition {
@@ -155,6 +173,15 @@ export async function captureSourceAcquisition<T = Point[]>(
     provenance,
   }));
   evidence.events.push({ type: "succeeded", detail: null });
-  await sink.saveSourceAcquisition(evidence);
-  return result;
+  const saved = await sink.saveSourceAcquisition(evidence);
+  // Issue 1421 (AN-15): hand downstream the COMMITTED values, not the fresh
+  // ones. A plain Point[] result is rebuilt from the ledger's answer; a result
+  // with a `points` projection (the EDGAR refresh outcome) is returned as is:
+  // its points are an exact-tolerance key, so the committed value is the
+  // collected one.
+  if (input.points || !saved.committed) return result;
+  if (saved.committed.length !== points.length) {
+    throw new Error(`${input.sourceKey}: the ledger reported ${saved.committed.length} committed values for ${points.length} submitted`);
+  }
+  return points.map((point, i) => ({ ...point, value: saved.committed![i]!.value })) as T;
 }

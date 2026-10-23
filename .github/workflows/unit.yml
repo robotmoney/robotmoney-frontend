@@ -132,6 +132,13 @@ jobs:
       # Pins fail-red-on-empty-selection: the two selectors above are just
       # directory paths, so a future rename must break CI rather than silently
       # collect zero files in both classes.
+      # Issue 1421: the SDK purity/import-graph test and the JUnit guard's own
+      # test ran with their full case counts, nothing skipped.
+      - name: Purity and suite-guard tests ran (issue 1421)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/analyst-sdk-purity.test.ts:55
+          scripts/tests/unit/assert-junit-suites.test.ts:9
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

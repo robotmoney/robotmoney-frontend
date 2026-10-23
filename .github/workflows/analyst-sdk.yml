@@ -1,5 +1,5 @@
 # Analyst SDK tier: the package's own tests (`bun test` inside
-# packages/analyst-sdk) with fetch replaced by a thrower, a typecheck, and a
+# packages/analyst-sdk) with every HTTP client replaced by a thrower, a typecheck, and a
 # standalone install from a copy holding ONLY the package, so the SDK cannot
 # quietly grow a dependency on the rest of the monorepo (issue #1095).
 #
@@ -66,7 +66,7 @@ jobs:
         # Spelled out because ci-workflows-structure.test.ts pins the package-script
         # form of this command to unit.yml and backend.yml.
         run: bunx tsc --noEmit
-      - name: SDK tests (fetch is a thrower)
+      - name: SDK tests (every HTTP client is a thrower)
         working-directory: packages/analyst-sdk
         run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/analyst-sdk.junit.xml"
       # Issue 1423: the series-identity proofs ran with at least their number of
@@ -76,6 +76,21 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/input-rule.test.ts:10
           tests/regime.test.ts:22
+      # Issue 1421: every named suite ran with at least its number of behaviour
+      # cases and none skipped; a renamed or emptied file is red, never green.
+      - name: SDK parity, provenance and no-HTTP suites ran (issue 1421)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/originals-provenance.test.ts:26
+          tests/report-parity.test.ts:15
+          tests/an-behaviours.test.ts:21
+          tests/byte-negative-control.test.ts:7
+          tests/exported-helpers.test.ts:15
+          tests/supplied-input-no-http.test.ts:7
+          tests/regime.test.ts:22
+          tests/prepare.test.ts:3
+          tests/input-rule.test.ts:10
+          tests/extract.test.ts:9
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

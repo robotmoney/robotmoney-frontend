@@ -1,0 +1,220 @@
+{
+  "origin": {
+    "codeCommit": "4b4414c0759305df046a2de511bb446070ee7057",
+    "capturedAt": "2026-10-23T01:42:44.154Z",
+    "commands": [
+      "cd packages/analyst-sdk && bun run scripts/capture-originals.ts 4b4414c0759305df046a2de511bb446070ee7057",
+      "cd backend && bun run scripts/capture-analytics-originals.ts 4b4414c0759305df046a2de511bb446070ee7057"
+    ],
+    "rule": "Captured from the pre-refactor code at codeCommit on an unmodified tree. Never regenerate these files from later code: a mismatch against them is a regression to explain, not a fixture to refresh."
+  },
+  "inputs": {
+    "production": {
+      "contentSha256": "e321104fd14bda91c7fec9559f932fad091a6256fb4bd7e8ac9d8fe6439ad449",
+      "rows": 36857,
+      "derivation": "tests/fixtures/raw-indicator-history.csv as committed"
+    },
+    "missing-label": {
+      "contentSha256": "f1e9cdeb2e46177fde20c6253d72447a583493b9720300b8e63dce68262ef775",
+      "rows": 33207,
+      "derivation": "variantCsv(\"missing-label\") in tests/support/originals.ts over the production fixture"
+    },
+    "zero-volatility": {
+      "contentSha256": "b721cb10d2a508d0fad57884b553cd89c9485e92d778231ed4996dd730c2f3ff",
+      "rows": 36857,
+      "derivation": "variantCsv(\"zero-volatility\") in tests/support/originals.ts over the production fixture"
+    }
+  },
+  "originals": [
+    {
+      "file": "an-behaviours.json.gz",
+      "fileSha256": "e46e662a220b6d95847b0e8e30367083479e59cd1162c7adf8c9cb2484334009",
+      "contentSha256": "62c2a4872eb50a5d17fcb325a2c63f1dbbc19dd725d19815977fc5e601498e50",
+      "byteLength": 46581,
+      "kind": "report",
+      "variant": "an-behaviours",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "AN-5/6/9/10/14 named pins and the full unstripped backtest of tests/support/an-scenario.ts"
+    },
+    {
+      "file": "backend-regime-snapshots-missing-label.json.gz",
+      "fileSha256": "89f7e34ba3567b647fd20b2ba05396b560977d28347c3f97e6d09663926b0697",
+      "contentSha256": "a26b800643a38dfc9cf2f756c21b6f0bd815f43c0fdbed91734bb30330a15916",
+      "byteLength": 1635081,
+      "kind": "report",
+      "variant": "missing-label",
+      "describes": "regime_snapshots artifact bytes of runAnalytics(2026-08-15, \"regime\") over the missing-label variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "backend-regime-snapshots-production.json.gz",
+      "fileSha256": "010fefd468dc0347d60bb8c98f7c95aa7f5aab3b8041c21abfce37d6b5fa724a",
+      "contentSha256": "dafc58dd8a6ff013ec528ae47c022cd23bd057fe50c8cffc119fbe4347f3fb2f",
+      "byteLength": 1703199,
+      "kind": "report",
+      "variant": "production",
+      "describes": "regime_snapshots artifact bytes of runAnalytics(2026-08-15, \"regime\") over the production variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "backend-regime-snapshots-zero-volatility.json.gz",
+      "fileSha256": "f42b7e0e7a31363a6449f3bb5ab2cfec11f2459bef11e4b8be2846de942d8f3e",
+      "contentSha256": "e06d8cbecfce248a845d2612a20a7ced4a81214ddfbf7263b6414e5a8523d095",
+      "byteLength": 1695877,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "describes": "regime_snapshots artifact bytes of runAnalytics(2026-08-15, \"regime\") over the zero-volatility variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "backend-report-missing-label.json.gz",
+      "fileSha256": "300e9a80404915e455d41a4602681535471efdef8225b3e258ab341d190fde67",
+      "contentSha256": "94f1793a57054ee03ae175e3d2511e66e2eed9ccdef27e0a8beb5897143d3d3d",
+      "byteLength": 185,
+      "kind": "report",
+      "variant": "missing-label",
+      "describes": "report bytes of runAnalytics(2026-08-15, \"regime\") over the missing-label variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "backend-report-production.json.gz",
+      "fileSha256": "f613bb851f56f34656d0db851b672dfdf86a957457a2e877ed346952930a421c",
+      "contentSha256": "a2ceccc4439d43810978c5f504a7c613c5f67d9a64e66e36adb6f1c88b8fa693",
+      "byteLength": 185,
+      "kind": "report",
+      "variant": "production",
+      "describes": "report bytes of runAnalytics(2026-08-15, \"regime\") over the production variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "backend-report-zero-volatility.json.gz",
+      "fileSha256": "f613bb851f56f34656d0db851b672dfdf86a957457a2e877ed346952930a421c",
+      "contentSha256": "a2ceccc4439d43810978c5f504a7c613c5f67d9a64e66e36adb6f1c88b8fa693",
+      "byteLength": 185,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "describes": "report bytes of runAnalytics(2026-08-15, \"regime\") over the zero-volatility variant",
+      "producedBy": "backend/scripts/capture-analytics-originals.ts"
+    },
+    {
+      "file": "daily-portfolio-missing-label.json.gz",
+      "fileSha256": "be8543808b8b29ed486543ccaa20270a3af360fe3999448280ec688501f7400b",
+      "contentSha256": "da630f19fb16e8ee8c3f46e3e905a517f7273d60db9fa07c0d384ca987ba3570",
+      "byteLength": 1254875,
+      "kind": "report",
+      "variant": "missing-label",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "daily portfolio values: portfolio -> strategy -> [date, value][] from the unstripped computeBacktest"
+    },
+    {
+      "file": "daily-portfolio-production.json.gz",
+      "fileSha256": "f76a4b79451c180345d6289ff5cef5d65a6e0ace60d9545a0990d6a1adfd4c15",
+      "contentSha256": "a4afe4aab2819cb3b67fd0ae8e7e4e6a1405c6f6a3cfe209dae4e19778818236",
+      "byteLength": 1294297,
+      "kind": "report",
+      "variant": "production",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "daily portfolio values: portfolio -> strategy -> [date, value][] from the unstripped computeBacktest"
+    },
+    {
+      "file": "daily-portfolio-zero-volatility.json.gz",
+      "fileSha256": "9c4fd11bb5e9cfd8d8471fd5cad7fe44a8245171144ecc3452c3172257f45bca",
+      "contentSha256": "7dee6876bb8a2f43e4d9762e151b6b827a97dbc7e3e73acc7399c3cfad819cdf",
+      "byteLength": 1105940,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "daily portfolio values: portfolio -> strategy -> [date, value][] from the unstripped computeBacktest"
+    },
+    {
+      "file": "sdk-report-full-factor-missing-label.json.gz",
+      "fileSha256": "6ede9163616810fcec0cd31ea58069e90525c8114bce0c973a42242b2bc46590",
+      "contentSha256": "bfeeb1221356eeaf5a41c3e84d9d1e5183b134a519e7a713a8a14871c2698f2a",
+      "byteLength": 1006153,
+      "kind": "report",
+      "variant": "missing-label",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "--full --factor CLI envelope: buildReport(runRegime(h, {factor:true}), {full:true})"
+    },
+    {
+      "file": "sdk-report-full-factor-production.json.gz",
+      "fileSha256": "1002d89a9177fd83584aaa7b3aee6d24a5f42042a0d9a855f2fe9adaa8ad8728",
+      "contentSha256": "3a3c996628bae8a76a228add2d51e27c1df807e472f33d0221bc6f374dbef300",
+      "byteLength": 1013862,
+      "kind": "report",
+      "variant": "production",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "--full --factor CLI envelope: buildReport(runRegime(h, {factor:true}), {full:true})"
+    },
+    {
+      "file": "sdk-report-full-factor-zero-volatility.json.gz",
+      "fileSha256": "879e66f3d603a73335844c2c381520ba56c8b81a5f93c1ff60645bfe0f92d1fd",
+      "contentSha256": "8804257fb98f22da209e54507604c0a5b1cd7ea3875995c901c44f964faf5ffc",
+      "byteLength": 1006540,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "--full --factor CLI envelope: buildReport(runRegime(h, {factor:true}), {full:true})"
+    },
+    {
+      "file": "sdk-report-missing-label.json.gz",
+      "fileSha256": "3b0974f515a044d3fa3acf9471b85ec021c674bc0b4b58184d6c29b43643c5bf",
+      "contentSha256": "13869748ad8fde5e6c80d798dd1ff66bba3f1073adbf40c91efc20dfb7d6f8f7",
+      "byteLength": 140373,
+      "kind": "report",
+      "variant": "missing-label",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "default CLI envelope: JSON.stringify(buildReport(runRegime(h)), null, 2) + newline"
+    },
+    {
+      "file": "sdk-report-production.json.gz",
+      "fileSha256": "e7f6c7c8be13ab889eb3fab37f5b75135bc6a40ba1a24d61ff364c690e49e968",
+      "contentSha256": "119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce",
+      "byteLength": 143934,
+      "kind": "report",
+      "variant": "production",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "default CLI envelope: JSON.stringify(buildReport(runRegime(h)), null, 2) + newline"
+    },
+    {
+      "file": "sdk-report-zero-volatility.json.gz",
+      "fileSha256": "334028e7304378755f0ec33dcd527b53bf16e3d5876ba5cffad7157f774bb412",
+      "contentSha256": "44f00799f9c45806ad1c2c7e0c819777d3861f6f169334d4374df1c5645bcbc6",
+      "byteLength": 136612,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "default CLI envelope: JSON.stringify(buildReport(runRegime(h)), null, 2) + newline"
+    },
+    {
+      "file": "shared-analysis-missing-label.json.gz",
+      "fileSha256": "89fc6df27825e990c5aa0cd6d42075fa1764e52acc8db92fb827fe6d700cad24",
+      "contentSha256": "b81bf01e6b8e0ca86454c7efa18e76e09e1f8d0070fbf5569185368959e6c779",
+      "byteLength": 68996,
+      "kind": "report",
+      "variant": "missing-label",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "shared calculation artifact: JSON.stringify({correlations, backtest}) (backtest stripped of _daily)"
+    },
+    {
+      "file": "shared-analysis-production.json.gz",
+      "fileSha256": "de1fcd3636815545c332d954428458786ea96ec7bd39c379c2106136adae47a5",
+      "contentSha256": "fc693cdc6556b7725a31f3eb1c2e989e1649ed7c87f6786fe07dc0c404430d8a",
+      "byteLength": 70763,
+      "kind": "report",
+      "variant": "production",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "shared calculation artifact: JSON.stringify({correlations, backtest}) (backtest stripped of _daily)"
+    },
+    {
+      "file": "shared-analysis-zero-volatility.json.gz",
+      "fileSha256": "88507b300463b51100625b240a7387b978256e900ffd6658cde53189d2bd1d65",
+      "contentSha256": "b501ec0daaf7c4e5d1b2fb6ac23a21906b84f34a7982fb24a2bdbded5f243fdf",
+      "byteLength": 63441,
+      "kind": "report",
+      "variant": "zero-volatility",
+      "producedBy": "packages/analyst-sdk/scripts/capture-originals.ts",
+      "describes": "shared calculation artifact: JSON.stringify({correlations, backtest}) (backtest stripped of _daily)"
+    }
+  ]
+}
