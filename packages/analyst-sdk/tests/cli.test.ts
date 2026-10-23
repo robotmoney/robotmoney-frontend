@@ -32,7 +32,7 @@ const regime = (args: string[], cwd = PKG) => run(["bun", REGIME, ...args], cwd)
 // A small source input whose last date identifies it.
 function probe(dir: string, name: string, lastDay: number): string {
   const lines = ["date,series,value"];
-  for (let i = 0; i < lastDay; i++) lines.push(`${new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10)},VIX,${12 + (i % 5)}`);
+  for (let i = 0; i < lastDay; i++) lines.push(`${new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10)},yahoo:^VIX,${12 + (i % 5)}`);
   const p = join(dir, name);
   writeFileSync(p, lines.join("\n") + "\n");
   return p;
@@ -77,13 +77,13 @@ describe("arguments", () => {
 
   test("runtime failures exit 1: a missing file, a malformed input, no series the run reads", async () => {
     const bad = join(TMP, "bad.csv");
-    writeFileSync(bad, "date,series,value\n2024-02-30,VIX,1\n");
+    writeFileSync(bad, "date,series,value\n2024-02-30,yahoo:^VIX,1\n");
     const foo = join(TMP, "foo.csv");
-    writeFileSync(foo, "date,series,value\n2024-01-01,FOO,1\n");
+    writeFileSync(foo, "date,series,value\n2024-01-01,test:FOO,1\n");
     const [missing, malformed, unread] = await Promise.all([regime(["no-such-file.csv"], TMP), regime([bad]), regime([foo])]);
     expect(missing.code).toBe(1);
     expect(malformed.code).toBe(1);
-    expect(malformed.stderr).toMatch(/InputRowError: input row 2: date must be a real calendar date/);
+    expect(malformed.stderr).toMatch(/InputRowError: input row 2: date must be a real (calendar|YYYY-MM-DD) date/);
     expect(unread.code).not.toBe(0);
     expect(unread.stderr).toMatch(/no series the run reads/);
   });

@@ -91,7 +91,7 @@ export function isCalendarDate(v: unknown): v is string {
 
 function checkValue(row: number, value: unknown): number {
   const n = typeof value === "number" ? value : typeof value === "string" && PLAIN_DECIMAL.test(value) ? Number(value) : NaN;
-  if (!Number.isFinite(n)) throw new InputRowError(row, `value must be a finite plain decimal number, got ${JSON.stringify(value)}`);
+  if (!Number.isFinite(n)) throw new InputRowError(row, `value must be a plain decimal number (finite), got ${JSON.stringify(value)}`);
   return n;
 }
 
@@ -117,7 +117,7 @@ export class CalculatedRowError extends InputRowError {
 }
 
 function checkSeriesRow(row: number, date: unknown, series: unknown, value: unknown): RawRow {
-  if (typeof date !== "string" || !isRealDay(date)) throw new InputRowError(row, `date must be a real calendar date in YYYY-MM-DD form, got ${JSON.stringify(date)}`);
+  if (typeof date !== "string" || !isRealDay(date)) throw new InputRowError(row, `date must be a real YYYY-MM-DD date, got ${JSON.stringify(date)}`);
   if (typeof series === "string" && isCalculatedName(series)) throw new CalculatedRowError(row, series);
   if (typeof series !== "string" || !SOURCE_ID.test(series)) throw new InputRowError(row, `series must be a source id <provider>:<symbol>, got ${JSON.stringify(series)}`);
   return checkRow(row, date, series, value, "");
