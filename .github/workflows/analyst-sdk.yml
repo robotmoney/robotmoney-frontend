@@ -91,6 +91,11 @@ jobs:
           tests/prepare.test.ts:3
           tests/input-rule.test.ts:10
           tests/extract.test.ts:9
+      # Issue 1399: the as-of label suite ran, the 419-run hindsight case included.
+      - name: As-of label suite ran (issue 1399)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/asof-labels.test.ts:11
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
