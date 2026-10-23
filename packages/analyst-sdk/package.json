@@ -8,8 +8,8 @@
     "bun": ">=1.2"
   },
   "scripts": {
-    "regime": "bun run bin/regime.ts",
-    "inputs": "bun run bin/inputs.ts",
+    "regime": "bun bin/regime.ts",
+    "inputs": "bun bin/inputs.ts",
     "golden:regenerate": "bun run scripts/golden-regenerate.ts",
     "universe:check": "bun run bin/check-universe.ts",
     "rules:check": "bun run bin/check-rule.ts",

@@ -158,6 +158,14 @@ jobs:
           for f in tests/db-registry-execution.test.ts tests/registry-interface.cases.ts; do
             test -f "$f" || { echo "::error::$f is missing: the spec §7.1 registry execution proof would stop running"; exit 1; }
           done
+      # Issue 1404: the analyst SDK parity and frozen-vintage round-trip proofs
+      # need the ephemeral Postgres below; their absence or exclusion is red.
+      - name: Analyst SDK proofs exist (issue 1404)
+        working-directory: backend
+        run: |
+          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
+            test -f "$f" || { echo "::error::$f is missing: an issue 1404 analyst SDK proof would stop running"; exit 1; }
+          done
       - name: Run tests (ephemeral Postgres via Docker)
         working-directory: backend
         # tests/geckoterminal-resilience.test.ts and
@@ -201,6 +209,13 @@ jobs:
             test -f "backend/$f" || { echo "::error::backend/$f is missing: an issue 1422 proof would stop running"; exit 1; }
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: an issue 1422 proof is excluded"; exit 1; }
+          done
+      - name: Analyst SDK proofs ran (issue 1404)
+        shell: bash
+        run: |
+          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
+            grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
+              || { echo "::error::$f did not run in the backend suite: an issue 1404 analyst SDK proof is excluded"; exit 1; }
           done
       - name: Registry execution proof ran (spec §7.1)
         shell: bash

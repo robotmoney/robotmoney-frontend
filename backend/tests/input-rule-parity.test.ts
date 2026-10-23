@@ -6,7 +6,7 @@
 // guard that stays meaningful if the backend ever forks its own copy.
 import { test, expect } from "bun:test";
 import { mergeSeries } from "../src/analytics/transform/math.ts";
-import { parseRawJson, toHistory, InputRowError } from "../../packages/analyst-sdk/src/input/load.ts";
+import { parseRawJson, parseSourceJson, inputHistory, toHistory, InputRowError } from "../../packages/analyst-sdk/src/input/load.ts";
 
 const base = [
   { date: "2024-03-09", indicator: "X", value: 9, source: "" },
@@ -25,4 +25,13 @@ test("non-finite: loader throws, mergeSeries drops, survivors equal", () => {
   expect(() => parseRawJson(JSON.stringify([...base, { date: "2024-03-06", indicator: "X", value: "abc", source: "" }]))).toThrow(InputRowError);
   const pts = [...base.map(({ date, value }) => ({ date, value })), { date: "2024-03-06", value: NaN }];
   expect(mergeSeries([], pts)).toEqual(toHistory(base).X!);
+});
+
+// Issue 1404: the source contract (date,series,value) follows the same rule.
+test("source input: loader inputHistory == backend mergeSeries; padded and hex values reject", () => {
+  const rows = base.map(({ date, value }) => ({ date, series: "X", value }));
+  expect(inputHistory(parseSourceJson(JSON.stringify(rows))).X!).toEqual(mergeSeries([], rows.map(({ date, value }) => ({ date, value }))));
+  for (const v of [" 1", "0x10", "1e1 "]) {
+    expect(() => parseSourceJson(JSON.stringify([{ date: "2024-03-01", series: "X", value: v }]))).toThrow(InputRowError);
+  }
 });
