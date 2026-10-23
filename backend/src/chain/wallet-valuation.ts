@@ -32,8 +32,6 @@ import {
   type PriceSource,
   type TrackedAsset,
 } from "../config.ts";
-import { sql } from "../db/client.ts";
-import { on, registerQuery } from "../db/registry.ts";
 import {
   decodeAggregate3,
   decodeUint256,
@@ -131,125 +129,6 @@ export const providerWalletPriceReader: WalletPriceReader = {
 // missed tick, recent enough that the fallback quote never reads as live.
 export const MAX_PERSISTED_PRICE_AGE_MS = 5 * 60_000;
 
-// D41 phase 3 (issue #850): whatever row this reader lands on is, in the
-// overwhelming common case, TODAY's own live row — the freshness bound below
-// already keeps this near-exclusively a "today" fallback (see the comment
-// preserved below on why a backfilled row almost never qualifies) — and D41
-// says today's live point keeps reading its fused sample row untouched. The
-// LEFT JOIN below exists for the narrow remainder: a row whose `sample_date`
-// is NOT today (a closed day) that still happens to fall inside the
-// freshness window, e.g. a backfill/repair commit landing within minutes of
-// UTC midnight for the day it just closed. For that row, and only that row,
-// the price it reports comes from `asset_prices` rather than the sample's own
-// `price_usd` column.
-//
-// Issue #927: the live sampler no longer writes `price_usd` on ordinary
-// samples, so TODAY's row (the common case above) has `price_usd IS NULL`
-// from the moment it is written — `asset_prices` never covers today either
-// (it is keyed by CLOSED-day UTC candles). Requiring `price_usd IS NOT NULL`
-// here would make this whole stale-degrade path (#173: serve a recent sample
-// when the live provider read fails) permanently unreachable the instant a
-// deployment picks up #927, which is a live-read-failure regression, not a
-// cleanup. `value_usd` is still written by every sampler row (#927 only drops
-// `price_usd`), and it is the exact same JS double `amount * price` the
-// sampler computed at sample time — so a row missing `price_usd` derives it
-// back out as `value_usd / amount` instead.
-// Registered queries (smoke-production-spec.md §7.1). The persisted-price
-// fallback is reached by the wallet sampler's valueLeg and by the projects
-// pipeline's live source; the request path never reads a price through it.
-// The fallback read below, as tests/db-registry-execution.test.ts runs it: the
-// call site's own statement (that test holds the two to the same text), under
-// both declarations it joins.
-const RECENT_PRICE_PROBE = {
-  statement: `SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
-           ap.price_usd AS asset_price_usd,
-           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
-      FROM wallet_balance_samples wbs
-      LEFT JOIN asset_prices ap
-        ON ap.symbol = wbs.symbol
-       AND ap.price_date = wbs.sample_date
-       AND ap.time_basis = $1
-     WHERE wbs.symbol = $2
-       AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
-       AND wbs.sampled_at <= now()
-       AND wbs.provenance <> $3
-       AND wbs.superseded_at IS NULL
-     ORDER BY wbs.sampled_at DESC
-     LIMIT 1`,
-  params: [ASSET_PRICE_TIME_BASIS, "USDC", QUARANTINED_PROVENANCE],
-};
-
-const fallbackSample = registerQuery({
-  role: "rm_app",
-  object: "wallet_balance_samples",
-  privileges: ["SELECT"],
-  site: "src/chain/wallet-valuation:recentPersistedPrice.samples",
-  purpose: "Read a symbol's newest recent sample price, for the fallback when a live price read fails.",
-  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
-  probe: RECENT_PRICE_PROBE,
-});
-
-const fallbackPrice = registerQuery({
-  role: "rm_app",
-  object: "asset_prices",
-  privileges: ["SELECT"],
-  site: "src/chain/wallet-valuation:recentPersistedPrice.prices",
-  purpose: "Join the settled asset price for the fallback sample's day, which the fallback read LEFT JOINs.",
-  callers: ["src/worker/handlers/wallet", "src/worker/handlers/projects"],
-  probe: RECENT_PRICE_PROBE,
-});
-
-async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number; sampledAt: string } | null> {
-  const rows = await on(sql, fallbackSample, fallbackPrice)<{
-    price_usd: string | null;
-    amount: string | null;
-    value_usd: string | null;
-    sampled_at: Date;
-    asset_price_usd: string | null;
-    is_closed: boolean;
-  }>`
-    SELECT wbs.price_usd, wbs.amount, wbs.value_usd, wbs.sampled_at,
-           ap.price_usd AS asset_price_usd,
-           (wbs.sample_date < (now() AT TIME ZONE 'UTC')::date) AS is_closed
-      FROM wallet_balance_samples wbs
-      LEFT JOIN asset_prices ap
-        ON ap.symbol = wbs.symbol
-       AND ap.price_date = wbs.sample_date
-       AND ap.time_basis = ${ASSET_PRICE_TIME_BASIS}
-     WHERE wbs.symbol = ${symbol}
-       AND (wbs.price_usd IS NOT NULL OR (wbs.value_usd IS NOT NULL AND wbs.amount IS NOT NULL AND wbs.amount <> 0))
-       AND wbs.sampled_at <= now()
-       -- A quarantined row's price may describe a DIFFERENT ASSET (migration
-       -- 0036) — excluded unconditionally, never served even via the join.
-       AND wbs.provenance <> ${QUARANTINED_PROVENANCE}
-       -- The MAX_PERSISTED_PRICE_AGE_MS bound below already excludes
-       -- quarantined rows in practice too — the backfill only fills CLOSED
-       -- days and stamps sampled_at at that day's 23:59, so every backfilled
-       -- row is more than five minutes old. That is a happy accident of two
-       -- unrelated policies, which is exactly the "correct today by luck"
-       -- shape §3 of the review is about; the predicate above makes it
-       -- correct by construction instead.
-       -- D55 (6): nor is a row the repair pass superseded (migration 0104):
-       -- the delete it replaces left no such row to serve.
-       AND wbs.superseded_at IS NULL
-     ORDER BY wbs.sampled_at DESC
-     LIMIT 1
-  `;
-  const row = rows[0];
-  if (!row) return null;
-  const derivedPriceUsd = row.price_usd != null
-    ? Number(row.price_usd)
-    : row.value_usd != null && row.amount != null && Number(row.amount) !== 0
-      ? Number(row.value_usd) / Number(row.amount)
-      : null;
-  if (derivedPriceUsd == null) return null;
-  const sampledAt = row.sampled_at instanceof Date ? row.sampled_at : new Date(row.sampled_at);
-  const sampledAtMs = sampledAt.getTime();
-  if (Date.now() - sampledAtMs > MAX_PERSISTED_PRICE_AGE_MS) return null; // too old — not eligible
-  const priceUsd = row.is_closed && row.asset_price_usd != null ? Number(row.asset_price_usd) : derivedPriceUsd;
-  return { priceUsd, sampledAt: sampledAt.toISOString() };
-}
-
 // Falls back to a recent persisted PER-SYMBOL price (wallet_balance_samples,
 // ≤MAX_PERSISTED_PRICE_AGE_MS old) when the live provider price read fails —
 // e.g. GeckoTerminal's keyless quota is exhausted (#173). The chain AMOUNT is
@@ -258,17 +137,28 @@ async function recentPersistedPrice(symbol: string): Promise<{ priceUsd: number;
 // sample's real sampledAt preserved. A missing or over-age sample rethrows the
 // original provider error so the caller degrades exactly as before (never a
 // fabricated price, never a silently-exhausted fallback masquerading as data).
-export const persistedFallbackWalletPriceReader: WalletPriceReader = {
-  async read(asset, source, priceSource) {
-    try {
-      return await providerWalletPriceReader.read(asset, source, priceSource);
-    } catch (err) {
-      const persisted = await recentPersistedPrice(asset.symbol).catch(() => null);
-      if (!persisted) throw err;
-      return { kind: "persisted", priceUsd: persisted.priceUsd, provenance: "stale", sampledAt: persisted.sampledAt };
-    }
-  },
-};
+export type PersistedPriceLookup = (symbol: string) => Promise<{ priceUsd: number; sampledAt: string } | null>;
+
+/**
+ * The provider reader, falling back to `lookup` — a recent persisted sample's
+ * price — when the live read fails. The lookup is a database read, so it lives
+ * with whoever holds the database: chain/wallet-persisted-price.ts in the api,
+ * and the pipeline read `wallet.recent_persisted_price` for the worker
+ * (worker/persisted-price.ts, issue 1034).
+ */
+export function persistedFallbackReader(lookup: PersistedPriceLookup): WalletPriceReader {
+  return {
+    async read(asset, source, priceSource) {
+      try {
+        return await providerWalletPriceReader.read(asset, source, priceSource);
+      } catch (err) {
+        const persisted = await lookup(asset.symbol).catch(() => null);
+        if (!persisted) throw err;
+        return { kind: "persisted", priceUsd: persisted.priceUsd, provenance: "stale", sampledAt: persisted.sampledAt };
+      }
+    },
+  };
+}
 
 function rpcOpts(blockTag?: string): RpcCallOptions {
   return blockTag === undefined ? { rpcUrl: config.baseRpcUrl } : { rpcUrl: config.baseRpcUrl, blockTag };

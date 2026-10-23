@@ -268,7 +268,7 @@ describe("a judging deadline is reconstructed, never restarted (§3.2, §9, §10
     expect(clock.deadlineAt("old")).toBeNull();
   });
 
-  test("a consensus recorded before the stored deadline yields `judged`, decided by stored time", async () => {
+  test("an answer accepted before the stored deadline yields `judged` once the deadline passes, decided by stored time", async () => {
     const { timers, api, boot } = world();
     api.addSubject("sub-a", 600);
     api.addSession({
@@ -281,7 +281,7 @@ describe("a judging deadline is reconstructed, never restarted (§3.2, §9, §10
     api.addSession({ sessionId: "sa", subjectId: "sub-a", windowClosesAt: T0 + 10_000_000 });
 
     await timers.advanceTo(T0 + 100_000);
-    api.recordConsensus("old"); // recorded well inside the deadline
+    api.recordAnswer("old"); // an on-time answer, well inside the deadline
     await timers.advanceTo(T0 + 2_000_000);
 
     const clock = boot();

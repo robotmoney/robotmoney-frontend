@@ -4,7 +4,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { configureHttp, fetchJson, fetchText, type FetchRecord } from "../src/extract/http.ts";
-import { fetchFred } from "../src/extract/fred.ts";
+import { fetchFred, parseFredCsv } from "../src/extract/fred.ts";
 import { fetchYahoo } from "../src/extract/yahoo.ts";
 import { fetchEdgarMonthCount } from "../src/extract/edgar.ts";
 import { fetchAll, fetchOne } from "../src/extract/sources.ts";
@@ -49,6 +49,21 @@ test("fetchFred and fetchYahoo turn real recorded response bodies into the commi
   expect(urls).toHaveLength(2);
   expect(urls[0]).toContain("fredgraph.csv?id=T10Y2Y");
   expect(urls[1]).toContain("/v8/finance/chart/%5EVIX");
+});
+
+// FRED's HTTP 200 maintenance page (issue #1413): the old parser read its
+// `<link ...Open+Sans:300,400,700>` line as a point dated `<link href=...`.
+const maintenanceBody = await Bun.file(join(FIX, "fred-maintenance.html")).text();
+
+test("parseFredCsv throws on FRED's HTML maintenance page, naming the series, and returns no point", () => {
+  let points: unknown = "unset";
+  expect(() => { points = parseFredCsv(maintenanceBody, "UMCSENT"); }).toThrow("FRED UMCSENT: response is not CSV");
+  expect(points).toBe("unset");
+});
+
+test("fetchFred rejects the maintenance page so the acquisition fails instead of returning bad points", async () => {
+  configureHttp({ fetch: (async () => new Response(maintenanceBody, { headers: { "content-type": "text/html" } })) as unknown as typeof fetch });
+  await expect(fetchFred("BOGZ1FL663067003Q")).rejects.toThrow("FRED BOGZ1FL663067003Q: response is not CSV");
 });
 
 test("with no fetch injected the extractors fall through to globalThis.fetch (here the preload thrower)", async () => {

@@ -603,13 +603,13 @@ describe("D61: role-passwords", () => {
     };
     const { logs, error } = await runCaptured(["role-passwords", ...CONFIRM], rec);
     expect(error).toBeUndefined();
-    expect(rec.calls).toEqual(["readTarget", "readDoadmin", "acquireLock:prod-init:role-passwords", "rolePasswords:doadmin:rm_owner,rm_app,rm_worker,rm_readonly", "release"]);
+    expect(rec.calls).toEqual(["readTarget", "readDoadmin", "acquireLock:prod-init:role-passwords", "rolePasswords:doadmin:rm_owner,rm_app,rm_readonly", "release"]);
     expect(seen).toEqual([{ doadmin: TYPED_DOADMIN, username: "doadmin", host: "db.example.internal:25060/defaultdb" }]);
     const dir = join(rec.root, "rm_prod", "prod-init");
     const receiptText = readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("role-passwords"))!), "utf8");
     expect(JSON.parse(receiptText)).toMatchObject({
       command: "role-passwords", outcome: "completed", identityBefore: "missing",
-      detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" }, ownerLoginBefore: false },
+      detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" }, ownerLoginBefore: false },
     });
     for (const text of [receiptText, ...logs]) expect(text).not.toContain(TYPED_DOADMIN);
     assertNoSecret(rec, logs, error);
@@ -708,7 +708,7 @@ describe("D61: role-passwords", () => {
     expect(statSync(homeEnvPath).mode & 0o777).toBe(0o600);
     const dir = join(rec.root, "rm_prod", "prod-init");
     const receiptText = readFileSync(join(dir, readdirSync(dir).find((f) => f.startsWith("role-passwords"))!), "utf8");
-    expect(JSON.parse(receiptText).detail.roles).toEqual({ rm_owner: "set", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" });
+    expect(JSON.parse(receiptText).detail.roles).toEqual({ rm_owner: "set", rm_app: "kept", rm_readonly: "kept" });
     for (const text of [receiptText, ...logs]) {
       expect(text).not.toContain(GENERATED("rm_owner"));
       expect(text).not.toContain("app-pw");
@@ -717,7 +717,7 @@ describe("D61: role-passwords", () => {
     // Idempotent: the rerun reads the line it wrote; every role is kept and ~/.env is unchanged.
     const rerun = onDisk({ ...ENV_NO_OWNER, rm_owner: GENERATED("rm_owner") }, readFileSync(homeEnvPath, "utf8"));
     const second = await runProdInit(["role-passwords", ...CONFIRM], rerun.rec.deps);
-    expect(second.detail).toMatchObject({ roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" } });
+    expect(second.detail).toMatchObject({ roles: { rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" } });
     expect(readFileSync(rerun.homeEnvPath, "utf8")).toBe(`${FILE_NO_OWNER}rm_owner = ${GENERATED("rm_owner")}\n`);
   });
 

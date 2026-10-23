@@ -7,6 +7,8 @@ import { LANES } from "../src/worker/lanes.ts";
 import { reapStuckJobs } from "../src/worker/reaper.ts";
 import { tickScheduler } from "../src/worker/scheduler.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { setPipelineTransport } from "../src/worker/pipeline-client.ts";
+import { inProcessPipelineTransport } from "./support/pipeline-in-process.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -234,14 +236,15 @@ test("scheduler: 'latest-only' catch-up policy enqueues exactly one job, at the 
 // Issue 1378: the parity sweep against an api that refuses connections settles
 // a 'degraded' run and a pending retry — the attempt is not spent as a hard
 // failure, as it was on the v0.6.2 stage boot (21:07:29.76, 'Unable to connect').
+// Issue 1034: the sweep is a pipeline write now; the transport refuses that one
+// request as a dead socket would, and answers the queue's own calls.
 test("analytics.parity_sweep against a refusing api settles 'degraded' and a pending retry, never 'failed' on the first attempt", async () => {
-  // A port nothing listens on: bind one, read its number, close it.
-  const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
-  const port = probe.port;
-  probe.stop(true);
-  const prev = { url: process.env.ANALYTICS_API_URL, file: process.env.ANALYTICS_TOKEN_FILE };
-  process.env.ANALYTICS_API_URL = `http://127.0.0.1:${port}`;
-  delete process.env.ANALYTICS_TOKEN_FILE;
+  const prevDeadline = process.env.PIPELINE_RETRY_DEADLINE_MS;
+  process.env.PIPELINE_RETRY_DEADLINE_MS = "0";
+  setPipelineTransport(async (path, body, headers) => {
+    if (path.endsWith("/analytics.parity_sweep")) throw new Error("Unable to connect. Is the computer able to access the url?");
+    return inProcessPipelineTransport(path, body, headers);
+  });
   try {
     const [{ id }] = await fixtureDb`INSERT INTO jobs (kind, payload, max_attempts) VALUES ('analytics.parity_sweep','{}', 5) RETURNING id`;
     expect(await processOneJob({ lane: LANES.analytics })).toBe(true);
@@ -253,8 +256,8 @@ test("analytics.parity_sweep against a refusing api settles 'degraded' and a pen
     const runs = await sql`SELECT status FROM job_runs WHERE job_id=${id}`;
     expect(runs.map((r) => r.status)).toEqual(["degraded"]);
   } finally {
-    if (prev.url === undefined) delete process.env.ANALYTICS_API_URL; else process.env.ANALYTICS_API_URL = prev.url;
-    if (prev.file !== undefined) process.env.ANALYTICS_TOKEN_FILE = prev.file;
+    setPipelineTransport(inProcessPipelineTransport);
+    if (prevDeadline === undefined) delete process.env.PIPELINE_RETRY_DEADLINE_MS; else process.env.PIPELINE_RETRY_DEADLINE_MS = prevDeadline;
   }
 });
 

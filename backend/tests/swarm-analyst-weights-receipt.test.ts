@@ -89,6 +89,9 @@ async function submit(m: Awaited<ReturnType<typeof member>>, date: string, subje
 
 /** POST epochs/finalize through the real admin handler — the call system-scheduler makes. */
 async function finalizeOverHttp(sessionId: string) {
+  // The judging deadline passes (D71): finalize is refused before it, and the
+  // answers already on file were accepted at or before this reading.
+  await sql`UPDATE swarm_sessions SET judging_deadline_at = clock_timestamp() WHERE id = ${sessionId} AND state = 'judging'`;
   const req = new Request("http://x/api/swarm/admin/epochs/finalize", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...schedulerHeaders(SCHEDULER) },
@@ -142,11 +145,11 @@ async function judgingEpoch(
   return { subjectId, sessionId, openedSessionId: opened.sessionId };
 }
 
-/** The judge of record signs and submits its judgement; the session becomes `judged`. */
+/** The judge signs and submits its answer: evidence only, the session stays `judging` until the draw (D71). */
 async function judgedByRecord(sessionId: string, opinion = STUB_JUDGE_REPLY) {
   const r = await submitSigned(await inHouseJudge(), sessionId, opinion);
-  if (!r.ok || !r.judgeOfRecord || !r.applied) throw new Error(`judgement not adopted: ${JSON.stringify(r)}`);
-  expect((await sessionRow(sessionId)).state).toBe("judged");
+  if (!r.ok || r.applied) throw new Error(`answer not filed as evidence: ${JSON.stringify(r)}`);
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 }
 
 // ── AC-FMT-03 / AC-FMT-04 / AC-E2E-01 ───────────────────────────────────────

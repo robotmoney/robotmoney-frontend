@@ -227,9 +227,11 @@ describe("the executor (real logins): each runtime role gets 42501, and rm_owner
     test(`${label}: rm_app, rm_worker and rm_readonly are each refused DELETE and TRUNCATE on jobs, and DELETE on admin_session`, async () => {
       for (const role of RUNTIME) {
         const refused = await asLogin(name(), role, async (db) => ({
-          "DELETE jobs": await sqlstate(db, "DELETE FROM jobs WHERE false"),
-          "TRUNCATE jobs": await sqlstate(db, "TRUNCATE jobs"),
-          "DELETE admin_session": await sqlstate(db, "DELETE FROM admin_session WHERE false"),
+          // Schema-qualified: rm_worker holds no USAGE on public since 0127
+          // (D75), so an unqualified name would not resolve at all (42P01).
+          "DELETE jobs": await sqlstate(db, "DELETE FROM public.jobs WHERE false"),
+          "TRUNCATE jobs": await sqlstate(db, "TRUNCATE public.jobs"),
+          "DELETE admin_session": await sqlstate(db, "DELETE FROM public.admin_session WHERE false"),
         }));
         expect({ role, refused }).toEqual({
           role,
@@ -253,7 +255,7 @@ describe("the executor (real logins): each runtime role gets 42501, and rm_owner
   }
 });
 
-describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing more on it (0109)", () => {
+describe("the wallet repair pass's evidence: INSERT and nothing more on it (0109; rm_app's since 0126, D75)", () => {
   test("RED CONTROL: the production baseline, before the upgrade, gives rm_worker no INSERT on either evidence table", () => {
     // 0054's allowlist left both off; so the repair pass's evidence copy (src/ops/
     // wallet-backfill.ts repairResolvedDay) failed 42501 for every incomplete day.
@@ -267,10 +269,12 @@ describe("rm_worker may INSERT the wallet repair pass's evidence, and nothing mo
     ["a blank bootstrap", () => blankDb],
     ["the upgraded production baseline", () => UPGRADED_DB],
   ] as const) {
-    test(`${label}: a real rm_worker login inserts an evidence row in each table, and cannot UPDATE or DELETE one`, async () => {
-      const outcome = await asLogin(name(), "rm_worker", async (db) => {
+    // The repair pass's writes run in the api as rm_app since issue 1034 (0126
+    // grants it the INSERT; grants.sql keeps both tables insert-only).
+    test(`${label}: a real rm_app login inserts an evidence row in each table, and cannot UPDATE or DELETE one`, async () => {
+      const outcome = await asLogin(name(), "rm_app", async (db) => {
         const inserted: Record<string, number> = {};
-        const rollback = new Error("rollback: rm_worker cannot remove what it inserted, so the probe row never commits");
+        const rollback = new Error("rollback: rm_app cannot remove what it inserted, so the probe row never commits");
         await db
           .begin(async (tx) => {
             const original = -Math.floor(Math.random() * 1e9) - 1;

@@ -36,7 +36,7 @@ import { canonicalizeSubmission } from "@robotmoney/contract";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ensureProseSubject } from "./support/prose-subject.ts";
-import { requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, enforceJudging } from "./support/stub-judge.ts";
+import { drawNow, requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, enforceJudging } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -103,8 +103,9 @@ test("the in-house judge (operator 'robotmoney') is accepted with the flag off โ
   const result = await ic.submitJudgement(inHouse.token, await signedJudgement(inHouse, sessionId));
   expect(result.ok, JSON.stringify(result)).toBe(true);
   if (!result.ok) return;
-  expect(result.judgeOfRecord).toBe(true);
-  expect(result.state).toBe("judged");
+  // The answer is evidence only (D71): filed on time, awaiting the draw.
+  expect(result.applied).toBe(false);
+  expect(result.state).toBe("judging");
   expect(await judgementRows(sessionId)).toEqual([{ judged_by: inHouse.id, judged_by_member_id: inHouse.id }]);
 });
 
@@ -127,19 +128,22 @@ test("an in-house SEAT is in-house whatever its operator says: production's them
   expect(await ic.submitJudgement(lookalike.token, await signedJudgement(lookalike, sessionId)))
     .toEqual({ ok: false, status: 403, error: "third_party_judging_disabled" });
   const result = await ic.submitJudgement(judge.token, await signedJudgement(judge, sessionId));
-  expect(result).toMatchObject({ ok: true, judgeOfRecord: true, state: "judged" });
+  expect(result).toMatchObject({ ok: true, applied: false, state: "judging" });
 });
 
-test("while the flag is off a third-party judge is not the judge of record, even with the lowest member id", async () => {
-  // Scheduler spec ยง4.4: the judge of record is chosen by member id among the
-  // ELIGIBLE judges, and "it passes the third-party gate" is part of eligible.
-  // A third-party judge sorting first must not displace the in-house one.
+test("while the flag is off a third-party judge is not a candidate for the draw, even with the lowest member id", async () => {
+  // D71: the draw lists only answers from judges that pass the third-party gate.
+  // A third-party judge is refused at submission, so only the in-house one can win.
   const thirdParty = await seatJudge({ prefix: "aaa_third_party", operator: "peaq" });
   const inHouse = await seatJudge({ prefix: "zzz_in_house", operator: "robotmoney" });
   const sessionId = await judging("of_record_gate");
   expect((await ic.submitJudgement(thirdParty.token, await signedJudgement(thirdParty, sessionId))).ok).toBe(false);
   const result = await ic.submitJudgement(inHouse.token, await signedJudgement(inHouse, sessionId));
-  expect(result).toMatchObject({ ok: true, judgeOfRecord: true, state: "judged" });
+  expect(result).toMatchObject({ ok: true, applied: false, state: "judging" });
+  const drawn = await drawNow(sessionId);
+  expect(drawn).toMatchObject({ ok: true, outcome: "judged" });
+  const [rec] = (await sql`SELECT swarm_recommendation->'judge'->>'judged_by_member_id' AS who FROM swarm_sessions WHERE id = ${sessionId}`) as any[];
+  expect(rec.who).toBe(inHouse.id);
 });
 
 test("while the flag is off a third-party judge is SERVED nothing, so it never pays for a model call it cannot land", async () => {

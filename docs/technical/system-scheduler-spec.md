@@ -72,7 +72,7 @@ There is no on/off state for scheduling. An admin activating a subject leads the
 
 1. Every active subject, with its scheduling columns (§2.2).
 2. Every session in `collecting`, with its `window_closes_at`, including one whose subject has since been deactivated.
-3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated`, `judging` or `judged` — with its state, and for `judging` its recorded deadline. A recovered `judged` session proceeds straight to finalize. This includes sessions whose subject has since been deactivated; a window left open by a deactivation still turns over at its boundary, and its settlement still has to finish.
+3. **Every session that is closed but not yet `published`** — in `window_closed`, `aggregated`, `judging` or `judged` — with its state, and for `judging` its recorded deadline. A recovered `judged` session (a state only an older version leaves behind, D71) proceeds straight to finalize. This includes sessions whose subject has since been deactivated; a window left open by a deactivation still turns over at its boundary, and its settlement still has to finish.
 4. The stream cursor the API returns with the read (§6.3).
 
 Then it sets a boundary timer per collecting session, a deadline timer per judging session, resumes every unfinished settlement from its recorded state, opens an epoch for every active subject that has none, and waits until the earliest timer. Fire it. Recompute. Repeat.
@@ -130,31 +130,29 @@ Closing an epoch starts its settlement, and settlement is **not scheduled**. It 
 
 **Judge mode and judging duration are captured at turnover.** The session records the judge mode in force (`off` or `enforce`, per D48) and the subject's `judging_duration` at the instant it closes. An admin changing either afterwards affects later sessions, never one already settling.
 
-**The judge of record.** A session has one **judge of record**, and its judgement is the session's consensus. An eligible judgement is signed by an active member holding the `judge` role that has no take in that session, and it passes the third-party gate of `smoke-production-spec.md` §6.2. Today one judge is seated, so the judge of record is that judge. If more than one is seated, the judge of record is chosen deterministically by member id — never by which judgement arrived first, so no judgement is selected by being fastest. Judgements from other seated judges are recorded and change no outcome. Agreement among several judges is a later amendment.
+**Every judge judges; the judge of record is the one drawn ([D71](../decisions.md#d71)).** An eligible judgement is signed by an active member holding the `judge` role that has no take in that session, and it passes the third-party gate of `smoke-production-spec.md` §6.2. Every eligible judge is asked to judge every session, and each may send one signed answer before the judging deadline. An answer is evidence only: it publishes nothing and records no consensus. After the judging deadline the API draws one on-time answer at random. That answer is the session's judgement, and its judge is the **judge of record**. Judges do not vote, and their answers are not merged.
 
 1. **Aggregate** — roll the signed takes up into the recommendation. `window_closed → aggregated`. Deterministic; the allocation arithmetic and the signed member history are the same whatever judging later produces.
 2. **Judge** — branches on the captured mode:
    - **`off`:** no judging is requested and nothing waits. `aggregated → publish` directly, with judging outcome `not_judged`. This is not a failure and is never presented as one.
-   - **`enforce`:** the scheduler requests judging. The API records the request instant and the **absolute deadline** (request instant plus the judging duration captured at turnover), moves the session to `judging`, returns the deadline, and pushes the request to the judge participants (`smoke-production-spec.md` §6). The scheduler holds a timer for that deadline. When the judges' consensus lands, the API records it with its acceptance instant, advances the session to `judged` if its state guard permits (§5), and publishes `session.judged`. A consensus that lands after the session is already `published` is recorded as late evidence and changes neither the lifecycle state nor the published outcome.
+   - **`enforce`:** the scheduler requests judging. The API records the request instant and the **absolute deadline** (request instant plus the judging duration captured at turnover), moves the session to `judging`, returns the deadline, and pushes the request to the judge participants (`smoke-production-spec.md` §6). The scheduler holds a timer for that deadline. Judges have only this deadline: the take window does not apply to them. Each answer is saved with its **accepted time**, one reading of the database clock, and is marked **on time** (accepted at or before the deadline) or **late** at that moment. An answer that lands while the session is `judging` leaves it `judging` and writes no event. An answer that lands after the session is `published` is recorded as late evidence and changes neither the lifecycle state nor the published outcome.
 3. **Publish** — the session goes public, with its consensus certificate when one exists. `→ published`.
 
-The scheduler waits for **either** `session.judged` **or** its deadline timer, whichever first, and then calls **finalize**. It never polls for the judgement.
+The scheduler waits for its **deadline timer** alone, then calls **finalize**. It never polls for the judgement, and no event shortens the wait: an answer that lands early decides nothing. The API no longer writes `session.judged`. The literal stays in the stream's vocabulary for events an older version wrote, and the scheduler ignores one.
 
-**The event is a wake-up and nothing more.** It lets the scheduler finalize the moment consensus lands instead of waiting out the deadline. It decides nothing. Its arrival time is never compared to anything. A late event, a duplicate event, or a lost event changes no outcome: the scheduler finalizes on the deadline instead, and finalize reads the same stored facts.
+**Finalize is one API call and decides the judging outcome atomically from stored data.** The API refuses it before the judging deadline, whatever answers exist. At or after the deadline it lists the on-time answers, keeps the first one per judge, drops the judges that were removed, switched off or gated out since they answered, and draws one at random with a secure source. The draw, the write of the winner's opinion onto the session, one `judge_draw` audit row and the publication commit in one transaction. The session record names the winning answer, and it holds the full list, the random number and the rule used, so anyone can recompute the pick. The session's consensus time is the winning answer's accepted time. Its outcome is one of:
 
-**Finalize is one API call and decides the judging outcome atomically from stored data.** The API compares the stored consensus acceptance instant (if a consensus was recorded) against the stored deadline. Its outcome is one of:
-
-- `judged` — a consensus was recorded at or before the deadline;
-- `no_consensus` — no consensus was recorded at or before the deadline;
+- `judged` — at least one on-time answer was on the list, and one was drawn;
+- `no_consensus` — no on-time answer was on the list;
 - `not_judged` — mode was `off`.
 
-Then it publishes. A repeated finalize returns the outcome already decided; it never re-decides. A consensus recorded after the deadline is kept as a record but does not change a `no_consensus` outcome.
+Then it publishes. A repeated finalize returns the outcome already decided; it never re-decides, and it never draws again. An answer that arrives late is kept as a record and never changes the winner. A session an older version left `judged` publishes on the consensus it recorded.
 
-**Finalize is time-guarded as well as state-guarded.** Under `enforce`, the API accepts finalize before the deadline only if an eligible consensus is already recorded, in which case it publishes `judged` at once. With no eligible consensus it refuses finalize as a reasoned no-op until the deadline has passed by the database clock (§4.2), because absence of a consensus before the deadline proves nothing. At the exact deadline instant: a consensus recorded *at or before* it is eligible, and finalize is accepted *at or after* it. This is request validation, not an API timer; the scheduler still holds the deadline and issues the call.
+**Finalize is time-guarded as well as state-guarded.** Under `enforce`, the API refuses finalize with a reason (`judging_deadline_not_reached`) until the deadline has passed by the database clock (§4.2), because an answer may still arrive before it. At the exact deadline instant: an answer accepted *at or before* it is on time, and finalize is accepted *at or after* it. This is request validation, not an API timer; the scheduler still holds the deadline and issues the call.
 
 **No consensus.** A session finalized as `no_consensus` is published in that state with no consensus certificate. Nothing is fabricated: no template opinion, no placeholder certificate, no default verdict. A session with no consensus says so. Its aggregate and its signed takes are published unchanged.
 
-**`no_consensus`, `not_judged` and `judged` are outcomes recorded on the published session.** The lifecycle ends at `published` in every case. Note that `judged` is used in two senses and both are intended: as the **lifecycle state** a session holds between consensus being recorded and finalize (§3 recovers it), and as the **outcome** finalize records when that consensus was eligible. `no_consensus` and `not_judged` are outcomes only and never lifecycle states.
+**`no_consensus`, `not_judged` and `judged` are outcomes recorded on the published session.** The lifecycle ends at `published` in every case. A new session goes `judging` to `published`. `judged` is an **outcome** only. It was also a lifecycle state between a consensus being recorded and finalize, and a session an older version left there still recovers (§3). `no_consensus` and `not_judged` are outcomes only and never lifecycle states.
 
 ### 4.5 Deactivating a subject
 
@@ -191,7 +189,7 @@ Every transition endpoint checks the session's current state — and, for turnov
 ### 6.1 Two kinds of work
 
 - **Timed work** fires at an instant the clock already knows. There is one scheduled kind: the epoch boundary, one per `collecting` session. The clock fires it directly; the API sends nothing, because the scheduler already holds the instant. The judging deadline (§4.4) is also a timer the scheduler holds, reconstructed from the instant the API stored, but it is a timeout inside settlement, not a schedule.
-- **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — one whose response it received, or one it learned of only by event (a second scheduler's, or its own whose response was lost) — and advanced by the `session.judged` event. A change to a subject's scheduling columns is itself an event.
+- **Event-driven work** fires because something happened. Settlement is driven by the scheduler as the direct consequence of a turnover — one whose response it received, or one it learned of only by event (a second scheduler's, or its own whose response was lost) — and by nothing else after that: no event advances it early (D71). A change to a subject's scheduling columns is itself an event.
 
 ### 6.2 Change events
 
@@ -201,7 +199,7 @@ Any write that alters what the scheduler is waiting on is published by the API a
 |---|---|---|
 | `subject.changed` | a scheduling column changed (§2.2), or an admin activated or deactivated the subject (§4.5) | re-reads that subject; on activation opens its first epoch when it has no `collecting` session (§3); on deactivation keeps the open session's boundary timer, so the boundary turns it over with no successor (§4.5) |
 | `epoch.turned_over` | epoch N closed and N+1 opened — by this scheduler's boundary, or by a second scheduler | sets that subject's boundary timer to the new `window_closes_at`; settles N if it is not already settling |
-| `session.judged` | the judges' consensus was recorded | proceeds to finalize (§4.4) |
+| `session.judged` | retired (D71): written only by older versions | ignored; the deadline timer finalizes (§4.4) |
 
 A duration change takes effect at the **next** boundary: the current window keeps the `window_closes_at` it was opened with, the grid is re-anchored at that instant (§2.2), and the epoch opened at that boundary uses the new duration. A change to `epoch_anchor` alone likewise leaves the current window alone and moves the grid from the next boundary. A change to `judging_duration` applies to sessions that close afterwards (§4.4).
 
@@ -246,7 +244,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 ## 9. Invariants
 
 - **A transition transaction never spans a network call, a model call, or a wait on another service.** It does database work and commits. The event counter (§6.3) therefore serializes only database work, bounded by the slowest single transition. Without this rule, one transition holding its transaction open would stall every other subject's.
-- Exactly two running services hold a database credential: `api`, and the pipeline worker running the vault, wallet, buyback and project jobs as `rm_worker` (`smoke-production-spec.md` §7.2). A third is a defect. The pipeline worker's move to the same no-database model is a later document.
+- Exactly one running service holds a database credential: `api` ([D75](../decisions.md#d75), `smoke-production-spec.md` §7.2). The pipeline worker runs the vault, wallet, buyback and project jobs through the api's `/api/pipeline/**` routes with its own service token. A second is a defect.
 - A subject's scheduling columns are set once by bootstrap and afterwards only by a migration on a deployed stack, or by the admin API on an ephemeral one (§2.3).
 - Every window closes on its subject's grid. A late turnover never shifts later windows.
 - Event sequence numbers are gapless and assigned in commit order.
@@ -262,7 +260,7 @@ The same `system-scheduler` image and code run in production, stage, test and CI
 - Every change to what the clock waits on is an event on the stream, sequenced in the transaction that made the change.
 - A fired transition is safe to fire again, and a repeated one returns the original result.
 - A judging deadline is stored by the API when judging is requested and is never restarted by a rebuild.
-- A session's judging outcome is decided once, by finalize, from stored instants, and is one of `judged`, `no_consensus`, `not_judged`. An event's arrival time never decides an outcome. Nothing is ever fabricated to fill a gap.
+- A session's judging outcome is decided once, by finalize, after the judging deadline, from stored data, and is one of `judged`, `no_consensus`, `not_judged`. The draw runs once per session. An event's arrival time never decides an outcome. Nothing is ever fabricated to fill a gap.
 
 ## 10. Acceptance gates
 
@@ -281,9 +279,9 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - Settlement of a closed epoch runs aggregate, judge and publish with no scheduled delay between them.
 - **Judge off:** a session that closes with mode `off` is published with outcome `not_judged`, requests no judging, and waits for nothing.
 - **Deadline:** a session finalized with no eligible consensus is published as `no_consensus` with no certificate and no fabricated content, asserted by inspecting every row the settlement wrote.
-- **Eligibility is decided by stored time, not event arrival:** a consensus recorded before the stored deadline whose `session.judged` event arrives after it yields `judged`. A consensus recorded after the deadline yields `no_consensus` and is kept as a record. Repeated finalize returns the same outcome. A lost or duplicated `session.judged` event changes no outcome.
+- **Eligibility by stored time:** an answer is on time or late from the accepted time saved with it, against the judging deadline and never the take window. An answer accepted at the deadline can win. An answer accepted a microsecond after it cannot, and is kept as a record. Repeated finalize returns the same outcome and draws once.
 - **Deadline reconstruction:** kill the scheduler after judging was requested and restart it before the deadline — the deadline timer fires at the originally stored instant, not later. Restart after the deadline — finalize runs immediately.
-- **Recovery read:** kill the scheduler between every pair of settlement transitions — after turnover, after aggregate, after the judging request, after `judged` — including for a subject deactivated meanwhile, and after an API commit whose response was lost. On restart each settlement resumes from its recorded state and no durable effect repeats.
+- **Recovery read:** kill the scheduler between every pair of settlement transitions — after turnover, after aggregate, after the judging request, after a session an older version left `judged` — including for a subject deactivated meanwhile, and after an API commit whose response was lost. On restart each settlement resumes from its recorded state and no durable effect repeats.
 - **Isolation:** a judge wait on one session, and a failed transition on another, delay no subject's boundary and no other session's settlement. Both happen between transactions, never inside one; transitions contend only on the event counter, for the duration of a database write (§9).
 - Transient aggregate failure with a healthy stream is retried and succeeds; a refusal with a reason is not retried.
 - Activating a subject, or booting a blank database with active subjects, opens an epoch for each with no operator action; activation during scheduler downtime yields one fresh epoch on rebuild, not backdated.
@@ -298,7 +296,7 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - **Handoff:** a turnover this scheduler did not make (a second scheduler's), committed between this scheduler's full read and its subscription, is delivered on the stream above the cursor, not lost.
 - **Silent stall:** stall the connection without closing it — the missed keepalive is detected, the scheduler rebuilds, and no stale timer fires.
 - **Final-event loss:** drop one application event at the API-to-scheduler hop while keepalives keep flowing, with no later event to follow it. The next keepalive's head sequence exceeds the scheduler's last-applied number; that alone triggers the rebuild, and the rebuilt state reflects the dropped change. The test asserts the trigger was the head-sequence mismatch, not a manually induced rebuild.
-- **Early finalize:** under `enforce`, calling finalize before the deadline with no eligible consensus is refused with a reason and changes nothing; calling it before the deadline with an eligible consensus publishes `judged`; calling it at the deadline instant with a consensus recorded at that instant publishes `judged`.
+- **Early finalize:** under `enforce`, calling finalize before the deadline is refused with a reason and changes nothing, even when on-time answers are on file; calling it at the deadline instant draws and publishes. The scheduler publishes at the deadline without waiting for an early result, and still publishes a session an older version left `judged`.
 - **Late consensus after publish:** a consensus arriving after the session is `published` is recorded and changes neither state nor outcome.
 - **Retry exhaustion:** with a dependency failing for the whole retry budget, the scheduler marks itself degraded naming the item and stops retrying; restarting it after the dependency recovers resumes the item exactly once. A subject whose turnover exhausted refuses submissions after `window_closes_at` throughout.
 - Dropping one event from the stream (a sequence gap) causes a full read and rebuild before any further fire. An API resync notice does the same.
@@ -306,14 +304,14 @@ Timing gates distinguish **dispatch** (the scheduler issued the call at the inst
 - **One clock:** a take arriving inside a transaction that started before `window_closes_at` but reaches the check after it is refused.
 - **One present per transaction:** a transition that both derives the next grid close and checks lateness uses one reading of the clock for the derivation, so its stored close never disagrees with itself.
 - **First-epoch floor:** activate a subject one second before a grid instant; its first window closes at the following instant instead, is at least half a duration long, and no session is published with every member absent because nobody could submit in time.
-- **Judge of record:** with two judges seated, the judge of record is the same one on every replay and does not change when the other answers first; the other's judgement is recorded and changes no outcome.
+- **Judge of record:** with several judges seated, every one is asked and each on-time answer is a candidate. The drawn answer is the judge of record, the stored draw recomputes to it, a removed judge cannot win, and a late answer never changes the winner.
 - **No transaction spans a call:** a transition never holds its transaction open across a network or model call, asserted by instrumenting the transition path; with one transition deliberately slowed, another subject's boundary still fires within its tolerance.
 - **Two credential holders:** the rendered compose config gives exactly `api` and the pipeline worker a database credential; a third service carrying one fails the gate by name.
 - Between instants, with a live stream and no events, `system-scheduler` makes no API call; transport keepalive frames are not API calls.
 
 ## 11. Out of scope
 
-The participant protocol (takes, judgements), how a judgement is signed, and how agents learn of a new window — `smoke-production-spec.md` §6; this document's no-polling rule applies to the scheduler, not to participants. Agreement among several judges, beyond the single-judgement rule of §4.4, and the format of what judges record. The pipeline worker's database role, which `smoke-production-spec.md` §7.2 governs.
+The participant protocol (takes, judgements), how a judgement is signed, and how agents learn of a new window — `smoke-production-spec.md` §6; this document's no-polling rule applies to the scheduler, not to participants. Agreement among several judges (voting or merging answers, beyond the draw of §4.4), and the format of what judges record. The pipeline worker's database role, which `smoke-production-spec.md` §7.2 governs.
 
 ## 12. Companion amendments (applied 2026-09-23)
 
@@ -396,3 +394,26 @@ Corrected the same day, after a review of the recorded D55 answers against the o
 | §6.3 | the WebSocket's reason unstated beyond its backlog | a transport preference (two-way keepalive, explicit close code); the token only in the upgrade's `Authorization` header, re-authorized at every keepalive; the scheduler stream only (D55 (11)) |
 | §6.3 | the `rm_owner` prune keeps a 7-day default window, configurable | a manual, receipted `rm_owner` command at each upgrade or on a runbook cadence, with a 7-day minimum window; a cursor below the floor gets resync-and-close (`log_truncated`); supersedes D52's retention bullet and D53 (2) (D55 (12)) |
 | §9, §10 | a deactivation closes the open epoch in its own transaction | a deactivation closes no epoch; gates added for takes after deactivation, reactivation inside the window, a prune below a cursor, and socket authorization |
+
+### 2026-10-20
+
+Decided with the owner on 2026-10-20 and recorded as [D71](../decisions.md#d71): every judge judges every session, and one on-time answer is drawn at random after the judging deadline. Each row records what changed so the edit is auditable from this document alone.
+
+| clause | said before | says now |
+|---|---|---|
+| §3 item 3 | a recovered `judged` session is a normal settling state | only an older version leaves a session `judged`; a new session goes `judging` to `published` |
+| §4.4 | when the judges' consensus lands the API records it, advances the session to `judged` and publishes `session.judged` | an answer is evidence only: it is saved with its accepted time and marked on time or late, and the session stays `judging` |
+| §4.4 | the scheduler waits for either `session.judged` or its deadline timer | the scheduler waits for its deadline timer alone |
+| §4.4 | the event is a wake-up that lets the scheduler finalize the moment consensus lands | retired: no early result exists, and an event from an older version is ignored |
+| §4.4 | finalize compares the stored consensus time with the deadline | finalize draws one on-time answer at random after the deadline, stores the draw and publishes in one transaction |
+| §4.4 | `judged` is used in two senses, a lifecycle state and an outcome | `judged` is an outcome; the state remains for sessions an older version left there |
+| §4.4 | the API accepts finalize before the deadline when an eligible consensus is recorded | finalize before the judging deadline is refused whatever answers exist |
+| §4.4 | the judge of record is the lowest member id | the judge of record is the judge whose on-time answer was drawn |
+| §6.1 | settlement is advanced by the `session.judged` event | settlement waits for the deadline timer only |
+| §6.2 | `session.judged` proceeds to finalize | `session.judged` is retired and ignored |
+| §9 | the outcome is decided once, from stored instants | decided once, after the judging deadline, and the draw runs once |
+| §10 Early finalize | an eligible consensus before the deadline publishes `judged` | finalize before the deadline is refused even with answers on file |
+| §10 Judge of record | the same judge on every replay | every judge is asked, and the stored draw recomputes to the winner |
+| §10 Eligibility by stored time | a consensus recorded before the deadline whose event arrives after it yields `judged` | an answer accepted at the deadline can win, and one accepted a microsecond after cannot |
+| §10 Recovery read | after `judged` | after a session an older version left `judged` |
+| §11 | the single-judgement rule of §4.4 | the draw of §4.4; voting and merging stay out of scope |

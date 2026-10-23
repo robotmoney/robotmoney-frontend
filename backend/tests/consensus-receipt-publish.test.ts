@@ -32,7 +32,7 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 // the participant does. Before issue #969 these tests anchored TEMPLATE prose
 // into a signed receipt — the exact thing #969 made impossible and D53 deleted.
 import {
-  inHouseJudge, requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
+  drawNow, inHouseJudge, requestJudgingFor, seatJudge, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
 } from "./support/stub-judge.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -92,7 +92,10 @@ async function collectingSession(prefix: string, weights: (number[] | null)[]) {
 const stateOf = async (sessionId: string): Promise<string> =>
   String(((await sql`SELECT state FROM swarm_sessions WHERE id = ${sessionId}`)[0] as any).state);
 
-/** Request judging and have the in-house judge submit its signed judgement. */
+/**
+ * Request judging and have the in-house judge submit its signed judgement. The
+ * answer is evidence only (D71): the session stays `judging` until `drawNow`.
+ */
 async function judgeNow(sessionId: string, opinion: string = STUB_JUDGE_REPLY) {
   await requestJudgingFor(sessionId);
   const judged = await submitSigned(await inHouseJudge(), sessionId, opinion);
@@ -113,8 +116,9 @@ async function advanceToPublished(sessionId: string) {
   // A judge participant's signed judgement: `source: "model"`, a real,
   // anchorable opinion, and the session's consensus.
   const judged = await judgeNow(sessionId);
-  const published = await verbs.publishSessionAdmin(sessionId, undefined);
-  if (!published.ok) throw new Error(`publish failed: ${JSON.stringify(published)}`);
+  // The judging deadline passes and finalize draws the one on-time answer.
+  const published = await drawNow(sessionId);
+  if (!published.ok) throw new Error(`finalize failed: ${JSON.stringify(published)}`);
   return judged;
 }
 
@@ -533,7 +537,13 @@ test("BLOCKER 1: aggregate, judge, reopen, amend — and the receipt is REFUSED,
   expect((await verbs.closeSessionAdmin(sessionId, undefined)).ok).toBe(true);
   expect((await verbs.aggregateSessionAdmin(sessionId, undefined)).ok).toBe(true);
   await judgeNow(sessionId);
-  expect(await stateOf(sessionId)).toBe("judged");
+  expect(await stateOf(sessionId)).toBe("judging");
+  // The shape an OLDER version left behind: a session `judged`, carrying the
+  // opinion, not yet published. The draw writes the same judge block, and the
+  // rows are put back into that legacy state so the admin reopen path, which
+  // only a legacy session can take, is what is under test.
+  expect((await drawNow(sessionId)).ok).toBe(true);
+  await fixtureDb`UPDATE swarm_sessions SET state = 'judged', judging_outcome = NULL, published_at = NULL WHERE id = ${sessionId}`;
 
   // THE ORIGINAL SEQUENCE, step for step, and every one of these is a
   // documented admin transition that still succeeds. Only the receipt refuses.
@@ -588,19 +598,20 @@ test("BLOCKER 1b: a receipt is refused from EVERY non-terminal state, by name", 
     expect((refused as any).error).toBe("session_not_published");
     seen.push(await stateOf(sessionId));
   }
-  // Loud-skip-never: the loop really did walk five distinct states.
-  expect(seen).toEqual(["collecting", "window_closed", "aggregated", "judging", "judged"]);
+  // Loud-skip-never: the loop really did walk distinct states. An answer filed
+  // while judging leaves the session `judging` (D71).
+  expect(seen).toEqual(["collecting", "window_closed", "aggregated", "judging", "judging"]);
 
   // And the same session publishes cleanly the moment it is terminal.
-  expect((await verbs.publishSessionAdmin(sessionId, undefined)).ok).toBe(true);
+  expect((await drawNow(sessionId)).ok).toBe(true);
   const ok = await admin.publishConsensusReceiptAdmin(sessionId);
   expect(ok.ok).toBe(true);
 });
 
 test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, and the adopted one is bound by equality", async () => {
-  // A second seated judge is eligible and its judgement is RECORDED — but it is
-  // not the judge of record (scheduler spec §4.4), so its opinion never reaches
-  // the session. A session whose only judgement is that one publishes
+  // A judge's answer that arrives AFTER the judging deadline is RECORDED — but
+  // it is late (scheduler spec §4.4, D71), so its opinion never reaches the
+  // session. A session whose only judgement is that one publishes
   // `no_consensus`, and its receipt must be refused: the row on file is an
   // opinion the session never adopted.
   const recordJudge = await seatJudge({ prefix: "judge_a" });
@@ -609,9 +620,11 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   expect((await verbs.closeSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
   expect((await verbs.aggregateSessionAdmin(unadopted.sessionId, undefined)).ok).toBe(true);
   await requestJudgingFor(unadopted.sessionId);
-  const second = await submitSigned(secondJudge, unadopted.sessionId);
-  expect(second).toMatchObject({ ok: true, judgeOfRecord: false, applied: false });
   await sql`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id = ${unadopted.sessionId}`;
+  const second = await submitSigned(secondJudge, unadopted.sessionId);
+  expect(second).toMatchObject({ ok: true, applied: false });
+  const [late] = (await sql`SELECT applied_skipped_reason FROM swarm_session_judgements WHERE session_id = ${unadopted.sessionId}`) as any[];
+  expect(late.applied_skipped_reason).toBe("after_deadline");
   expect(await ic.finalizeEpoch(unadopted.sessionId)).toMatchObject({ ok: true, outcome: "no_consensus" });
 
   const [rows] = (await sql`
@@ -636,16 +649,16 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
     SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${unadopted.sessionId}`) as any[];
   expect(none.n).toBe(0);
 
-  // THE NEWEST ROW IS NOT THE ADOPTED ROW. The judge of record's judgement is
-  // applied; the second judge's lands LATER over the same inputs — identical
-  // prompt_hash and inputs_digest, higher id. `ORDER BY id DESC LIMIT 1` would
+  // THE NEWEST ROW IS NOT THE ADOPTED ROW. Both judges answer on time over the
+  // same inputs — identical prompt_hash and inputs_digest. The draw (fixed to
+  // the first candidate) picks the first judge's; the second has the higher id. `ORDER BY id DESC LIMIT 1` would
   // embed the second one; binding to the session's own judge block does not.
   const live = await collectingSession("recbound", [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
   expect((await verbs.closeSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   expect((await verbs.aggregateSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
   await requestJudgingFor(live.sessionId);
   const adopted = await submitSigned(recordJudge, live.sessionId);
-  expect(adopted).toMatchObject({ ok: true, judgeOfRecord: true, applied: true });
+  expect(adopted).toMatchObject({ ok: true, applied: false });
   const adoptedId = String((adopted as any).judgementId);
   const later = await submitSigned(secondJudge, live.sessionId, JSON.stringify({
     rationale: "A second judge's reading, recorded and adopted by nobody.",
@@ -655,7 +668,7 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   expect(later).toMatchObject({ ok: true, applied: false });
   expect(Number((later as any).judgementId)).toBeGreaterThan(Number(adoptedId));
 
-  expect((await verbs.publishSessionAdmin(live.sessionId, undefined)).ok).toBe(true);
+  expect((await drawNow(live.sessionId, { random: 0 })).ok).toBe(true);
   const published = await admin.publishConsensusReceiptAdmin(live.sessionId);
   expect(published.ok).toBe(true);
   // The receipt is joined to the ADOPTED judgement, not the newest one.
@@ -666,10 +679,74 @@ test("BLOCKER 2: a judgement the session never adopted never reaches a receipt, 
   const body = (await get(path(ROUTES.swarm.sessionConsensusReceipt, { id: live.sessionId }))) as any;
   expect(body.body.receipt.judge.mode).toBe("enforce");
   expect(body.body.verified).toBe(true);
+  // The draw lives on the session record, never in the signed bytes (D71).
+  expect(JSON.stringify(body.body.receipt)).not.toContain("random_value");
+  expect(Object.keys(body.body.receipt.judge)).not.toContain("judgement_id");
   // The judge block in the receipt IS the judge block the session serves.
   const [record] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${live.sessionId}`) as any[];
   expect(body.body.receipt.judge.rationale).toBe(record.swarm_recommendation.rationale);
   expect(body.body.receipt.judge.release_safety).toEqual(record.swarm_recommendation.release_safety);
+});
+
+// Issue #1407: the receipt links to the judgement the draw chose, by id.
+async function judgedByJudges(prefix: string, judges: Awaited<ReturnType<typeof seatJudge>>[], o: { lateJudge?: Awaited<ReturnType<typeof seatJudge>>; random: number }) {
+  const s = await collectingSession(prefix, [[0.15, 0.55, 0.2, 0.1], [0.1, 0.65, 0.15, 0.1]]);
+  expect((await verbs.closeSessionAdmin(s.sessionId, undefined)).ok).toBe(true);
+  expect((await verbs.aggregateSessionAdmin(s.sessionId, undefined)).ok).toBe(true);
+  await requestJudgingFor(s.sessionId);
+  const ids: string[] = [];
+  for (const j of judges) {
+    const r = await submitSigned(j, s.sessionId);
+    expect(r).toMatchObject({ ok: true });
+    ids.push(String((r as any).judgementId));
+  }
+  if (o.lateJudge) {
+    await sql`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '1 second' WHERE id = ${s.sessionId}`;
+    const late = await submitSigned(o.lateJudge, s.sessionId);
+    expect(late).toMatchObject({ ok: true, applied: false });
+    ids.push(String((late as any).judgementId));
+  }
+  expect((await drawNow(s.sessionId, { random: o.random })).ok).toBe(true);
+  const [rec] = (await sql`SELECT swarm_recommendation FROM swarm_sessions WHERE id = ${s.sessionId}`) as any[];
+  return { ...s, ids, drawnId: String(rec.swarm_recommendation.judge.judgement_id) };
+}
+
+test("the receipt links to the drawn judgement when two on-time answers carry identical opinions", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  // random 0 draws the first candidate, the LOWER id: `ORDER BY id DESC` would pick the other one.
+  const s = await judgedByJudges("recdrawn", [a, b], { random: 0 });
+  expect(s.drawnId).toBe(s.ids[0]!);
+  expect((await admin.publishConsensusReceiptAdmin(s.sessionId)).ok).toBe(true);
+  const [stored] = (await sql`SELECT judgement_id FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(String(stored.judgement_id)).toBe(s.drawnId);
+  expect(String(stored.judgement_id)).not.toBe(s.ids[1]!);
+});
+
+test("the receipt links to the drawn judgement when a late copy of the winning opinion exists", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const late = await seatJudge({ prefix: "judge_late" });
+  const s = await judgedByJudges("reclatecopy", [a], { lateJudge: late, random: 0 });
+  expect(s.ids.length).toBe(2);
+  expect(s.drawnId).toBe(s.ids[0]!);
+  expect((await admin.publishConsensusReceiptAdmin(s.sessionId)).ok).toBe(true);
+  const [stored] = (await sql`SELECT judgement_id FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(String(stored.judgement_id)).toBe(s.drawnId);
+});
+
+test("a drawn judgement id that names no row fails the receipt and never falls back", async () => {
+  const a = await seatJudge({ prefix: "judge_a" });
+  const b = await seatJudge({ prefix: "judge_b" });
+  const s = await judgedByJudges("recmissing", [a, b], { random: 0 });
+  await sql`
+    UPDATE swarm_sessions
+       SET swarm_recommendation = jsonb_set(swarm_recommendation, '{judge,judgement_id}', '999999999'::jsonb)
+     WHERE id = ${s.sessionId}`;
+  const refused = await admin.publishConsensusReceiptAdmin(s.sessionId);
+  expect(refused.ok).toBe(false);
+  expect((refused as any).error).toBe("judgement_not_adopted");
+  const [none] = (await sql`SELECT count(*)::int AS n FROM swarm_consensus_receipts WHERE session_id = ${s.sessionId}`) as any[];
+  expect(none.n).toBe(0);
 });
 
 // Issue #1019: an adopted judgement with `source='fallback'` must never reach a

@@ -42,7 +42,6 @@ const PINNED_PROVISIONING_SHAPES: Readonly<Record<string, string>> = {
   ownerLoginEnable: "ALTER ROLE rm_owner LOGIN",
   ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
   appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
-  workerPasswordSet: "ALTER ROLE rm_worker WITH PASSWORD $1",
   readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
 };
 
@@ -308,7 +307,6 @@ describe("structural enforcement — a raw sql call outside the interface is det
     "src/db/schema-manifest",
     "src/db/schema-snapshot",
     "src/db/target-lock",
-    "src/db/worker-client",
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -671,14 +669,13 @@ describe("structural enforcement — a raw sql call outside the interface is det
       "src/db/schema-manifest",
       "src/db/schema-snapshot",
       "src/db/target-lock",
-      "src/db/worker-client",
       // The append-only probes, which must not declare the DELETE they prove is refused.
       "src/db/analytics-ledger-guard",
       "src/db/append-only-guard",
     ].sort());
     // A schema-* entry must be a real schema module, not a name that merely matches.
     for (const moduleId of INFRA) {
-      expect(/^src\/db\/(schema-[a-z-]+|client|worker-client|registry|migrate|target-lock|preflight|append-only-guard|analytics-ledger-guard)$/.test(moduleId), moduleId).toBe(true);
+      expect(/^src\/db\/(schema-[a-z-]+|client|registry|migrate|target-lock|preflight|append-only-guard|analytics-ledger-guard)$/.test(moduleId), moduleId).toBe(true);
     }
   });
 
@@ -776,9 +773,10 @@ describe("declarations — what the converted modules declare, read without depe
     "src/api/routes/submissions",
     "src/chain/allocation-framework",
     "src/chain/vault-economics",
-    "src/chain/wallet-balances",
+    // Issue 1034 (D75): the wallet reads and writes moved to the api's stores.
+    "src/chain/wallet-balances-store",
+    "src/chain/wallet-persisted-price",
     "src/chain/wallet-sleeves",
-    "src/chain/wallet-valuation",
     "src/db/automation-tokens",
     "src/db/handle-namespace",
     "src/db/seed",
@@ -811,18 +809,22 @@ describe("declarations — what the converted modules declare, read without depe
     "src/swarm/judge-replay",
     "src/swarm/judgements",
     "src/swarm/receipt-gap",
-    "src/worker/handlers/repair",
     // #1026 W6 P2 (the object-less wallet lock is not a query, so it is not here).
     "src/analytics/store/output-snapshot-store",
     "src/analytics/store/regime-store",
     "src/api/auth",
     "src/api/routes/projects",
     "src/swarm/epoch",
-    "src/worker/handlers/vault",
-    "src/worker/handlers/wallet",
-    "src/worker/loop",
-    "src/worker/reaper",
-    "src/worker/scheduler",
+    // Issue 1034 (D75): the pipeline worker declares nothing; the statements it
+    // used to run live in the api's pipeline stores.
+    "src/pipeline/queue-store",
+    "src/pipeline/receipts",
+    "src/pipeline/stores/buybacks",
+    "src/pipeline/stores/projects",
+    "src/pipeline/stores/token-market",
+    "src/pipeline/stores/vault",
+    "src/pipeline/stores/wallet",
+    "src/pipeline/stores/wallet-backfill",
   ];
 
   test("every registerQuery call is at module level, so importing a module enumerates all of it", () => {
@@ -851,6 +853,12 @@ describe("declarations — what the converted modules declare, read without depe
       expect(declaring.has(moduleId), moduleId).toBe(true);
       expect(declarationsOf(moduleId).length, moduleId).toBeGreaterThan(0);
     }
+  });
+
+  test("no pipeline worker module declares a query, and no declaration is rm_worker's (issue 1034, D75)", () => {
+    const workerModules = [...declaringModules().keys()].filter((m) => m.startsWith("src/worker/"));
+    expect(workerModules).toEqual([]);
+    expect(registeredSites().filter((d) => d.role === "rm_worker").map((d) => d.site)).toEqual([]);
   });
 
   test("every application declaration names a relation the schema snapshot creates in public", () => {
@@ -935,8 +943,8 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
    *  in the same change, with a reason: a shape added to only one fails a test. */
   const PINNED_SHAPES: Readonly<Record<string, string>> = {
     clockText: "SELECT clock_timestamp()::text AS at",
-    clockTimestamp: "SELECT clock_timestamp() AS at",
     connectionCheck: "SELECT 1",
+    connectionBudget: "SELECT current_setting('max_connections')::int AS max_connections, current_setting('superuser_reserved_connections')::int AS superuser_reserved, current_setting('reserved_connections')::int AS reserved",
     walletSnapshotLock: "SELECT pg_advisory_xact_lock(hashtext('wallet-aum-snapshot'), hashtext($1))",
     sourceKeyLock: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     runEventsLock: "SELECT pg_advisory_xact_lock(hashtextextended('analytics_ledger_run_events:' || $1, 0))",
@@ -1095,7 +1103,8 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
   });
 
   test("each password DDL names one fixed §3 role, has exactly one slot, and only rm_owner's adds an attribute (LOGIN)", () => {
-    expect([...VERIFIER_SLOT_SHAPES]).toEqual(["ownerPasswordSet", "appPasswordSet", "workerPasswordSet", "readonlyPasswordSet"]);
+    // rm_worker's left with D75 (issue 1034): `~/.env` keeps no line for it.
+    expect([...VERIFIER_SLOT_SHAPES]).toEqual(["ownerPasswordSet", "appPasswordSet", "readonlyPasswordSet"]);
     expect(Object.isFrozen(VERIFIER_SLOT_SHAPES)).toBe(true);
     for (const name of VERIFIER_SLOT_SHAPES) {
       const text = PROVISIONING_SHAPES[name];
@@ -1125,7 +1134,7 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
     expect(existsSync(join(BACKEND, "scripts", "enable-owner-login.ts"))).toBe(false);
   });
 
-  test("the doadmin declarations a process holds are exactly the six role-passwords sites", () => {
+  test("the doadmin declarations a process holds are exactly the five role-passwords sites", () => {
     const script = join(mkdtempSync(join(tmpdir(), "rm-registry-doadmin-")), "enumerate.ts");
     writeFileSync(script, [
       `await import(${JSON.stringify(join(BACKEND, "scripts", "role-passwords.ts"))});`,
@@ -1142,7 +1151,6 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
         ["scripts/role-passwords:enableOwnerLogin", "ownerLoginEnable", ["scripts/role-passwords"]],
         ["scripts/role-passwords:setOwnerPassword", "ownerPasswordSet", ["scripts/role-passwords"]],
         ["scripts/role-passwords:setAppPassword", "appPasswordSet", ["scripts/role-passwords"]],
-        ["scripts/role-passwords:setWorkerPassword", "workerPasswordSet", ["scripts/role-passwords"]],
         ["scripts/role-passwords:setReadonlyPassword", "readonlyPasswordSet", ["scripts/role-passwords"]],
       ]);
     } finally {
@@ -1160,6 +1168,9 @@ describe("registered functions with no production caller stay deleted (D55 (13))
   const DELETED = [
     "getRosterCapacityStatus",
     "recordJudgingConsensus",
+    // D71: an answer records no consensus, and the judge of record is the one drawn.
+    "recordJudgingConsensusTx",
+    "judgeOfRecordTx",
     "canonicalSha256",
     "buildCanonicalWalletSnapshotManifest",
     "validateWalletSnapshotExactSets",

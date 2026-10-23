@@ -154,6 +154,34 @@
     "reason": "The paid CoinGecko tier answering 429, 401 or 403. v0.5.4 uses the Basic plan key on the paid host, so a refusal after v0.5.4 is a regression (a bad key, or a plan limit reached)."
   },
   {
+    "id": "external-gecko-onchain-price-5xx-or-timeout",
+    "match": "^\\s*error: (<n>|408|5\\d\\d) (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout|Request Timeout) for https://pro-api\\.coingecko\\.com/api/v(<n>|\\d+)/onchain/simple/networks/base/token_price/",
+    "source": "worker-analytics",
+    "class": "external",
+    "reason": "The cause line bun prints under a failed price read when the paid CoinGecko host answers the batched onchain token_price request with a 5xx or a 408 (backend/src/chain/token-prices.ts geckoFetchJson: new Error(`${status} ${statusText} for ${url}`)). Seen on the v0.6.3 production preflight on 2026-10-21 (28x 500, 4x 408 in one window). A provider fault: the errors came in one window, and the same request succeeds outside it. The wallet sampler degrades each leg to its last persisted sample and token-market keeps its last good reading, so no wrong price is served. Held to the token_price path on the paid host and to 5xx and 408: a 4xx refusal there is known-gecko-paid-tier-refused and any other status stays unclassified."
+  },
+  {
+    "id": "fragment-timeout-domexception-message",
+    "match": "^\\s*message: \"The operation timed out\\.\",$",
+    "source": "worker-analytics",
+    "class": "fragment",
+    "reason": "The message field bun prints inside a DOMException TimeoutError (an AbortSignal.timeout fired on a fetch, as backend/src/chain/token-prices.ts geckoFetchJson sets on every CoinGecko call). Seen 8x on the v0.6.3 production preflight on 2026-10-21 under the token-market and wallet-balances price-read headlines. A fragment: the headline it belongs to is classified on its own, and an unclassified headline still fails."
+  },
+  {
+    "id": "external-token-market-price-read-kept-last-good",
+    "match": "^token-market: (ROBOTMONEY|WETH) price read failed, keeping the last good reading:",
+    "source": "worker-analytics",
+    "class": "external",
+    "reason": "The headline backend/src/worker/handlers/token-market.ts readPrice logs when a price leg fails: it writes nothing for that leg, so the row keeps its last good reading with its true age, and the api stops serving it once it is older than PRICE_MAX_AGE_MS (backend/src/chain/token-metrics.ts). Seen 16x per symbol on the v0.6.3 production preflight on 2026-10-21. The cause is on its own lines, which the inventory does not join to this headline: a provider cause has its own external rule, and any other cause (an unresolved asset, a non-positive price) stays unclassified and fails."
+  },
+  {
+    "id": "expected-token-market-price-holdoff",
+    "match": "^\\s*error: token-market: a token_price request failed (<n>|\\d+) ms ago; not asking again this tick$",
+    "source": "worker-analytics",
+    "class": "expected",
+    "reason": "The cause token-market gives when the wallet sampler's token_price request failed under 60 s ago (PRICE_FAILURE_HOLDOFF_MS, the #202 rule): it does not ask the host again a moment later. The quota-saving hold-off working as designed; the failure it defers to is logged and classified on its own lines. Seen 32x on the v0.6.3 production preflight on 2026-10-21, one per failed price leg."
+  },
+  {
     "id": "external-geckoterminal",
     "match": "geckoterminal.*(throttled|retry budget exhausted|HTTP <n> — retrying|HTTP 429)",
     "class": "external",
@@ -272,11 +300,11 @@
   },
   {
     "id": "known-db-write-500",
-    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP <n>",
+    "match": "POST /api/analytics/(source-acquisitions|telemetry|vintages) failed: HTTP 5\\d\\d\\b",
     "class": "known-issue",
     "issue": "1035",
     "fixedIn": "0.5.2",
-    "reason": "The api's analytics writes fail while the cluster is read-only or full; the api's own PostgresError is classified separately."
+    "reason": "The api's analytics writes fail with a 5xx while the cluster is read-only or full; the api's own PostgresError is classified separately. A 4xx is a payload rejection and stays unclassified (issue 1413)."
   },
   {
     "id": "known-upstream-closed",

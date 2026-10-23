@@ -37,8 +37,7 @@ import * as epoch from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { activeSubject, collectingSessions, recordConsensus, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
-import { inHouseJudge } from "./support/stub-judge.ts";
+import { activeSubject, collectingSessions, sessionRow, setJudgeMode } from "./support/epoch-fixtures.ts";
 import { provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -618,31 +617,6 @@ test("a subject.changed edit (activation) aborted at COMMIT leaves the subject i
   expect(status).toBe("inactive");
 });
 
-test("a consensus aborted at COMMIT publishes no session.judged and leaves the session judging", async () => {
-  await setJudgeMode("enforce");
-  const { subjectId, sessionId: open } = await openedEpoch("to_abort_judged");
-  const turned = await epoch.turnOverEpoch(subjectId, open);
-  if (!turned.ok) throw new Error("turnOverEpoch failed");
-  const sessionId = turned.closedSessionId;
-  await epoch.aggregateEpoch(sessionId);
-  const requested = await epoch.requestJudging(sessionId);
-  if (!requested.ok) throw new Error("requestJudging failed");
-  const judge = await inHouseJudge();
-  const [j] = await sql<{ id: string }[]>`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/epoch-fixture-judge', 'ph', 'id', 1, 1, '{"verdict":"ok"}'::jsonb,
-            ${judge.id}, ${judge.id})
-    RETURNING id`;
-  const head = await epoch.streamHeadSequence();
+// A consensus no longer writes an event (D71), so there is no commit-time abort to plant for it.
+// The draw's atomicity is asserted in swarm-judge-draw.test.ts.
 
-  const error = await abortedAtCommit(() => recordConsensus(sessionId, Number(j.id)));
-  expect(error).toBe(`planted commit-time failure after event ${head + 1}`);
-
-  expect(await epoch.streamHeadSequence()).toBe(head);
-  const s = await sessionRow(sessionId);
-  expect(s.state).toBe("judging");
-  expect(s.consensus_recorded_at).toBeNull();
-  await setJudgeMode("off");
-});

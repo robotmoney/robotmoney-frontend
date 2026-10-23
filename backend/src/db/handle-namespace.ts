@@ -241,10 +241,8 @@ export const NAMESPACE_GUARD_MAX_BUDGET_MS = 2_147_483_647;
  * unparseable budget is an operator typo, and refusing to start over a typo
  * trades one outage for another.
  *
- * The sibling idiom in src/db/worker-client.ts:28 can stay `Number(...)`: what a
- * `NaN` reaches there is a Postgres startup parameter on the WORKER's pool
- * (`connection.statement_timeout`), in a different process, with no port waiting
- * behind it. Here it would silently remove the only bound in front of one.
+ * A `NaN` here would silently remove the only bound in front of the api's
+ * port.
  */
 export function parseGuardBudgetMs(
   raw: string | undefined,
@@ -313,8 +311,8 @@ function expireAfter(ms: number): { expiry: Promise<never>; cancel: () => void }
  * `swarm_members` held under ACCESS EXCLUSIVE for the whole boot, and requires
  * it to serve /health inside NAMESPACE_GUARD_BUDGET_MS with the lock still held.
  *
- * The mechanism is the one src/db/worker-client.ts:31-38 already uses for the
- * same class of hazard: server-side timeouts as startup parameters, so every
+ * The mechanism is the one db/client.ts's pools use for the same class of
+ * hazard: server-side timeouts as startup parameters, so every
  * statement on the connection inherits them. `lock_timeout` is added because
  * blocking on a LOCK is the specific shape here, and `connect_timeout` because
  * a black-holed TCP path (a firewall-rule mismatch, a managed-Postgres

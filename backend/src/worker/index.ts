@@ -1,14 +1,32 @@
-// Always-on worker process entry: resolves this process's execution lane,
-// runs preflight checks 1-3 as rm_worker, and only then runs the
-// drain/scheduler/reaper loops via runtime.ts. Run with
+// Always-on pipeline worker process entry: resolves this process's execution
+// lane, proves it can reach the api with its pipeline-worker token, and only
+// then runs the drain/scheduler/reaper loops via runtime.ts. Run with
 // `WORKER_LANE=<analytics|generic> bun run src/worker/index.ts`.
 //
 // WORKER_LANE is REQUIRED (issue #107): an empty or unknown lane fails loudly
 // here instead of silently claiming every kind — the compose topology runs
 // one worker container, worker-analytics (see docker-compose.yml).
+//
+// NO DATABASE CREDENTIAL (issue 1034, decision D75). Only the api holds one.
+// This process claims, renews and settles its jobs, reads the state its
+// handlers need and writes their rows through /api/pipeline/**
+// (worker/pipeline-client.ts), presenting the token PIPELINE_TOKEN_FILE names.
+// Its whole import graph reaches no database module and no `postgres` import
+// (backend/tests/pipeline-worker-boundary.test.ts).
 import { warnIfStrategyVaultsUnconfigured } from "../config.ts";
-import { runStartupPreflight } from "../db/preflight.ts";
 import { resolveLane } from "./lanes.ts";
+import { databaseKeysIn, pipelineStartupCheck } from "./startup-check.ts";
+
+// A database key in this process's environment refuses the start, naming the
+// key and never its value. A worker handed a credential is a composition
+// error, and running beside it would hide one.
+const leaked = databaseKeysIn(process.env);
+if (leaked.length > 0) {
+  console.error(
+    `pipeline_startup: refused: this worker holds no database credential (D75), but its environment sets ${leaked.join(", ")}`,
+  );
+  process.exit(1);
+}
 
 // Empty strategy-vault list → loud warning, never a refusal to boot (issue
 // #642, decision D37). This lane runs the wallet SAMPLER (handlers/wallet.ts),
@@ -16,49 +34,27 @@ import { resolveLane } from "./lanes.ts";
 // unconfigured list here silently bakes idle-USDC-only NAV into that history.
 warnIfStrategyVaultsUnconfigured();
 
-// Resolved before preflight so a missing or unknown WORKER_LANE refuses first,
-// on its own message, without touching the database.
+// Resolved before the startup check so a missing or unknown WORKER_LANE
+// refuses first, on its own message, without reaching the api.
 const lane = resolveLane(process.env.WORKER_LANE);
 
-// PREFLIGHT CHECKS 1-3 AS rm_worker (spec §7.2, #1026 criterion 120): "run
-// checks 1–3 at startup against their own credential, log, and refuse to …
-// claim work on failure." Before startWorker, so a refusal claims no job, ticks
-// no schedule, reaps nothing — and writes NO HEARTBEAT: every heartbeat is
-// written from inside startWorker's loops (runtime.ts), so a refused worker
-// never reports itself alive. The signal a stack's readiness reads is the log
-// line, exactly `startup_preflight: passed` or one
-// `startup_preflight: refused check <n>: <reason>` per refusal, then exit 1.
-// No exception of any kind: a refusal claims no job in every process.
-// backend/tests/worker-startup-preflight.test.ts spawns this file and proves
-// a refusal claims zero jobs.
-//
-// A MISSING credential is check 1's question too, and gets the same signal.
-// db/worker-client.ts refuses at import when WORKER_DATABASE_URL is unset, and
-// a static import would throw that before this body runs — an uncaught error
-// with neither line, which readiness would read as "still starting". So the
-// variable is tested first, and the modules that build the pool are imported
-// only once it exists. Both are imported BEFORE the preflight runs: check 2
-// judges the registry, and it must hold every query this program registers.
-if (!process.env.WORKER_DATABASE_URL) {
-  const refused = await runStartupPreflight({ role: "rm_worker", databaseUrl: undefined });
-  for (const line of refused.lines) console.error(line);
-  process.exit(1);
-}
-const { closeDb, workerDatabaseUrl } = await import("../db/worker-client.ts");
-const { startWorker } = await import("./runtime.ts");
-
-const startup = await runStartupPreflight({ role: "rm_worker", databaseUrl: workerDatabaseUrl() });
-if (!startup.passed) {
-  for (const line of startup.lines) console.error(line);
-  await closeDb();
-  process.exit(1);
-}
-for (const line of startup.lines) console.log(line);
-
-// Issue 1378: no claim before the api answers /health. In-process, because a
-// rolling boot starts this service with `--no-deps`, which compose's
-// depends_on cannot gate.
+// THE STARTUP CHECK IS HTTP. The api must answer /health and accept the
+// pipeline-worker token with both of its rights before this worker claims
+// anything. A stack's readiness reads the log line: exactly
+// `pipeline_startup: passed`, or `pipeline_startup: refused: <reason>` and
+// exit 1. The api not answering yet is not a refusal: the check waits for it,
+// as a rolling boot needs (issue 1378). A refused token is, and no heartbeat is
+// written before the check passes, so a refused worker never reports itself
+// alive.
 const { resolveApiHealthUrl } = await import("./boot.ts");
+const startup = await pipelineStartupCheck({ apiHealthUrl: resolveApiHealthUrl() });
+if (!startup.passed) {
+  console.error(startup.line);
+  process.exit(1);
+}
+console.log(startup.line);
+
+const { startWorker } = await import("./runtime.ts");
 const worker = startWorker({ lane, apiHealthUrl: resolveApiHealthUrl() });
 
 let shutdownStarted = false;
@@ -67,7 +63,6 @@ async function shutdown(signal: string): Promise<void> {
   shutdownStarted = true;
   console.log(`\n${signal} received, shutting down…`);
   await worker.stop();
-  await closeDb();
 }
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));

@@ -21,11 +21,8 @@ import {
   SP500_TICKER,
   SP500_SIZE_VERIFIED_AT,
 } from "../../src/config.ts";
-import {
-  fetchWalletBalances,
-  fetchPersistedWalletBalances,
-  _resetWalletBalancesCacheForTests,
-} from "../../src/chain/wallet-balances.ts";
+import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../src/chain/wallet-balances.ts";
+import { fetchPersistedWalletBalances } from "../../src/chain/wallet-balances-store.ts";
 import {
   _resetRpcConcurrencyForTests,
   decodeAggregate3Calls,

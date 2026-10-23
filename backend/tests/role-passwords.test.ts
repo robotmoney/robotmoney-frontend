@@ -97,7 +97,8 @@ beforeAll(async () => {
   // Production's pre-state: rm_owner NOLOGIN with no line; the runtime lines present and working.
   await adminExec("ALTER ROLE rm_owner NOLOGIN");
   const pw = ROLE_PASSWORD();
-  writeFileSync(envPath, `${HEADER}rm_app = ${pw}\nrm_worker = ${pw}\nrm_readonly = ${pw}\n`, { mode: 0o600 });
+  // No rm_worker line: it holds no privilege and is off the allowlist (D75, issue 1034).
+  writeFileSync(envPath, `${HEADER}rm_app = ${pw}\nrm_readonly = ${pw}\n`, { mode: 0o600 });
 });
 
 afterAll(async () => {
@@ -126,12 +127,12 @@ describe("rolePasswords on a real cluster (D61)", () => {
   const runtimeAttributes: Record<string, string> = {};
 
   test("production's pre-state: rm_owner is set (LOGIN + verifier, line written, login proven); the working runtime lines are kept", async () => {
-    for (const r of ["rm_app", "rm_worker", "rm_readonly"]) runtimeAttributes[r] = await attributes(r);
+    for (const r of ["rm_app", "rm_readonly"]) runtimeAttributes[r] = await attributes(r);
     const before = readFileSync(envPath, "utf8");
     const runtimeBefore = await passwords();
     const o = options();
     const result = await rolePasswords(o);
-    expect(result).toEqual({ roles: { rm_app: "kept", rm_worker: "kept", rm_readonly: "kept", rm_owner: "set" }, ownerLoginBefore: false });
+    expect(result).toEqual({ roles: { rm_app: "kept", rm_readonly: "kept", rm_owner: "set" }, ownerLoginBefore: false });
     ownerPassword = lines().rm_owner!;
     expect(ownerPassword).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(readFileSync(envPath, "utf8")).toBe(`${before}rm_owner = ${ownerPassword}\n`);
@@ -144,7 +145,7 @@ describe("rolePasswords on a real cluster (D61)", () => {
     expect(await canLogIn("rm_owner", ownerPassword)).toBe(true);
     // The kept runtime roles: not one ALTER, not one attribute changed.
     const runtimeAfter = await passwords();
-    for (const r of ["rm_app", "rm_worker", "rm_readonly"]) {
+    for (const r of ["rm_app", "rm_readonly"]) {
       expect(runtimeAfter[r], r).toBe(runtimeBefore[r]!);
       expect(await attributes(r), r).toBe(runtimeAttributes[r]!);
     }
@@ -154,20 +155,22 @@ describe("rolePasswords on a real cluster (D61)", () => {
     const text = readFileSync(envPath, "utf8");
     const before = await passwords();
     const result = await rolePasswords(options());
-    expect(result.roles).toEqual({ rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" });
+    expect(result.roles).toEqual({ rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" });
     expect(await passwords()).toEqual(before);
     expect(readFileSync(envPath, "utf8")).toBe(text);
   });
 
   test("an absent runtime line is set without widening the role: password only, every attribute unchanged", async () => {
-    const text = readFileSync(envPath, "utf8").replace(/^rm_worker = .*\n/m, "");
+    const text = readFileSync(envPath, "utf8").replace(/^rm_readonly = .*\n/m, "");
     writeFileSync(envPath, text, { mode: 0o600 });
     const result = await rolePasswords(options());
-    expect(result.roles.rm_worker).toBe("set");
-    const worker = lines().rm_worker!;
-    expect(await canLogIn("rm_worker", worker)).toBe(true);
-    expect(await canLogIn("rm_worker", ROLE_PASSWORD())).toBe(false);
-    expect(await attributes("rm_worker")).toBe(runtimeAttributes.rm_worker!);
+    expect(result.roles.rm_readonly).toBe("set");
+    const readonly = lines().rm_readonly!;
+    expect(await canLogIn("rm_readonly", readonly)).toBe(true);
+    expect(await canLogIn("rm_readonly", ROLE_PASSWORD())).toBe(false);
+    expect(await attributes("rm_readonly")).toBe(runtimeAttributes.rm_readonly!);
+    // rm_worker is not managed (D75): no line is written for it.
+    expect(lines().rm_worker).toBeUndefined();
   });
 
   test("a line that does not log in refuses, names --rotate, changes nothing, and prints no secret", async () => {

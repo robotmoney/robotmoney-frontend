@@ -62,9 +62,8 @@ let author: TestMember | null = null;
 
 /**
  * An in-house participant with `role = judge` — the credential the
- * subscription authenticates. Judge A's id sorts before judge B's, so A is the
- * judge of record whenever both are seated (scheduler spec §4.4: chosen by
- * member id, never by arrival).
+ * subscription authenticates. Every seated judge is asked to judge every
+ * session (D71), so A and B are both served the same work.
  */
 async function activeJudge(which: "a" | "b" = "a"): Promise<TestJudge> {
   const cached = which === "a" ? judgeA : judgeB;
@@ -261,24 +260,16 @@ test("once this judge has submitted, the session is no longer served to it", asy
   expect((await judge.pendingJudgingFor(j.id)).map((p) => p.sessionId)).not.toContain(sessionId);
 });
 
-test("the pending filter is per judge: one judge's judgement is not another's", async () => {
-  // THE ROW IS PLANTED, and the reason is worth stating because it looks like a
-  // shortcut and is not. A real `submitJudgement` by judge A on a session in
-  // `judging` also RECORDS THE CONSENSUS, which moves the session to `judged`
-  // and takes it out of everyone's pending set — correctly, per §4.4. So a
-  // two-judge submission cannot isolate the property under test. What is under
-  // test is the filter's scope: it excludes a session because THIS judge has a
-  // judgement on it, never because some judge does. A filter keyed on the
-  // session alone would silence every other judge the moment one answered.
+test("one judge answering does not stop the other judges from being asked", async () => {
+  // What is under test is the filter's scope: it excludes a session because
+  // THIS judge has a judgement on it, never because some judge does. An answer
+  // records evidence only (D71), so the session stays `judging` and every other
+  // eligible judge is still served it.
   const a = await activeJudge("a");
   const b = await activeJudge("b");
   const { sessionId } = await judgingSession("js_two_judges");
-  await sql`
-    INSERT INTO swarm_session_judgements
-      (session_id, mode, source, model, prompt_hash, inputs_digest, take_count, min_takes, opinion,
-       judged_by, judged_by_member_id)
-    VALUES (${sessionId}, 'enforce', 'model', 'test/participant-judge', 'ph', 'id', 1, 1,
-            ${sql.json(JSON.parse(OPINION))}, ${a.id}, ${a.id})`;
+  const done = await judge.submitJudgement(a.token, await submission(a, sessionId));
+  expect(done.ok).toBe(true);
   expect((await judge.pendingJudgingFor(a.id)).map((p) => p.sessionId)).not.toContain(sessionId);
   expect((await judge.pendingJudgingFor(b.id)).map((p) => p.sessionId)).toContain(sessionId);
   expect((await sessionRow(sessionId)).state).toBe("judging");
@@ -329,7 +320,7 @@ test("a member that is not a judge cannot submit a judgement", async () => {
   if (!refused.ok) expect(refused.error).toBe("judge_role_required");
 });
 
-test("the submission records the consensus with its acceptance instant", async () => {
+test("the submission records the answer with its accepted time and records no consensus", async () => {
   const j = await activeJudge();
   const { sessionId } = await judgingSession("js_instant");
   const before = Date.now();
@@ -337,23 +328,21 @@ test("the submission records the consensus with its acceptance instant", async (
   expect(ok.ok).toBe(true);
   if (!ok.ok) return;
 
+  // An answer is evidence only (D71): the session waits for the judging deadline.
   const row = await sessionRow(sessionId);
-  expect(row.state).toBe("judged");
-  expect(row.consensus_recorded_at).not.toBeNull();
-  const recorded = new Date(row.consensus_recorded_at).getTime();
-  expect(recorded).toBeGreaterThanOrEqual(before - 1000);
-  expect(ok.recordedAt).toBe(new Date(row.consensus_recorded_at).toISOString());
+  expect(row.state).toBe("judging");
+  expect(row.consensus_recorded_at).toBeNull();
+  expect(ok.applied).toBe(false);
 
-  // Wired to part 1's transition rather than duplicating it: the judgement row
-  // this route wrote is the one the consensus points at, and the `session.judged`
-  // event exists because `recordJudgingConsensusTx` wrote it in its own
-  // transaction.
-  const [judgement] = await sql<{ judged_by_member_id: string }[]>`
-    SELECT judged_by_member_id FROM swarm_session_judgements WHERE id = ${ok.judgementId}`;
+  // The accepted time is saved with the row, from one clock reading.
+  const [judgement] = await sql<{ judged_by_member_id: string; created_at: Date; applied_skipped_reason: string }[]>`
+    SELECT judged_by_member_id, created_at, applied_skipped_reason FROM swarm_session_judgements WHERE id = ${ok.judgementId}`;
   expect(judgement.judged_by_member_id).toBe(j.id);
-  const [event] = await sql<{ payload: any }[]>`
-    SELECT payload FROM swarm_stream_events WHERE session_id = ${sessionId} AND kind = 'session.judged'`;
-  expect(event.payload.judgementId).toBe(ok.judgementId);
+  expect(judgement.applied_skipped_reason).toBe("awaiting_draw");
+  expect(new Date(judgement.created_at).getTime()).toBeGreaterThanOrEqual(before - 1000);
+  expect(ok.recordedAt).toBe(new Date(judgement.created_at).toISOString());
+  // And no early-publish event was written for it.
+  expect(await sql`SELECT 1 FROM swarm_stream_events WHERE session_id = ${sessionId} AND kind = 'session.judged'`).toHaveLength(0);
 });
 
 test("nothing is fabricated: the stored judgement is the judge's own opinion, with no fallback source", async () => {
@@ -460,7 +449,7 @@ test("an unconnected judge holds up no other session", async () => {
   const absent = await judgingSession("js_isolation_absent");
   const answered = await judgingSession("js_isolation_answered");
   await judge.submitJudgement(j.token, await submission(j, answered.sessionId));
-  expect((await sessionRow(answered.sessionId)).state).toBe("judged");
+  expect((await sessionRow(answered.sessionId)).state).toBe("judging");
   expect((await sessionRow(absent.sessionId)).state).toBe("judging");
 });
 
@@ -544,7 +533,8 @@ test("the submission route posts a judgement under the judge's credential", asyn
   )) as { status: number; body: any };
   expect(res.status).toBe(200);
   expect(res.body.sessionId).toBe(sessionId);
-  expect((await sessionRow(sessionId)).state).toBe("judged");
+  expect(res.body.applied).toBe(false);
+  expect((await sessionRow(sessionId)).state).toBe("judging");
 });
 
 test("the judge routes own only their own paths", async () => {

@@ -39,7 +39,7 @@
 // with the table and no row refuses before any prompt: set-identity never
 // writes a row.
 //
-// provision-tokens (§9.1 step 5): the three holders' rows in the token store,
+// provision-tokens (§9.1 step 5): the four holders' rows in the token store,
 // each secret in `tokens/<holder>/token` under the instance's state directory,
 // each file's hash the row's.
 //
@@ -189,7 +189,7 @@ describe("§9.1 step 1 — `prod-init role-passwords`: the role passwords throug
     const [receipt] = receipts("role-passwords");
     expect(receipt).toMatchObject({
       command: "role-passwords", outcome: "completed",
-      detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" }, ownerLoginBefore: false },
+      detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" }, ownerLoginBefore: false },
     });
     const text = JSON.stringify(receipt);
     for (const secret of [db.passwords.rm_owner, DOADMIN_PASSWORD, WRONG_DOADMIN]) expect(text).not.toContain(secret);
@@ -199,7 +199,7 @@ describe("§9.1 step 1 — `prod-init role-passwords`: the role passwords throug
   test("the rerun: every role kept, nothing altered", async () => {
     const run = await rolePasswords();
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
-    expect(receipts("role-passwords").at(-1)).toMatchObject({ detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" }, ownerLoginBefore: true } });
+    expect(receipts("role-passwords").at(-1)).toMatchObject({ detail: { roles: { rm_owner: "kept", rm_app: "kept", rm_readonly: "kept" }, ownerLoginBefore: true } });
   }, 120_000);
 
   test("RED CONTROL: without --doadmin-stdin and with no terminal it refuses before the lock; the ~/.env doadmin line is never a fallback", async () => {
@@ -228,7 +228,7 @@ describe("§9.1 step 1 — `prod-init role-passwords`: the role passwords throug
       expect(run.screen).not.toContain(generated!);
       expect(db.superuser("SELECT rolpassword FROM pg_authid WHERE rolname = 'rm_owner'")).toMatch(/^SCRAM-SHA-256\$4096:/);
       const receipt = receipts("role-passwords").at(-1)!;
-      expect(receipt).toMatchObject({ outcome: "completed", detail: { roles: { rm_owner: "set", rm_app: "kept", rm_worker: "kept", rm_readonly: "kept" } } });
+      expect(receipt).toMatchObject({ outcome: "completed", detail: { roles: { rm_owner: "set", rm_app: "kept", rm_readonly: "kept" } } });
       expect(JSON.stringify(receipt)).not.toContain(generated!);
       const rerun = await rolePasswords();
       expect(rerun.code).toBe(0);
@@ -256,14 +256,14 @@ describe("§9.1 step 1 — `prod-init role-passwords`: the role passwords throug
   }, 120_000);
 });
 
-describe("§9.1 step 5 — `prod-init provision-tokens` writes the three holders' rows and token files", () => {
-  test("~/.env's rm_owner, the exact --confirm-target and the target lock: three rows in the store, three 0600 files whose hashes are the rows', one receipt", async () => {
+describe("§9.1 step 5 — `prod-init provision-tokens` writes the four holders' rows and token files", () => {
+  test("~/.env's rm_owner, the exact --confirm-target and the target lock: four rows in the store, four 0600 files whose hashes are the rows', one receipt", async () => {
     const run = await prodInit(["provision-tokens"]);
     expect({ code: run.code, tail: run.code === 0 ? "" : run.screen.slice(-2000) }).toEqual({ code: 0, tail: "" });
     const rows = db
       .superuser(`SELECT holder || '|' || token_hash || '|' || created_by FROM automation_tokens WHERE instance = '${PRODUCTION_INSTANCE}' ORDER BY holder`)
       .split("\n");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(SERVICE_TOKEN_HOLDERS.length);
     for (const holder of SERVICE_TOKEN_HOLDERS) {
       const file = paths().tokenFiles[holder];
       expect(statSync(file).mode & 0o777).toBe(0o600);

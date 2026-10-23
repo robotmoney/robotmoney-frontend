@@ -1583,7 +1583,8 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .adm-btn--ghost:hover { color: var(--color-text); border-color: var(--color-text-muted); opacity: 1; }
 
 /* Toolbar */
-.adm-toolbar { display: flex; align-items: center; gap: 0.75rem; margin: 0.5rem 0 1.5rem; }
+/* Wraps: a member's action row ran 16px past a 390px viewport. */
+.adm-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0.5rem 0 1.5rem; }
 .adm-toolbar__spacer { flex: 1 1 auto; }
 
 /* Status tiles + badges */
@@ -1606,6 +1607,13 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* Section headings + tables */
 .adm-h2 { font-size: 1rem; font-family: var(--font-mono); color: var(--color-text-muted); margin: 2rem 0 0.75rem; }
 .adm-h2--flush { margin-top: 0; }
+/* Member avatar (RM-184): current and picked image side by side, each in the
+   public pages' own .sv__avatar box. */
+.adm-avatar { margin: 0 0 2rem; }
+.adm-avatar__row { display: flex; gap: 1.5rem; }
+.adm-avatar__slot { margin: 0; display: grid; justify-items: start; gap: 0.4rem; font-size: 0.75rem; }
+.adm-avatar .adm-toolbar { margin-bottom: 0.5rem; }
+.adm-avatar input[type="file"] { flex: 0 1 24rem; min-width: 0; }
 .adm-table { font-family: var(--font-mono); }
 .adm-table .adm-err { max-width: 24rem; white-space: normal; word-break: break-word; color: var(--color-text-muted); }
 .adm-row { cursor: pointer; }

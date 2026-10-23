@@ -70,7 +70,10 @@ describe("the bootstrap migration credential never reaches a long-running servic
     // would break the stack, and this is what tells the two apart.
     const main = read("docker-compose.yml");
     expect(main).toContain("DATABASE_URL: ${DATABASE_URL}");
-    expect(main).toMatch(/WORKER_DATABASE_URL:\s*\$\{WORKER_DATABASE_URL:-\}/);
+    // The pipeline worker's one credential is its token file (issue 1034, D75).
+    const live = main.split("\n").filter((line) => !line.trim().startsWith("#")).join("\n");
+    expect(live).not.toMatch(/WORKER_DATABASE_URL/);
+    expect(main).toContain("PIPELINE_TOKEN_FILE:");
   });
 
   test("the migration step is the one place that names the credential", () => {

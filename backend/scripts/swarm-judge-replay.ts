@@ -90,6 +90,7 @@ let mismatched = 0;
 let wrote = 0;
 let digestMismatched = 0;
 let digestHistorical = 0;
+let drawMismatched = 0;
 for (const id of sessionIds) {
   const replay = await replaySessionJudge(id);
   if (!replay) {
@@ -100,6 +101,7 @@ for (const id of sessionIds) {
   if (!replay.judgeWroteNothing) wrote++;
   if (replay.digestVerdict === "mismatch") digestMismatched++;
   if (replay.digestVerdict === "historical_divergence") digestHistorical++;
+  if (replay.drawVerdict === "mismatch") drawMismatched++;
   results.push({
     sessionId: replay.sessionId,
     date: replay.date,
@@ -125,6 +127,8 @@ for (const id of sessionIds) {
     digestScheme: replay.digestScheme,
     digestStored: replay.digestStored,
     digestRederived: replay.digestRederived,
+    drawVerdict: replay.drawVerdict,
+    drawProblems: replay.drawProblems,
   });
   if (!asJson) {
     const verdict = replay.weightsVerdict === "mismatch"
@@ -147,13 +151,15 @@ for (const id of sessionIds) {
         `takes=${replay.takeCount}`,
         `judge=${replay.judgementSource ?? "never-judged"}${replay.judgementFallbackReason ? `(${replay.judgementFallbackReason})` : ""}`,
         digestBadge,
+        replay.drawVerdict === "verified" ? "draw-ok" : replay.drawVerdict === "mismatch" ? "DRAW-MISMATCH" : "",
         replay.judgeWroteNothing ? "" : "JUDGE-WROTE-THE-VECTOR",
-      ].join("  ").trimEnd(),
+      ].filter(Boolean).join("  ").trimEnd(),
     );
     if (replay.weightsVerdict === "mismatch") {
       console.log(`           stored:    ${JSON.stringify(replay.weightsStored)}`);
       console.log(`           rederived: ${JSON.stringify(replay.weightsRederived)}`);
     }
+    for (const problem of replay.drawProblems) console.log(`           draw: ${problem}`);
     if (replay.digestVerdict === "mismatch" || replay.digestVerdict === "historical_divergence") {
       console.log(
         `           digest scheme: stored=${replay.digestScheme ?? "(none)"} current=${DIGEST_SCHEME}` +
@@ -173,13 +179,14 @@ const drift = only ? null : await listRationaleLadderDrift();
 
 if (asJson) {
   console.log(
-    JSON.stringify({ sessions: results, mismatched, wrote, digestMismatched, digestHistorical, rationaleDrift: drift }, null, 2),
+    JSON.stringify({ sessions: results, mismatched, wrote, digestMismatched, digestHistorical, drawMismatched, rationaleDrift: drift }, null, 2),
   );
 } else {
   console.log(
     `\n${results.length} session(s) replayed, ${mismatched} vector(s) no longer reproducible, ` +
       `${wrote} vector(s) written by the replay, ${digestMismatched} digest(s) mismatched under the current scheme, ` +
-      `${digestHistorical} digest(s) diverged under an earlier scheme (expected, not failed)`,
+      `${digestHistorical} digest(s) diverged under an earlier scheme (expected, not failed), ` +
+      `${drawMismatched} stored draw(s) that do not recompute`,
   );
   if (drift) {
     console.log(
@@ -209,4 +216,4 @@ if (asJson) {
 // Drift and historical digest divergence are deliberately NOT in the exit
 // code — see the header. A post-cutover digest mismatch IS: it is a real
 // finding, exactly as a weight mismatch is.
-process.exit(mismatched === 0 && wrote === 0 && digestMismatched === 0 ? 0 : 1);
+process.exit(mismatched === 0 && wrote === 0 && digestMismatched === 0 && drawMismatched === 0 ? 0 : 1);

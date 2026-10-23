@@ -1,14 +1,12 @@
-// The two setDatabase() TEST SEAMS refuse to run unless the test seam is armed.
+// The setDatabase() TEST SEAM, and the pipeline worker's transport seam, refuse
+// to run unless the test seam is armed.
 //
-// WHY THIS IS ITS OWN TEST. db/client.ts and db/worker-client.ts each export a
-// function that re-points a long-lived pool at an arbitrary URL. Both were
-// documented as test-only and neither enforced it — flagged independently by
-// two reviewers on PR #686 (R-003, SEC-005). The worker one is the sharper
-// case: it deliberately DROPS the WORKER_DATABASE_URL fallback, so a call in a
-// deployed worker moves the process off the restricted `rm_worker` role
-// (migrations/0016_worker_role.sql:42) and onto the owner role in
-// config.databaseUrl — silently undoing the analytics write boundary that
-// tests/analytics-worker-role.test.ts exists to prove.
+// WHY THIS IS ITS OWN TEST. db/client.ts exports a function that re-points a
+// long-lived pool at an arbitrary URL; it was documented as test-only and not
+// enforced — flagged independently by two reviewers on PR #686 (R-003,
+// SEC-005). The pipeline worker's client (worker/pipeline-client.ts, issue
+// 1034) exports setPipelineTransport, which re-routes every queue call and
+// write the worker sends: in a deployed worker it would send them anywhere.
 //
 // "Nothing in production ever calls it" is a claim about today's call graph.
 // This makes it a property of the function. Issue #973: the gate used to be
@@ -21,7 +19,6 @@ import { test, expect } from "bun:test";
 import { join } from "node:path";
 import { config } from "../src/config.ts";
 import * as client from "../src/db/client.ts";
-import * as workerClient from "../src/db/worker-client.ts";
 import { testSeamArmed } from "../src/test-seam.ts";
 
 const BACKEND_DIR = join(import.meta.dir, "..");
@@ -37,7 +34,7 @@ function unarmed(script: string, env: Record<string, string> = {}): { out: strin
   return { out: proc.stdout.toString().trim(), code: proc.exitCode, err: proc.stderr.toString() };
 }
 
-const SEAM_SCRIPT = (module: "client" | "worker-client") => `
+const SEAM_SCRIPT = (module: "client") => `
 const { config } = await import("./src/config.ts");
 const m = await import("./src/db/${module}.ts");
 const before = { databaseUrl: config.databaseUrl, env: process.env.DATABASE_URL, pool: m.sql };
@@ -65,16 +62,22 @@ for (const rmEnv of ["ephemeral", "smoke", "prod", undefined]) {
     expect(parsed).toMatchObject({ configUntouched: true, envUntouched: true, poolUntouched: true });
   });
 
-  test(`db/worker-client.setDatabase() refuses in a process that never armed the seam (${label})`, () => {
-    const res = unarmed(SEAM_SCRIPT("worker-client"), env);
+  test(`worker/pipeline-client.setPipelineTransport() refuses in a process that never armed the seam (${label})`, () => {
+    const res = unarmed(
+      `const m = await import("./src/worker/pipeline-client.ts");
+       let error = null;
+       try { m.setPipelineTransport(async () => ({ status: 200, text: "{}", retryAfter: null })); } catch (e) { error = e.message; }
+       console.log(JSON.stringify({ error }));
+       process.exit(0);`,
+      env,
+    );
     if (res.code !== 0 || !res.out) throw new Error(`subprocess failed (${res.code}): ${res.err}`);
     const parsed = JSON.parse(res.out.split("\n").at(-1)!) as Record<string, unknown>;
-    expect(parsed.error).toMatch(/db\/worker-client\.setDatabase\(\) is a test-only seam and this process is not the test harness/);
-    expect(parsed).toMatchObject({ poolUntouched: true });
+    expect(parsed.error).toMatch(/worker\/pipeline-client\.setPipelineTransport\(\) is a test-only seam and this process is not the test harness/);
   });
 }
 
-test("both seams work in the armed harness — the suite depends on it", async () => {
+test("the seam works in the armed harness — the suite depends on it", async () => {
   // Positive control. Without this, the tests above would also pass if
   // setDatabase() had been broken outright.
   expect(testSeamArmed()).toBe(true); // armed by tests/preload.ts
@@ -82,7 +85,6 @@ test("both seams work in the armed harness — the suite depends on it", async (
   const url = process.env.DATABASE_URL!;
   const before = config.databaseUrl;
   await client.setDatabase(url);
-  await workerClient.setDatabase(url);
   expect(config.databaseUrl).toBe(before);
   const [{ db }] = (await client.sql`SELECT current_database() AS db`) as unknown as { db: string }[];
   expect(db).toBe(new URL(url).pathname.slice(1));

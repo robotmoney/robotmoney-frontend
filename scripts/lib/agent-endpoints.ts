@@ -433,7 +433,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.sessionJudgements,
     summary: "The consensus judge's public opinion on one session",
     description:
-      "A session has one judge of record: the active judge that comes first by member id and filed no take in it; an outside judge counts only once third-party judging is on. This lists its public judgement (and, for a session re-judged by another judge, that judge's latest too), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
+      "Every eligible judge judges a session, and one on-time answer is drawn at random after the judging deadline; its judge is the judge of record. An outside judge counts only once third-party judging is on. This lists the drawn public judgement (for a session published before the draw existed, the judgements that reached the session), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session (the drawn one) are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.",
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmJudgementsResponse",
@@ -755,14 +755,15 @@ function flattenRoutes(node: unknown, out: string[] = []): string[] {
 /**
  * Fail when the catalogue has drifted from ROUTES.
  *
- * Admin, analytics-provider and health-adjacent namespaces are skipped wholesale:
+ * Admin, analytics-provider, pipeline-worker (issue 1034, D75) and
+ * health-adjacent namespaces are skipped wholesale:
  * they are credentialed surfaces that must never be advertised to an anonymous
  * reader. Everything else must be either catalogued or excluded with a reason.
  */
 export function assertCatalogCoversRoutes(): string[] {
   const catalogued = new Set(PUBLIC_ENDPOINTS.map((e) => e.path));
   const excluded = new Set(Object.keys(EXCLUDED_ROUTES));
-  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
+  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/") || p.startsWith("/api/pipeline/");
 
   const missing = flattenRoutes(ROUTES)
     .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)

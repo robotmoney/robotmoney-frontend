@@ -9,11 +9,12 @@
 // What this file pins, each from the running cluster or from the source, not
 // from a comment:
 //
-//   1. NO POOL IS A SUPERUSER. The api pool and the worker pool authenticate as
-//      logins that hold no SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or
-//      BYPASSRLS, and neither login is the container's bootstrap superuser.
-//   2. THE WORKER POOL IS A RUNTIME ROLE. Its session role is `rm_worker`, and it
-//      is refused DELETE, as a runtime role is (D55 (6)).
+//   1. NO POOL IS A SUPERUSER. The api pool authenticates as a login that
+//      holds no SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS, and
+//      is not the container's bootstrap superuser.
+//   2. THE PIPELINE WORKER HOLDS NO POOL (issue 1034, D75). The suite sets no
+//      WORKER_DATABASE_URL, and rm_worker, which nothing logs in as, is
+//      refused even a read of the queue (migration 0127).
 //   3. THE SCHEMA IS `rm_owner`'S. Every relation in the shared database is owned
 //      by it, and the ledger is the snapshot's own filename list: the database
 //      was bootstrapped from backend/schema/, not replayed by a superuser.
@@ -29,7 +30,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
-import * as workerClient from "../src/db/worker-client.ts";
+import postgres from "postgres";
 import { loadSnapshot } from "../src/db/schema-snapshot.ts";
 import { adminUrl } from "./support/cluster.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
@@ -73,20 +74,6 @@ describe("the pools log in as roles, never as a superuser", () => {
     expect(facts!.current_user).toBe("rm_app");
   });
 
-  test("the worker pool: a login with no cluster powers, whose session role is rm_worker", async () => {
-    const [facts] = (await workerClient.sql.unsafe(FACTS)) as unknown as LoginFacts[];
-    expect(facts).toBeDefined();
-    expect({
-      rolsuper: facts!.rolsuper,
-      rolcreaterole: facts!.rolcreaterole,
-      rolcreatedb: facts!.rolcreatedb,
-      rolreplication: facts!.rolreplication,
-      rolbypassrls: facts!.rolbypassrls,
-    }).toEqual({ rolsuper: false, rolcreaterole: false, rolcreatedb: false, rolreplication: false, rolbypassrls: false });
-    expect(facts!.session_user).toBe("rm_test_worker");
-    expect(facts!.current_user).toBe("rm_worker");
-  });
-
   test("the fixture handle: a login with no cluster powers, acting as the schema owner", async () => {
     const [facts] = (await fixtureDb.unsafe(FACTS)) as unknown as LoginFacts[];
     expect(facts).toBeDefined();
@@ -99,10 +86,10 @@ describe("the pools log in as roles, never as a superuser", () => {
     expect(facts!.current_user).toBe("rm_owner");
   });
 
-  test("neither configured URL is the container's bootstrap superuser", () => {
+  test("the configured URL is not the container's bootstrap superuser, and there is no worker URL", () => {
     const admin = new URL(adminUrl()).username;
     expect(new URL(process.env.DATABASE_URL!).username).not.toBe(admin);
-    expect(new URL(process.env.WORKER_DATABASE_URL!).username).not.toBe(admin);
+    expect(process.env.WORKER_DATABASE_URL).toBeUndefined();
     // Non-vacuous: the admin is a real, different login.
     expect(admin.length).toBeGreaterThan(0);
   });
@@ -128,20 +115,25 @@ describe("the pools log in as roles, never as a superuser", () => {
   });
 });
 
-describe("the worker pool is a runtime role", () => {
-  test("it is refused DELETE, the privilege no runtime role holds (D55 (6))", async () => {
+describe("rm_worker holds nothing (issue 1034, migration 0127)", () => {
+  test("logged in as itself, it is refused even a read of the queue", async () => {
+    const [{ db }] = (await sql`SELECT current_database() AS db`) as unknown as { db: string }[];
+    const url = new URL(process.env.DATABASE_URL!);
+    url.username = "rm_worker";
+    url.password = process.env.RM_TEST_ROLE_PASSWORD!;
+    url.pathname = `/${db}`;
+    const worker = postgres(url.toString(), { max: 1, onnotice: () => {} });
     let code: string | undefined;
     try {
-      await workerClient.sql`DELETE FROM job_schedules WHERE false`;
+      // Schema-qualified: with no USAGE on `public`, an unqualified name does
+      // not even resolve (42P01); the qualified one is refused by grant.
+      await worker`SELECT count(*)::int AS n FROM public.jobs`;
     } catch (error) {
       code = (error as { code?: string }).code;
+    } finally {
+      await worker.end({ timeout: 5 });
     }
     expect(code).toBe("42501");
-  });
-
-  test("and it can do what the worker does: claim work in the queue", async () => {
-    const rows = await workerClient.sql`SELECT count(*)::int AS n FROM jobs`;
-    expect(typeof rows[0]!.n).toBe("number");
   });
 });
 
@@ -180,7 +172,6 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
   const CLUSTER_ADMIN_FILES: readonly string[] = [
     "admin-revocation.test.ts",
     "analytics-ledger-restore.test.ts",
-    "analytics-worker-role.test.ts",
     "api-version-endpoint.test.ts", // drops its own database under the running api (issue #973)
     "append-only-replication.test.ts",
     "automation-token-provision.test.ts",
@@ -201,6 +192,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "pre-revoke-boot-refusal.test.ts",
     "prod-baseline.test.ts",
     "prune-command.test.ts",
+    "rm-worker-retired.test.ts", // sets rm_worker's password to log in as it (issue 1034)
     "role-passwords.test.ts",
     "runtime-delete-revoked.test.ts",
     "schema-additive-backfills.test.ts",
@@ -222,7 +214,6 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "upgrade-from-release.test.ts",
     "upgrade-preflight-rm-owner-login.test.ts",
     "webauthn-challenge-slots.test.ts",
-    "worker-startup-preflight.test.ts",
   ];
 
   const ADMIN_USE = /\b(adminExec|adminConnection|adminUrl)\b|RM_TEST_ADMIN_URL|connectAdmin\b/;

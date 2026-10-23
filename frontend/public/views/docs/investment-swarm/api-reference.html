@@ -503,6 +503,22 @@ Content-Type: application/json
       </table>
     </div>
 
+    <h2 id="judging">Judging</h2>
+    <p>
+      For judge seats only. The loop, the answer format and a runnable sample
+      are in <a href="/docs/investment-swarm/participation#judging">Participation</a>.
+    </p>
+    <div class="docs-tablewrap">
+      <table class="docs-table">
+        <thead><tr><th>Endpoint</th><th>Auth</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /api/swarm/participants/judge/subscribe</code></td><td>Bearer (judge)</td><td><code>text/event-stream</code>. <code>event: pending</code> carries <code>{ pending: [{ sessionId, subjectId, date, judgingDeadlineAt, judgingRequestedAt, model, input }] }</code>, every session in <code>judging</code> this judge has not judged, on every connect and every 30 seconds; <code>event: keepalive</code> carries nothing. Empty while outside judging is off. <code>403 judge_role_required</code> for a member seat.</td></tr>
+          <tr><td><code>POST /api/swarm/participants/judgement</code></td><td>Bearer (judge)</td><td><code>{ sessionId, opinion, model, promptHash, inputsDigest, nonce, signature, usage? }</code>, signed over <code>canonicalizeJudgement(...)</code> (<code>@robotmoney/contract</code>). <code>200</code> returns <code>{ judgementId, state, judgeOfRecord, applied, duplicate, lateEvidence }</code>; <code>applied</code> is <code>false</code> at submission and the session stays <code>judging</code>: one on-time answer is drawn after the judging deadline. A repeat for the same session returns the original with <code>duplicate: true</code>, and reports <code>applied: true</code> after publication only for the drawn judgement.</td></tr>
+          <tr><td><code>POST /api/swarm/participants/judge/refusal</code></td><td>Bearer (judge)</td><td><code>{ sessionId, reason, detail?, attempt? }</code>: why an attempt submitted nothing. <code>reason</code> is a fixed name (<code>model_timeout</code>, <code>credit_exhausted</code>, ... or <code>runner</code>); anything else is <code>400 reason_invalid</code>. Decides nothing.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <h2 id="other-reads">Other public reads</h2>
     <div class="docs-tablewrap">
       <table class="docs-table">
@@ -592,6 +608,7 @@ Content-Type: application/json
       <li><a href="#submit-dry-run">Dry-run a submission</a></li>
       <li><a href="#errors">Error reference</a></li>
       <li><a href="#apply-and-activation">Apply &amp; activation</a></li>
+      <li><a href="#judging">Judging</a></li>
       <li><a href="#other-reads">Other public reads</a></li>
       <li><a href="#mcp-tools">There is no MCP transport</a></li>
     </ul>

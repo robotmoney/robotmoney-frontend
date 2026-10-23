@@ -228,7 +228,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     }
   });
 
-  test("criteria 31, 96: three token files, the hash and the holder's rights in the store, no token in any environment", () => {
+  test("criteria 31, 96: one token file per holder, the hash and the holder's rights in the store, no token in any environment", () => {
     // Journaled as its own preparation step (§5), after the database was enrolled.
     const steps = journalNow(h)!.phases.filter((r) => r.phase === "prepare").map((r) => `${r.step}:${r.status}`);
     expect(steps).toContain("tokens:committed");
@@ -237,6 +237,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
       "system-scheduler": "lifecycle_transitions,read_sessions,read_subjects",
       "analytics-producer": "analytics_ingestion",
       operator: "admin",
+      "pipeline-worker": "pipeline_ingest,pipeline_queue",
     };
     for (const holder of SERVICE_TOKEN_HOLDERS) {
       const file = h.paths.tokenFiles[holder];
@@ -249,7 +250,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
       expect({ holder, row }).toEqual({ holder, row: `${holder}|${rights[holder]}` });
       expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE token_hash = '${secret.replace(/'/g, "''")}' OR instance = '${secret.replace(/'/g, "''")}'`)).toBe("0");
     }
-    expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE instance = '${h.instance}'`)).toBe("3");
+    expect(bootQuery(h.project, `SELECT count(*) FROM automation_tokens WHERE instance = '${h.instance}'`)).toBe(String(SERVICE_TOKEN_HOLDERS.length));
     // No service carries a token in its environment (smoke spec §3, D52).
     for (const service of ["api", "worker-analytics", "system-scheduler", "analytics-producer", "website-server"]) {
       for (const key of ["ADMIN_TOKEN", "AUTOMATION_TOKEN", "ANALYTICS_TOKEN"]) {
@@ -326,11 +327,12 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
     expect(bootQuery(h.project, "SELECT count(*) FROM schema_manifest")).toBe("1");
   });
 
-  test("the api runs as rm_app and the pipeline worker as rm_worker — no container holds the local superuser", () => {
+  test("the api runs as rm_app, the pipeline worker holds no database URL (D75) — no container holds the local superuser", () => {
     const user = (url: string | undefined) => (url ? decodeURIComponent(new URL(url).username) : "(unset)");
     expect(user(containerEnv(h.project, "api", "DATABASE_URL"))).toBe("rm_app");
-    expect(user(containerEnv(h.project, "worker-analytics", "DATABASE_URL"))).toBe("rm_worker");
-    expect(user(containerEnv(h.project, "worker-analytics", "WORKER_DATABASE_URL"))).toBe("rm_worker");
+    expect(user(containerEnv(h.project, "worker-analytics", "DATABASE_URL"))).toBe("(unset)");
+    expect(user(containerEnv(h.project, "worker-analytics", "WORKER_DATABASE_URL"))).toBe("(unset)");
+    expect(containerEnv(h.project, "worker-analytics", "PIPELINE_TOKEN_FILE")).toBeTruthy();
     for (const service of ["api", "worker-analytics", "system-scheduler", "analytics-producer", "website-server"]) {
       for (const key of ["DATABASE_URL", "WORKER_DATABASE_URL", "MIGRATE_DATABASE_URL"]) {
         const value = containerEnv(h.project, service, key);
@@ -351,7 +353,7 @@ describe("a real `bun smoke` run (criteria 20, 14, 40, 26, 29)", () => {
 
   test("criterion 14: the printed plan holds no role password, owner password or service token", () => {
     const plan = printedPlan(boot);
-    expect(serviceTokens.length).toBe(3);
+    expect(serviceTokens.length).toBe(SERVICE_TOKEN_HOLDERS.length);
     const secrets = {
       ...Object.fromEntries(Object.entries(ROLE_PASSWORDS).map(([k, v]) => [`role password ${k}`, v])),
       ...Object.fromEntries(serviceTokens.map((t, i) => [`service token ${i}`, t])),
@@ -508,7 +510,7 @@ describe("a real `bun smoke` run with a seated roster (criterion 14, roster half
     // The roster WAS read — the plan carries it by name and fingerprint.
     expect(plan).toContain("agent: athena role member key fp:");
     expect(plan).toContain("judge: themis role judge key fp:");
-    expect(rosterServiceTokens.length).toBe(3);
+    expect(rosterServiceTokens.length).toBe(SERVICE_TOKEN_HOLDERS.length);
     const shapeless = {
       "participant model key": PARTICIPANT.modelKey,
       "participant private key": PARTICIPANT.privateD,

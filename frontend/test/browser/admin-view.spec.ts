@@ -1114,6 +1114,96 @@ test("swarm admin: member profile edit gives only stale_version the reload advic
   await expect(page.getByText(/stale version.*reload and try again/)).toBeVisible();
 });
 
+// RM-184: the avatar picker posts the file's raw bytes, with its own type, to
+// the #626 route, then reloads and shows the upload in the public pages' slot.
+// The member id is UUID-shaped because the route refuses any other.
+const MEMBER_UPLOADABLE = {
+  ...MEMBER_ACTIVE, id: "26e56b8d-341b-4670-9f86-e27848dd0348", handle: "allscale", name: "AllScale", token_hash: undefined,
+};
+const UPLOADED_PATH = `/api/swarm/members/${MEMBER_UPLOADABLE.id}/avatar?v=abc12345`;
+// A real 1x1 PNG: the avatar <img> swaps itself for the derived mark when its
+// bytes fail to decode, so a magic number alone would fail the last assertion.
+const PNG_BYTES = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+
+test("swarm admin: avatar upload posts the raw image and shows the uploaded avatar", async ({ page }) => {
+  await mockSwarmApi(page);
+  let avatar: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) =>
+    route.fulfill(jsonReply({ members: [MEMBER_ACTIVE, { ...MEMBER_UPLOADABLE, avatar }] })));
+  let captured: { type: string | null; token: string | null; bytes: number[] } | null = null;
+  await page.route(/\/api\/swarm\/admin\/members\/[0-9a-f-]+\/avatar$/, (route) => {
+    const req = route.request();
+    captured = { type: req.headers()["content-type"] ?? null, token: req.headers()["x-admin-token"] ?? null, bytes: [...(req.postDataBuffer() ?? [])] };
+    avatar = { path: UPLOADED_PATH, source_url: null, credit: "Uploaded by admin" };
+    return route.fulfill(jsonReply({ ok: true, status: 200, memberId: MEMBER_UPLOADABLE.id, avatar }));
+  });
+  await page.route(/\/api\/swarm\/members\/[0-9a-f-]+\/avatar(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PNG_BYTES }));
+
+  await signIn(page, `/admin/swarm/members/${MEMBER_UPLOADABLE.id}`);
+  await expect(page.getByTestId("member-avatar-source")).toHaveText(/Derived mark/);
+  await expect(page.getByTestId("member-avatar-upload")).toBeDisabled();
+
+  await page.getByTestId("member-avatar-input").setInputFiles({ name: "allscale.svg", mimeType: "image/svg+xml", buffer: Buffer.from("<svg/>") });
+  await expect(page.getByTestId("member-avatar-error")).toHaveText(/SVG is not accepted/);
+  await expect(page.getByTestId("member-avatar-upload")).toBeDisabled();
+
+  await page.getByTestId("member-avatar-input").setInputFiles({ name: "allscale.png", mimeType: "image/png", buffer: PNG_BYTES });
+  await expect(page.getByTestId("member-avatar-preview")).toHaveAttribute("src", /^data:image\/png;base64,/);
+  await page.getByTestId("member-avatar-upload").click();
+
+  await expect(page.getByTestId("member-avatar-source")).toHaveText(/Uploaded here/);
+  await expect(page.locator('[data-testid="member-avatar-current"] img')).toHaveAttribute("src", UPLOADED_PATH);
+  await expect(page.getByTestId("member-avatar-remove")).toBeVisible();
+  expect(captured).toEqual({ type: "image/png", token: ADMIN_PASSWORD, bytes: [...PNG_BYTES] });
+});
+
+// RM-184's rung that matters: an upload outranks the curated logo map. Then
+// "Stop showing upload" clears the pointer with the member's CURRENT version
+// (the upload bumped it) and the curated logo comes back.
+test("swarm admin: an upload replaces a curated logo, and stopping it brings the logo back", async ({ page }) => {
+  await mockSwarmApi(page);
+  const curated = { ...MEMBER_UPLOADABLE, id: "e5171190-73c2-4a33-b06e-9a170df207b5", handle: "dualmint-2", name: "DualMint" };
+  const uploaded = `/api/swarm/members/${curated.id}/avatar?v=def67890`;
+  let row: Record<string, unknown> = { ...curated, avatar: null, version: 2 };
+  await page.route(/\/api\/swarm\/admin\/members$/, (route) => route.fulfill(jsonReply({ members: [MEMBER_ACTIVE, row] })));
+  await page.route(/\/api\/swarm\/admin\/members\/[0-9a-f-]+\/avatar$/, (route) => {
+    row = { ...row, avatar: { path: uploaded, source_url: null, credit: "Uploaded by admin" }, version: 3 };
+    return route.fulfill(jsonReply({ ok: true, status: 200, memberId: curated.id, avatar: row.avatar }));
+  });
+  let cleared: unknown = null;
+  await page.route(/\/api\/swarm\/admin\/members\/[0-9a-f-]+\/update$/, (route) => {
+    cleared = route.request().postDataJSON();
+    row = { ...row, avatar: null, version: 4 };
+    return route.fulfill(jsonReply({ ok: true, status: 200, member: row }));
+  });
+  await page.route(/\/api\/swarm\/members\/[0-9a-f-]+\/avatar(\?.*)?$/, (route) =>
+    route.fulfill({ status: 200, contentType: "image/png", body: PNG_BYTES }));
+
+  const current = page.locator('[data-testid="member-avatar-current"] img');
+  await signIn(page, `/admin/swarm/members/${curated.id}`);
+  await expect(page.getByTestId("member-avatar-source")).toHaveText(/Curated logo/);
+  await expect(current).toHaveAttribute("src", "/avatars/swarm/dualmint.png");
+
+  await page.getByTestId("member-avatar-input").setInputFiles({ name: "dualmint.png", mimeType: "image/png", buffer: PNG_BYTES });
+  await page.getByTestId("member-avatar-upload").click();
+  await expect(page.getByTestId("member-avatar-source")).toHaveText(/Uploaded here/);
+  await expect(current).toHaveAttribute("src", uploaded);
+
+  await page.getByTestId("member-avatar-remove").click();
+  await expect(page.getByTestId("member-avatar-source")).toHaveText(/Curated logo/);
+  await expect(current).toHaveAttribute("src", "/avatars/swarm/dualmint.png");
+  expect(cleared).toEqual({ expectedVersion: 3, avatar: null, reason: "Removed the uploaded avatar." });
+});
+
+test("swarm admin: a handle-shaped member id gets no avatar picker", async ({ page }) => {
+  await mockSwarmApi(page);
+  await signIn(page, "/admin/swarm/members/athena");
+  await expect(page.getByTestId("member-avatar-source")).toBeVisible();
+  await expect(page.getByTestId("member-avatar-input")).toHaveCount(0);
+  await expect(page.getByText(/predates uploads/)).toBeVisible();
+});
+
 // AC (#567): client-side validation mirrors the server's shapes so an operator
 // is corrected before the round-trip, and a bad value never leaves the page.
 // Both bounds are the backend's own: CONTACT_EMAIL_RE and optionalBiases()'s

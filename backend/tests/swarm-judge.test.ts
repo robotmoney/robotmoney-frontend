@@ -53,7 +53,7 @@ import {
   checkRationaleLadder, listRationaleLadderDrift, recentJudgeableSessions, replaySessionJudge,
 } from "../src/swarm/judge-replay.ts";
 import {
-  enforceJudging, requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
+  drawNow, enforceJudging, requestJudgingFor, seatJudge, signedJudgement, STUB_JUDGE_MODEL, STUB_JUDGE_REPLY, submitSigned,
   type TestJudge,
 } from "./support/stub-judge.ts";
 import { adminHeaders, provisionOperatorToken, provisionSchedulerToken, schedulerHeaders } from "./support/automation-auth.ts";
@@ -241,7 +241,7 @@ test("the judge ships OFF, and an aggregated session nobody requested judging fo
 
 // ── 1. A judgement is SIGNED by its judge ───────────────────────────────────
 
-test("a signed judgement lands with the REAL digests, becomes the consensus, and reaches the session's record", async () => {
+test("a signed judgement lands with the REAL digests as on-time evidence, and the draw puts it on the session's record", async () => {
   const { session, members } = await judgingSession("judge-signed");
   const before = await recOf(session.id);
   const judge = await seatJudge();
@@ -249,9 +249,11 @@ test("a signed judgement lands with the REAL digests, becomes the consensus, and
   const result = await submitSigned(judge, session.id, goodAnswer(members[0]!.id, members[1]!.id));
   expect(result.ok, JSON.stringify(result)).toBe(true);
   if (!result.ok) return;
-  expect(result.judgeOfRecord).toBe(true);
-  expect(result.applied).toBe(true);
-  expect(result.state).toBe("judged");
+  // An answer records evidence only (D71): nothing is published and no consensus is recorded.
+  expect(result.judgeOfRecord).toBe(false);
+  expect(result.applied).toBe(false);
+  expect(result.state).toBe("judging");
+  expect((await recOf(session.id)).judge ?? null).toBeNull();
 
   const row = await latestRow(session.id);
   // NOT the 'participant' placeholder the first cut of this route stored: the
@@ -265,21 +267,24 @@ test("a signed judgement lands with the REAL digests, becomes the consensus, and
   expect(row.judged_by).toBe(judge.id);
   expect(row.judged_by_member_id).toBe(judge.id);
   expect(Number(row.take_count)).toBe(3);
-  expect(row.applied).toBe(true);
+  expect(row.applied).toBe(false);
+  expect(row.applied_skipped_reason).toBe("awaiting_draw");
 
-  // The session carries it — which is what a consensus receipt embeds — and
-  // the vector did not move.
+  // After the judging deadline the draw applies it. The session carries it —
+  // which is what a consensus receipt embeds — and the vector did not move.
+  expect((await drawNow(session.id)).ok).toBe(true);
   const after = await recOf(session.id);
   expect(after.rationale).toBe("The submitted takes converge on a constructive read, with one dissent on timing.");
   expect(after.judge).toMatchObject({
     source: "model", prompt_hash: row.prompt_hash, inputs_digest: row.inputs_digest, judged_by_member_id: judge.id,
+    judgement_id: Number(row.id),
   });
   expect(JSON.stringify(after.weights)).toBe(JSON.stringify(before.weights));
 
   // The signature is kept beside the row it authorized.
   const [audit] = await sql`
     SELECT scope FROM audit_log WHERE action = 'submit_judgement' AND actor = ${judge.id}` as any[];
-  expect(audit.scope).toMatchObject({ sessionId: session.id, judgementId: Number(row.id), judgeOfRecord: true });
+  expect(audit.scope).toMatchObject({ sessionId: session.id, judgementId: Number(row.id), applied: false, appliedSkippedReason: "awaiting_draw" });
   expect(typeof audit.scope.signature).toBe("string");
 });
 
@@ -522,6 +527,7 @@ test("a member cannot put words in another member's mouth: `view` is the attribu
   const judge = await seatJudge();
   const result = await submitSigned(judge, session.id, obedient);
   expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect((await drawNow(session.id)).ok).toBe(true);
   const after = await recOf(session.id);
   const byMember = new Map<string, string>(after.disagreements[0].positions.map((p: any) => [p.member_id, p.view]));
   expect(byMember.get(victim.id)).toBe("MY ACTUAL POSITION: conviction is intact.");
@@ -578,6 +584,7 @@ test("a two-take session is flagged thinly supported even when the model says it
   const judge = await seatJudge();
   const result = await submitSigned(judge, session.id, goodAnswer(members[0]!.id, members[1]!.id, "safe"));
   expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect((await drawNow(session.id)).ok).toBe(true);
   const row = await latestRow(session.id);
   const safety = row.opinion.release_safety;
   expect(safety.thinly_supported).toBe(true);
@@ -628,6 +635,7 @@ test("one stance-only take degrades ONE position, recorded as a drop on the row,
   const judge = await seatJudge();
   const result = await submitSigned(judge, session.id, answer);
   expect(result.ok, JSON.stringify(result)).toBe(true);
+  expect((await drawNow(session.id)).ok).toBe(true);
   const after = await recOf(session.id);
   expect(after.rationale).toBe(MODEL_RATIONALE);
   expect(after.disagreements).toHaveLength(1);
@@ -759,11 +767,11 @@ test("a judge DEACTIVATED while it submits is refused as judge_member_inactive, 
   expect(await stateOf(session.id)).toBe("judging");
 });
 
-test("judged is not terminal: a judged session publishes, and carries the judge's opinion when it does", async () => {
+test("an answered session stays judging until the deadline, then publishes carrying the drawn judge's opinion", async () => {
   const { session } = await judgingSession("judge-states");
   expect((await submitSigned(await seatJudge(), session.id, STUB_JUDGE_REPLY)).ok).toBe(true);
-  expect(await stateOf(session.id)).toBe("judged");
-  const published = await ic.finalizeEpoch(session.id);
+  expect(await stateOf(session.id)).toBe("judging");
+  const published = await drawNow(session.id);
   expect(published).toMatchObject({ ok: true, state: "published", outcome: "judged" });
   expect((await recOf(session.id)).judge.prompt_hash).toBe(JUDGE_PROMPT_HASH);
 });
@@ -795,13 +803,12 @@ test("a position_actions session emits NO hardcoded actions — and judging one 
 
 // ── 7. The judge of record, and one transaction ─────────────────────────────
 
-test("the judge of record is chosen by member id, never by arrival: a faster judge's judgement changes no outcome", async () => {
+test("every judge is asked and answers on time: no answer, whoever is first, publishes or applies anything", async () => {
   const { session, members } = await judgingSession("judge-of-record");
-  // `judge_a_…` sorts before `judge_b_…`, so A is the judge of record.
   const a = await seatJudge({ prefix: "judge_a" });
   const b = await seatJudge({ prefix: "judge_b" });
 
-  // B ARRIVES FIRST. It is eligible, so it is recorded — and it decides nothing.
+  // B ARRIVES FIRST. It is recorded as evidence and decides nothing.
   const first = await submitSigned(b, session.id, goodAnswer(members[0]!.id, members[1]!.id, "hold"));
   expect(first.ok, JSON.stringify(first)).toBe(true);
   if (!first.ok) return;
@@ -810,41 +817,46 @@ test("the judge of record is chosen by member id, never by arrival: a faster jud
   expect(await stateOf(session.id)).toBe("judging");
   expect((await sql`SELECT consensus_recorded_at FROM swarm_sessions WHERE id = ${session.id}`)[0]!.consensus_recorded_at).toBeNull();
   expect((await recOf(session.id)).judge ?? null).toBeNull();
-  expect((await latestRow(session.id)).applied_skipped_reason).toBe("not_judge_of_record");
+  expect((await latestRow(session.id)).applied_skipped_reason).toBe("awaiting_draw");
+  // The other judge is STILL asked, and B is not.
+  expect((await ic.pendingJudgingFor(a.id)).map((p) => p.sessionId)).toEqual([session.id]);
+  expect(await ic.pendingJudgingFor(b.id)).toEqual([]);
 
-  // A ARRIVES SECOND, and its judgement is the consensus.
+  // A ARRIVES SECOND. It too is evidence, and no event is written for either.
   const second = await submitSigned(a, session.id, goodAnswer(members[0]!.id, members[1]!.id, "safe"));
   expect(second.ok, JSON.stringify(second)).toBe(true);
   if (!second.ok) return;
-  expect(second.judgeOfRecord).toBe(true);
-  expect(second.state).toBe("judged");
+  expect(second.judgeOfRecord).toBe(false);
+  expect(second.state).toBe("judging");
+  expect(await sql`SELECT 1 FROM swarm_stream_events WHERE session_id = ${session.id} AND kind = 'session.judged'`).toHaveLength(0);
+
+  // After the judging deadline the draw picks one, by the fixed random value.
+  const drawn = await drawNow(session.id, { random: 1 });
+  expect(drawn).toMatchObject({ ok: true, outcome: "judged" });
   expect((await recOf(session.id)).judge.judged_by_member_id).toBe(a.id);
-  const [event] = await sql`
-    SELECT payload FROM swarm_stream_events WHERE session_id = ${session.id} AND kind = 'session.judged'` as any[];
-  expect(event.payload.judgementId).toBe(second.judgementId);
+  expect((await recOf(session.id)).judge.judgement_id).toBe(second.judgementId);
 });
 
-test("the judgement row and the consensus it forms are ONE transaction: a failure recording the consensus leaves neither", async () => {
+test("the judgement row stays whole in ONE transaction: a failure writing the audit row leaves no row", async () => {
   const { session } = await judgingSession("judge-one-tx");
   const judge = await seatJudge();
   const before = JSON.stringify(await recOf(session.id));
-  // Make the LAST write of the transaction — the `session.judged` event —
-  // fail. Everything before it (the applied opinion, the judgement row, its
-  // audit row, the state change) must roll back with it.
+  // Make the LAST write of the transaction, the submission's audit row, fail.
+  // Everything before it (the judgement row) must roll back with it.
   await fixtureDb.unsafe(`
-    CREATE OR REPLACE FUNCTION rm_test_refuse_judged_event() RETURNS trigger LANGUAGE plpgsql AS $f$
+    CREATE OR REPLACE FUNCTION rm_test_refuse_submit_audit() RETURNS trigger LANGUAGE plpgsql AS $f$
     BEGIN
-      IF NEW.kind = 'session.judged' THEN RAISE EXCEPTION 'rm_test: refusing session.judged'; END IF;
+      IF NEW.action = 'submit_judgement' THEN RAISE EXCEPTION 'rm_test: refusing submit_judgement audit'; END IF;
       RETURN NEW;
     END $f$;
-    CREATE TRIGGER rm_test_refuse_judged_event BEFORE INSERT ON swarm_stream_events
-      FOR EACH ROW EXECUTE FUNCTION rm_test_refuse_judged_event();`);
+    CREATE TRIGGER rm_test_refuse_submit_audit BEFORE INSERT ON audit_log
+      FOR EACH ROW EXECUTE FUNCTION rm_test_refuse_submit_audit();`);
   try {
-    await expect(submitSigned(judge, session.id, STUB_JUDGE_REPLY)).rejects.toThrow("refusing session.judged");
+    await expect(submitSigned(judge, session.id, STUB_JUDGE_REPLY)).rejects.toThrow("refusing submit_judgement audit");
   } finally {
     await fixtureDb.unsafe(`
-      DROP TRIGGER IF EXISTS rm_test_refuse_judged_event ON swarm_stream_events;
-      DROP FUNCTION IF EXISTS rm_test_refuse_judged_event();`);
+      DROP TRIGGER IF EXISTS rm_test_refuse_submit_audit ON audit_log;
+      DROP FUNCTION IF EXISTS rm_test_refuse_submit_audit();`);
   }
   expect(await judgementCount(session.id)).toBe(0);
   expect(await stateOf(session.id)).toBe("judging");
@@ -853,7 +865,8 @@ test("the judgement row and the consensus it forms are ONE transaction: a failur
 
   // …and the same submission, with nothing in the way, lands whole.
   expect((await submitSigned(judge, session.id, STUB_JUDGE_REPLY)).ok).toBe(true);
-  expect(await stateOf(session.id)).toBe("judged");
+  expect(await judgementCount(session.id)).toBe(1);
+  expect(await stateOf(session.id)).toBe("judging");
 });
 
 test("two racing submissions from one judge produce ONE judgement", async () => {
@@ -882,7 +895,7 @@ async function callAdmin(path: string, body: unknown): Promise<{ status: number;
   return (await handleSwarmAdmin(req, new URL(req.url))) ?? { status: 404, body: null };
 }
 
-test("the judge of record submitting AFTER the deadline but before finalize is kept as evidence, and the session publishes no_consensus with NO certificate", async () => {
+test("a judge submitting AFTER the deadline but before finalize is kept as evidence, and the session publishes no_consensus with NO certificate", async () => {
   const { session } = await judgingSession("judge-after-deadline");
   const before = await recOf(session.id);
   // The stored deadline has passed by the database clock; the scheduler has
@@ -892,7 +905,7 @@ test("the judge of record submitting AFTER the deadline but before finalize is k
 
   const judge = await seatJudge();
   const late = await submitSigned(judge, session.id, STUB_JUDGE_REPLY);
-  expect(late).toMatchObject({ ok: true, judgeOfRecord: true, applied: false, lateEvidence: false, duplicate: false });
+  expect(late).toMatchObject({ ok: true, judgeOfRecord: false, applied: false, lateEvidence: false, duplicate: false });
   // Retained as a record (§4.4), and it reached nothing.
   const row = await latestRow(session.id);
   expect(row.applied).toBe(false);
@@ -921,13 +934,10 @@ test("the judge of record submitting AFTER the deadline but before finalize is k
 
 test("the retired epochs/consensus route is gone: a bare judgement id cannot be recorded as the consensus", async () => {
   const { session, members } = await judgingSession("judge-no-consensus-route");
-  // A judge that is NOT the judge of record lands evidence that reached nothing.
-  const ofRecord = await seatJudge();
-  const second = await seatJudge();
-  const [low, high] = [ofRecord, second].sort((a, b) => (a.id < b.id ? -1 : 1));
-  const evidence = await submitSigned(high!, session.id, goodAnswer(members[0]!.id, members[1]!.id));
+  // A judge's answer is evidence that reached nothing.
+  const judge = await seatJudge();
+  const evidence = await submitSigned(judge, session.id, goodAnswer(members[0]!.id, members[1]!.id));
   expect(evidence).toMatchObject({ ok: true, judgeOfRecord: false, applied: false });
-  expect(low).toBeTruthy();
 
   const res = await callAdmin("/api/swarm/admin/epochs/consensus", {
     sessionId: session.id, judgementId: (evidence as any).judgementId,
@@ -946,6 +956,8 @@ test("the admin read path returns every judgement a session received and names w
   const b = await seatJudge({ prefix: "judge_b" });
   await submitSigned(b, session.id, goodAnswer(members[0]!.id, members[1]!.id, "hold"));
   await submitSigned(a, session.id, goodAnswer(members[0]!.id, members[1]!.id));
+  // The draw is fixed to the second candidate: A's answer.
+  expect(await drawNow(session.id, { random: 1 })).toMatchObject({ ok: true, outcome: "judged" });
 
   const res = await admin.getSessionJudgementsAdmin(session.id) as any;
   expect(res.ok).toBe(true);
@@ -953,10 +965,11 @@ test("the admin read path returns every judgement a session received and names w
   expect(judgements.length).toBe(2);
   expect(res.inForce.id).toBe(judgements[0].id);
   const byJudge = new Map(judgements.map((j) => [j.judgedByMemberId, j]));
-  expect(byJudge.get(a.id)).toMatchObject({ applied: true, carriedBySession: true, mode: "enforce", source: "model" });
-  // The second judge's row never reached the session, so it is not a LOSS.
-  expect(byJudge.get(b.id)).toMatchObject({ applied: false, carriedBySession: false, supersededReason: null });
+  expect(byJudge.get(a.id)).toMatchObject({ applied: true, drawn: true, carriedBySession: true, mode: "enforce", source: "model" });
+  // The other judge's row lost the draw and never reached the session, so it is not a LOSS.
+  expect(byJudge.get(b.id)).toMatchObject({ applied: false, drawn: false, carriedBySession: false, supersededReason: null });
   expect(res.sessionJudge.inputsDigest).toBe(byJudge.get(a.id).inputsDigest);
+  expect(res.sessionJudge.judgementId).toBe(byJudge.get(a.id).id);
 
   const missing = await admin.getSessionJudgementsAdmin(crypto.randomUUID());
   expect(missing.ok).toBe(false);
@@ -967,8 +980,23 @@ test("`inForce` reports SUPERSEDED after the legal close -> aggregate that wipes
   const { session } = await judgingSession("judge-806-superseded");
   const judge = await seatJudge();
   expect((await submitSigned(judge, session.id, STUB_JUDGE_REPLY)).ok).toBe(true);
+  expect((await drawNow(session.id)).ok).toBe(true);
   const fresh = await admin.getSessionJudgementsAdmin(session.id) as any;
-  expect(fresh.inForce).toMatchObject({ applied: true, carriedBySession: true, supersededReason: null });
+  expect(fresh.inForce).toMatchObject({ applied: true, drawn: true, carriedBySession: true, supersededReason: null });
+  // The sanctioned reopen re-runs a session an OLDER version left `judged`, whose judgement
+  // row says `applied` and whose record names no draw. Put the session in exactly that shape.
+  await fixtureDb`UPDATE swarm_sessions
+    SET state = 'judged', judging_outcome = NULL, published_at = NULL,
+        swarm_recommendation = swarm_recommendation #- '{judge,judgement_id}' #- '{judge,draw}'
+    WHERE id = ${session.id}`;
+  await fixtureDb`INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes, applied,
+       dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion)
+    SELECT session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes, true,
+           dropped_positions, dropped_disagreements, judged_by, judged_by_member_id, opinion
+      FROM swarm_session_judgements WHERE session_id = ${session.id} ORDER BY id LIMIT 1`;
+  const legacy = await admin.getSessionJudgementsAdmin(session.id) as any;
+  expect(legacy.inForce).toMatchObject({ applied: true, drawn: false, carriedBySession: true, supersededReason: null });
 
   expect((await verbs.closeSessionAdmin(session.id, undefined, "admin", "reopening")).ok).toBe(true);
   expect((await verbs.aggregateSessionAdmin(session.id, undefined)).ok).toBe(true);

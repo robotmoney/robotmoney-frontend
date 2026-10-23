@@ -52,7 +52,6 @@ const ALLOWED: Record<string, string> = {
   "backend/tests/append-only-replication.test.ts": "replicates a DELETE to prove the row-level guard catches it",
   "backend/tests/append-only-no-new-deletes.test.ts": "this file (the table names are the subject)",
   "backend/tests/swarm-admin-regime.test.ts": "asserts a session delete is refused 0A000",
-  "backend/tests/analytics-worker-role.test.ts": "asserts the restricted role is denied 42501",
   "backend/tests/api-boot-handle-namespace-guard.test.ts": "rolls schema_migrations back to build a pre-0032 database",
   "backend/tests/consensus-receipt-publish.test.ts": "asserts DELETE and TRUNCATE of a published receipt are refused",
   "backend/tests/analytics-overwrite-events.test.ts":

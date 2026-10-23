@@ -178,23 +178,21 @@ export interface StackDatabase {
    */
   url?: string;
   /**
-   * THE RUNTIME ROLES' OWN URLS, as a container reaches the database: `app`
-   * for `api` (rm_app) and `worker` for the pipeline worker (rm_worker). When
-   * set, they are what buildComposeEnv() emits as DATABASE_URL and
-   * WORKER_DATABASE_URL, and no container is handed any other database login
-   * (smoke-production-spec §3, §7.2, §7.3: "tests connect as
-   * rm_app/rm_worker/rm_readonly, and nothing uses the superuser again").
-   * `bun smoke` always sets them — from the instance's generated passwords for
+   * THE RUNTIME ROLE'S OWN URL, as a container reaches the database: `app`
+   * for `api` (rm_app), the one service that holds a database credential
+   * (issue 1034, D75: the pipeline worker holds none). When set, it is what
+   * buildComposeEnv() emits as DATABASE_URL, and no container is handed any
+   * other database login (smoke-production-spec §3, §7.2, §7.3).
+   * `bun smoke` always sets it — from the instance's generated passwords for
    * a local mode, from `~/.env` for the remote database.
    *
    * Unset (a consumer that has not moved onto the role taxonomy, such as the
-   * onboarding eval's `core` stack), both variables fall back to the one URL
-   * above: that consumer's single legacy login, stated explicitly rather than
-   * left to docker-compose.yml, which no longer falls back from one to the other.
+   * onboarding eval's `core` stack), DATABASE_URL falls back to the one URL
+   * above: that consumer's single legacy login, stated explicitly.
    *
    * NEVER log or serialize these.
    */
-  roleUrls?: { readonly app: string; readonly worker: string };
+  roleUrls?: { readonly app: string };
 }
 
 // The baked-in smoke credentials (previously spelled out in smoke-main.ts). They
@@ -358,10 +356,9 @@ export function buildComposeEnv(cfg: StackConfig): Record<string, string> {
     // file without a second code path.
     [ENV_CLASS_COMPOSE_VAR]: cfg.environment.class,
     [ENV_HASH_COMPOSE_VAR]: cfg.environment.hash,
+    // The api's credential, and the only one: the pipeline worker holds none
+    // (issue 1034, D75), so no WORKER_DATABASE_URL is emitted.
     DATABASE_URL: cfg.database.roleUrls?.app ?? internalDatabaseUrl(cfg.database),
-    // The pipeline worker's credential (docker-compose.yml x-worker-env hands it
-    // to BOTH of the worker's pools, with no fallback to the api's).
-    WORKER_DATABASE_URL: cfg.database.roleUrls?.worker ?? internalDatabaseUrl(cfg.database),
     // No service token of any kind (smoke spec §3): each holder's token is a
     // file under RM_INSTANCE_STATE_DIR, mounted into that holder alone.
     // No WEB_PORT / POSTGRES_PORT. They were compose interpolation OUTPUTS

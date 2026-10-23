@@ -21,15 +21,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { resolvePropWallets, resolveTrackedAssets } from "../src/config.ts";
-import {
-  fetchPersistedWalletBalances,
-  _resetWalletBalancesCacheForTests,
-} from "../src/chain/wallet-balances.ts";
+import { _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
+import { fetchPersistedWalletBalances } from "../src/chain/wallet-balances-store.ts";
 import {
   getWalletSleeves,
   _resetWalletSleevesCacheForTests,
 } from "../src/chain/wallet-sleeves.ts";
-import { persistedFallbackWalletPriceReader } from "../src/chain/wallet-valuation.ts";
+import { persistedFallbackWalletPriceReader } from "../src/worker/persisted-price.ts";
 import { ASSET_PRICE_TIME_BASIS } from "../src/ops/asset-prices.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";

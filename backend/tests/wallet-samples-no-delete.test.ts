@@ -4,15 +4,16 @@
 //
 // WHAT CHANGED. ops/wallet-backfill.ts used to rewrite an incomplete day by
 // deleting every wallet_balance_samples and wallet_sleeve_samples row on the
-// date and inserting the rows it computed, as rm_worker — the one runtime
-// DELETE the pipeline worker issued. It now upserts each row it writes on the
+// date and inserting the rows it computed — the one runtime DELETE the
+// pipeline worker issued. Its statements now run in the api as rm_app (issue
+// 1034, D75), so this file runs the pass as an rm_app login. It now upserts each row it writes on the
 // table's natural key and sets `superseded_at` (migration 0104) on each live
 // row of the date it no longer writes, and every read of either table filters
 // `superseded_at IS NULL`.
 //
 // WHAT THIS FILE PROVES, each against the real code path on a real database:
 //
-//   1. The pass runs as a real rm_worker LOGIN with DELETE and TRUNCATE revoked
+//   1. The pass runs as a real rm_app LOGIN with DELETE and TRUNCATE revoked
 //      on both tables (the revocation w5-no-runtime-delete's migration makes),
 //      and succeeds.
 //   2. A re-run over the same date is idempotent: same row count, same values,
@@ -54,7 +55,7 @@
 //
 // THE EVIDENCE GRANT. The pass copies a day's live rows into
 // wallet_{balance,sleeve}_sample_evidence before it rewrites them, as
-// rm_worker. The shipped grant set must give rm_worker INSERT on both tables.
+// rm_app. The shipped grant set must give rm_app INSERT on both tables.
 // 0054's allowlist omitted them (the same omission 0061 fixed for
 // wallet_backfill_state), so the grant belongs in w5-no-runtime-delete's
 // migration and backend/schema/grants.sql. The first test below reads the
@@ -69,20 +70,15 @@ import { sql, type DbHandle } from "../src/db/client.ts";
 import { decodeAggregate3Calls, encodeAggregate3Result } from "../src/chain/base-rpc-client.ts";
 import type { TrackedAsset } from "../src/config.ts";
 import { resolveTrackedAssets } from "../src/config.ts";
-import {
-  fetchPersistedWalletBalances,
-  fetchWalletBalances,
-  _resetWalletBalancesCacheForTests,
-} from "../src/chain/wallet-balances.ts";
+import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../src/chain/wallet-balances.ts";
+import { fetchPersistedWalletBalances } from "../src/chain/wallet-balances-store.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
 import { getWalletSleeves, _resetWalletSleevesCacheForTests } from "../src/chain/wallet-sleeves.ts";
-import {
-  MAX_PERSISTED_PRICE_AGE_MS,
-  persistedFallbackWalletPriceReader,
-  type ChainAmount,
-  type KeyedAssetRead,
-} from "../src/chain/wallet-valuation.ts";
-import { backfillAssetPricesForCleanDays } from "../src/ops/asset-prices.ts";
+import { MAX_PERSISTED_PRICE_AGE_MS, type ChainAmount, type KeyedAssetRead } from "../src/chain/wallet-valuation.ts";
+import { persistedFallbackWalletPriceReader } from "../src/worker/persisted-price.ts";
+import { backfillAssetPricesForCleanDays } from "../src/ops/asset-price-backfill.ts";
+import { assetPriceBackfillDbStore } from "../src/ops/asset-prices.ts";
+import { walletBackfillDbStore } from "../src/pipeline/stores/wallet-backfill.ts";
 import { detectGaps } from "../src/ops/gap-detector.ts";
 import { getSeriesDef, type SeriesDef } from "../src/ops/series-registry.ts";
 import { backfillWalletDay, planWalletBackfill, type WalletBackfillDeps } from "../src/ops/wallet-backfill.ts";
@@ -311,7 +307,7 @@ async function readAll(): Promise<Record<string, unknown>> {
     fallback,
     balanceGaps: await detectGaps(seriesDef("wallet_balance_samples"), sql, READ_NOW),
     sleeveGaps: await detectGaps(seriesDef("wallet_sleeve_samples"), sql, READ_NOW),
-    repairPlan: await planWalletBackfill(sql, READ_NOW),
+    repairPlan: await planWalletBackfill(walletBackfillDbStore(sql), READ_NOW),
     // The passes dual-wrote D's asset_prices rows, which takes D out of this
     // reader's candidate set before it ever reads the samples, and the seeded
     // history's unpriced days fill its 30-day window first. Its input here is
@@ -324,7 +320,7 @@ async function readAll(): Promise<Record<string, unknown>> {
       await owner`DELETE FROM asset_prices WHERE price_date = ${D}`;
       await owner`DELETE FROM wallet_balance_samples WHERE sample_date <> ${D}`;
       await owner`DELETE FROM wallet_sleeve_samples WHERE sample_date <> ${D}`;
-      return backfillAssetPricesForCleanDays(tx, READ_NOW, {
+      return backfillAssetPricesForCleanDays(assetPriceBackfillDbStore(tx), READ_NOW, {
         async loadPrices(assets, fromDate) {
           return new Map(assets.map((a) => [a.symbol, new Map([[fromDate, 2]])]));
         },
@@ -376,23 +372,23 @@ async function staleDegradedHoldings(): Promise<Record<string, unknown>> {
 }
 
 const EVIDENCE_TABLES = ["wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence"] as const;
-/** rm_worker's INSERT on each evidence table as the template shipped it, read
+/** rm_app's INSERT on each evidence table as the template shipped it, read
  *  before this file grants anything. */
 const shippedEvidenceInsert: Record<string, boolean> = {};
 let worker: postgres.Sql<{}>;
 
 beforeAll(async () => {
-  // D55 (6)'s end state on this file's own copy: rm_worker holds no DELETE or
+  // D55 (6)'s end state on this file's own copy: rm_app holds no DELETE or
   // TRUNCATE on either sample table.
-  await fixtureDb`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_worker`;
+  await fixtureDb`REVOKE DELETE, TRUNCATE ON wallet_balance_samples, wallet_sleeve_samples FROM rm_app`;
   // See THE EVIDENCE GRANT in the header: read the shipped privilege first.
   for (const table of EVIDENCE_TABLES) {
-    const [row] = await sql<{ ins: boolean }[]>`SELECT has_table_privilege('rm_worker', ${table}, 'INSERT') AS ins`;
+    const [row] = await sql<{ ins: boolean }[]>`SELECT has_table_privilege('rm_app', ${table}, 'INSERT') AS ins`;
     shippedEvidenceInsert[table] = row!.ins;
   }
-  await fixtureDb`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_worker`;
+  await fixtureDb`GRANT INSERT ON wallet_balance_sample_evidence, wallet_sleeve_sample_evidence TO rm_app`;
   const [{ db }] = await sql<{ db: string }[]>`SELECT current_database() AS db`;
-  worker = postgres(roleUrl("rm_worker", db), { max: 2, onnotice: () => {} });
+  worker = postgres(roleUrl("rm_app", db), { max: 2, onnotice: () => {} });
 });
 
 beforeEach(() => {
@@ -411,7 +407,7 @@ afterAll(async () => {
 });
 
 describe("the shipped grant set", () => {
-  test("gives rm_worker INSERT on both evidence tables, which every rewrite of an incomplete day copies into first", () => {
+  test("gives rm_app INSERT on both evidence tables, which every rewrite of an incomplete day copies into first", () => {
     // Red until w5-no-runtime-delete's migration and grants.sql grant it: the
     // repair pass then fails 42501 at its evidence copy for every incomplete
     // day in production (backend/src/ops/wallet-backfill.ts, the evidence
@@ -423,7 +419,7 @@ describe("the shipped grant set", () => {
   });
 });
 
-describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
+describe("the wallet repair pass as rm_app with DELETE revoked", () => {
   // Block stamps for the two configurations, fixed when the first pass runs
   // (not at collection) so the rows stay well inside the persisted-price
   // fallback's MAX_PERSISTED_PRICE_AGE_MS window when the golden reads them.
@@ -433,9 +429,9 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
   let afterPass1: Awaited<ReturnType<typeof tableState>>;
   let afterPass2: Awaited<ReturnType<typeof tableState>>;
 
-  test("the login really is rm_worker, and it can neither DELETE nor TRUNCATE either table", async () => {
+  test("the login really is rm_app, and it can neither DELETE nor TRUNCATE either table", async () => {
     const [who] = await worker<{ u: string }[]>`SELECT current_user AS u`;
-    expect(who!.u).toBe("rm_worker");
+    expect(who!.u).toBe("rm_app");
     for (const table of ["wallet_balance_samples", "wallet_sleeve_samples"]) {
       const [privs] = await worker<{ del: boolean; trunc: boolean; upd: boolean; ins: boolean }[]>`
         SELECT has_table_privilege(${table}, 'DELETE') AS del,
@@ -461,7 +457,7 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     T1 = Date.now() - 60_000;
     T2 = Date.now() - 30_000;
     useConfig("A");
-    const result = await backfillWalletDay(worker, D, passDeps(5, T1), PASS_NOW);
+    const result = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(5, T1), PASS_NOW);
     expect(result).toMatchObject({ ok: true, status: "filled" });
 
     const manifest = resolveWalletSnapshotManifest();
@@ -477,14 +473,14 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
 
   test("re-running pass 1 over the same date is idempotent: same rows, same values, same ids", async () => {
     useConfig("A");
-    const rerun = await backfillWalletDay(worker, D, passDeps(5, T1), PASS_NOW);
+    const rerun = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(5, T1), PASS_NOW);
     expect(rerun).toMatchObject({ ok: true, status: "filled" });
     expect(await tableState(D)).toEqual(afterPass1);
   });
 
   test("pass 2 under configuration B rewrites the day on its keys and supersedes the keys it dropped — nothing is deleted", async () => {
     useConfig("B");
-    const result = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
+    const result = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(7, T2), PASS_NOW);
     expect(result).toMatchObject({ ok: true, status: "filled" });
 
     const manifest = resolveWalletSnapshotManifest();
@@ -537,7 +533,7 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
   test("re-running pass 2 over the same date is idempotent: same rows, same values, same ids, same tombstones", async () => {
     useConfig("B");
     const tombstonesBefore = await tombstones(D);
-    const rerun = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
+    const rerun = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(7, T2), PASS_NOW);
     expect(rerun).toMatchObject({ ok: true, status: "filled" });
     expect(await tableState(D)).toEqual(afterPass2);
     expect(await tombstones(D)).toEqual(tombstonesBefore);
@@ -549,7 +545,7 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     // completeness read must not count them), so the pass rewrites it — its
     // upsert revives those keys and supersedes the new wallet's.
     useConfig("A");
-    const pass3 = await backfillWalletDay(worker, D, passDeps(5, T1), PASS_NOW);
+    const pass3 = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(5, T1), PASS_NOW);
     expect(pass3).toMatchObject({ ok: true, status: "filled" });
     const afterPass3 = await tableState(D);
     expect(afterPass3.balances).toHaveLength(afterPass2.balances.length);
@@ -564,7 +560,7 @@ describe("the wallet repair pass as rm_worker with DELETE revoked", () => {
     // Pass 4, configuration B again: pass 2's table, key for key and value for
     // value (the live rows are new versions, so their ids are new).
     useConfig("B");
-    const pass4 = await backfillWalletDay(worker, D, passDeps(7, T2), PASS_NOW);
+    const pass4 = await backfillWalletDay(walletBackfillDbStore(worker), D, passDeps(7, T2), PASS_NOW);
     expect(pass4).toMatchObject({ ok: true, status: "filled" });
     const afterPass4 = await tableState(D);
     expect(afterPass4.balances.map(withoutIds)).toEqual(afterPass2.balances.map(withoutIds));
@@ -759,7 +755,7 @@ describe("the published-snapshot guard still refuses a repair that would touch a
       expect(before.balances).toHaveLength(1);
       expect(before.balances[0]!.superseded).toBe(superseded);
 
-      const result = await backfillWalletDay(worker, day, passDeps(9, Date.parse(`${day}T23:59:58Z`)), NOW);
+      const result = await backfillWalletDay(walletBackfillDbStore(worker), day, passDeps(9, Date.parse(`${day}T23:59:58Z`)), NOW);
       expect(result.ok).toBe(false);
       expect(result.detail).toContain("transactional snapshot write failed");
       // The message rm_wallet_aum_snapshot_constituent_guard raises with

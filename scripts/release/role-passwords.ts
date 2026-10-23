@@ -37,7 +37,8 @@ import { loadTarget, type ReleaseTarget } from "./target.ts";
 const USAGE = "usage: bun run role-passwords --target <stage|prod|path> [--doadmin-stdin] [--roles <role,…>] [--rotate <role,…>]";
 
 /** Role lists are names only: checked here so nothing odd reaches a remote shell. */
-const ROLE_LIST = /^(rm_owner|rm_app|rm_worker|rm_readonly)(,(rm_owner|rm_app|rm_worker|rm_readonly))*$/;
+// rm_worker is not one of them: it keeps no `~/.env` line (D75, issue 1034).
+const ROLE_LIST = /^(rm_owner|rm_app|rm_readonly)(,(rm_owner|rm_app|rm_readonly))*$/;
 
 export interface WrapperArgs {
   readonly target: string;
@@ -64,7 +65,7 @@ export function parseWrapperArgs(argv: readonly string[]): WrapperArgs | { error
   }
   if (!target) return { error: `--target is required. ${USAGE}` };
   for (const [name, v] of [["--roles", roles], ["--rotate", rotate]] as const) {
-    if (v !== undefined && !ROLE_LIST.test(v)) return { error: `${name} takes a comma-separated list of rm_owner, rm_app, rm_worker, rm_readonly.` };
+    if (v !== undefined && !ROLE_LIST.test(v)) return { error: `${name} takes a comma-separated list of rm_owner, rm_app, rm_readonly.` };
   }
   return { target, doadminStdin, roles, rotate };
 }

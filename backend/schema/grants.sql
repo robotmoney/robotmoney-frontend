@@ -33,50 +33,11 @@
 
 DO $$
 DECLARE
-  -- rm_worker's grants, as the migrations give them (0016's default, narrowed
-  -- by 0054's explicit allowlist, then 0061 and 0062, less the DELETE 0107
-  -- revoked). Declared here because the snapshot carries no grants: before this
-  -- list a `--local blank` bootstrap left rm_worker holding nothing, so the
-  -- pipeline worker could not even claim a job. Everything else rm_worker holds
-  -- is SELECT (0062: "GRANT SELECT ON ALL TABLES/SEQUENCES ... TO rm_app,
-  -- rm_worker" and its default for later tables), and the loop below re-asserts
-  -- exactly that. The worker's writes are inserts, updates and upserts; a
-  -- superseded wallet sample is tombstoned (0104), never deleted.
-  worker_dml text[] := ARRAY[
-    'agent_revenue_daily', 'agent_vaults', 'chain_address_floors', 'chain_day_blocks', 'daily_agent_snapshots',
-    'daily_coin_snapshots', 'daily_tvl_snapshots', 'daily_wallet_snapshots', 'job_runs', 'job_schedules', 'jobs',
-    'lobster_coins', 'openclaw_agents', 'projects', 'tracked_wallets', 'vault_adapter_samples',
-    'vault_share_price_history', 'wallet_backfill_state', 'wallet_balance_samples', 'wallet_sleeve_samples'
-  ];
-  -- Written by the price workers (0054). The same privileges as worker_dml now
-  -- that neither list carries DELETE; kept apart because 0054 granted them apart.
-  -- buyback_scan_state (B11, issue #1150, 2026-10-05): the buybacks job
-  -- handler runs the indexer on the worker's pool, and its cursor upsert is an
-  -- INSERT ... ON CONFLICT DO UPDATE.
-  -- token_market_samples (0115, 2026-10-08): the token page's market reading,
-  -- upserted by the wallet.sample_balances tick (worker/handlers/token-market.ts).
-  worker_insert_update text[] := ARRAY['asset_price_floors', 'asset_prices', 'buyback_scan_state', 'token_market_samples'];
-  -- The wallet repair pass's immutable evidence (0037): it copies a day's
-  -- samples here before rewriting the day, so it INSERTs, and 0037's guard
-  -- refuses every UPDATE. Granted by 0109; 0054's allowlist had left it out,
-  -- and the repair of every incomplete day failed 42501 on the copy.
-  -- buyback_swaps (B11): the indexer INSERTs a decoded swap, idempotent on
-  -- tx_hash, and never updates one; its serial is already in
-  -- worker_sequence_usage (0054).
-  worker_insert_only text[] := ARRAY['wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence', 'buyback_swaps'];
-  -- The serial sequences behind rm_worker's inserts (0054, 0061); every other
-  -- sequence is SELECT only for it (0062).
-  worker_sequence_usage text[] := ARRAY[
-    'analytics_artifacts_id_seq', 'analytics_stage_runs_id_seq', 'audit_log_id_seq', 'buyback_swaps_id_seq',
-    'committee_agent_health_events_id_seq', 'committee_member_keys_id_seq', 'committee_memos_id_seq',
-    'committee_session_events_id_seq', 'job_runs_id_seq', 'job_schedules_id_seq', 'jobs_id_seq', 'prices_id_seq',
-    'regime_indicators_id_seq', 'research_pipeline_artifacts_id_seq', 'research_pipeline_runs_id_seq',
-    'research_pipeline_stages_id_seq', 'research_pipeline_warnings_id_seq', 'research_signals_id_seq',
-    'swarm_session_judgements_id_seq', 'vault_adapter_samples_id_seq', 'vault_share_price_history_id_seq',
-    'vault_tvl_id_seq', 'wallet_aum_snapshot_runs_run_id_seq', 'wallet_balance_sample_evidence_evidence_id_seq',
-    'wallet_balance_samples_id_seq', 'wallet_balances_id_seq', 'wallet_sleeve_sample_evidence_evidence_id_seq',
-    'wallet_sleeve_samples_id_seq'
-  ];
+  -- rm_worker HOLDS NOTHING (issue 1034, D75, migration 0127). Only the api
+  -- holds a database credential; the pipeline worker reaches the database
+  -- through /api/pipeline/**. The role still exists (dropping it needs
+  -- CREATEROLE, which rm_owner does not hold), so every sweep below revokes
+  -- everything from it: a hand-run grant to it does not survive a migrate run.
   -- The trigger functions 0056/0057/0058/0059/0060 created with PUBLIC EXECUTE
   -- revoked. The snapshot declares no function ACLs, so a blank bootstrap left
   -- PUBLIC holding EXECUTE on each; reconciliation re-asserts the revoke.
@@ -116,8 +77,8 @@ DECLARE
     'analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens',
     'schema_migrations', 'swarm_dormancy_baseline'
   ];
-  -- The subset of `read_only_for_runtime` whose SELECT is restored to rm_app and
-  -- rm_worker after the REVOKE ALL below. Not optional for `schema_migrations`: the
+  -- The subset of `read_only_for_runtime` whose SELECT is restored to rm_app
+  -- after the REVOKE ALL below. Not optional for `schema_migrations`: the
   -- api's append-only guard reads the ledger at boot (src/db/append-only-guard.ts),
   -- and §7.2 has every database-holding container run preflight check 3, which
   -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
@@ -125,8 +86,7 @@ DECLARE
   select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations', 'swarm_dormancy_baseline'];
   -- SELECT restored to rm_app ALONE (migration 0112, issue #1095): the api serves
   -- GET /api/public/analytics/overwrite-events from `analytics_overwrite_events`,
-  -- whose READ 0056's REVOKE ALL took along with the write. rm_worker reads
-  -- nothing from it, so it is not in select_for_runtime above.
+  -- whose READ 0056's REVOKE ALL took along with the write.
   select_for_app_only text[] := ARRAY['analytics_overwrite_events'];
   -- The immutable analytics ledgers (LEDGER_FAMILIES in
   -- src/db/analytics-ledger-guard.ts). Their migrations granted rm_app exactly
@@ -142,7 +102,12 @@ DECLARE
     'analytics_ledger_methodology_versions', 'analytics_ledger_runs', 'analytics_ledger_run_events',
     'analytics_data_vintages', 'analytics_vintage_members',
     'analytics_output_snapshots', 'analytics_report_snapshots', 'swarm_brief_revisions',
-    'analytics_parity_observations', 'maintenance_windows'
+    'analytics_parity_observations', 'maintenance_windows',
+    -- 0126 (issue 1034): a pipeline write's idempotency receipt is recorded once and never changed.
+    'pipeline_ingest_receipts',
+    -- 0109's evidence copies, which rm_app writes since 0126 (issue 1034, D75):
+    -- a replaced sample's evidence row is written once and never changed.
+    'wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'
   ];
   rel record;
   usurped text;
@@ -183,18 +148,17 @@ BEGIN
       -- must RE-ASSERT that narrowing, not undo it: a sweep that hands every table
       -- back to rm_app would quietly widen the tables whose whole point is that the
       -- application cannot write them, and it would do so on every run.
-      EXECUTE format('REVOKE ALL ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('REVOKE ALL ON %s FROM rm_app', rel.ident);
       IF rel.name = ANY(select_for_runtime) THEN
-        EXECUTE format('GRANT SELECT ON %s TO rm_app, rm_worker', rel.ident);
+        EXECUTE format('GRANT SELECT ON %s TO rm_app', rel.ident);
       END IF;
       IF rel.name = ANY(select_for_app_only) THEN
         EXECUTE format('GRANT SELECT ON %s TO rm_app', rel.ident);
       END IF;
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = ANY(insert_only_for_runtime) THEN
-      -- rm_worker's SELECT on these (0062) is its allowlist's business and is
-      -- left alone; only the write privileges no migration granted are taken.
-      EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON %s FROM rm_app, rm_worker', rel.ident);
+      -- Only the write privileges no migration granted are taken.
+      EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON %s FROM rm_app', rel.ident);
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'swarm_recommendations' THEN
@@ -202,7 +166,7 @@ BEGIN
       -- flag is the one column the accepting transaction sets and unsets. The
       -- table-level REVOKE also drops column grants, so it runs first and the
       -- column GRANT second — every run, so a hand-widened UPDATE does not survive.
-      EXECUTE format('REVOKE UPDATE ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('REVOKE UPDATE ON %s FROM rm_app', rel.ident);
       EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT UPDATE (final) ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
@@ -211,37 +175,23 @@ BEGIN
       -- overwrites and consumes a slot in place and never adds one, so the
       -- table an unauthenticated request writes stays at exactly 32 rows. The
       -- ordinary sweep below would hand rm_app INSERT on every run.
-      EXECUTE format('REVOKE INSERT ON %s FROM rm_app, rm_worker', rel.ident);
+      EXECUTE format('REVOKE INSERT ON %s FROM rm_app', rel.ident);
       EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSIF rel.name = 'swarm_stream_head' THEN
       -- The event counter's one row (migration 0098): rm_app reads it and
       -- increments it, and nothing else. The row is seeded by the migration and
       -- bootstrap-data.sql, so no runtime role ever INSERTs one; the ordinary
-      -- sweep below would hand rm_app INSERT on every run. rm_worker's SELECT is
-      -- settled by the worker block that follows, like every other table's.
-      EXECUTE format('REVOKE INSERT ON %s FROM rm_app, rm_worker', rel.ident);
+      -- sweep below would hand rm_app INSERT on every run.
+      EXECUTE format('REVOKE INSERT ON %s FROM rm_app', rel.ident);
       EXECUTE format('GRANT SELECT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_app', rel.ident);
       EXECUTE format('GRANT SELECT ON %s TO rm_readonly', rel.ident);
     END IF;
-    -- rm_worker, exactly as the migrations leave it: DML on its allowlist,
-    -- SELECT everywhere else. The read-only-for-runtime tables were settled in
-    -- their own branch above (SELECT on the select list, nothing otherwise) and
-    -- are not touched again here.
-    IF NOT rel.name = ANY(read_only_for_runtime) THEN
-      IF rel.name = ANY(worker_dml) OR rel.name = ANY(worker_insert_update) THEN
-        EXECUTE format('GRANT SELECT, INSERT, UPDATE ON %s TO rm_worker', rel.ident);
-      ELSIF rel.name = ANY(worker_insert_only) THEN
-        EXECUTE format('GRANT SELECT, INSERT ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE UPDATE ON %s FROM rm_worker', rel.ident);
-      ELSE
-        EXECUTE format('GRANT SELECT ON %s TO rm_worker', rel.ident);
-        EXECUTE format('REVOKE INSERT, UPDATE ON %s FROM rm_worker', rel.ident);
-      END IF;
-    END IF;
+    -- rm_worker holds nothing on any relation (issue 1034, migration 0127).
+    EXECUTE format('REVOKE ALL ON %s FROM rm_worker', rel.ident);
   END LOOP;
 
   -- D55 (6), for every runtime role, last, on every relation check 2 inspects:
@@ -268,8 +218,7 @@ BEGIN
   END LOOP;
 
   -- Sequences: rm_app writes, so it needs the serial columns' sequences; rm_readonly
-  -- reads `last_value` (migration 0062); rm_worker reads every one and uses the
-  -- ones behind its own inserts (`worker_sequence_usage`), nothing more.
+  -- reads `last_value` (migration 0062); rm_worker holds nothing (0127).
   FOR rel IN
     SELECT c.oid::regclass AS ident, c.relname AS name
     FROM pg_class c
@@ -281,12 +230,7 @@ BEGIN
   LOOP
     EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO rm_app', rel.ident);
     EXECUTE format('GRANT SELECT ON SEQUENCE %s TO rm_readonly', rel.ident);
-    IF rel.name = ANY(worker_sequence_usage) THEN
-      EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO rm_worker', rel.ident);
-    ELSE
-      EXECUTE format('GRANT SELECT ON SEQUENCE %s TO rm_worker', rel.ident);
-      EXECUTE format('REVOKE USAGE, UPDATE ON SEQUENCE %s FROM rm_worker', rel.ident);
-    END IF;
+    EXECUTE format('REVOKE ALL ON SEQUENCE %s FROM rm_worker', rel.ident);
   END LOOP;
 
   FOREACH fn IN ARRAY ledger_guard_functions LOOP
@@ -299,7 +243,9 @@ $$;
 
 -- Schema usage, and nothing that grants DDL: 0053 revoked ALL on `public` from PUBLIC
 -- and granted only USAGE, which is what the `ddl` denylist rule tests.
-GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
+GRANT USAGE ON SCHEMA public TO rm_app, rm_readonly;
+-- rm_worker holds nothing in the schema either (issue 1034, migration 0127).
+REVOKE ALL ON SCHEMA public FROM rm_worker;
 
 -- Future objects created by rm_owner: READ ONLY, for every runtime role. 0053 says
 -- "There are no default write grants. A later migration must name every new runtime
@@ -322,7 +268,10 @@ GRANT USAGE ON SCHEMA public TO rm_app, rm_worker, rm_readonly;
 -- defaults, so that revoke is a provisioning step run as the login itself
 -- (scripts/lib/smoke-database.ts PROVISIONING_DEFAULT_PRIVILEGES_SQL; §9.1 step 3).
 ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public
-  REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM rm_readonly, rm_app, rm_worker;
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly, rm_app, rm_worker;
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE USAGE, UPDATE ON SEQUENCES FROM rm_readonly, rm_app, rm_worker;
-ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly, rm_app, rm_worker;
+  REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM rm_readonly, rm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON TABLES TO rm_readonly, rm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE USAGE, UPDATE ON SEQUENCES FROM rm_readonly, rm_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQUENCES TO rm_readonly, rm_app;
+-- rm_worker gets nothing on future objects (issue 1034, migration 0127).
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE ALL ON TABLES FROM rm_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public REVOKE ALL ON SEQUENCES FROM rm_worker;

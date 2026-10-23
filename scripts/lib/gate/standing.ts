@@ -291,15 +291,21 @@ export function evalMigrations(base: readonly string[] | null, now: readonly str
 export const CHAIN_STATE_TABLES = ["wallet_backfill_state", "chain_day_blocks", "chain_address_floors"] as const;
 
 /**
- * R8.r. Role and grant integrity: rm_worker INSERTs on the chain-state tables, the api connects as
- * rm_app (never a superuser), rm_readonly reads every public sequence. A twin holds no grants (its
+ * R8.r. Role and grant integrity: rm_app INSERTs on the chain-state tables (the pipeline worker's
+ * writes run in the api since issue 1034, D75), rm_worker holds no INSERT on them (0127 retired it;
+ * a database before 0127 still shows the old grant, which WARNs rather than fails), the api connects
+ * as rm_app (never a superuser), rm_readonly reads every public sequence. A twin holds no grants (its
  * dump is taken with --no-privileges), so it is not graded there.
  */
-export function evalGrants(dbMode: string, r: { workerInsert: boolean | null; currentUser: string | null; readonlySeq: boolean | null } | undefined): StandingCheck[] {
+export function evalGrants(
+  dbMode: string,
+  r: { appInsert: boolean | null; workerInsert: boolean | null; currentUser: string | null; readonlySeq: boolean | null } | undefined,
+): StandingCheck[] {
   if (dbMode !== "external") return [mk("R8.r", "grants", "INFO", `not checked on a ${dbMode} stack: a restored dump carries no grants. Production is checked at SP.3 and SV.5`)];
   if (!r) return [mk("R8.r", "grants", "FAIL", "the query returned no row")];
   return [
-    r.workerInsert === true ? mk("R8.r", "rm_worker grants", "PASS", `INSERT on the ${CHAIN_STATE_TABLES.length} chain-state tables`) : mk("R8.r", "rm_worker grants", "FAIL", `rm_worker lacks INSERT on a chain-state table (${String(r.workerInsert)})`),
+    r.appInsert === true ? mk("R8.r", "rm_app chain-state grants", "PASS", `INSERT on the ${CHAIN_STATE_TABLES.length} chain-state tables`) : mk("R8.r", "rm_app chain-state grants", "FAIL", `rm_app lacks INSERT on a chain-state table (${String(r.appInsert)})`),
+    r.workerInsert === false ? mk("R8.r", "rm_worker retired", "PASS", "no INSERT on the chain-state tables (0127)") : mk("R8.r", "rm_worker retired", "WARN", `rm_worker still holds INSERT on a chain-state table (${String(r.workerInsert)}): 0127 not applied yet`),
     r.currentUser === "rm_app" ? mk("R8.r", "api role", "PASS", "rm_app (never doadmin)") : mk("R8.r", "api role", "FAIL", `the api connects as ${r.currentUser ?? "?"}, expected rm_app`),
     r.readonlySeq === true ? mk("R8.r", "rm_readonly sequences", "PASS", "SELECT on every public sequence") : mk("R8.r", "rm_readonly sequences", "FAIL", String(r.readonlySeq)),
   ];
@@ -342,13 +348,22 @@ export function evalApiLogs(lines: readonly string[] | null): StandingCheck[] {
   return out;
 }
 
-/** R8.v. The buyback scan never fails on a refused range (a 413 is halved, never a failure). */
+/**
+ * R8.v. The buyback scan never fails on a refused range (a 413 is halved, never a failure). A failed
+ * scan whose error is a Base RPC rate limit (HTTP 429, "request limit reached") is an external outcome
+ * (log rule `external-base-rpc`): the rows and the cursor stay, the next refresh resumes. That is a
+ * WARN (issue 1387); any other 'live index failed' is a FAIL.
+ */
 export function evalBuyback(lines: readonly string[] | null): StandingCheck {
   const title = "buyback";
   if (lines === null) return mk("R8.v", title, "WARN", "no worker container: UNVERIFIED");
-  const bad = lines.filter((l) => l.includes("live index failed")).length;
+  const failed = lines.filter((l) => l.includes("live index failed"));
+  const limited = failed.filter((l) => /HTTP 429|request limit reached/i.test(l)).length;
   const b413 = lines.filter((l) => l.includes("HTTP 413")).length;
-  return bad === 0 ? mk("R8.v", title, "PASS", `0 'live index failed' (${b413} HTTP 413 answers, each halved)`) : mk("R8.v", title, "FAIL", `${bad} 'live index failed'`);
+  const halved = `${b413} HTTP 413 answers, each halved`;
+  if (failed.length === 0) return mk("R8.v", title, "PASS", `0 'live index failed' (${halved})`);
+  if (limited === failed.length) return mk("R8.v", title, "WARN", `${limited} 'live index failed' on a Base RPC rate limit (HTTP 429), resumed from the cursor (${halved})`);
+  return mk("R8.v", title, "FAIL", `${failed.length} 'live index failed', ${failed.length - limited} not a Base RPC rate limit (${halved})`);
 }
 
 /** R8.w, R8.w2, R8.w3. Gecko: the tier matches the key, no 429/401/403, and the key is in no ledger row or api/website environment. */

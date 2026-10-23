@@ -3211,6 +3211,13 @@ column true than to teach every future reader that it is not, and the same
 comparison is what `inForce` needs anyway, so one definition
 (`sessionJudgeFingerprint()`) now serves the writer and the read path.
 
+> **Superseded by [D71](#d71) on 2026-10-20 for who gets `applied`.** `applied`
+> still means the session carries the opinion, and the read-back still proves
+> it. It is no longer written when a judgement is filed: the answer is filed
+> `applied = false` with the reason `awaiting_draw`, and the draw after the
+> judging deadline applies the winner. A reader treats a judgement as applied
+> when `applied` is true or its id is the session's `judge.judgement_id`.
+
 **`inForce` reconciles against the session.** The append-only record and
 `swarm_sessions.swarm_recommendation` are two stores. Two legal admin actions —
 `judged -> window_closed`, then `window_closed -> aggregated` — have
@@ -3989,6 +3996,12 @@ data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
 `rm_worker` and runs preflight checks 1-3; the research lane, which serves only
 retired rows, is removed.
 
+> **Superseded in part by [D75](#d75) on 2026-10-22.** Decision 2's `rm_worker`
+> carve-out no longer holds. The pipeline worker holds no database credential:
+> it reaches the database only through the api's `/api/pipeline/**` routes with
+> its pipeline-worker token, its startup check is HTTP, and `rm_worker` holds no
+> privilege (migration 0127).
+
 **Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
 close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
 windows, downtime skips to the next future grid instant, and a duration change
@@ -4012,6 +4025,11 @@ this was built:
   by which judgement arrived first, so nothing wins by being fastest. Other
   judgements are recorded and change no outcome. Agreement among several judges
   remains a later amendment.
+
+  > **Superseded by [D71](#d71) on 2026-10-20.** The judge of record is no
+  > longer the lowest member id. Every eligible judge judges every session, and
+  > the judge of record is the judge whose on-time answer is drawn at random
+  > after the judging deadline.
 - **A first epoch's window has a floor** of half an `epoch_duration`. Without
   one, a subject activated moments before a grid instant opened a window nobody
   could submit into, then published a session recording every seated member
@@ -5753,3 +5771,155 @@ release branch by different squashes; comparing trees removes that failure
 without forbidding the squash. Tagging at the cutover keeps production from
 ever running a commit no version names, and makes every pre-cutover check the
 place a release can still stop.
+
+---
+
+<a id="d71"></a>
+## D71 — Every judge judges; the winner is drawn at random after the judging deadline (owner, 2026-10-20)
+
+**Status.** Accepted 2026-10-20. Implemented by issue 1336. It supersedes by name the
+[D52](#d52) bullet "The judge of record, not a race" and the D42 applied paragraph
+("`applied` is read back, not counted", issue 806). It extends D69 (3) with the draw seam.
+
+**Decision.**
+
+1. **Every eligible judge judges every session.** An answer records evidence
+   only. It publishes nothing, writes no event and does not stop the other
+   judges from being asked. A judge stays asked until it has answered.
+2. **The two deadlines are separate.** Members file takes until the take window
+   closes. Judging starts after the takes are aggregated. The judging deadline is
+   the moment judging is requested plus the judging duration captured at turnover.
+   Judges have only the judging deadline.
+3. **An answer is marked on time or late when it arrives.** The answer's accepted
+   time is one reading of the database clock, saved with the row. An answer
+   accepted at or before the judging deadline is on time (the row says
+   `awaiting_draw`). A later one is `after_deadline`, and one after publication
+   is `late_evidence`. Finalize time never decides it. Saved answers are never
+   changed.
+4. **Finalize before the judging deadline is refused**, whatever answers exist
+   (`judging_deadline_not_reached`).
+5. **The draw.** At or after the judging deadline, finalize lists the on-time
+   answers, keeps the first one per judge in ascending id order, drops judges
+   that were removed, switched off or gated out since they answered, and draws
+   one at random. The random source is the operating system's secure source. The
+   rule is `rejection-u32-v1`: draw a 32-bit value v, reject v >= floor(2^32 / n)
+   * n, then the position is v mod n. The draw runs in one transaction with the
+   write of the winner's opinion onto the session, the audit row and the
+   publication. Two finalizes at the same moment give one draw, because the
+   session row lock serialises them and a published session returns its stored
+   outcome.
+6. **The record.** The session's judge block gains `judgement_id` and `draw` (the
+   candidate ids and member ids, `drawn_index`, `random_value`, `draw_rule` and
+   `drawn_at`). The audit log gets one `judge_draw` row with the same facts.
+   Anyone can recompute `drawn_index` from the list and the number. The random
+   value itself is trusted: commit-reveal is out of scope.
+7. **The judge of record is redefined** as the judge whose answer was drawn. The
+   session's consensus time is the winning answer's accepted time, so it is at or
+   before the judging deadline.
+8. **Outcomes.** One or more candidates give `judged`. None gives `no_consensus`
+   and nothing is made up. Judging `off` gives `not_judged`. A new session goes
+   judging to published. The judged state stays for sessions an older version
+   left there.
+9. **Readers.** A judgement is applied when `applied` is true or its id is the
+   session's `judge.judgement_id`. The public pages, the admin read path, the
+   receipt, the release gates and the replay check all use that one predicate. The
+   public judgements page and a judge's own page show only the drawn answer. The
+   receipt bytes are unchanged.
+10. **The draw seam is a test-only path.** It extends D69 (3): the test harness
+    may fix the random value, and a process that is not the armed harness refuses.
+
+**Accepted costs.**
+
+- Answers filed during the cutover: a session in judging when the api is
+  replaced has answers the old api tagged `not_judge_of_record`. They are not
+  candidates, so that session may publish `no_consensus`. Start the upgrade with
+  no session in judging where possible.
+- Rollback: old code reads only `applied`, so drawn sessions look unjudged in the
+  gates and on the public page until the roll forward. No data is lost.
+- Mixed versions: an old scheduler waits for an event that never comes, and an old
+  scheduler already arms the deadline timer. Both mixes finalize at the judging
+  deadline.
+
+**Why.** Production had no judged session since 17 October. Three judges were
+seated, the code always picked the lowest id, that judge had never answered, and
+the other judges' answers were ignored. Every session ended with no consensus.
+Drawing one on-time answer gives each judge an equal chance, takes no vote and
+merges nothing.
+
+Out of scope: skipping a judge's own operator's portfolio and the in-house
+exemption (issue 1335), judges voting or merging answers, verifiable randomness,
+turning outside judging on in production (issue 1396) and filling in draw records
+for sessions published earlier.
+
+<a id="d75"></a>
+## D75 — Only the api holds a database credential; the pipeline worker writes through /api/pipeline/** (supersedes D52 decision 2's rm_worker carve-out; owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22. Implemented by issue 1034. It supersedes in part
+[D52](#d52): decision 2's sentence "The pipeline worker keeps `rm_worker` and runs
+preflight checks 1-3". It amends smoke-production-spec.md §3 and §7.2.
+
+**Decision.**
+
+1. **No service other than `api` holds a database credential.** No composition
+   hands any other service `DATABASE_URL`, `WORKER_DATABASE_URL`, a `PG*`
+   connection key, a `postgres://` value or a pool setting.
+   `scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts`
+   renders every composition and asserts it, with a planted red control.
+2. **The pipeline worker reaches the database only through `/api/pipeline/**`.**
+   It claims, renews and settles jobs, ticks the schedules, reaps expired leases
+   and enqueues follow-up jobs through the queue routes, reads the state its
+   handlers need through the read routes, and writes their rows through the
+   ingestion routes. Its import graph reaches no database module. It refuses to
+   start with a database key in its environment, and its startup check is HTTP:
+   the api answers and accepts its token with both rights (`pipeline_startup:
+   passed`).
+3. **It holds one credential, the `pipeline-worker` service token.** The token
+   lives in the api's automation-token store like the other holders (smoke spec
+   §3), with two rights: `pipeline_queue` and `pipeline_ingest`. It is refused on
+   every route outside `/api/pipeline/**`, and every other token is refused inside
+   it.
+4. **Every pipeline write is bounded, idempotent and fenced.** A request carries
+   at most 1,000 rows and 1 MiB (413 otherwise). It carries an `Idempotency-Key`:
+   a replay with the same body returns the recorded response and writes nothing,
+   and the same key with another body answers 409. It carries its lease
+   `(jobId, workerId, attempt)`: the api locks the job row and writes only while
+   the lease holds, so a reaped lease or a stale attempt answers 409 `lease_lost`
+   and writes nothing.
+5. **Pipeline work runs on the api's batch pool, capped per token.** A token
+   holds `PIPELINE_TOKEN_CONCURRENCY` requests at once (default 2). One more waits
+   `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated` with `Retry-After`, which
+   the worker honours. Public and member routes keep their own request pool.
+6. **`rm_worker` holds no privilege.** Migration 0127 revokes every table,
+   sequence and schema privilege and rm_owner's default grants to it, and
+   `backend/schema/grants.sql` re-asserts that on every migrate run. Its
+   password leaves the `~/.env` allowlist (preflight check 4).
+
+**Accepted costs.**
+
+- Migration 0127 is `compat: breaking`: a worker built before this release
+  needs `rm_worker`'s grants, and an api built before it refuses to boot beside
+  it (spec §8.4). A release that carries 0127 follows spec §8.5's breaking
+  order. To keep the rolling upgrade, 0127 can ship one release after 0126 and
+  the new worker: by then nothing connects as `rm_worker`.
+- Each existing `~/.env` holds an `rm_worker` line that is now off the
+  allowlist. Check 4 warns on stage and refuses on prod until the line goes.
+  The release runner's env rewrite moves it out.
+- `projects.discover` writes its roster in requests of at most 1,000 rows, each
+  its own transaction, instead of one transaction. Every write is an idempotent
+  upsert, and deactivation runs only after every request landed, so a run that
+  stops between requests leaves rows the next run rewrites.
+- The retired `regime.classify` and `research.refresh` kinds still have
+  handlers that present the analytics token. The worker no longer holds that
+  token, so a job of either kind enqueued by hand fails. No schedule enqueues
+  them (D25).
+
+**Why.** Production answered nginx 502s while the api logged its 10 s request
+timeout at about 1% CPU. Every worker lane opened its own pools, so no one place
+bounded concurrency, timeouts or query budgets. With the api as the only client,
+the connection budget is one sum the api checks at boot, and bulk pipeline
+work can exhaust only the batch pool.
+
+Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
+`CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
+pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
+connection pooler.

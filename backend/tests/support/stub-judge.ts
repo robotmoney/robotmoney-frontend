@@ -18,6 +18,7 @@
 import { canonicalizeJudgement } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import {
+  finalizeEpoch,
   judgeInputFromFrozen,
   loadFrozenTakeSet,
   registerMember,
@@ -29,6 +30,7 @@ import {
 import { getJudgeConfig, setJudgeConfig } from "../../src/swarm/judge-config.ts";
 import { inputsDigest, JUDGE_PROMPT_HASH } from "../../src/swarm/judge.ts";
 import { generateKeyPair, signMessage } from "../../src/lib/signing.ts";
+import { setJudgeDrawSourceForTests } from "../../src/swarm/judge-draw.ts";
 
 /** The model a stub judgement names. Any non-keyless id; nothing calls it. */
 export const STUB_JUDGE_MODEL = "stub/judge";
@@ -69,10 +71,8 @@ let standing: TestJudge | null = null;
 
 /**
  * THE in-house judge for a test file: seated once and reused while its row
- * exists, re-seated after a per-test database reset. Reuse matters: the judge
- * of record is the lowest-id eligible judge (scheduler spec §4.4), so seating a
- * fresh judge for every session would let a later one outrank the judge whose
- * judgements a test expects to be the consensus.
+ * exists, re-seated after a per-test database reset. Reuse keeps one judge's
+ * answers together across a file's sessions.
  */
 export async function inHouseJudge(): Promise<TestJudge> {
   if (standing) {
@@ -153,8 +153,8 @@ export async function requestJudgingFor(sessionId: string): Promise<void> {
 /**
  * The whole participant path for one session: request judging, seat an
  * in-house judge (or use the one given), and submit its signed judgement. On
- * success the session is `judged` and carries the opinion, which is what a
- * consensus receipt embeds.
+ * success the answer is on file and the session is still `judging` (D71):
+ * `drawNow` runs the draw that makes it the session's judgement.
  */
 export async function judgeViaParticipant(
   sessionId: string,
@@ -164,4 +164,22 @@ export async function judgeViaParticipant(
   const judge = opts.judge ?? await inHouseJudge();
   const result = await submitSigned(judge, sessionId, opts.opinion ?? STUB_JUDGE_REPLY);
   return { judge, result };
+}
+
+/**
+ * Let the judging deadline pass and run finalize, which draws the winner (D71).
+ *
+ * The deadline is moved to the database clock's present, so every answer already
+ * on file was accepted at or before it and finalize runs strictly after it.
+ * `random` fixes the draw's 32-bit value (default 0, the first candidate by
+ * judgement id, which is the first answer filed); the CSPRNG is restored after.
+ */
+export async function drawNow(sessionId: string, opts: { random?: number } = {}) {
+  setJudgeDrawSourceForTests(() => opts.random ?? 0);
+  try {
+    await sql`UPDATE swarm_sessions SET judging_deadline_at = clock_timestamp() WHERE id = ${sessionId}`;
+    return await finalizeEpoch(sessionId);
+  } finally {
+    setJudgeDrawSourceForTests(null);
+  }
 }

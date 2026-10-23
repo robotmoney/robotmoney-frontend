@@ -39,6 +39,8 @@ export const provisionOperatorToken = () => provisionHolderToken("operator");
 export const provisionAnalyticsToken = () => provisionHolderToken("analytics-producer");
 /** system-scheduler's token (read_subjects, read_sessions, lifecycle_transitions). */
 export const provisionSchedulerToken = () => provisionHolderToken("system-scheduler");
+/** The pipeline worker's token (pipeline_queue, pipeline_ingest; issue 1034). */
+export const provisionPipelineToken = () => provisionHolderToken("pipeline-worker");
 
 /**
  * Write `token` to a fresh file and return its path — the delivery shape a

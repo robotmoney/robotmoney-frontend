@@ -9,9 +9,7 @@
 //
 // The one-time pre-launch history backfill (backfillWalletHistory) lives in
 // db/seed.ts — it is migrate/seed tooling on the migration pool, not a worker
-// job, and the worker's queue-scoped pool (db/worker-client.ts, issue #106)
-// must not be dragged into the migrate one-shot's import graph (a queried
-// second pool would keep `bun run migrate` from ever exiting).
+// job.
 //
 // D41 phase 4 (issue #927): the live sampler now dual-writes price data to
 // `asset_prices` and no longer writes `price_usd` to `wallet_balance_samples`,
@@ -22,67 +20,11 @@
 // a separate, independently-scheduled job — to have covered the same
 // (date, symbol) that tick. See the comment on sampleWalletSleeves for why
 // that reliance was a false invariant.
-import { sql } from "../../db/worker-client.ts";
-import { on, registerQuery } from "../../db/registry.ts";
-
-// Registered queries (smoke-production-spec.md §7.1), on the worker's own
-// pool. This handler module is the entry: the job loop dispatches the two
-// wallet sampler kinds to it.
-const WALLET_HANDLER = "src/worker/handlers/wallet";
-
-const upsertBalanceSample = registerQuery({
-  role: "rm_worker",
-  object: "wallet_balance_samples",
-  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
-  // EXCLUDED are read.
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/worker/handlers/wallet:sampleWalletBalances",
-  purpose: "Upsert the day's balance sample per tracked asset on (sample_date, symbol).",
-  callers: [WALLET_HANDLER],
-  probe: {
-    statement: `INSERT INTO wallet_balance_samples
-        (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
-      VALUES ($1::date, $2, $3::numeric, $4::numeric, $5, $6::boolean, now())
-      ON CONFLICT (sample_date, symbol) DO UPDATE SET
-        amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
-        strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only, sampled_at = EXCLUDED.sampled_at,
-        id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.id ELSE EXCLUDED.id END,
-        price_usd = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_usd ELSE EXCLUDED.price_usd END,
-        snapshot_run_id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
-        amount_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
-        price_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
-        recorded_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.recorded_at ELSE EXCLUDED.recorded_at END,
-        superseded_at = NULL`,
-    params: ["2026-01-01", "PROBE", "1", "1", "live", false],
-  },
-});
-
-const upsertSleeveSample = registerQuery({
-  role: "rm_worker",
-  object: "wallet_sleeve_samples",
-  // UPDATE for ON CONFLICT DO UPDATE; SELECT because the conflict target and
-  // EXCLUDED are read.
-  privileges: ["INSERT", "UPDATE", "SELECT"],
-  site: "src/worker/handlers/wallet:sampleWalletSleeves",
-  purpose: "Upsert the day's sample per sleeve wallet and asset on (sample_date, wallet_address, symbol).",
-  callers: [WALLET_HANDLER],
-  probe: {
-    statement: `INSERT INTO wallet_sleeve_samples
-        (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
-      VALUES ($1::date, $2, $3, $4::numeric, $5::numeric, $6, now())
-      ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
-        amount = EXCLUDED.amount, value_usd = EXCLUDED.value_usd, provenance = EXCLUDED.provenance,
-        sampled_at = EXCLUDED.sampled_at,
-        id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.id ELSE EXCLUDED.id END,
-        price_usd = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_usd ELSE EXCLUDED.price_usd END,
-        snapshot_run_id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
-        amount_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
-        price_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
-        recorded_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.recorded_at ELSE EXCLUDED.recorded_at END,
-        superseded_at = NULL`,
-    params: ["2026-01-01", "0x0000000000000000000000000000000000000001", "PROBE", "1", "1", "live"],
-  },
-});
+// The rows go to the api (pipeline/stores/wallet.ts, issue 1034): this worker
+// holds no database credential. The api writes a day's rows in one
+// transaction under the wallet snapshot date lock, as this handler used to.
+import { pipelineIngest } from "../pipeline-client.ts";
+import type { BalanceSampleRow, SleeveSampleRow } from "../../pipeline/stores/wallet.ts";
 import { fetchWalletBalances, _resetWalletBalancesCacheForTests } from "../../chain/wallet-balances.ts";
 import {
   isPlaceholderAddress,
@@ -92,8 +34,8 @@ import {
   resolveTrackedAssets,
   type TrackedAsset,
 } from "../../config.ts";
+import { persistedFallbackWalletPriceReader } from "../persisted-price.ts";
 import {
-  persistedFallbackWalletPriceReader,
   readChainAmountsBatched,
   SLEEVE_DEFS,
   sleeveSymbols,
@@ -101,8 +43,7 @@ import {
   type KeyedAssetRead,
 } from "../../chain/wallet-valuation.ts";
 import { classifySlot, declineReplayedSlot } from "./slot.ts";
-import { lockWalletSnapshotDate } from "../../ops/wallet-snapshot-manifest.ts";
-import { writeAssetPrice, type AssetPriceSource } from "../../ops/asset-prices.ts";
+import type { AssetPriceSource } from "../../ops/asset-price-types.ts";
 import { resolvePoolForToken } from "../../chain/historical-prices.ts";
 
 /** The instant a UTC daily candle for `date` closes — one day after `date`'s
@@ -175,95 +116,67 @@ export async function sampleWalletBalances(payload: Record<string, unknown> = {}
     }
   }
 
-  return sql.begin(async (tx) => {
-    await lockWalletSnapshotDate(tx, sampleDate);
-    let persisted = 0;
-    for (const h of holdings) {
-      // Never persist a leg with no value (no live read AND no prior sample) — that
-      // would write a fabricated/placeholder row. A degraded 'stale' leg carries
-      // its last-persisted value, which is fine to re-record idempotently.
-      if (h.valueUsd == null) continue;
-      // Only a genuinely LIVE leg is relabelled 'backfilled' on a same-bucket
-      // catch-up — a leg that already degraded to 'stub'/'stale' keeps that
-      // (more specific, more important) label rather than being overwritten.
-      const provenance = replay === "same-bucket-catchup" && h.provenance === "live" ? "backfilled" : h.provenance;
-      // issue #642: the sampler is the ONLY place that knows whether a strategy
-      // leg's NAV came from idle USDC alone — the request path serves persisted
-      // rows with zero RPC and cannot re-derive it. `undefined` (every
-      // non-strategy leg, and any leg whose read failed) persists as NULL:
-      // not-applicable/not-known, never a fabricated `false`. See migration 0032.
-      const strategyNavIdleOnly = h.strategyNavIdleOnly ?? null;
-      const asset = assetBySymbol.get(h.symbol);
-      const priceUsd = h.priceUsd;
-      // D41 phase 4 (issue #927): price_usd is NOT written to wallet_balance_samples.
-      // asset_prices is the sole write target for price data now that #850 switched
-      // every read site to the join; leaving this column NULL on a live-sampled row
-      // is deliberate, not an oversight, and value_usd still carries the fused
-      // amount*price product a caller may need before the join lands its row.
-      //
-      // D55 (6): a key the wallet repair pass superseded (ops/wallet-backfill.ts,
-      // migration 0104) is live again once the sampler writes it, as the row
-      // the old delete-and-insert would have let this INSERT create fresh.
-      // "Fresh" is every column, not just the tombstone. A superseded row was
-      // archived to evidence under its id while it was live, and the evidence
-      // tables hold UNIQUE (original_id), so the revived row takes EXCLUDED's
-      // new id: keeping the old one would make the day's next rewrite archive
-      // that id a second time and fail 23505. Its price_usd and snapshot
-      // identity (snapshot_run_id and the three *_observed_at / recorded_at
-      // columns) are the old version's too, so they reset to what the INSERT
-      // gives a fresh row. A LIVE row keeps every column this upsert never
-      // wrote, exactly as before. SET expressions read the pre-update row, so
-      // each CASE sees the tombstone this statement clears.
-      await on(tx, upsertBalanceSample)`
-        INSERT INTO wallet_balance_samples
-          (sample_date, symbol, amount, value_usd, provenance, strategy_nav_idle_only, sampled_at)
-        VALUES
-          (${sampleDate}, ${h.symbol}, ${h.amount}, ${h.valueUsd}, ${provenance}, ${strategyNavIdleOnly}, now())
-        ON CONFLICT (sample_date, symbol) DO UPDATE SET
-          amount     = EXCLUDED.amount,
-          value_usd  = EXCLUDED.value_usd,
-          provenance = EXCLUDED.provenance,
-          strategy_nav_idle_only = EXCLUDED.strategy_nav_idle_only,
-          sampled_at = EXCLUDED.sampled_at,
-          id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.id ELSE EXCLUDED.id END,
-          price_usd = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_usd ELSE EXCLUDED.price_usd END,
-          snapshot_run_id = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
-          amount_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
-          price_observed_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
-          recorded_at = CASE WHEN wallet_balance_samples.superseded_at IS NULL THEN wallet_balance_samples.recorded_at ELSE EXCLUDED.recorded_at END,
-          superseded_at = NULL
-      `;
+  // The rows, built here and written by the api in ONE transaction under the
+  // wallet snapshot date lock (pipeline/stores/wallet.ts writeBalanceSamples),
+  // exactly as this sampler used to write them on its own pool.
+  const rows: BalanceSampleRow[] = [];
+  for (const h of holdings) {
+    // Never persist a leg with no value (no live read AND no prior sample) — that
+    // would write a fabricated/placeholder row. A degraded 'stale' leg carries
+    // its last-persisted value, which is fine to re-record idempotently.
+    if (h.valueUsd == null) continue;
+    // Only a genuinely LIVE leg is relabelled 'backfilled' on a same-bucket
+    // catch-up — a leg that already degraded to 'stub'/'stale' keeps that
+    // (more specific, more important) label rather than being overwritten.
+    const provenance = replay === "same-bucket-catchup" && h.provenance === "live" ? "backfilled" : h.provenance;
+    // issue #642: the sampler is the ONLY place that knows whether a strategy
+    // leg's NAV came from idle USDC alone — the request path serves persisted
+    // rows with zero RPC and cannot re-derive it. `undefined` (every
+    // non-strategy leg, and any leg whose read failed) persists as NULL:
+    // not-applicable/not-known, never a fabricated `false`. See migration 0032.
+    const strategyNavIdleOnly = h.strategyNavIdleOnly ?? null;
+    const asset = assetBySymbol.get(h.symbol);
+    const priceUsd = h.priceUsd;
+    // D41 phase 4 (issue #927): price_usd is NOT written to wallet_balance_samples
+    // (see writeBalanceSamples). D55 (6): a key the repair pass superseded is
+    // revived as a fresh row by the same upsert.
+    const row: BalanceSampleRow = {
+      symbol: h.symbol,
+      amount: h.amount,
+      valueUsd: h.valueUsd,
+      provenance,
+      strategyNavIdleOnly,
+      assetPrice: null,
+    };
 
-      // D41 phase 4 — dual-write the price row alongside the sample row,
-      // once per (date, symbol) from the aggregate leg. Gated on
-      // isFreshThisTick(h.provenance) for the same reason the pool-key
-      // resolution above is: a degraded ('stale'/'seed') leg's price is OLD,
-      // not this tick's observation, and writing it into asset_prices under
-      // TODAY's date would misrepresent that day's eventual close (see the
-      // extended rationale above).
-      if (asset && isFreshThisTick(h.provenance) && priceUsd != null && Number.isFinite(priceUsd) && priceUsd > 0) {
-        const source: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
-        const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(h.symbol) ?? null);
-        const now = new Date();
-        await writeAssetPrice(tx as any, {
-          priceDate: sampleDate,
-          symbol: h.symbol,
-          priceUsd,
-          source,
-          poolKey,
-          tokenAddress: source === "pinned" ? null : (asset.address ?? null),
-          observedAt: dayCloseInstant(sampleDate),
-          fetchedAt: now,
-          configIdentity: source === "pinned"
-            ? "pinned:usd:1.00"
-            : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
-        });
-      }
-
-      persisted += 1;
+    // D41 phase 4 — dual-write the price row alongside the sample row,
+    // once per (date, symbol) from the aggregate leg. Gated on
+    // isFreshThisTick(h.provenance) for the same reason the pool-key
+    // resolution above is: a degraded ('stale'/'seed') leg's price is OLD,
+    // not this tick's observation, and writing it into asset_prices under
+    // TODAY's date would misrepresent that day's eventual close (see the
+    // extended rationale above).
+    if (asset && isFreshThisTick(h.provenance) && priceUsd != null && Number.isFinite(priceUsd) && priceUsd > 0) {
+      const source: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+      const poolKey = source === "pinned" ? null : (poolKeyBySymbol.get(h.symbol) ?? null);
+      row.assetPrice = {
+        priceDate: sampleDate,
+        symbol: h.symbol,
+        priceUsd,
+        source,
+        poolKey,
+        tokenAddress: source === "pinned" ? null : (asset.address ?? null),
+        observedAt: dayCloseInstant(sampleDate),
+        fetchedAt: new Date(),
+        configIdentity: source === "pinned"
+          ? "pinned:usd:1.00"
+          : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+      };
     }
-    return { sampleDate, persisted };
-  });
+    rows.push(row);
+  }
+  const persisted = await pipelineIngest<number>("wallet.balance_samples", sampleDate, rows);
+  return { sampleDate, persisted };
 }
 
 // SLEEVE_DEFS is imported from chain/wallet-valuation.ts (it was duplicated
@@ -319,104 +232,88 @@ export async function sampleWalletSleeves(payload: Record<string, unknown> = {})
   // SAME tick, not a correctness requirement.
   const poolKeyBySymbol = new Map<string, string | null>();
   const dualWrittenSymbols = new Set<string>();
-  return sql.begin(async (tx) => {
-    await lockWalletSnapshotDate(tx, sampleDate);
-    let persisted = 0;
-
-    for (const { walletAddress, asset, key } of readTargets) {
-      const chainAmount = chainAmounts.get(key);
-      if (!chainAmount || !chainAmount.ok) continue;
+  // The rows, built here and written by the api in ONE transaction under the
+  // wallet snapshot date lock (pipeline/stores/wallet.ts writeSleeveSamples).
+  // The pool lookups below run before that transaction now, not inside it.
+  const rows: SleeveSampleRow[] = [];
+  for (const { walletAddress, asset, key } of readTargets) {
+    const chainAmount = chainAmounts.get(key);
+    if (!chainAmount || !chainAmount.ok) continue;
 
     // Explicit persisted-fallback reader (issue #294): this sampler runs on the
     // worker schedule, not the request path, so a live-price-provider hiccup
     // should still degrade to a recent persisted per-symbol price rather than
     // skipping the sample entirely. This must be passed explicitly here and
-    // NOT via valueLeg's default — wallet-balances.ts:133 (fetchWalletBalances,
-    // the out-of-scope /api/dashboards/wallet-balances request path) calls
-    // valueLeg with no reader argument and must keep inheriting
+    // NOT via valueLeg's default — wallet-balances.ts (fetchWalletBalances)
+    // calls valueLeg with no reader argument and must keep inheriting
     // providerWalletPriceReader's original ok:false-on-failure behavior.
-      const valued = await valueLeg(asset, chainAmount, source, priceSource, persistedFallbackWalletPriceReader);
-      if (!valued.ok) continue;
-      // Same relabelling rule as sampleWalletBalances above: only a genuinely
-      // LIVE leg becomes 'backfilled' on a same-bucket catch-up.
-      const provenance = sleeveReplay === "same-bucket-catchup" && valued.provenance === "live" ? "backfilled" : valued.provenance;
+    const valued = await valueLeg(asset, chainAmount, source, priceSource, persistedFallbackWalletPriceReader);
+    if (!valued.ok) continue;
+    // Same relabelling rule as sampleWalletBalances above: only a genuinely
+    // LIVE leg becomes 'backfilled' on a same-bucket catch-up.
+    const provenance = sleeveReplay === "same-bucket-catchup" && valued.provenance === "live" ? "backfilled" : valued.provenance;
 
-      // D41 phase 4 (issue #927): price_usd is NOT written to
-      // wallet_sleeve_samples, mirroring both sampleWalletBalances above and
-      // repairResolvedDay's already-shipped (#851) sleeve write. asset_prices
-      // is the sole write target for price data; value_usd still carries the
-      // fused amount*price product. D55 (6): a superseded key is revived as a
-      // fresh row (new id, price_usd and snapshot identity reset), for the
-      // reason spelled out at sampleWalletBalances' upsert above.
-      await on(tx, upsertSleeveSample)`
-        INSERT INTO wallet_sleeve_samples
-          (sample_date, wallet_address, symbol, amount, value_usd, provenance, sampled_at)
-        VALUES
-          (${sampleDate}, ${walletAddress}, ${asset.symbol}, ${valued.amount}, ${valued.valueUsd}, ${provenance}, now())
-        ON CONFLICT (sample_date, wallet_address, symbol) DO UPDATE SET
-          amount     = EXCLUDED.amount,
-          value_usd  = EXCLUDED.value_usd,
-          provenance = EXCLUDED.provenance,
-          sampled_at = EXCLUDED.sampled_at,
-          id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.id ELSE EXCLUDED.id END,
-          price_usd = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_usd ELSE EXCLUDED.price_usd END,
-          snapshot_run_id = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.snapshot_run_id ELSE EXCLUDED.snapshot_run_id END,
-          amount_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.amount_observed_at ELSE EXCLUDED.amount_observed_at END,
-          price_observed_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.price_observed_at ELSE EXCLUDED.price_observed_at END,
-          recorded_at = CASE WHEN wallet_sleeve_samples.superseded_at IS NULL THEN wallet_sleeve_samples.recorded_at ELSE EXCLUDED.recorded_at END,
-          superseded_at = NULL
-      `;
+    // D41 phase 4 (issue #927): price_usd is NOT written to
+    // wallet_sleeve_samples, mirroring both sampleWalletBalances above and
+    // repairResolvedDay's already-shipped (#851) sleeve write. D55 (6): a
+    // superseded key is revived as a fresh row (writeSleeveSamples).
+    const row: SleeveSampleRow = {
+      walletAddress,
+      symbol: asset.symbol,
+      amount: valued.amount,
+      valueUsd: valued.valueUsd,
+      provenance,
+      assetPrice: null,
+    };
 
-      // Own dual-write (see the block comment above `sql.begin`): gated on
-      // isFreshThisTick(valued.provenance) for the exact reason
-      // sampleWalletBalances' gate is — a degraded ('stale'/'seed') leg is
-      // carrying an OLD price forward, and writing that under TODAY's date
-      // would misrepresent today's eventual close once it becomes a closed
-      // day tomorrow. One write per (date, symbol) per tick: several sleeves
-      // can share a symbol (issue #948 — every wallet reads every
-      // chain-readable tracked asset), so dualWrittenSymbols skips the
-      // repeats rather than reissuing an upsert that would just overwrite
-      // itself with an equivalent price.
-      if (
-        isFreshThisTick(valued.provenance) &&
-        Number.isFinite(valued.priceUsd) &&
-        valued.priceUsd > 0 &&
-        !dualWrittenSymbols.has(asset.symbol)
-      ) {
-        dualWrittenSymbols.add(asset.symbol);
-        const priceSourceKind: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
-        let poolKey: string | null = null;
-        if (priceSourceKind === "geckoterminal" && asset.address) {
-          if (poolKeyBySymbol.has(asset.symbol)) {
-            poolKey = poolKeyBySymbol.get(asset.symbol) ?? null;
-          } else {
-            try {
-              poolKey = await resolvePoolForToken(asset.address);
-            } catch {
-              poolKey = null;
-            }
-            poolKeyBySymbol.set(asset.symbol, poolKey);
+    // Own dual-write (see the block comment above): gated on
+    // isFreshThisTick(valued.provenance) for the exact reason
+    // sampleWalletBalances' gate is — a degraded ('stale'/'seed') leg is
+    // carrying an OLD price forward, and writing that under TODAY's date
+    // would misrepresent today's eventual close once it becomes a closed
+    // day tomorrow. One write per (date, symbol) per tick: several sleeves
+    // can share a symbol (issue #948 — every wallet reads every
+    // chain-readable tracked asset), so dualWrittenSymbols skips the
+    // repeats rather than reissuing an upsert that would just overwrite
+    // itself with an equivalent price.
+    if (
+      isFreshThisTick(valued.provenance) &&
+      Number.isFinite(valued.priceUsd) &&
+      valued.priceUsd > 0 &&
+      !dualWrittenSymbols.has(asset.symbol)
+    ) {
+      dualWrittenSymbols.add(asset.symbol);
+      const priceSourceKind: AssetPriceSource = asset.priceKind === "usdc" ? "pinned" : "geckoterminal";
+      let poolKey: string | null = null;
+      if (priceSourceKind === "geckoterminal" && asset.address) {
+        if (poolKeyBySymbol.has(asset.symbol)) {
+          poolKey = poolKeyBySymbol.get(asset.symbol) ?? null;
+        } else {
+          try {
+            poolKey = await resolvePoolForToken(asset.address);
+          } catch {
+            poolKey = null;
           }
+          poolKeyBySymbol.set(asset.symbol, poolKey);
         }
-        const now = new Date();
-        await writeAssetPrice(tx as any, {
-          priceDate: sampleDate,
-          symbol: asset.symbol,
-          priceUsd: valued.priceUsd,
-          source: priceSourceKind,
-          poolKey,
-          tokenAddress: priceSourceKind === "pinned" ? null : (asset.address ?? null),
-          observedAt: dayCloseInstant(sampleDate),
-          fetchedAt: now,
-          configIdentity: priceSourceKind === "pinned"
-            ? "pinned:usd:1.00"
-            : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
-        });
       }
-
-      persisted += 1;
+      row.assetPrice = {
+        priceDate: sampleDate,
+        symbol: asset.symbol,
+        priceUsd: valued.priceUsd,
+        source: priceSourceKind,
+        poolKey,
+        tokenAddress: priceSourceKind === "pinned" ? null : (asset.address ?? null),
+        observedAt: dayCloseInstant(sampleDate),
+        fetchedAt: new Date(),
+        configIdentity: priceSourceKind === "pinned"
+          ? "pinned:usd:1.00"
+          : `geckoterminal:pool:${poolKey ?? "unresolved"}`,
+      };
     }
+    rows.push(row);
+  }
 
-    return { sampleDate, persisted };
-  });
+  const persisted = await pipelineIngest<number>("wallet.sleeve_samples", sampleDate, rows);
+  return { sampleDate, persisted };
 }
