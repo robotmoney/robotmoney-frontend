@@ -87,9 +87,9 @@ jobs:
           tests/byte-negative-control.test.ts:7
           tests/exported-helpers.test.ts:15
           tests/supplied-input-no-http.test.ts:7
-          tests/regime.test.ts:17
+          tests/regime.test.ts:22
           tests/prepare.test.ts:3
-          tests/input-rule.test.ts:4
+          tests/input-rule.test.ts:10
           tests/extract.test.ts:9
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI

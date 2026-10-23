@@ -206,7 +206,7 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/extras-key-map.test.ts:10
-          tests/analytics-offline-replay.test.ts:2
+          tests/analytics-offline-replay.test.ts:3
           tests/analyst-sdk-golden-reference.test.ts:4
       # Issue 1421: the report-parity, committed-input and replay proofs. Each
       # named file must appear in the JUnit report with at least its number of
@@ -219,5 +219,5 @@ jobs:
           tests/regime-fidelity.test.ts:7
           tests/backtest-correlations-fidelity.test.ts:7
           tests/regime-replay-published.test.ts:1
-          tests/analytics-offline-replay.test.ts:2
+          tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8
