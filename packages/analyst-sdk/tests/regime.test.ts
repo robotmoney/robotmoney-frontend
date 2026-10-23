@@ -209,3 +209,63 @@ describe("runRegime asof, factor and forward-fill ages", () => {
     expect(JSON.parse(ok.stdout.toString()).factor.index).toBeDefined();
   }, TEST_TIMEOUT_MS);
 });
+
+// D74 (issue 1423): raw_indicator_history:SPX_TREND and backtest:^GSPC both map
+// to yahoo:^GSPC but are different streams. Here they hold different values on
+// the same dates; each consumer must receive only its own stream, by exact
+// value and version id, and the regime must not see the backtest's stream.
+describe("two stored streams for one source id stay separate", async () => {
+  const { SERIES_MAPPING, inputHistoryFromStorage, selectConsumerObservations } = await import("../src/series-ids.ts");
+  const fixture = toHistory(parseRawHistory(csvText));
+  const keyOf = new Map(SERIES_MAPPING.map((m) => [m.inputId, m.storageKey]));
+  // A non-monotone change (ranks and returns move), so the correlations and backtest notice it.
+  const bump = (v: number, i: number) => v * (i % 2 === 0 ? 1.02 : 0.98);
+  let nextId = 1;
+  const rows: Array<{ sourceKey: string; marketDate: string; value: number; versionId: string }> = [];
+  for (const id of Object.keys(fixture)) {
+    for (const [i, p] of fixture[id]!.entries()) {
+      // The backtest's stream differs from SPX_TREND's on every shared date.
+      const value = id === "SPX" ? bump(p.value, i) : p.value;
+      rows.push({ sourceKey: keyOf.get(id)!, marketDate: p.date, value, versionId: String(nextId++) });
+    }
+  }
+  const spxTrend = rows.filter((r) => r.sourceKey === "raw_indicator_history:SPX_TREND");
+  const gspc = rows.filter((r) => r.sourceKey === "backtest:^GSPC");
+  const shared = spxTrend.filter((r) => gspc.some((g) => g.marketDate === r.marketDate && g.value !== r.value));
+  const conflicted = buildReport(runRegime(inputHistoryFromStorage(rows)));
+  const golden = JSON.parse(goldenText);
+
+  test("the fixture really holds conflicting same-date values", () => {
+    expect(shared.length).toBeGreaterThan(1000);
+  });
+
+  test("each consumer receives only its own stream: exact values and version ids", () => {
+    const strip = (xs: typeof rows) => xs.map((r) => ({ storageKey: r.sourceKey, date: r.marketDate, value: r.value, versionId: r.versionId }));
+    const got = (c: string) => selectConsumerObservations(rows, c).map(({ series: _s, ...o }) => o);
+    expect(got("indicator:SPX_TREND")).toEqual(strip(spxTrend));
+    for (const c of ["correlations", "backtest"]) {
+      expect(got(c).filter((o) => o.storageKey === "backtest:^GSPC")).toEqual(strip(gspc));
+      expect(got(c).some((o) => o.storageKey === "raw_indicator_history:SPX_TREND")).toBe(false);
+    }
+    expect(selectConsumerObservations(rows, "indicator:SPX_TREND").every((o) => o.series === "yahoo:^GSPC")).toBe(true);
+    expect(selectConsumerObservations(rows, "backtest").filter((o) => o.storageKey === "backtest:^GSPC").every((o) => o.series === "yahoo:^GSPC")).toBe(true);
+  });
+
+  test("neither stream is merged, overwritten or substituted in the history the run reads", () => {
+    const h = inputHistoryFromStorage(rows);
+    expect(h.SPX_TREND).toEqual(fixture.SPX_TREND!);
+    expect(h.SPX).toEqual(fixture.SPX!.map((p, i) => ({ date: p.date, value: bump(p.value, i) })));
+  });
+
+  test("the regime reads SPX_TREND's stream (unchanged), the correlations and backtest read the backtest stream", () => {
+    expect(conflicted.indicators).toEqual(golden.indicators);
+    expect(conflicted.regime).toEqual(golden.regime);
+    expect(JSON.stringify(conflicted.correlations)).not.toBe(JSON.stringify(golden.correlations));
+    expect(JSON.stringify(conflicted.backtest)).not.toBe(JSON.stringify(golden.backtest));
+  });
+
+  test("with the original values, storage rows give the golden bytes", () => {
+    const original = rows.map((r) => (r.sourceKey === "backtest:^GSPC" ? { ...r, value: fixture.SPX!.find((p) => p.date === r.marketDate)!.value } : r));
+    expect(JSON.stringify(buildReport(runRegime(inputHistoryFromStorage(original))), null, 2) + "\n").toBe(goldenText);
+  });
+});
