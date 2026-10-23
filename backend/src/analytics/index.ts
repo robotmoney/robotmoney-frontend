@@ -369,7 +369,7 @@ export async function runAnalytics(
 
   // ── REGIME ────────────────────────────────────────────────────────────────
   if (want("regime") && registry && extras) {
-    // A composite panel with no observation at all cannot be classified: a
+    // With no composite panel holding any observation nothing can be classified: a
     // named coverage error, never a fetch (issue 1421).
     assertRequiredCoverage(registry, asof);
 

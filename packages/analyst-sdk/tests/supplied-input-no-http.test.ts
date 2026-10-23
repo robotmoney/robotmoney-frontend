@@ -66,24 +66,23 @@ describe("downstream paths make zero acquisition attempts", () => {
     expect(attempts).toEqual([]);
   });
 
-  test("missing required series: a whole composite panel absent raises CoverageError", () => {
-    for (const panel of ["macro", "onchain"] as const) {
-      const ids = panelIds(panel);
-      const input = without((id) => ids.has(id));
-      let err: unknown;
-      try {
-        runRegime(input);
-      } catch (e) {
-        err = e;
-      }
-      expect(err).toBeInstanceOf(CoverageError);
-      expect((err as CoverageError).name).toBe("CoverageError");
-      expect((err as CoverageError).missingPanels).toEqual([panel]);
+  test("missing required series: no composite panel with data raises CoverageError", () => {
+    const composite = new Set([...panelIds("macro"), ...panelIds("onchain")]);
+    let err: unknown;
+    try {
+      runRegime(without((id) => composite.has(id)));
+    } catch (e) {
+      err = e;
     }
+    expect(err).toBeInstanceOf(CoverageError);
+    expect((err as CoverageError).name).toBe("CoverageError");
+    expect((err as CoverageError).missingPanels).toEqual(["macro", "onchain"]);
     // Rows only AFTER the as-of day do not count as coverage.
-    const ids = panelIds("onchain");
-    const late: RawIndicatorHistory = { ...without((id) => ids.has(id)), BTC_MVRV: [{ date: "2030-01-01", value: 1 }] };
+    const late: RawIndicatorHistory = { ...without((id) => composite.has(id)), BTC_MVRV: [{ date: "2030-01-01", value: 1 }] };
     expect(() => assertRequiredCoverage(late, "2026-08-15")).toThrow(CoverageError);
+    // One empty panel is not an error: the composite uses the panel with data.
+    const onchain = panelIds("onchain");
+    expect(() => assertRequiredCoverage(without((id) => onchain.has(id)), "2026-08-15")).not.toThrow();
     expect(attempts).toEqual([]);
   });
 

@@ -359,8 +359,8 @@ is described in
 [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
 
 **Downstream never acquires.** After extract, every stage runs from the committed
-dataset and never calls the data source or an HTTP client. A composite panel
-(macro or on-chain) with no observation on or before the as-of day stops the run
+dataset and never calls the data source or an HTTP client. When neither composite
+panel (macro, on-chain) has an observation on or before the as-of day, the run stops
 with the named `CoverageError` (`packages/analyst-sdk/src/coverage.ts`, also raised
 by the SDK's `runRegime`). A missing optional input gives its documented missing
 result instead: no factor figures, no correlations or backtest pairs without SPX and

@@ -244,8 +244,8 @@ describe("issue 1421: downstream consumes the committed value and version, never
 
   test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
     const base = await baseObservations();
-    const macro = new Set(INDICATORS.filter((i) => i.panel === "macro").map((i) => i.id));
-    const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !macro.has(id))) };
+    const composite = new Set(INDICATORS.filter((i) => i.panel === "macro" || i.panel === "onchain").map((i) => i.id));
+    const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !composite.has(id))) };
     const missingRequired = poisonedSource(noMacro, 2);
     let err: unknown;
     try {
@@ -256,7 +256,7 @@ describe("issue 1421: downstream consumes the committed value and version, never
       missingRequired.restore();
     }
     expect(err).toBeInstanceOf(CoverageError);
-    expect((err as CoverageError).missingPanels).toEqual(["macro"]);
+    expect((err as CoverageError).missingPanels).toEqual(["macro", "onchain"]);
     expect(missingRequired.calls).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
     expect(missingRequired.afterExtract).toEqual([]);
     expect(missingRequired.poison!.attempts).toEqual([]);
