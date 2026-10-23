@@ -139,6 +139,10 @@
           </div>
 
           <div class="ea__send">
+            <!-- Cloudflare Turnstile renders here when a site key is set; it
+                 stays invisible unless the visitor has to answer a check. -->
+            <div class="ea__challenge" x-ref="challenge"></div>
+            <p class="ea__err" role="alert" x-show="challengeMissing" x-cloak>Complete the check above, then send again.</p>
             <button class="btn-primary ea__submit" type="submit" :disabled="sending" x-text="sending ? 'Sending' : 'Request early access'">Request early access</button>
             <p class="ea__hint">No wallet connection or signature.</p>
             <p class="ea__err" role="alert" x-show="failed" x-cloak>Not sent. Try again, or message <a href="https://t.me/onchainpm" target="_blank" rel="noopener noreferrer">@onchainpm</a> on Telegram.</p>
@@ -236,6 +240,7 @@
 .ea__hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .ea__send { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding-top: 0.5rem; }
 .ea__send .ea__hint { margin-top: 0.25rem; }
+.ea__challenge:empty { display: none; }
 /* The line that opens the three questions: a rule above it marks where the
    contact details end and the questions begin. */
 .ea__group { margin: 0.5rem 0 -0.75rem; padding-top: 1.75rem; border-top: 1px solid var(--color-border);

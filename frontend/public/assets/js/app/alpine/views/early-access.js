@@ -18,6 +18,30 @@ import { referralCode, clearReferral } from "../../lib/referral.js";
 // row (the script has no read path). A send without it fails visibly.
 export const EARLY_ACCESS_URL = "https://script.google.com/macros/s/AKfycbxzDpdBKN0YLyCVZPnrgPQTY7Ux92At-CC-lAY65gM3yidHaFsFfQGMHFXBwkM5TvyZQg/exec";
 
+// Cloudflare Turnstile, against junk sign-ups. The site key is public; the
+// secret lives in the Apps Script's properties, which checks each token before
+// it writes a row. Empty means off: no script is loaded and no token is sent.
+export const TURNSTILE_SITE_KEY = "";
+const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=rmTurnstileReady";
+// How long a send waits for a token before asking the visitor to finish the check.
+const CHALLENGE_WAIT_MS = 8000;
+
+let turnstileLoad = null;
+/** Cloudflare's script, loaded once per page; resolves to window.turnstile. */
+function loadTurnstile() {
+  if (!turnstileLoad) {
+    turnstileLoad = new Promise((resolve, reject) => {
+      globalThis.rmTurnstileReady = () => resolve(globalThis.turnstile);
+      const el = document.createElement("script");
+      el.src = TURNSTILE_SRC;
+      el.async = true;
+      el.onerror = () => { turnstileLoad = null; reject(new Error("turnstile did not load")); };
+      document.head.appendChild(el);
+    });
+  }
+  return turnstileLoad;
+}
+
 // Sign-ups from anywhere but the production site say where they came from, so
 // a test from a preview or staging is told apart in the sheet.
 const CANONICAL_HOST = "robotmoney.network";
@@ -95,6 +119,40 @@ export function registerEarlyAccessForm(Alpine) {
     sent: false,
     failed: false,
     sentHandle: "",
+    // Turnstile: the current token, and whether a send gave up waiting for one.
+    challengeToken: "",
+    challengeMissing: false,
+    widgetId: null,
+
+    async init() {
+      if (!TURNSTILE_SITE_KEY) return;
+      try {
+        const turnstile = await loadTurnstile();
+        this.widgetId = turnstile.render(this.$refs.challenge, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: "dark",
+          appearance: "interaction-only",
+          callback: (token) => { this.challengeToken = token; this.challengeMissing = false; },
+          "expired-callback": () => { this.challengeToken = ""; },
+          "error-callback": () => { this.challengeToken = ""; },
+        });
+      } catch { /* the send reports it: no token, so the visitor is asked to retry */ }
+    },
+    destroy() {
+      if (this.widgetId !== null) globalThis.turnstile?.remove(this.widgetId);
+    },
+    // Resolves to a token, waiting briefly for a check still in progress.
+    async challenge() {
+      if (!TURNSTILE_SITE_KEY) return null;
+      const until = Date.now() + CHALLENGE_WAIT_MS;
+      while (!this.challengeToken && Date.now() < until) await new Promise((r) => setTimeout(r, 200));
+      return this.challengeToken || null;
+    },
+    // A token is good for one check, so every send gets a fresh one.
+    resetChallenge() {
+      this.challengeToken = "";
+      if (this.widgetId !== null) globalThis.turnstile?.reset(this.widgetId);
+    },
 
     revalidate() {
       if (this.tried) this.errors = validateEarlyAccess(this.draft);
@@ -111,8 +169,16 @@ export function registerEarlyAccessForm(Alpine) {
         return;
       }
       this.sending = true;
+      this.challengeMissing = false;
       try {
-        await sendEarlyAccess(earlyAccessPayload(this.draft, referralCode(), globalThis.location?.hostname));
+        const token = await this.challenge();
+        if (TURNSTILE_SITE_KEY && !token) {
+          this.challengeMissing = true;
+          return;
+        }
+        const payload = earlyAccessPayload(this.draft, referralCode(), globalThis.location?.hostname);
+        if (token) payload.turnstileToken = token;
+        await sendEarlyAccess(payload);
         this.sentHandle = normalizeHandle(this.draft.handle);
         this.sent = true;
         clearReferral();
@@ -120,6 +186,7 @@ export function registerEarlyAccessForm(Alpine) {
         this.failed = true;
       } finally {
         this.sending = false;
+        if (!this.sent) this.resetChallenge();
       }
     },
   }));

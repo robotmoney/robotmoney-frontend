@@ -25,6 +25,18 @@ database table for it.
 A change to the script needs a new version of the same deployment (Deploy,
 Manage deployments, edit, New version), or the URL keeps serving the old code.
 
+`@OnlyCurrentDoc` on the first line limits the script to this spreadsheet.
+
+## Turnstile
+
+The form carries a Cloudflare Turnstile token once a site key is set in
+`TURNSTILE_SITE_KEY` (`frontend/public/assets/js/app/alpine/views/early-access.js`).
+The script checks it once its secret is set: Project Settings, Script
+properties, add `TURNSTILE_SECRET`. Never commit the secret. Set the site key
+and the secret together: a key without the secret is checked by nobody, and a
+secret without the key refuses every sign-up. The site's CSP must allow
+`https://challenges.cloudflare.com` (script and frame).
+
 ## What it stores
 
 One row per handle, on a tab named `Requests`:
@@ -49,11 +61,14 @@ One row per handle, on a tab named `Requests`:
   formula and `10-30` never becomes a date.
 - A request that fills the hidden `website` field is a bot: it gets a success
   reply and nothing is written.
+- With Turnstile on, a request without a valid token gets `{ ok: false,
+  error: "challenge" }` and nothing is written.
 - Export is File, Download, CSV.
 
 ## The script
 
 ```js
+/** @OnlyCurrentDoc */
 const TAB = "Requests";
 const HEADERS = ["Received", "Updated", "Handle", "Email", "Wallet", "Business type",
   "Intended deposit", "Share outside stablecoins", "Referral code", "Source"];
@@ -67,6 +82,9 @@ function doPost(e) {
   let d;
   try { d = JSON.parse(e.postData.contents); } catch (err) { return reply({ ok: false, error: "body" }); }
   if (d.website) return reply({ ok: true });
+  // Turnstile: once the secret is set, a sign-up without a valid token is refused.
+  const secret = PropertiesService.getScriptProperties().getProperty("TURNSTILE_SECRET");
+  if (secret && !passesChallenge(d.turnstileToken, secret)) return reply({ ok: false, error: "challenge" });
 
   const handle = text(d.handle, 64);
   if (!/^'?@[A-Za-z0-9_]{1,32}$/.test(handle)) return reply({ ok: false, error: "handle" });
@@ -116,6 +134,16 @@ function tab() {
 function text(v, max) {
   const s = String(v == null ? "" : v).trim().slice(0, max);
   return /^[=+\-@]/.test(s) ? "'" + s : s;
+}
+
+function passesChallenge(token, secret) {
+  if (!token) return false;
+  const res = UrlFetchApp.fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "post",
+    payload: { secret: secret, response: String(token) },
+    muteHttpExceptions: true,
+  });
+  try { return JSON.parse(res.getContentText()).success === true; } catch (e) { return false; }
 }
 
 function handleKey(v) {
