@@ -287,6 +287,15 @@ describe("run membership (pure)", () => {
     expect(selectBackups(two).map((r) => r.backup)).toEqual(["2026-01-01T000000Z", "2026-01-02T000000Z"]);
   });
 
+  test("a listed path outside its backup directory is refused", () => {
+    const id = "2026-01-01T000000Z";
+    const rec = (path: string) =>
+      JSON.stringify({ format: 1, backup: id, revisions: {}, append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ path, rows: 1, sha256_gz: "0".repeat(64) }] } } });
+    const bad = ["/abs/x.csv.gz", `csv/${id}/../../outside/x`, `csv/${id}/data/../x.csv.gz`, "csv/2026-01-02T000000Z/data/x.csv.gz", `csv/${id}//x`, `csv/${id}/./x`, `csv/${id}\\..\\x`, `csv/${id}/x\0y`];
+    for (const p of bad) expect(() => selectBackups({ [id]: rec(p) }), p).toThrow(/is not a file inside/);
+    expect(selectBackups({ [id]: rec(`csv/${id}/data/t.csv.gz`) }).length).toBe(1);
+  });
+
   test("COPY CSV: quoted fields, doubled quotes, NULL versus empty string", () => {
     const p = parseCopyCsv('a,b,c\n1,"x,""y""\nz",\n2,"",3\n');
     expect(p.header).toEqual(["a", "b", "c"]);

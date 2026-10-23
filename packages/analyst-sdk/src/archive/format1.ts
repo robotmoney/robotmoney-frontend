@@ -157,6 +157,7 @@ export function selectBackups(recordTexts: Record<string, string>, asOf?: string
     if (rec.backup !== id) throw new ArchiveError(`csv/${id}/backup.json: record says backup ${rec.backup}`);
     if (rec.source !== undefined && rec.source !== "api" && rec.source !== "db") throw new ArchiveError(`csv/${id}/backup.json: source must be "api" or "db"`);
     if (!rec.append_only || typeof rec.append_only !== "object") throw new ArchiveError(`csv/${id}/backup.json: no append_only section`);
+    for (const f of listedFiles([rec])) checkFilePath(f.path, id);
     out.push(rec);
   }
   const last = new Map<string, string | null>();
@@ -170,6 +171,19 @@ export function selectBackups(recordTexts: Record<string, string>, asOf?: string
     }
   }
   return out;
+}
+
+// A listed path must stay inside its own backup directory: relative, under
+// `csv/<backup id>/`, with no empty, `.` or `..` segment and no backslash or
+// NUL, so a crafted record cannot make the reader open a file outside the copy.
+function checkFilePath(path: unknown, backup: string): void {
+  const ok =
+    typeof path === "string" &&
+    path.startsWith(`csv/${backup}/`) &&
+    !path.includes("\\") &&
+    !path.includes("\0") &&
+    path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+  if (!ok) throw new ArchiveError(`csv/${backup}/backup.json lists the path ${JSON.stringify(path)}, which is not a file inside csv/${backup}/`);
 }
 
 // Every file the selected backups list (data and revision files).

@@ -29,7 +29,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SDK = join(HERE, "..");
@@ -146,6 +146,22 @@ function tablesFor(part: "all" | "b1" | "b2"): Table[] {
   return t;
 }
 
+// gzip bytes differ between zlib builds (bun 1.3.5 in CI, newer bun locally),
+// so the committed .gz is kept whenever it decompresses to exactly the rows
+// this script would write. The fixture is then judged by its content, and its
+// recorded sha256_gz stays the hash of the committed file.
+function stableGzip(path: string, raw: string): Buffer {
+  if (existsSync(path)) {
+    const committed = readFileSync(path);
+    try {
+      if (gunzipSync(committed).equals(Buffer.from(raw, "utf8"))) return committed;
+    } catch {
+      // not a readable gzip: rewrite it
+    }
+  }
+  return gzipSync(Buffer.from(raw, "utf8"), { level: 9 });
+}
+
 const files = new Map<string, Buffer | string>();
 function writeCopy(dir: string, backups: Backup[]) {
   const watermark = new Map<string, string | null>();
@@ -155,7 +171,7 @@ function writeCopy(dir: string, backups: Backup[]) {
       const name = `${t.name}.${stamp(t.tmin)}_${stamp(t.tmax)}.csv.gz`;
       const path = `csv/${b.id}/data/${name}`;
       const raw = copyCsv(t.header, t.rows);
-      const gz = gzipSync(Buffer.from(raw, "utf8"), { level: 9 });
+      const gz = stableGzip(join(dir, path), raw);
       files.set(join(dir, path), gz);
       const ids = t.rows.map((r) => BigInt(r[t.idCol ?? 0]!));
       const max = ids.reduce((m, x) => (x > m ? x : m), 0n);
