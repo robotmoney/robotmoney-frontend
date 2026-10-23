@@ -14,6 +14,7 @@ import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from ".
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
+import { resolveInputHistory } from "./series-ids.ts";
 
 export const BACKFILL_START = "2018-01-01";
 // Indicator ids in the input that carry price levels for correlations/backtest.
@@ -53,7 +54,7 @@ function assertIsoDate(name: string, v: string): void {
 
 const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor"];
 
-export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
+export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
   // An option this version does not know is an error, never silently ignored
   // (a caller passing the former `panels` would otherwise get no factor output).
   for (const k of Object.keys(opts)) {
@@ -65,6 +66,8 @@ export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
   }
+  // Input names (input id, storage key or source id, D74) -> the ids read below.
+  const rawIn = resolveInputHistory(input);
   const start = opts.start ?? BACKFILL_START;
   const asof = opts.asof;
   assertIsoDate("start", start);

@@ -9,3 +9,4 @@ export { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from ".
 export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
 export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";
+export * from "./series-ids.ts";
