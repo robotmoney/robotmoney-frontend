@@ -135,6 +135,46 @@ describe("the --universe option and the exit-code gate (bin/universe-option.ts)"
   });
 });
 
+describe("bun run universe:check (bin/check-universe.ts, spawned)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "analyst-sdk-universe-cli-"));
+  const write = (name: string, data: unknown) => { const p = join(dir, name); writeFileSync(p, JSON.stringify(data)); return p; };
+  const bad = write("bad.json", { neutral: R1.neutral, risk_on: { ...R1.risk_on, BTC: 12, AAVE: 25 } });
+  const doge = write("doge.json", { neutral: { ...R1.neutral, USDC: 0, DOGE: 2 } });
+  const other = clone();
+  other.assets.push({ ...other.assets.find((a: { id: string }) => a.id === "BTC"), id: "DOGE", name: "Dogecoin", series: null });
+  const otherPath = write("other.json", other);
+  const run = (...a: string[]) => {
+    const p = Bun.spawnSync([process.execPath, "run", "bin/check-universe.ts", ...a], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
+    return { code: p.exitCode, err: p.stderr.toString() };
+  };
+
+  test("findings exit 2 and name the holding, the state and the cap", () => {
+    const r = run(bad);
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("refused: risk_on: BTC at 12% is over its cap of 10%");
+  });
+
+  test("--allow-outside-universe exits 0 and still reports the findings", () => {
+    const r = run(bad, "--allow-outside-universe");
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("warning (allowed by --allow-outside-universe): risk_on: BTC at 12%");
+  });
+
+  test("--universe other.json is honoured", () => {
+    expect(run(doge).code).toBe(2);
+    const r = run(doge, "--universe", otherPath);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain("ok: every holding is inside the universe (10 assets");
+  });
+
+  test("a usage error exits 2, an unreadable file exits 1", () => {
+    expect(run(bad, "--universe").code).toBe(2);
+    expect(run().code).toBe(2);
+    expect(run(bad, "--nope").code).toBe(2);
+    expect(run(join(dir, "missing.json")).code).toBe(1);
+  });
+});
+
 describe("scripts/export-universe.ts", () => {
   const shipped: Universe = loadUniverse();
 

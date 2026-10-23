@@ -1,7 +1,7 @@
 // The CLI side of the universe check (issue 1400): `--universe <path>` and
-// `--allow-outside-universe`. A command that reads a rule file (the allocate
-// command, issue 1405) calls universeFromArgs, then universeGate on the rule's
-// states, and exits with the gate's code. The file read lives here, in bin/,
+// `--allow-outside-universe`. The `universe:check` command (bin/check-universe.ts)
+// calls universeFromArgs, then universeGate on the holdings by state,
+// and exits with the gate's code. The file read lives here, in bin/,
 // because src/ may not touch the filesystem.
 import { checkHoldings, loadUniverse, type HoldingFinding, type HoldingsByState, type Universe } from "../src/allocate/universe.ts";
 

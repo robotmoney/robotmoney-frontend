@@ -274,6 +274,7 @@ src/input/       CSV and JSON loader
 src/run.ts       raw history in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
+bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 universe/        base-universe.json, the shipped universe
 ```
@@ -292,7 +293,7 @@ They are never regenerated from later code.
 
 `universe/base-universe.json` lists the assets a model portfolio may hold on Base: per asset its id (the name a rule file uses), name, sleeve, chain, contract, liquidity, yield, tier (`eligible` or `watchlist`), its own cap (`maxWeight`, percent of NAV) and its price or yield series (`<provider>:<symbol>`). The group caps (Sky, Aave, Morpho, Morpho V2, Compound, Bitcoin, Gold) are data in the same file. `exported` is the date the file was built, `source` says from what.
 
-`loadUniverse()` returns the shipped file; `loadUniverse(json)` validates a parsed file of your own. `checkHoldings({ risk_off: {...}, neutral: {...}, risk_on: {...} }, universe)` returns one finding per holding that is not in the universe or is over its own cap, and per group over its cap, each naming the state, the holding and the cap. An empty array means the holdings fit. A command that reads a rule file takes `--universe <path>` (read in `bin/universe-option.ts`, since `src/` reads no files) and exits 2 on findings unless `--allow-outside-universe` is set.
+`loadUniverse()` returns the shipped file; `loadUniverse(json)` validates a parsed file of your own. `checkHoldings({ risk_off: {...}, neutral: {...}, risk_on: {...} }, universe)` returns one finding per holding that is not in the universe or is over its own cap, and per group over its cap, each naming the state, the holding and the cap. An empty array means the holdings fit. `bun run universe:check <holdings.json> [--universe <path>] [--allow-outside-universe]` runs the check from the command line on a JSON map of state to holding weights. It prints one line per finding to stderr and exits 2 on findings unless `--allow-outside-universe` is set. `--universe <path>` swaps in your own universe file (read in `bin/`, since `src/` reads no files).
 
 `bun run universe:export <assets.csv> [--groups groups.csv]` rebuilds the file from a CSV export of the Base Permissionless Asset Universe sheet. The file shipped today is a seed: the nine holdings and caps of the prototype's reference rule, until the sheet export replaces it.
 
