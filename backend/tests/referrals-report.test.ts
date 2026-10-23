@@ -182,7 +182,7 @@ describe("missing data is unknown, never 'no referral'", () => {
 
 describe("interrupted scans resume from the checkpoint", () => {
   test("a budget stop writes an incomplete artifact; the resume rescans no completed range and matches a fresh run", async () => {
-    const dir = mkdtempSync(join(process.env.HOME ? join(process.env.HOME, "tmp") : tmpdir(), "referral-cp-"));
+    const dir = mkdtempSync(join(tmpdir(), "referral-cp-"));
     const checkpointPath = join(dir, "scan.checkpoint.json");
     const first = fakeChain(txs());
     const stopped = await report(first, { checkpointPath, budget: { maxRpcCalls: 8 } });
@@ -203,7 +203,7 @@ describe("interrupted scans resume from the checkpoint", () => {
   });
 
   test("a checkpoint is never reused for other inputs or another cutoff", async () => {
-    const dir = mkdtempSync(join(process.env.HOME ? join(process.env.HOME, "tmp") : tmpdir(), "referral-cp-"));
+    const dir = mkdtempSync(join(tmpdir(), "referral-cp-"));
     const checkpointPath = join(dir, "scan.checkpoint.json");
     await report(fakeChain(txs()), { checkpointPath });
     restore();
@@ -218,7 +218,7 @@ describe("the committed CLI (backend/scripts/referrals-report.ts)", () => {
     const { serveFakeChain } = await import("./support/referral-fixtures.ts");
     const served = serveFakeChain(fakeChain(txs()));
     try {
-      const out = mkdtempSync(join(process.env.HOME ? join(process.env.HOME, "tmp") : tmpdir(), "referral-cli-"));
+      const out = mkdtempSync(join(tmpdir(), "referral-cli-"));
       const script = join(import.meta.dir, "..", "scripts", "referrals-report.ts");
       const env = { ...process.env, ...RPC_ENV };
       // Async spawn: the fake RPC is served from THIS process's event loop.
