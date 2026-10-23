@@ -54,7 +54,15 @@ async function get(path: string, init: RequestInit = {}, ip = `192.0.2.${++ipCou
   return handlePublicAnalytics(req, new URL(req.url), ip);
 }
 async function bytesOf(res: Response): Promise<Uint8Array> {
-  return new Uint8Array(await res.arrayBuffer());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("a response body never ended")), 60_000);
+  });
+  try {
+    return new Uint8Array(await Promise.race([res.arrayBuffer(), timeout]));
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // "Now" for the archive: 2001-01-04 03:00 UTC, so 2001-01-02, -03 and -04 are
@@ -173,9 +181,29 @@ async function copyCsv(select: string): Promise<string> {
   return fixtureDb.begin(async (tx) => {
     await tx.unsafe("SET LOCAL TimeZone = 'UTC'");
     const stream = await tx.unsafe(`COPY (${select}) TO STDOUT WITH (FORMAT csv, HEADER true)`).readable();
-    const chunks: Buffer[] = [];
-    for await (const c of stream) chunks.push(Buffer.from(c));
-    return Buffer.concat(chunks).toString("utf8");
+    // Collected from events, ending on whichever of end or close comes first:
+    // a for-await over this stream intermittently never saw its end under a
+    // loaded full-suite run.
+    return new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      };
+      const timer = setTimeout(() => {
+        if (!done) reject(new Error(`COPY of ${select.slice(0, 80)} never ended`));
+      }, 60_000);
+      stream.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+      stream.on("end", finish);
+      stream.on("close", finish);
+      stream.on("error", (e: Error) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
   }) as Promise<string>;
 }
 
@@ -197,6 +225,7 @@ async function record(id: string): Promise<{ res: Response; body: any; bytes: Ui
     const res = await get(`${P.archiveFiles}csv/${id}/backup.json`);
     if (res.status === 503) {
       expect(Number(res.headers.get("Retry-After"))).toBeGreaterThanOrEqual(1);
+      if (i % 10 === 9) console.error(`[archives test] backup ${id} still 503 after ${i + 1} tries: ${await res.text()} (gate ${publicQueryGate.inUse()})`);
       await Bun.sleep(500);
       continue;
     }

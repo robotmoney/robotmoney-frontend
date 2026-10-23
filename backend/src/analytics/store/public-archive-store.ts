@@ -882,7 +882,10 @@ export function recordFor(id: string): Promise<BuiltRecord> {
         records.set(id, r);
         building.delete(id);
       },
-      () => building.delete(id),
+      (err) => {
+        building.delete(id);
+        console.error(`[public-archive] backup ${id}: the record build failed: ${(err as Error).message}`);
+      },
     );
   }
   return p;
