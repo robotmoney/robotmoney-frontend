@@ -364,6 +364,50 @@ transforms and forward-fill ages are built. Its callers are
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
 
+### 8.2 Source ids and the storage mapping (D74, issue 1423)
+
+A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or
+`fred:DTB3`. Stored rows keep their existing keys. No row, vintage, report or
+archive is renamed or rewritten, and there is no migration. The one mapping
+between the two lives in `packages/analyst-sdk/src/series-ids.ts`
+(`SERIES_MAPPING`, re-exported by `backend/src/analytics/extras.ts`).
+
+- **Per consumer.** A consumer is one computation that reads source data: each
+  registry indicator (`indicator:<ID>`), the correlations and the backtest. Each
+  consumer reads the storage keys it read before: `raw_indicator_history:<ID>`
+  for an indicator, `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for
+  the correlations and the backtest. Tests pin this list per consumer.
+- **Two streams, one id.** `raw_indicator_history:SPX_TREND` and `backtest:^GSPC`
+  both map to `yahoo:^GSPC`. So do `raw_indicator_history:ETH_TREND` and
+  `backtest:ETH-USD` for `yahoo:ETH-USD`. Their same-date values can differ. They
+  stay separate streams: `selectConsumerObservations` gives each consumer only
+  its own keys, and every observation keeps its storage key as provenance.
+- **Ambiguity.** The mapping is rejected when it loads if one consumer would read
+  two storage keys for one source id. The error names both keys. One source id
+  read by two consumers through two keys is allowed.
+- **Ratios.** A ratio indicator stores a calculated value, so its key maps to the
+  indicator id with kind `calculated`, and its two legs are listed.
+- **Source ids without a provider symbol.** The provider is the registry's
+  `source`, the name the ledger already records. Providers with no series use a
+  fixed symbol: `defillama_tvl:total`, `defillama_stables:total`,
+  `geckoterminal_newpools:new_pools`, `shiller_cape:CAPE`. Coin Metrics uses
+  `<asset>.<metric>`, for example `coinmetrics:eth.AdrActCnt`.
+- **SDK input names.** The computation still reads its inputs under the ids it
+  read before: registry ids, plus `SPX`, `ETH` and `TBILL3M`. So identical
+  observations give byte-identical reports. `runRegime` accepts a stream under
+  that id, under its storage key, or under its source id when only one stream
+  holds that id. A source id alone feeds every consumer that reads it. An input
+  that names one consumer's stream twice is rejected with both names, for
+  example `SPX_TREND` and `yahoo:^GSPC`. With two streams for one source id, name
+  each by its storage key.
+- **Writes** use the reverse mapping. `storageKeyForSourceId(consumer, id)` gives
+  the key, and `EXTRA_WRITE_KEYS` gives the keys `fetchBacktestExtras` writes.
+- **Storage to inputs.** `inputHistoryFromStorage` turns stored rows, for example
+  a reloaded vintage's members, into the history `runRegime` reads.
+  `backend/tests/analytics-offline-replay.test.ts` freezes the SDK fixture into a
+  vintage and reloads it offline. The test rebuilds the committed golden report
+  byte for byte.
+
 ## 9. Deliberate v0 divergences
 
 v1's regime **procedure** (the pure math in `compute.ts`/`indicators.ts`/
