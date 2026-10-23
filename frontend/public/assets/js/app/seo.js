@@ -293,8 +293,8 @@ const META = {
   // The early-access form (RM-189): interest in depositing before the vault
   // opens to outside depositors.
   "/early-access": {
-    title: "Early Access to the Model Portfolio | Robot Money",
-    description: "Request early access to the Robot Money vault on Base: the swarm's model portfolio in one non-custodial deposit, opening to depositors in small groups.",
+    title: "Early Access to the Vaults | Robot Money",
+    description: "Request early access to Robot Money's vaults on Base. Deposits open in small groups, and they are non-custodial: you deposit and withdraw yourself.",
   },
   // A placeholder hub nothing links to since the footer became the site index
   // (RM-124), and out of sitemap.xml: noindexed like the stubs below.
