@@ -46,6 +46,7 @@ function txs() {
 const opts = (over: Partial<CollectOptions> = {}): CollectOptions => ({ rpc: { rpcUrl: "http://fake-rpc" }, manifest: testManifest(), rangeBlocks: 5000, checkpointKey: "k1", cutoffBlock: 19_000, ...over });
 
 async function report(chain: FakeChain, over: Partial<CollectOptions> = {}, holdings = false): Promise<Report> {
+  restore();
   restore = installFakeChain(chain);
   const evidence = await collectEvidence(opts(over));
   const base = { evidence, registry: REGISTRY, corrections: log(), manifest: testManifest(), revisions: { rules: "abc", config: "v9.9.9", configAccepted: true } };
@@ -250,4 +251,11 @@ describe("the committed CLI (backend/scripts/referrals-report.ts)", () => {
       served.stop();
     }
   }, 60_000);
+});
+
+test("the fake RPC never outlives a test: the process's real fetch is back", () => {
+  // bun runs every backend test file in one process; a leaked fake fetch would
+  // answer every later file's HTTP call with JSON-RPC.
+  restore();
+  expect(String(globalThis.fetch)).not.toContain("jsonrpc");
 });

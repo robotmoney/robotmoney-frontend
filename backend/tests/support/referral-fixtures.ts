@@ -211,9 +211,14 @@ function answer(chain: FakeChain, method: string, params: any[]): { result?: unk
   }
 }
 
-/** Install the fake as globalThis.fetch. Returns a restore function. */
+// The process's real fetch, captured once. Every restore goes back to THIS, not
+// to whatever was installed before: bun runs every test file in one process,
+// so a restore that reinstated an earlier fake would leak it into every later
+// file's HTTP calls.
+const ORIGINAL_FETCH = globalThis.fetch;
+
+/** Install the fake as globalThis.fetch. Returns a restore function that puts the real fetch back. */
 export function installFakeChain(chain: FakeChain): () => void {
-  const real = globalThis.fetch;
   globalThis.fetch = (async (_url: string, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body));
     const one = (b: any) => ({ jsonrpc: "2.0", id: b.id, ...answer(chain, b.method, b.params) });
@@ -221,7 +226,7 @@ export function installFakeChain(chain: FakeChain): () => void {
     return new Response(JSON.stringify(out), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as unknown as typeof fetch;
   return () => {
-    globalThis.fetch = real;
+    globalThis.fetch = ORIGINAL_FETCH;
   };
 }
 
