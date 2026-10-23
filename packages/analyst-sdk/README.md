@@ -14,9 +14,10 @@ and backtest leaves) the composite, the panel indices, the percentiles, the labe
 correlations and the backtest reproduced bit-exactly from the persisted inputs. The
 Yahoo-sourced indicators are the exception and can drift on another run: they are
 persisted only to a relative tolerance (1e-6 for float32 series, 5e-6 for ratios of
-two series; decision D56, `backend/src/analytics/source-tolerance.ts`), while a run
-computes from the freshly fetched values. A replay can therefore differ, by an
-amount that is not bounded by that tolerance. The tolerance applies to `VIX`, `SPX_TREND`, `ETH_TREND` (float32) and
+two series; decision D56, `backend/src/analytics/source-tolerance.ts`). Runs before
+issue 1421 computed from the freshly fetched values, so a replay of such a run can
+differ, by an amount that is not bounded by that tolerance. Since issue 1421 a run
+computes from the committed (stored) values, so its replay reproduces it. The tolerance applies to `VIX`, `SPX_TREND`, `ETH_TREND` (float32) and
 `COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`,
 `XLP_XLY` (ratios) in the registry, and to the `backtest:^GSPC` and `backtest:ETH-USD`
 price series. Observed on one audited run: `factor_index` differed on some days by up
@@ -81,7 +82,7 @@ bun run regime tests/fixtures/raw-indicator-history.json --full    # adds the pe
 bun run regime my-history.csv --start 2018-01-01                   # first day of the date axis
 bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
 bun run regime my-history.csv --factor                            # also report the factor panel
-bun test                                                            # package tests, fetch is a thrower
+bun test                                                            # package tests, every HTTP client is a thrower
 bunx tsc --noEmit                                                   # typecheck
 ```
 
@@ -94,6 +95,7 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | `--start D` / `start` | first day of the date axis. Default `2018-01-01`. |
 | `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date in the input. |
 | `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
+| required data | each composite panel (macro, on-chain) needs at least one registry indicator with a row on or before the as-of day, or `runRegime` throws the named `CoverageError` (the CLI exits 1). It never fetches to fill the gap. Optional inputs give a missing result instead: without `SPX` and `ETH`, `correlations` and `backtest` are `null`; without `TBILL3M`, `backtest` is `null`; without factor indicators, the `factor` figures are `null`. |
 | validation | invalid values throw a `RangeError` (the CLI exits 2): `asof` and `start` must be real `YYYY-MM-DD` dates, `asof` must not be before `start`, or before every input row (an `asof` later than the newest row is fine: values are forward-filled, as in production). `--start` and `--asof` need a value, and an unknown flag (such as the former `--panels`) or option field exits 2 or throws rather than being ignored. |
 
 `runRegime` builds its inputs with `prepareRegimeInputs`, the same function production
@@ -270,12 +272,19 @@ src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
 src/input/       CSV and JSON loader
 src/run.ts       raw history in, regime report out
+src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 ```
 
 `src/` stays pure: no `node:fs`, `postgres`, `bun:sqlite`, no `process.env`, nothing
-from the backend. `scripts/tests/unit/analyst-sdk-purity.test.ts` in the repository
-root enforces it.
+from the backend, no csvb, and no HTTP outside `src/extract/http.ts`; nothing outside
+`src/extract/` reaches an extractor, directly or through its imports.
+`scripts/tests/unit/analyst-sdk-purity.test.ts` in the repository root enforces it.
+
+`tests/fixtures/originals/` holds the report bytes captured from the pre-refactor code
+(issue 1421; `manifest.json` names the commit, the commands and each file's sha256).
+`tests/report-parity.test.ts` compares the current output with them byte for byte.
+They are never regenerated from later code.
 
 ## Rebuilding inputs from raw sources (optional)
 

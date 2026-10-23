@@ -340,14 +340,32 @@ last axis day, so the as-of day is revised by construction when D moves forward 
 day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
 section 6 and is not restated here.
 
-**Persistence tolerance (D56).** The persisted raw floor is the compute input only
-up to the per-source tolerance of D56 (`docs/decisions.md`): a point within tolerance
-is not rewritten (Yahoo ratios relative 5e-6, Yahoo float32 relative 1e-6). A run
-computes from the freshly fetched in-memory values, so a replay from the stored floor
-or ledger can differ slightly. The audit saw `factor_index` differ by up to 1.4e-4
-on 786 of 3,066 days (an inference from the stored data, not confirmed, because the
-fetched values are not recorded anywhere). Replaying a run from the ledger is described in
+**Persistence tolerance (D56) and the committed dataset.** A point within its
+source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative
+5e-6, Yahoo float32 relative 1e-6). Since issue 1421 a run computes only from what
+ingestion committed: `runAnalytics` runs every source call first, reads the raw
+floor back after writing it, and takes each backtest extra and research input from
+the ledger head `saveSourceAcquisition` returns for it. A within-tolerance re-fetch
+therefore reaches the computation as the stored value under the stored version, and
+a material revision as its new version, so a replay from the run's frozen vintage
+reproduces its published figures (`backend/tests/regime-replay-published.test.ts`).
+The run's telemetry carries a `committed-input-evidence` artifact counting the
+collected values that differed from the committed ones. Before issue 1421 a run
+computed from the freshly fetched in-memory values, so a replay of an earlier run
+from the stored floor or ledger can differ slightly: the audit saw `factor_index`
+differ by up to 1.4e-4 on 786 of 3,066 days (an inference from the stored data,
+because those fetched values are recorded nowhere). Replaying a run from the ledger
+is described in
 [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
+
+**Downstream never acquires.** After extract, every stage runs from the committed
+dataset and never calls the data source or an HTTP client. A composite panel
+(macro or on-chain) with no observation on or before the as-of day stops the run
+with the named `CoverageError` (`packages/analyst-sdk/src/coverage.ts`, also raised
+by the SDK's `runRegime`). A missing optional input gives its documented missing
+result instead: no factor figures, no correlations or backtest pairs without SPX and
+ETH, no cash yield without TBILL3M. `scripts/tests/unit/analyst-sdk-purity.test.ts`
+rejects any import path from a downstream module to an acquisition client.
 
 **`regime_snapshots` is a current view; the ledger is the record.** Every run
 recomputes the full history and rewrites the table. What an earlier run showed
