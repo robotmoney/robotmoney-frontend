@@ -96,6 +96,11 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/asof-labels.test.ts:11
+      # Issue 1402: the sleeve signal suite ran (grammar, fixture date, missing data).
+      - name: Sleeve signal suite ran (issue 1402)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/signals.test.ts:16
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

@@ -17,3 +17,8 @@ export {
   type Inventory, type InventorySeries, type InventoryProxy, type CoverageGap,
 } from "./inventory.ts";
 export * from "./allocate/labels.ts";
+export * from "./allocate/signals.ts";
+export {
+  computeChannelDivergence, computeLateCycle, TOP7, type ChannelInputs, type LateCycleInputs,
+} from "./analyze/research-signals.ts";
+export type { Gauge, ResearchPayload } from "./analyze/research.ts";
