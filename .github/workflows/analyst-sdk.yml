@@ -71,7 +71,7 @@ jobs:
       - name: Fixtures exist and are current
         working-directory: packages/analyst-sdk
         run: |
-          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/reference/backtest-pre-refactor.ts; do
+          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts; do
             test -s "$f" || { echo "::error::$f is missing: an SDK fixture is absent"; exit 1; }
           done
           bun run archive-fixture:regenerate --check
@@ -128,7 +128,8 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/backtest.test.ts:16
           tests/cli.test.ts:10
-          tests/inputs.test.ts:16
+          tests/backtest-cli.test.ts:5
+          tests/inputs.test.ts:15
           tests/input-rule.test.ts:10
           tests/regime.test.ts:22
           tests/prepare.test.ts:3
@@ -152,7 +153,9 @@ jobs:
           # pinned:true with its manifest.
           bun run regime tests/fixtures/raw-indicator-history.csv --provenance > "$d/env.json"
           bun -e 'const e = JSON.parse(await Bun.file(process.argv[1]).text()); const g = await Bun.file("tests/golden/regime-report.json").text(); if (e.pinned !== false || JSON.stringify(e.report, null, 2) + "\n" !== g) process.exit(1)' "$d/env.json"
-          run="$(bun -e 'console.log(Object.keys(JSON.parse(await Bun.file("tests/fixtures/archive/facts.json").text()).runs)[1])')"
-          bun run inputs --archive tests/fixtures/archive/api-only --run "$run" --out "$d/gen"
+          # tests/fixtures/archive/api-recorded is the recording of the real public
+          # archive routes (backend/tests/analyst-sdk-public-archive-recording.test.ts).
+          run=0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2
+          bun run inputs --archive tests/fixtures/archive/api-recorded --run "$run" --out "$d/gen"
           bun run regime "$d/gen/inputs.csv" --replay --provenance > "$d/pinned.json"
           bun -e 'const e = JSON.parse(await Bun.file(process.argv[1]).text()); if (e.pinned !== true || e.manifest.run_key !== process.argv[2] || e.manifest.source !== "api") process.exit(1)' "$d/pinned.json" "$run"

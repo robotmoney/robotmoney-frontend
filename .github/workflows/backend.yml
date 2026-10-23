@@ -163,7 +163,7 @@ jobs:
       - name: Analyst SDK proofs exist (issue 1404)
         working-directory: backend
         run: |
-          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
+          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/analyst-sdk-public-archive-recording.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
             test -f "$f" || { echo "::error::$f is missing: an issue 1404 analyst SDK proof would stop running"; exit 1; }
           done
       - name: Run tests (ephemeral Postgres via Docker)
@@ -213,7 +213,7 @@ jobs:
       - name: Analyst SDK proofs ran (issue 1404)
         shell: bash
         run: |
-          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
+          for f in tests/analyst-sdk-vintage-roundtrip.test.ts tests/analyst-sdk-public-archive-recording.test.ts tests/backtest-correlations-fidelity.test.ts tests/input-rule-parity.test.ts; do
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: an issue 1404 analyst SDK proof is excluded"; exit 1; }
           done

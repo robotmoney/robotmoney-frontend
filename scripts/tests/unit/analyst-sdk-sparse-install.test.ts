@@ -35,19 +35,19 @@ describe("standalone install of packages/analyst-sdk", () => {
     expect(b.stdout).toBe(GOLDEN);
   });
 
-  test("provenance: pinned false without a manifest; the recorded API-only copy gives pinned true", async () => {
+  test("provenance: pinned false without a manifest; the recorded real-route API-only copy gives pinned true", async () => {
     const plain = await sh(["bun", "run", "regime", "tests/fixtures/raw-indicator-history.csv", "--provenance"], DIR);
     const e = JSON.parse(plain.stdout);
     expect(e.pinned).toBe(false);
     expect(JSON.stringify(e.report, null, 2) + "\n").toBe(GOLDEN);
-    const facts = JSON.parse(readFileSync(join(DIR, "tests/fixtures/archive/facts.json"), "utf8"));
-    const run = Object.keys(facts.runs)[1]!;
-    const gen = await sh(["bun", "run", "inputs", "--archive", "fixtures/archive/api-only", "--run", run, "--out", "../gen"], join(DIR, "tests"));
+    // The recording of the real public archive routes: no private repository access.
+    const run = "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2";
+    const gen = await sh(["bun", "run", "inputs", "--archive", "fixtures/archive/api-recorded", "--run", run, "--out", "../gen"], join(DIR, "tests"));
     expect(gen.code, gen.stderr).toBe(0);
     const env = await sh(["bun", "run", "regime", "gen/inputs.csv", "--replay", "--provenance"], DIR);
     expect(env.code, env.stderr).toBe(0);
     const p = JSON.parse(env.stdout);
     expect(p.pinned).toBe(true);
-    expect(p.manifest).toMatchObject({ run_key: run, backup_id: facts.backup, source: "api", code_revision: facts.build });
+    expect(p.manifest).toMatchObject({ run_key: run, backup_id: "2001-01-03T000000Z", source: "api", code_revision: "4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f" });
   });
 });
