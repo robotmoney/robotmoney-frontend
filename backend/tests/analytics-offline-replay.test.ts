@@ -16,8 +16,14 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
-import { loadFrozenVintage } from "../src/analytics/store/run-ledger-store.ts";
-import { buildVintageManifest } from "../src/analytics/run-ledger.ts";
+import { beginRun, freezeVintage, loadFrozenVintage, loadHistoricalSourceValues } from "../src/analytics/store/run-ledger-store.ts";
+import { buildVintageManifest, sortedMembers } from "../src/analytics/run-ledger.ts";
+import { SERIES_MAPPING, inputHistoryFromStorage, selectConsumerObservations } from "../src/analytics/extras.ts";
+import { parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
+import { buildReport, runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -128,4 +134,69 @@ test(
     expect(manifestBytes.length).toBeGreaterThan(0);
   },
   { timeout: 60_000 },
+);
+
+// Issue 1423 (D74): the storage mapping must not change what a frozen vintage
+// replays. The SDK's committed fixture is stored under the storage keys its
+// consumers read today, frozen into a vintage, then reloaded with the network
+// and every data source poisoned. Membership, version ids, values, dates and
+// ordering come back unchanged, every member reaches its consumers through the
+// mapping, and the report rebuilt from the reloaded members equals the
+// committed golden byte for byte (no tolerance, no regenerated file).
+const SDK_TESTS = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "tests");
+const GOLDEN_SHA256 = "119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce";
+
+test(
+  "a frozen regime vintage reloads offline with unchanged membership and rebuilds the golden report bytes through the D74 mapping",
+  async () => {
+    const goldenText = readFileSync(join(SDK_TESTS, "golden", "regime-report.json"), "utf8");
+    expect(createHash("sha256").update(goldenText).digest("hex")).toBe(GOLDEN_SHA256);
+    const fixture = toHistory(parseRawHistory(readFileSync(join(SDK_TESTS, "fixtures", "raw-indicator-history.csv"), "utf8")));
+    const keyOf = new Map(SERIES_MAPPING.map((m) => [m.inputId, m.storageKey]));
+    const sink = { saveSourceAcquisition };
+    for (const id of Object.keys(fixture).sort()) {
+      const sourceKey = keyOf.get(id);
+      expect(sourceKey, `fixture series ${id} has a storage key`).toBeDefined();
+      await captureSourceAcquisition({ provider: "fixture", sourceKey: sourceKey!, parserVersion: "d74-replay-fixture:1", cacheIdentity: sourceKey! }, sink, async () => fixture[id]!);
+    }
+
+    // The fixture's last date; earlier tests in this file may have left research rows, which no regime consumer reads.
+    const ASOF = Object.values(fixture).reduce((d, pts) => (pts[pts.length - 1]!.date > d ? pts[pts.length - 1]!.date : d), "");
+    const mapped = new Set(SERIES_MAPPING.map((m) => m.storageKey));
+    const methodology = { toolId: "regime", versionLabel: "d74-replay", config: { issue: 1423 } };
+    const run = await beginRun({ runKey: crypto.randomUUID(), asof: ASOF, toolId: "regime", sourceLabel: "fixture", methodology, buildIdentity: "d74-replay" });
+    const knowledgeTimeCutoff = new Date().toISOString();
+    const frozen = await freezeVintage({ runId: run.runId, toolId: "regime", knowledgeTimeCutoff, marketTimeCutoff: ASOF, methodologyVersionId: run.methodologyVersionId, buildIdentity: "d74-replay" });
+    const original = sortedMembers(await loadHistoricalSourceValues(knowledgeTimeCutoff, ASOF));
+    expect(original.length).toBe(frozen.memberCount);
+    expect(original.filter((m) => mapped.has(m.sourceKey)).length).toBe(Object.values(fixture).reduce((n, pts) => n + pts.length, 0));
+
+    globalThis.fetch = (async () => { throw new Error("OFFLINE REPLAY MUST NEVER CALL fetch"); }) as unknown as typeof fetch;
+    poisonEveryDataSourceMethod();
+
+    const reloaded = await loadFrozenVintage(frozen.vintageId);
+    expect(reloaded).not.toBeNull();
+    const members = sortedMembers(reloaded!.members);
+    // Membership, version ids, keys, dates, values and ordering: exact.
+    expect(members).toEqual(original);
+    expect(reloaded!.manifestDigest).toBe(frozen.manifest.manifestDigest);
+
+    // Every member reaches the consumers that read its key, as itself.
+    const seen = new Set<string>();
+    for (const consumer of new Set(SERIES_MAPPING.map((m) => m.consumer))) {
+      const keys = new Set(SERIES_MAPPING.filter((m) => m.consumer === consumer).map((m) => m.storageKey));
+      const obs = selectConsumerObservations(members, consumer);
+      expect(obs.map((o): unknown[] => [o.versionId, o.storageKey, o.date, o.value])).toEqual(
+        members.filter((m) => keys.has(m.sourceKey)).map((m) => [m.versionId, m.sourceKey, m.marketDate, m.value]),
+      );
+      for (const o of obs) seen.add(o.versionId!);
+    }
+    expect(seen.size).toBe(members.filter((m) => mapped.has(m.sourceKey)).length);
+
+    // The history the run reads equals the committed fixture, and the report its bytes.
+    const history = inputHistoryFromStorage(members);
+    expect(history).toEqual(fixture);
+    expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);
+  },
+  { timeout: 120_000 },
 );

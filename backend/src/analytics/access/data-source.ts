@@ -11,7 +11,7 @@ import type { Indicator } from "../analyze/indicators.ts";
 import { fetchAll } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
-import { LEDGER_EXTRA_KEYS } from "../extras.ts";
+import { EXTRA_WRITE_KEYS, LEDGER_EXTRA_KEYS } from "../extras.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
   refreshEdgarWithTierFallback,
@@ -189,14 +189,17 @@ export const liveDataSource: AnalyticsDataSource = {
     if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
     const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
       captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
-    // The provider and ledger-key literals stay inline: tests/analytics-source-tolerance.test.ts
-    // scrapes them from acquire(...) call sites. tests/extras-key-map.test.ts pins them to
-    // LEDGER_EXTRA_KEYS (the symbols and cache identities below come from the map directly).
+    // The storage keys come from the D74 reverse mapping (W = EXTRA_WRITE_KEYS,
+    // packages/analyst-sdk/src/series-ids.ts), so they cannot drift from the keys the
+    // consumers read. The provider literals stay inline, and the `W.<name>` spelling is
+    // what tests/analytics-source-tolerance.test.ts resolves at acquire(...) call sites.
+    // tests/extras-key-map.test.ts pins both to LEDGER_EXTRA_KEYS.
     const X = LEDGER_EXTRA_KEYS;
+    const W = EXTRA_WRITE_KEYS;
     const [spx, eth, tbill3m] = await Promise.all([
-      safe(X.spx.symbol, () => acquire("yahoo", "backtest:^GSPC", `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
-      safe(X.eth.symbol, () => acquire("yahoo", "backtest:ETH-USD", `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
-      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", "backtest:DTB3", X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
+      safe(X.spx.symbol, () => acquire("yahoo", W.spx, `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
+      safe(X.eth.symbol, () => acquire("yahoo", W.eth, `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
+      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
     ]);
     return { spx, eth, tbill3m };
   },

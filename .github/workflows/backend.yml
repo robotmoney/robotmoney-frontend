@@ -102,6 +102,8 @@ jobs:
               # rollout-signing.ts's own EVIDENCE_DIR constant, so a rename
               # cannot leave this behind.
               - 'rollout-evidence/**'
+              # The suite guard the job runs (issue 1421).
+              - 'scripts/checks/assert-junit-suites.ts'
 
   backend:
     needs: [changes]
@@ -167,7 +169,8 @@ jobs:
         # Output is kept (pipefail is on in Actions' bash) for the next step.
         # Under Actions bun prefixes each file header with ##[group], (written `::group::` in the file bun emits, rendered `##[group]` in the Actions log), which the guards below accept.
         shell: bash
-        run: bun test --timeout=30000 --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts' 2>&1 | tee "$RUNNER_TEMP/backend-bun-test.log"
+        # The JUnit report feeds the issue 1421 guard step below.
+        run: bun test --timeout=30000 --path-ignore-patterns='tests/geckoterminal-resilience.test.ts' --path-ignore-patterns='tests/token-prices-resilience.test.ts' --reporter=junit --reporter-outfile="$RUNNER_TEMP/backend.junit.xml" 2>&1 | tee "$RUNNER_TEMP/backend-bun-test.log"
       - name: Schema proofs ran (spec §8.4)
         shell: bash
         run: |
@@ -194,3 +197,14 @@ jobs:
         run: |
           grep -qE '^(::group::|##\[group\])?tests/db-registry-execution\.test\.ts:$' "$RUNNER_TEMP/backend-bun-test.log" \
             || { echo "::error::tests/db-registry-execution.test.ts did not run in the backend suite: the spec §7.1 execution proof is excluded"; exit 1; }
+      # Issue 1423: the series-identity proofs (D74 storage mapping). Each named
+      # file must appear in the JUnit report with at least its number of cases
+      # and none skipped. A renamed, excluded or unloadable file (the Postgres
+      # preload throws when Docker is absent) is red here.
+      - name: Series identity proofs ran (issue 1423)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/extras-key-map.test.ts:10
+          tests/analytics-offline-replay.test.ts:2
+          tests/analyst-sdk-golden-reference.test.ts:4

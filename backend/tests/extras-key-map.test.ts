@@ -1,16 +1,35 @@
 // One map names the backtest extras: ledger key, SDK input id, provider symbol.
 // Production rows exist under the ledger keys, so they must never drift.
+// The D74 storage mapping (issue 1423) builds on it: see the second describe.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { LEDGER_EXTRA_KEYS, type LedgerExtra } from "../src/analytics/extras.ts";
-import { SOURCE_TOLERANCES } from "../src/analytics/source-tolerance.ts";
+import {
+  EXTRA_WRITE_KEYS,
+  LEDGER_EXTRA_KEYS,
+  SERIES_MAPPING,
+  consumerStorageKeys,
+  inputHistoryFromStorage,
+  selectConsumerObservations,
+  sourceIdForStorageKey,
+  storageKeyForSourceId,
+  type LedgerExtra,
+} from "../src/analytics/extras.ts";
+import { SOURCE_TOLERANCES, rawIndicatorSourceKey } from "../src/analytics/source-tolerance.ts";
+import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import { sql } from "../src/db/client.ts";
+import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
+import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
+import { loadCurrentSourceValues } from "../src/analytics/store/run-ledger-store.ts";
+import { useCleanDatabase } from "./support/clean-db.ts";
 import { liveDataSource } from "../src/analytics/access/data-source.ts";
 import { EXTRA_IDS } from "../../packages/analyst-sdk/src/run.ts";
 
 function missingTolerances(map: Record<string, LedgerExtra>, tol: Record<string, unknown>): string[] {
   return Object.values(map).filter((x) => !(x.ledgerKey in tol)).map((x) => x.ledgerKey);
 }
+
+useCleanDatabase(import.meta.file);
 
 describe("LEDGER_EXTRA_KEYS", () => {
   test("pins the production ledger keys (never rename)", () => {
@@ -56,10 +75,69 @@ describe("LEDGER_EXTRA_KEYS", () => {
     for (const x of Object.values(LEDGER_EXTRA_KEYS)) expect(got.some((g) => g.provider === x.provider && g.cacheIdentity.startsWith(x.symbol))).toBe(true);
   });
 
-  test("the acquire() call sites in data-source.ts write exactly the map's provider/ledger keys", () => {
+  test("the acquire() call sites in data-source.ts write through the reverse mapping, to exactly the map's provider/ledger keys", () => {
     const src = readFileSync(join(import.meta.dir, "..", "src", "analytics", "access", "data-source.ts"), "utf8");
-    const written = [...src.matchAll(/\bacquire\(\s*"([^"]+)",\s*"(backtest:[^"]+)"/g)].map((m) => `${m[1]}|${m[2]}`).sort();
+    const written = [...src.matchAll(/\bacquire\(\s*"([^"]+)",\s*W\.(spx|eth|tbill3m)\b/g)]
+      .map((m) => `${m[1]}|${EXTRA_WRITE_KEYS[m[2] as keyof typeof EXTRA_WRITE_KEYS]}`).sort();
     expect(written).toEqual(Object.values(LEDGER_EXTRA_KEYS).map((x) => `${x.provider}|${x.ledgerKey}`).sort());
+    expect(src).not.toMatch(/\bacquire\(\s*"[^"]+",\s*"backtest:/);
     for (const k of ["spx", "eth", "tbill3m"]) expect(src).toContain(`X.${k}.symbol`);
+  });
+});
+
+// D74 (issue 1423): one shared mapping from storage key to source id, per consumer.
+describe("the D74 storage mapping", () => {
+  // Pinned BEFORE the change: the storage keys each consumer read on main.
+  const REGISTRY_IDS = INDICATORS.map((i) => i.id);
+  const PINNED: Record<string, string[]> = {
+    ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${id}`]])),
+    correlations: ["backtest:ETH-USD", "backtest:^GSPC"],
+    backtest: ["backtest:DTB3", "backtest:ETH-USD", "backtest:^GSPC"],
+  };
+
+  test("every consumer's resolved storage keys equal the pinned pre-change list", () => {
+    expect(REGISTRY_IDS.length).toBe(26);
+    expect(consumerStorageKeys()).toEqual(PINNED);
+  });
+
+  test("writes use the reverse mapping: it returns the keys the extractors write and the readers read", () => {
+    for (const ind of INDICATORS) {
+      const m = SERIES_MAPPING.find((x) => x.consumer === `indicator:${ind.id}`)!;
+      expect(storageKeyForSourceId(m.consumer, m.series)).toBe(rawIndicatorSourceKey(ind.id));
+      expect(sourceIdForStorageKey(m.consumer, rawIndicatorSourceKey(ind.id))).toBe(m.series);
+    }
+    expect(EXTRA_WRITE_KEYS).toEqual({ spx: "backtest:^GSPC", eth: "backtest:ETH-USD", tbill3m: "backtest:DTB3" });
+    expect(sourceIdForStorageKey("backtest", "backtest:DTB3")).toBe("fred:DTB3");
+    expect(sourceIdForStorageKey("indicator:SPX_TREND", "backtest:^GSPC")).toBeNull();
+    expect(() => storageKeyForSourceId("backtest", "yahoo:QQQ")).toThrow(/no storage key maps to yahoo:QQQ for consumer backtest/);
+  });
+
+  test("every mapped storage key has its D56 tolerance", () => {
+    const keys = [...new Set(SERIES_MAPPING.map((m) => m.storageKey))];
+    expect(keys.filter((k) => !(k in SOURCE_TOLERANCES))).toEqual([]);
+  });
+
+  test("two stored streams for yahoo:^GSPC: each consumer reads only its own, by exact value and version id", async () => {
+    const sink = { saveSourceAcquisition };
+    const capture = (sourceKey: string, points: { date: string; value: number }[]) =>
+      captureSourceAcquisition({ provider: "yahoo", sourceKey, parserVersion: "yahoo:1", cacheIdentity: `^GSPC:${sourceKey}` }, sink, async () => points);
+    // Same provider:symbol, same dates, different values.
+    await capture("raw_indicator_history:SPX_TREND", [{ date: "2026-10-01", value: 5700.25 }, { date: "2026-10-02", value: 5711.5 }]);
+    await capture("backtest:^GSPC", [{ date: "2026-10-01", value: 5699.875 }, { date: "2026-10-02", value: 5712.125 }]);
+    const stored = await sql<{ id: string; source_key: string; market_date: string; value: number }[]>`
+      SELECT id::text, source_key, market_date::text AS market_date, value FROM source_value_versions
+      WHERE source_key IN ('raw_indicator_history:SPX_TREND', 'backtest:^GSPC') ORDER BY source_key, market_date`;
+    // Four rows: nothing merged or overwritten.
+    expect(stored.length).toBe(4);
+    const members = await loadCurrentSourceValues();
+    const want = (key: string) => stored.filter((r) => r.source_key === key).map((r) => ({ series: "yahoo:^GSPC", storageKey: key, date: r.market_date, value: Number(r.value), versionId: r.id }));
+    const got = (c: string) => selectConsumerObservations(members, c).filter((o) => o.series === "yahoo:^GSPC");
+    expect(got("indicator:SPX_TREND")).toEqual(want("raw_indicator_history:SPX_TREND"));
+    expect(got("backtest")).toEqual(want("backtest:^GSPC"));
+    expect(got("correlations")).toEqual(want("backtest:^GSPC"));
+    expect(want("backtest:^GSPC").map((o) => o.value)).toEqual([5699.875, 5712.125]);
+    const h = inputHistoryFromStorage(members);
+    expect(h.SPX_TREND).toEqual([{ date: "2026-10-01", value: 5700.25 }, { date: "2026-10-02", value: 5711.5 }]);
+    expect(h.SPX).toEqual([{ date: "2026-10-01", value: 5699.875 }, { date: "2026-10-02", value: 5712.125 }]);
   });
 });
