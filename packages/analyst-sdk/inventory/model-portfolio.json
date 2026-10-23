@@ -1,0 +1,95 @@
+{
+  "workflow": "model-portfolio",
+  "description": "Every source series the model portfolio workflow reads (issue 1398, version one). Each id is <provider>:<symbol> (D74). storageKey is the source_value_versions key the series is recorded under: an existing key where another collector already holds that stream, else the id itself. A gap or late inception is served as it is and named in limitation; a proxy is never spliced in by extract.",
+  "series": [
+    {
+      "id": "yahoo:BTC-USD",
+      "provider": "yahoo",
+      "symbol": "BTC-USD",
+      "kind": "price",
+      "units": "USD, daily close",
+      "requestedStart": "2018-01-01",
+      "inception": "2014-09-17",
+      "proxy": null,
+      "limitation": null,
+      "storageKey": "research:BTC-USD"
+    },
+    {
+      "id": "yahoo:ETH-USD",
+      "provider": "yahoo",
+      "symbol": "ETH-USD",
+      "kind": "price",
+      "units": "USD, daily close",
+      "requestedStart": "2018-01-01",
+      "inception": "2017-11-09",
+      "proxy": null,
+      "limitation": null,
+      "storageKey": "backtest:ETH-USD"
+    },
+    {
+      "id": "yahoo:GLD",
+      "provider": "yahoo",
+      "symbol": "GLD",
+      "kind": "price",
+      "units": "USD, daily adjusted close",
+      "requestedStart": "2018-01-01",
+      "inception": "2004-11-18",
+      "proxy": null,
+      "limitation": "Gold is the SPDR Gold Shares ETF price, not the spot gold price. NYSE trading days only: no weekend or holiday rows.",
+      "storageKey": "yahoo:GLD"
+    },
+    {
+      "id": "yahoo:^GSPC",
+      "provider": "yahoo",
+      "symbol": "^GSPC",
+      "kind": "price",
+      "units": "USD, daily index close (price return, no dividends)",
+      "requestedStart": "2018-01-01",
+      "inception": "1927-12-30",
+      "proxy": null,
+      "limitation": "NYSE trading days only: no weekend or holiday rows.",
+      "storageKey": "backtest:^GSPC"
+    },
+    {
+      "id": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "provider": "defillama-yields",
+      "symbol": "7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2018-01-01",
+      "inception": "2024-03-10",
+      "proxy": {
+        "id": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501",
+        "from": "2023-02-06",
+        "to": "2024-03-09",
+        "provenance": "Aave v3 USDC on Ethereum, the same protocol's predecessor market. The rule is the prototype's (PR 1397, scripts/allocate-data.py): Aave v3 Base from 2024-03-10, Aave v3 Ethereum from 2023-02-06. Extract serves both series as they are; the consumer applies the splice."
+      },
+      "limitation": "Aave v3 USDC on Base. DefiLlama's first observation is 2024-03-10, so nothing before it is served under this id. With the proxy, coverage starts 2023-02-06; there is no lending yield before that.",
+      "storageKey": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84"
+    },
+    {
+      "id": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501",
+      "provider": "defillama-yields",
+      "symbol": "aa70268e-4b52-42bf-a116-608b370f9501",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2018-01-01",
+      "inception": "2023-02-06",
+      "proxy": null,
+      "limitation": "Aave v3 USDC on Ethereum. DefiLlama's first observation is 2023-02-06; nothing before it is served.",
+      "storageKey": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501"
+    },
+    {
+      "id": "fred:DTB3",
+      "provider": "fred",
+      "symbol": "DTB3",
+      "kind": "rate",
+      "units": "percent per year, 3-month Treasury bill secondary market rate",
+      "requestedStart": "2018-01-01",
+      "inception": "1954-01-04",
+      "proxy": null,
+      "limitation": "US business days only; FRED publishes holidays as missing.",
+      "storageKey": "backtest:DTB3"
+    }
+  ]
+}

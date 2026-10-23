@@ -24,6 +24,7 @@ export const EXTRA_IDS = {
   eth: LEDGER_EXTRA_KEYS.eth.inputId,
   tbill3m: LEDGER_EXTRA_KEYS.tbill3m.inputId,
 } as const;
+const READ_IDS: ReadonlySet<string> = new Set([...INDICATORS.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
 
 export interface RunResult {
   dateAxis: string[];
@@ -39,7 +40,7 @@ export interface RunResult {
 export interface RunOptions {
   start?: string;
   // Last day of the date axis (YYYY-MM-DD). Input rows dated after it are
-  // ignored. Default: the newest date in the input.
+  // ignored. Default: the newest date of any input series the run reads.
   asof?: string;
   // Also run production's second computeRegime call (macro, onchain, factor)
   // and return its factor_* figures. The composite and labels stay the
@@ -86,8 +87,12 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // Never mutate the caller's input: with asof, build a filtered copy.
   const raw: RawIndicatorHistory = {};
   for (const id in rawIn) raw[id] = asof === undefined ? rawIn[id]! : cutAtAsof(rawIn[id]!, asof);
+  // Only series the run reads set the date axis (analytics requirements 4.2),
+  // so an input that also carries other source data (the model portfolio
+  // inputs, issue 1398) gives the same regime numbers.
   let maxDate = start;
   for (const id in raw) {
+    if (!READ_IDS.has(id)) continue;
     const rows = raw[id]!;
     if (rows.length && rows[rows.length - 1]!.date > maxDate) maxDate = rows[rows.length - 1]!.date;
   }
