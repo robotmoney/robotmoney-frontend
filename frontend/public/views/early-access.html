@@ -24,7 +24,7 @@
     </div>
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Early access</h1>
-      <p class="a2-hero__lede">Deposits into Robot Money's vaults on Base open in small groups. Tell us who you are and we will reach you when yours opens.</p>
+      <p class="a2-hero__lede">Robot Money's vaults on Base open to depositors in small groups. Tell us about your treasury and we'll reach you when your group opens.</p>
     </div>
   </header>
 
@@ -33,7 +33,7 @@
 
       <div class="ea__main">
         <form class="ea__form" novalidate @submit.prevent="submit()" x-show="!sent" aria-label="Request early access">
-          <p class="ea__privacy">A handle and a wallet together tie you to that wallet's holdings. This list stays private, used only for access and referral credit. <a href="/privacy">Privacy policy</a></p>
+          <p class="ea__privacy">This list is private. We use it only to give you access and credit your referrer. <a href="/privacy">Privacy policy</a></p>
 
           <div class="ea__field">
             <label class="ea__label" for="ea-handle">Telegram or X handle</label>
@@ -59,9 +59,11 @@
                    placeholder="0x…" maxlength="42"
                    x-model="draft.wallet" @input="revalidate()"
                    :aria-invalid="errors.wallet ? 'true' : 'false'" aria-describedby="ea-wallet-hint ea-wallet-err" />
-            <p class="ea__hint" id="ea-wallet-hint">The address you would deposit from.</p>
+            <p class="ea__hint" id="ea-wallet-hint">The address you'd deposit from. With your handle it links you to that wallet's holdings, so we keep it private.</p>
             <p class="ea__err" id="ea-wallet-err" x-show="errors.wallet" x-text="errors.wallet" x-cloak></p>
           </div>
+
+          <p class="ea__group">Three quick questions, so we reach the right treasuries first.</p>
 
           <div class="ea__field">
             <label class="ea__label" id="ea-business-l" for="ea-business">What best describes you</label>
@@ -87,7 +89,7 @@
           </div>
 
           <div class="ea__field">
-            <label class="ea__label" id="ea-deposit-l" for="ea-deposit">How much would you deposit</label>
+            <label class="ea__label" id="ea-deposit-l" for="ea-deposit">Roughly how much would you deposit</label>
             <div class="rm-select" x-data="rmSelect('Choose one')" x-modelable="value" x-model="draft.intendedDeposit"
                  @rm-select-change="revalidate()" @click.outside="close(false)">
               <button class="rm-select__btn" id="ea-deposit" type="button" aria-haspopup="listbox"
@@ -109,7 +111,7 @@
           </div>
 
           <div class="ea__field">
-            <label class="ea__label" id="ea-share-l" for="ea-share">Share of your treasury you would hold outside stablecoins</label>
+            <label class="ea__label" id="ea-share-l" for="ea-share">Share of your treasury you'd hold outside stablecoins</label>
             <div class="rm-select" x-data="rmSelect('Choose one')" x-modelable="value" x-model="draft.nonStableShare"
                  @rm-select-change="revalidate()" @click.outside="close(false)">
               <button class="rm-select__btn" id="ea-share" type="button" aria-haspopup="listbox"
@@ -138,13 +140,14 @@
 
           <div class="ea__send">
             <button class="btn-primary ea__submit" type="submit" :disabled="sending" x-text="sending ? 'Sending' : 'Request early access'">Request early access</button>
+            <p class="ea__hint">No wallet connection or signature.</p>
             <p class="ea__err" role="alert" x-show="failed" x-cloak>Not sent. Try again, or message <a href="https://t.me/onchainpm" target="_blank" rel="noopener noreferrer">@onchainpm</a> on Telegram.</p>
           </div>
         </form>
 
         <div class="ea__done" x-show="sent" x-cloak role="status">
-          <h2 class="ea__done-h">You are on the list</h2>
-          <p class="ea__done-p">We will reach you at <b x-text="sentHandle"></b> when your group opens.</p>
+          <h2 class="ea__done-h">You're on the list</h2>
+          <p class="ea__done-p">We'll message <b x-text="sentHandle"></b> when your group opens. For news before then, follow <a href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer">@RobotMoneyAgent</a> on X.</p>
         </div>
       </div>
 
@@ -160,7 +163,7 @@
           </div>
           <div class="ea__fact">
             <dt>No promised returns</dt>
-            <dd>The portfolio moves with its markets. This is not investment advice.</dd>
+            <dd>Vault shares rise and fall with what the vaults hold. This is not investment advice.</dd>
           </div>
         </dl>
       </aside>
@@ -228,6 +231,11 @@
 
 .ea__hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .ea__send { display: flex; flex-direction: column; align-items: flex-start; gap: 1rem; padding-top: 0.5rem; }
+.ea__send .ea__hint { margin-top: 0.25rem; }
+/* The line that opens the three questions: a rule above it marks where the
+   contact details end and the questions begin. */
+.ea__group { margin: 0.5rem 0 -0.75rem; padding-top: 1.75rem; border-top: 1px solid var(--color-border);
+  font-size: 0.875rem; line-height: 1.6; color: var(--color-text-muted); }
 .ea__submit { border: 0; cursor: pointer; }
 .ea__submit:disabled { opacity: 0.6; cursor: default; }
 
