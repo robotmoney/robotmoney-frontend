@@ -101,6 +101,11 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/signals.test.ts:16
+      # Issue 1401: the rule file suite ran (shipped files, field-named errors, README example).
+      - name: Rule file suite ran (issue 1401)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/rules.test.ts:19
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

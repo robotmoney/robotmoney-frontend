@@ -12,6 +12,8 @@ export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";
 export * from "./series-ids.ts";
 export { CoverageError, assertRequiredCoverage } from "./coverage.ts";
 export * from "./allocate/universe.ts";
+export * from "./allocate/types.ts";
+export * from "./allocate/rules.ts";
 export {
   loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, CALENDAR_SLACK_DAYS, INVENTORY_FIELDS,
   type Inventory, type InventorySeries, type InventoryProxy, type CoverageGap,
