@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotmoney.network/contract/schemas/public-analytics-archive-backups.schema.json",
+  "title": "GET /api/public/analytics/archive/backups",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "limit",
+    "format",
+    "backups",
+    "nextCursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000
+    },
+    "format": {
+      "const": 1
+    },
+    "backups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "backup",
+          "record"
+        ],
+        "properties": {
+          "backup": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{6}Z$"
+          },
+          "record": {
+            "type": "string",
+            "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/backup\\.json$"
+          }
+        }
+      }
+    },
+    "nextCursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

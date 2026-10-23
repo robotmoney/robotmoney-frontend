@@ -624,6 +624,201 @@
         }
       }
     },
+    "/api/public/analytics/source-versions": {
+      "get": {
+        "operationId": "getPublicSourceVersions",
+        "summary": "Every collected version of the source data, with when it was observed",
+        "description": "Each value as the external party published it when it was collected, with the time it was observed and the version it revised. A later revision is a new row beside the old one. `asof` returns only the versions in force at that time. Tokenless and read-only (GET only; any other method is 405), 100 tokens a minute per client (a page costs 1), cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.\n\nResponse size: about 200 B a row.\n\nResponse type: `PublicSourceVersionsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "parameters": [
+          {
+            "name": "series",
+            "in": "query",
+            "required": false,
+            "description": "One storage key, for example backtest:DTB3.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "backtest:DTB3"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "First market date, YYYY-MM-DD, inclusive.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-01-01"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Last market date, YYYY-MM-DD, inclusive.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-03-31"
+          },
+          {
+            "name": "asof",
+            "in": "query",
+            "required": false,
+            "description": "A date or ISO date-time: only the versions in force then.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "2026-10-01T00:00:00Z"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page, 1 to 1000 (default 100; a larger value is clamped).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "100"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's `nextCursor`; omit for the first page.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-contract-type": "PublicSourceVersionsResponse",
+        "responses": {
+          "200": {
+            "description": "Every collected version of the source data, with when it was observed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "PublicSourceVersionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/analytics/reports": {
+      "get": {
+        "operationId": "getPublicReports",
+        "summary": "Each analytics run's published report, byte for byte",
+        "description": "Without a filter, a page of published reports: the run key, as-of date, SHA-256 and size of each. With `run` (a run key) or `vintage` (a vintage id) the report itself, exactly the bytes the run published, with its SHA-256 as a strong ETag and in X-Content-SHA256, cacheable forever. A report's bytes cost 10 of the 100 tokens a minute per client.\n\nResponse size: about 200 B a listed report; a report itself is its stored size.\n\nResponse type: `PublicReportsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "parameters": [
+          {
+            "name": "run",
+            "in": "query",
+            "required": false,
+            "description": "A run key (a UUID): answer that run's report bytes.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "00000000-0000-4000-8000-000000000000"
+          },
+          {
+            "name": "vintage",
+            "in": "query",
+            "required": false,
+            "description": "A vintage id: answer the report its run published.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Rows per page, 1 to 1000 (default 100; a larger value is clamped).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "100"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's `nextCursor`; omit for the first page.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-contract-type": "PublicReportsResponse",
+        "responses": {
+          "200": {
+            "description": "Each analytics run's published report, byte for byte",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "PublicReportsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/analytics/archive/backups": {
+      "get": {
+        "operationId": "getPublicArchiveBackups",
+        "summary": "The sealed format 1 archive backups",
+        "description": "One backup per UTC day, oldest first, listed once the day is an hour past. Each names its record, `csv/<backup id>/backup.json`, served under /api/public/analytics/archive/ with every archive it lists (gzipped Postgres COPY CSV, at most 64 MB uncompressed, named `<table>.<start>_<end>.csv.gz`). Records and archives never change: their ETag is their SHA-256. An archive body costs 10 of the 100 tokens a minute and its full size from the 50 MB a minute per client.\n\nResponse size: about 80 B a backup.\n\nResponse type: `PublicArchiveBackupsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "tags": [
+          "public-read"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Backups per page, 1 to 1000 (default 100; a larger value is clamped).",
+            "schema": {
+              "type": "string"
+            },
+            "example": "100"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The previous page's `nextCursor`; omit for the first page.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-contract-type": "PublicArchiveBackupsResponse",
+        "responses": {
+          "200": {
+            "description": "The sealed format 1 archive backups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "PublicArchiveBackupsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/dashboards/research-signals/{key}": {
       "get": {
         "operationId": "getResearchSignal",

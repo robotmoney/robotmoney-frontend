@@ -260,9 +260,11 @@ describe("no host port is named anywhere except the stage overlay", () => {
   const stageLines = effective(STAGE_COMPOSE_FILE);
 
   test("docker-compose.yml publishes CONTAINER PORTS ONLY — Docker assigns the host side", () => {
-    // The short form: a quoted bare container port, no host half, no variable.
+    // The short form: a quoted container port with no host port and no
+    // variable. The api's is bound to loopback (issue 1422: only
+    // website-server may reach it from off the host), still Docker-assigned.
     const trimmed = composeLines.map((l) => l.trim());
-    expect(trimmed).toContain(`- "${API_CONTAINER_PORT}"`);
+    expect(trimmed).toContain(`- "127.0.0.1::${API_CONTAINER_PORT}"`);
     expect(trimmed).toContain(`- "${POSTGRES_CONTAINER_PORT}"`);
   });
 

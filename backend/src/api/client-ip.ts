@@ -8,7 +8,12 @@
 // KNOWN proxy, so they are honored ONLY when `trustProxy` is true
 // (docker-compose.yml sets TRUST_PROXY=1 unconditionally because
 // website-server/nginx.conf sits in front of `api` for every request in every
-// composition — issue #892). Two headers, in this order (issue #1095):
+// composition — issue #892). Three headers, in this order:
+//   0. X-Client-IP (issue 1422, vendor-neutral) — the address website-server
+//      (nginx) resolved for the client and SET on every proxied /api/ request,
+//      replacing any X-Client-IP the caller sent. It is nginx's own account of
+//      the client, with no CDN rule involved, and the api port is never
+//      published, so only nginx can reach the api to set it.
 //   1. CF-Connecting-IP — what Cloudflare (D13) puts on every request it
 //      proxies. nginx (website-server/nginx.conf) passes it through only from a
 //      Cloudflare or same-host peer and otherwise OVERWRITES it with the peer
@@ -53,9 +58,12 @@ export function resolveClientIp(
   trustProxy: boolean,
   forwardedFor: string | null,
   cfConnectingIp: string | null = null,
+  xClientIp: string | null = null,
 ): string {
   const peer = normalizeIp(peerAddress);
   if (!trustProxy) return peer;
+  const xc = xClientIp?.trim();
+  if (xc && isIP(xc) !== 0) return normalizeIp(xc);
   const cf = cfConnectingIp?.trim();
   if (cf && isIP(cf) !== 0) return normalizeIp(cf);
   if (forwardedFor && isLoopback(peer)) {

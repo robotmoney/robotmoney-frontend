@@ -207,6 +207,10 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 | `/api/public/analytics/asset-prices` | daily asset closes in USD | `symbol`, `from`, `to` |
 | `/api/public/analytics/vintages` | frozen data vintages: run, methodology, cutoffs, digest, members | `run_key`, `tool_id`, `include=members` |
 | `/api/public/analytics/overwrite-events` | every recorded revision of a stored row | `table_name` |
+| `/api/public/analytics/source-versions` | every collected version of source data, with the time it was observed | `series` (the storage key), `from`, `to`, `asof` (the versions in force then) |
+| `/api/public/analytics/reports` | each run's published report: a list, or with `run` or `vintage` the report's exact bytes | `run`, `vintage` |
+| `/api/public/analytics/archive/backups` | the sealed format 1 backups, oldest first | |
+| `/api/public/analytics/archive/` | a backup's `backup.json` and every archive it lists, at `archive/` + the record's `path` | |
 
 ```sh
 API=https://robotmoney.network
@@ -223,6 +227,19 @@ curl -s "$API/api/public/analytics/vintages?run_key=<run_key>&tool_id=<tool_id>&
 
 # revisions: what a row was before it was overwritten, and what it became
 curl -s "$API/api/public/analytics/overwrite-events?table_name=raw_indicator_history&limit=5"
+
+# every collected version of one series, and the versions in force at a time
+curl -s "$API/api/public/analytics/source-versions?series=backtest:DTB3&limit=5"
+curl -s "$API/api/public/analytics/source-versions?series=backtest:DTB3&asof=2026-10-01T00:00:00Z"
+
+# published reports, then one run's report byte for byte (its ETag is its SHA-256)
+curl -s "$API/api/public/analytics/reports?limit=5"
+curl -s -o report.json "$API/api/public/analytics/reports?run=<run_key>"
+
+# format 1 archives: the backups, one backup's record, and an archive it lists
+curl -s "$API/api/public/analytics/archive/backups"
+curl -s "$API/api/public/analytics/archive/csv/<backup id>/backup.json"
+curl -s -o x.csv.gz "$API/api/public/analytics/archive/csv/<backup id>/data/<table>.<start>_<end>.csv.gz"
 
 # regime outputs are NOT here: they stay on the dashboards endpoint
 curl -s --compressed "$API/api/dashboards/regime-snapshots?include=backtest"
@@ -252,11 +269,33 @@ of `analytics_output_snapshots`). Artifacts named `regime_snapshots` are empty f
 - **Caching**: `Cache-Control: public, max-age=300` and a weak `ETag`. Send it back as
   `If-None-Match` and an unchanged page is a `304`. A body over 256 KB is gzip-encoded
   when you send `Accept-Encoding: gzip` (curl: `--compressed`).
-- **Rate limit**: 100 requests a minute per client ip, shared by the four routes. Past
-  that the answer is `429` with `Retry-After` (seconds). The limit is per api process;
-  one api replica runs today.
+- **Immutable bodies**: a report and every archive file carry
+  `Cache-Control: public, max-age=31536000, immutable` and a strong `ETag` that is their
+  SHA-256 (also in `X-Content-SHA256`). A matching `If-None-Match` is a `304`, answered
+  without reading the body.
+- **Limits** (per client ip, per api process; one api replica runs today): 100 tokens a
+  minute, where a list costs 1 and a report's bytes or an archive body cost 10; and
+  50 MB a minute, where a request is admitted while any is left and an archive is charged
+  in full. Past either the answer is `429` with `Retry-After` (seconds). At most two public
+  queries run at once and each has a 5 s timeout; past that the answer is `503` with
+  `Retry-After`.
 - **Errors** are `{"error": "..."}`: `400` for a bad parameter or cursor, `404` for a path
-  that is not one of the four, `405`, `429`.
+  that is not a route, `405`, `429`, and `503` (busy, a timed-out query, or a backup record
+  still being prepared).
+
+### Archives (format 1)
+
+The archive routes serve the robotmoney/csv-backups layout. A backup is one UTC day:
+`<day>T000000Z` holds every row of the append-only tables (source data versions, the run
+ledger, vintages and their members, published outputs and reports, recorded revisions)
+stamped before that midnight and after the previous backup. A day is listed once it is an
+hour past. Its record, `backup.json`, lists each archive with its row count, id range,
+watermarks and SHA-256s; an archive is `<table>.<start>_<end>.csv.gz`, at most 64 MB
+uncompressed, the rows as Postgres COPY CSV text. A sealed backup never changes. List the
+backups, fetch each record past your watermark, then each archive it lists, and check
+`sha256_gz` before you keep it. The revised tables (`raw_indicator_history`,
+`asset_prices`, `regime_snapshots`) have no revision archives here; read their current
+values from the list routes above.
 
 ### Data terms
 

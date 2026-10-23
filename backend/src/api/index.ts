@@ -186,7 +186,13 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
     // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"), req.headers.get("cf-connecting-ip"));
+    const clientIp = resolveClientIp(
+      peer,
+      config.trustProxy,
+      req.headers.get("x-forwarded-for"),
+      req.headers.get("cf-connecting-ip"),
+      req.headers.get("x-client-ip"),
+    );
 
     try {
       return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);

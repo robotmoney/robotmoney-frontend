@@ -30,25 +30,63 @@
 // body, answer a matching `If-None-Match` with 304, and are gzip-encoded when
 // the client accepts it and the body is over 256 KB.
 //
-// RATE LIMIT. One shared sliding window per client ip, per process (see
-// rate-limit.ts): 100 requests a minute across all four routes, then 429 with
-// `Retry-After`.
+// ISSUE 1422: THE RECORD, AND ITS ARCHIVES. Two more list routes serve the
+// record as it was: `source-versions` (every collected version of source data,
+// with the time it was observed; `asof` gives the versions in force then) and
+// `reports` (each run's published report, byte for byte, with its checksum;
+// `run` or `vintage` names one). The archive routes serve format 1 backups (the
+// robotmoney/csv-backups layout): `archive/backups` lists the sealed backups,
+// and every file a backup record lists is served at `archive/` + its path.
+// See analytics/store/public-archive-store.ts for what a backup is here.
+//
+// LOAD PROTECTION (issue 1422, see ../public-analytics-limits.ts). Every
+// request spends weighted tokens (1, or 10 for a report's bytes or an archive
+// body) and bytes from its client's per-minute budgets, else 429 with
+// Retry-After. Every handler's statements run as ONE public read: a slot of a
+// process-wide gate of 2 (else 503 with Retry-After), one READ ONLY
+// transaction, a 5 s statement timeout (a timeout is 503 with Retry-After).
+// JSON bodies are gzip-encoded off the event loop (node:zlib on the
+// threadpool), never with a synchronous call on it.
+//
+// CACHING. Lists carry `Cache-Control: public, max-age=300` and a weak ETag of
+// the body. A report and an archive file are immutable: a strong ETag that is
+// their SHA-256, read before any bytes (a report's checksum column, a built
+// backup record), so a matching If-None-Match answers 304 without reading or
+// regenerating the body, and `Cache-Control: public, max-age=31536000,
+// immutable`. Errors and refusals carry `no-store`.
+import { promisify } from "node:util";
+import { gzip as gzipCb } from "node:zlib";
+import type { TransactionSql } from "postgres";
 import {
   PUBLIC_ANALYTICS_CACHE_CONTROL,
   PUBLIC_ANALYTICS_DEFAULT_LIMIT,
   PUBLIC_ANALYTICS_GZIP_MIN_BYTES,
+  PUBLIC_ANALYTICS_HEAVY_COST,
+  PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
+  PUBLIC_ANALYTICS_LIST_COST,
+  PUBLIC_ANALYTICS_MAX_CONCURRENT_QUERIES,
   PUBLIC_ANALYTICS_MAX_LIMIT,
   PUBLIC_ANALYTICS_SCHEMA_VERSION,
   ROUTES,
 } from "@robotmoney/contract";
-import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
-import { createRateLimiter } from "../rate-limit.ts";
+import { classifyDbFailure } from "../../db/client.ts";
+import {
+  archiveBodyStream,
+  BACKUP_ID_RE,
+  cachedRecord,
+  fileIn,
+  isServedBackup,
+  listBackupIds,
+  recordFor,
+} from "../../analytics/store/public-archive-store.ts";
+import { createClientBudgets, PublicBusyError, publicQueryGate, publicRead } from "../public-analytics-limits.ts";
+
+const gzipAsync = promisify(gzipCb);
+type Tx = TransactionSql<{}>;
 
 const ROUTE = "src/api/routes/public-analytics";
 
-export const PUBLIC_ANALYTICS_RATE_MAX = 100;
-export const PUBLIC_ANALYTICS_RATE_WINDOW_MS = 60_000;
 // overwrite-events rows carry whole previous/replacement rows, and a
 // regime_snapshots row is ~0.5 MB. The bound is applied IN SQL, before any row
 // reaches this process: a running sum of pg_column_size(previous_row) +
@@ -61,10 +99,18 @@ export const PUBLIC_ANALYTICS_RATE_WINDOW_MS = 60_000;
 export const OVERWRITE_PAGE_STORED_BYTES = 1024 * 1024;
 const OVERWRITE_PAGE_BYTE_BUDGET = 8 * 1024 * 1024;
 
-const limiter = createRateLimiter({ max: PUBLIC_ANALYTICS_RATE_MAX, windowMs: PUBLIC_ANALYTICS_RATE_WINDOW_MS });
-/** Forget every client's window. For tests. */
+const budgets = createClientBudgets();
+/** Forget every client's token and byte windows. For tests. */
 export function _resetPublicAnalyticsRateLimitForTests(): void {
-  limiter.reset();
+  budgets.reset();
+}
+/** Charge a client bytes as a served body would. For tests. */
+export function _chargePublicAnalyticsBytesForTests(clientIp: string, bytes: number): void {
+  budgets.chargeBytes(clientIp, bytes);
+}
+/** A client's remaining tokens and bytes. For tests. */
+export function _publicAnalyticsBudgetForTests(clientIp: string): { tokens: number; bytes: number } {
+  return budgets.peek(clientIp);
 }
 
 // ── Registered queries ──────────────────────────────────────────────────────
@@ -116,10 +162,12 @@ const readAssetPrices = registerQuery({
 const vintageProbe = {
   statement: `SELECT v.id::text AS id, r.run_key, r.asof::text AS asof, r.source_label, v.tool_id,
         v.knowledge_time_cutoff, v.market_time_cutoff::text AS market_time_cutoff, v.manifest_digest, v.member_count,
-        v.build_identity, v.created_at, m.version_label, m.config_digest
+        v.build_identity, v.created_at, m.version_label, m.config_digest,
+        rs.id::text AS report_id, rs.checksum AS report_checksum, rs.byte_length::text AS report_byte_length
       FROM analytics_data_vintages v
       JOIN analytics_ledger_runs r ON r.id = v.run_id
       JOIN analytics_ledger_methodology_versions m ON m.id = v.methodology_version_id
+      LEFT JOIN analytics_report_snapshots rs ON rs.run_id = v.run_id
       WHERE v.id > $1::bigint
         AND ($2::text IS NULL OR r.run_key = $3::text)
         AND ($4::text IS NULL OR v.tool_id = $5::text)
@@ -152,6 +200,16 @@ const readVintageMethodology = registerQuery({
   privileges: ["SELECT"],
   site: "src/api/routes/public-analytics:listVintages.methodology",
   purpose: "Join each vintage to its methodology version (label, config digest) for GET /api/public/analytics/vintages.",
+  callers: [ROUTE],
+  probe: vintageProbe,
+});
+
+const readVintageReports = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:listVintages.reports",
+  purpose: "Join each vintage to the report its run published (id, checksum, size) for GET /api/public/analytics/vintages (issue 1422).",
   callers: [ROUTE],
   probe: vintageProbe,
 });
@@ -206,6 +264,119 @@ const readOverwriteEvents = registerQuery({
     statement: OVERWRITE_STATEMENT,
     params: [0, null, null, 2, 1048576],
   },
+});
+
+const SOURCE_VERSIONS_STATEMENT = `SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date, s.market_instant, s.value,
+        s.revision_kind, s.prior_version_id::text AS prior_version_id, s.knowledge_time
+      FROM source_value_versions s
+      WHERE s.id > $1::bigint
+        AND ($2::text IS NULL OR s.source_key = $3::text)
+        AND (s.market_date IS NULL OR (s.market_date >= $4::date AND s.market_date <= $5::date))
+        AND (s.market_instant IS NULL
+          OR ((s.market_instant AT TIME ZONE 'UTC')::date >= $6::date AND (s.market_instant AT TIME ZONE 'UTC')::date <= $7::date))
+        AND ($8::text::timestamptz IS NULL OR (s.knowledge_time <= $9::text::timestamptz
+          AND NOT EXISTS (SELECT 1 FROM source_value_versions n
+            WHERE n.source_key = s.source_key AND n.market_date = s.market_date AND n.market_instant IS NULL
+              AND n.knowledge_time <= $10::text::timestamptz AND (n.knowledge_time, n.id) > (s.knowledge_time, s.id))
+          AND NOT EXISTS (SELECT 1 FROM source_value_versions n
+            WHERE n.source_key = s.source_key AND n.market_instant = s.market_instant AND n.market_date IS NULL
+              AND n.knowledge_time <= $11::text::timestamptz AND (n.knowledge_time, n.id) > (s.knowledge_time, s.id))))
+      ORDER BY s.id
+      LIMIT $12`;
+
+const readSourceVersions = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:listSourceVersions",
+  purpose: "Page every collected source data version by id, or the versions in force at an asof, for GET /api/public/analytics/source-versions (issue 1422).",
+  callers: [ROUTE],
+  probe: {
+    statement: SOURCE_VERSIONS_STATEMENT,
+    params: [0, null, null, "0001-01-01", "9999-12-31", "0001-01-01", "9999-12-31", null, null, null, null, 2],
+  },
+});
+
+const REPORT_LIST_STATEMENT = `SELECT rs.id::text AS report_id, r.run_key, rs.asof::text AS asof, rs.checksum, rs.byte_length::text AS byte_length,
+        rs.created_at
+      FROM analytics_report_snapshots rs
+      JOIN analytics_ledger_runs r ON r.id = rs.run_id
+      WHERE rs.id > $1::bigint
+      ORDER BY rs.id
+      LIMIT $2`;
+const readReportList = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:listReports",
+  purpose: "Page published reports (id, run, checksum, size; never the bytes) for GET /api/public/analytics/reports (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_LIST_STATEMENT, params: [0, 2] },
+});
+const readReportListRuns = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:listReports.runs",
+  purpose: "Join each published report to its run key for GET /api/public/analytics/reports (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_LIST_STATEMENT, params: [0, 2] },
+});
+
+const REPORT_BY_RUN_STATEMENT = `SELECT rs.id::text AS report_id, rs.checksum, rs.byte_length::text AS byte_length
+      FROM analytics_report_snapshots rs
+      JOIN analytics_ledger_runs r ON r.id = rs.run_id
+      WHERE r.run_key = $1::text`;
+const readReportByRun = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:reportByRun",
+  purpose: "Find a run's published report and its checksum, without its bytes, for GET /api/public/analytics/reports?run= (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_BY_RUN_STATEMENT, params: ["probe"] },
+});
+const readReportByRunRuns = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:reportByRun.runs",
+  purpose: "Resolve a run key to its run for GET /api/public/analytics/reports?run= (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_BY_RUN_STATEMENT, params: ["probe"] },
+});
+
+const REPORT_BY_VINTAGE_STATEMENT = `SELECT rs.id::text AS report_id, rs.checksum, rs.byte_length::text AS byte_length
+      FROM analytics_report_snapshots rs
+      JOIN analytics_data_vintages v ON v.run_id = rs.run_id
+      WHERE v.id = $1::bigint`;
+const readReportByVintage = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:reportByVintage",
+  purpose: "Find the report a vintage's run published and its checksum, without its bytes, for GET /api/public/analytics/reports?vintage= (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_BY_VINTAGE_STATEMENT, params: [1] },
+});
+const readReportByVintageVintages = registerQuery({
+  role: "rm_app",
+  object: "analytics_data_vintages",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:reportByVintage.vintages",
+  purpose: "Resolve a vintage id to its run for GET /api/public/analytics/reports?vintage= (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: REPORT_BY_VINTAGE_STATEMENT, params: [1] },
+});
+
+const readReportBytes = registerQuery({
+  role: "rm_app",
+  object: "analytics_report_snapshots",
+  privileges: ["SELECT"],
+  site: "src/api/routes/public-analytics:reportBytes",
+  purpose: "Read one published report's exact stored bytes for GET /api/public/analytics/reports (issue 1422).",
+  callers: [ROUTE],
+  probe: { statement: "SELECT report_bytes FROM analytics_report_snapshots WHERE id = $1::bigint", params: [1] },
 });
 
 // ── Parsing ─────────────────────────────────────────────────────────────────
@@ -278,13 +449,13 @@ const iso = (d: unknown): string => (d instanceof Date ? d.toISOString() : new D
 
 // ── Handlers: each returns the body; the transport below wraps it ───────────
 
-async function rawHistory(url: URL) {
+async function rawHistory(url: URL, tx: Tx) {
   const limit = limitParam(url);
   const indicator = textParam(url, "indicator");
   const from = dateParam(url, "from") ?? MIN_DATE;
   const to = dateParam(url, "to") ?? MAX_DATE;
   const cursor = decodeCursor(url, ["date", "text"]) ?? [MIN_DATE, ""];
-  const rows = await on(sql, readRawHistory)<{ date: string; indicator: string; value: number; source: string }>`
+  const rows = await on(tx, readRawHistory)<{ date: string; indicator: string; value: number; source: string }>`
     SELECT date::text AS date, indicator, value, source FROM raw_indicator_history
       WHERE (date, indicator) > (${cursor[0]}::date, ${cursor[1]}::text)
         AND date >= ${from}::date AND date <= ${to}::date
@@ -301,13 +472,13 @@ async function rawHistory(url: URL) {
   };
 }
 
-async function assetPrices(url: URL) {
+async function assetPrices(url: URL, tx: Tx) {
   const limit = limitParam(url);
   const symbol = textParam(url, "symbol");
   const from = dateParam(url, "from") ?? MIN_DATE;
   const to = dateParam(url, "to") ?? MAX_DATE;
   const cursor = decodeCursor(url, ["date", "text", "text"]) ?? [MIN_DATE, "", ""];
-  const rows = await on(sql, readAssetPrices)<{
+  const rows = await on(tx, readAssetPrices)<{
     price_date: string; symbol: string; time_basis: string; price_usd: number; currency: string; source: string;
     pool_key: string | null; token_address: string | null; observed_at: Date; fetched_at: Date; config_identity: string;
   }>`
@@ -345,9 +516,10 @@ interface VintageRow {
   id: string; run_key: string; asof: string; source_label: string; tool_id: string; knowledge_time_cutoff: Date;
   market_time_cutoff: string; manifest_digest: string; member_count: number; build_identity: string; created_at: Date;
   version_label: string; config_digest: string;
+  report_id: string | null; report_checksum: string | null; report_byte_length: string | null;
 }
 
-async function vintages(url: URL) {
+async function vintages(url: URL, tx: Tx) {
   const limit = limitParam(url);
   const runKey = textParam(url, "run_key", 64);
   const toolId = textParam(url, "tool_id", 64);
@@ -362,13 +534,15 @@ async function vintages(url: URL) {
     throw new BadRequest("include=members needs run_key and tool_id, so exactly one vintage is named");
   }
   const cursor = withMembers ? null : decodeCursor(url, ["id"]);
-  const rows = await on(sql, readVintages, readVintageRuns, readVintageMethodology)<VintageRow>`
+  const rows = await on(tx, readVintages, readVintageRuns, readVintageMethodology, readVintageReports)<VintageRow>`
     SELECT v.id::text AS id, r.run_key, r.asof::text AS asof, r.source_label, v.tool_id,
         v.knowledge_time_cutoff, v.market_time_cutoff::text AS market_time_cutoff, v.manifest_digest, v.member_count,
-        v.build_identity, v.created_at, m.version_label, m.config_digest
+        v.build_identity, v.created_at, m.version_label, m.config_digest,
+        rs.id::text AS report_id, rs.checksum AS report_checksum, rs.byte_length::text AS report_byte_length
       FROM analytics_data_vintages v
       JOIN analytics_ledger_runs r ON r.id = v.run_id
       JOIN analytics_ledger_methodology_versions m ON m.id = v.methodology_version_id
+      LEFT JOIN analytics_report_snapshots rs ON rs.run_id = v.run_id
       WHERE v.id > ${cursor?.[0] ?? "0"}::bigint
         AND (${runKey}::text IS NULL OR r.run_key = ${runKey}::text)
         AND (${toolId}::text IS NULL OR v.tool_id = ${toolId}::text)
@@ -379,6 +553,7 @@ async function vintages(url: URL) {
   const out = [];
   for (const v of page) {
     out.push({
+      id: Number(v.id),
       run_key: v.run_key,
       tool_id: v.tool_id,
       asof: v.asof,
@@ -390,7 +565,10 @@ async function vintages(url: URL) {
       build_identity: v.build_identity,
       methodology: { tool_id: v.tool_id, version_label: v.version_label, config_digest: v.config_digest },
       created_at: iso(v.created_at),
-      ...(withMembers ? { members: await vintageMembers(url, v.id, limit) } : {}),
+      report: v.report_id === null
+        ? null
+        : { report_id: Number(v.report_id), checksum: v.report_checksum!, byte_length: Number(v.report_byte_length) },
+      ...(withMembers ? { members: await vintageMembers(url, tx, v.id, limit) } : {}),
     });
   }
   return {
@@ -401,9 +579,9 @@ async function vintages(url: URL) {
   };
 }
 
-async function vintageMembers(url: URL, vintageId: string, limit: number) {
+async function vintageMembers(url: URL, tx: Tx, vintageId: string, limit: number) {
   const after = decodeCursor(url, ["id"])?.[0] ?? "0";
-  const rows = await on(sql, readVintageMembers)<{ source_key: string; source_value_version_id: string }>`
+  const rows = await on(tx, readVintageMembers)<{ source_key: string; source_value_version_id: string }>`
     SELECT m.source_key, g.id::text AS source_value_version_id
       FROM analytics_vintage_members m
       CROSS JOIN LATERAL generate_series(
@@ -424,14 +602,14 @@ async function vintageMembers(url: URL, vintageId: string, limit: number) {
 
 const OVERWRITE_TABLES = ["raw_indicator_history", "regime_snapshots", "research_signals"];
 
-async function overwriteEvents(url: URL) {
+async function overwriteEvents(url: URL, tx: Tx) {
   const limit = limitParam(url);
   const tableName = textParam(url, "table_name");
   if (tableName !== null && !OVERWRITE_TABLES.includes(tableName)) {
     throw new BadRequest(`table_name must be one of ${OVERWRITE_TABLES.join(", ")}`);
   }
   const cursor = decodeCursor(url, ["id"]);
-  const all = await on(sql, readOverwriteEvents)<{
+  const all = await on(tx, readOverwriteEvents)<{
     id: string; table_name: string; operation: string; natural_key: unknown; previous_row: unknown;
     replacement_row: unknown; recorded_at: Date; window_rows: number;
   }>`WITH win AS (
@@ -482,6 +660,116 @@ async function overwriteEvents(url: URL) {
   };
 }
 
+const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2}))?$/;
+
+/** `asof`: a date (its end, UTC) or an ISO date-time, as a canonical ISO instant. */
+function asofParam(url: URL): string | null {
+  const v = url.searchParams.get("asof");
+  if (v === null) return null;
+  if (!ISO_TIME_RE.test(v)) throw new BadRequest("asof must be a YYYY-MM-DD date or an ISO 8601 date-time");
+  if (v.length === 10) {
+    if (!isCalendarDate(v)) throw new BadRequest("asof must be a valid date");
+    return `${v}T23:59:59.999999Z`;
+  }
+  const t = Date.parse(v);
+  if (Number.isNaN(t) || !isCalendarDate(v.slice(0, 10))) throw new BadRequest("asof must be a valid date-time");
+  return new Date(t).toISOString();
+}
+
+async function sourceVersions(url: URL, tx: Tx) {
+  const limit = limitParam(url);
+  const series = textParam(url, "series");
+  const from = dateParam(url, "from") ?? MIN_DATE;
+  const to = dateParam(url, "to") ?? MAX_DATE;
+  const asof = asofParam(url);
+  const cursor = decodeCursor(url, ["id"]);
+  const rows = await on(tx, readSourceVersions)<{
+    id: string; source_key: string; market_date: string | null; market_instant: Date | null; value: number;
+    revision_kind: string; prior_version_id: string | null; knowledge_time: Date;
+  }>`SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date, s.market_instant, s.value,
+        s.revision_kind, s.prior_version_id::text AS prior_version_id, s.knowledge_time
+      FROM source_value_versions s
+      WHERE s.id > ${cursor?.[0] ?? "0"}::bigint
+        AND (${series}::text IS NULL OR s.source_key = ${series}::text)
+        AND (s.market_date IS NULL OR (s.market_date >= ${from}::date AND s.market_date <= ${to}::date))
+        AND (s.market_instant IS NULL
+          OR ((s.market_instant AT TIME ZONE 'UTC')::date >= ${from}::date AND (s.market_instant AT TIME ZONE 'UTC')::date <= ${to}::date))
+        AND (${asof}::text::timestamptz IS NULL OR (s.knowledge_time <= ${asof}::text::timestamptz
+          AND NOT EXISTS (SELECT 1 FROM source_value_versions n
+            WHERE n.source_key = s.source_key AND n.market_date = s.market_date AND n.market_instant IS NULL
+              AND n.knowledge_time <= ${asof}::text::timestamptz AND (n.knowledge_time, n.id) > (s.knowledge_time, s.id))
+          AND NOT EXISTS (SELECT 1 FROM source_value_versions n
+            WHERE n.source_key = s.source_key AND n.market_instant = s.market_instant AND n.market_date IS NULL
+              AND n.knowledge_time <= ${asof}::text::timestamptz AND (n.knowledge_time, n.id) > (s.knowledge_time, s.id))))
+      ORDER BY s.id
+      LIMIT ${limit + 1}`;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
+    limit,
+    asof,
+    rows: page.map((r) => ({
+      id: Number(r.id),
+      series: r.source_key,
+      market_date: r.market_date,
+      market_instant: r.market_instant === null ? null : iso(r.market_instant),
+      value: Number(r.value),
+      revision_kind: r.revision_kind,
+      prior_version_id: r.prior_version_id === null ? null : Number(r.prior_version_id),
+      knowledge_time: iso(r.knowledge_time),
+    })),
+    nextCursor: rows.length > limit && last ? encodeCursor([last.id]) : null,
+  };
+}
+
+async function reportList(url: URL, tx: Tx) {
+  const limit = limitParam(url);
+  const cursor = decodeCursor(url, ["id"]);
+  const rows = await on(tx, readReportList, readReportListRuns)<{
+    report_id: string; run_key: string; asof: string; checksum: string; byte_length: string; created_at: Date;
+  }>`SELECT rs.id::text AS report_id, r.run_key, rs.asof::text AS asof, rs.checksum, rs.byte_length::text AS byte_length,
+        rs.created_at
+      FROM analytics_report_snapshots rs
+      JOIN analytics_ledger_runs r ON r.id = rs.run_id
+      WHERE rs.id > ${cursor?.[0] ?? "0"}::bigint
+      ORDER BY rs.id
+      LIMIT ${limit + 1}`;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
+    limit,
+    reports: page.map((r) => ({
+      report_id: Number(r.report_id),
+      run_key: r.run_key,
+      asof: r.asof,
+      checksum: r.checksum,
+      byte_length: Number(r.byte_length),
+      created_at: iso(r.created_at),
+    })),
+    nextCursor: rows.length > limit && last ? encodeCursor([last.report_id]) : null,
+  };
+}
+
+const RUN_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** `run` or `vintage` (one, not both), or null when neither names a report. */
+function reportSelector(url: URL): { run: string } | { vintage: string } | null {
+  const run = url.searchParams.get("run");
+  const vintage = url.searchParams.get("vintage");
+  if (run !== null && vintage !== null) throw new BadRequest("name a report by run or by vintage, not both");
+  if (run !== null) {
+    if (!RUN_KEY_RE.test(run)) throw new BadRequest("run must be a run key (a lowercase UUID)");
+    return { run };
+  }
+  if (vintage !== null) {
+    if (!/^[1-9]\d{0,17}$/.test(vintage)) throw new BadRequest("vintage must be a positive integer id");
+    return { vintage };
+  }
+  return null;
+}
+
 // ── Transport ───────────────────────────────────────────────────────────────
 
 function problem(status: number, error: string, extra: Record<string, string> = {}): Response {
@@ -511,52 +799,215 @@ function acceptsGzip(header: string | null): boolean {
   });
 }
 
-function ok(req: Request, body: unknown): Response {
+/** A body as sent: gzip-encoded (on the threadpool, never on the event loop) when the client accepts it and it is large. */
+async function encoded(req: Request, identity: Uint8Array, headers: Record<string, string>): Promise<Uint8Array<ArrayBuffer>> {
+  if (identity.length > PUBLIC_ANALYTICS_GZIP_MIN_BYTES && acceptsGzip(req.headers.get("accept-encoding"))) {
+    headers["Content-Encoding"] = "gzip";
+    return new Uint8Array(await gzipAsync(identity));
+  }
+  return new Uint8Array(identity);
+}
+
+/** What a handler answers: the response, and the bytes to charge for it. */
+interface Sent {
+  res: Response;
+  bytes: number;
+}
+
+async function okJson(req: Request, body: unknown, cacheControl = PUBLIC_ANALYTICS_CACHE_CONTROL): Promise<Sent> {
   const identity = new TextEncoder().encode(JSON.stringify(body));
   const etag = etagOf(identity);
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "Cache-Control": PUBLIC_ANALYTICS_CACHE_CONTROL,
+    "Cache-Control": cacheControl,
     ETag: etag,
     Vary: "Accept-Encoding",
   };
-  if (matchesEtag(req.headers.get("if-none-match"), etag)) return new Response(null, { status: 304, headers });
-  if (identity.length > PUBLIC_ANALYTICS_GZIP_MIN_BYTES && acceptsGzip(req.headers.get("accept-encoding"))) {
-    headers["Content-Encoding"] = "gzip";
-    return new Response(Bun.gzipSync(identity), { status: 200, headers });
-  }
-  return new Response(identity, { status: 200, headers });
+  if (matchesEtag(req.headers.get("if-none-match"), etag)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
+  const sent = await encoded(req, identity, headers);
+  return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
+}
+
+const strongEtag = (sha256: string): string => `"${sha256}"`;
+
+/** A report's exact stored bytes, or 304 from its checksum alone. */
+async function reportBytes(req: Request, sel: { run: string } | { vintage: string }): Promise<Sent> {
+  const found = await publicRead(async (tx) => {
+    const [meta] = "run" in sel
+      ? await on(tx, readReportByRun, readReportByRunRuns)<{ report_id: string; checksum: string; byte_length: string }>`SELECT rs.id::text AS report_id, rs.checksum, rs.byte_length::text AS byte_length
+      FROM analytics_report_snapshots rs
+      JOIN analytics_ledger_runs r ON r.id = rs.run_id
+      WHERE r.run_key = ${sel.run}::text`
+      : await on(tx, readReportByVintage, readReportByVintageVintages)<{ report_id: string; checksum: string; byte_length: string }>`SELECT rs.id::text AS report_id, rs.checksum, rs.byte_length::text AS byte_length
+      FROM analytics_report_snapshots rs
+      JOIN analytics_data_vintages v ON v.run_id = rs.run_id
+      WHERE v.id = ${sel.vintage}::bigint`;
+    if (!meta) return null;
+    // A matching If-None-Match is answered from the checksum alone: the bytes are never read.
+    if (matchesEtag(req.headers.get("if-none-match"), strongEtag(meta.checksum))) return { meta, bytes: null };
+    const [row] = await on(tx, readReportBytes)<{ report_bytes: Uint8Array }>`SELECT report_bytes FROM analytics_report_snapshots WHERE id = ${meta.report_id}::bigint`;
+    return { meta, bytes: row ? new Uint8Array(row.report_bytes) : null };
+  });
+  if (!found) return { res: problem(404, "no published report for that run or vintage"), bytes: 0 };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
+    ETag: strongEtag(found.meta.checksum),
+    "X-Content-SHA256": found.meta.checksum,
+    "X-Report-Id": found.meta.report_id,
+    Vary: "Accept-Encoding",
+  };
+  if (found.bytes === null) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
+  const sent = await encoded(req, found.bytes, headers);
+  return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
 }
 
 const R = ROUTES.publicAnalytics;
-const HANDLERS: Record<string, (url: URL) => Promise<unknown>> = {
+const LISTS: Record<string, (url: URL, tx: Tx) => Promise<unknown>> = {
   [R.rawHistory]: rawHistory,
   [R.assetPrices]: assetPrices,
+  [R.sourceVersions]: sourceVersions,
   [R.vintages]: vintages,
   [R.overwriteEvents]: overwriteEvents,
 };
 
+// ── Archive routes ─────────────────────────────────────────────────────────
+
+/** How long a request for an unbuilt backup record waits for it before answering 503. */
+const RECORD_WAIT_MS = 4_000;
+const RECORD_RETRY_AFTER = "10";
+
+async function archiveBackups(req: Request, url: URL): Promise<Sent> {
+  const limit = limitParam(url);
+  const after = url.searchParams.get("cursor");
+  if (after !== null && !BACKUP_ID_RE.test(after)) throw new BadRequest("cursor is not valid");
+  const all = await listBackupIds();
+  const rest = after === null ? all : all.filter((id) => id > after);
+  const page = rest.slice(0, limit);
+  return okJson(req, {
+    schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
+    limit,
+    format: 1,
+    backups: page.map((backup) => ({ backup, record: `csv/${backup}/backup.json` })),
+    nextCursor: rest.length > limit ? page[page.length - 1]! : null,
+  });
+}
+
+/** The built record, waiting a bounded time for a build; null when it is still building. */
+async function awaitRecord(id: string) {
+  const have = cachedRecord(id);
+  if (have) return have;
+  const p = recordFor(id);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), RECORD_WAIT_MS);
+  });
+  try {
+    return await Promise.race([p, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const ARCHIVE_PATH_RE = /^csv\/(\d{4}-\d{2}-\d{2}T000000Z)\/(backup\.json|data\/[a-z_]+\.\d{4}-\d{2}-\d{2}T\d{6}Z_\d{4}-\d{2}-\d{2}T\d{6}Z(?:-\d+)?\.csv\.gz)$/;
+
+function building(): Response {
+  return problem(503, "this backup's record is being prepared; retry after the interval", { "Retry-After": RECORD_RETRY_AFTER });
+}
+
+async function archiveFile(req: Request, path: string, clientIp: string): Promise<Sent> {
+  const m = ARCHIVE_PATH_RE.exec(path);
+  if (!m || !(await isServedBackup(m[1]!))) return { res: problem(404, "no such backup or archive"), bytes: 0 };
+  const built = await awaitRecord(m[1]!);
+  if (!built) return { res: building(), bytes: 0 };
+  if (m[2] === "backup.json") {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
+      ETag: strongEtag(built.sha256),
+      "X-Content-SHA256": built.sha256,
+      Vary: "Accept-Encoding",
+    };
+    if (matchesEtag(req.headers.get("if-none-match"), headers.ETag!)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
+    const sent = await encoded(req, built.bytes, headers);
+    return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
+  }
+  const hit = fileIn(built, path);
+  if (!hit) return { res: problem(404, "no such archive in this backup"), bytes: 0 };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/gzip",
+    "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
+    ETag: strongEtag(hit.file.sha256_gz),
+    "X-Content-SHA256": hit.file.sha256_gz,
+  };
+  // The ETag is the record's sha256_gz: a revalidation never regenerates the body.
+  if (matchesEtag(req.headers.get("if-none-match"), headers.ETag!)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
+  // Admission: the body's pages wait for gate slots once streaming, so a new
+  // body is refused up front when the gate is already full.
+  if (publicQueryGate.inUse() >= PUBLIC_ANALYTICS_MAX_CONCURRENT_QUERIES) throw new PublicBusyError(1);
+  // Charged in full on admission (§4.8): the client's byte budget may go negative.
+  budgets.chargeBytes(clientIp, hit.file.bytes_gz);
+  headers["Content-Length"] = String(hit.file.bytes_gz);
+  return { res: new Response(archiveBodyStream(hit.table, hit.file), { status: 200, headers }), bytes: 0 };
+}
+
+/** The token cost of a request: heavy for a report's bytes or an archive body. */
+function costOf(url: URL): number {
+  const p = url.pathname;
+  if (p === R.reports && (url.searchParams.has("run") || url.searchParams.has("vintage"))) return PUBLIC_ANALYTICS_HEAVY_COST;
+  if (p.startsWith(R.archiveFiles) && p.endsWith(".csv.gz")) return PUBLIC_ANALYTICS_HEAVY_COST;
+  return PUBLIC_ANALYTICS_LIST_COST;
+}
+
+async function dispatch(req: Request, url: URL, clientIp: string): Promise<Sent | null> {
+  const p = url.pathname;
+  const list = LISTS[p];
+  if (list) return okJson(req, await publicRead((tx) => list(url, tx)));
+  if (p === R.reports) {
+    const sel = reportSelector(url);
+    if (sel) return reportBytes(req, sel);
+    return okJson(req, await publicRead((tx) => reportList(url, tx)));
+  }
+  if (p === R.archiveBackups) return archiveBackups(req, url);
+  if (p.startsWith(R.archiveFiles)) return archiveFile(req, p.slice(R.archiveFiles.length), clientIp);
+  return null;
+}
+
 /**
  * Answer one request under /api/public/analytics/. Always returns a Response:
- * 429 over the shared limit, 405 for any method but GET, 404 for a path that is
- * not one of the four routes, 400 for a bad parameter or cursor, else the page.
+ * 429 over the client's token or byte budget, 405 for any method but GET, 404
+ * for a path that is no route, 400 for a bad parameter or cursor, 503 with
+ * Retry-After when the public query gate is full, a query timed out, or a
+ * backup record is still being prepared, else the body.
  */
 export async function handlePublicAnalytics(req: Request, url: URL, clientIp: string): Promise<Response> {
-  const verdict = limiter.check(clientIp);
-  if (verdict.limited) {
-    return problem(429, "rate limit exceeded", { "Retry-After": String(verdict.retryAfterSeconds) });
+  const verdict = budgets.admit(clientIp, costOf(url));
+  if (!verdict.admitted) {
+    return problem(429, verdict.reason === "bytes" ? "byte budget exceeded" : "rate limit exceeded", {
+      "Retry-After": String(verdict.retryAfterSeconds),
+    });
   }
   if (req.method !== "GET") return problem(405, "method not allowed", { Allow: "GET" });
-  const handler = HANDLERS[url.pathname];
-  if (!handler) return problem(404, "not found");
   try {
-    return ok(req, await handler(url));
+    const sent = await dispatch(req, url, clientIp);
+    if (!sent) return problem(404, "not found");
+    budgets.chargeBytes(clientIp, sent.bytes);
+    return sent.res;
   } catch (err) {
     if (err instanceof BadRequest) return problem(400, err.message);
+    if (err instanceof PublicBusyError) {
+      return problem(503, "public analytics is busy", { "Retry-After": String(err.retryAfterSeconds) });
+    }
+    // A full request pool, or a statement the 5 s timeout cancelled: transient, 503 with Retry-After.
+    const failure = classifyDbFailure(err);
+    if (failure === "db_saturated") return problem(503, "db_saturated", { "Retry-After": "1" });
+    if (failure === "db_timeout") return problem(503, "query timed out", { "Retry-After": "5" });
     // A value that passed the checks above but Postgres still refuses is the
     // caller's input, not a server fault: SQLSTATE class 22 is "data exception".
     const code = (err as { code?: unknown } | null)?.code;
     if (typeof code === "string" && code.startsWith("22")) return problem(400, "a parameter is out of range");
+    // Anything else keeps its own meaning: index.ts answers it (503 for an
+    // unreachable database, else 500).
     throw err;
   }
 }
