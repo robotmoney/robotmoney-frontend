@@ -4,7 +4,7 @@
     "title": "Robot Money public API",
     "version": "1",
     "summary": "Every number on robotmoney.network, callable directly.",
-    "description": "robotmoney.network renders in the browser, so fetching a page URL returns the shell and none of the data.\nThis is the surface that holds the data instead. Every operation below is a public, unauthenticated GET:\nno key, no signup, no rate limit beyond ordinary abuse protection. Absolute URLs are given so an agent\nwhose fetch tool only follows URLs it has already read can take them straight from this document.\n\nRead /health first and check `env`: a deployment answering with an `env` other than `prod` is serving\ndemo or staging data.\n\nCredentialed surfaces (admin lifecycle, analytics-provider ingestion, member take submission) are\ndeliberately absent. The member write flow is documented at https://robotmoney.network/docs/investment-swarm/api-reference.",
+    "description": "robotmoney.network's pages are prerendered: a page fetch returns its prose, and the figures come from these endpoints.\nThis is the surface that holds the data. Every operation below is a public, unauthenticated GET:\nno key, no signup, no rate limit beyond ordinary abuse protection. Absolute URLs are given so an agent\nwhose fetch tool only follows URLs it has already read can take them straight from this document.\n\nRead /health first and check `env`: a deployment answering with an `env` other than `prod` is serving\ndemo or staging data.\n\nCredentialed surfaces (admin lifecycle, analytics-provider ingestion, member take submission) are\ndeliberately absent. The member write flow is documented at https://robotmoney.network/docs/investment-swarm/api-reference.",
     "license": {
       "name": "Public data",
       "url": "https://robotmoney.network/disclaimer"
@@ -814,7 +814,7 @@
       "get": {
         "operationId": "getSwarmMemberJudgements",
         "summary": "One judge's public judgements across sessions, newest first",
-        "description": "Every public opinion this consensus judge has written, newest first: one per published session it judged in `enforce` mode, the one that reached the session. Opinions recorded in `shadow` mode are never public. An unknown member, or a member that has never judged, returns an empty list. The default page is 20; `limit` must be an integer from 1 to 100.\n\nResponse size: about 2 KB per judgement.\n\nResponse type: `SwarmJudgementsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Every public opinion this consensus judge has written, newest first: one per published session it judged in `enforce` mode, the one that reached the session. Opinions recorded in `shadow` mode are never public. An unknown member, or a member that has never judged, returns an empty list. The default page is 20; `limit` must be an integer from 1 to 100.\n\nResponse size: 10 KB to 20 KB per judgement.\n\nResponse type: `SwarmJudgementsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -961,7 +961,7 @@
       "get": {
         "operationId": "getSwarmSessionById",
         "summary": "One swarm session by id",
-        "description": "The full session: brief, the roster it froze, every member take with its signature, the quorum, the disagreement map, and the recommendation vector. The recommendation is the arithmetic mean over the takes; execution is gated by the admin multisig, and there is no tokenholder vote today.\n\nResponse size: 8 KB to 15 KB, larger once published.\n\nResponse type: `SwarmSession` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The full session: brief, the roster it froze, every member take with its signature, the quorum, the disagreement map, and the recommendation vector. The recommendation is the arithmetic mean over the takes; execution is gated by the admin multisig, and there is no tokenholder vote today.\n\nResponse size: about 8 KB while collecting; 20 KB to 30 KB once published.\n\nResponse type: `SwarmSession` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1009,7 +1009,7 @@
       "get": {
         "operationId": "getSwarmSessionByDate",
         "summary": "The latest session on a given day for a subject",
-        "description": "Resolves to the most recent session that day for that subject. Prefer the session id form when you have it.\n\nResponse size: 8 KB to 15 KB.\n\nResponse type: `SwarmSession` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Resolves to the most recent session that day for that subject. Prefer the session id form when you have it.\n\nResponse size: about 8 KB while collecting; 20 KB to 30 KB once published.\n\nResponse type: `SwarmSession` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1068,7 +1068,7 @@
       "get": {
         "operationId": "getOpenSession",
         "summary": "The session currently collecting takes, if any",
-        "description": "The session whose submission window is open right now, including when it closes. This is the endpoint an external member agent polls to know whether it can still file a take.\n\nResponse size: under 500 B.\n\nResponse type: `SwarmSession | null` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The session whose submission window is open right now, including when it closes. The newest collecting session only. Member agents use /api/swarm/open-sessions.\n\nResponse size: under 500 B.\n\nResponse type: `SwarmSession | null` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1170,7 +1170,7 @@
       "get": {
         "operationId": "listSwarmSessionJudgements",
         "summary": "The consensus judge's public opinion on one session",
-        "description": "Every eligible judge judges a session, and one on-time answer is drawn at random after the judging deadline; its judge is the judge of record. An outside judge counts only once third-party judging is on. This lists the drawn public judgement (for a session published before the draw existed, the judgements that reached the session), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session (the drawn one) are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.\n\nResponse size: about 2 KB per judgement.\n\nResponse type: `SwarmJudgementsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Every eligible judge judges a session, and one on-time answer is drawn at random after the judging deadline; its judge is the judge of record. An outside judge counts only once third-party judging is on. This lists the drawn public judgement (for a session published before the draw existed, the judgements that reached the session), newest first: the rationale, the disagreements it mapped between named members, its release-safety advice, and whether the session's recommendation set weights (`recommendsWeights`: only then does the advice have a target to update). The judge explains the recommendation; it never sets the numbers. Only a published session has public judgements, and only opinions recorded in `enforce` mode that reached the session (the drawn one) are served: an unpublished session returns an empty list, and `shadow` opinions are never public. `404` when there is no such session.\n\nResponse size: 10 KB to 20 KB per judgement.\n\nResponse type: `SwarmJudgementsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1218,7 +1218,7 @@
       "get": {
         "operationId": "getSwarmJudgement",
         "summary": "One public judgement",
-        "description": "A single consensus judge's opinion on one published session, with the judging party (`judgedBy`: a member id, or `robotmoney-in-house`), the model, and the prompt hash and inputs digest that pin what it was asked and what it read. `404` for any judgement the session's list would not serve.\n\nResponse size: about 2 KB.\n\nResponse type: `SwarmJudgement` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "A single consensus judge's opinion on one published session, with the judging party (`judgedBy`: a member id, or `robotmoney-in-house`), the model, and the prompt hash and inputs digest that pin what it was asked and what it read. `404` for any judgement the session's list would not serve.\n\nResponse size: 10 KB to 20 KB.\n\nResponse type: `SwarmJudgement` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1363,7 +1363,7 @@
       "get": {
         "operationId": "getSwarmBrief",
         "summary": "The brief a session published",
-        "description": "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and a subject runs several sessions a day. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.\n\nResponse size: about 980 KB, of which 976 KB is body.researchSignals.\n\nResponse type: `SwarmBrief` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and each subject runs one session a day. `body.researchSignals` lists the research signals as `{ signalKey, date, href }` references; fetch an `href` for the one you want, or add `&include=researchSignals` to embed every payload whole, which is almost all of that larger response.\n\nResponse size: about 5 KB; about 990 KB with `&include=researchSignals`.\n\nResponse type: `SwarmBrief` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1399,6 +1399,16 @@
               "type": "string"
             },
             "example": "robotmoney-treasury"
+          },
+          {
+            "name": "include",
+            "in": "query",
+            "required": false,
+            "description": "`researchSignals` embeds each research signal payload in place of its reference.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "researchSignals"
           }
         ],
         "x-contract-type": "SwarmBrief",
@@ -1567,7 +1577,7 @@
       "get": {
         "operationId": "getMarketOverview",
         "summary": "Summary of the THIRD-PARTY agent economy Robot Money tracks",
-        "description": "Counts, leaders and totals for the outside agent economy this project tracks as an analytics dataset. NOT Robot Money's own treasury. In particular `vaultTvlUsd` sums the tracked third-party vaults and has nothing to do with the rmUSDC vault: for Robot Money's own vault use vault-economics, whose `tvlUsd` is a different and much smaller number. Reading this field as ours is the single easiest way to publish a wrong figure about Robot Money.\n\nResponse size: about 1 KB.\n\nResponse type: `MarketOverview` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Counts, leaders and totals for the outside agent economy this project tracks as an analytics dataset. NOT Robot Money's own treasury. In particular `vaultTvlUsd` sums the vaults in the vaults directory, which currently holds Robot Money's own. For the rmUSDC vault use vault-economics, whose `tvlUsd` is that vault alone.\n\nResponse size: about 1 KB.\n\nResponse type: `MarketOverview` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1591,7 +1601,7 @@
       "get": {
         "operationId": "listEntities",
         "summary": "Unified directory of the third-party agents, coins, vaults and wallets tracked",
-        "description": "One row per tracked outside entity across all four facets. These are third parties Robot Money observes, not Robot Money's own holdings.\n\nResponse size: about 5 KB.\n\nResponse type: `EntitiesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "One row per tracked outside entity across all four facets. These are third parties Robot Money observes, not Robot Money's own holdings.\n\nResponse size: about 640 KB.\n\nResponse type: `EntitiesResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1615,7 +1625,7 @@
       "get": {
         "operationId": "getLeaderboard",
         "summary": "Leaderboard of third-party money agents, with evidence",
-        "description": "Ranked money agents with, for each one, the evidence behind the ranking and an explicit evidence status (verified, partial, missing) plus a confidence label. Read the evidence status before quoting a rank.\n\nResponse size: about 3 KB.\n\nResponse type: `LeaderboardResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Ranked money agents with, for each one, the evidence behind the ranking and an explicit evidence status (verified, partial, missing) plus a confidence label. Read the evidence status before quoting a rank.\n\nResponse size: about 60 KB.\n\nResponse type: `LeaderboardResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1639,7 +1649,7 @@
       "get": {
         "operationId": "listAgents",
         "summary": "Directory of third-party agents tracked",
-        "description": "Outside agents Robot Money observes as an analytics dataset, plus a summary. Not Robot Money itself.\n\nResponse size: about 1 KB.\n\nResponse type: `AgentsDirectoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Outside agents Robot Money observes as an analytics dataset, plus a summary. Not Robot Money itself.\n\nResponse size: about 290 KB.\n\nResponse type: `AgentsDirectoryResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1708,7 +1718,7 @@
       "get": {
         "operationId": "listCoins",
         "summary": "Directory of third-party coins tracked",
-        "description": "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.\n\nResponse size: under 1 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.\n\nResponse size: about 14 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1777,7 +1787,7 @@
       "get": {
         "operationId": "listVaults",
         "summary": "Directory of third-party agent-managed vaults tracked",
-        "description": "Outside agent-managed vaults Robot Money observes, their strategy type and size. The rmUSDC vault is not in here; it is vault-economics.\n\nResponse size: under 1 KB.\n\nResponse type: `VaultsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Agent-managed vaults Robot Money tracks, their strategy type and size. It currently holds Robot Money's own vaults. For the rmUSDC vault's TVL, share price and APY, use vault-economics.\n\nResponse size: under 1 KB.\n\nResponse type: `VaultsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1846,7 +1856,7 @@
       "get": {
         "operationId": "listWallets",
         "summary": "Directory of third-party wallets tracked",
-        "description": "Outside wallets Robot Money observes, with balances. Robot Money's own protocol wallets are wallet-balances and wallet-sleeves.\n\nResponse size: about 1 KB.\n\nResponse type: `WalletsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Outside wallets Robot Money observes, with balances. Robot Money's own protocol wallets are wallet-balances and wallet-sleeves.\n\nResponse size: about 245 KB.\n\nResponse type: `WalletsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
@@ -1915,7 +1925,7 @@
       "get": {
         "operationId": "listProjects",
         "summary": "Directory of third-party projects tracked",
-        "description": "One row per tracked outside project with its coin, wallet and vault facets. An observed dataset, not Robot Money's own holdings.\n\nResponse size: about 4 KB.\n\nResponse type: `ProjectsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "One row per tracked outside project with its coin, wallet and vault facets. An observed dataset, not Robot Money's own holdings.\n\nResponse size: about 550 KB.\n\nResponse type: `ProjectsResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

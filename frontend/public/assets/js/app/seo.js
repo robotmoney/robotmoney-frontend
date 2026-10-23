@@ -22,6 +22,13 @@ import { TOKEN_FAQ, TOKEN_CONTRACT } from "./lib/token-faq.js";
 const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
 const OG_IMAGE = ORIGIN + "/assets/og-image.png";
+// The default image's alt, as index.html carries it.
+const OG_IMAGE_ALT = "Robot Money, the model portfolio for crypto, made by a swarm of AI agents";
+
+// A route may name its own share image (a site path, 1200x630 like the
+// default, since the shell's og:image:width/height are fixed) and its alt.
+const imageOf = (/** @type {{ image?: string }} */ m) => (m.image ? ORIGIN + m.image : OG_IMAGE);
+const imageAltOf = (/** @type {{ imageAlt?: string }} */ m) => m.imageAlt || OG_IMAGE_ALT;
 
 // The Organization node the shell's own JSON-LD defines (index.html). Route
 // structured data refers to it by this @id and repeats its name and url, so a
@@ -93,6 +100,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 //   faq         its questions and answers, word for word as the page shows
 //               them; the route's JSON-LD is then a FAQPage (faqGraph).
 //   crumb       its breadcrumb name, when the nav calls it something else.
+//   image       its own share image, a site path at 1200x630, and imageAlt
+//               its alt text; every other route uses the default.
 /**
  * @typedef {{
  *   title: string;
@@ -108,6 +117,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
  *   downloads?: { path: string; title: string; type: string }[];
  *   faq?: { id: string; q: string; a: string }[];
  *   crumb?: string;
+ *   image?: string;
+ *   imageAlt?: string;
  * }} RouteMeta
  */
 /** @type {Record<string, RouteMeta>} */
@@ -289,6 +300,15 @@ const META = {
   "/privacy": {
     title: "Privacy Policy | Robot Money",
     description: "What data the Robot Money website collects, what it does not, and how onchain data is treated as public.",
+  },
+  // The early-access form (RM-189): interest in depositing before the vault
+  // opens to outside depositors.
+  "/early-access": {
+    title: "Early Access to the Vaults | Robot Money",
+    description: "Request early access to Robot Money's vaults on Base. Deposits open in small groups, and they are non-custodial: you deposit and withdraw yourself.",
+    // The launch post and members' referral links all point here.
+    image: "/assets/img/early-access/og.jpg",
+    imageAlt: "Early access to Robot Money's vaults on Base: basalt steps rising to a lit doorway on a salt flat at night",
   },
   // A placeholder hub nothing links to since the footer became the site index
   // (RM-124), and out of sitemap.xml: noindexed like the stubs below.
@@ -926,7 +946,7 @@ export function routeStructuredData(pathname) {
       description: m.description,
       url,
       mainEntityOfPage: { "@type": "WebPage", "@id": url },
-      image: OG_IMAGE,
+      image: imageOf(m),
       ...(m.published ? { datePublished: m.published } : {}),
       dateModified: m.modified,
       author: ORG,
@@ -1158,13 +1178,14 @@ export function applyRouteMeta(pathname) {
   upsert("meta", "property", "og:description", "content", m.description);
   upsert("meta", "property", "og:url", "content", url);
   upsert("meta", "property", "og:site_name", "content", SITE_NAME);
-  upsert("meta", "property", "og:image", "content", OG_IMAGE);
+  upsert("meta", "property", "og:image", "content", imageOf(m));
+  upsert("meta", "property", "og:image:alt", "content", imageAltOf(m));
 
   upsert("meta", "property", "og:type", "content", ogTypeFor(m));
 
   upsert("meta", "name", "twitter:title", "content", m.title);
   upsert("meta", "name", "twitter:description", "content", m.description);
-  upsert("meta", "name", "twitter:image", "content", OG_IMAGE);
+  upsert("meta", "name", "twitter:image", "content", imageOf(m));
 
   // The route's structured data: written for a research page, and removed on
   // every other route so one page's Article never describes the next.
@@ -1282,8 +1303,8 @@ export function renderMeta(shellHtml, pathname) {
   // metaFor's SECTIONS branch derives its title from the raw last path segment,
   // so a `$` in the URL would be expanded rather than inserted. `$&` re-injects
   // the matched tag (including its quote, reopening the attribute) and `$'`
-  // inserts the entire remainder of the document, compounding across the nine
-  // replaces: a 16KB shell became 256MB for a path of six `$'`. A function's
+  // inserts the entire remainder of the document, compounding across every
+  // replace: a 16KB shell became 256MB for a path of six `$'`. A function's
   // return value is always used verbatim.
   const TAGS = [
     [/(<meta name="description" content=")[^"]*(")/, description],
@@ -1295,6 +1316,9 @@ export function renderMeta(shellHtml, pathname) {
     [/(<meta name="twitter:title" content=")[^"]*(")/, titleAttr],
     [/(<meta name="twitter:description" content=")[^"]*(")/, description],
     [/(<meta property="og:type" content=")[^"]*(")/, ogTypeFor(m)],
+    [/(<meta property="og:image" content=")[^"]*(")/, escapeAttr(imageOf(m))],
+    [/(<meta property="og:image:alt" content=")[^"]*(")/, escapeAttr(imageAltOf(m))],
+    [/(<meta name="twitter:image" content=")[^"]*(")/, escapeAttr(imageOf(m))],
   ];
 
   let html = shellHtml.replace(/<title>[^<]*<\/title>/, () => `<title>${title}</title>`);
