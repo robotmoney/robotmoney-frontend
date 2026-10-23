@@ -5,7 +5,6 @@ import { parseRawJson, parseRawCsv, parseRawHistory, toHistory, InputRowError } 
 import { mergeSeries, alignDailyForwardFill, forwardFillAge, buildDateAxis } from "../src/transform/math.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildReport, runRegime } from "../src/run.ts";
 import {
   AmbiguousInputSeriesError,
   AmbiguousSeriesMappingError,
@@ -170,4 +169,129 @@ const PINNED_CONSUMER_KEYS: Record<string, string[]> = {
 
 test("every consumer's resolved storage keys equal the pinned pre-change list", () => {
   expect(consumerStorageKeys()).toEqual(PINNED_CONSUMER_KEYS);
+});
+
+// ── Source and replay contracts (issue 1404; analytics requirements 4.2, 4.3) ──
+import { describe } from "bun:test";
+import {
+  CALCULATED_SERIES,
+  CalculatedRowError,
+  CsvHeaderError,
+  ReplayContractError,
+  parseInput,
+  parseReplayCsv,
+  parseReplayJson,
+  parseSourceCsv,
+  parseSourceJson,
+} from "../src/input/load.ts";
+import { buildReport, runRegime } from "../src/run.ts";
+
+describe("strict rows, every contract", () => {
+  const SRC = "date,series,value\n";
+  const LEG = "date,indicator,value,source\n";
+  test("impossible calendar dates reject the file", () => {
+    for (const d of ["2026-02-30", "2026-13-01", "2025-02-29", "2026-00-10", "2026-1-01", "20260101", " 2026-01-01"]) {
+      expect(() => parseSourceCsv(`${SRC}${d},yahoo:^VIX,1`)).toThrow(InputRowError);
+      expect(() => parseRawCsv(`${LEG}${d},VIX,1,s`)).toThrow(InputRowError);
+      expect(() => parseSourceJson(JSON.stringify([{ date: d, series: "yahoo:^VIX", value: 1 }]))).toThrow(InputRowError);
+    }
+    expect(parseSourceCsv(`${SRC}2024-02-29,yahoo:^VIX,1`)[0]!.date).toBe("2024-02-29");
+  });
+
+  test("malformed, nonfinite, hex and padded values reject the file", () => {
+    for (const v of ["0x10", " 1e1 ", " 1", "1 ", "abc", "", "NaN", "Infinity", "-Infinity", "1e", "1.2.3", "+", "1_000", "0b1", "1e400"]) {
+      expect(() => parseSourceCsv(`${SRC}2024-01-01,yahoo:^VIX,${v}`)).toThrow(InputRowError);
+      expect(() => parseRawCsv(`${LEG}2024-01-01,VIX,${v},s`)).toThrow(InputRowError);
+      expect(() => parseSourceJson(JSON.stringify([{ date: "2024-01-01", series: "yahoo:^VIX", value: v }]))).toThrow(InputRowError);
+    }
+    const ok = ["1", "-1", "+1", "1.", ".5", "1.5e-3", "-2E+4", "0", "13.2"];
+    expect(parseSourceCsv(SRC + ok.map((v, i) => `2024-01-0${i + 1},yahoo:^VIX,${v}`).join("\n")).map((r) => r.value)).toEqual(ok.map(Number));
+  });
+
+  test("CSV and JSON of the same rows load the same observations", () => {
+    const rows = [{ date: "2024-01-02", series: "yahoo:^VIX", value: 13.2 }, { date: "2024-01-01", series: "yahoo:^GSPC", value: 4700.5 }];
+    const csv = SRC + rows.map((r) => `${r.date},${r.series},${r.value}`).join("\n") + "\n";
+    expect(parseSourceJson(JSON.stringify(rows))).toEqual(parseSourceCsv(csv));
+    expect(parseInput(csv).history).toEqual(parseInput(JSON.stringify(rows)).history);
+  });
+
+  test("source rows with extra or missing fields or keys reject", () => {
+    expect(() => parseSourceCsv(`${SRC}2024-01-01,yahoo:^VIX,1,extra`)).toThrow(InputRowError);
+    expect(() => parseSourceCsv(`${SRC}2024-01-01,yahoo:^VIX`)).toThrow(InputRowError);
+    expect(() => parseSourceJson('[{"date":"2024-01-01","series":"yahoo:^VIX","value":1,"source":"x"}]')).toThrow(InputRowError);
+    expect(() => parseSourceJson('[{"date":"2024-01-01","value":1}]')).toThrow(InputRowError);
+    expect(() => parseSourceCsv("date,series,value,source\n")).toThrow(CsvHeaderError);
+    expect(() => parseInput("Date,series,value\n")).toThrow(CsvHeaderError);
+  });
+});
+
+describe("calculated ratios", () => {
+  test("the eight Yahoo ratio indicators are the calculated series", () => {
+    expect([...CALCULATED_SERIES].sort()).toEqual(["BTC_ETH", "COPPER_GOLD", "IWF_IWD", "IWM_SPY", "MTUM_SPY", "SPHB_SPLV", "XLP_XLY", "XLU_SPY"]);
+  });
+
+  test("source-only parsing rejects a calculated ratio row", () => {
+    for (const id of CALCULATED_SERIES) {
+      expect(() => parseSourceCsv(`date,series,value\n2024-01-01,${id},1.5`)).toThrow(CalculatedRowError);
+      expect(() => parseSourceJson(JSON.stringify([{ date: "2024-01-01", series: id, value: 1.5 }]))).toThrow(CalculatedRowError);
+    }
+  });
+
+  test("the replay contract accepts stored ratios as kind calculated only, unchanged, with no legs invented", () => {
+    const text = "date,series,value,kind\n2024-01-01,COPPER_GOLD,0.00191,calculated\n2024-01-01,VIX,13.2,source\n";
+    const rows = parseReplayCsv(text);
+    expect(rows).toEqual([
+      { date: "2024-01-01", series: "COPPER_GOLD", value: 0.00191, kind: "calculated" },
+      { date: "2024-01-01", series: "VIX", value: 13.2, kind: "source" },
+    ]);
+    expect(parseReplayJson(JSON.stringify(rows))).toEqual(rows);
+    const h = parseInput(text, { replay: true }).history;
+    expect(Object.keys(h).sort()).toEqual(["COPPER_GOLD", "VIX"]);
+    expect(() => parseReplayCsv("date,series,value,kind\n2024-01-01,COPPER_GOLD,1,source")).toThrow(InputRowError);
+    expect(() => parseReplayCsv("date,series,value,kind\n2024-01-01,VIX,1,calculated")).toThrow(InputRowError);
+    expect(() => parseReplayCsv("date,series,value,kind\n2024-01-01,VIX,1,derived")).toThrow(InputRowError);
+  });
+
+  test("a replay file is refused unless the replay contract is asked for", () => {
+    const text = "date,series,value,kind\n2024-01-01,VIX,13.2,source\n";
+    expect(() => parseInput(text)).toThrow(ReplayContractError);
+    expect(() => parseInput(JSON.stringify([{ date: "2024-01-01", series: "VIX", value: 1, kind: "source" }]))).toThrow(ReplayContractError);
+    expect(parseInput(text, { replay: true }).format).toBe("replay");
+  });
+
+  test("the legacy raw-history adapter still reads its stored ratios", () => {
+    const p = parseInput("date,indicator,value,source\n2024-01-01,COPPER_GOLD,0.002,fred\n");
+    expect(p.format).toBe("legacy");
+    expect(p.history.COPPER_GOLD).toEqual([{ date: "2024-01-01", value: 0.002 }]);
+  });
+});
+
+describe("date axis, usable series and optional sections", () => {
+  const axisRows = (n: number, id: string, start = 0) =>
+    Array.from({ length: n }, (_, i) => `${new Date(Date.UTC(2024, 0, 1 + start + i)).toISOString().slice(0, 10)},${id},${10 + (i % 7)}`);
+  const csv = (lines: string[]) => "date,series,value\n" + lines.join("\n") + "\n";
+
+  test("an unread future series does not extend the date axis or change the report", () => {
+    const base = axisRows(60, "yahoo:^VIX").concat(axisRows(60, "fred:T10Y2Y"));
+    const a = buildReport(runRegime(parseInput(csv(base)).history, { start: "2024-01-01" }));
+    const b = buildReport(runRegime(parseInput(csv([...base, "2027-06-01,test:FOO,1"])).history, { start: "2024-01-01" }));
+    expect(b.asof).toBe(a.asof);
+    expect(JSON.stringify(b)).toBe(JSON.stringify(a));
+  });
+
+  test("no usable series, or a start after every usable row, is rejected", () => {
+    expect(() => runRegime(parseInput(csv(["2024-01-01,test:FOO,1"])).history)).toThrow(/no series the run reads/);
+    expect(() => runRegime(parseInput(csv(axisRows(10, "yahoo:^VIX"))).history, { start: "2025-01-01" })).toThrow(/after every input row/);
+    expect(() => runRegime({}, {})).toThrow(RangeError);
+  });
+
+  test("without the price series the correlations and backtest sections are null", () => {
+    const r = buildReport(runRegime(parseInput(csv(axisRows(40, "yahoo:^VIX"))).history, { start: "2024-01-01" }));
+    expect(r.correlations).toBeNull();
+    expect(r.backtest).toBeNull();
+    // SPX and ETH without TBILL3M: correlations only.
+    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD")])).history, { start: "2024-01-01" }));
+    expect(r2.correlations).not.toBeNull();
+    expect(r2.backtest).toBeNull();
+  });
 });

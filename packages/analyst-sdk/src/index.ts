@@ -5,7 +5,17 @@ export { prepareRegimeInputs, type PreparedRegimeInputs } from "./prepare.ts";
 export { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 export { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indicators.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
-export { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
+export {
+  computeBacktest, stripDailyFromSnapshot, simulatePortfolio, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
+  BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END,
+  type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
+  type TradeEvidence, type PeriodStatsOptions,
+} from "./analyze/backtest.ts";
+export * from "./input/manifest.ts";
+export {
+  parseCopyCsv, toObjects, selectBackups, listedFiles, verifyFile, seriesForStorageKey, serializeInputs, RunInputCollector,
+  ArchiveError, INPUT_TABLES, type BackupRecord, type FileRecord, type GeneratedRow, type RunIdentity, type RunInputs,
+} from "./archive/format1.ts";
 export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
 export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";
