@@ -5,6 +5,13 @@
 // CSV schema: `date,indicator,value,source` (header required, exact names and
 // order). JSON schema: an array of `{date, indicator, value, source}` objects.
 // Both forms produce the same rows, hence byte-identical regime output.
+//
+// SOURCE-DATA FORM (analytics requirements 4.2, issue 1398): the header
+// `date,series,value`, where `series` is a source id (`<provider>:<symbol>`,
+// D74), or JSON objects `{date, series, value}`. A row's series becomes its
+// `indicator` and its source is empty; src/series-ids.ts resolveInputHistory
+// maps source ids to the ids the computation reads. This form is strict: a
+// date must be a real calendar date and a value a plain decimal number.
 import type { Point, RawIndicatorHistory } from "../types.ts";
 
 export interface RawRow {
@@ -15,12 +22,13 @@ export interface RawRow {
 }
 
 export const CSV_HEADER = "date,indicator,value,source";
+export const SERIES_CSV_HEADER = "date,series,value";
 
 // Named so callers (and tests) can tell a bad header from a bad row.
 export class CsvHeaderError extends Error {
   override readonly name = "CsvHeaderError";
   constructor(readonly got: string) {
-    super(`CSV header must be exactly "${CSV_HEADER}", got "${got}"`);
+    super(`CSV header must be exactly "${SERIES_CSV_HEADER}" or "${CSV_HEADER}", got "${got}"`);
   }
 }
 
@@ -59,9 +67,34 @@ function checkRow(row: number, date: unknown, indicator: unknown, value: unknown
   return { date, indicator, value: n, source: typeof source === "string" ? source : "" };
 }
 
+const SOURCE_ID = /^[^\s,:"]+:[^\s,"]+$/;
+const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const isRealDay = (d: string) => ISO_DAY.test(d) && new Date(`${d}T00:00:00Z`).toISOString().slice(0, 10) === d;
+
+function checkSeriesRow(row: number, date: unknown, series: unknown, value: unknown): RawRow {
+  if (typeof date !== "string" || !isRealDay(date)) throw new InputRowError(row, `date must be a real YYYY-MM-DD date, got ${JSON.stringify(date)}`);
+  if (typeof series !== "string" || !SOURCE_ID.test(series)) throw new InputRowError(row, `series must be a source id <provider>:<symbol>, got ${JSON.stringify(series)}`);
+  if (typeof value === "string" && !PLAIN_DECIMAL.test(value)) throw new InputRowError(row, `value must be a plain decimal number, got ${JSON.stringify(value)}`);
+  return checkRow(row, date, series, value, "");
+}
+
+function parseSeriesCsv(lines: string[]): RawRow[] {
+  const out: RawRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "") continue;
+    if (line.includes('"')) throw new CsvQuotedFieldError(i + 1);
+    const f = line.split(",");
+    if (f.length !== 3) throw new InputRowError(i + 1, `expected 3 fields, got ${f.length}: "${line}"`);
+    out.push(checkSeriesRow(i + 1, f[0], f[1], f[2]));
+  }
+  return out;
+}
+
 export function parseRawCsv(text: string): RawRow[] {
   const lines = text.replace(/^﻿/, "").split(/\r?\n/);
   const header = (lines[0] ?? "").trim();
+  if (header === SERIES_CSV_HEADER) return parseSeriesCsv(lines);
   if (header !== CSV_HEADER) throw new CsvHeaderError(header);
   const out: RawRow[] = [];
   for (let i = 1; i < lines.length; i++) {
@@ -84,6 +117,8 @@ export function parseRawJson(text: string): RawRow[] {
   if (!Array.isArray(data)) throw new InputRowError(0, "JSON input must be an array of {date, indicator, value, source}");
   return data.map((r, i) => {
     const o = (r ?? {}) as Record<string, unknown>;
+    // `{date, series, value}` is the source-data form; `indicator` keeps the original one.
+    if (!("indicator" in o) && "series" in o) return checkSeriesRow(i + 1, o.date, o.series, o.value);
     return checkRow(i + 1, o.date, o.indicator, o.value, o.source);
   });
 }

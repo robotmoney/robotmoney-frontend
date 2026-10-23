@@ -10,8 +10,8 @@
 // as the provider published it. A gap, a late inception or a proxy is recorded
 // here, never repaired downstream: requireCoverage names the missing series and
 // date range, and nothing after extract fetches.
-import type { Point } from "../types.ts";
-import shipped from "../../inventory/model-portfolio.json";
+import type { Point } from "./types.ts";
+import shipped from "../inventory/model-portfolio.json";
 
 export const INVENTORY_PROVIDERS = ["yahoo", "fred", "defillama-yields"] as const;
 export type InventoryProvider = (typeof INVENTORY_PROVIDERS)[number];

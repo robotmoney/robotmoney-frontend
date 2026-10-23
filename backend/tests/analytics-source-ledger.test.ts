@@ -12,6 +12,7 @@ import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckotermin
 import { captureSourceAcquisition, payloadChecksum, type AcquisitionSink } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -535,11 +536,13 @@ const MP_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/model-
 const mpGz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, MP_FIX)).arrayBuffer())));
 const MP_BASE = "7e0661bf-8cf3-45e6-9424-31916d4c7b84";
 const MP_ETH = "aa70268e-4b52-42bf-a116-608b370f9501";
-const mpBodies: [string, string][] = [
-  ["/v8/finance/chart/GLD?", await mpGz("yahoo-GLD.json.gz")],
-  [`yields.llama.fi/chart/${MP_BASE}`, await mpGz(`defillama-yields-${MP_BASE}.json.gz`)],
-  [`yields.llama.fi/chart/${MP_ETH}`, await mpGz(`defillama-yields-${MP_ETH}.json.gz`)],
-];
+// Every series the inventory collects under its own id, with its recorded body.
+const MP_IDS = loadInventory().series.filter(collectedByInventory).map((s) => s.id);
+const mpBodies: [string, string][] = [];
+for (const s of loadInventory().series.filter(collectedByInventory)) {
+  const fragment = s.provider === "yahoo" ? `/v8/finance/chart/${encodeURIComponent(s.symbol)}?` : `yields.llama.fi/chart/${s.symbol}`;
+  mpBodies.push([fragment, await mpGz(`${s.id.replace(":", "-")}.json.gz`)]);
+}
 const mpExpected = JSON.parse(await mpGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
 
 test("issue 1398: a price, then a changed price for the same date, are both recoverable from source_value_versions under the source id, as rm_app within the existing grants", async () => {
@@ -590,10 +593,14 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
   const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
   const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn: (m) => warnings.push(m), error() {} }, sink, 77);
 
-  const ids = ["yahoo:GLD", `defillama-yields:${MP_BASE}`, `defillama-yields:${MP_ETH}`];
+  const ids = MP_IDS;
+  expect(ids).toContain("yahoo:GLD");
+  expect(ids).toContain("yahoo:USDC-USD");
+  expect(ids.length).toBe(9);
   expect(out.map((c) => c.id)).toEqual(ids);
   expect(out.every((c) => c.error === null && c.storageKey === c.id)).toBe(true);
-  expect(urls).toHaveLength(3); // GLD and the two pools; ^GSPC, ETH-USD, BTC-USD and DTB3 are not fetched again
+  expect(urls).toHaveLength(ids.length); // ^GSPC, ETH-USD, BTC-USD and DTB3 are not fetched again
+  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD)\?|fredgraph/.test(u))).toBe(false);
   for (const id of ids) {
     const rows = await sql`
       SELECT market_date::text AS date, value FROM source_value_versions
@@ -602,7 +609,7 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
     expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(mpExpected[id]!);
   }
   const acq = await sql`SELECT provider, cache_identity, requested_by_run_id FROM source_acquisitions WHERE requested_by_run_id = 77 ORDER BY provider, cache_identity`;
-  expect(acq.map((r) => r.provider)).toEqual(["defillama-yields", "defillama-yields", "yahoo"]);
+  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), "yahoo", "yahoo"]);
   // The late Base inception is reported, not repaired.
   expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start 2018-01-01`))).toBe(true);
 
@@ -625,5 +632,5 @@ test("issue 1398: one failed model portfolio series is reported by id and drops 
   const eth = out.find((c) => c.id === `defillama-yields:${MP_ETH}`)!;
   expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from 2018-01-01`);
   expect(eth.rows).toBe(0);
-  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(["yahoo:GLD", `defillama-yields:${MP_BASE}`]);
+  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(MP_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
 });

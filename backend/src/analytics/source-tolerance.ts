@@ -110,6 +110,12 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "yahoo:GLD": YAHOO_FLOAT32,
   "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84": EXACT, // Aave v3 USDC on Base, apyBase
   "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501": EXACT, // Aave v3 USDC on Ethereum, apyBase
+  "yahoo:USDC-USD": YAHOO_FLOAT32, // Base universe asset USDC
+  "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72": EXACT, // Base universe asset SUSDS (Sky savings USDS), apyBase
+  "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c": EXACT, // Base universe asset SPARK (Spark USDC vault, Morpho), apyBase
+  "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469": EXACT, // Base universe asset GT (Gauntlet USDC vault, Morpho), apyBase
+  "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c": EXACT, // Base universe asset STEAK (Steakhouse USDC vault, Morpho V2), apyBase
+  "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19": EXACT, // Base universe asset COMP (Compound v3 USDC on Base), apyBase
 };
 
 export function toleranceFor(sourceKey: string): SourceTolerance {

@@ -5,9 +5,11 @@
 //
 // Recorded responses (tests/fixtures/extract/model-portfolio/), captured once
 // on 2026-10-22 from the live endpoints, bodies unedited (gzipped):
-//   yahoo-GLD.json.gz                     v8 chart for GLD, period1=2018-01-01
-//   defillama-yields-<pool>.json.gz       yields.llama.fi/chart/<pool> for Aave v3
-//                                         USDC on Base (7e0661bf..) and on Ethereum (aa70268e..)
+//   yahoo-<SYMBOL>.json.gz                v8 chart for GLD and USDC-USD, period1=2018-01-01
+//   defillama-yields-<pool>.json.gz       yields.llama.fi/chart/<pool> for every pool the
+//                                         inventory collects (Aave v3 USDC on Base and
+//                                         Ethereum, and the Base universe pools; USDC-USD
+//                                         and the universe pools were captured 2026-10-23)
 //   defillama-yields-unknown-pool.json    the answer for a pool that does not exist
 //   yahoo-BTC-USD-2010-01.json            Yahoo's HTTP 400 body for a window before BTC-USD's inception
 // expected-points.json.gz is what the clients must return for them, computed
@@ -17,10 +19,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { configureHttp } from "../src/extract/http.ts";
-import { loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, INVENTORY_FIELDS } from "../src/extract/inventory.ts";
+import { loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, INVENTORY_FIELDS } from "../src/inventory.ts";
 import { extractInventorySeries, describeCoverage, NoObservationsError, SeriesExtractError } from "../src/extract/model-portfolio.ts";
 import { parseLlamaYieldChart } from "../src/extract/defillama-yields.ts";
 import { LEDGER_EXTRA_KEYS } from "../src/extras.ts";
+import { loadUniverse } from "../src/allocate/universe.ts";
+import { resolveInputHistory } from "../src/series-ids.ts";
 import { buildReport, runRegime, parseRawHistory, toHistory, type RawRow } from "../src/index.ts";
 import shippedJson from "../inventory/model-portfolio.json";
 
@@ -28,19 +32,21 @@ afterEach(() => { configureHttp({}); });
 
 const FIX = join(import.meta.dir, "fixtures/extract/model-portfolio");
 const gz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(join(FIX, name)).arrayBuffer())));
-const recorded: Record<string, string> = {
-  "yahoo:GLD": await gz("yahoo-GLD.json.gz"),
-  "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84": await gz("defillama-yields-7e0661bf-8cf3-45e6-9424-31916d4c7b84.json.gz"),
-  "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501": await gz("defillama-yields-aa70268e-4b52-42bf-a116-608b370f9501.json.gz"),
+const inventory = loadInventory();
+const byId = new Map(inventory.series.map((s) => [s.id, s]));
+const NEW_IDS = inventory.series.filter(collectedByInventory).map((s) => s.id);
+// One recorded body per collected series; a missing file fails the file loudly.
+const recorded: Record<string, string> = {};
+for (const id of NEW_IDS) recorded[id] = await gz(`${id.replace(":", "-")}.json.gz`);
+/** The URL fragment that identifies a series' request. */
+const fragment = (id: string) => {
+  const s = byId.get(id)!;
+  return s.provider === "yahoo" ? `/chart/${encodeURIComponent(s.symbol)}?` : `/chart/${s.symbol}`;
 };
 const expected = JSON.parse(await gz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
 const unknownPool = await Bun.file(join(FIX, "defillama-yields-unknown-pool.json")).text();
 const yahooPreInception = await Bun.file(join(FIX, "yahoo-BTC-USD-2010-01.json")).text();
 const fredMaintenance = await Bun.file(join(import.meta.dir, "fixtures/extract/fred-maintenance.html")).text();
-
-const inventory = loadInventory();
-const byId = new Map(inventory.series.map((s) => [s.id, s]));
-const NEW_IDS = inventory.series.filter(collectedByInventory).map((s) => s.id);
 
 /** A fake fetch serving one recorded body per URL fragment; it fails on any other URL. */
 function serve(routes: [fragment: string, body: string, status?: number][]): string[] {
@@ -61,12 +67,18 @@ describe("the model portfolio inventory", () => {
   test("lists every version one series with every field, and fails on a missing one", () => {
     expect(inventory.workflow).toBe("model-portfolio");
     expect(inventory.series.map((s) => s.id).sort()).toEqual([
+      "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19",
       "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c",
       "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501",
+      "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c",
+      "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72",
+      "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469",
       "fred:DTB3",
       "yahoo:BTC-USD",
       "yahoo:ETH-USD",
       "yahoo:GLD",
+      "yahoo:USDC-USD",
       "yahoo:^GSPC",
     ]);
     const raw = (shippedJson as { series: Record<string, unknown>[] }).series;
@@ -88,12 +100,25 @@ describe("the model portfolio inventory", () => {
 
   test("asset prices, the lending yields with their proxy provenance, and the T-bill rate are all listed", () => {
     const kinds = (k: string) => inventory.series.filter((s) => s.kind === k).map((s) => s.symbol).sort();
-    expect(kinds("price")).toEqual(["BTC-USD", "ETH-USD", "GLD", "^GSPC"]);
+    expect(kinds("price")).toEqual(["BTC-USD", "ETH-USD", "GLD", "USDC-USD", "^GSPC"]);
     expect(kinds("rate")).toEqual(["DTB3"]);
     const base = byId.get("defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84")!;
     expect(base.kind).toBe("lending_yield");
     expect(base.proxy).toMatchObject({ id: "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501", from: "2023-02-06", to: "2024-03-09" });
     expect(base.proxy!.provenance).toContain("PR 1397");
+  });
+
+  test("every Base universe asset with a series is in the inventory; an asset without one would be a recorded limitation", () => {
+    const universe = loadUniverse();
+    expect(universe.assets.length).toBeGreaterThan(0);
+    for (const a of universe.assets) {
+      // An asset with no price history names no series: it must then be named in a limitation.
+      if (a.series === null) {
+        expect(inventory.series.some((s) => s.limitation?.includes(a.id))).toBe(true);
+        continue;
+      }
+      expect(byId.has(a.series), `${a.id}: ${a.series} missing from the inventory`).toBe(true);
+    }
   });
 
   test("series another collector already holds keep its storage key; the rest are recorded under their own id", () => {
@@ -119,20 +144,17 @@ describe("the model portfolio inventory", () => {
 
 describe("recorded-response extract for each new series", () => {
   test("valid responses give the independently computed points, through the injected fetch", async () => {
-    const urls = serve([
-      ["/chart/GLD?", recorded["yahoo:GLD"]!],
-      ["/chart/7e0661bf", recorded["defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84"]!],
-      ["/chart/aa70268e", recorded["defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501"]!],
-    ]);
+    const urls = serve(NEW_IDS.map((id) => [fragment(id), recorded[id]!]));
     for (const id of NEW_IDS) {
       const out = await extractInventorySeries(byId.get(id)!);
       expect(out.points).toEqual(expected[id]!);
-      expect(out.points.length).toBeGreaterThan(900);
+      expect(out.points.length).toBeGreaterThan(300);
       expect(out.coverage.rows).toBe(out.points.length);
     }
-    expect(urls).toHaveLength(3);
-    expect(urls[0]).toBe(`https://query2.finance.yahoo.com/v8/finance/chart/GLD?period1=${Date.parse("2018-01-01T00:00:00Z") / 1000}&period2=${urls[0]!.match(/period2=(\d+)/)![1]}&interval=1d&events=history`);
-    expect(urls[1]).toBe("https://yields.llama.fi/chart/7e0661bf-8cf3-45e6-9424-31916d4c7b84");
+    expect(urls).toHaveLength(NEW_IDS.length);
+    const gld = urls.find((u) => u.includes("/chart/GLD?"))!;
+    expect(gld).toBe(`https://query2.finance.yahoo.com/v8/finance/chart/GLD?period1=${Date.parse("2018-01-01T00:00:00Z") / 1000}&period2=${gld.match(/period2=(\d+)/)![1]}&interval=1d&events=history`);
+    expect(urls).toContain("https://yields.llama.fi/chart/7e0661bf-8cf3-45e6-9424-31916d4c7b84");
   });
 
   test("a late inception is reported as a coverage limitation, with the recorded reason, and no row before it", async () => {
@@ -220,4 +242,46 @@ describe("the SDK input carries the series under their source ids", () => {
     expect(expected["yahoo:GLD"]!.at(-1)!.date > "2026-08-15").toBe(true);
     expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(await golden);
   }, 120_000);
+});
+
+describe("the SDK input file in the source-data form (date,series,value)", () => {
+  // tests/fixtures/model-portfolio-inputs.csv: March 2026 of every inventory
+  // series under its source id. The values are the expected points above for
+  // the collected series, the backend regime extras fixture
+  // (backend/tests/fixtures/regime/regime-extras.json.gz) for ^GSPC, ETH-USD
+  // and DTB3, and a Yahoo v8 BTC-USD response for 2026-03 (captured 2026-10-23).
+  const text = Bun.file(join(import.meta.dir, "fixtures/model-portfolio-inputs.csv")).text();
+
+  test("prices, lending yields and the T-bill rate load with every inventory series under its source id", async () => {
+    const t = await text;
+    expect(t.split("\n")[0]).toBe("date,series,value");
+    const history = toHistory(parseRawHistory(t));
+    expect(Object.keys(history).sort()).toEqual(inventory.series.map((s) => s.id).sort());
+    for (const s of inventory.series) expect(history[s.id]!.length).toBeGreaterThan(20);
+    for (const id of NEW_IDS) expect(history[id]).toEqual(expected[id]!.filter((p) => p.date >= "2026-03-01" && p.date <= "2026-03-31"));
+    for (const k of ["price", "lending_yield", "rate"]) expect(inventory.series.some((s) => s.kind === k && history[s.id])).toBe(true);
+    // The source ids the backtest reads resolve to the ids it reads (D74 mapping).
+    const resolved = resolveInputHistory(history);
+    expect(resolved.SPX).toBe(history["yahoo:^GSPC"]!);
+    expect(resolved.ETH).toBe(history["yahoo:ETH-USD"]!);
+    expect(resolved.TBILL3M).toBe(history["fred:DTB3"]!);
+    expect(resolved["yahoo:GLD"]).toBe(history["yahoo:GLD"]!);
+  });
+
+  test("the JSON form gives the same rows", async () => {
+    const rows = parseRawHistory(await text);
+    const json = JSON.stringify(rows.map((r) => ({ date: r.date, series: r.indicator, value: r.value })));
+    expect(parseRawHistory(json)).toEqual(rows);
+  });
+
+  test("the source-data form refuses a bad date, a non-decimal value, a non source id and a wrong field count", () => {
+    const h = "date,series,value\n";
+    expect(() => parseRawHistory(h + "2026-02-30,yahoo:GLD,1\n")).toThrow(/row 2: date must be a real YYYY-MM-DD date/);
+    expect(() => parseRawHistory(h + "2026-03-02,yahoo:GLD,0x10\n")).toThrow(/value must be a plain decimal number/);
+    expect(() => parseRawHistory(h + "2026-03-02,yahoo:GLD, 1\n")).toThrow(/value must be a plain decimal number/);
+    expect(() => parseRawHistory(h + "2026-03-02,yahoo:GLD,Infinity\n")).toThrow(/value must be a plain decimal number/);
+    expect(() => parseRawHistory(h + "2026-03-02,GLD,1\n")).toThrow(/series must be a source id/);
+    expect(() => parseRawHistory(h + "2026-03-02,yahoo:GLD,1,x\n")).toThrow(/expected 3 fields, got 4/);
+    expect(parseRawHistory(h + "2026-03-02,yahoo:GLD,-1.5e2\n")).toEqual([{ date: "2026-03-02", indicator: "yahoo:GLD", value: -150, source: "" }]);
+  });
 });

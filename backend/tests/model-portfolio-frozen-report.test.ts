@@ -22,6 +22,7 @@ import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { loadRawIndicatorHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -35,11 +36,12 @@ afterAll(() => {
 
 const MP_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/model-portfolio/", import.meta.url);
 const gz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, MP_FIX)).arrayBuffer())));
-const bodies: [string, string][] = [
-  ["/v8/finance/chart/GLD?", await gz("yahoo-GLD.json.gz")],
-  ["yields.llama.fi/chart/7e0661bf-8cf3-45e6-9424-31916d4c7b84", await gz("defillama-yields-7e0661bf-8cf3-45e6-9424-31916d4c7b84.json.gz")],
-  ["yields.llama.fi/chart/aa70268e-4b52-42bf-a116-608b370f9501", await gz("defillama-yields-aa70268e-4b52-42bf-a116-608b370f9501.json.gz")],
-];
+const collected = loadInventory().series.filter(collectedByInventory);
+const bodies: [string, string][] = [];
+for (const s of collected) {
+  const fragment = s.provider === "yahoo" ? `/v8/finance/chart/${encodeURIComponent(s.symbol)}?` : `yields.llama.fi/chart/${s.symbol}`;
+  bodies.push([fragment, await gz(`${s.id.replace(":", "-")}.json.gz`)]);
+}
 
 let callsAfterExtract = 0;
 const thrower = (() => {
@@ -102,8 +104,8 @@ test("issue 1398: the frozen regime report is byte-identical with and without mo
   const after = await run(true);
 
   // The collection really ran and wrote the series into the ledger.
-  const [{ n }] = await sql`SELECT count(*)::int AS n FROM source_value_versions WHERE source_key IN ('yahoo:GLD', 'defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84', 'defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501')`;
-  expect(n).toBeGreaterThan(4000);
+  const [{ n }] = await sql`SELECT count(DISTINCT source_key)::int AS n FROM source_value_versions WHERE source_key = ANY(${collected.map((c) => c.storageKey)}::text[])`;
+  expect(n).toBe(collected.length);
 
   expect(before.reportBytes.length).toBeGreaterThan(100);
   expect(Buffer.from(after.reportBytes).equals(Buffer.from(before.reportBytes))).toBe(true);

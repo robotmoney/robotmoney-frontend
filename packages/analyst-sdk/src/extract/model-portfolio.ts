@@ -7,7 +7,7 @@ import type { Point } from "../types.ts";
 import { fetchYahoo } from "./yahoo.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchLlamaYield } from "./defillama-yields.ts";
-import { CALENDAR_SLACK_DAYS, type InventorySeries } from "./inventory.ts";
+import { CALENDAR_SLACK_DAYS, type InventorySeries } from "../inventory.ts";
 
 const unix = (iso: string) => Math.floor(Date.parse(`${iso}T00:00:00Z`) / 1000);
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
