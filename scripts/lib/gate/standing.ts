@@ -348,13 +348,22 @@ export function evalApiLogs(lines: readonly string[] | null): StandingCheck[] {
   return out;
 }
 
-/** R8.v. The buyback scan never fails on a refused range (a 413 is halved, never a failure). */
+/**
+ * R8.v. The buyback scan never fails on a refused range (a 413 is halved, never a failure). A failed
+ * scan whose error is a Base RPC rate limit (HTTP 429, "request limit reached") is an external outcome
+ * (log rule `external-base-rpc`): the rows and the cursor stay, the next refresh resumes. That is a
+ * WARN (issue 1387); any other 'live index failed' is a FAIL.
+ */
 export function evalBuyback(lines: readonly string[] | null): StandingCheck {
   const title = "buyback";
   if (lines === null) return mk("R8.v", title, "WARN", "no worker container: UNVERIFIED");
-  const bad = lines.filter((l) => l.includes("live index failed")).length;
+  const failed = lines.filter((l) => l.includes("live index failed"));
+  const limited = failed.filter((l) => /HTTP 429|request limit reached/i.test(l)).length;
   const b413 = lines.filter((l) => l.includes("HTTP 413")).length;
-  return bad === 0 ? mk("R8.v", title, "PASS", `0 'live index failed' (${b413} HTTP 413 answers, each halved)`) : mk("R8.v", title, "FAIL", `${bad} 'live index failed'`);
+  const halved = `${b413} HTTP 413 answers, each halved`;
+  if (failed.length === 0) return mk("R8.v", title, "PASS", `0 'live index failed' (${halved})`);
+  if (limited === failed.length) return mk("R8.v", title, "WARN", `${limited} 'live index failed' on a Base RPC rate limit (HTTP 429), resumed from the cursor (${halved})`);
+  return mk("R8.v", title, "FAIL", `${failed.length} 'live index failed', ${failed.length - limited} not a Base RPC rate limit (${halved})`);
 }
 
 /** R8.w, R8.w2, R8.w3. Gecko: the tier matches the key, no 429/401/403, and the key is in no ledger row or api/website environment. */

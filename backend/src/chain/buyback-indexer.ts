@@ -313,6 +313,16 @@ export interface IndexResult {
 }
 
 /**
+ * The one line a failed live scan logs. The error, and for an HTTP answer its status and the start of the
+ * provider's body, sit on that same line: Bun prints an Error argument on later lines, and soak check R8.v
+ * reads line by line to tell a Base RPC 429 (a WARN) from any other failure (issue 1387).
+ */
+export function liveIndexFailedLine(err: unknown): string {
+  const what = err instanceof BaseRpcHttpError ? `${err.name}: ${err.message}${err.detail ? ` ${err.detail}` : ""}` : err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return `buyback-logs: live index failed, leaving persisted rows in place: ${what.replace(/\s+/g, " ")}`;
+}
+
+/**
  * @param db the pool the indexer's sites run on: the worker's (rm_worker) from
  *   the buybacks handler; the api's by default, for tests and the dashboards
  *   process. The four indexer sites declare rm_worker.
@@ -424,7 +434,7 @@ export async function indexBuybacks(store: BuybackIndexStore = pipelineBuybackIn
       from = to + 1;
     }
   } catch (err) {
-    console.error("buyback-logs: live index failed, leaving persisted rows in place:", err);
+    console.error(liveIndexFailedLine(err));
   }
   return { indexed, skipped: null, scannedToBlock };
 }

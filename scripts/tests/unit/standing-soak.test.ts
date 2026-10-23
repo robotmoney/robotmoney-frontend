@@ -436,6 +436,26 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalBuyback(["answered HTTP 413, halving"]).status).toBe("PASS");
     expect(evalBuyback(["live index failed"]).status).toBe("FAIL");
   });
+  test("R8.v warns on a Base RPC 429 and fails on any other live index failure (issue 1387)", () => {
+    // The line liveIndexFailedLine (backend/src/chain/buyback-indexer.ts) writes for a BaseRpcHttpError(429);
+    // backend/tests/buyback-logs-batching.test.ts asserts the formatter yields exactly this text.
+    const r429 = "buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 request limit reached";
+    const other = "buyback-logs: live index failed, leaving persisted rows in place: Error: Base RPC error -32000: header not found";
+    // Before the fix, Bun printed the error on later lines (a source excerpt follows the message). That
+    // first line names no status, so it stays a FAIL: an unclassified failure is never downgraded.
+    const oldShape = ["buyback-logs: live index failed, leaving persisted rows in place: 598 | } catch (err) {", "BaseRpcHttpError: Base RPC HTTP 429", " status: 429,"];
+    expect(evalBuyback(oldShape).status).toBe("FAIL");
+    const w = evalBuyback([r429, "answered HTTP 413, halving"]);
+    expect(w.status).toBe("WARN");
+    expect(w.detail[0]).toContain("1 'live index failed' on a Base RPC rate limit");
+    expect(w.detail[0]).toContain("1 HTTP 413 answers");
+    expect(evalBuyback(["buyback-logs: live index failed, leaving persisted rows in place: request limit reached"]).status).toBe("WARN");
+    const mixed = evalBuyback([r429, other]);
+    expect(mixed.status).toBe("FAIL");
+    expect(mixed.detail[0]).toContain("2 'live index failed', 1 not a Base RPC rate limit");
+    expect(evalBuyback([other]).status).toBe("FAIL");
+    expect(evalBuyback(["answered HTTP 413, halving", "answered HTTP 413, halving"]).status).toBe("PASS");
+  });
   test("R8.w: the tier must match the key", () => {
     const g = (hasKey: boolean, lines: string[]) => evalGecko({ hasKey, geckoLines: lines, unredactedLedgerRows: 0, keyEnvHits: 0 }).find((c) => c.id === "R8.w")!.status;
     expect(g(true, ["[gecko] x via pro tier (h)"])).toBe("PASS");
