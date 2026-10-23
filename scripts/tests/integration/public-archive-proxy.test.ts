@@ -137,6 +137,15 @@ describe("one way in, and an identity the caller cannot choose", () => {
     expect(r.body.cf).toBe(r.peer);
   }, 120_000);
 
+  test("every proxied path overwrites the identity: /health, /version and an encoded-slash public path", () => {
+    for (const path of ["/health", "/version", `${BASE}/x%2Fy`]) {
+      const r = fromContainer(UNTRUSTED_NET, path, { "X-Client-IP": "6.6.6.6", "CF-Connecting-IP": "7.7.7.7" });
+      expect(r.status, path).toBe(200);
+      expect(r.body.xClientIp, path).toBe(r.peer);
+      expect(r.body.cf, path).toBe(r.peer);
+    }
+  }, 180_000);
+
   test("from a trusted peer, Cloudflare's CF-Connecting-IP becomes X-Client-IP; a sent X-Client-IP is still replaced", () => {
     const r = fromContainer(NET, `${BASE}/echo-trusted`, { "CF-Connecting-IP": "203.0.113.9", "X-Client-IP": "6.6.6.6" });
     expect(r.status).toBe(200);

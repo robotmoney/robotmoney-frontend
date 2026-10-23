@@ -12,15 +12,16 @@
 //   0. X-Client-IP (issue 1422, vendor-neutral) — the address website-server
 //      (nginx) resolved for the client and SET on every proxied /api/ request,
 //      replacing any X-Client-IP the caller sent. It is nginx's own account of
-//      the client, with no CDN rule involved, and the api port is never
-//      published, so only nginx can reach the api to set it.
+//      the client, with no CDN rule involved, and the api port is published
+//      on loopback only (docker-compose.yml), so from off the host only nginx
+//      can reach the api to set it.
 //   1. CF-Connecting-IP — what Cloudflare (D13) puts on every request it
 //      proxies. nginx (website-server/nginx.conf) passes it through only from a
 //      Cloudflare or same-host peer and otherwise OVERWRITES it with the peer
 //      address, so by the time it reaches this process it is nginx's account of
 //      the client, never the sender's. A request that bypassed nginx and reached
 //      the api port directly could still write it, which is why that port is
-//      never published (compose-internal only).
+//      published on loopback only (docker-compose.yml, issue 1422).
 //   2. X-Forwarded-For, LAST hop — but ONLY from a loopback peer. A proxy on
 //      the same host is the one place the header is the proxy's own account of
 //      its peer. From any other peer (a docker-network address, a LAN host, the

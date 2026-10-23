@@ -73,6 +73,7 @@ import { on, registerQuery } from "../../db/registry.ts";
 import { classifyDbFailure } from "../../db/client.ts";
 import {
   archiveBodyStream,
+  archiveEncoderMatches,
   BACKUP_ID_RE,
   cachedRecord,
   fileIn,
@@ -266,8 +267,10 @@ const readOverwriteEvents = registerQuery({
   },
 });
 
-const SOURCE_VERSIONS_STATEMENT = `SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date, s.market_instant, s.value,
-        s.revision_kind, s.prior_version_id::text AS prior_version_id, s.knowledge_time
+const SOURCE_VERSIONS_STATEMENT = `SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date,
+        to_char(s.market_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS market_instant, s.value,
+        s.revision_kind, s.prior_version_id::text AS prior_version_id,
+        to_char(s.knowledge_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS knowledge_time
       FROM source_value_versions s
       WHERE s.id > $1::bigint
         AND ($2::text IS NULL OR s.source_key = $3::text)
@@ -662,7 +665,7 @@ async function overwriteEvents(url: URL, tx: Tx) {
 
 const ISO_TIME_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2}))?$/;
 
-/** `asof`: a date (its end, UTC) or an ISO date-time, as a canonical ISO instant. */
+/** `asof`: a date (its last microsecond, UTC) or an ISO date-time, kept as given. */
 function asofParam(url: URL): string | null {
   const v = url.searchParams.get("asof");
   if (v === null) return null;
@@ -671,9 +674,9 @@ function asofParam(url: URL): string | null {
     if (!isCalendarDate(v)) throw new BadRequest("asof must be a valid date");
     return `${v}T23:59:59.999999Z`;
   }
-  const t = Date.parse(v);
-  if (Number.isNaN(t) || !isCalendarDate(v.slice(0, 10))) throw new BadRequest("asof must be a valid date-time");
-  return new Date(t).toISOString();
+  if (Number.isNaN(Date.parse(v)) || !isCalendarDate(v.slice(0, 10))) throw new BadRequest("asof must be a valid date-time");
+  // Kept exactly as given: Postgres reads it (::timestamptz) to the microsecond.
+  return v;
 }
 
 async function sourceVersions(url: URL, tx: Tx) {
@@ -684,10 +687,12 @@ async function sourceVersions(url: URL, tx: Tx) {
   const asof = asofParam(url);
   const cursor = decodeCursor(url, ["id"]);
   const rows = await on(tx, readSourceVersions)<{
-    id: string; source_key: string; market_date: string | null; market_instant: Date | null; value: number;
-    revision_kind: string; prior_version_id: string | null; knowledge_time: Date;
-  }>`SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date, s.market_instant, s.value,
-        s.revision_kind, s.prior_version_id::text AS prior_version_id, s.knowledge_time
+    id: string; source_key: string; market_date: string | null; market_instant: string | null; value: number;
+    revision_kind: string; prior_version_id: string | null; knowledge_time: string;
+  }>`SELECT s.id::text AS id, s.source_key, s.market_date::text AS market_date,
+        to_char(s.market_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS market_instant, s.value,
+        s.revision_kind, s.prior_version_id::text AS prior_version_id,
+        to_char(s.knowledge_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS knowledge_time
       FROM source_value_versions s
       WHERE s.id > ${cursor?.[0] ?? "0"}::bigint
         AND (${series}::text IS NULL OR s.source_key = ${series}::text)
@@ -713,11 +718,12 @@ async function sourceVersions(url: URL, tx: Tx) {
       id: Number(r.id),
       series: r.source_key,
       market_date: r.market_date,
-      market_instant: r.market_instant === null ? null : iso(r.market_instant),
+      // Microseconds, as stored: a JS Date would cut them to milliseconds.
+      market_instant: r.market_instant,
       value: Number(r.value),
       revision_kind: r.revision_kind,
       prior_version_id: r.prior_version_id === null ? null : Number(r.prior_version_id),
-      knowledge_time: iso(r.knowledge_time),
+      knowledge_time: r.knowledge_time,
     })),
     nextCursor: rows.length > limit && last ? encodeCursor([last.id]) : null,
   };
@@ -918,6 +924,11 @@ function building(): Response {
 async function archiveFile(req: Request, path: string, clientIp: string): Promise<Sent> {
   const m = ARCHIVE_PATH_RE.exec(path);
   if (!m || !(await isServedBackup(m[1]!))) return { res: problem(404, "no such backup or archive"), bytes: 0 };
+  // A runtime whose gzip is not the pinned encoder would publish different
+  // bytes under names already published: refuse instead (public-archive-store.ts).
+  if (!(await archiveEncoderMatches())) {
+    return { res: problem(503, "archives are unavailable: this server's encoder is not the pinned one", { "Retry-After": "3600" }), bytes: 0 };
+  }
   const built = await awaitRecord(m[1]!);
   if (!built) return { res: building(), bytes: 0 };
   if (m[2] === "backup.json") {
@@ -988,6 +999,8 @@ export async function handlePublicAnalytics(req: Request, url: URL, clientIp: st
     });
   }
   if (req.method !== "GET") return problem(405, "method not allowed", { Allow: "GET" });
+  // An encoded slash names no route here, and a proxy may match it differently.
+  if (/%2f/i.test(new URL(req.url).pathname)) return problem(404, "not found");
   try {
     const sent = await dispatch(req, url, clientIp);
     if (!sent) return problem(404, "not found");

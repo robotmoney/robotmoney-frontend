@@ -9,9 +9,12 @@
 //   - One backup per UTC day boundary t, named `YYYY-MM-DDT000000Z`. A backup
 //     is listed and served only once it is SEALED: t is at least
 //     ARCHIVE_SETTLE_MS (1 hour) in the past.
-//   - Per table, its watermark is the id just below the first row, after the
-//     previous backup's watermark, whose time column is at or after t (the
-//     table's newest id when no such row exists yet). Every time column here
+//   - Per table, its watermark is the largest existing id, after the previous
+//     backup's watermark, below the first row whose time column is at or after
+//     t (or below nothing, when no such row exists yet). It always names a row
+//     that exists, so a gap in the id sequence cannot move it when later rows
+//     arrive. Vintage members are cut by vintage instead: every member of every
+//     vintage at or below the vintages watermark. Every time column here
 //     defaults to clock_timestamp() and no code writes one explicitly, so a row
 //     inserted after t is stamped after t and gets a higher id: a sealed
 //     backup's watermarks, rows, file names and bytes never change. The settle
@@ -114,7 +117,8 @@ interface ArchiveTable {
   columns: readonly string[];
   /** Rows per page: a few MB per statement, well inside the 5 s timeout. */
   pageRows: number;
-  step(tx: Tx, after: string, boundary: string): Promise<ChainStep[]>;
+  /** `vintages`: the vintages watermark at this boundary (only the members table reads it). */
+  step(tx: Tx, after: string, boundary: string, vintages: string): Promise<ChainStep[]>;
   page(tx: Tx, after: string, through: string, limit: number): Promise<Row[]>;
 }
 
@@ -132,10 +136,12 @@ const SVV_STEP = `WITH b AS (
     SELECT (SELECT id FROM source_value_versions WHERE id > $1::bigint AND knowledge_time >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM source_value_versions) AS max_id,
       (SELECT knowledge_time FROM source_value_versions ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM source_value_versions x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM source_value_versions WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM source_value_versions WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM source_value_versions WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM source_value_versions WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const svvStep = registerQuery({
   role: "rm_app",
@@ -144,7 +150,7 @@ const svvStep = registerQuery({
   site: "src/analytics/store/public-archive-store:source_value_versions.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: SVV_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: SVV_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const SVV_PAGE = `SELECT id::text AS id, knowledge_time::text AS t, id::text AS c_id, acquisition_id::text AS acquisition_id,
     source_key, market_date::text AS market_date, market_instant::text AS market_instant, value::text AS value,
@@ -165,10 +171,12 @@ const RUNS_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_ledger_runs WHERE id > $1::bigint AND created_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_ledger_runs) AS max_id,
       (SELECT created_at FROM analytics_ledger_runs ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_ledger_runs x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_ledger_runs WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_ledger_runs WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_ledger_runs WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_ledger_runs WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const runsStep = registerQuery({
   role: "rm_app",
@@ -177,7 +185,7 @@ const runsStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_ledger_runs.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: RUNS_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: RUNS_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const RUNS_PAGE = `SELECT id::text AS id, created_at::text AS t, id::text AS c_id, run_key, asof::text AS asof, tool_id, source_label,
     methodology_version_id::text AS methodology_version_id, build_identity, job_id::text AS job_id, created_at::text AS created_at
@@ -197,10 +205,12 @@ const METH_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_ledger_methodology_versions WHERE id > $1::bigint AND created_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_ledger_methodology_versions) AS max_id,
       (SELECT created_at FROM analytics_ledger_methodology_versions ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_ledger_methodology_versions x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_ledger_methodology_versions WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_ledger_methodology_versions WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_ledger_methodology_versions WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_ledger_methodology_versions WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const methStep = registerQuery({
   role: "rm_app",
@@ -209,7 +219,7 @@ const methStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_ledger_methodology_versions.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: METH_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: METH_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const METH_PAGE = `SELECT id::text AS id, created_at::text AS t, id::text AS c_id, tool_id, version_label, config::text AS config,
     config_digest, created_at::text AS created_at
@@ -229,10 +239,12 @@ const VIN_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_data_vintages WHERE id > $1::bigint AND created_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_data_vintages) AS max_id,
       (SELECT created_at FROM analytics_data_vintages ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_data_vintages x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_data_vintages WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_data_vintages WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_data_vintages WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_data_vintages WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const vinStep = registerQuery({
   role: "rm_app",
@@ -241,7 +253,7 @@ const vinStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_data_vintages.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: VIN_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: VIN_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const VIN_PAGE = `SELECT id::text AS id, created_at::text AS t, id::text AS c_id, run_id::text AS run_id, tool_id,
     knowledge_time_cutoff::text AS knowledge_time_cutoff, market_time_cutoff::text AS market_time_cutoff,
@@ -259,12 +271,14 @@ const vinPage = registerQuery({
 });
 
 // analytics_vintage_members: no time of its own; a member's time is its vintage's created_at.
-const MEM_STEP = `WITH b AS (
-    SELECT (SELECT m.id FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id
-        WHERE m.id > $1::bigint AND v.created_at >= $2::timestamptz ORDER BY m.id LIMIT 1) AS next_id,
-      (SELECT max(id) FROM analytics_vintage_members) AS max_id,
+// Members are cut by vintage, not by time: a backup holds every member of every
+// vintage it holds (the largest member id whose vintage is at or below the
+// vintages watermark), so two freezes interleaving across midnight never split
+// one vintage's members between backups.
+const MEM_STEP = `WITH w AS (
+    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > $1::bigint AND m.vintage_id <= $2::bigint) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_vintage_members WHERE id > $3::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > $4::bigint AND id <= w.wm)::text AS s
@@ -276,7 +290,7 @@ const memStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
 });
 const memStepVintages = registerQuery({
   role: "rm_app",
@@ -285,7 +299,7 @@ const memStepVintages = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step.vintages",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
 });
 const MEM_PAGE = `SELECT m.id::text AS id, v.created_at::text AS t, m.id::text AS c_id, m.vintage_id::text AS vintage_id,
     m.source_value_version_id::text AS source_value_version_id, m.source_key,
@@ -316,10 +330,12 @@ const OVW_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_overwrite_events WHERE id > $1::bigint AND recorded_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_overwrite_events) AS max_id,
       (SELECT recorded_at FROM analytics_overwrite_events ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_overwrite_events x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_overwrite_events WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_overwrite_events WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_overwrite_events WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_overwrite_events WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const ovwStep = registerQuery({
   role: "rm_app",
@@ -328,7 +344,7 @@ const ovwStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_overwrite_events.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: OVW_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: OVW_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const OVW_PAGE = `SELECT id::text AS id, recorded_at::text AS t, id::text AS c_id, table_name, operation, natural_key::text AS natural_key,
     previous_row::text AS previous_row, replacement_row::text AS replacement_row, recorded_at::text AS recorded_at
@@ -348,10 +364,12 @@ const OUT_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_output_snapshots WHERE id > $1::bigint AND created_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_output_snapshots) AS max_id,
       (SELECT created_at FROM analytics_output_snapshots ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_output_snapshots x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_output_snapshots WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_output_snapshots WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_output_snapshots WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_output_snapshots WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const outStep = registerQuery({
   role: "rm_app",
@@ -360,7 +378,7 @@ const outStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_output_snapshots.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: OUT_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: OUT_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const OUT_PAGE = `SELECT id::text AS id, created_at::text AS t, id::text AS c_id, run_id::text AS run_id, artifact_kind, checksum,
     byte_length::text AS byte_length, created_at::text AS created_at, convert_from(payload_bytes, 'UTF8') AS payload_json,
@@ -381,10 +399,12 @@ const REP_STEP = `WITH b AS (
     SELECT (SELECT id FROM analytics_report_snapshots WHERE id > $1::bigint AND created_at >= $2::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_report_snapshots) AS max_id,
       (SELECT created_at FROM analytics_report_snapshots ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_report_snapshots x WHERE x.id > $3::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_report_snapshots WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_report_snapshots WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_report_snapshots WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_report_snapshots WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const repStep = registerQuery({
   role: "rm_app",
@@ -393,7 +413,7 @@ const repStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_report_snapshots.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: REP_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0] },
+  probe: { statement: REP_STEP, params: [0, "2000-01-01T00:00:00Z", 0, 0, 0] },
 });
 const REP_PAGE = `SELECT id::text AS id, created_at::text AS t, id::text AS c_id, run_id::text AS run_id, asof::text AS asof, checksum,
     byte_length::text AS byte_length, created_at::text AS created_at, convert_from(report_bytes, 'UTF8') AS report_json,
@@ -420,7 +440,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_output_snapshots WHERE id > ${a}::bigint AND created_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_output_snapshots) AS max_id,
       (SELECT created_at FROM analytics_output_snapshots ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_output_snapshots x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_output_snapshots WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_output_snapshots WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -439,7 +461,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_report_snapshots WHERE id > ${a}::bigint AND created_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_report_snapshots) AS max_id,
       (SELECT created_at FROM analytics_report_snapshots ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_report_snapshots x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_report_snapshots WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_report_snapshots WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -458,7 +482,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM source_value_versions WHERE id > ${a}::bigint AND knowledge_time >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM source_value_versions) AS max_id,
       (SELECT knowledge_time FROM source_value_versions ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM source_value_versions x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM source_value_versions WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM source_value_versions WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -477,7 +503,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_ledger_runs WHERE id > ${a}::bigint AND created_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_ledger_runs) AS max_id,
       (SELECT created_at FROM analytics_ledger_runs ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_ledger_runs x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_ledger_runs WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_ledger_runs WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -495,7 +523,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_ledger_methodology_versions WHERE id > ${a}::bigint AND created_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_ledger_methodology_versions) AS max_id,
       (SELECT created_at FROM analytics_ledger_methodology_versions ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_ledger_methodology_versions x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_ledger_methodology_versions WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_ledger_methodology_versions WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -513,7 +543,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_data_vintages WHERE id > ${a}::bigint AND created_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_data_vintages) AS max_id,
       (SELECT created_at FROM analytics_data_vintages ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_data_vintages x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_data_vintages WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_data_vintages WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -529,12 +561,10 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     time: { lookup: { column: "vintage_id", table: "analytics_data_vintages", key: "id", timeColumn: "created_at" } },
     columns: ["id", "vintage_id", "source_value_version_id", "source_key", "last_source_value_version_id"],
     pageRows: 50_000,
-    step: (tx, a, b) => on(tx, memStep, memStepVintages)<ChainStep>`WITH b AS (
-    SELECT (SELECT m.id FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id
-        WHERE m.id > ${a}::bigint AND v.created_at >= ${b}::timestamptz ORDER BY m.id LIMIT 1) AS next_id,
-      (SELECT max(id) FROM analytics_vintage_members) AS max_id,
+    step: (tx, a, _b, vin) => on(tx, memStep, memStepVintages)<ChainStep>`WITH w AS (
+    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > ${a}::bigint AND m.vintage_id <= ${vin}::bigint) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_vintage_members WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -554,7 +584,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     SELECT (SELECT id FROM analytics_overwrite_events WHERE id > ${a}::bigint AND recorded_at >= ${b}::timestamptz ORDER BY id LIMIT 1) AS next_id,
       (SELECT max(id) FROM analytics_overwrite_events) AS max_id,
       (SELECT recorded_at FROM analytics_overwrite_events ORDER BY id LIMIT 1) AS first_time
-  ), w AS (SELECT COALESCE(next_id - 1, max_id) AS wm, first_time FROM b)
+  ), w AS (
+    SELECT (SELECT max(x.id) FROM analytics_overwrite_events x WHERE x.id > ${a}::bigint AND x.id < COALESCE(b.next_id, b.max_id + 1)) AS wm, b.first_time FROM b
+  )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
     (SELECT count(*) FROM analytics_overwrite_events WHERE id > ${a}::bigint AND id <= w.wm)::text AS n,
     (SELECT coalesce(sum(id), 0) FROM analytics_overwrite_events WHERE id > ${a}::bigint AND id <= w.wm)::text AS s
@@ -642,7 +674,7 @@ async function loadFirstDay(): Promise<number | null> {
   let earliest: bigint | null = null;
   await publicRead(async (tx) => {
     for (const t of ARCHIVE_TABLES) {
-      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z");
+      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z", "0");
       if (r?.first_time) {
         const us = parseDbTime(r.first_time);
         if (earliest === null || us < earliest) earliest = us;
@@ -686,7 +718,7 @@ async function ensureChain(id: string): Promise<void> {
         await publicRead(async (tx) => {
           for (const t of ARCHIVE_TABLES) {
             const p = before?.get(t.name) ?? { wm: null, rows: 0n, sum: 0n };
-            const [r] = await t.step(tx, p.wm ?? "0", new Date(d).toISOString());
+            const [r] = await t.step(tx, p.wm ?? "0", new Date(d).toISOString(), marks.get("analytics_data_vintages")?.wm ?? "0");
             const wm = r?.wm ?? p.wm;
             marks.set(t.name, { wm, rows: p.rows + BigInt(r?.n ?? "0"), sum: p.sum + BigInt(r?.s ?? "0") });
           }
@@ -810,6 +842,52 @@ async function buildTableFiles(backup: string, t: ArchiveTable, after: string, t
   }
   await flush();
   return files;
+}
+
+// ── The encoder pin ────────────────────────────────────────────────────────
+// An archive's identity is the SHA-256 of its gzip bytes (format 1 records
+// `sha256_gz`, and the ETag is it). Those bytes depend on the zlib build in
+// the Bun runtime: node:zlib at level 9 gives different bytes under bun 1.3.5
+// and 1.3.14. So the encoder is pinned. A fixed fixture's gzip must hash to the
+// value recorded here, measured under the Bun that backend/Dockerfile and CI
+// pin (oven/bun:1.3.5). When it does not, the archive routes refuse (503)
+// rather than publish different bytes under a name already published, and
+// the CI test that compares it fails the build. Changing the Bun version
+// therefore needs a decision about every published archive's identity.
+
+/** sha256 of the gzip of encoderFixture() under oven/bun:1.3.5. */
+export const ARCHIVE_GZIP_FIXTURE_SHA256 = "3878bc2a58589bf197450607629ee8c172c642efe20949199b504f9a4d2c98ef";
+
+function encoderFixture(): string {
+  return Array.from({ length: 5000 }, (_, i) =>
+    encodeCsvRow([String(i), `raw_indicator_history:X${i % 7}`, `2001-01-0${(i % 9) + 1}`, (i * 1.25).toFixed(3), 'a, "b"\n'])).join("");
+}
+
+/** The SHA-256 of the fixture gzipped by this runtime, through the same path every archive takes. */
+export async function encoderFixtureSha256(): Promise<string> {
+  const sink = new GzSink();
+  await sink.write(encoderFixture());
+  return (await sink.close()).sha256_gz;
+}
+
+let encoderPin: string = ARCHIVE_GZIP_FIXTURE_SHA256;
+let encoderVerdict: Promise<boolean> | null = null;
+/** Pin the encoder to another hash (tests run under any Bun; the pin itself is asserted separately). */
+export function _setArchiveEncoderPinForTests(sha256: string | null): void {
+  encoderPin = sha256 ?? ARCHIVE_GZIP_FIXTURE_SHA256;
+  encoderVerdict = null;
+}
+
+/** Does this runtime's gzip produce the pinned bytes? Measured once per process. */
+export function archiveEncoderMatches(): Promise<boolean> {
+  if (!encoderVerdict) {
+    const pin = encoderPin;
+    encoderVerdict = encoderFixtureSha256().then((got) => {
+      if (got !== pin) console.error(`[public-archive] this runtime's gzip hashes the encoder fixture to ${got}, the pin is ${pin}: archives are not served`);
+      return got === pin;
+    });
+  }
+  return encoderVerdict;
 }
 
 const records = new Map<string, BuiltRecord>();

@@ -33,8 +33,11 @@ import { publicQueryGate } from "../../src/api/public-analytics-limits.ts";
 import {
   _resetArchiveForTests,
   _setArchiveClockForTests,
+  _setArchiveEncoderPinForTests,
   _setArchivePartBytesForTests,
+  ARCHIVE_GZIP_FIXTURE_SHA256,
   ARCHIVE_TABLES,
+  encoderFixtureSha256,
 } from "../../src/analytics/store/public-archive-store.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 import { fixtureDb } from "../support/fixture-db.ts";
@@ -92,6 +95,9 @@ beforeAll(async () => {
   _resetArchiveForTests();
   _setArchivePartBytesForTests(null);
   _setArchiveClockForTests(() => NOW);
+  // The archive tests run under any Bun: the encoder pin itself is asserted by
+  // its own test below, against ARCHIVE_GZIP_FIXTURE_SHA256.
+  _setArchiveEncoderPinForTests(await encoderFixtureSha256());
   const [mv] = await fixtureDb<{ id: string }[]>`
     INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest, created_at)
     VALUES ('regime', 'regime-v3', '{"panels": ["macro", "onchain"], "note": "a,b"}', repeat('a', 64), '2001-01-01 01:00:00.123456+00')
@@ -170,6 +176,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(() => {
+  _setArchiveEncoderPinForTests(null);
   _setArchiveClockForTests(null);
   _setArchivePartBytesForTests(null);
   _resetArchiveForTests();
@@ -244,8 +251,8 @@ describe("source-versions", () => {
     expect(validateJsonSchema(schema(P.sourceVersions), body)).toEqual([]);
     expect(body.asof).toBeNull();
     expect(body.rows.map((r: any) => [r.value, r.revision_kind, r.knowledge_time])).toEqual([
-      [5.1, "initial", "2001-01-02T03:00:00.000Z"],
-      [5.2, "revision", "2001-01-02T09:00:00.000Z"],
+      [5.1, "initial", "2001-01-02T03:00:00.000000Z"],
+      [5.2, "revision", "2001-01-02T09:00:00.000000Z"],
     ]);
     expect(body.rows[1].prior_version_id).toBe(body.rows[0].id);
 
@@ -265,12 +272,24 @@ describe("source-versions", () => {
 
   test("asof gives the versions in force then, and a later revision does not change it", async () => {
     const before: any = await (await get(`${P.sourceVersions}?series=backtest:DTB3&asof=2001-01-02T05:00:00Z`)).json();
-    expect(before.asof).toBe("2001-01-02T05:00:00.000Z");
+    expect(before.asof).toBe("2001-01-02T05:00:00Z");
     expect(before.rows.map((r: any) => r.value)).toEqual([5.1]);
     const after: any = await (await get(`${P.sourceVersions}?series=backtest:DTB3&asof=2001-01-02`)).json();
     expect(after.rows.map((r: any) => r.value)).toEqual([5.2]);
     const none: any = await (await get(`${P.sourceVersions}?series=backtest:DTB3&asof=2001-01-01`)).json();
     expect(none.rows).toEqual([]);
+  });
+
+  test("times keep their microseconds: an asof one microsecond before a version excludes it, at it includes it", async () => {
+    const at: any = await (await get(`${P.sourceVersions}?series=raw_indicator_history:ARCH&asof=2001-01-01T02:00:00.000123Z`)).json();
+    expect(at.asof).toBe("2001-01-01T02:00:00.000123Z");
+    expect(at.rows.map((r: any) => [r.market_date, r.knowledge_time])).toEqual([["1990-01-01", "2001-01-01T02:00:00.000123Z"]]);
+    const before: any = await (await get(`${P.sourceVersions}?series=raw_indicator_history:ARCH&asof=2001-01-01T02:00:00.000122Z`)).json();
+    expect(before.rows).toEqual([]);
+    const [stored] = await fixtureDb<{ t: string }[]>`
+      SELECT to_char(knowledge_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS t
+      FROM source_value_versions WHERE source_key = 'raw_indicator_history:ARCH' AND market_date = '1990-01-01'`;
+    expect(stored!.t).toBe("2001-01-01T02:00:00.000123Z");
   });
 
   test("bad parameters are 400s", async () => {
@@ -625,6 +644,113 @@ describe("archive: records and bodies", () => {
       clearInterval(tick);
     }
   }, 120_000);
+});
+
+describe("archive: watermarks that never move", () => {
+  test("a gap at the tail of an id sequence does not move a sealed watermark when a later row arrives", async () => {
+    _resetArchiveForTests();
+    // Burn two ids, as a rolled-back insert or a 23505 retry does.
+    await fixtureDb.unsafe("SELECT nextval(pg_get_serial_sequence('analytics_ledger_methodology_versions', 'id')) FROM generate_series(1, 2)");
+    const before = await record("2001-01-04T000000Z");
+    const [{ max }] = await fixtureDb<{ max: string }[]>`SELECT max(id)::text AS max FROM analytics_ledger_methodology_versions`;
+    expect(before.body.append_only.analytics_ledger_methodology_versions.watermark_after).toBe(max);
+    // A later row arrives past the gap.
+    await fixtureDb`
+      INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
+      VALUES ('regime', 'after-the-gap', '{}', repeat('e', 64))`;
+    _resetArchiveForTests();
+    const after = await record("2001-01-04T000000Z");
+    expect(after.body.append_only.analytics_ledger_methodology_versions.watermark_after).toBe(max);
+    expect(Buffer.compare(Buffer.from(after.bytes), Buffer.from(before.bytes))).toBe(0);
+    for (const id of ["2001-01-02T000000Z", "2001-01-03T000000Z"]) {
+      const a = (await record(id)).body.append_only;
+      for (const [t, rec] of Object.entries<any>(a)) {
+        if (rec.watermark_after === null) continue;
+        const [hit] = await fixtureDb.unsafe(`SELECT count(*)::int AS n FROM ${t} WHERE id = ${rec.watermark_after}`);
+        expect(hit!.n, `${id} ${t} watermark ${rec.watermark_after} names a row`).toBe(1);
+      }
+    }
+  }, 120_000);
+
+  test("two freezes interleaving across midnight: every member of a vintage is in the backup that holds the vintage", async () => {
+    const [run] = await fixtureDb<{ id: string; mv: string }[]>`
+      SELECT id::text AS id, methodology_version_id::text AS mv FROM analytics_ledger_runs WHERE run_key = ${RUN_B}`;
+    const freeze = async (tool: string, at: string) => {
+      const [v] = await fixtureDb<{ id: string }[]>`
+        INSERT INTO analytics_data_vintages (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id,
+          build_identity, manifest, manifest_digest, member_count, created_at)
+        VALUES (${run!.id}, ${tool}, ${at}, '2001-01-04', ${run!.mv}, 'build-i', '{}', repeat('f', 64), 2, ${at})
+        RETURNING id::text AS id`;
+      return v!.id;
+    };
+    const c = await freeze("interleave-c", "2001-01-04T23:59:59Z");
+    const d = await freeze("interleave-d", "2001-01-05T00:00:01Z");
+    const member = async (vintage: string, svv: number) => {
+      const [m] = await fixtureDb<{ id: string }[]>`
+        INSERT INTO analytics_vintage_members (vintage_id, source_value_version_id, source_key)
+        VALUES (${vintage}, ${svv}, 'raw_indicator_history:ARCH') RETURNING id::text AS id`;
+      return m!.id;
+    };
+    const first = Number(svvIds.first);
+    const c1 = await member(c, first);
+    await member(d, first);
+    const c2 = await member(c, first + 1);
+    await member(d, first + 1);
+    _setArchiveClockForTests(() => Date.parse("2001-01-06T03:00:00Z"));
+    _resetArchiveForTests();
+    try {
+      const membersOf = async (id: string): Promise<{ vintages: Set<string>; members: Map<string, string> }> => {
+        const a = (await record(id)).body.append_only;
+        const vintages = new Set<string>();
+        for (const f of a.analytics_data_vintages.files) {
+          const lines = gunzipSync(await bytesOf(await get(`${P.archiveFiles}${f.path}`))).toString("utf8").trim().split("\n").slice(1);
+          for (const l of lines) vintages.add(l.split(",")[0]!);
+        }
+        const members = new Map<string, string>();
+        for (const f of a.analytics_vintage_members.files) {
+          const lines = gunzipSync(await bytesOf(await get(`${P.archiveFiles}${f.path}`))).toString("utf8").trim().split("\n").slice(1);
+          for (const l of lines) members.set(l.split(",")[0]!, l.split(",")[1]!);
+        }
+        return { vintages, members };
+      };
+      const day5 = await membersOf("2001-01-05T000000Z");
+      expect(day5.vintages.has(c)).toBe(true);
+      expect(day5.vintages.has(d)).toBe(false);
+      expect(day5.members.get(c1)).toBe(c);
+      expect(day5.members.get(c2)).toBe(c);
+      // No member of a vintage the backup holds is left for a later one.
+      const day6 = await membersOf("2001-01-06T000000Z");
+      expect(day6.vintages.has(d)).toBe(true);
+      expect([...day6.members.values()].includes(c)).toBe(false);
+    } finally {
+      _setArchiveClockForTests(() => NOW);
+      _resetArchiveForTests();
+    }
+  }, 120_000);
+});
+
+describe("archive: the encoder pin", () => {
+  test("this runtime's gzip is the pinned encoder (oven/bun:1.3.5, as backend/Dockerfile and CI pin)", async () => {
+    expect(await encoderFixtureSha256(), "the Bun runtime's zlib changed: every published archive identity would change").toBe(ARCHIVE_GZIP_FIXTURE_SHA256);
+  });
+
+  test("a server whose encoder is not the pinned one refuses archives instead of publishing other bytes", async () => {
+    _setArchiveEncoderPinForTests("0".repeat(64));
+    try {
+      const res = await get(`${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`);
+      expect(res.status).toBe(503);
+      expect(res.headers.get("Retry-After")).toBe("3600");
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+    } finally {
+      _setArchiveEncoderPinForTests(await encoderFixtureSha256());
+    }
+    expect((await get(`${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`)).status).toBe(200);
+  });
+
+  test("an encoded slash names no route", async () => {
+    expect((await get(`${P.archiveFiles}csv%2F2001-01-02T000000Z%2Fbackup.json`)).status).toBe(404);
+    expect((await get(`/api/public/analytics/reports%2f`)).status).toBe(404);
+  });
 });
 
 /** Every backend module a module reaches through its static imports. */
