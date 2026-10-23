@@ -14,9 +14,9 @@ import { referralCode, clearReferral } from "../../lib/referral.js";
 // Sign-ups go to a private Google Sheet through an Apps Script web app, not
 // to our API (RM-189: no backend work for launch). The script, its setup and
 // the sheet's columns are in docs/ops/early-access-sheet.md. The URL is public
-// by nature: whoever loads the page can read it. Empty until it is deployed,
-// and a send then fails visibly rather than pretending.
-export const EARLY_ACCESS_URL = "";
+// by nature: whoever loads the page can read it, and it can only append a
+// row (the script has no read path). A send without it fails visibly.
+export const EARLY_ACCESS_URL = "https://script.google.com/macros/s/AKfycbxzDpdBKN0YLyCVZPnrgPQTY7Ux92At-CC-lAY65gM3yidHaFsFfQGMHFXBwkM5TvyZQg/exec";
 
 // Sign-ups from anywhere but the production site say where they came from, so
 // a test from a preview or staging is told apart in the sheet.
