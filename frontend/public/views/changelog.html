@@ -57,7 +57,7 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">41 releases</span>
+        <span class="cl__count" x-text="countLabel">42 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
@@ -70,6 +70,13 @@
           <h3 class="cl__title"><a href="#next-a-new-home-page">A new home page</a></h3>
           <p>The home page leads with the model portfolio: the swarm's latest weights, read live, with the receipt behind them. It shows how the swarm makes it, the analysts and judges who do, and the ways to hold it.</p>
           <div class="cl__links"><a class="cl__lnk" href="/">Home</a><a class="cl__lnk" href="/swarm">The swarm</a></div>
+        </article>
+
+        <article class="cl__entry" id="next-early-access-to-the-vaults" data-tags="vaults" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Vaults</span></div>
+          <h3 class="cl__title"><a href="#next-early-access-to-the-vaults">Early access to the vaults</a></h3>
+          <p>Deposits into the vaults open in small groups, and one page takes the requests: a Telegram or X handle and three questions about your treasury. A swarm member's referral link carries through to the request.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/early-access">Early access</a></div>
         </article>
 
         <div class="cl__also" data-release="pending" x-show="!tag">
