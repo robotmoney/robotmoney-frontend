@@ -19,7 +19,11 @@ const storage = (store) => {
   try { return store ?? globalThis.sessionStorage; } catch { return undefined; }
 };
 
-/** Read `?ref=` from a query string and keep it, unless one is already held. */
+/**
+ * Read `?ref=` from a query string and keep it, unless one is already held.
+ * @param {string} [search]
+ * @param {Storage} [store]
+ */
 export function captureReferral(search = globalThis.location?.search ?? "", store) {
   const raw = new URLSearchParams(search).get("ref")?.trim();
   if (!raw || raw.length > MAX_LENGTH) return;
@@ -29,12 +33,12 @@ export function captureReferral(search = globalThis.location?.search ?? "", stor
   } catch { /* storage blocked: the code is lost, the page is not */ }
 }
 
-/** The held code, or null. */
+/** The held code, or null. @param {Storage} [store] */
 export function referralCode(store) {
   try { return storage(store)?.getItem(KEY) || null; } catch { return null; }
 }
 
-/** Forget the code once the form that carries it has been sent. */
+/** Forget the code once the form that carries it has been sent. @param {Storage} [store] */
 export function clearReferral(store) {
   try { storage(store)?.removeItem(KEY); } catch { /* nothing held */ }
 }

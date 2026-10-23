@@ -23,9 +23,9 @@ const ROT = [
   [27, 20, 39, 8, 14],
 ];
 
-const rotl = (v, n) => (n === 0 ? v : ((v << BigInt(n)) | (v >> BigInt(64 - n))) & MASK);
+const rotl = (/** @type {bigint} */ v, /** @type {number} */ n) => (n === 0 ? v : ((v << BigInt(n)) | (v >> BigInt(64 - n))) & MASK);
 
-/** Keccak-f[1600] over 25 lanes, indexed x + 5y. */
+/** Keccak-f[1600] over 25 lanes, indexed x + 5y. @param {bigint[]} s */
 function keccakF(s) {
   for (let round = 0; round < 24; round++) {
     const c = [0, 1, 2, 3, 4].map((x) => s[x] ^ s[x + 5] ^ s[x + 10] ^ s[x + 15] ^ s[x + 20]);
@@ -33,7 +33,7 @@ function keccakF(s) {
       const d = c[(x + 4) % 5] ^ rotl(c[(x + 1) % 5], 1);
       for (let y = 0; y < 25; y += 5) s[x + y] ^= d;
     }
-    const b = new Array(25);
+    const b = /** @type {bigint[]} */ (new Array(25));
     for (let x = 0; x < 5; x++) {
       for (let y = 0; y < 5; y++) b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(s[x + 5 * y], ROT[x][y]);
     }
@@ -44,7 +44,7 @@ function keccakF(s) {
   }
 }
 
-/** Keccak-256 (the Ethereum hash, not SHA3-256) of bytes, as lowercase hex. */
+/** Keccak-256 (the Ethereum hash, not SHA3-256) of bytes, as lowercase hex. @param {Uint8Array} bytes */
 export function keccak256Hex(bytes) {
   const rate = 136;
   const padded = new Uint8Array(Math.ceil((bytes.length + 1) / rate) * rate);
@@ -67,7 +67,7 @@ export function keccak256Hex(bytes) {
   return out;
 }
 
-/** The EIP-55 checksummed spelling of a 0x-prefixed 40-hex-digit address. */
+/** The EIP-55 checksummed spelling of a 0x-prefixed 40-hex-digit address. @param {string} address */
 export function toChecksumAddress(address) {
   const hex = address.slice(2).toLowerCase();
   const hash = keccak256Hex(new TextEncoder().encode(hex));
@@ -81,6 +81,8 @@ export function toChecksumAddress(address) {
  * All-lowercase and all-uppercase carry no checksum and are accepted (EIP-55);
  * a mixed-case address must match its checksum, so a mistyped character in a
  * copied address is caught.
+ * @param {unknown} input
+ * @returns {string | null}
  */
 export function parseEvmAddress(input) {
   const s = String(input ?? "").trim();

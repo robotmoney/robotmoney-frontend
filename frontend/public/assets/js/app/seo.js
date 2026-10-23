@@ -27,8 +27,8 @@ const OG_IMAGE_ALT = "Robot Money, the model portfolio for crypto, made by a swa
 
 // A route may name its own share image (a site path, 1200x630 like the
 // default, since the shell's og:image:width/height are fixed) and its alt.
-const imageOf = (m) => (m.image ? ORIGIN + m.image : OG_IMAGE);
-const imageAltOf = (m) => m.imageAlt || OG_IMAGE_ALT;
+const imageOf = (/** @type {{ image?: string }} */ m) => (m.image ? ORIGIN + m.image : OG_IMAGE);
+const imageAltOf = (/** @type {{ imageAlt?: string }} */ m) => m.imageAlt || OG_IMAGE_ALT;
 
 // The Organization node the shell's own JSON-LD defines (index.html). Route
 // structured data refers to it by this @id and repeats its name and url, so a
@@ -100,6 +100,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 //   faq         its questions and answers, word for word as the page shows
 //               them; the route's JSON-LD is then a FAQPage (faqGraph).
 //   crumb       its breadcrumb name, when the nav calls it something else.
+//   image       its own share image, a site path at 1200x630, and imageAlt
+//               its alt text; every other route uses the default.
 /**
  * @typedef {{
  *   title: string;
@@ -115,6 +117,8 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
  *   downloads?: { path: string; title: string; type: string }[];
  *   faq?: { id: string; q: string; a: string }[];
  *   crumb?: string;
+ *   image?: string;
+ *   imageAlt?: string;
  * }} RouteMeta
  */
 /** @type {Record<string, RouteMeta>} */
