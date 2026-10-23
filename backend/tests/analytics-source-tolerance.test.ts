@@ -16,6 +16,17 @@ import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { SOURCE_TOLERANCES, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { EXTRA_WRITE_KEYS } from "../src/analytics/extras.ts";
+import { sql } from "../src/db/client.ts";
+import { runAnalytics } from "../src/analytics/index.ts";
+import { CoverageError } from "../src/analytics/coverage.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
+import { loadRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
+import { loadFrozenVintage } from "../src/analytics/store/run-ledger-store.ts";
+import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.ts";
+import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
+import { mergeSeries } from "../src/analytics/transform/math.ts";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
 
 const srcDir = join(import.meta.dir, "..", "src", "analytics");
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -119,3 +130,173 @@ describe("withinTolerance", () => {
     expect(withinTolerance("not-a-real:key", 10, 10 * (1 + 1e-9))).toBe(false);
   });
 });
+
+// ── Issue 1421 (review finding AN-15): the tolerance decision binds downstream ──
+// Through REAL persistence, two whole-suite runs: the first commits the base
+// observations, the second's provider serves within-tolerance jitter (whole
+// VIX, SPX and BTC-USD series) and one material revision per handoff (T10Y2Y,
+// ETH, QQQ). The writers already kept the stored values for the jitter (D56);
+// the bug was that the orchestrator then computed from the FRESH in-memory
+// values anyway. Here the pre-fix handoff is reproduced from the same data
+// and shown to leak, and the run itself is shown not to.
+describe("issue 1421: downstream consumes the committed value and version, never the discarded jitter", () => {
+  useCleanDatabasePerTest(import.meta.file);
+
+  test("unchanged, discarded-jitter and materially revised observations through real persistence", async () => {
+    const base = await baseObservations();
+    await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
+    const first = poisonedSource(base, 3);
+    let firstResults: Record<string, unknown>;
+    try {
+      firstResults = await runAnalytics(ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink);
+    } finally {
+      first.restore();
+    }
+    const firstRunId = (firstResults as any).__runLedger.runId as string;
+    const reportRowsBefore = await reportRows(firstRunId);
+    const floorBefore = await loadRawIndicatorHistory();
+    const vixVersionsBefore = await versionsOf("raw_indicator_history:VIX");
+    const firstHeads = new Map(first.acquired.map((a) => [a.evidence.values[0]!.sourceKey, a.committed]));
+
+    const second = secondObservations(base);
+    const source = poisonedSource(second, 3);
+    const telemetry = capturingTelemetry();
+    const submitted: TerminalRunPackageInput[] = [];
+    let results: Record<string, unknown>;
+    try {
+      results = await runAnalytics(ASOF, undefined, source, {
+        ...directAnalyticsPersistence,
+        async submitTerminalRunPackage(input) {
+          submitted.push(input);
+          return directAnalyticsPersistence.submitTerminalRunPackage(input);
+        },
+      }, telemetry);
+    } finally {
+      source.restore();
+    }
+    const heads = new Map(source.acquired.map((a) => [a.evidence.values[0]!.sourceKey, a]));
+
+    // AN-15 reproduced on the pre-fix handoff: the old orchestrator prepared the
+    // in-memory merge of the floor with the FRESH fetch, and the old capture
+    // returned the fresh extras and research values. Both carry the jitter
+    // ingestion discarded, so the old code path computed from values that are
+    // stored nowhere.
+    const preFixRegistry = mergeSeries(floorBefore.VIX!, second.registry.VIX!);
+    expect(preFixRegistry.at(-1)!.value).toBe(second.registry.VIX!.at(-1)!.value);
+    expect(preFixRegistry.at(-1)!.value).not.toBe(floorBefore.VIX!.at(-1)!.value);
+    const spx = heads.get("backtest:^GSPC")!;
+    expect(spx.evidence.values.at(-1)!.value).not.toBe(spx.committed.at(-1)!.value); // what the old capture returned vs what is stored
+
+    // 1. Within tolerance: the stored rows and versions are unchanged, and
+    //    downstream received the stored value under the stored version.
+    const floorAfter = await loadRawIndicatorHistory();
+    expect(floorAfter.VIX).toEqual(floorBefore.VIX);
+    expect(await versionsOf("raw_indicator_history:VIX")).toEqual(vixVersionsBefore);
+    expect(spx.committed).toEqual(firstHeads.get("backtest:^GSPC")!);
+    const latest = submitted[0]!.regimeSnapshots!.at(-1)!;
+    const rawOf = (id: string) => (latest.indicators as { id: string; raw_value: number | null }[]).find((i) => i.id === id)!.raw_value;
+    expect(rawOf("VIX")).toBe(floorBefore.VIX!.at(-1)!.value);
+    expect(heads.get("research:BTC-USD")!.committed).toEqual(firstHeads.get("research:BTC-USD")!);
+
+    // 2. A material revision commits a new version, and downstream uses it.
+    const t10 = await versionsOf("raw_indicator_history:T10Y2Y");
+    const revised = t10.filter((v) => v.revision_kind === "revision");
+    expect(revised.length).toBe(1);
+    expect(revised[0]!.value).toBe(second.registry.T10Y2Y!.at(-1)!.value);
+    expect(rawOf("T10Y2Y")).toBe(second.registry.T10Y2Y!.at(-1)!.value);
+    expect(floorAfter.T10Y2Y!.at(-1)!.value).toBe(second.registry.T10Y2Y!.at(-1)!.value);
+    const eth = heads.get("backtest:ETH-USD")!;
+    const ethNew = eth.committed.at(-1)!;
+    expect(ethNew.value).toBe(second.extras.eth.at(-1)!.value);
+    expect(ethNew.versionId).not.toBe(firstHeads.get("backtest:ETH-USD")!.at(-1)!.versionId);
+    expect(heads.get("research:QQQ")!.committed.at(-1)!.value).toBe(second.research.qqq.at(-1)!.value);
+
+    // 3. The run records the versions it consumed: its frozen vintage holds
+    //    the stored VIX/SPX versions and the new T10Y2Y/ETH/QQQ versions.
+    const vintage = await loadFrozenVintage((results as any).__runLedger.vintage.vintageId);
+    const member = (key: string, date: string) => vintage!.members.find((m) => m.sourceKey === key && m.marketDate === date);
+    expect(member("backtest:^GSPC", spx.evidence.values.at(-1)!.marketDate!)!.versionId).toBe(spx.committed.at(-1)!.versionId);
+    expect(member("backtest:ETH-USD", eth.evidence.values.at(-1)!.marketDate!)!.versionId).toBe(ethNew.versionId);
+    expect(member("raw_indicator_history:T10Y2Y", revised[0]!.market_date)!.versionId).toBe(String(revised[0]!.id));
+
+    // 4. The input evidence reports the collected-versus-committed mismatches.
+    const evidence = telemetry.runs[0]!.artifacts.find((a) => a.kind === "committed-input-evidence")!.preview as {
+      registry: { indicators: Record<string, number> };
+      acquisitions: Record<string, { mismatched: number }>;
+      acquiredKeys: number;
+      versionsSha256: string;
+    };
+    // With an acquisition sink the swap happens at the ledger, so the registry
+    // floor already agrees with the fetched (committed) values; the jitter is
+    // reported against the acquisition that carried it.
+    expect(evidence.registry.indicators).toEqual({});
+    expect(evidence.acquisitions["backtest:^GSPC"]!.mismatched).toBe(second.extras.spx.length);
+    expect(evidence.acquisitions["research:BTC-USD"]!.mismatched).toBe(second.research.btc.length);
+    expect(evidence.acquisitions["raw_indicator_history:VIX"]!.mismatched).toBe(second.registry.VIX!.length);
+    expect(evidence.acquisitions["backtest:ETH-USD"]).toBeUndefined();
+    expect(evidence.acquiredKeys).toBe(source.acquired.length);
+    expect(evidence.versionsSha256).toMatch(/^[0-9a-f]{64}$/);
+
+    // 5. The first run's frozen output and report rows are byte-unchanged.
+    expect(await reportRows(firstRunId)).toEqual(reportRowsBefore);
+    expect(reportRowsBefore.outputs.length).toBeGreaterThan(0);
+  }, 300_000);
+
+  test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
+    const base = await baseObservations();
+    const macro = new Set(INDICATORS.filter((i) => i.panel === "macro").map((i) => i.id));
+    const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !macro.has(id))) };
+    const missingRequired = poisonedSource(noMacro, 2);
+    let err: unknown;
+    try {
+      await runAnalytics(ASOF, "regime", missingRequired, directAnalyticsPersistence, noopTelemetrySink);
+    } catch (e) {
+      err = e;
+    } finally {
+      missingRequired.restore();
+    }
+    expect(err).toBeInstanceOf(CoverageError);
+    expect((err as CoverageError).missingPanels).toEqual(["macro"]);
+    expect(missingRequired.calls).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
+    expect(missingRequired.afterExtract).toEqual([]);
+    expect(missingRequired.poison!.attempts).toEqual([]);
+
+    const noExtras: typeof base = { ...base, extras: { spx: [], eth: [], tbill3m: [] } };
+    const missingOptional = poisonedSource(noExtras, 2);
+    const submitted: TerminalRunPackageInput[] = [];
+    try {
+      await runAnalytics(ASOF, "regime", missingOptional, {
+        ...directAnalyticsPersistence,
+        async submitTerminalRunPackage(input) {
+          submitted.push(input);
+          return directAnalyticsPersistence.submitTerminalRunPackage(input);
+        },
+      }, noopTelemetrySink);
+    } finally {
+      missingOptional.restore();
+    }
+    const latest = submitted[0]!.regimeSnapshots!.at(-1)!;
+    expect(latest.regime).not.toBeNull();
+    expect(latest.backtest).toEqual({}); // no portfolio has prices
+    const cells = Object.values((latest.correlations as { forward: Record<string, Record<string, { rho: number | null; n: number }>> }).forward).flatMap((c) => Object.values(c));
+    expect(cells.length).toBeGreaterThan(0);
+    expect(cells.every((c) => c.rho === null && c.n === 0)).toBe(true);
+    expect(missingOptional.afterExtract).toEqual([]);
+    expect(missingOptional.poison!.attempts).toEqual([]);
+  }, 300_000);
+});
+
+async function versionsOf(sourceKey: string) {
+  return sql<{ id: string; market_date: string; value: number; revision_kind: string }[]>`
+    SELECT id::text AS id, market_date::text AS market_date, value, revision_kind
+    FROM source_value_versions WHERE source_key = ${sourceKey} ORDER BY id`;
+}
+
+async function reportRows(runId: string) {
+  const outputs = await sql`SELECT id::text AS id, artifact_kind, payload_bytes, checksum FROM analytics_output_snapshots WHERE run_id = ${runId}::bigint ORDER BY id`;
+  const reports = await sql`SELECT id::text AS id, report_bytes, checksum FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint ORDER BY id`;
+  return {
+    outputs: outputs.map((r) => ({ ...r, payload_bytes: Buffer.from(r.payload_bytes as Uint8Array).toString("base64") })),
+    reports: reports.map((r) => ({ ...r, report_bytes: Buffer.from(r.report_bytes as Uint8Array).toString("base64") })),
+  };
+}

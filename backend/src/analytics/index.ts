@@ -186,7 +186,7 @@ export async function runAnalytics(
   // Issue 1421: every acquisition's collected values are compared with the
   // committed values the ledger hands back, and the run's input evidence
   // records the difference and the consumed versions.
-  const inputEvidence: InputEvidence = { registry: null, acquisitions: {} };
+  const inputEvidence: InputEvidence = { registry: null, acquisitions: {}, acquiredKeys: 0, acquiredValues: 0, consumed: [] };
   const saveAcquisition = persistence.saveSourceAcquisition?.bind(persistence);
   const acquisitionSink: AcquisitionSink | undefined = saveAcquisition
     ? {
@@ -361,7 +361,7 @@ export async function runAnalytics(
       collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, s0);
     }
   }
-  if (inputEvidence.registry || Object.keys(inputEvidence.acquisitions).length > 0) {
+  if (inputEvidence.registry || inputEvidence.acquiredKeys > 0) {
     reportInputEvidence(inputEvidence, collector, logger);
   }
 
@@ -665,18 +665,23 @@ export async function runAnalytics(
 // committed floor and ledger heads. A within-tolerance re-observation keeps
 // the stored value, so a mismatch here is jitter the ingestion boundary
 // discarded (or a revision another writer committed first), never a value
-// downstream saw. `versionsSha256` fingerprints the ledger versions consumed
-// per source key; the run's frozen vintage holds those same versions.
-interface AcquisitionEvidenceSummary {
-  collected: number;
+// downstream saw. With an acquisition sink the swap happens at the ledger
+// (captureSourceAcquisition), so the mismatch shows under `acquisitions`;
+// `registry` catches a floor that disagrees with what was fetched.
+// `versionsSha256` fingerprints the ledger versions consumed (source key and
+// version id, sorted); the run's frozen vintage holds those same versions.
+// Compact on purpose: telemetry previews are bounded (4 kB).
+interface AcquisitionMismatch {
   mismatched: number;
-  firstMismatch: { date: string | null; collected: number; committed: number } | null;
-  versionsSha256: string | null;
+  first: { date: string | null; collected: number; committed: number };
 }
 
 interface InputEvidence {
   registry: { mismatched: number; indicators: Record<string, number> } | null;
-  acquisitions: Record<string, AcquisitionEvidenceSummary>;
+  acquisitions: Record<string, AcquisitionMismatch>;
+  acquiredKeys: number;
+  acquiredValues: number;
+  consumed: string[];
 }
 
 function recordAcquisitionEvidence(
@@ -687,21 +692,16 @@ function recordAcquisitionEvidence(
   const key = evidence.values[0]?.sourceKey;
   if (!key) return;
   const committed = saved.committed ?? [];
-  let mismatched = 0;
-  let firstMismatch: AcquisitionEvidenceSummary["firstMismatch"] = null;
+  out.acquiredKeys++;
+  out.acquiredValues += evidence.values.length;
   evidence.values.forEach((v, i) => {
     const c = committed[i];
-    if (c && c.value !== v.value) {
-      mismatched++;
-      firstMismatch ??= { date: v.marketDate ?? v.marketInstant, collected: v.value, committed: c.value };
-    }
+    if (!c) return;
+    out.consumed.push(`${v.sourceKey}:${c.versionId}`);
+    if (c.value === v.value) return;
+    const m = (out.acquisitions[key] ??= { mismatched: 0, first: { date: v.marketDate ?? v.marketInstant, collected: v.value, committed: c.value } });
+    m.mismatched++;
   });
-  out.acquisitions[key] = {
-    collected: evidence.values.length,
-    mismatched,
-    firstMismatch,
-    versionsSha256: committed.length > 0 ? sha256Hex(committed.map((c) => c.versionId).join(",")) : null,
-  };
 }
 
 function registryEvidence(
@@ -721,16 +721,21 @@ function registryEvidence(
 }
 
 function reportInputEvidence(evidence: InputEvidence, collector: TelemetryCollector, logger: Logger): void {
-  const mismatchedKeys = Object.entries(evidence.acquisitions).filter(([, a]) => a.mismatched > 0);
+  const acquiredMismatched = Object.values(evidence.acquisitions).reduce((n, a) => n + a.mismatched, 0);
   const registryMismatched = evidence.registry?.mismatched ?? 0;
-  if (registryMismatched > 0 || mismatchedKeys.length > 0) {
+  if (registryMismatched > 0 || acquiredMismatched > 0) {
     logger.log?.(
-      `[analytics] committed inputs: ${registryMismatched} registry point(s) and ` +
-        `${mismatchedKeys.reduce((n, [, a]) => n + a.mismatched, 0)} acquired value(s) across ${mismatchedKeys.length} source key(s) ` +
-        "differ from what was collected; downstream uses the committed values",
+      `[analytics] committed inputs: ${registryMismatched} registry point(s) and ${acquiredMismatched} acquired value(s) ` +
+        `across ${Object.keys(evidence.acquisitions).length} source key(s) differ from what was collected; downstream uses the committed values`,
     );
   }
-  collector.artifact("extract", "committed-input-evidence", evidence);
+  collector.artifact("extract", "committed-input-evidence", {
+    registry: evidence.registry,
+    acquisitions: evidence.acquisitions,
+    acquiredKeys: evidence.acquiredKeys,
+    acquiredValues: evidence.acquiredValues,
+    versionsSha256: evidence.consumed.length > 0 ? sha256Hex([...evidence.consumed].sort().join(",")) : null,
+  });
 }
 
 // ─── snapshot-row builder (mirrors update.js writeFullHistoryCsv + writeSnapshot) ─

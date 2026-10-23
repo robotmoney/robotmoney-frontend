@@ -25,6 +25,23 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
+import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.ts";
+import type { Point } from "../src/analytics/types.ts";
+import { PANELS } from "../src/analytics/analyze/indicators.ts";
+import { computeRegime } from "../src/analytics/analyze/compute.ts";
+import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
+import { computeBacktest, stripDailyFromSnapshot } from "../src/analytics/analyze/backtest.ts";
+import { TOP7, computeChannelDivergence, computeLateCycle } from "../src/analytics/analyze/research-signals.ts";
+import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
+import {
+  ASOF as COMMITTED_ASOF,
+  baseObservations,
+  capturingTelemetry,
+  committedAfterSecond,
+  poisonedSource,
+  secondObservations,
+} from "./support/committed-inputs.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -199,4 +216,115 @@ test(
     expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);
   },
   { timeout: 120_000 },
+);
+
+// ── Issue 1421 (review findings AN-13, AN-15): downstream runs from committed data ──
+// A whole-suite run (regime + both research signals) over real persistence.
+// The source acquires through the production captureSourceAcquisition path,
+// and the moment its third and last extract call returns it poisons fetch,
+// node:http(s), WebSocket, EventSource and XMLHttpRequest, and turns every
+// further source call and acquisition save into a recorded, throwing call.
+// The second run's provider serves within-tolerance jitter and one material
+// revision per handoff; every handoff must receive exactly the COMMITTED
+// observations (the stored value for the jitter, the new version for the
+// revision), the frozen vintage must hold exactly the versions consumed, and
+// nothing may acquire after extract.
+test(
+  "after extract, with HTTP and acquisition poisoned, registry, backtest-extras and research handoffs receive exactly the committed observations and versions",
+  async () => {
+    const base = await baseObservations();
+    await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
+    const first = poisonedSource(base, 3);
+    try {
+      await runAnalytics(COMMITTED_ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink);
+    } finally {
+      first.restore();
+    }
+
+    const second = secondObservations(base);
+    const committed = committedAfterSecond(base, second);
+    const source = poisonedSource(second, 3);
+    const telemetry = capturingTelemetry();
+    const submitted: TerminalRunPackageInput[] = [];
+    const persistence: AnalyticsPersistence = {
+      ...directAnalyticsPersistence,
+      async submitTerminalRunPackage(input) {
+        submitted.push(input);
+        return directAnalyticsPersistence.submitTerminalRunPackage(input);
+      },
+    };
+    let results: Record<string, unknown>;
+    try {
+      results = await runAnalytics(COMMITTED_ASOF, undefined, source, persistence, telemetry);
+    } finally {
+      source.restore();
+    }
+
+    // Extract ran once per handoff, then nothing acquired: no source call, no
+    // acquisition save and no HTTP attempt of any kind after it.
+    expect(source.calls).toEqual(["fetchIndicators", "fetchBacktestExtras", "fetchResearchInputs"]);
+    expect(source.poison).not.toBeNull();
+    expect(source.afterExtract).toEqual([]);
+    expect(source.poison!.attempts).toEqual([]);
+    expect(source.acquired.length).toBe(Object.keys(second.registry).length + 3 + 4 + TOP7.length + 2);
+
+    // Registry handoff: the jittered VIX reached downstream as the STORED value,
+    // the revised T10Y2Y as its new version.
+    const rows = submitted[0]!.regimeSnapshots!;
+    const latest = rows[rows.length - 1]!;
+    const rawOf = (id: string) => (latest.indicators as { id: string; raw_value: number | null }[]).find((i) => i.id === id)!.raw_value;
+    expect(rawOf("VIX")).toBe(base.registry.VIX!.at(-1)!.value);
+    expect(rawOf("VIX")).not.toBe(second.registry.VIX!.at(-1)!.value);
+    expect(rawOf("T10Y2Y")).toBe(second.registry.T10Y2Y!.at(-1)!.value);
+
+    // Regime and backtest-extras handoffs: the outputs are exactly the pure
+    // calculation over the committed observations, and differ from the same
+    // calculation over what was collected.
+    const prepared = prepareRegimeInputs(committed.registry, { start: "2018-01-01", asof: COMMITTED_ASOF });
+    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, prepared.ages);
+    expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
+    const analysis = (extras: typeof committed.extras) =>
+      JSON.stringify({
+        correlations: computeCorrelations(prepared.dateAxis, r2, extras),
+        backtest: stripDailyFromSnapshot(computeBacktest(prepared.dateAxis, r2, extras)),
+      });
+    const published = JSON.stringify({ correlations: latest.correlations, backtest: latest.backtest });
+    expect(published).toBe(analysis(committed.extras));
+    expect(published).not.toBe(analysis(second.extras));
+
+    // Research handoffs: both signals are exactly the calculation over the
+    // committed research inputs (STABLES from the committed floor, MNA from the
+    // persisted floor), and the jittered BTC-USD did not reach them.
+    const stables = committed.registry.STABLES!;
+    const channel = (btc: Point[], qqq: Point[]) => JSON.stringify(computeChannelDivergence({ btc, qqq, spy: committed.research.spy, stables }, COMMITTED_ASOF));
+    expect(JSON.stringify(results["channel-divergence"])).toBe(channel(committed.research.btc, committed.research.qqq));
+    expect(JSON.stringify(results["channel-divergence"])).not.toBe(channel(second.research.btc, second.research.qqq));
+    const r = committed.research;
+    expect(JSON.stringify(results["late-cycle-signals"])).toBe(
+      JSON.stringify(computeLateCycle({ spy: r.spy, rsp: r.rsp, top7: r.top7, mna: base.mna, margin: r.margin, conf: r.conf }, COMMITTED_ASOF)),
+    );
+
+    // Versions: every committed value the ledger handed back is the member of
+    // the run's frozen vintage at that coordinate, version for version.
+    const vintageId = (results as any).__runLedger.vintage.vintageId as string;
+    const vintage = await loadFrozenVintage(vintageId);
+    const members = new Map(vintage!.members.map((m) => [`${m.sourceKey}|${m.marketDate}`, m]));
+    let checked = 0;
+    for (const { evidence, committed: heads } of source.acquired) {
+      expect(heads.length).toBe(evidence.values.length);
+      evidence.values.forEach((v, i) => {
+        const member = members.get(`${v.sourceKey}|${v.marketDate}`);
+        expect(member, `${v.sourceKey} ${v.marketDate}`).toBeDefined();
+        expect(member!.versionId).toBe(heads[i]!.versionId);
+        expect(member!.value).toBe(heads[i]!.value);
+        checked++;
+      });
+    }
+    expect(checked).toBeGreaterThan(50_000);
+
+    // Input evidence: the collected-versus-committed differences are reported.
+    const artifact = telemetry.runs[0]!.artifacts.find((a) => a.kind === "committed-input-evidence");
+    expect(artifact).toBeDefined();
+  },
+  { timeout: 300_000 },
 );
