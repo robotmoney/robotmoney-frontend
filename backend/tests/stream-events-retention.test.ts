@@ -144,11 +144,13 @@ for (const role of RUNTIME) {
     const [{ who }] = (await db`SELECT current_user AS who`) as unknown as { who: string }[];
     expect(who).toBe(role);
     expect({
-      "DELETE swarm_stream_events": await sqlstate(db, "DELETE FROM swarm_stream_events WHERE seq = 1"),
-      "DELETE swarm_stream_events (all)": await sqlstate(db, "DELETE FROM swarm_stream_events"),
-      "TRUNCATE swarm_stream_events": await sqlstate(db, "TRUNCATE swarm_stream_events"),
-      "DELETE swarm_stream_head": await sqlstate(db, "DELETE FROM swarm_stream_head"),
-      "TRUNCATE swarm_stream_head": await sqlstate(db, "TRUNCATE swarm_stream_head"),
+      // Schema-qualified: rm_worker holds no USAGE on public since 0127 (D75),
+      // so an unqualified name would not resolve at all (42P01).
+      "DELETE swarm_stream_events": await sqlstate(db, "DELETE FROM public.swarm_stream_events WHERE seq = 1"),
+      "DELETE swarm_stream_events (all)": await sqlstate(db, "DELETE FROM public.swarm_stream_events"),
+      "TRUNCATE swarm_stream_events": await sqlstate(db, "TRUNCATE public.swarm_stream_events"),
+      "DELETE swarm_stream_head": await sqlstate(db, "DELETE FROM public.swarm_stream_head"),
+      "TRUNCATE swarm_stream_head": await sqlstate(db, "TRUNCATE public.swarm_stream_head"),
     }).toEqual({
       "DELETE swarm_stream_events": "42501",
       "DELETE swarm_stream_events (all)": "42501",
@@ -157,9 +159,9 @@ for (const role of RUNTIME) {
       "TRUNCATE swarm_stream_head": "42501",
     });
     expect(await count()).toBe(before);
-    // Reading stays open: rm_app serves the stream, and rm_worker's SELECT is
-    // 0062's.
-    expect(await sqlstate(db, "SELECT seq FROM swarm_stream_events LIMIT 1")).toBeNull();
+    // Reading stays open to rm_app, which serves the stream. rm_worker's
+    // 0062 SELECT left with 0127 (D75): it reads nothing at all.
+    expect(await sqlstate(db, "SELECT seq FROM public.swarm_stream_events LIMIT 1")).toBe(role === "rm_app" ? null : "42501");
   });
 }
 
@@ -246,7 +248,7 @@ test("grant reconciliation revokes DELETE and TRUNCATE from every runtime role o
     await asOwner(async (tx) => tx.unsafe(grantsSql));
     expect(await held()).toEqual([]);
     expect(await sqlstate(logins.get("rm_app")!, "DELETE FROM swarm_stream_events WHERE seq = 1")).toBe("42501");
-    expect(await sqlstate(logins.get("rm_worker")!, "DELETE FROM jobs WHERE false")).toBe("42501");
+    expect(await sqlstate(logins.get("rm_worker")!, "DELETE FROM public.jobs WHERE false")).toBe("42501");
   } finally {
     await fixtureDb.unsafe("REVOKE DELETE, TRUNCATE ON swarm_stream_events, jobs FROM rm_app, rm_worker, rm_readonly");
   }
@@ -290,7 +292,8 @@ test("grant reconciliation gives rm_app exactly SELECT and UPDATE on the counter
         CROSS JOIN (VALUES ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE')) AS p(privilege)
        WHERE has_table_privilege(r.rolname, 'public.swarm_stream_head', p.privilege)
        ORDER BY 1`) as unknown as { item: string }[]).map((r) => r.item);
-  const exactly0081 = ["rm_app:SELECT", "rm_app:UPDATE", "rm_readonly:SELECT", "rm_worker:SELECT"];
+  // rm_worker's SELECT left with 0127 (D75, issue 1034).
+  const exactly0081 = ["rm_app:SELECT", "rm_app:UPDATE", "rm_readonly:SELECT"];
   expect(await held()).toEqual(exactly0081);
   // Red control: a hand-widened INSERT is taken back, and a reconciliation run
   // on a clean database adds nothing (the ordinary sweep would add INSERT).
@@ -342,7 +345,7 @@ test("migration 0098 seeds the counter from the log it finds, so an upgraded dat
   expect(await domain.streamHeadSequence()).toBe(max + 1);
   // The grants the file itself gives, as reconciliation would re-assert them.
   expect(await sqlstate(logins.get("rm_app")!, "SELECT seq FROM swarm_stream_head")).toBeNull();
-  expect(await sqlstate(logins.get("rm_worker")!, "UPDATE swarm_stream_head SET seq = seq + 1")).toBe("42501");
+  expect(await sqlstate(logins.get("rm_worker")!, "UPDATE public.swarm_stream_head SET seq = seq + 1")).toBe("42501");
 });
 
 test("migration 0097 is what dropped the triggers, and it keeps the revoke in the same file", () => {

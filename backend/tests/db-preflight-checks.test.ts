@@ -30,6 +30,7 @@ import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import {
   ENV_FILE_ALLOWED_KEYS,
+  ENV_FILE_RETIRED_KEYS,
   PREFLIGHT_CHECK_NUMBER,
   RUNTIME_DELETE_REVOKED_TABLES,
   checkEnvCredentials,
@@ -1399,20 +1400,20 @@ describe("check 3b — does the booting code support the installed version", () 
 
 describe("check 4 — ~/.env holds only the keys §3 lists", () => {
   // The connection keys as scripts/lib/env-role.ts reads them (the
-  // DigitalOcean panel's spelling), plus the three runtime role passwords.
+  // DigitalOcean panel's spelling), plus the two runtime role passwords
+  // (rm_worker's left with D75, issue 1034).
   const SAFE = [
     "host = db.example.invalid",
     "port = 25060",
     "database = defaultdb",
     "sslmode = require",
     "rm_app = token-a",
-    "rm_worker = token-b",
     "rm_readonly = token-c",
   ];
 
   test("the allowlist is exactly §3's keys, spelled the way env-role.ts reads the connection and the roles", () => {
     // §3: "the remote connection (host, port, dbname); the runtime role
-    // passwords rm_app, rm_worker and rm_readonly; RM_ENV; and RM_CREDENTIALS."
+    // passwords rm_app and rm_readonly; RM_ENV; and RM_CREDENTIALS."
     // D61 adds the owner password `rm_owner`. `doadmin` is not allowed (D61
     // amendment, owner, 2026-10-08): it is never stored in a file.
     // env-role.ts is the one resolver the host-side tools use, so its
@@ -1457,6 +1458,23 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     expect(prod.findings[0]?.message).toContain("OPENCODE_API_KEY");
     const stage = await checkEnvCredentials(context({ env: "stage", connection: "remote", envFilePath }));
     expect(stage.findings.map((f) => f.severity)).toEqual(["warn"]);
+  });
+
+  test("D75: a retired rm_worker line warns on prod and on stage, and never refuses, so the release that moves it out is not stopped by it", async () => {
+    expect(Object.keys(ENV_FILE_RETIRED_KEYS)).toEqual(["rm_worker"]);
+    expect(ENV_FILE_ALLOWED_KEYS).not.toContain("rm_worker");
+    const envFilePath = writeEnvFile("retired-worker.env", [...SAFE, "rm_worker = token-b-not-printed"]);
+    for (const env of ["prod", "stage"] as const) {
+      const result = await checkEnvCredentials(context({ env, connection: "remote", envFilePath }));
+      expect(result.findings.map((f) => f.severity)).toEqual(["warn"]);
+      expect(result.findings[0]?.message).toContain("rm_worker");
+      expect(result.findings[0]?.message).not.toContain("token-b-not-printed");
+    }
+    // Red control: the retired key's spelling only. `RM_WORKER` is a key
+    // nothing reads, and still refuses on prod.
+    const upper = writeEnvFile("retired-worker-upper.env", [...SAFE, "RM_WORKER = x"]);
+    const prod = await checkEnvCredentials(context({ env: "prod", connection: "remote", envFilePath: upper }));
+    expect(prod.findings.map((f) => f.severity)).toEqual(["refuse"]);
   });
 
   test("the file preflight reads by default is env-role.ts's $HOME/.env", () => {

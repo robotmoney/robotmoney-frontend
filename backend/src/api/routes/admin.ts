@@ -20,6 +20,8 @@ import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
 import { getOverviewProjection, PRODUCTION_KINDS } from "../../admin/overview.ts";
 import { detectAllGaps } from "../../ops/gap-detector.ts";
 import { isPrivileged } from "../auth.ts";
+import { config } from "../../config.ts";
+import { adminCorrections } from "../../referrals/lookup.ts";
 import { handleAdminMaintenance } from "./admin-maintenance.ts";
 import { hashKey } from "../../lib/keys.ts";
 import { getAnalyticsReadMode } from "../../analytics/cutover/read-mode.ts";
@@ -314,8 +316,8 @@ const readRawSeries = registerQuery({
   probe: {
     statement:
       "SELECT date::text AS date, value, source FROM raw_indicator_history WHERE indicator = $1 " +
-      "AND ($2::date IS NULL OR date >= $3) AND ($4::date IS NULL OR date <= $5) ORDER BY date DESC LIMIT $6",
-    params: ["probe", null, null, null, null, 1],
+      "AND date >= COALESCE($2::date, '-infinity'::date) AND date <= COALESCE($3::date, 'infinity'::date) ORDER BY date DESC LIMIT $4",
+    params: ["probe", null, null, 1],
   },
 });
 
@@ -601,6 +603,17 @@ export async function handleAdmin(
   if (m === "GET" && p === "/api/admin/gaps") {
     if (!await isPrivileged(req)) return FORBIDDEN;
     return { status: 200, body: { series: await detectAllGaps() } };
+  }
+
+  // GET /api/admin/referrals/corrections — the referral correction log,
+  // read-only (issue 1371, referrals-spec §4). Corrections are recorded by a
+  // reviewed config change shipped in a release, never by an admin-route write
+  // (D66). The panel shows each entry with its signature, nonce, expiry and
+  // code checks; an EIP-1271 signature costs one read of the wallet contract
+  // through the shared RPC transport. No chain scan runs here.
+  if (m === "GET" && p === "/api/admin/referrals/corrections") {
+    if (!await isPrivileged(req)) return FORBIDDEN;
+    return { status: 200, body: await adminCorrections({ rpcUrl: config.baseRpcUrl }) };
   }
 
   // GET /api/admin/jobs — cursor-paginated jobs (kind/status/scope/created-range
@@ -934,12 +947,14 @@ export async function handleAdmin(
       return { status: 200, body: { indicator, points } };
     }
     // `source` (issue #397): row-level provenance — null on every pre-migration
-    // row (genuinely unknown, never fabricated).
+    // row (genuinely unknown, never fabricated). The bounds are concrete ranges
+    // (±infinity when absent), not `$x IS NULL OR date >= $x`, so the planner
+    // can use them as index conditions (issue 1034).
     const points = await on(sql, readRawSeries)<Row>`
       SELECT date::text AS date, value, source FROM raw_indicator_history
        WHERE indicator = ${indicator}
-         AND (${from || null}::date IS NULL OR date >= ${from || null})
-         AND (${to || null}::date IS NULL OR date <= ${to || null})
+         AND date >= COALESCE(${from || null}::date, '-infinity'::date)
+         AND date <= COALESCE(${to || null}::date, 'infinity'::date)
        ORDER BY date DESC LIMIT ${limit}`;
     return { status: 200, body: { indicator, points } };
   }

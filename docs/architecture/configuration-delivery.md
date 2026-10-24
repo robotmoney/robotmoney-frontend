@@ -1,8 +1,15 @@
 # Configuration delivery
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers a reviewed, versioned referral registry and historical deployment manifest.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371). The referral registry (codes, lifecycle
+> times, the one launch block), the correction log and the coverage manifest are
+> reviewed JSON files under `backend/src/referrals/config/`, shipped in the image
+> with the rest of `backend/` and changed only by a reviewed change in a release.
+> `accepted-revisions.json` holds them as they stood at each production version
+> tag, with the tag time as the revision's deployment time; CI validates the
+> working files against the last accepted revision with "now" as the earliest
+> possible deployment ([D76](../decisions.md#d76)). No environment variable and no
+> new grant is involved; the delivery rules below are unchanged.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 

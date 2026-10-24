@@ -165,10 +165,9 @@ function seconds(duration: string | undefined): number {
 
 test("worker-analytics waits for a healthy api and outlasts its 30 s release window on stop", async () => {
   const w = (await services())["worker-analytics"]!;
-  expect(w.depends_on).toMatchObject({
-    postgres: { condition: "service_healthy" },
-    api: { condition: "service_healthy" },
-  });
+  // The worker holds no database credential (issue 1034, D75): it waits for the
+  // api alone, and never for postgres directly.
+  expect(w.depends_on).toEqual({ api: { condition: "service_healthy" } });
   expect(seconds(w.stop_grace_period)).toBeGreaterThan(30);
 });
 

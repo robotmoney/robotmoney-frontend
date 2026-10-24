@@ -688,15 +688,15 @@ export function createStack(
    * prepares inside its own journaled plan (`prepareDatabase`).
    *
    * The containers must already be configured with the runtime roles' URLs
-   * (throwawayStackDatabase): the api and worker preflights refuse the
-   * superuser (spec §7.2), so a stack that would hand it to them is refused
+   * (throwawayStackDatabase): the api's preflight refuses the superuser
+   * (spec §7.2), so a stack that would hand it to it is refused
    * here, before anything is written.
    */
   async function prepareOwnDatabase(): Promise<void> {
     if (!cfg.instance) throw new Error("a throwaway stack's database needs an instance: the role passwords and token files live in its state directory");
     if (!cfg.database.roleUrls) {
       throw new Error(
-        "this stack's containers would log in as the postgres superuser, which the api and worker preflights refuse " +
+        "this stack's api would log in as the postgres superuser, which the api's preflight refuses " +
           "(smoke-production-spec.md §7.2): build its database config with throwawayStackDatabase(instance.paths)",
       );
     }

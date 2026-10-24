@@ -17,7 +17,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { indexBuybacks, _resetBuybackScanCachesForTests, _resetBuybackRangeCapForTests, rangeCapFromError } from "../src/chain/buyback-logs.ts";
+import { indexBuybacks, liveIndexFailedLine, _resetBuybackScanCachesForTests, _resetBuybackRangeCapForTests, rangeCapFromError } from "../src/chain/buyback-indexer.ts";
+import { evalBuyback } from "../../scripts/lib/gate/standing.ts";
 import { BaseRpcHttpError } from "../src/chain/base-rpc-client.ts";
 import { _resetRpcConcurrencyForTests, _resetRpcRateLimiterForTests } from "../src/chain/base-rpc-client.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
@@ -271,6 +272,16 @@ test("rangeCapFromError reads the cap only from a 413 that names one", () => {
   expect(rangeCapFromError(new Error("eth_getLogs is limited to a 500 range"))).toBeNull();
 });
 
+test("the live index failure is one self-describing line: R8.v warns on a 429 and fails on anything else (issue 1387)", () => {
+  const r429 = liveIndexFailedLine(new BaseRpcHttpError(429, "request limit reached"));
+  // The same text scripts/tests/unit/standing-soak.test.ts uses as its 429 fixture.
+  expect(r429).toBe("buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 request limit reached");
+  expect(liveIndexFailedLine(new BaseRpcHttpError(429, '{"error":\n "x"}'))).not.toContain("\n");
+  expect(evalBuyback([r429]).status).toBe("WARN");
+  expect(evalBuyback([liveIndexFailedLine(new BaseRpcHttpError(413, "request entity too large"))]).status).toBe("FAIL");
+  expect(evalBuyback([liveIndexFailedLine(new Error("Base RPC error -32000: header not found"))]).status).toBe("FAIL");
+});
+
 test("a scan read the provider accepts is one request: nothing is split", async () => {
   serve();
   await indexBuybacks();
@@ -283,7 +294,8 @@ test("one block the provider still refuses cannot be split: the failure is logge
   serve({ maxScanRange: 0 });
   const errors: string[] = [];
   const realError = console.error;
-  console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+  // One string argument: the line the log reader sees is the whole message (issue 1387).
+  console.error = (...a: unknown[]) => { errors.push(a.length === 1 && typeof a[0] === "string" ? a[0] : `NOT ONE LINE: ${a.map(String).join(" ")}`); };
   const realWarn = console.warn;
   console.warn = () => {};
   try {

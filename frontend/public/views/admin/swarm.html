@@ -56,6 +56,7 @@
       <button type="button" class="adm-tab" :class="tab === 'topics' && 'adm-tab--active'" @click="setTab('topics')">Topics</button>
       <button type="button" class="adm-tab" :class="tab === 'members' && 'adm-tab--active'" @click="setTab('members')">Members</button>
       <button type="button" class="adm-tab" :class="tab === 'sessions' && 'adm-tab--active'" @click="setTab('sessions')">Sessions</button>
+      <button type="button" class="adm-tab" :class="tab === 'referrals' && 'adm-tab--active'" @click="setTab('referrals')" data-testid="tab-referrals">Referral corrections</button>
     </div>
 
     <!-- ── Topics ─────────────────────────────────────────────────────── -->
@@ -246,6 +247,47 @@
               </tr>
             </template>
             <tr x-show="sessions.length === 0"><td class="adm-dim" colspan="4">No sessions yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── Referral corrections (issue 1371, referrals-spec §4) ─────────── -->
+    <!-- Read-only. A correction is recorded by a reviewed change to
+         backend/src/referrals/config/corrections.json shipped in a release,
+         never from this page (D66). The panel shows each entry with the
+         checks it can make now: signature (EIP-191 here, EIP-1271 by one read
+         of the wallet contract), nonce, expiry, code. Whether the wallet was
+         unbound and the deposit self-funded is decided by the report. -->
+    <section x-show="tab === 'referrals'" x-cloak data-testid="referral-corrections">
+      <p class="adm-dim" data-testid="referral-corrections-readonly">
+        Read-only. Corrections are added or revoked by a reviewed change to the
+        correction log, shipped in a release; nothing here writes. A correction
+        takes effect when recorded, never earlier, and never takes a wallet
+        from another code. "Accepted" means its signature and payload check out;
+        the attribution report decides whether it binds.
+      </p>
+      <span x-show="correctionsLoading" class="rm-loading">Loading…</span>
+      <span x-show="correctionsError" x-text="correctionsError" class="rm-error"></span>
+      <p class="adm-dim" x-show="correctionsDigest">Log digest <code x-text="correctionsDigest"></code></p>
+      <div class="rm-table-scroll">
+        <table class="rm-table adm-table">
+          <thead><tr><th>Id</th><th>Kind</th><th>Wallet</th><th>Code</th><th>Deposit</th><th>Recorded (UTC)</th><th>Who / why</th><th>Check</th><th>Revoked</th></tr></thead>
+          <tbody>
+            <template x-for="c in corrections" :key="c.id">
+              <tr data-testid="referral-correction-row">
+                <td x-text="c.id"></td>
+                <td x-text="c.kind + (c.signature ? ' (' + c.signature.scheme + ')' : '')"></td>
+                <td><code x-text="c.wallet"></code></td>
+                <td x-text="c.code"></td>
+                <td><code x-text="c.deposit.transactionHash + ' #' + c.deposit.logIndex"></code></td>
+                <td x-text="fmtUtc(c.recordedAt)"></td>
+                <td x-text="c.recordedBy + ': ' + c.reason"></td>
+                <td><span x-text="c.check.status"></span><span class="adm-dim" x-show="c.check.problems.length" x-text="' — ' + c.check.problems.join('; ')"></span></td>
+                <td x-text="c.revocation ? fmtUtc(c.revocation.recordedAt) + ' by ' + c.revocation.recordedBy + ': ' + c.revocation.reason : '—'"></td>
+              </tr>
+            </template>
+            <tr x-show="!correctionsLoading && corrections.length === 0"><td class="adm-dim" colspan="9">No corrections recorded.</td></tr>
           </tbody>
         </table>
       </div>

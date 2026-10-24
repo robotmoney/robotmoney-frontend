@@ -121,6 +121,26 @@ export const ROUTES: {
     assetPrices: string;
     vintages: string;
     overwriteEvents: string;
+    sourceVersions: string;
+    reports: string;
+    archiveBackups: string;
+    archiveFiles: string;
+  };
+  pipeline: {
+    claim: string;
+    renew: string;
+    settle: string;
+    release: string;
+    reap: string;
+    sweep: string;
+    enqueue: string;
+    tick: string;
+    whoami: string;
+    read: string;
+    ingest: string;
+  };
+  referrals: {
+    code: string;
   };
   analytics: {
     readiness: string;
@@ -160,6 +180,7 @@ export const ROUTES: {
     researchRawSeries: string;
     researchSignal: string;
     researchRerun: string;
+    referralCorrections: string;
   };
 };
 

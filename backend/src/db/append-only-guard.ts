@@ -223,9 +223,8 @@ export type AppendOnlyDb = postgresTypes.Sql<{}> | postgresTypes.TransactionSql<
  *    `analytics_submissions`, `research_signals`, `research_pipeline_runs`,
  *    `research_pipeline_stages`, `research_pipeline_warnings`,
  *    `research_pipeline_artifacts` — pipeline execution records, re-derivable
- *    by re-running the pipeline against the same inputs, and already deleted by
- *    live paths (see backend/tests/analytics-worker-role.test.ts). Their
- *    integrity guarantee is the `rm_worker` role's lack of DELETE privilege,
+ *    by re-running the pipeline against the same inputs. Their integrity
+ *    guarantee is that no runtime role holds DELETE (D55 (6)),
  *    which is a stronger and separate mechanism — a privilege refusal (42501)
  *    beats a trigger the owner can drop. `research_signals` remains a current
  *    view, but migration 0056 captures each changed/deleted row before it is

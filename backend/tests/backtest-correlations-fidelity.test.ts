@@ -43,14 +43,34 @@
 // cross-implementation check — verified 0 mismatches (correlationLeaves=48,
 // backtestLeaves=4992) over the BTC_MVRV-inclusive floor, not merely a guard
 // against the replay diverging between call sites.
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
+import { PANELS } from "../src/analytics/analyze/indicators.ts";
+import { cutAtAsof, prepareRegimeInputs } from "../src/analytics/prepare.ts";
+import { variantInputs } from "./support/originals-source.ts";
+import {
+  VARIANTS,
+  bytesEqual,
+  dailyEvidenceBytes,
+  originalFile,
+  readOriginal,
+  sharedAnalysisBytes,
+} from "../../packages/analyst-sdk/tests/support/originals.ts";
+import { AN_SKIPPED_DAY, anPins, anScenario } from "../../packages/analyst-sdk/tests/support/an-scenario.ts";
 import {
   loadRawIndicatorHistory,
   loadJsonGz,
 } from "./fixtures/regime/load.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
-import { computeBacktest, stripDailyFromSnapshot, type BacktestExtras } from "../src/analytics/analyze/backtest.ts";
+import {
+  computeBacktest,
+  stripDailyFromSnapshot,
+  simulatePortfolio,
+  periodStats,
+  scheduleFromLabels,
+  PORTFOLIO_SPECS,
+  type BacktestExtras,
+} from "../src/analytics/analyze/backtest.ts";
 import { computeCorrelations, type CorrelationExtras } from "../src/analytics/analyze/correlations.ts";
 import {
   buildDateAxis,
@@ -220,4 +240,79 @@ test("backtest+correlations TRACKING: metrics track the committed snapshot withi
     `[backtest-corr-fidelity] TRACKING vs committed snapshot: concurrentClose=${corrClose}/${corrCompared} ` +
       `backtestStrategiesCompared=${btCompared}`,
   );
+});
+
+// ── Issue 1421: the backend path against the pre-refactor originals ──────────
+// The backend's own seam (the prepare/compute/backtest shims, exactly what
+// runAnalytics calls) over each input variant must give the SAME original bytes
+// the SDK's report-parity test uses: the shared correlations/backtest artifact
+// and the daily portfolio values. And the established backtest behaviours
+// AN-5/6/9/10/14 must equal their named original values through the shim.
+describe("issue 1421: backend backtest and correlations against the original bytes", () => {
+  for (const v of VARIANTS) {
+    test(`${v}: shared artifact and daily portfolio values equal the originals`, () => {
+      const inputs = variantInputs(v);
+      const { dateAxis, transformed, ages } = prepareRegimeInputs(inputs.registry, { start: BACKFILL_START, asof: inputs.asof });
+      const r2 = computeRegime(transformed, dateAxis, PANELS, ages);
+      const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };
+      const full = computeBacktest(dateAxis, r2, extras);
+      const shared = sharedAnalysisBytes({ correlations: computeCorrelations(dateAxis, r2, extras), backtest: stripDailyFromSnapshot(full) });
+      expect(bytesEqual(shared, readOriginal(originalFile.sharedAnalysis(v)))).toBe(true);
+      expect(bytesEqual(dailyEvidenceBytes(full), readOriginal(originalFile.daily(v)))).toBe(true);
+    }, 120_000);
+  }
+
+  test("AN-5/6/9/10/14: every named pin equals its original value through the backend shim", () => {
+    const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: unknown };
+    const s = anScenario();
+    const bt = computeBacktest(s.dateAxis, s.result, s.extras);
+    const pins = anPins(bt);
+    expect(Object.keys(pins)).toEqual(Object.keys(original.pins));
+    for (const [name, value] of Object.entries(pins)) {
+      expect(bytesEqual(JSON.stringify(value), JSON.stringify(original.pins[name])), name).toBe(true);
+    }
+    expect(bytesEqual(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2))).toBe(true);
+    // The behaviours themselves, not only the numbers.
+    expect(bt.mixed!.blend_hodl!.transitions).toBe(0); // AN-5
+    expect([bt.eth!.composite!.start_date, bt.eth!.eth_hodl!.start_date]).toEqual(["2024-01-27", "2024-01-25"]); // AN-6
+    expect(bt.eth!.composite!._daily!.map((p) => p.date)).not.toContain(AN_SKIPPED_DAY); // AN-9
+    expect(bt.eth!.composite!.cagr_out_sample).not.toBeNull(); // AN-10
+    expect(bt.eth!.composite!.transitions).toBeGreaterThan(0); // AN-14: costs charged, Sharpe pre-cost
+  });
+});
+
+// Issue 1404: the public simulatePortfolio + periodStats + scheduleFromLabels,
+// reached through the backend shim, reproduce computeBacktest byte for byte
+// (daily values included) and the ORIGINAL JS reference within the STRICT
+// bound above, over the same composite-strategy and baseline schedules.
+test("backtest generalized path (backend shim): simulatePortfolio + periodStats reproduce computeBacktest byte for byte", async () => {
+  const { result, dateAxis } = await replay();
+  const extras = await loadJsonGz<Extras>("regime-extras.json.gz");
+  const ref = await loadJsonGz<Reference>("regime-backtest-correlations-reference.json.gz");
+  const shared = computeBacktest(dateAxis, result, extras as BacktestExtras);
+  const price: Record<string, any[]> = { eth: extras.eth, sp500: extras.spx };
+  let compared = 0;
+  for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
+    const prices: Record<string, any[]> = {};
+    for (const a of spec.risky) prices[a] = price[a]!;
+    const run = (schedule: any) => {
+      const sim = simulatePortfolio(dateAxis, schedule, prices, extras.tbill3m);
+      return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+    };
+    const cases: [string, any][] = [
+      ["composite", scheduleFromLabels(result.regime, spec.weights)],
+      ["macro", scheduleFromLabels(result.panelRegimes.macro!, spec.weights)],
+      [spec.hodl.key, dateAxis.map(() => spec.hodl.weights)],
+      ["stables_only", dateAxis.map(() => ({ cash: 1 }))],
+    ];
+    for (const [name, schedule] of cases) {
+      const got = run(schedule);
+      expect(JSON.stringify(got), `${pKey}.${name}`).toBe(JSON.stringify(shared[pKey]![name]));
+      const { _daily, ...stripped } = got;
+      void _daily;
+      assertDeepClose(stripped, ref.backtest[pKey][name], `${pKey}.${name}`, 1e-9, { n: 0 });
+      compared++;
+    }
+  }
+  expect(compared).toBe(12);
 });

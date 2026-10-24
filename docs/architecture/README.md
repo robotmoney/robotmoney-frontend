@@ -139,12 +139,16 @@ roadmaps, task checklists, or phase ordering to `docs/`.
   [original-app](../bot-analytics-ui-port/inventory-original.md) and
   [current-repo](../bot-analytics-ui-port/inventory-current.md) inventories.
 
-## Proposed specifications
+## Feature specifications
 
-- [Referral specification](../technical/referrals-spec.md) — proposed goals,
-  consent, eligibility, code lifecycle, public/admin contracts and reproducible
-  reporting. Not accepted or shipped; existing canonical boundaries retain
-  authority until owner acceptance.
+- [Referral specification](../technical/referrals-spec.md) — goals, consent,
+  eligibility, code lifecycle, public/admin contracts and reproducible reporting.
+  Accepted 2026-10-19 (PR 1390) and implemented by issue 1371: the code registry
+  and correction log as reviewed config ([D76](../decisions.md#d76)), the public
+  lookup, the admin projection and corrections view, the deposit skill's referral
+  rules and the private attribution report CLI. Launch stays gated on the owner
+  items in the spec's §10; the on-chain carrier adapter is core conformance
+  pending.
 
 ## Reviews and investigations
 

@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { backfillWalletDay, type WalletBackfillDeps } from "../src/ops/wallet-backfill.ts";
+import { walletBackfillDbStore } from "../src/pipeline/stores/wallet-backfill.ts";
 import type { ChainAmount, KeyedAssetRead } from "../src/chain/wallet-valuation.ts";
 import { resolveTrackedAssets } from "../src/config.ts";
 import { sampleWalletBalances } from "../src/worker/handlers/wallet.ts";
@@ -76,7 +77,7 @@ function happyDeps(overrides: Partial<WalletBackfillDeps> = {}): WalletBackfillD
 }
 
 test("a repaired day dual-writes asset_prices for every priced symbol, source correct, SP500 absent", async () => {
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(walletBackfillDbStore(sql), D1, happyDeps(), NOW);
   expect(result.ok).toBe(true);
 
   const rows = await sql<{ symbol: string; price_usd: string; currency: string; time_basis: string; source: string }[]>`
@@ -103,7 +104,7 @@ test("a disagreement against an already-persisted asset_prices row is reported, 
     VALUES
       (${D1}, 'WETH', 'utc-daily-close', 999, 'USD', 'geckoterminal', now(), now(), 'fixture-prior-repair')
   `;
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(walletBackfillDbStore(sql), D1, happyDeps(), NOW);
   expect(result.ok).toBe(true);
   expect(result.detail).toContain("asset_prices disagreement");
   expect(result.detail).toContain("WETH");
@@ -126,7 +127,7 @@ test("a disagreement against the PRIOR wallet_balance_samples row is reported â€
     INSERT INTO wallet_balance_samples (sample_date, symbol, amount, price_usd, value_usd, provenance, sampled_at)
     VALUES (${D1}, 'WETH', 1, 999, 999, 'live', ${new Date(BLOCK_TS * 1000).toISOString()})
   `;
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(walletBackfillDbStore(sql), D1, happyDeps(), NOW);
   expect(result.ok).toBe(true);
   expect(result.detail).toContain("asset_prices disagreement");
   expect(result.detail).toContain("sample_row");
@@ -141,7 +142,7 @@ test("no disagreement is reported when the freshly repaired price matches what a
     VALUES
       (${D1}, 'WETH', 'utc-daily-close', 2, 'USD', 'geckoterminal', now(), now(), 'fixture-prior-repair')
   `;
-  const result = await backfillWalletDay(sql, D1, happyDeps(), NOW);
+  const result = await backfillWalletDay(walletBackfillDbStore(sql), D1, happyDeps(), NOW);
   expect(result.detail ?? "").not.toContain("disagreement");
 });
 

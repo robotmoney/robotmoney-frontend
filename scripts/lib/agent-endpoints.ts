@@ -286,6 +286,57 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     sizeHint: "from 300 B a row for raw history to about 0.5 MB for a regime snapshot",
   },
   {
+    id: "getPublicSourceVersions",
+    method: "GET",
+    path: ROUTES.publicAnalytics.sourceVersions,
+    summary: "Every collected version of the source data, with when it was observed",
+    description:
+      "Each value as the external party published it when it was collected, with the time it was observed and the version it revised. A later revision is a new row beside the old one. `asof` returns only the versions in force at that time. Tokenless and read-only (GET only; any other method is 405), 100 tokens a minute per client (a page costs 1), cacheable for 5 minutes with an ETag. Page with `nextCursor` until it is null.",
+    backs: [],
+    params: [
+      { name: "series", in: "query", description: "One storage key, for example backtest:DTB3.", example: "backtest:DTB3" },
+      { name: "from", in: "query", description: "First market date, YYYY-MM-DD, inclusive.", example: "2026-01-01" },
+      { name: "to", in: "query", description: "Last market date, YYYY-MM-DD, inclusive.", example: "2026-03-31" },
+      { name: "asof", in: "query", description: "A date or ISO date-time: only the versions in force then.", example: "2026-10-01T00:00:00Z" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicSourceVersionsResponse",
+    sizeHint: "about 200 B a row",
+  },
+  {
+    id: "getPublicReports",
+    method: "GET",
+    path: ROUTES.publicAnalytics.reports,
+    summary: "Each analytics run's published report, byte for byte",
+    description:
+      "Without a filter, a page of published reports: the run key, as-of date, SHA-256 and size of each. With `run` (a run key) or `vintage` (a vintage id) the report itself, exactly the bytes the run published, with its SHA-256 as a strong ETag and in X-Content-SHA256, cacheable forever. A report's bytes cost 10 of the 100 tokens a minute per client.",
+    backs: [],
+    params: [
+      { name: "run", in: "query", description: "A run key (a UUID): answer that run's report bytes.", example: "00000000-0000-4000-8000-000000000000" },
+      { name: "vintage", in: "query", description: "A vintage id: answer the report its run published.", example: "1" },
+      { name: "limit", in: "query", description: "Rows per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicReportsResponse",
+    sizeHint: "about 200 B a listed report; a report itself is its stored size",
+  },
+  {
+    id: "getPublicArchiveBackups",
+    method: "GET",
+    path: ROUTES.publicAnalytics.archiveBackups,
+    summary: "The sealed format 1 archive backups",
+    description:
+      "One backup per UTC day, oldest first, listed once the day is an hour past. Each names its record, `csv/<backup id>/backup.json`, served under /api/public/analytics/archive/ with every archive it lists (gzipped Postgres COPY CSV, at most 64 MB uncompressed, named `<table>.<start>_<end>.csv.gz`). Records and archives never change: their ETag is their SHA-256. An archive body costs 10 of the 100 tokens a minute and its full size from the 50 MB a minute per client.",
+    backs: [],
+    params: [
+      { name: "limit", in: "query", description: "Backups per page, 1 to 1000 (default 100; a larger value is clamped).", example: "100" },
+      { name: "cursor", in: "query", description: "The previous page's `nextCursor`; omit for the first page.", example: "" },
+    ],
+    contractType: "PublicArchiveBackupsResponse",
+    sizeHint: "about 80 B a backup",
+  },
+  {
     id: "getResearchSignal",
     method: "GET",
     path: ROUTES.dashboards.researchSignal,
@@ -684,6 +735,18 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     contractType: "{ comments: Comment[] }",
     sizeHint: "under 1 KB",
   },
+  {
+    id: "lookupReferralCode",
+    method: "GET",
+    path: ROUTES.referrals.code,
+    summary: "Whether one referral code is active right now",
+    description:
+      "Check a referral code a wallet owner asked for before it goes on a deposit. An active member code answers its normalized `code` and the member's `handle` and `name`; an active team channel code answers its `code` and `channel`. Every other code (unknown, malformed, not yet active, disabled, or a departed member's) answers the same 404. It says nothing about a wallet's eligibility, launch status or credit; attribution is evaluated after the deposit executes. One code per request: nothing lists codes or members. Cacheable for 60 seconds (a change can take up to a minute to show), at most 100 requests a minute per client.",
+    backs: [],
+    params: [{ name: "code", in: "path", required: true, description: "The referral code: `rm_` plus a lowercase slug, 32 characters at most. Surrounding spaces are trimmed and ASCII letters lowercased; nothing else is changed.", example: "rm_site" }],
+    contractType: "ReferralCodeCheck",
+    sizeHint: "under 200 B",
+  },
 ];
 
 // Routes deliberately absent from the public catalogue, each with the reason.
@@ -710,6 +773,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.regime]: "analytics-provider ingestion boundary",
   [ROUTES.swarm.memberAvatar]: "image bytes; linked from the member payload, not independently useful",
   [ROUTES.swarm.takePermalink]: "an HTML page, not an API resource; it is in sitemap.xml",
+  [ROUTES.publicAnalytics.archiveFiles]: "a prefix, not a route: a backup's record and archives, each linked from getPublicArchiveBackups and its record",
   // Issue #1026 W4. Two credentialed machine surfaces that do not live under
   // /api/swarm/admin/ and so are not skipped wholesale by the namespace rule.
   // Neither is a browsable resource and neither answers an anonymous caller:
@@ -755,14 +819,15 @@ function flattenRoutes(node: unknown, out: string[] = []): string[] {
 /**
  * Fail when the catalogue has drifted from ROUTES.
  *
- * Admin, analytics-provider and health-adjacent namespaces are skipped wholesale:
+ * Admin, analytics-provider, pipeline-worker (issue 1034, D75) and
+ * health-adjacent namespaces are skipped wholesale:
  * they are credentialed surfaces that must never be advertised to an anonymous
  * reader. Everything else must be either catalogued or excluded with a reason.
  */
 export function assertCatalogCoversRoutes(): string[] {
   const catalogued = new Set(PUBLIC_ENDPOINTS.map((e) => e.path));
   const excluded = new Set(Object.keys(EXCLUDED_ROUTES));
-  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/");
+  const credentialed = (p: string) => p.startsWith("/api/admin/") || p.startsWith("/api/swarm/admin/") || p.startsWith("/api/analytics/") || p.startsWith("/api/pipeline/");
 
   const missing = flattenRoutes(ROUTES)
     .filter((p) => p.startsWith("/api/") || p === ROUTES.health || p === ROUTES.version)

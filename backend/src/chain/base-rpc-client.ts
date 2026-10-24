@@ -1133,3 +1133,49 @@ export async function ethGetBalance(address: string, opts: RpcCallOptions): Prom
   if (typeof result !== "string") throw new Error("Base RPC: missing result");
   return decodeUint256(result);
 }
+
+// --- Referral report evidence reads (issue 1371) ------------------------------
+// docs/technical/referrals-spec.md §7: the report fetches transaction, receipt
+// and block evidence through THIS transport and its one shared rate bucket, with
+// no second limiter and no second client. A hash or block the node does not
+// know answers null (single call) or `{ ok: true, result: null }` (batch): the
+// caller records it as unknown evidence, never as "no deposit".
+
+/** A block header with the identity the report pins: number, hash and timestamp. */
+export interface EthBlockHeader {
+  number: string; // 0x-hex
+  hash: string;
+  timestamp: string; // 0x-hex unix seconds
+  [k: string]: unknown;
+}
+
+/**
+ * One block header by number or by tag ("finalized", "safe", "latest"). Null
+ * when the node has no such block, including a provider that does not support
+ * the `finalized` tag the way the spec needs it. A header missing its hash or
+ * timestamp is a transport fault and throws.
+ */
+export async function ethGetBlockHeader(block: number | string, opts: RpcCallOptions): Promise<EthBlockHeader | null> {
+  const tag = typeof block === "number" ? toBlockTag(block) : block;
+  const result = await rpcRequest<EthBlockHeader | null>("eth_getBlockByNumber", [tag, false], opts);
+  if (result === null || result === undefined) return null;
+  if (typeof result.hash !== "string" || typeof result.timestamp !== "string" || typeof result.number !== "string") {
+    throw new Error(`Base RPC: block ${tag} header without number, hash or timestamp`);
+  }
+  return result;
+}
+
+/** Many block headers by number, one batched POST per chunk. */
+export async function ethGetBlockHeaderBatch(blocks: readonly number[], opts: RpcCallOptions): Promise<BatchResult<EthBlockHeader | null>[]> {
+  return await rpcBatchRequest<EthBlockHeader | null>(blocks.map((n) => ({ method: "eth_getBlockByNumber", params: [toBlockTag(n), false] })), opts);
+}
+
+/** Many transaction receipts by hash. */
+export async function ethGetTransactionReceiptBatch(hashes: readonly string[], opts: RpcCallOptions): Promise<BatchResult<Record<string, unknown> | null>[]> {
+  return await rpcBatchRequest<Record<string, unknown> | null>(hashes.map((h) => ({ method: "eth_getTransactionReceipt", params: [h] })), opts);
+}
+
+/** Many transactions by hash. */
+export async function ethGetTransactionByHashBatch(hashes: readonly string[], opts: RpcCallOptions): Promise<BatchResult<Record<string, unknown> | null>[]> {
+  return await rpcBatchRequest<Record<string, unknown> | null>(hashes.map((h) => ({ method: "eth_getTransactionByHash", params: [h] })), opts);
+}

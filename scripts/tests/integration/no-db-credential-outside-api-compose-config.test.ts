@@ -1,19 +1,21 @@
-// PERMANENT GUARD: only `api` carries a database credential — issue #1026 W4.
+// PERMANENT GUARD: only `api` carries a database credential — issue #1026 W4,
+// and issue 1034 (decision D75), which took the pipeline worker's carve-out away.
 //
-// AUTHORITY: docs/technical/system-scheduler-spec.md §1, §7, §9 and §10.
+// AUTHORITY: docs/decisions.md D75, smoke-production-spec.md §7.2, and
+// docs/technical/system-scheduler-spec.md §1, §7, §9 and §10.
 //
 //   §1: the API is "the only running service in this document's scope" that
 //    holds a database connection. `system-scheduler`: "**No.** Never."
 //
 //   §9 (as amended 2026-09-24, D52): "Among the running services this document
-//    covers, only the API connects to the database. (The pipeline worker, which
-//    runs the vault, wallet, buyback and project jobs, also holds a database
-//    role; `smoke-production-spec.md` §7.2 governs it. This invariant is not
-//    silently extended to it.)"
+//    covers, only the API connects to the database." D52 kept the pipeline
+//    worker on rm_worker; D75 (issue 1034) supersedes that carve-out: the
+//    pipeline worker reaches the database only through /api/pipeline/**.
 //
-//   §10: "No service other than `api` and the pipeline worker carries a
-//    database credential in any composition, asserted by rendering the compose
-//    config; `system-scheduler` carries none."
+//   §10, as D75 leaves it: no service other than `api` carries a database
+//    credential in any composition — DATABASE_URL, WORKER_DATABASE_URL, a PG*
+//    connection key, a postgres:// value or a pool setting — asserted by
+//    rendering the compose config.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WHAT THIS REPLACES
@@ -30,10 +32,9 @@
 // WHY THE EXCEPTION LIST IS NAMED, AND WHY IT IS SHORT
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// §9 carves out ONE worker — the pipeline worker — and adds "This invariant is
-// not silently extended to it." A wildcard for `worker-*` would be that silent
-// extension: a new lane would inherit the exception without anyone deciding to
-// grant it. So each exempt service is named, with its reason, and `EXEMPT` is
+// D52 carved out ONE worker — the pipeline worker — and D75 took it back, so no
+// worker is exempt. A wildcard for `worker-*` would have been a silent
+// extension; each exempt service is named, with its reason, and `EXEMPT` is
 // asserted to contain nothing that is not in the rendered configuration — a
 // stale exemption is itself a finding.
 //
@@ -98,7 +99,7 @@ export { DB_CREDENTIAL_KEYS, looksLikeConnectionString };
 export interface CredentialFinding {
   service: string;
   key: string;
-  reason: "declared_credential_key" | "connection_string_value";
+  reason: "declared_credential_key" | "connection_or_pool_key" | "connection_string_value";
 }
 
 function normaliseEnvironment(env: ComposeServiceLike["environment"]): Record<string, string | null> {
@@ -131,6 +132,13 @@ export function findDatabaseCredentials(cfg: ComposeConfigLike): CredentialFindi
         out.push({ service, key, reason: "declared_credential_key" });
         continue;
       }
+      // A libpq connection key (PGHOST, PGDATABASE, …) or a pool setting
+      // (PG_POOL_MAX, PG_REQUEST_POOL_MAX, …): only a process that opens a
+      // pool reads one (issue 1034).
+      if (/^PG/.test(key)) {
+        out.push({ service, key, reason: "connection_or_pool_key" });
+        continue;
+      }
       if (looksLikeConnectionString(value)) {
         out.push({ service, key, reason: "connection_string_value" });
       }
@@ -146,9 +154,7 @@ export function findDatabaseCredentials(cfg: ComposeConfigLike): CredentialFindi
  * spelling the reason out beside the name.
  */
 export const EXEMPT: Record<string, string> = {
-  api: "§1: the API is the only service in scope that holds a database connection",
-  "worker-analytics":
-    "§9's ONE named exception: the pipeline worker running the vault, wallet, buyback and project jobs as rm_worker, governed by smoke-production-spec.md §7.2",
+  api: "§1 and D75: the API is the only service that holds a database connection",
   migrate: "a one-shot migration runner, not a running service; it exists to hold rm_owner for one command",
 };
 
@@ -423,14 +429,31 @@ describe("only the named services carry a database credential (§9, §10)", () =
     }
   });
 
-  test("only ONE worker is a spec exception, and no unlanded removal is carried", () => {
+  test("no worker is an exception, and no unlanded removal is carried (D75 took the pipeline worker's carve-out away)", () => {
     expect(UNLANDED_REMOVALS).toEqual([]);
-    expect(Object.keys(EXEMPT)).not.toContain("worker-research");
-    const workers = Object.keys(EXEMPT).filter((s) => s.startsWith("worker-"));
-    const blessed = workers.filter((s) => !(UNLANDED_REMOVALS as readonly string[]).includes(s));
-    // §9 carves out the pipeline worker and nothing else. If this ever names
-    // two, someone widened the invariant without amending the spec.
-    expect(blessed).toEqual(["worker-analytics"]);
+    expect(Object.keys(EXEMPT).filter((s) => s.startsWith("worker-"))).toEqual([]);
+  });
+
+  test("`worker-analytics` carries no database key and exactly one credential, its pipeline-worker token FILE, in every composition", () => {
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const svc = composeConfig(files, profiles).services?.["worker-analytics"];
+      expect({ label, present: svc !== undefined }).toEqual({ label, present: true });
+      expect({ label, db: findDatabaseCredentials({ services: { "worker-analytics": svc } }) }).toEqual({ label, db: [] });
+      const env = normaliseEnvironment(svc?.environment);
+      // TOKEN_PRICE_CACHE_TTL_MS is a price-cache knob, not a credential.
+      const tokenShaped = Object.keys(env).filter((k) => /_TOKEN|TOKEN_FILE|PASSWORD|SECRET/.test(k) && !k.startsWith("TOKEN_PRICE")).sort();
+      expect({ label, tokenShaped }).toEqual({ label, tokenShaped: ["PIPELINE_TOKEN_FILE"] });
+      expect({ label, tokenFile: env.PIPELINE_TOKEN_FILE, url: env.PIPELINE_API_URL }).toEqual({
+        label,
+        tokenFile: `/run/rm-token/${TOKEN_FILE_NAME}`,
+        url: "http://api:8787",
+      });
+      const volumes = (svc as { volumes?: Array<{ source?: string; target?: string; read_only?: boolean }> } | undefined)?.volumes ?? [];
+      expect({ label, volumes: volumes.map((v) => ({ source: v.source, target: v.target, readOnly: v.read_only })) }).toEqual({
+        label,
+        volumes: [{ source: INSTANCE_PATHS.tokenDirs["pipeline-worker"], target: "/run/rm-token", readOnly: true }],
+      });
+    }
   });
 
   test("every exemption is still a real service — a stale exemption is itself a finding", () => {
@@ -491,6 +514,21 @@ describe("the detector", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("RED CONTROL: a planted credential is caught end to end", () => {
+  test("an overlay handing `worker-analytics` a WORKER_DATABASE_URL and a pool setting is named by the detector", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rm-dbcred-worker-"));
+    const overlay = join(dir, "docker-compose.planted.yml");
+    writeFileSync(
+      overlay,
+      'services:\n  worker-analytics:\n    environment:\n      WORKER_DATABASE_URL: postgres://rm_worker@postgres/rm\n      PG_POOL_MAX: "2"\n',
+      "utf8",
+    );
+    const cfg = JSON.parse(renderCompose([...BASE, overlay], [])) as ComposeConfigLike;
+    const findings = findDatabaseCredentials(cfg).filter((f) => f.service === "worker-analytics");
+    expect(findings.map((f) => f.key).sort()).toEqual(["PG_POOL_MAX", "WORKER_DATABASE_URL"]);
+    // And neither is excused: worker-analytics is on no exemption list.
+    expect(findings.filter((f) => !(f.service in EXEMPT)).length).toBe(2);
+  });
+
   test("an overlay handing `system-scheduler` a DATABASE_URL is found in the rendered config", () => {
     // Written to a temp dir, never into a tracked compose file, and rendered
     // through the SAME `docker compose config` path the real cases use. A guard

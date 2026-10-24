@@ -40,7 +40,16 @@ import {
   type BacktestPayload,
 } from "./analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
-import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
+import {
+  liveDataSource,
+  type AnalyticsDataSource,
+  type BacktestExtras,
+  type Logger,
+  type ResearchInputs,
+} from "./access/data-source.ts";
+import type { AcquisitionSink, SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
+import { assertRequiredCoverage } from "./coverage.ts";
+import { sha256Hex } from "./run-ledger.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
 import { selectEdgarRefreshTier, defaultEdgarRefreshDeadlineMs } from "./edgar-incremental-refresh.ts";
 import {
@@ -174,8 +183,19 @@ export async function runAnalytics(
   const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
   const results: Record<string, unknown> = {};
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
-  const acquisitionSink = persistence.saveSourceAcquisition
-    ? { saveSourceAcquisition: persistence.saveSourceAcquisition.bind(persistence) }
+  // Issue 1421: every acquisition's collected values are compared with the
+  // committed values the ledger hands back, and the run's input evidence
+  // records the difference and the consumed versions.
+  const inputEvidence: InputEvidence = { registry: null, acquisitions: {}, acquiredKeys: 0, acquiredValues: 0, consumed: [] };
+  const saveAcquisition = persistence.saveSourceAcquisition?.bind(persistence);
+  const acquisitionSink: AcquisitionSink | undefined = saveAcquisition
+    ? {
+        async saveSourceAcquisition(evidence) {
+          const saved = await saveAcquisition(evidence);
+          recordAcquisitionEvidence(inputEvidence, evidence, saved);
+          return saved;
+        },
+      }
     : undefined;
   const collector = new TelemetryCollector();
   let runFailed: unknown = null;
@@ -218,7 +238,19 @@ export async function runAnalytics(
   const researchSignalArtifacts: ResearchSignalArtifact[] = [];
 
   try {
-  // ── REGIME ────────────────────────────────────────────────────────────────
+  // ══ EXTRACT ══════════════════════════════════════════════════════════════
+  // Issue 1421: extract is the ONLY stage that calls `source`, and it runs to
+  // completion before any computation. Everything after the DOWNSTREAM marker
+  // below consumes the committed dataset this stage hands over (the stored
+  // floor and the ledger heads after the D56 tolerance decision), never the
+  // values the provider just served, and never calls `source` again: a
+  // missing input there is a coverage error or a documented missing result,
+  // never a fetch. Pinned by tests/analytics-offline-replay.test.ts and
+  // tests/analytics-source-tolerance.test.ts.
+  let registry: Record<string, { date: string; value: number }[]> | null = null;
+  let extras: BacktestExtras | null = null;
+  let researchFloor: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
+  let inputs: ResearchInputs | null = null;
   if (want("regime")) {
     // Opt-in cold-DB floor seed (issue #13): on the real-live smoke path a fresh DB
     // would re-fetch years of history (esp. ~200 EDGAR requests) before the first
@@ -268,19 +300,91 @@ export async function runAnalytics(
       t0,
     );
 
-    // Persist the merged floor back before computing. Tag every
-    // row with which AnalyticsDataSource actually produced it this run
-    // (issue #397 provenance).
+    // Persist the merged floor back. Tag every row with which
+    // AnalyticsDataSource actually produced it this run (issue #397
+    // provenance). The writer keeps the stored value for a point within its
+    // D56 tolerance, so `merged` is what was COLLECTED, not what is stored.
+    // Issue 1421 (review finding AN-15): the run computes from the committed
+    // floor read back after the write, so a discarded jitter value can never
+    // reach downstream; the collected-versus-committed difference is
+    // reported in the input evidence below.
     t0 = new Date();
     await persistence.saveRawHistory(merged, sourceLabel);
-    mergedRaw = merged;
-    collector.stage("store", "ok", "persisted merged raw indicator floor", t0);
+    const committedFloor = await persistence.loadRawHistory();
+    registry = {};
+    for (const ind of INDICATORS) registry[ind.id] = committedFloor[ind.id] ?? [];
+    inputEvidence.registry = registryEvidence(merged, registry);
+    mergedRaw = registry;
+    collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
 
+    // Predictive correlations + regime backtest overlays (SPX/ETH price
+    // levels + DTB3 yield; NOT registry indicators). A failed extras fetch
+    // degrades to []: correlations/backtest simply carry fewer/no pairs
+    // rather than throwing. Cut at asof like every other input (issue #1162
+    // Part 0): a run for a past as-of day must not read prices dated after
+    // it. Live runs have no such rows, so this changes nothing on the live
+    // path; regime-sdk-equivalence pins it. With an acquisition sink these are
+    // the ledger's committed values (captureSourceAcquisition, issue 1421).
     t0 = new Date();
+    const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
+    collector.stage("access", "ok", `fetched backtest extras from the ${sourceLabel} source`, t0);
+    // Issue 1398: the model portfolio inputs are collected into the source
+    // ledger in extract, on the same run. The regime reads none of them, so
+    // the outcome is only logged and no number downstream changes.
+    if (source.collectModelPortfolioInputs) {
+      const collected = await source.collectModelPortfolioInputs(logger, acquisitionSink, jobId ?? null);
+      logger.log?.(`[analytics] model portfolio inputs: ${collected.map((c) => `${c.id}=${c.error ? "FAILED" : c.rows}`).join(" ")}`);
+    }
+  }
+
+  if (want("channel-divergence") || want("late-cycle-signals")) {
+    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
+    // report.md finding 1.10): hand the live source its persisted MNA floor
+    // + one hard deadline, sized to whichever tier THIS asof selects — a
+    // cheap incremental sweep most days, a full [EDGAR_FLOOR_START, asof]
+    // reconciliation sweep periodically (see selectEdgarRefreshTier in
+    // edgar-incremental-refresh.ts) so an EDGAR back-revision to any
+    // historical month still lands, just not on every single run. Hermetic/
+    // fixture sources ignore this context entirely.
+    const t0 = new Date();
+    researchFloor = await getPersisted();
+    const edgarTier = selectEdgarRefreshTier(asof);
+    inputs = await source.fetchResearchInputs(asof, logger, {
+      persistedMna: researchFloor.MNA ?? [],
+      deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
+    }, acquisitionSink, jobId ?? null);
+    collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
+
+    // Submit ONLY the freshly-fetched MNA rows (a small idempotent upsert
+    // batch on (date, indicator)) — never the whole merged series — BEFORE
+    // computing/publishing the dependent signal, so a signal is never
+    // published against data that was never durably persisted. A degraded
+    // refresh persists nothing (issue #109 AC5, handled downstream).
+    const refresh = inputs.mnaRefresh;
+    if (want("late-cycle-signals") && refresh && refresh.status !== "degraded" && refresh.newRows.length > 0) {
+      const s0 = new Date();
+      await persistence.saveRawHistory({ MNA: refresh.newRows }, sourceLabel);
+      collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, s0);
+    }
+  }
+  if (inputEvidence.registry || inputEvidence.acquiredKeys > 0) {
+    reportInputEvidence(inputEvidence, collector, logger);
+  }
+
+  // ══ DOWNSTREAM: committed data only, no `source` call below ══════════════
+
+  // ── REGIME ────────────────────────────────────────────────────────────────
+  if (want("regime") && registry && extras) {
+    // With no composite panel holding any observation nothing can be classified: a
+    // named coverage error, never a fetch (issue 1421).
+    assertRequiredCoverage(registry, asof);
+
+    let t0 = new Date();
     // #402: `ages` is the forward-fill age per non-zero_fill indicator (days since
     // the last REAL observation); zero_fill indicators are left out so
     // computeRegime never caps them. Built by the shared SDK seam.
-    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(merged, { start: BACKFILL_START, asof });
+    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof });
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
@@ -289,14 +393,7 @@ export async function runAnalytics(
 
     // Predictive correlations + regime backtest — computed from the SAME 2-panel
     // composite the original main snapshot uses, over the chart-overlay extras
-    // (SPX/ETH price levels + DTB3 yield; NOT registry indicators). A failed
-    // extras fetch degrades to []: correlations/backtest simply carry fewer/no
-    // pairs rather than throwing. Baked onto the latest snapshot row (asof view).
-    // Cut at asof like every other input (issue #1162 Part 0): a run for a past
-    // as-of day must not read prices dated after it. Live runs have no such rows,
-    // so this changes nothing on the live path; regime-sdk-equivalence pins it.
-    const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
-    const extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
+    // extracted above. Baked onto the latest snapshot row (asof view).
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";
@@ -349,29 +446,13 @@ export async function runAnalytics(
   }
 
   // ── RESEARCH SIGNALS ────────────────────────────────────────────────────────
-  if (want("channel-divergence") || want("late-cycle-signals")) {
-    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
-    // report.md finding 1.10): hand the live source its persisted MNA floor
-    // + one hard deadline, sized to whichever tier THIS asof selects — a
-    // cheap incremental sweep most days, a full [EDGAR_FLOOR_START, asof]
-    // reconciliation sweep periodically (see selectEdgarRefreshTier in
-    // edgar-incremental-refresh.ts) so an EDGAR back-revision to any
-    // historical month still lands, just not on every single run. Hermetic/
-    // fixture sources ignore this context entirely.
+  if ((want("channel-divergence") || want("late-cycle-signals")) && inputs && researchFloor) {
     let t0 = new Date();
-    const floor = await getPersisted();
-    const edgarTier = selectEdgarRefreshTier(asof);
-    const inputs = await source.fetchResearchInputs(asof, logger, {
-      persistedMna: floor.MNA ?? [],
-      deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
-    }, acquisitionSink, jobId ?? null);
-    collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
-
     if (want("channel-divergence")) {
       t0 = new Date();
-      // STABLES is a registry indicator → source it from the persisted raw floor
-      // (matching channel-divergence.js, which reads raw-indicator-history.csv).
-      const stables = mergedRaw?.STABLES ?? floor.STABLES ?? [];
+      // STABLES is a registry indicator → source it from the committed raw
+      // floor (matching channel-divergence.js, which reads raw-indicator-history.csv).
+      const stables = mergedRaw?.STABLES ?? researchFloor.STABLES ?? [];
       const bundle = { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables };
       collector.stage(
         "transform",
@@ -445,15 +526,7 @@ export async function runAnalytics(
         collector.stage("store", "warn", "skipped — retained last-good persisted signal, nothing new written", new Date());
         results["late-cycle-signals"] = { skipped: true, reason: refresh.reason };
       } else {
-        // Submit ONLY the freshly-fetched rows (a small idempotent upsert
-        // batch on (date, indicator)) — never the whole merged series —
-        // BEFORE computing/publishing the dependent signal, so a signal is
-        // never published against data that was never durably persisted.
-        if (refresh && refresh.newRows.length > 0) {
-          t0 = new Date();
-          await persistence.saveRawHistory({ MNA: refresh.newRows }, sourceLabel);
-          collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, t0);
-        }
+        // The fresh MNA rows were persisted in the extract stage above.
         t0 = new Date();
         const payload = computeLateCycle(bundle, asof);
         collector.stage("analyze", "ok", "computed late-cycle-signals signal", t0);
@@ -592,6 +665,84 @@ export async function runAnalytics(
 
   if (runFailed) throw runFailed;
   return results;
+}
+
+// ─── committed-input evidence (issue 1421, review finding AN-15) ───────────
+// What the run COLLECTED from its source against what it COMPUTED from: the
+// committed floor and ledger heads. A within-tolerance re-observation keeps
+// the stored value, so a mismatch here is jitter the ingestion boundary
+// discarded (or a revision another writer committed first), never a value
+// downstream saw. With an acquisition sink the swap happens at the ledger
+// (captureSourceAcquisition), so the mismatch shows under `acquisitions`;
+// `registry` catches a floor that disagrees with what was fetched.
+// `versionsSha256` fingerprints the ledger versions consumed (source key and
+// version id, sorted); the run's frozen vintage holds those same versions.
+// Compact on purpose: telemetry previews are bounded (4 kB).
+interface AcquisitionMismatch {
+  mismatched: number;
+  first: { date: string | null; collected: number; committed: number };
+}
+
+interface InputEvidence {
+  registry: { mismatched: number; indicators: Record<string, number> } | null;
+  acquisitions: Record<string, AcquisitionMismatch>;
+  acquiredKeys: number;
+  acquiredValues: number;
+  consumed: string[];
+}
+
+function recordAcquisitionEvidence(
+  out: InputEvidence,
+  evidence: SourceAcquisitionEvidence,
+  saved: SaveSourceAcquisitionResult,
+): void {
+  const key = evidence.values[0]?.sourceKey;
+  if (!key) return;
+  const committed = saved.committed ?? [];
+  out.acquiredKeys++;
+  out.acquiredValues += evidence.values.length;
+  evidence.values.forEach((v, i) => {
+    const c = committed[i];
+    if (!c) return;
+    out.consumed.push(`${v.sourceKey}:${c.versionId}`);
+    if (c.value === v.value) return;
+    const m = (out.acquisitions[key] ??= { mismatched: 0, first: { date: v.marketDate ?? v.marketInstant, collected: v.value, committed: c.value } });
+    m.mismatched++;
+  });
+}
+
+function registryEvidence(
+  collected: Record<string, { date: string; value: number }[]>,
+  committed: Record<string, { date: string; value: number }[]>,
+): InputEvidence["registry"] {
+  const indicators: Record<string, number> = {};
+  let mismatched = 0;
+  for (const [id, pts] of Object.entries(collected)) {
+    const stored = new Map((committed[id] ?? []).map((p) => [p.date, p.value]));
+    let n = 0;
+    for (const p of pts) if (Number.isFinite(p.value) && stored.get(p.date) !== p.value) n++;
+    if (n > 0) indicators[id] = n;
+    mismatched += n;
+  }
+  return { mismatched, indicators };
+}
+
+function reportInputEvidence(evidence: InputEvidence, collector: TelemetryCollector, logger: Logger): void {
+  const acquiredMismatched = Object.values(evidence.acquisitions).reduce((n, a) => n + a.mismatched, 0);
+  const registryMismatched = evidence.registry?.mismatched ?? 0;
+  if (registryMismatched > 0 || acquiredMismatched > 0) {
+    logger.log?.(
+      `[analytics] committed inputs: ${registryMismatched} registry point(s) and ${acquiredMismatched} acquired value(s) ` +
+        `across ${Object.keys(evidence.acquisitions).length} source key(s) differ from what was collected; downstream uses the committed values`,
+    );
+  }
+  collector.artifact("extract", "committed-input-evidence", {
+    registry: evidence.registry,
+    acquisitions: evidence.acquisitions,
+    acquiredKeys: evidence.acquiredKeys,
+    acquiredValues: evidence.acquiredValues,
+    versionsSha256: evidence.consumed.length > 0 ? sha256Hex([...evidence.consumed].sort().join(",")) : null,
+  });
 }
 
 // ─── snapshot-row builder (mirrors update.js writeFullHistoryCsv + writeSnapshot) ─

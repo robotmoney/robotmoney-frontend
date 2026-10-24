@@ -1,0 +1,57 @@
+{
+  "id": "E3w",
+  "name": "Engine v1: composite tilts plus Bitcoin volatility scaling, Bitcoin to 20%",
+  "author": "Claude, 2026-10-13, on the pattern in robotmoney.network/regime-detection (Lex). Prototype for Lex to react to.",
+  "date": "2026-10-13",
+  "status": "hypothesis",
+  "description": "As E1 with Bitcoin's ceiling at 20%. Bitcoin's tilted weight is scaled by 55% / its 60-day realized volatility, bounded to 0.5x..1.5x and to the band.",
+  "engine": {
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "sleeves": [
+      {
+        "holding": "BTC",
+        "signal": "composite",
+        "min": 0,
+        "max": 20,
+        "scale": 0.17,
+        "volTarget": 55
+      },
+      {
+        "holding": "GOLD",
+        "signal": "inverse(composite)",
+        "min": 2,
+        "max": 6,
+        "scale": 0.17
+      }
+    ],
+    "buffer": "USDC",
+    "dollarBook": {
+      "instruments": [
+        "AAVE",
+        "SUSDS",
+        "GT",
+        "SPARK",
+        "STEAK",
+        "COMP"
+      ],
+      "trailingDays": 30
+    }
+  },
+  "drift": {
+    "points": 2,
+    "relative": 0.25,
+    "byHolding": {
+      "BTC": 3
+    }
+  }
+}

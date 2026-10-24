@@ -67,10 +67,12 @@ const PASSWORD: Record<RuntimeRole, string> = {
  *  one-row key, the UPDATE and DELETE match the one row, and TRUNCATE has no
  *  WHERE at all. A 42501 therefore cannot be a constraint or an empty match. */
 const WRITES = {
-  INSERT: "INSERT INTO deployment_identity (kind) VALUES ('production')",
-  UPDATE: "UPDATE deployment_identity SET kind = 'production'",
-  DELETE: "DELETE FROM deployment_identity",
-  TRUNCATE: "TRUNCATE deployment_identity",
+  // Schema-qualified: rm_worker holds no USAGE on public since 0127 (D75), so
+  // an unqualified name would not resolve for it at all (42P01).
+  INSERT: "INSERT INTO public.deployment_identity (kind) VALUES ('production')",
+  UPDATE: "UPDATE public.deployment_identity SET kind = 'production'",
+  DELETE: "DELETE FROM public.deployment_identity",
+  TRUNCATE: "TRUNCATE public.deployment_identity",
 } as const;
 
 const connections = new Map<RuntimeRole, postgres.Sql<{}>>();
@@ -104,12 +106,17 @@ async function sqlstate(role: RuntimeRole, statement: string): Promise<string | 
 
 async function assertEveryWriteRefusedByGrant(): Promise<void> {
   for (const role of RUNTIME_ROLES) {
-    // The connection is real and the table is readable: a refusal below is
-    // about writing, not about reaching the database.
+    // The connection is real and, for rm_app and rm_readonly, the table is
+    // readable: a refusal below is about writing, not about reaching the
+    // database. rm_worker reads nothing since 0127 (D75).
     const [who] = (await connections.get(role)!`SELECT current_user AS role`) as unknown as { role: string }[];
     expect(who?.role).toBe(role);
-    const rows = (await connections.get(role)!`SELECT kind FROM deployment_identity`) as unknown as { kind: string }[];
-    expect(rows.map((r) => r.kind)).toEqual(["rehearsal"]);
+    if (role === "rm_worker") {
+      expect(await sqlstate(role, "SELECT kind FROM public.deployment_identity")).toBe("42501");
+    } else {
+      const rows = (await connections.get(role)!`SELECT kind FROM deployment_identity`) as unknown as { kind: string }[];
+      expect(rows.map((r) => r.kind)).toEqual(["rehearsal"]);
+    }
 
     for (const [verb, statement] of Object.entries(WRITES)) {
       expect({ role, verb, sqlstate: await sqlstate(role, statement) }).toEqual({ role, verb, sqlstate: "42501" });
@@ -297,7 +304,7 @@ describe("the smoke's own preparation writes `rehearsal` through rm_owner, and n
       await owner.unsafe("INSERT INTO deployment_identity (kind) VALUES ('production')");
       await owner.end({ timeout: 5 });
       for (const role of RUNTIME_ROLES) {
-        expect({ role, code: await writeAs(name, role, "UPDATE deployment_identity SET kind = 'rehearsal'") }).toEqual({ role, code: "42501" });
+        expect({ role, code: await writeAs(name, role, "UPDATE public.deployment_identity SET kind = 'rehearsal'") }).toEqual({ role, code: "42501" });
       }
       expect((await enrollment(name)).startsWith("production|")).toBe(true);
     } finally {

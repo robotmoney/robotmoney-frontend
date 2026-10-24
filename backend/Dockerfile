@@ -28,9 +28,11 @@ COPY contract/ /contract/
 # backend re-exports it through shims at the old analytics/ paths. From
 # /app/src/analytics/<dir>/ the shims reach `../../../../packages/analyst-sdk`,
 # which is /packages/analyst-sdk here, the same way contract/ sits at /contract.
-# src and package.json only: tests/ (fixtures, goldens, ~4.7 MB) are not runtime.
+# src, inventory and package.json only: tests/ (fixtures, goldens, ~4.7 MB) are not
+# runtime. inventory/ is runtime data: src/extract/inventory.ts imports it (issue 1398).
 COPY packages/analyst-sdk/package.json /packages/analyst-sdk/package.json
 COPY packages/analyst-sdk/src/ /packages/analyst-sdk/src/
+COPY packages/analyst-sdk/inventory/ /packages/analyst-sdk/inventory/
 COPY backend/package.json backend/bun.lock* /app/
 RUN bun install
 

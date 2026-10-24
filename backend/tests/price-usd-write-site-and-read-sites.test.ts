@@ -62,7 +62,7 @@ function insertColumnLists(source: string, table: string): string[] {
 }
 
 test("repairResolvedDay's sample-row inserts no longer name price_usd as a written column", () => {
-  const backfill = src("ops/wallet-backfill.ts");
+  const backfill = src("pipeline/stores/wallet-backfill.ts"); // run in the api since issue 1034
 
   const balanceInserts = insertColumnLists(backfill, "wallet_balance_samples");
   const sleeveInserts = insertColumnLists(backfill, "wallet_sleeve_samples");
@@ -84,7 +84,8 @@ test("repairResolvedDay's sample-row inserts no longer name price_usd as a writt
 });
 
 test("sampleWalletBalances' sample-row insert no longer names price_usd as a written column", () => {
-  const sampler = src("worker/handlers/wallet.ts");
+  // The samplers' writes run in the api since issue 1034 (D75).
+  const sampler = src("pipeline/stores/wallet.ts");
 
   const balanceInserts = insertColumnLists(sampler, "wallet_balance_samples");
 
@@ -100,7 +101,7 @@ test("sampleWalletBalances' sample-row insert no longer names price_usd as a wri
 });
 
 test("sampleWalletSleeves' sample-row insert no longer names price_usd as a written column", () => {
-  const sampler = src("worker/handlers/wallet.ts");
+  const sampler = src("pipeline/stores/wallet.ts");
 
   const sleeveInserts = insertColumnLists(sampler, "wallet_sleeve_samples");
 
@@ -137,15 +138,19 @@ test("the guard's column-list pattern actually matches an INSERT that DOES write
 // unrelated change.
 const ALLOWED_READERS: Record<string, string> = {
   "chain/wallet-balances.ts":
-    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL; loadHistory reads the sample's fused value_usd for today's row (is_closed = false) and falls back to it for a closed day asset_prices has not covered yet, joining asset_prices for a covered closed day",
+    "historyFromRows values the rows wallet-balances-store.ts read: the sample's fused value_usd for today's row (is_closed = false) and for a closed day asset_prices has not covered yet, asset_prices' price for a covered closed day; it names price_usd only as the joined asset_price_usd and in prose",
+  "chain/wallet-balances-store.ts":
+    "lastPersistedHolding's stale-degrade fallback (a live read failed) reads the last persisted price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL; walletHistoryRows joins asset_prices for a covered closed day (moved out of wallet-balances.ts, issue 1034)",
   "chain/wallet-sleeves.ts":
     "computeWalletSleeves reads the sample's price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL (both samplers now stop writing it, mirroring repairResolvedDay's already-shipped #851 change) for today's row (is_closed = false) and for a closed day asset_prices has not covered yet, joining asset_prices for a covered closed day",
-  "chain/wallet-valuation.ts":
-    "recentPersistedPrice reads the sample's price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL (else this stale-degrade path — issue #173 — would go permanently unreachable the moment a deployment picks up #927); joins asset_prices for a covered closed day",
-  "ops/wallet-backfill.ts":
-    "repairResolvedDay reads the PRIOR row's price_usd (before its own delete) purely for the sample-row-vs-price-row disagreement check (D41 phase 2's verify step); the evidence-table INSERT...SELECT also copies whatever price_usd a replaced row already had. Neither writes a fresh price_usd (see the test above)",
+  "chain/wallet-persisted-price.ts":
+    "recentPersistedPrice (moved out of wallet-valuation.ts, issue 1034) reads the sample's price_usd when present, deriving value_usd/amount instead for a post-#927 row that has it NULL (else this stale-degrade path — issue #173 — would go permanently unreachable the moment a deployment picks up #927); joins asset_prices for a covered closed day",
+  "pipeline/stores/wallet-backfill.ts":
+    "repairResolvedDay's writes, run in the api since issue 1034, read the PRIOR row's price_usd (before its own delete) purely for the sample-row-vs-price-row disagreement check (D41 phase 2's verify step); the evidence-table INSERT...SELECT also copies whatever price_usd a replaced row already had. Neither writes a fresh price_usd (see the test above)",
   "ops/asset-prices.ts":
     "mentions wallet_balance_samples only in prose comments (writeAssetPrice's own price_usd reads/writes are all against asset_prices, never a sample table); flagged by this test's file-level substring check rather than a real reference",
+  "pipeline/stores/wallet.ts":
+    "the samplers' upserts, run in the api since issue 1034: neither INSERT names price_usd (see the tests above); the ON CONFLICT clause keeps a live row's existing price_usd and takes the incoming NULL when it revives a superseded one",
   "worker/handlers/wallet.ts":
     "neither sampler writes price_usd any more (issue #927 stopped both sampleWalletBalances and sampleWalletSleeves, mirroring repairResolvedDay); the string only survives in prose comments explaining that history — flagged by this test's file-level substring check rather than a real reference",
 };

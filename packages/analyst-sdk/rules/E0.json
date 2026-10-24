@@ -1,0 +1,56 @@
+{
+  "id": "E0",
+  "name": "A held still, dollar book by the yield program",
+  "author": "Claude, 2026-10-13",
+  "date": "2026-10-13",
+  "status": "comparison",
+  "description": "A's sleeve weights fixed; inside the dollar book, the linear program fills the highest trailing 30-day yields first, within the caps.",
+  "engine": {
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "sleeves": [
+      {
+        "holding": "BTC",
+        "signal": "composite",
+        "min": 5,
+        "max": 5,
+        "scale": 0.17
+      },
+      {
+        "holding": "GOLD",
+        "signal": "composite",
+        "min": 6,
+        "max": 6,
+        "scale": 0.17
+      }
+    ],
+    "buffer": "USDC",
+    "dollarBook": {
+      "instruments": [
+        "AAVE",
+        "SUSDS",
+        "GT",
+        "SPARK",
+        "STEAK",
+        "COMP"
+      ],
+      "trailingDays": 30
+    }
+  },
+  "drift": {
+    "points": 2,
+    "relative": 0.25,
+    "byHolding": {
+      "BTC": 3
+    }
+  }
+}

@@ -95,8 +95,9 @@ export type PrepareResult =
 
 /** The roles `urlFor` will assemble from `~/.env`. Never `rm_owner` or `doadmin`:
  *  those lines are read only by `remoteAuthority`, for the two remote steps
- *  that write as the owner. */
-export const RUNTIME_ROLES = ["rm_app", "rm_worker", "rm_readonly"] as const;
+ *  that write as the owner. Not `rm_worker`: no container holds it (D75, issue
+ *  1034), so preflight check 1 has no password of it to prove. */
+export const RUNTIME_ROLES = ["rm_app", "rm_readonly"] as const;
 
 /**
  * A remote step's `~/.env` authority (D61): the `rm_owner` line, the file, the

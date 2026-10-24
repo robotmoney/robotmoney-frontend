@@ -70,9 +70,19 @@ The Compose topology is one container per surviving lane
 `analytics-producer`, and `system-scheduler`, which is not a queue lane at all
 — it holds one API token, no database credential, and drives epochs over HTTP.
 The pipeline worker (`worker-analytics`, lane `analytics`, running the vault,
-wallet, buyback and project jobs) holds `rm_worker` and runs preflight checks
-1–3 at startup
-([smoke spec §7.2](../technical/smoke-production-spec.md#72-one-library-three-callers)). Worker lanes
+wallet, buyback and project jobs) holds no database credential
+([D75](../decisions.md#d75)). It refuses to start with a database key in its
+environment, and its startup check is HTTP: the api accepts its
+pipeline-worker token with both rights, logged as `pipeline_startup: passed`
+([smoke spec §7.2](../technical/smoke-production-spec.md#72-one-library-three-callers)).
+Every claim, renew, settle, read and write goes to the api's
+`/api/pipeline/**` routes (`src/worker/pipeline-client.ts`). A write carries
+an `Idempotency-Key` (`<jobId>.<attempt>.<n>.<op>`) and its lease
+`(jobId, workerId, attempt)`: a replay is answered from the recorded receipt
+and writes nothing, the same key with another body is `409
+idempotency_key_reused`, and a write or settle after the lease moved is `409
+lease_lost`. The client retries `503 db_saturated`, `502`, `504` and refused
+connections, honouring `Retry-After`, until `PIPELINE_RETRY_DEADLINE_MS`. Worker lanes
 scale independently; producer cadence does not pass through a worker lane.
 Worker ids default to `<lane>-<pid>`, so `locked_by`, logs, and the admin jobs
 dashboard are lane-attributable. Shutdown is **bounded**: on SIGINT/SIGTERM a
@@ -271,9 +281,9 @@ spec §3; wiring: `ANALYTICS_API_URL`). Only the producer mounts that file; the 
 Mutations validate the entire payload before opening a transaction, are
 idempotent on natural keys, and there is NO generic SQL-over-HTTP endpoint. The
 API process injects the direct service (`analytics/store/direct.ts`) instead.
-Shared worker DB access remains queue/non-analytics scoped (`rm_worker`,
-`0016_worker_role.sql`), and legacy analytics handler code has no supported
-enqueue path or bearer. `tests/analytics-api-boundary.test.ts` and the producer
+The pipeline worker reaches the database only through `/api/pipeline/**`
+([D75](../decisions.md#d75)), and legacy analytics handler code has no
+supported enqueue path or bearer. `tests/analytics-api-boundary.test.ts` and the producer
 boundary tests fail CI if the compute side imports SQL/store writers or gains
 ambient DB/admin credentials.
 

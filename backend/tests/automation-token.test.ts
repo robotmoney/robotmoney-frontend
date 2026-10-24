@@ -58,6 +58,7 @@ import {
   probe,
   provisionAnalyticsToken,
   provisionOperatorToken,
+  provisionPipelineToken,
   provisionSchedulerToken,
   writeRedControlPreload,
   type ApiProcess,
@@ -288,7 +289,7 @@ test("a row written with no holder is the scheduler's — the default keeps pre-
   const [row] = await sql<{ holder: string }[]>`
     SELECT holder FROM automation_tokens WHERE instance = 'rm_legacy_insert'`;
   expect(row?.holder).toBe("system-scheduler");
-  expect([...AUTOMATION_HOLDERS]).toEqual(["system-scheduler", "analytics-producer", "operator"]);
+  expect([...AUTOMATION_HOLDERS]).toEqual(["system-scheduler", "analytics-producer", "operator", "pipeline-worker"]);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -350,8 +351,8 @@ test("117 red control: the scan finds each retired read shape it claims to find"
 // Criteria 117 and 118 on the running api
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Family = "public" | "member" | "admin" | "lifecycle" | "scheduler-read" | "analytics";
-const PRIVILEGED: readonly Family[] = ["admin", "lifecycle", "scheduler-read", "analytics"];
+type Family = "public" | "member" | "admin" | "lifecycle" | "scheduler-read" | "analytics" | "pipeline";
+const PRIVILEGED: readonly Family[] = ["admin", "lifecycle", "scheduler-read", "analytics", "pipeline"];
 
 // The admin namespace's deliberately public entries: the claim probe and the
 // passkey/recovery login steps, which run before any credential exists.
@@ -387,6 +388,8 @@ const PUBLIC = new Set([
  */
 function familyOf(key: string): Family | null {
   if (key.startsWith("analytics.") || key === "swarm.regime") return "analytics";
+  // The pipeline worker's queue, read and ingestion routes (issue 1034, D75).
+  if (key.startsWith("pipeline.")) return "pipeline";
   if (key.startsWith("swarm.scheduler.")) return "scheduler-read";
   if (key.startsWith("swarm.admin.epoch")) return "lifecycle";
   if (key.startsWith("swarm.admin.") || key === "swarm.register" || key === "projects.adminUpdate") return "admin";
@@ -394,7 +397,8 @@ function familyOf(key: string): Family | null {
   if (MEMBER.has(key)) return "member";
   // publicAnalytics.* (issue #1095, D58): the tokenless raw-data reads. Public by
   // construction, and under /api/public/, which no credential gate matches.
-  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.") || key.startsWith("publicAnalytics.")) return "public";
+  // referrals.* (issue 1371, referrals-spec §6): the tokenless one-code lookup.
+  if (PUBLIC.has(key) || key.startsWith("dashboards.") || key.startsWith("comments.") || key.startsWith("publicAnalytics.") || key.startsWith("referrals.")) return "public";
   return null;
 }
 
@@ -428,10 +432,12 @@ let api: ApiProcess;
 let scheduler = "";
 let analytics = "";
 let operator = "";
+let pipeline = "";
 beforeAll(async () => {
   scheduler = await provisionSchedulerToken();
   analytics = await provisionAnalyticsToken();
   operator = await provisionOperatorToken();
+  pipeline = await provisionPipelineToken();
   api = await bootApi({ env: { ...LEGACY, RM_ALLOW_INSECURE: "1" } });
 });
 afterAll(() => api?.stop());
@@ -489,8 +495,38 @@ test("118 is not vacuous: every privileged route refuses a forged credential (40
   expect(open).toEqual([]);
 }, 120_000);
 
-test("118: a full-rights scheduler token substitutes for nothing outside its rights — admin, analytics or member", async () => {
-  expect(await substitutions(api, scheduler, ["admin", "analytics", "member"])).toEqual([]);
+test("118: a full-rights scheduler token substitutes for nothing outside its rights — admin, analytics, pipeline or member", async () => {
+  expect(await substitutions(api, scheduler, ["admin", "analytics", "pipeline", "member"])).toEqual([]);
+}, 120_000);
+
+// Issue 1034 (D75): the pipeline-worker token opens /api/pipeline/** and nothing
+// else, and no other holder's token or a member bearer opens /api/pipeline/**.
+test("1034: the pipeline-worker token is refused on every route outside /api/pipeline/**", async () => {
+  expect(await substitutions(api, pipeline, ["admin", "lifecycle", "scheduler-read", "analytics", "member"])).toEqual([]);
+}, 120_000);
+
+test("1034: inside /api/pipeline/**, the scheduler, analytics and operator tokens and a member bearer are refused, and the pipeline token is admitted", async () => {
+  const entries = ENTRIES.filter((e) => e.family === "pipeline");
+  expect(entries.map((e) => e.key).sort()).toEqual([
+    "pipeline.claim", "pipeline.enqueue", "pipeline.ingest", "pipeline.read", "pipeline.reap", "pipeline.release",
+    "pipeline.renew", "pipeline.settle", "pipeline.sweep", "pipeline.tick", "pipeline.whoami",
+  ]);
+  for (const token of [scheduler, analytics, operator]) {
+    expect(await substitutions(api, token, ["pipeline"])).toEqual([]);
+  }
+  const member = `rmk_${crypto.randomUUID().replace(/-/g, "")}`;
+  for (const e of entries) {
+    const r = await probe(api, "POST", e.path, { Authorization: `Bearer ${member}` }, {});
+    expect({ route: e.key, status: r.status }).toEqual({ route: e.key, status: 401 });
+  }
+  // Control: the pipeline token gets past the door (its own 200 or a body 400/404, never 401/403).
+  const whoami = await probe(api, "POST", ROUTES.pipeline.whoami, { Authorization: `Bearer ${pipeline}` }, {});
+  expect(whoami.status).toBe(200);
+  expect(JSON.parse(whoami.body)).toEqual({ holder: "pipeline-worker", rights: ["pipeline_queue", "pipeline_ingest"] });
+  for (const e of entries) {
+    const r = await probe(api, "POST", e.path, { Authorization: `Bearer ${pipeline}` }, {});
+    expect({ route: e.key, refused: r.status === 401 || r.status === 403 }).toEqual({ route: e.key, refused: false });
+  }
 }, 120_000);
 
 test("118: the analytics token opens only the analytics routes — not admin, not the scheduler's, not a member's", async () => {

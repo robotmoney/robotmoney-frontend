@@ -340,14 +340,32 @@ last axis day, so the as-of day is revised by construction when D moves forward 
 day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
 section 6 and is not restated here.
 
-**Persistence tolerance (D56).** The persisted raw floor is the compute input only
-up to the per-source tolerance of D56 (`docs/decisions.md`): a point within tolerance
-is not rewritten (Yahoo ratios relative 5e-6, Yahoo float32 relative 1e-6). A run
-computes from the freshly fetched in-memory values, so a replay from the stored floor
-or ledger can differ slightly. The audit saw `factor_index` differ by up to 1.4e-4
-on 786 of 3,066 days (an inference from the stored data, not confirmed, because the
-fetched values are not recorded anywhere). Replaying a run from the ledger is described in
+**Persistence tolerance (D56) and the committed dataset.** A point within its
+source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative
+5e-6, Yahoo float32 relative 1e-6). Since issue 1421 a run computes only from what
+ingestion committed: `runAnalytics` runs every source call first, reads the raw
+floor back after writing it, and takes each backtest extra and research input from
+the ledger head `saveSourceAcquisition` returns for it. A within-tolerance re-fetch
+therefore reaches the computation as the stored value under the stored version, and
+a material revision as its new version, so a replay from the run's frozen vintage
+reproduces its published figures (`backend/tests/regime-replay-published.test.ts`).
+The run's telemetry carries a `committed-input-evidence` artifact counting the
+collected values that differed from the committed ones. Before issue 1421 a run
+computed from the freshly fetched in-memory values, so a replay of an earlier run
+from the stored floor or ledger can differ slightly: the audit saw `factor_index`
+differ by up to 1.4e-4 on 786 of 3,066 days (an inference from the stored data,
+because those fetched values are recorded nowhere). Replaying a run from the ledger
+is described in
 [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
+
+**Downstream never acquires.** After extract, every stage runs from the committed
+dataset and never calls the data source or an HTTP client. When neither composite
+panel (macro, on-chain) has an observation on or before the as-of day, the run stops
+with the named `CoverageError` (`packages/analyst-sdk/src/coverage.ts`, also raised
+by the SDK's `runRegime`). A missing optional input gives its documented missing
+result instead: no factor figures, no correlations or backtest pairs without SPX and
+ETH, no cash yield without TBILL3M. `scripts/tests/unit/analyst-sdk-purity.test.ts`
+rejects any import path from a downstream module to an acquisition client.
 
 **`regime_snapshots` is a current view; the ledger is the record.** Every run
 recomputes the full history and rewrites the table. What an earlier run showed
@@ -363,6 +381,50 @@ transforms and forward-fill ages are built. Its callers are
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
+
+### 8.2 Source ids and the storage mapping (D74, issue 1423)
+
+A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or
+`fred:DTB3`. Stored rows keep their existing keys. No row, vintage, report or
+archive is renamed or rewritten, and there is no migration. The one mapping
+between the two lives in `packages/analyst-sdk/src/series-ids.ts`
+(`SERIES_MAPPING`, re-exported by `backend/src/analytics/extras.ts`).
+
+- **Per consumer.** A consumer is one computation that reads source data: each
+  registry indicator (`indicator:<ID>`), the correlations and the backtest. Each
+  consumer reads the storage keys it read before: `raw_indicator_history:<ID>`
+  for an indicator, `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for
+  the correlations and the backtest. Tests pin this list per consumer.
+- **Two streams, one id.** `raw_indicator_history:SPX_TREND` and `backtest:^GSPC`
+  both map to `yahoo:^GSPC`. So do `raw_indicator_history:ETH_TREND` and
+  `backtest:ETH-USD` for `yahoo:ETH-USD`. Their same-date values can differ. They
+  stay separate streams: `selectConsumerObservations` gives each consumer only
+  its own keys, and every observation keeps its storage key as provenance.
+- **Ambiguity.** The mapping is rejected when it loads if one consumer would read
+  two storage keys for one source id. The error names both keys. One source id
+  read by two consumers through two keys is allowed.
+- **Ratios.** A ratio indicator stores a calculated value, so its key maps to the
+  indicator id with kind `calculated`, and its two legs are listed.
+- **Source ids without a provider symbol.** The provider is the registry's
+  `source`, the name the ledger already records. Providers with no series use a
+  fixed symbol: `defillama_tvl:total`, `defillama_stables:total`,
+  `geckoterminal_newpools:new_pools`, `shiller_cape:CAPE`. Coin Metrics uses
+  `<asset>.<metric>`, for example `coinmetrics:eth.AdrActCnt`.
+- **SDK input names.** The computation still reads its inputs under the ids it
+  read before: registry ids, plus `SPX`, `ETH` and `TBILL3M`. So identical
+  observations give byte-identical reports. `runRegime` accepts a stream under
+  that id, under its storage key, or under its source id when only one stream
+  holds that id. A source id alone feeds every consumer that reads it. An input
+  that names one consumer's stream twice is rejected with both names, for
+  example `SPX_TREND` and `yahoo:^GSPC`. With two streams for one source id, name
+  each by its storage key.
+- **Writes** use the reverse mapping. `storageKeyForSourceId(consumer, id)` gives
+  the key, and `EXTRA_WRITE_KEYS` gives the keys `fetchBacktestExtras` writes.
+- **Storage to inputs.** `inputHistoryFromStorage` turns stored rows, for example
+  a reloaded vintage's members, into the history `runRegime` reads.
+  `backend/tests/analytics-offline-replay.test.ts` freezes the SDK fixture into a
+  vintage and reloads it offline. The test rebuilds the committed golden report
+  byte for byte.
 
 ## 9. Deliberate v0 divergences
 

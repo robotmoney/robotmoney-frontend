@@ -101,7 +101,8 @@ const labelFlags = dockerLabelFlags(stackLabels(environment, name));
 // (tests/support/cluster.ts) and by the tests that must construct a state no
 // runtime role can (a superuser role, a role membership, a password change).
 // Nothing the application code under test connects with is a superuser:
-// WORKER_DATABASE_URL is `rm_worker`, DATABASE_URL is `HARNESS_ROLE`, and the
+// DATABASE_URL is `HARNESS_ROLE` (the pipeline worker holds no database
+// credential, issue 1034), and the
 // schema and the seed are `rm_owner`'s, as `bun smoke --local blank` has them.
 const ROLE_PASSWORD = "rm_test_role_password";
 const ADMIN_URL = `postgres://robotmoney:robotmoney@localhost:${port}/postgres`;
@@ -120,19 +121,9 @@ const HARNESS_ROLE = "rm_test";
 // does. A login of its own, so a test that changes rm_owner's password (the
 // owner-terminal tests) cannot lock the fixtures out.
 const OWNER_HARNESS_ROLE = "rm_test_owner";
-// The pipeline worker's pool, on the same footing: a login of its own whose
-// session role is `rm_worker`, so it holds exactly the worker's privileges (a
-// real runtime role: no DELETE, no DDL) and a test that changes rm_worker's
-// password cannot lock the pool out.
-const WORKER_HARNESS_ROLE = "rm_test_worker";
 const baseUrl = roleUrl(HARNESS_ROLE);
 // Must be set BEFORE any module reads config.databaseUrl / creates the pool.
 process.env.DATABASE_URL = baseUrl;
-// db/worker-client.ts requires WORKER_DATABASE_URL in every env and no longer
-// falls back to DATABASE_URL (#1026 criterion 120). The pipeline worker's pool
-// is the worker's real role; tests/support/clean-db.ts moves the two pools
-// together, each on its own login.
-process.env.WORKER_DATABASE_URL = roleUrl(WORKER_HARNESS_ROLE);
 process.env.RM_TEST_ADMIN_URL = ADMIN_URL;
 process.env.RM_TEST_ROLE_PASSWORD = ROLE_PASSWORD;
 // The template a test file clones to get a clean database of its own; see
@@ -158,6 +149,19 @@ process.env.RM_TEST_PG_CONTAINER = name;
 {
   const { armTestSeam } = await import("../src/test-seam.ts");
   armTestSeam();
+}
+// THE PIPELINE WORKER'S TRANSPORT (issue 1034, D75). The worker holds no
+// database credential: its queue calls, reads and writes go to the api's
+// /api/pipeline/** routes. In this process there is no api listening, so the
+// worker's client dispatches each request to the api's pipeline router on the
+// test database (tests/support/pipeline-in-process.ts). A short retry deadline:
+// a 503 here is a test's own saturation, and a test that wants the worker to
+// wait longer sets its own.
+{
+  const { setPipelineTransport } = await import("../src/worker/pipeline-client.ts");
+  const { inProcessPipelineTransport } = await import("./support/pipeline-in-process.ts");
+  setPipelineTransport(inProcessPipelineTransport);
+  process.env.PIPELINE_RETRY_DEADLINE_MS ??= "3000";
 }
 
 const up = Bun.spawnSync([
@@ -210,7 +214,8 @@ process.on("exit", () => { try { Bun.spawnSync(["docker", "rm", "-f", "-v", name
 //      (tests/support/clean-db.ts) and is not used for anything else here.
 //
 // WHAT THE SUITE'S LOGINS ARE NOW. The api pool is `HARNESS_ROLE` (a NON-superuser)
-// and the worker pool is `WORKER_HARNESS_ROLE`, acting as rm_worker. tests/preload-roles.test.ts asserts it.
+// and nothing connects as rm_worker, which holds no privilege (migration 0127).
+// tests/preload-roles.test.ts asserts it.
 // A few tests still need the cluster's superuser to build a state no runtime
 // role can reach (`ALTER ROLE rm_app SUPERUSER` for the denylist checks, a
 // `GRANT rm_owner TO rm_app`); they reach it through RM_TEST_ADMIN_URL
@@ -257,9 +262,6 @@ async function whenReady<T>(open: () => Promise<T>, timeoutMs = 30_000): Promise
       CREATE ROLE ${OWNER_HARNESS_ROLE} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOINHERIT PASSWORD '${ROLE_PASSWORD}';
       GRANT rm_owner, rm_app, rm_worker, rm_readonly TO ${OWNER_HARNESS_ROLE};
       ALTER ROLE ${OWNER_HARNESS_ROLE} SET role = 'rm_owner';
-      CREATE ROLE ${WORKER_HARNESS_ROLE} LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOINHERIT PASSWORD '${ROLE_PASSWORD}';
-      GRANT rm_worker TO ${WORKER_HARNESS_ROLE};
-      ALTER ROLE ${WORKER_HARNESS_ROLE} SET role = 'rm_worker';
       -- Two observability powers the owner-acting harness session needs and does
       -- not get from ownership: reading other sessions' statement text (the race
       -- tests wait on a blocked statement), and the replica-role session setting

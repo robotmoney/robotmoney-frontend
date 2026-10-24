@@ -25,6 +25,8 @@ import {
 } from "./domain.ts";
 // Issue #562 — the one implementation of "what handle does this name get".
 import { deriveMemberHandle } from "./handle.ts";
+// Issue 1371 — the member's referral code from the reviewed registry (config, no DB read).
+import { memberReferral } from "../referrals/lookup.ts";
 import { dormancyThresholdSessions, silentSessionsByMember } from "./dormancy.ts";
 // Issue #752 — the consensus judge's runtime switch. A DATABASE row, not an env
 // var, because the swarm is live and an operator must be able to take the
@@ -692,6 +694,10 @@ function toMemberAdmin(row: Record<string, any>): AdminMember {
     silentSessions: row.silent_sessions == null ? null : Number(row.silent_sessions),
     // SWARM_DORMANCY_THRESHOLD_SESSIONS, the count at which the list shows the line.
     silentThreshold: dormancyThresholdSessions(),
+    // Issue 1371 (referrals-spec §5, §6): the code the admin page shows, with
+    // its state and times, or null. Admin only: no public member projection
+    // carries it.
+    referral: memberReferral(row.id),
   };
 }
 

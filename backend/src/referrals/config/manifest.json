@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "chainId": 8453,
+  "asset": { "symbol": "USDC", "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "decimals": 6 },
+  "carrier": { "status": "core-conformance-pending" },
+  "entries": [
+    {
+      "id": "v0-rmusdc",
+      "kind": "vault",
+      "label": "v0 rmUSDC (config.vault)",
+      "address": "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
+      "abi": "erc4626",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": { "successors": ["d2-router", "d2-rmusdc", "d2-rmproto", "d2-rmagent", "d2-rmrwa"] }
+    },
+    {
+      "id": "d2-router",
+      "kind": "router",
+      "label": "deployment 2 router (#1356)",
+      "address": "0xb3a8e66d9e2980b54ac0e70e0e236486d1dcb356",
+      "abi": "router-d2",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": null
+    },
+    {
+      "id": "d2-rmusdc",
+      "kind": "vault",
+      "label": "deployment 2 rmUSDC (#1356)",
+      "address": "0x28bf6e6edad526191e8652ee631b56ead4ce7435",
+      "abi": "erc4626",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": null
+    },
+    {
+      "id": "d2-rmproto",
+      "kind": "vault",
+      "label": "deployment 2 rmPROTO (#1356)",
+      "address": "0x28c5ca4df0107679bfcc9b0ad4c2f3f209b8f797",
+      "abi": "erc4626",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": null
+    },
+    {
+      "id": "d2-rmagent",
+      "kind": "vault",
+      "label": "deployment 2 rmAGENT (#1356)",
+      "address": "0x22bd48c56c34a2c1c1bac77bd7c4e636a6f10d57",
+      "abi": "erc4626",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": null
+    },
+    {
+      "id": "d2-rmrwa",
+      "kind": "vault",
+      "label": "deployment 2 rmRWA (#1356)",
+      "address": "0x37be372bd32f9e63a94c7db3ab415996658bcd50",
+      "abi": "erc4626",
+      "status": "candidate",
+      "deploymentBlock": null,
+      "startBlock": null,
+      "endBlock": null,
+      "legacy": null
+    }
+  ]
+}

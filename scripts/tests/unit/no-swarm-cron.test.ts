@@ -441,8 +441,11 @@ describe("the general job queue and every non-swarm kind are untouched", () => {
 
   test("the job_schedules table, the tick and the claim loop are all still there", () => {
     expect(seed).toContain("job_schedules");
+    // The worker drives the tick; the api reads job_schedules (issue 1034, D75).
     const scheduler = readFileSync(join(REPO, "backend/src/worker/scheduler.ts"), "utf8");
-    expect(scheduler).toContain("job_schedules");
+    expect(scheduler).toContain("tickScheduler");
+    const store = readFileSync(join(REPO, "backend/src/pipeline/queue-store.ts"), "utf8");
+    expect(store).toContain("job_schedules");
   });
 
   test("the two surviving lanes are declared and resolve, and there is no research lane", () => {

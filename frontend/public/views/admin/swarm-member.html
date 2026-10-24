@@ -61,6 +61,30 @@
           <dt>Activated</dt><dd x-text="member.activatedAt || '—'"></dd>
         </dl>
 
+        <!-- Referral code (issue 1371, referrals-spec §5, §6). Read-only:
+             codes are reviewed backend configuration shipped in a release,
+             so nothing on this page changes them. State and both times are
+             shown so a scheduled replacement cannot pass for the active code. -->
+        <section x-show="!editing" class="adm-referral" data-testid="member-referral">
+          <h2 class="adm-h2 adm-h2--flush">Referral code</h2>
+          <template x-if="member.referral">
+            <dl class="adm-meta-grid">
+              <dt>Code</dt><dd><code x-text="member.referral.code" data-testid="member-referral-code"></code></dd>
+              <dt>State</dt><dd x-text="referralStateLabel()" data-testid="member-referral-state"></dd>
+              <dt>Terms version</dt><dd x-text="member.referral.termsVersion || '—'" data-testid="member-referral-terms"></dd>
+              <dt>Active from</dt><dd x-text="fmtUtc(member.referral.enabledAt)" data-testid="member-referral-enabled-at"></dd>
+              <dt>Disabled from</dt><dd x-text="fmtUtc(member.referral.disabledAt)" data-testid="member-referral-disabled-at"></dd>
+            </dl>
+          </template>
+          <p class="adm-dim" x-show="!member.referral" data-testid="member-referral-none">No referral code.</p>
+          <p class="adm-dim" data-testid="member-referral-readonly">
+            Read-only. A code is issued, scheduled, cancelled or disabled only by a
+            reviewed change to the referral registry, shipped in a release. An
+            active code identifies who referred a depositor; it is no promise of
+            a reward or credit.
+          </p>
+        </section>
+
         <div class="adm-toolbar" x-show="!editing">
           <button type="button" class="adm-btn" x-show="canEdit()" @click="startEdit()" data-testid="member-edit-toggle">Edit profile</button>
           <button type="button" class="adm-btn" x-show="canActivate()" @click="openConfirm('activate')" data-testid="member-activate">Activate</button>

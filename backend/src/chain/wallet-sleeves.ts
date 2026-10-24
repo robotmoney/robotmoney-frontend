@@ -12,7 +12,6 @@ import {
 import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import {
-  persistedFallbackWalletPriceReader,
   QUARANTINED_PROVENANCE,
   readChainAmountsBatched,
   SLEEVE_DEFS,
@@ -23,6 +22,7 @@ import {
   type WalletPriceReader,
 } from "./wallet-valuation.ts";
 import { ASSET_PRICE_TIME_BASIS } from "../ops/asset-price-basis.ts";
+import { dbPersistedFallbackReader } from "./wallet-persisted-price.ts";
 import { ttlCached } from "./ttl-cache.ts";
 
 export type { Provenance };
@@ -103,7 +103,7 @@ const sleevePrices = registerQuery({
 
 const defaultWalletSleeveReaders: WalletSleeveReaders = {
   readChainAmounts: readChainAmountsBatched,
-  priceReader: persistedFallbackWalletPriceReader,
+  priceReader: dbPersistedFallbackReader,
 };
 
 // SLEEVE_DEFS now lives in wallet-valuation.ts — the same module that already

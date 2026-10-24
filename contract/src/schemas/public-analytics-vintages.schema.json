@@ -25,6 +25,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "id",
           "run_key",
           "tool_id",
           "asof",
@@ -35,9 +36,14 @@
           "member_count",
           "build_identity",
           "methodology",
-          "created_at"
+          "created_at",
+          "report"
         ],
         "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1
+          },
           "run_key": {
             "type": "string"
           },
@@ -132,6 +138,32 @@
                   "string",
                   "null"
                 ]
+              }
+            }
+          },
+          "report": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "report_id",
+              "checksum",
+              "byte_length"
+            ],
+            "properties": {
+              "report_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "checksum": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "byte_length": {
+                "type": "integer",
+                "minimum": 1
               }
             }
           }

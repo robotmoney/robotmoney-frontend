@@ -1,6 +1,7 @@
+import type { TransactionSql } from "postgres";
 import { sql, jsonValue } from "../../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
-import type { SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
+import type { CommittedSourceValue, SaveSourceAcquisitionResult, SourceAcquisitionEvidence, SourceValueEvidence } from "../source-ledger.ts";
 import { withinTolerance } from "../source-tolerance.ts";
 
 // Issue #1035: what one re-observation adds to the ledger, given the head it is
@@ -95,25 +96,6 @@ const sourceKeyLock = registerStatement({
   callers: [ANALYTICS_ROUTE],
 });
 
-const priorValue = registerQuery({
-  role: "rm_app",
-  object: "source_value_versions",
-  privileges: ["SELECT"],
-  site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.priorValue",
-  purpose: "Read one value's prior revision, chained inside a batch that names the same coordinate twice.",
-  callers: [ANALYTICS_ROUTE],
-  probe: {
-    statement: `SELECT id, value, provenance
-          FROM source_value_versions
-          WHERE source_key = $1
-            AND market_date IS NOT DISTINCT FROM $2::date
-            AND market_instant IS NOT DISTINCT FROM $3::timestamptz
-          ORDER BY knowledge_time DESC, id DESC
-          LIMIT 1`,
-    params: ["probe", null, null],
-  },
-});
-
 const insertValues = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
@@ -152,6 +134,59 @@ const priorDated = registerQuery({
   },
 });
 
+type PriorRevision = { id: number; value: number; provenance: string | null };
+
+/**
+ * Each entry's prior revision, keyed by its `idx`: `undefined` when the
+ * coordinate has none. Dated and timestamped values are read by the two
+ * indexable lateral lookups (priorDated, priorInstants), one round trip each.
+ */
+async function resolvePriors(
+  tx: TransactionSql<{}>,
+  entries: readonly { idx: number; v: SourceAcquisitionEvidence["values"][number] }[],
+): Promise<Map<number, PriorRevision | undefined>> {
+  const priorByIdx = new Map<number, PriorRevision | undefined>();
+  const dated = entries.filter((e) => e.v.marketDate !== null && e.v.marketDate !== undefined);
+  const instants = entries.filter((e) => e.v.marketDate === null || e.v.marketDate === undefined);
+  const record = (rows: readonly Record<string, unknown>[]) => {
+    for (const r of rows) {
+      priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: (r.provenance as string | null) ?? null });
+    }
+  };
+
+  if (dated.length > 0) {
+    record(await on(tx, priorDated)`
+      SELECT k.idx, svv.id, svv.value, svv.provenance
+      FROM unnest(${dated.map((d) => d.v.sourceKey)}::text[], ${dated.map((d) => d.v.marketDate)}::date[], ${dated.map((d) => d.idx)}::int[])
+        AS k(source_key, market_date, idx)
+      LEFT JOIN LATERAL (
+        SELECT id, value, provenance
+        FROM source_value_versions v
+        WHERE v.source_key = k.source_key
+          AND v.market_date = k.market_date
+          AND v.market_instant IS NULL
+        ORDER BY v.knowledge_time DESC, v.id DESC
+        LIMIT 1
+      ) svv ON true`);
+  }
+  if (instants.length > 0) {
+    record(await on(tx, priorInstants)`
+      SELECT k.idx, svv.id, svv.value, svv.provenance
+      FROM unnest(${instants.map((d) => d.v.sourceKey)}::text[], ${instants.map((d) => d.v.marketInstant)}::timestamptz[], ${instants.map((d) => d.idx)}::int[])
+        AS k(source_key, market_instant, idx)
+      LEFT JOIN LATERAL (
+        SELECT id, value, provenance
+        FROM source_value_versions v
+        WHERE v.source_key = k.source_key
+          AND v.market_instant = k.market_instant
+          AND v.market_date IS NULL
+        ORDER BY v.knowledge_time DESC, v.id DESC
+        LIMIT 1
+      ) svv ON true`);
+  }
+  return priorByIdx;
+}
+
 const priorInstants = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
@@ -176,15 +211,33 @@ const priorInstants = registerQuery({
   },
 });
 
+// Issue 1421 (review finding AN-15): the ledger head of every submitted value,
+// read inside the same transaction after the tolerance decision, so the caller
+// computes from what the ledger holds rather than from what the provider just
+// served. A value within tolerance of its head wrote no row, so its head is the
+// stored version. One indexed round trip per representation (resolvePriors).
+async function committedHeads(
+  tx: TransactionSql<{}>,
+  values: SourceAcquisitionEvidence["values"],
+): Promise<CommittedSourceValue[]> {
+  if (values.length === 0) return [];
+  const heads = await resolvePriors(tx, values.map((v, i) => ({ idx: i + 1, v })));
+  return values.map((v, i) => {
+    const head = heads.get(i + 1);
+    if (!head) throw new Error(`${v.sourceKey} ${v.marketDate ?? v.marketInstant}: no ledger head after the acquisition was saved`);
+    return { versionId: String(head.id), value: head.value };
+  });
+}
+
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
-): Promise<{ acquisitionId: string; replayed: boolean }> {
+): Promise<SaveSourceAcquisitionResult> {
   return sql.begin(async (tx) => {
     // The producer-generated acquisition UUID is the idempotency key. A replay
     // is a read-only success; a partially persisted acquisition is impossible
     // because every first submission is one transaction.
     const existing = await on(tx, findAcquisition)`SELECT id FROM source_acquisitions WHERE id = ${evidence.id}::uuid`;
-    if (existing.length > 0) return { acquisitionId: evidence.id, replayed: true };
+    if (existing.length > 0) return { acquisitionId: evidence.id, replayed: true, committed: await committedHeads(tx, evidence.values) };
 
     await on(tx, insertAcquisition)`
       INSERT INTO source_acquisitions (id, provider, parser_version, cache_identity, requested_by_run_id)
@@ -261,19 +314,13 @@ export async function saveSourceAcquisition(
       // correctly chains prior_version_id across values within this same
       // transaction. The bulk path below assumes distinct coordinates, so it
       // cannot be used here.
+      //
+      // Each value's prior is read through the same indexable lookups as the
+      // bulk path below, one value at a time, never an `IS NOT DISTINCT FROM`
+      // (see the note there, issue 1034).
       for (const value of evidence.values) {
-        const [prior] = await on(tx, priorValue)`
-          SELECT id, value, provenance
-          FROM source_value_versions
-          WHERE source_key = ${value.sourceKey}
-            AND market_date IS NOT DISTINCT FROM ${value.marketDate}::date
-            AND market_instant IS NOT DISTINCT FROM ${value.marketInstant}::timestamptz
-          ORDER BY knowledge_time DESC, id DESC
-          LIMIT 1`;
-        const revisionKind = classify(
-          prior === undefined ? undefined : { value: Number(prior.value), provenance: (prior.provenance as string | null) ?? null },
-          value,
-        );
+        const prior = (await resolvePriors(tx, [{ idx: 1, v: value }])).get(1);
+        const revisionKind = classify(prior, value);
         if (revisionKind === null) continue;
         await on(tx, insertValues)`
           INSERT INTO source_value_versions
@@ -303,45 +350,10 @@ export async function saveSourceAcquisition(
       // A row has exactly one representation (CHECK in migration 0057), so
       // splitting on it gives plain equality plus an IS NULL, both of which
       // `source_value_versions_lookup_idx` can search.
-      const priorByIdx = new Map<number, { id: number; value: number; provenance: string | null } | undefined>();
-      const dated: { idx: number; v: SourceAcquisitionEvidence["values"][number] }[] = [];
-      const instants: { idx: number; v: SourceAcquisitionEvidence["values"][number] }[] = [];
-      evidence.values.forEach((v, i) => {
-        (v.marketDate !== null && v.marketDate !== undefined ? dated : instants).push({ idx: i + 1, v });
-      });
-
-      if (dated.length > 0) {
-        const rows = await on(tx, priorDated)`
-          SELECT k.idx, svv.id, svv.value, svv.provenance
-          FROM unnest(${dated.map((d) => d.v.sourceKey)}::text[], ${dated.map((d) => d.v.marketDate)}::date[], ${dated.map((d) => d.idx)}::int[])
-            AS k(source_key, market_date, idx)
-          LEFT JOIN LATERAL (
-            SELECT id, value, provenance
-            FROM source_value_versions v
-            WHERE v.source_key = k.source_key
-              AND v.market_date = k.market_date
-              AND v.market_instant IS NULL
-            ORDER BY v.knowledge_time DESC, v.id DESC
-            LIMIT 1
-          ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: (r.provenance as string | null) ?? null });
-      }
-      if (instants.length > 0) {
-        const rows = await on(tx, priorInstants)`
-          SELECT k.idx, svv.id, svv.value, svv.provenance
-          FROM unnest(${instants.map((d) => d.v.sourceKey)}::text[], ${instants.map((d) => d.v.marketInstant)}::timestamptz[], ${instants.map((d) => d.idx)}::int[])
-            AS k(source_key, market_instant, idx)
-          LEFT JOIN LATERAL (
-            SELECT id, value, provenance
-            FROM source_value_versions v
-            WHERE v.source_key = k.source_key
-              AND v.market_instant = k.market_instant
-              AND v.market_date IS NULL
-            ORDER BY v.knowledge_time DESC, v.id DESC
-            LIMIT 1
-          ) svv ON true`;
-        for (const r of rows) priorByIdx.set(Number(r.idx), r.id === null ? undefined : { id: Number(r.id), value: Number(r.value), provenance: (r.provenance as string | null) ?? null });
-      }
+      const priorByIdx = await resolvePriors(
+        tx,
+        evidence.values.map((v, i) => ({ idx: i + 1, v })),
+      );
 
       const rows = evidence.values.flatMap((value, i) => {
         const prior = priorByIdx.get(i + 1); // WITH ORDINALITY is 1-based
@@ -368,6 +380,6 @@ export async function saveSourceAcquisition(
       }
     }
 
-    return { acquisitionId: evidence.id, replayed: false };
+    return { acquisitionId: evidence.id, replayed: false, committed: await committedHeads(tx, evidence.values) };
   });
 }

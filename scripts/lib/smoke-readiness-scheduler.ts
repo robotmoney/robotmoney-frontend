@@ -253,10 +253,14 @@ export interface GateCheck {
 export type ContainerHealth = "healthy" | "unhealthy" | "starting" | "none" | "missing";
 
 /**
- * One pipeline-worker container, as the boot read it. The worker writes no
- * heartbeat until its startup checks 1-3 pass (§7.2), and logs exactly
- * `startup_preflight: passed`, or `startup_preflight: refused check <n>:
- * <reason>` and exits 1. `line` is the last such line in its log.
+ * One pipeline-worker container, as the boot read it. The worker holds no
+ * database credential (issue 1034, D75), so its startup check is HTTP: the api
+ * answers and accepts its pipeline-worker token with both rights. It writes no
+ * heartbeat until that passes, and logs exactly `pipeline_startup: passed`, or
+ * `pipeline_startup: refused: <reason>` and exits 1. A worker image from before
+ * issue 1034 logged `startup_preflight: passed` or `startup_preflight: refused
+ * check <n>: <reason>` instead, and a rolling boot can still meet one, so both
+ * are read. `line` is the last such line in its log.
  */
 export interface WorkerStartupReading {
   service: string;
@@ -266,10 +270,10 @@ export interface WorkerStartupReading {
 
 /** The exact line the pipeline worker logs, parsed; null for any other line. */
 export function parseStartupPreflightLine(line: string): WorkerStartupReading["line"] {
-  const passed = /startup_preflight: passed\b/.exec(line);
-  const refused = /startup_preflight: refused (check \d+: .*)$/.exec(line.trim());
+  const trimmed = line.trim();
+  const refused = /pipeline_startup: refused: (.*)$/.exec(trimmed) ?? /startup_preflight: refused (check \d+: .*)$/.exec(trimmed);
   if (refused) return { kind: "refused", detail: refused[1]! };
-  if (passed) return { kind: "passed" };
+  if (/(?:pipeline_startup|startup_preflight): passed\b/.test(line)) return { kind: "passed" };
   return null;
 }
 
@@ -306,7 +310,7 @@ export function evaluateWorkerStartup(workers: readonly WorkerStartupReading[]):
   const describe = (w: WorkerStartupReading): string => {
     if (w.line?.kind === "refused") return `${w.service}: refused ${w.line.detail}`;
     if (w.line?.kind === "passed") return `${w.service}: startup checks passed (container ${w.health})`;
-    return `${w.service}: no startup_preflight line yet (container ${w.health})`;
+    return `${w.service}: no pipeline_startup line yet (container ${w.health})`;
   };
   const pass = workers.every((w) => w.line?.kind === "passed" && w.health === "healthy");
   return { check: "pipeline-worker-startup", pass, detail: workers.map(describe).join("; ") };

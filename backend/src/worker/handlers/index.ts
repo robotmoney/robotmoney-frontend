@@ -8,14 +8,15 @@ import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
 import { sampleWalletBalances, sampleWalletSleeves } from "./wallet.ts";
 import { sampleTokenMarket } from "./token-market.ts";
-import { backfillAssetPricesForCleanDays } from "../../ops/asset-prices.ts";
+import { backfillAssetPricesForCleanDays } from "../../ops/asset-price-backfill.ts";
 // Issue #979 fix: NEVER import analytics/cutover/parity.ts here — it imports
 // db/client.ts (the rm_app-credentialed API pool), and worker/** must never
 // hold that pool, even transitively (see db migration 0060's REVOKE + the
 // analytics-api-boundary transitive-reachability test). triggerParitySweep()
 // is the authenticated-HTTP call to the API process instead, the same
 // worker→API pattern analyticsApiClient() already uses for #977/#978.
-import { AnalyticsApiUnreachableError, triggerParitySweep } from "../../analytics/api-client.ts";
+import { AnalyticsApiUnreachableError, triggerParitySweep, type ParityDomainSummary } from "../../analytics/api-client.ts";
+import { PipelineUnreachableError, pipelineIngest } from "../pipeline-client.ts";
 
 // `jobId` is the claimed job's row id (loop.ts passes `job.id`). It is optional
 // and source-compatible: existing handlers that only take `payload` remain
@@ -113,9 +114,16 @@ export const handlers: Record<string, JobHandler> = {
   // its backoff. Any other error (a 4xx, a bad answer) still fails the job.
   "analytics.parity_sweep": async () => {
     try {
-      return await triggerParitySweep();
+      // One pipeline ingestion request per domain (issue 1034): the worker
+      // presents its pipeline-worker token, never the analytics one.
+      return await triggerParitySweep(null, console.log, (domain) =>
+        pipelineIngest<ParityDomainSummary>("analytics.parity_sweep", domain),
+      );
     } catch (err) {
-      if (err instanceof AnalyticsApiUnreachableError) return { ok: false, error: err.message };
+      const cause = err instanceof Error ? err.cause : undefined;
+      if (err instanceof AnalyticsApiUnreachableError || cause instanceof PipelineUnreachableError) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
       throw err;
     }
   },

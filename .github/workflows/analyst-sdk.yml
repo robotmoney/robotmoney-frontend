@@ -1,5 +1,5 @@
 # Analyst SDK tier: the package's own tests (`bun test` inside
-# packages/analyst-sdk) with fetch replaced by a thrower, a typecheck, and a
+# packages/analyst-sdk) with every HTTP client replaced by a thrower, a typecheck, and a
 # standalone install from a copy holding ONLY the package, so the SDK cannot
 # quietly grow a dependency on the rest of the monorepo (issue #1095).
 #
@@ -45,6 +45,8 @@ jobs:
           filters: |
             analyst-sdk:
               - 'packages/analyst-sdk/**'
+              # The suite guard the job runs (issue 1421).
+              - 'scripts/checks/assert-junit-suites.ts'
 
   analyst-sdk:
     needs: [changes]
@@ -64,9 +66,73 @@ jobs:
         # Spelled out because ci-workflows-structure.test.ts pins the package-script
         # form of this command to unit.yml and backend.yml.
         run: bunx tsc --noEmit
-      - name: SDK tests (fetch is a thrower)
+      # Recorded fixtures must exist and be current before the suite runs: the
+      # archive copies, the raw-history fixture and the golden (issue 1404).
+      - name: Fixtures exist and are current
         working-directory: packages/analyst-sdk
-        run: bun test
+        run: |
+          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts; do
+            test -s "$f" || { echo "::error::$f is missing: an SDK fixture is absent"; exit 1; }
+          done
+          bun run archive-fixture:regenerate --check
+          bun run golden:regenerate --check
+      - name: SDK tests (every HTTP client is a thrower)
+        working-directory: packages/analyst-sdk
+        run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/analyst-sdk.junit.xml"
+      # Issue 1423: the series-identity proofs ran with at least their number of
+      # cases and none skipped; a renamed or emptied file is red, never green.
+      - name: Series identity proofs ran (issue 1423)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/input-rule.test.ts:10
+          tests/regime.test.ts:22
+      # Issue 1421: every named suite ran with at least its number of behaviour
+      # cases and none skipped; a renamed or emptied file is red, never green.
+      - name: SDK parity, provenance and no-HTTP suites ran (issue 1421)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/originals-provenance.test.ts:26
+          tests/report-parity.test.ts:15
+          tests/an-behaviours.test.ts:21
+          tests/byte-negative-control.test.ts:7
+          tests/exported-helpers.test.ts:15
+          tests/supplied-input-no-http.test.ts:7
+          tests/regime.test.ts:22
+          tests/prepare.test.ts:3
+          tests/input-rule.test.ts:10
+          tests/extract.test.ts:9
+      # Issue 1399: the as-of label suite ran, the 419-run hindsight case included.
+      - name: As-of label suite ran (issue 1399)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/asof-labels.test.ts:11
+      # Issue 1402: the sleeve signal suite ran (grammar, fixture date, missing data).
+      - name: Sleeve signal suite ran (issue 1402)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/signals.test.ts:16
+      # Issue 1401: the rule file suite ran (shipped files, field-named errors, README example).
+      - name: Rule file suite ran (issue 1401)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/rules.test.ts:19
+      # Issue 1403: the allocation engine suite ran (tilts, caps, volatility, the prototype's weekly weights).
+      - name: Allocation engine suite ran (issue 1403)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/engine.test.ts:18
+      # Issue 1404: the backtest, CLI and producer-to-SDK suites ran with at
+      # least their number of cases and none skipped (JUnit, not console text).
+      - name: Backtest, CLI and input suites ran (issue 1404)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/backtest.test.ts:16
+          tests/cli.test.ts:10
+          tests/backtest-cli.test.ts:5
+          tests/inputs.test.ts:15
+          tests/input-rule.test.ts:10
+          tests/regime.test.ts:22
+          tests/prepare.test.ts:3
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
@@ -80,3 +146,16 @@ jobs:
           cd "$d"
           bun install --frozen-lockfile
           bun run regime tests/fixtures/raw-indicator-history.csv | diff - tests/golden/regime-report.json
+          # Relative paths resolve from the caller's folder, also under bun run.
+          (cd tests && bun run regime fixtures/raw-indicator-history.json | diff - golden/regime-report.json)
+          # Provenance: no manifest gives pinned:false around the unchanged report;
+          # the recorded API-only copy (no private repository access) gives
+          # pinned:true with its manifest.
+          bun run regime tests/fixtures/raw-indicator-history.csv --provenance > "$d/env.json"
+          bun -e 'const e = JSON.parse(await Bun.file(process.argv[1]).text()); const g = await Bun.file("tests/golden/regime-report.json").text(); if (e.pinned !== false || JSON.stringify(e.report, null, 2) + "\n" !== g) process.exit(1)' "$d/env.json"
+          # tests/fixtures/archive/api-recorded is the recording of the real public
+          # archive routes (backend/tests/analyst-sdk-public-archive-recording.test.ts).
+          run=0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2
+          bun run inputs --archive tests/fixtures/archive/api-recorded --run "$run" --out "$d/gen"
+          bun run regime "$d/gen/inputs.csv" --replay --provenance > "$d/pinned.json"
+          bun -e 'const e = JSON.parse(await Bun.file(process.argv[1]).text()); if (e.pinned !== true || e.manifest.run_key !== process.argv[2] || e.manifest.source !== "api") process.exit(1)' "$d/pinned.json" "$run"

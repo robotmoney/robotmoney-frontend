@@ -3996,6 +3996,12 @@ data seeds the pipeline worker's `job_schedules` rows. The pipeline worker keeps
 `rm_worker` and runs preflight checks 1-3; the research lane, which serves only
 retired rows, is removed.
 
+> **Superseded in part by [D75](#d75) on 2026-10-22.** Decision 2's `rm_worker`
+> carve-out no longer holds. The pipeline worker holds no database credential:
+> it reaches the database only through the api's `/api/pipeline/**` routes with
+> its pipeline-worker token, its startup check is HTTP, and `rm_worker` holds no
+> privilege (migration 0127).
+
 **Decision 3: sessions close on a fixed wall-clock grid.** A subject's windows
 close at `epoch_anchor + k × epoch_duration`. A late turnover never shifts later
 windows, downtime skips to the next future grid instant, and a duration change
@@ -4761,10 +4767,22 @@ observed off) if either would change.
 | `backtest:^GSPC` | yahoo | relative 1e-6 |
 | `backtest:ETH-USD` | yahoo | relative 1e-6 |
 | `backtest:DTB3` | fred | exact |
+| `yahoo:GLD` | yahoo | relative 1e-6 |
+| `defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84` | defillama-yields | exact |
+| `defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501` | defillama-yields | exact |
+| `yahoo:USDC-USD` | yahoo | relative 1e-6 |
+| `defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72` | defillama-yields | exact |
+| `defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c` | defillama-yields | exact |
+| `defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469` | defillama-yields | exact |
+| `defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c` | defillama-yields | exact |
+| `defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19` | defillama-yields | exact |
 
 `backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
 capture call site under `src/analytics/extract` and `src/analytics/access`, and
-fails if one has no entry here or in `SOURCE_TOLERANCES`.
+fails if one has no entry here or in `SOURCE_TOLERANCES`. The last nine rows
+are the model portfolio inputs recorded under their own source id (issue 1398),
+including the Base universe assets; the test reads them from
+`packages/analyst-sdk/inventory/model-portfolio.json`.
 
 **Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
 is Yahoo's. Its chart API serves float32-derived numbers
@@ -5914,3 +5932,122 @@ This settles three points.
 1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
 2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, the revision capture waits for an owner decision.
 3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
+
+---
+
+<a id="d75"></a>
+## D75 — Only the api holds a database credential; the pipeline worker writes through /api/pipeline/** (supersedes D52 decision 2's rm_worker carve-out; owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22. Implemented by issue 1034. It supersedes in part
+[D52](#d52): decision 2's sentence "The pipeline worker keeps `rm_worker` and runs
+preflight checks 1-3". It amends smoke-production-spec.md §3 and §7.2.
+
+**Decision.**
+
+1. **No service other than `api` holds a database credential.** No composition
+   hands any other service `DATABASE_URL`, `WORKER_DATABASE_URL`, a `PG*`
+   connection key, a `postgres://` value or a pool setting.
+   `scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts`
+   renders every composition and asserts it, with a planted red control.
+2. **The pipeline worker reaches the database only through `/api/pipeline/**`.**
+   It claims, renews and settles jobs, ticks the schedules, reaps expired leases
+   and enqueues follow-up jobs through the queue routes, reads the state its
+   handlers need through the read routes, and writes their rows through the
+   ingestion routes. Its import graph reaches no database module. It refuses to
+   start with a database key in its environment, and its startup check is HTTP:
+   the api answers and accepts its token with both rights (`pipeline_startup:
+   passed`).
+3. **It holds one credential, the `pipeline-worker` service token.** The token
+   lives in the api's automation-token store like the other holders (smoke spec
+   §3), with two rights: `pipeline_queue` and `pipeline_ingest`. It is refused on
+   every route outside `/api/pipeline/**`, and every other token is refused inside
+   it.
+4. **Every pipeline write is bounded, idempotent and fenced.** A request carries
+   at most 1,000 rows and 1 MiB (413 otherwise). It carries an `Idempotency-Key`:
+   a replay with the same body returns the recorded response and writes nothing,
+   and the same key with another body answers 409. It carries its lease
+   `(jobId, workerId, attempt)`: the api locks the job row and writes only while
+   the lease holds, so a reaped lease or a stale attempt answers 409 `lease_lost`
+   and writes nothing.
+5. **Pipeline work runs on the api's batch pool, capped per token.** A token
+   holds `PIPELINE_TOKEN_CONCURRENCY` requests at once (default 2). One more waits
+   `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated` with `Retry-After`, which
+   the worker honours. Public and member routes keep their own request pool.
+6. **`rm_worker` holds no privilege.** Migration 0127 revokes every table,
+   sequence and schema privilege and rm_owner's default grants to it, and
+   `backend/schema/grants.sql` re-asserts that on every migrate run. Its
+   password leaves the `~/.env` allowlist (preflight check 4).
+
+**Accepted costs.**
+
+- Migration 0127 is `compat: breaking`: a worker built before this release
+  needs `rm_worker`'s grants, and an api built before it refuses to boot beside
+  it (spec §8.4). A release that carries 0127 follows spec §8.5's breaking
+  order. To keep the rolling upgrade, 0127 can ship one release after 0126 and
+  the new worker: by then nothing connects as `rm_worker`.
+- Each existing `~/.env` holds an `rm_worker` line that is now off the
+  allowlist. Check 4 warns on stage and refuses on prod until the line goes.
+  The release runner's env rewrite moves it out.
+- `projects.discover` writes its roster in requests of at most 1,000 rows, each
+  its own transaction, instead of one transaction. Every write is an idempotent
+  upsert, and deactivation runs only after every request landed, so a run that
+  stops between requests leaves rows the next run rewrites.
+- The retired `regime.classify` and `research.refresh` kinds still have
+  handlers that present the analytics token. The worker no longer holds that
+  token, so a job of either kind enqueued by hand fails. No schedule enqueues
+  them (D25).
+
+**Why.** Production answered nginx 502s while the api logged its 10 s request
+timeout at about 1% CPU. Every worker lane opened its own pools, so no one place
+bounded concurrency, timeouts or query budgets. With the api as the only client,
+the connection budget is one sum the api checks at boot, and bulk pipeline
+work can exhaust only the batch pool.
+
+Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
+`CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
+pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
+connection pooler.
+
+---
+
+<a id="d76"></a>
+## D76 — Referral attribution: the accepted specification governs; codes and admin corrections are reviewed config, not tables (implementation owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22 as the implementation-owner decision the
+[referral specification](technical/referrals-spec.md) §8 and §11 left open
+("Correction storage: implementation owner decides"). Implemented by issue 1371.
+The specification itself was accepted by the owner on 2026-10-19 (PR 1390).
+
+**Decision.**
+
+1. **Policy authority.** `docs/technical/referrals-spec.md` governs referral
+   attribution in this repository. Attribution only: no payment, fee or reward
+   logic lives here. A policy change returns to owner review first.
+2. **Codes are reviewed configuration.** The registry
+   (`backend/src/referrals/config/registry.json`: codes, lifecycle times, the one
+   launch block) changes only by a reviewed change shipped in a release. No
+   environment variable grants attribution.
+3. **Admin corrections are an append-only reviewed config log**
+   (`backend/src/referrals/config/corrections.json`), not a new table and not an
+   admin-route write. D66 makes every production data change a migration and
+   rejects an admin-route write with an audit row; a table with an insert-only
+   grant would need its own owner sign-off. Review supplies the "who"; each entry
+   records `recordedBy`, `recordedAt`, `reason` and its evidence, and a revocation
+   is a later entry. The admin panel verifies and shows the log read-only.
+4. **The previous accepted revision is committed data.** `accepted-revisions.json`
+   holds the registry, correction log and manifest as they stood at each
+   production version tag (D64, D70), with the tag time as that revision's
+   deployment time. A revision is validated against its predecessor at its own tag
+   time: no deleted history, no reassignment, no retroactive edit, and no newly
+   introduced effective time earlier than the deployment. CI validates the working
+   files against the last accepted revision with "now" as the earliest deployment,
+   because its checkout has no git history.
+5. **The carrier is robotmoney-core's.** The report decodes core's event (payer,
+   receiver, amount, code, owner choice 2026-10-19) in one adapter,
+   `backend/src/referrals/carrier.ts`. Until core publishes the event's ABI the
+   adapter decodes a clearly marked placeholder; conformance is checked at
+   launch (spec §10), never as a merge gate, and needs no contract change here.
+
+**Accepted costs.** A code or correction shipped by a release always takes effect
+no earlier than that release's tag; an urgent correction waits for a release. A
+scheduled activation that misses its release fails CI until it is rescheduled.

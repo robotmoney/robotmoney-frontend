@@ -21,6 +21,7 @@ import type {
 } from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
 import type { TerminalRunPackageInput } from "./output-snapshots.ts";
+import type { SaveSourceAcquisitionResult } from "./source-ledger.ts";
 import { readFileSync } from "node:fs";
 import { ALL_PARITY_DOMAINS, type ParityDomain } from "./cutover/parity-domains.ts";
 
@@ -139,7 +140,7 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
       return await call<TerminalRunPackageResult>("POST", ROUTES.analytics.runPackage, { package: wire });
     },
     async saveSourceAcquisition(acquisition) {
-      return await call<{ acquisitionId: string; replayed: boolean }>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
+      return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);
@@ -203,20 +204,25 @@ export interface ParitySweepSummary {
 // and names the domain; the domains before it have already recorded their
 // observations, which are evidence in their own right.
 export async function triggerParitySweep(
-  cfg: AnalyticsApiConfig = resolveAnalyticsApiConfig(),
+  cfg: AnalyticsApiConfig | null = null,
   log: (line: string) => void = console.log,
+  // One domain's request. The pipeline worker passes its own (the pipeline
+  // ingestion operation `analytics.parity_sweep`, issue 1034): it holds the
+  // pipeline-worker token, not the analytics one.
+  sweepDomain: (domain: ParityDomain) => Promise<ParityDomainSummary> = (domain) =>
+    analyticsApiCall<ParityDomainSummary>(cfg ?? resolveAnalyticsApiConfig(), "POST", ROUTES.analytics.paritySweep, { domain }),
 ): Promise<ParitySweepSummary> {
   const domains: ParityDomainSummary[] = [];
   for (const domain of ALL_PARITY_DOMAINS) {
     const started = performance.now();
     let summary: ParityDomainSummary;
     try {
-      summary = await analyticsApiCall<ParityDomainSummary>(cfg, "POST", ROUTES.analytics.paritySweep, { domain });
+      summary = await sweepDomain(domain);
     } catch (err) {
       const message = `parity sweep failed on domain ${domain}: ${err instanceof Error ? err.message : String(err)}`;
       // Keep the class: the handler degrades on an unready api (issue 1378).
       if (err instanceof AnalyticsApiUnreachableError) throw new AnalyticsApiUnreachableError(message);
-      throw new Error(message);
+      throw new Error(message, { cause: err });
     }
     log(
       `[parity-sweep] domain=${domain} matched=${summary.matched} legacy=${summary.legacyRowCount} ` +

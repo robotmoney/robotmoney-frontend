@@ -1106,8 +1106,9 @@ export interface SchemaIdentity {
 
 /**
  * The keys §3 allows in `~/.env`, and nothing else: "the remote connection
- * (host, port, dbname); the runtime role passwords `rm_app`, `rm_worker` and
- * `rm_readonly`; `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D61 adds
+ * (host, port, dbname); the runtime role passwords `rm_app` and `rm_readonly`;
+ * `RM_ENV`; `RM_CREDENTIALS`; and `COINGECKO_API_KEY`." D75 (issue 1034) took
+ * `rm_worker` off it: no container holds that role any more. D61 adds
  * the owner password `rm_owner` (read by `bun run migrate`, `bun run prune`, a
  * remote `bun smoke --migrate/--seed` and `prod-init`). No container receives
  * it. `doadmin` is NOT allowed (D61 amendment, owner, 2026-10-08): it is never
@@ -1135,13 +1136,24 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
   "dbname",
   "sslmode",
   "rm_app",
-  "rm_worker",
   "rm_readonly",
   "rm_owner",
   "RM_ENV",
   "RM_CREDENTIALS",
   "COINGECKO_API_KEY",
 ]);
+
+/**
+ * Keys §3 listed once and no longer does. Production's `~/.env` still holds an
+ * `rm_worker` line from before D75 (issue 1034), and the release's
+ * C07-env-rewrite moves it out. Until then check 4 WARNS on such a key in every
+ * environment and never refuses, so the rolling upgrade that retires the role
+ * is not stopped by the line it is about to move. Any other off-list key is
+ * still refused on prod.
+ */
+export const ENV_FILE_RETIRED_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  rm_worker: "the retired rm_worker password (D75: no container logs in as rm_worker; C07-env-rewrite moves the line out)",
+});
 
 /**
  * Check 4 — `~/.env` holds only the keys §3 lists.
@@ -1216,11 +1228,19 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         severity,
         message:
           `${path} line ${line.number} is not a KEY = VALUE line (it has no \`=\`): §3 allows only the connection values, the database ` +
-          "role passwords (rm_app, rm_worker, rm_readonly, rm_owner), RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
+          "role passwords (rm_app, rm_readonly, rm_owner), RM_ENV, RM_CREDENTIALS and COINGECKO_API_KEY, and a bare value is none of them",
       });
       continue;
     }
     if (allowed.has(line.key)) continue;
+    if (line.plain && Object.hasOwn(ENV_FILE_RETIRED_KEYS, line.key)) {
+      findings.push({
+        check: "env_credentials",
+        severity: "warn",
+        message: `${path} holds ${line.key}, ${ENV_FILE_RETIRED_KEYS[line.key]} — §3 no longer lists it`,
+      });
+      continue;
+    }
     if (!line.plain) {
       // Not printed: a key holding `:`, spaces or quotes may be half a secret.
       const reason = dangerousTokenReason(line.key);
@@ -1230,7 +1250,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
         message:
           `${path} line ${line.number} has a key that is not a plain name, ` +
           `${reason === null ? "so it is none of the keys §3 lists" : `and it names ${reason}`} — §3 allows only the connection values ` +
-          "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, RM_ENV, " +
+          "(host, port, database/dbname, sslmode), the rm_app, rm_readonly and rm_owner passwords, RM_ENV, " +
           "RM_CREDENTIALS and COINGECKO_API_KEY",
       });
       continue;
@@ -1241,7 +1261,7 @@ export async function checkEnvCredentials(context: PreflightContext): Promise<Pr
       severity,
       message:
         `${path} holds ${line.key}, ${reason ?? "a key §3 does not list"} — §3 allows only the connection values ` +
-        "(host, port, database/dbname, sslmode), the rm_app, rm_worker, rm_readonly and rm_owner passwords, RM_ENV, " +
+        "(host, port, database/dbname, sslmode), the rm_app, rm_readonly and rm_owner passwords, RM_ENV, " +
         "RM_CREDENTIALS and COINGECKO_API_KEY",
     });
   }
@@ -1627,9 +1647,9 @@ export function preflightReportLines(report: PreflightReport): string[] {
 // Container startup (§7.2's second caller)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** The one role each database-holding container holds (§7.2): `api` is
- *  `rm_app`, the pipeline worker is `rm_worker`. */
-export type ContainerRole = "rm_app" | "rm_worker";
+/** The one role the one database-holding container holds (§7.2, D75): `api`
+ *  is `rm_app`. The pipeline worker holds no database credential (issue 1034). */
+export type ContainerRole = "rm_app";
 
 /** Spec §7's own numbering, which the startup log line carries. 3a and 3b are
  *  the two questions of check 3, so both are `3`. */
@@ -1672,9 +1692,9 @@ export interface StartupPreflightOutcome {
 
 /**
  * Checks 1-3 at container startup, against the container's own credential —
- * spec §7.2: "`api`, and the pipeline worker running the vault, wallet, buyback
- * and project jobs as `rm_worker` — run checks 1–3 at startup against their own
- * credential, log, and refuse to serve or claim work on failure."
+ * spec §7.2 as D75 amends it: "`api`, the only database-holding container —
+ * runs checks 1–3 at startup against its own credential, logs, and refuses to
+ * serve on failure."
  *
  * Inputs: the role, the process's connection string, and an optional budget.
  * No policy value: a container reads no `RM_ENV` (issue #973). Output: whether it passed, and the log lines. It does not log and

@@ -1026,7 +1026,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
 
   test("TOKEN PROVISIONING: provisionServiceTokens waits for the competitor, then writes the rows", async () => {
     const { provisionServiceTokens } = await import("../scripts/provision-tokens.ts");
-    const { instancePaths } = await import("../../scripts/lib/smoke-state.ts");
+    const { instancePaths, SERVICE_TOKEN_HOLDERS } = await import("../../scripts/lib/smoke-state.ts");
     await withEnrolledCopy(async (url, admin) => {
       const root = mkdtempSync(join(tmpdir(), "rm-tl-tokens-"));
       const paths = instancePaths(root, "rm_tl_tokens", { create: true });
@@ -1035,7 +1035,7 @@ describe("every fenced mutation's REAL path waits on a competitor's fence, holdi
       );
       expect(order).toEqual(expected("automation_tokens"));
       const rows = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM automation_tokens WHERE instance = 'rm_tl_tokens'`;
-      expect(rows[0]?.n).toBe(3);
+      expect(rows[0]?.n).toBe(SERVICE_TOKEN_HOLDERS.length);
     });
   }, 60_000);
 

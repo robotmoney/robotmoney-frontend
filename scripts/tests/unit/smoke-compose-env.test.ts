@@ -51,26 +51,23 @@ describe("smokePassthroughEnv", () => {
     expect(smokePassthroughEnv({ MIGRATE_DATABASE_URL: url })).toEqual({});
   });
 
-  test("the worker's credential is the stack's own: buildComposeEnv emits rm_worker from StackDatabase.roleUrls", () => {
+  test("the api's credential is the stack's own, and no worker credential is emitted at all (D75)", () => {
     const cfg: StackConfig = {
       repoRoot: "/repo",
       project: "rm_smoke_stack_roles",
       profile: "core",
       composeFiles: DEFAULT_COMPOSE_FILES,
-      database: {
-        ...DEFAULT_STACK_DATABASE,
-        roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney", worker: "postgres://rm_worker:w@postgres:5432/robotmoney" },
-      },
+      database: { ...DEFAULT_STACK_DATABASE, roleUrls: { app: "postgres://rm_app:a@postgres:5432/robotmoney" } },
       environment: { class: "local", hash: "0123456789" },
       extraComposeEnv: smokePassthroughEnv({ WORKER_DATABASE_URL: "postgres://rm_worker:shell@elsewhere:5432/x" }),
     };
     const env = buildComposeEnv(cfg);
     expect(env.DATABASE_URL).toBe("postgres://rm_app:a@postgres:5432/robotmoney");
-    expect(env.WORKER_DATABASE_URL).toBe("postgres://rm_worker:w@postgres:5432/robotmoney");
-    // Red control: without roleUrls both fall back to the one legacy login a
+    expect("WORKER_DATABASE_URL" in env).toBe(false);
+    // Without roleUrls, DATABASE_URL falls back to the one legacy login a
     // consumer that has not moved onto the taxonomy states explicitly.
     const legacy = buildComposeEnv({ ...cfg, database: DEFAULT_STACK_DATABASE });
-    expect(legacy.WORKER_DATABASE_URL).toBe(legacy.DATABASE_URL);
+    expect("WORKER_DATABASE_URL" in legacy).toBe(false);
     expect(legacy.DATABASE_URL).toBe("postgres://robotmoney:robotmoney@postgres:5432/robotmoney");
   });
 

@@ -11,7 +11,7 @@ import type { Indicator } from "../analyze/indicators.ts";
 import { fetchAll } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
-import { LEDGER_EXTRA_KEYS } from "../extras.ts";
+import { EXTRA_WRITE_KEYS, LEDGER_EXTRA_KEYS } from "../extras.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
   refreshEdgarWithTierFallback,
@@ -22,6 +22,7 @@ import {
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
+import { loadInventory, collectedByInventory, fetchInventorySeries, describeCoverage } from "../extract/model-portfolio.ts";
 
 export type Logger = {
   log?: (m: string) => void;
@@ -89,6 +90,17 @@ export interface FetchIndicatorsOptions {
   provenance?: string;
 }
 
+// Issue 1398: one inventory series' collection outcome. `rows` is what the
+// provider served (recorded in source_value_versions under `storageKey` when it
+// differs from the head); `limitations` and `error` are the coverage report.
+export interface ModelPortfolioCollection {
+  id: string;
+  storageKey: string;
+  rows: number;
+  limitations: string[];
+  error: string | null;
+}
+
 export interface AnalyticsDataSource {
   // Registry indicator raw series (id → pre-transform {date,value}[]).
   fetchIndicators(
@@ -106,6 +118,10 @@ export interface AnalyticsDataSource {
   // Backtest/correlations overlays (SPX/ETH price levels + DTB3 yield). A failed
   // fetch returns [] (logged) → that leg is simply excluded downstream.
   fetchBacktestExtras(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<BacktestExtras>;
+  // Model portfolio inputs (issue 1398): record every inventory series that no
+  // other collector holds into the source ledger. Collection only: the regime
+  // reads none of it. Optional, so a fixture or hermetic source collects nothing.
+  collectModelPortfolioInputs?(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<ModelPortfolioCollection[]>;
 }
 
 const CHANNEL_START = "2018-01-01";
@@ -189,15 +205,39 @@ export const liveDataSource: AnalyticsDataSource = {
     if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
     const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
       captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
-    // The provider and ledger-key literals stay inline: tests/analytics-source-tolerance.test.ts
-    // scrapes them from acquire(...) call sites. tests/extras-key-map.test.ts pins them to
-    // LEDGER_EXTRA_KEYS (the symbols and cache identities below come from the map directly).
+    // The storage keys come from the D74 reverse mapping (W = EXTRA_WRITE_KEYS,
+    // packages/analyst-sdk/src/series-ids.ts), so they cannot drift from the keys the
+    // consumers read. The provider literals stay inline, and the `W.<name>` spelling is
+    // what tests/analytics-source-tolerance.test.ts resolves at acquire(...) call sites.
+    // tests/extras-key-map.test.ts pins both to LEDGER_EXTRA_KEYS.
     const X = LEDGER_EXTRA_KEYS;
+    const W = EXTRA_WRITE_KEYS;
     const [spx, eth, tbill3m] = await Promise.all([
-      safe(X.spx.symbol, () => acquire("yahoo", "backtest:^GSPC", `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
-      safe(X.eth.symbol, () => acquire("yahoo", "backtest:ETH-USD", `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
-      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", "backtest:DTB3", X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
+      safe(X.spx.symbol, () => acquire("yahoo", W.spx, `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
+      safe(X.eth.symbol, () => acquire("yahoo", W.eth, `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
+      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
     ]);
     return { spx, eth, tbill3m };
+  },
+
+  async collectModelPortfolioInputs(logger = console, acquisitionSink, requestedByRunId): Promise<ModelPortfolioCollection[]> {
+    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+    // The inventory names each series' storage key. A series another collector
+    // already holds (backtest:^GSPC, research:BTC-USD, ...) is not fetched
+    // twice; the rest are recorded under their own source id (D74). Each is
+    // one acquisition, so one bounded request to the ingestion route, and a
+    // failure drops only that series.
+    const entries = loadInventory().series.filter(collectedByInventory);
+    return Promise.all(entries.map(async (entry): Promise<ModelPortfolioCollection> => {
+      try {
+        const points = await captureSourceAcquisition({ provider: entry.provider, sourceKey: entry.storageKey, parserVersion: `${entry.provider}:1`, cacheIdentity: `${entry.symbol}:${entry.requestedStart}`, requestedByRunId }, acquisitionSink, () => fetchInventorySeries(entry));
+        const coverage = describeCoverage(entry, points);
+        for (const l of coverage.limitations) logger.warn?.(`[extract] model portfolio ${l}`);
+        return { id: entry.id, storageKey: entry.storageKey, rows: points.length, limitations: coverage.limitations, error: null };
+      } catch (e: any) {
+        logger.error?.(`[extract] model portfolio ${entry.id} FAILED: ${e?.message ?? e}`);
+        return { id: entry.id, storageKey: entry.storageKey, rows: 0, limitations: [], error: String(e?.message ?? e) };
+      }
+    }));
   },
 };

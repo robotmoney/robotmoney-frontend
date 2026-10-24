@@ -15,7 +15,7 @@
 // sweep against a per-IP-metered provider is the 2026-08-10 incident this
 // feature exists to repair. It must decline, not proceed.
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { sql } from "../src/db/worker-client.ts";
+import { sql } from "../src/db/client.ts";
 // The worker pool is a real runtime role and may not DELETE (D55 (6)); the
 // cleanup between cases is the schema owner's, through the fixture handle.
 import { fixtureDb as owner } from "./support/fixture-db.ts";

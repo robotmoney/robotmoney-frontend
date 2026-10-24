@@ -14,8 +14,8 @@ export type AnalyticsRunner = (asof: string, toolId?: string, jobId?: number) =>
 // PERSISTENCE (issue #106): the worker is an UPDATER — it fetches and computes,
 // then submits every output through the authenticated /api/analytics/* boundary
 // via the HTTP AnalyticsPersistence client (ANALYTICS_API_URL + ANALYTICS_TOKEN_FILE,
-// resolved at call time). It never writes analytics SQL; its own DB connection
-// (db/worker-client.ts) is scoped to queue lifecycle + non-analytics samplers.
+// resolved at call time). It never writes analytics SQL, and it holds no
+// database connection at all (issue 1034).
 // The telemetry client (telemetryHttpSink, default 5th runAnalytics param) is
 // the same authenticated-HTTP path — issue #151.
 const apiBoundaryRunner: AnalyticsRunner = (asof, toolId, jobId) =>

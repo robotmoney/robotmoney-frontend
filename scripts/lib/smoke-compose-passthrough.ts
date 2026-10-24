@@ -68,9 +68,8 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "PG_NAMESPACE_GUARD_TIMEOUT_MS",
   // NO "RM_ENV". No container reads it (issue 1326, D69), and
   // buildComposeEnv() refuses to see it in the extras map.
-  // NO "WORKER_DATABASE_URL" either. It is the pipeline worker's rm_worker
-  // credential, which buildComposeEnv() emits from the stack's own role URLs
-  // (StackDatabase.roleUrls); an exported value must never shadow it.
+  // NO "WORKER_DATABASE_URL" either. The pipeline worker holds no database
+  // credential (D75, issue 1034); an exported value must never reach it.
 ] as const;
 
 export function smokePassthroughEnv(env: Record<string, string | undefined>): Record<string, string> {

@@ -5,8 +5,10 @@
 import { ROUTES } from "@robotmoney/contract";
 import { config, API_IDLE_TIMEOUT_SECONDS, assertNoVaultAddressCollision, warnIfStrategyVaultsUnconfigured } from "../config.ts";
 import { withRequestTiming } from "./request-timing.ts";
-import { closeDb, isDatabaseUnavailable } from "../db/client.ts";
-import { databaseAnswers } from "../db/connection-check.ts";
+import { closeDb, dbPoolTelemetry, runOnBatchPool } from "../db/client.ts";
+import { configureApiPoolsFromServer, databaseAnswers } from "../db/connection-check.ts";
+import { describeConnectionBudget } from "../db/connection-budget.ts";
+import { dbFailureResponse } from "./db-failure.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
@@ -23,6 +25,8 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
+import { handlePipeline } from "./routes/pipeline.ts";
+import { handleReferrals, REFERRALS_PREFIX } from "./routes/referrals.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
 import { resolveClientIp } from "./client-ip.ts";
@@ -127,6 +131,21 @@ await assertAnalyticsLedgerGuardArmed();
   if (!startup.passed) process.exit(1);
 }
 
+// THE CONNECTION BUDGET (issue 1034). The api sizes its pools from the server's
+// own max_connections, minus the reserved slots and the headroom it leaves for
+// every other client, and installs three: request (public, member and admin
+// routes, timeouts below the 10 s request deadline), batch (analytics-provider
+// bulk work, long timeouts) and the health probe's single connection. An
+// override that does not fit refuses the boot here, naming the budget and each
+// share, before a port is bound.
+try {
+  const budget = await configureApiPoolsFromServer();
+  console.log(`db pools: ${describeConnectionBudget(budget)}`);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
+
 // Requests being answered right now; the SIGTERM drain waits for zero.
 let inFlight = 0;
 
@@ -156,7 +175,8 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
       try {
         return await upgradeSchedulerStream(req, url, server);
       } catch (err) {
-        if (isDatabaseUnavailable(err)) return json({ error: "database unavailable" }, 503);
+        const failure = dbFailureResponse(err);
+        if (failure) return failure;
         console.error("api error:", err);
         return json({ error: "internal error" }, 500);
       }
@@ -166,7 +186,13 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
     // the trust/parsing rules — TRUST_PROXY=1 only when a known proxy (now
     // website-server, issue #892) sits in front of this process.
     const peer = server.requestIP(req)?.address || "";
-    const clientIp = resolveClientIp(peer, config.trustProxy, req.headers.get("x-forwarded-for"), req.headers.get("cf-connecting-ip"));
+    const clientIp = resolveClientIp(
+      peer,
+      config.trustProxy,
+      req.headers.get("x-forwarded-for"),
+      req.headers.get("cf-connecting-ip"),
+      req.headers.get("x-client-ip"),
+    );
 
     try {
       return withCors(await withRequestTiming(req, pathname, () => route(req, url, pathname, clientIp)), req, pathname);
@@ -182,9 +208,15 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
       // — and the reason is named so the SPA can say "database unavailable"
       // rather than "internal error". Narrow by construction: a bad query
       // still reports as a 500 (see isDatabaseUnavailable).
-      if (isDatabaseUnavailable(err)) {
-        console.error("api error (database unavailable):", err);
-        return withCors(json({ error: "database unavailable" }, 503), req, pathname);
+      //
+      // The same door answers a busy database (issue 1034): `db_saturated` when
+      // the pool had no free connection within the admission wait, and
+      // `db_timeout` when the server cancelled the statement or gave up on a
+      // lock. Both carry Retry-After. See classifyDbFailure.
+      const failure = dbFailureResponse(err);
+      if (failure) {
+        console.error(`api error (${failure.status} ${pathname}):`, err);
+        return withCors(failure, req, pathname);
       }
       console.error("api error:", err);
       return withCors(json({ error: "internal error" }, 500), req, pathname);
@@ -206,8 +238,9 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     if (pathname === ROUTES.health) {
-      let db = "down";
-      db = (await databaseAnswers()) ? "up" : "down";
+      // On the probe's own connection with a 1 s budget, never on the request
+      // pool, so a saturated pool cannot stall the health check (issue 1034).
+      const db = (await databaseAnswers()) ? "up" : "down";
       // handle_namespace reports what the BOOT guard concluded, so an
       // "unchecked" boot (database unqueryable through the guard's budget) or
       // an overridden one is machine-readable and not merely a log line that
@@ -234,6 +267,10 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
         // one (backend/src/ops/build-identity.ts).
         build: buildIdentityJson(),
         analytics_ledger_guard: analyticsLedgerGuardOutcome(),
+        // Per-pool admission counts and the boot budget (issue 1034): max,
+        // in_use, waiting, admitted_total, refused_total (503 db_saturated)
+        // and timeout_total (503 db_timeout), for request and batch.
+        db_pool: dbPoolTelemetry(),
       });
     }
 
@@ -428,14 +465,34 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
       return handlePublicAnalytics(req, url, clientIp);
     }
 
+    // Public referral-code lookup (issue 1371, referrals-spec §6). The handler
+    // owns the whole prefix and answers every request under it, rate limited
+    // per trusted client ip by its own limiter instance.
+    if (pathname.startsWith(REFERRALS_PREFIX)) {
+      return handleReferrals(req, url, clientIp);
+    }
+
     // Analytics ingestion boundary (issue #106): the analytics-provider-only
     // typed read/mutation surface updater processes use instead of direct SQL.
+    //
+    // ON THE BATCH POOL (issue 1034). These are the analytics provider's bulk
+    // reads and writes: GET raw-history returns the whole table, and a run
+    // package or a backfill writes thousands of rows. They run with the bulk
+    // timeouts on a pool of their own, so a flood of them exhausts only that
+    // pool while every public and member route keeps its connections.
     if (pathname.startsWith("/api/analytics/")) {
-      const r = await handleAnalytics(req, url);
+      const r = await runOnBatchPool(() => handleAnalytics(req, url));
       if (r) return json(r.body, r.status);
     }
 
     // Admin task-queue dashboard (read-only over jobs/job_schedules/job_runs).
+    // The pipeline worker's queue, read and ingestion routes (issue 1034, D75).
+    // Batch pool, like the analytics routes: bulk pipeline work can exhaust
+    // only that pool, never the one public and member routes use.
+    if (pathname.startsWith("/api/pipeline/")) {
+      return runOnBatchPool(() => handlePipeline(req, url));
+    }
+
     if (pathname.startsWith("/api/admin/webauthn/")) {
       const r = await handleAdminWebauthn(req, url);
       if (r) return json(r.body, r.status);

@@ -1,4 +1,4 @@
-// The four §3 roles' passwords — the database half of `bun scripts/prod-init.ts
+// The §3 roles' passwords that `~/.env` holds — the database half of `bun scripts/prod-init.ts
 // role-passwords` (decision D61; smoke-production-spec.md §9.1 step 1).
 //
 // WHY. D61 keeps every role password as a `<role> = <password>` line in the
@@ -9,7 +9,9 @@
 // reuses it, so a rerun changes nothing. This module does the same for a
 // remote target, as doadmin, with the line in `~/.env` as the saved copy.
 //
-// FOR EACH ROLE IN THE SET (default: all four), read from `~/.env` by the caller:
+// FOR EACH ROLE IN THE SET (default: all three), read from `~/.env` by the caller.
+// rm_worker is not one of them: it holds no privilege and no container logs in
+// as it (D75, issue 1034), so `~/.env` keeps no line for it.
 //   - line present, and that password logs in        → `kept`. No ALTER.
 //   - line absent                                     → `set`: generate a
 //     password on the host (32 crypto-random bytes, base64url), compute its
@@ -53,8 +55,8 @@ import type { HeldTargetLock } from "../src/db/target-lock.ts";
 
 const MODULE = "scripts/role-passwords";
 
-/** The roles this command manages: the four of spec §3, in the order it handles them. */
-export const PASSWORD_ROLES = ["rm_owner", "rm_app", "rm_worker", "rm_readonly"] as const;
+/** The roles this command manages: spec §3's roles with a `~/.env` line (D75 took rm_worker off it), in the order it handles them. */
+export const PASSWORD_ROLES = ["rm_owner", "rm_app", "rm_readonly"] as const;
 export type PasswordRole = (typeof PASSWORD_ROLES)[number];
 
 /** What happened to one role. The only thing about a password a receipt records. */
@@ -92,14 +94,6 @@ const setAppPassword = registerStatement({
   callers: [MODULE],
 });
 
-const setWorkerPassword = registerStatement({
-  role: "doadmin",
-  shape: "workerPasswordSet",
-  site: "scripts/role-passwords:setWorkerPassword",
-  purpose: "Sets rm_worker's password to one generated on the host, sent only as its SCRAM-SHA-256 verifier; no attribute changes (D61).",
-  callers: [MODULE],
-});
-
 const setReadonlyPassword = registerStatement({
   role: "doadmin",
   shape: "readonlyPasswordSet",
@@ -124,14 +118,6 @@ const proveApp = registerStatement({
   callers: [MODULE],
 });
 
-const proveWorker = registerStatement({
-  role: "rm_worker",
-  shape: "connectionCheck",
-  site: "scripts/role-passwords:proveWorkerLogin",
-  purpose: "Proves rm_worker logs in with the password in ~/.env (D61).",
-  callers: [MODULE],
-});
-
 const proveReadonly = registerStatement({
   role: "rm_readonly",
   shape: "connectionCheck",
@@ -144,7 +130,6 @@ const proveReadonly = registerStatement({
 export const PASSWORD_SET_SQL: Readonly<Record<PasswordRole, string>> = Object.freeze({
   rm_owner: PROVISIONING_SHAPES.ownerPasswordSet,
   rm_app: PROVISIONING_SHAPES.appPasswordSet,
-  rm_worker: PROVISIONING_SHAPES.workerPasswordSet,
   rm_readonly: PROVISIONING_SHAPES.readonlyPasswordSet,
 });
 
@@ -327,9 +312,6 @@ export async function rolePasswords(options: RolePasswordsOptions): Promise<Role
             case "rm_app":
               await onStatement(admin, setAppPassword)`ALTER ROLE rm_app WITH PASSWORD ${literal}`;
               return;
-            case "rm_worker":
-              await onStatement(admin, setWorkerPassword)`ALTER ROLE rm_worker WITH PASSWORD ${literal}`;
-              return;
             case "rm_readonly":
               await onStatement(admin, setReadonlyPassword)`ALTER ROLE rm_readonly WITH PASSWORD ${literal}`;
               return;
@@ -373,9 +355,6 @@ async function proveAs(db: RegistryDb, role: PasswordRole): Promise<void> {
       return;
     case "rm_app":
       await onStatement(db, proveApp)`SELECT 1`;
-      return;
-    case "rm_worker":
-      await onStatement(db, proveWorker)`SELECT 1`;
       return;
     case "rm_readonly":
       await onStatement(db, proveReadonly)`SELECT 1`;

@@ -40,7 +40,7 @@ interface Facts {
   resolved: string;
   conn: { idle_in_tx: number; total: number; visible: number };
   judge: { mode: string; model: string | null; third_party: boolean };
-  grants: { worker_insert: boolean; who: string; readonly_seq: boolean };
+  grants: { app_insert: boolean; worker_insert: boolean; who: string; readonly_seq: boolean };
   sessionId: string | null;
   ledgerKeyRows: number;
   disk: number | null;
@@ -67,7 +67,7 @@ function healthy(): Facts {
     vintage: { id: "9", member_count: "100", covered: "100" }, resolved: "100",
     conn: { idle_in_tx: 0, total: 9, visible: 4 },
     judge: { mode: "enforce", model: PINNED_JUDGE_MODEL, third_party: false },
-    grants: { worker_insert: true, who: "rm_app", readonly_seq: true },
+    grants: { app_insert: true, worker_insert: false, who: "rm_app", readonly_seq: true },
     sessionId: "11111111-1111-1111-1111-111111111111", ledgerKeyRows: 0, disk: 80,
     layers: [{ service: "api", bytes: 40 * 1024 ** 2 }, { service: "worker-analytics", bytes: 300 * 1024 ** 2 }],
     http: { "/health": 200, "/api/health": 200, "/api/swarm/sessions/11111111-1111-1111-1111-111111111111/judgements": 200 },
@@ -192,7 +192,7 @@ const RED: Array<[id: string, expected: "FAIL" | "WARN", mutate: (f: Facts) => v
   ["R8.n3", "FAIL", (f) => { f.disk = 70; }],
   ["R8.p", "FAIL", (f) => { f.migrations = [...f.migrations, "0099_surprise.sql"]; }, { baseline: { sizeMb: 5000, migrations: ["0001_a.sql", "0002_b.sql"], recordedAt: SINCE } }],
   ["R8.q", "FAIL", (f) => { f.judge = { mode: "off", model: PINNED_JUDGE_MODEL, third_party: false }; }],
-  ["R8.r", "FAIL", (f) => { f.grants = { worker_insert: true, who: "doadmin", readonly_seq: true }; }],
+  ["R8.r", "FAIL", (f) => { f.grants = { app_insert: true, worker_insert: false, who: "doadmin", readonly_seq: true }; }],
   ["R8.s", "FAIL", (f) => { f.http["/health"] = 503; f.http["/api/health"] = 503; }],
   ["R8.t", "FAIL", (f) => { f.sessions = [{ state: "published", openedAt: null, date: "2026-10-05" }]; }],
   ["R8.u", "FAIL", (f) => { f.logs.api!.push(L("[api] GET /api/x timed out after 10s")); }],
@@ -269,7 +269,7 @@ describe("red controls: each check fails on a fixture that violates it", () => {
 
   test("a twin stack is not graded for grants (its dump holds none)", async () => {
     const f = healthy();
-    f.grants = { worker_insert: false, who: "doadmin", readonly_seq: false };
+    f.grants = { app_insert: false, worker_insert: true, who: "doadmin", readonly_seq: false };
     const c = await run(f, { dbMode: "smoke-twin" });
     expect(status(c, "R8.r")).toEqual(["INFO"]);
   });
@@ -404,12 +404,14 @@ describe("pure evaluators: pass and red control", () => {
     expect(evalJudgeConfig(row(PINNED_JUDGE_MODEL, "enforce", true)).status).toBe("FAIL");
     expect(evalJudgeConfig(undefined).status).toBe("FAIL");
   });
-  test("R8.r grades each of the three grants on an external stack", () => {
-    const ok = { workerInsert: true, currentUser: "rm_app", readonlySeq: true };
+  test("R8.r grades each of the four grants on an external stack", () => {
+    const ok = { appInsert: true, workerInsert: false, currentUser: "rm_app", readonlySeq: true };
     expect(evalGrants("external", ok).every((c) => c.status === "PASS")).toBe(true);
-    expect(evalGrants("external", { ...ok, workerInsert: false }).map((c) => c.status)).toEqual(["FAIL", "PASS", "PASS"]);
-    expect(evalGrants("external", { ...ok, currentUser: "postgres" }).map((c) => c.status)).toEqual(["PASS", "FAIL", "PASS"]);
-    expect(evalGrants("external", { ...ok, readonlySeq: false }).map((c) => c.status)).toEqual(["PASS", "PASS", "FAIL"]);
+    expect(evalGrants("external", { ...ok, appInsert: false }).map((c) => c.status)).toEqual(["FAIL", "PASS", "PASS", "PASS"]);
+    // A database before 0127 (D75) still grants rm_worker: a warning, not a failure.
+    expect(evalGrants("external", { ...ok, workerInsert: true }).map((c) => c.status)).toEqual(["PASS", "WARN", "PASS", "PASS"]);
+    expect(evalGrants("external", { ...ok, currentUser: "postgres" }).map((c) => c.status)).toEqual(["PASS", "PASS", "FAIL", "PASS"]);
+    expect(evalGrants("external", { ...ok, readonlySeq: false }).map((c) => c.status)).toEqual(["PASS", "PASS", "PASS", "FAIL"]);
   });
   test("R8.s", () => {
     expect(evalHealth(200, null, 200).status).toBe("PASS");
@@ -433,6 +435,26 @@ describe("pure evaluators: pass and red control", () => {
   test("R8.v tolerates a 413 that was halved", () => {
     expect(evalBuyback(["answered HTTP 413, halving"]).status).toBe("PASS");
     expect(evalBuyback(["live index failed"]).status).toBe("FAIL");
+  });
+  test("R8.v warns on a Base RPC 429 and fails on any other live index failure (issue 1387)", () => {
+    // The line liveIndexFailedLine (backend/src/chain/buyback-indexer.ts) writes for a BaseRpcHttpError(429);
+    // backend/tests/buyback-logs-batching.test.ts asserts the formatter yields exactly this text.
+    const r429 = "buyback-logs: live index failed, leaving persisted rows in place: BaseRpcHttpError: Base RPC HTTP 429 request limit reached";
+    const other = "buyback-logs: live index failed, leaving persisted rows in place: Error: Base RPC error -32000: header not found";
+    // Before the fix, Bun printed the error on later lines (a source excerpt follows the message). That
+    // first line names no status, so it stays a FAIL: an unclassified failure is never downgraded.
+    const oldShape = ["buyback-logs: live index failed, leaving persisted rows in place: 598 | } catch (err) {", "BaseRpcHttpError: Base RPC HTTP 429", " status: 429,"];
+    expect(evalBuyback(oldShape).status).toBe("FAIL");
+    const w = evalBuyback([r429, "answered HTTP 413, halving"]);
+    expect(w.status).toBe("WARN");
+    expect(w.detail[0]).toContain("1 'live index failed' on a Base RPC rate limit");
+    expect(w.detail[0]).toContain("1 HTTP 413 answers");
+    expect(evalBuyback(["buyback-logs: live index failed, leaving persisted rows in place: request limit reached"]).status).toBe("WARN");
+    const mixed = evalBuyback([r429, other]);
+    expect(mixed.status).toBe("FAIL");
+    expect(mixed.detail[0]).toContain("2 'live index failed', 1 not a Base RPC rate limit");
+    expect(evalBuyback([other]).status).toBe("FAIL");
+    expect(evalBuyback(["answered HTTP 413, halving", "answered HTTP 413, halving"]).status).toBe("PASS");
   });
   test("R8.w: the tier must match the key", () => {
     const g = (hasKey: boolean, lines: string[]) => evalGecko({ hasKey, geckoLines: lines, unredactedLedgerRows: 0, keyEnvHits: 0 }).find((c) => c.id === "R8.w")!.status;
@@ -497,7 +519,7 @@ describe("drift guards against main", () => {
     has("backend/src/api/request-timing.ts", "timed out after");
     has("backend/src/api/request-timing.ts", "[api] slow request");
     has("backend/src/api/request-timing.ts", "request ran past");
-    has("backend/src/chain/buyback-logs.ts", "live index failed");
+    has("backend/src/chain/buyback-indexer.ts", "live index failed");
     has("backend/src/chain/gecko-endpoint.ts", "[gecko]");
     has("backend/src/chain/gecko-endpoint.ts", "answered HTTP");
     has("backend/src/analytics/index.ts", "regime asof");

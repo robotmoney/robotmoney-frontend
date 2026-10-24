@@ -17,8 +17,13 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file, { migrationBuilt: true });
 
-/** Roles whose READS 0062 repairs. Writes stay fail-closed and are asserted so. */
-const READERS: string[] = ["rm_readonly", "rm_app", "rm_worker"];
+/**
+ * Roles whose READS 0062 repairs. Writes stay fail-closed and are asserted so.
+ * 0062 repaired rm_worker's reads too; 0127 (issue 1034, D75) took every one of
+ * them back with the role's last use (rm-worker-retired.test.ts proves it), so
+ * the two runtime roles still in service are the readers here.
+ */
+const READERS: string[] = ["rm_readonly", "rm_app"];
 
 async function unreadable(role: string, kind: "tables" | "sequences"): Promise<string[]> {
   const relkinds = kind === "tables" ? ["r", "p"] : ["S"];
@@ -75,80 +80,52 @@ describe("after the full migration set, every reader role can read everything", 
     }
   });
 
-  test("rm_worker can now WRITE the sampler tables it was dying on", async () => {
+  test("rm_app can WRITE the sampler tables the worker was dying on, and DELETE none of them", async () => {
     // The outage itself, asserted as effect. writeAssetPrice() does
     // INSERT ... ON CONFLICT DO UPDATE, so both privileges are required —
     // INSERT alone would still fail on the conflict path, which is the branch
-    // a re-sampled day always takes.
+    // a re-sampled day always takes. The writes ran as rm_worker when 0062
+    // landed; they run in the api as rm_app since issue 1034 (0126 grants it).
     const rows = (await sql`
       SELECT c.relname,
-             has_table_privilege('rm_worker', c.oid, 'INSERT') AS ins,
-             has_table_privilege('rm_worker', c.oid, 'UPDATE') AS upd,
-             has_table_privilege('rm_worker', c.oid, 'DELETE') AS del
+             has_table_privilege('rm_app', c.oid, 'INSERT') AS ins,
+             has_table_privilege('rm_app', c.oid, 'UPDATE') AS upd,
+             has_table_privilege('rm_app', c.oid, 'DELETE') AS del
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
        WHERE n.nspname = 'public'
          AND c.relname IN ('asset_prices', 'asset_price_floors', 'chain_address_floors')
        ORDER BY c.relname
     `) as unknown as { relname: string; ins: boolean; upd: boolean; del: boolean }[];
     expect(rows.map((r) => r.relname)).toEqual(["asset_price_floors", "asset_prices", "chain_address_floors"]);
-    // DELETE is denied on all three. `chain_address_floors` was the exception
-    // until migration 0107: 0061_rm_worker_wallet_backfill_grant granted
-    // INSERT/UPDATE/DELETE on the wallet-backfill driver's tables, and D55 (6)
-    // took DELETE and TRUNCATE from every runtime role on every table.
-    const deletable = new Set<string>();
+    // DELETE is denied on all three: D55 (6) took DELETE and TRUNCATE from
+    // every runtime role on every table (0107).
     for (const r of rows) {
-      expect({ t: r.relname, ins: r.ins, upd: r.upd, del: r.del })
-        .toEqual({ t: r.relname, ins: true, upd: true, del: deletable.has(r.relname) });
+      expect({ t: r.relname, ins: r.ins, upd: r.upd, del: r.del }).toEqual({ t: r.relname, ins: true, upd: true, del: false });
     }
   });
 
-  test("the write grant did NOT leak onto the rest of the schema", async () => {
-    // An allow-list that quietly became a blanket grant would be the worse
-    // bug. rm_worker's writable set must be exactly 0054's list plus 0061's,
-    // 0062's, 0109's and 0113's additions, and no more.
+  test("rm_worker writes nothing at all after 0127, and the evidence copies are INSERT-only for rm_app", async () => {
+    // The write allow-list 0054, 0061, 0062, 0109, 0113 and 0115 built for
+    // rm_worker is gone with the role's last use (D75).
     const rows = (await sql`
       WITH t AS MATERIALIZED (
         SELECT c.oid, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE n.nspname = 'public' AND c.relkind IN ('r','p')
       )
-      SELECT relname FROM t WHERE has_table_privilege('rm_worker', oid, 'INSERT') ORDER BY relname
+      SELECT relname FROM t
+       WHERE has_table_privilege('rm_worker', oid, 'INSERT') OR has_table_privilege('rm_worker', oid, 'UPDATE')
+       ORDER BY relname
     `) as unknown as { relname: string }[];
-    const writable = new Set(rows.map((r) => r.relname));
-    // 0054's allow-list, restated so a change to either side is visible here.
-    const allowed = [
-      "jobs", "job_runs", "job_schedules",
-      "vault_share_price_history", "vault_adapter_samples",
-      "wallet_balance_samples", "wallet_sleeve_samples",
-      "projects", "openclaw_agents", "lobster_coins", "tracked_wallets", "agent_vaults",
-      "agent_revenue_daily", "daily_coin_snapshots", "daily_agent_snapshots",
-      "daily_wallet_snapshots", "daily_tvl_snapshots",
-      // 0062's additions
-      "asset_prices", "asset_price_floors", "chain_address_floors",
-      // 0061_rm_worker_wallet_backfill_grant's additions: the wallet-backfill
-      // repair driver (src/ops/wallet-backfill.ts) runs on the rm_worker
-      // connection and writes its own two tables, which 0054's allow-list
-      // missed. `chain_address_floors` is its third and is already above.
-      "chain_day_blocks", "wallet_backfill_state",
-      // 0109_rm_worker_wallet_evidence_insert's additions: the same repair
-      // driver copies a day's samples into the immutable evidence tables before
-      // rewriting it. INSERT only (asserted just below); 0037's guard refuses
-      // an UPDATE anyway.
-      "wallet_balance_sample_evidence", "wallet_sleeve_sample_evidence",
-      // 0113_rm_worker_buyback_indexer_grants' additions (runbook B11): the
-      // buyback indexer runs on the rm_worker connection and writes its scan
-      // cursor (INSERT, UPDATE) and the swaps it finds (INSERT).
-      "buyback_scan_state", "buyback_swaps",
-      // 0115_token_market_samples (v0.6.0 release finding, 2026-10-08): the
-      // wallet.sample_balances tick upserts the token page's market reading.
-      "token_market_samples",
-    ];
-    expect([...writable].filter((t) => !allowed.includes(t))).toEqual([]);
-    // The evidence is INSERT-only for rm_worker, never UPDATE.
-    const evidenceUpdate = (await sql`
-      SELECT relname FROM pg_class
+    expect(rows.map((r) => r.relname)).toEqual([]);
+    const evidence = (await sql`
+      SELECT relname, has_table_privilege('rm_app', oid, 'INSERT') AS ins, has_table_privilege('rm_app', oid, 'UPDATE') AS upd
+        FROM pg_class
        WHERE relname IN ('wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence')
-         AND has_table_privilege('rm_worker', oid, 'UPDATE')`) as unknown as { relname: string }[];
-    expect(evidenceUpdate).toEqual([]);
+       ORDER BY relname`) as unknown as { relname: string; ins: boolean; upd: boolean }[];
+    expect([...evidence]).toEqual([
+      { relname: "wallet_balance_sample_evidence", ins: true, upd: false },
+      { relname: "wallet_sleeve_sample_evidence", ins: true, upd: false },
+    ]);
   });
 
   test("0062 granted no WRITE to rm_readonly — it still cannot write anywhere", async () => {

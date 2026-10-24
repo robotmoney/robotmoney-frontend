@@ -59,3 +59,14 @@ describe("website-server/nginx.conf: CF-Connecting-IP is nginx's account of the 
     expect(stripped.indexOf("map \"$cf_trusted_peer")).toBeLessThan(stripped.indexOf("server {"));
   });
 });
+
+describe("website-server/nginx.conf: X-Client-IP on every proxied path (issue 1422)", () => {
+  test("every location that proxies to the api sets X-Client-IP and CF-Connecting-IP from the map", () => {
+    const locations = [...stripped.matchAll(/location\s+[^{]+\{[^}]*\}/g)].map((m) => m[0]).filter((b) => b.includes("proxy_pass"));
+    expect(locations.length).toBeGreaterThanOrEqual(5);
+    for (const b of locations) {
+      expect(b, b.split("{")[0]).toMatch(/proxy_set_header\s+X-Client-IP\s+\$client_ip;/);
+      expect(b, b.split("{")[0]).toMatch(/proxy_set_header\s+CF-Connecting-IP\s+\$client_ip;/);
+    }
+  });
+});
