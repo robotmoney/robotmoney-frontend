@@ -220,7 +220,7 @@ The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existi
 
 - **As-of runs.** `runRegime` takes `asof`. Source data dated after it is ignored. Missing values are forward-filled, capped at `MAX_FORWARD_FILL_DAYS` (120). Semantics are in `regime-engine.md` section 8.1.
 - **Pinned source data.** A run is only reproducible against pinned source data. An unpinned read can differ from a published run, because external parties revise source data.
-- **Run manifest.** A run records the input files it used and their hashes, its vintage id, methodology id and exact code revision. Historical runs retain their recorded identity; any supplemental replay metadata is stored separately from immutable reports.
+- **Run manifest.** A run records the input files it used and their hashes, its vintage id, methodology id and exact code revision. The code revision is the image's baked git commit (`RM_BUILD_COMMIT`), the value `/version` reports (AC-ID-03). Package and runtime versions are never part of it. An image built without a commit records `unavailable: RM_BUILD_COMMIT is unset or blank`. Historical runs retain their recorded identity, including the earlier `pkg:<version>+bun:<runtime>` label (issue 1442); any supplemental replay metadata is stored separately from immutable reports.
 - **Compatibility evidence.** Representative published runs across market regimes, dates and missing-data patterns provide pinned inputs and complete expected outputs. Comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values and every statistic. Identical inputs and report options must produce byte-identical serialized reports through the pre-refactor backend, pre-refactor SDK, refactored backend and refactored SDK. Changes to floating-point operation order, serialization, null handling or dates are regressions even when differences are small. Report comparison is byte for byte; no numerical tolerance applies.
 - **Replay.** The ledger starts on 2026-09-21. A published run is replayed from the source data in force at its vintage cutoff, not from the current table.
 - **Source updates.** Ingestion applies D56 when deciding whether a provider value changes the stored record. Once committed, values are used exactly throughout preparation, calculation, archives and SDK inputs. No source-specific tolerance applies to downstream calculations or report comparison.
@@ -254,6 +254,7 @@ Package paths are relative to `packages/analyst-sdk/`.
 | A report served for a run is byte-identical on every request, and its checksum matches the stored one. | `backend/tests/api/public-analytics.test.ts` |
 | Source data served with `asof` equals the versions collected up to that time, and a later revision does not change it. | `backend/tests/api/public-analytics.test.ts` |
 | Every vintage names its members and its published report, and both can be fetched. | `backend/tests/api/public-analytics.test.ts` |
+| A vintage's build identity is the image's commit, the same across runtime versions, and `unavailable` without one; earlier vintages keep their rows. | `backend/tests/analytics-build-identity.test.ts` |
 | Each limit of section 4.8 holds, and a timed-out query answers 503. | `backend/tests/api/public-analytics-limits.test.ts` |
 
 ## 8. Open decisions
