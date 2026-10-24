@@ -12,7 +12,8 @@
 > [4. Workflow](#4-the-release-workflow) · [5. Runbooks](#5-runbooks-are-yaml) ·
 > [6. Tracking issue](#6-the-tracking-issue) · [7. Backporting](#7-backporting) ·
 > [8. Compatibility](#8-compatibility-contract) · [9. Standing checks](#9-standing-check-ids) ·
-> [10. Standing invariants](#10-the-standing-invariants-sw2)
+> [10. Standing invariants](#10-the-standing-invariants-sw2) ·
+> [11. Analyst SDK releases](#11-analyst-sdk-releases)
 
 This is not the process for ordinary feature work, which is PR review against `main`
 ([CONTRIBUTING.md](../../CONTRIBUTING.md)). It covers packaging a release, rehearsing it on stage
@@ -430,3 +431,51 @@ a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records t
 A query that errored never reads as a pass: a read that fails is a FAIL of the check that needed it.
 A release that adds an invariant adds a row here, with its red-control test, in the same pull request
 (§9).
+
+## 11. Analyst SDK releases
+
+The analyst SDK (`packages/analyst-sdk/`) has its own release line ([D77](../decisions.md#d77),
+owner 2026-10-24). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
+release. The SDK runs on an analyst's machine. Nothing deploys, so there is no QA branch, no stage
+run, no rc tag and no production cutover.
+
+**Branch.** The SDK ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own
+semver. The `analyst-sdk/` prefix is required. Platform CI triggers on `releases-*`, and
+`scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform
+release line. Changes reach the branch from `main` only, by merge or cherry-pick (main-first, like
+§2 route (a)). Feature PRs never target it.
+
+**Tag.** A release is the tag `analyst-sdk-vA.B.C`. It lands only on a commit of
+`analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in
+`packages/analyst-sdk/package.json`. The namespace is separate from the platform's `v*` tags, as
+`contract-v*` is for `contract/` (`.github/workflows/contract-publish.yml`). The first tag is
+`analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh
+number separates tagged releases from them.
+
+**Gate.** Before tagging, these are green at the commit:
+
+- the `analyst-sdk` workflow (`.github/workflows/analyst-sdk.yml`);
+- the backend analyst SDK parity tests in `.github/workflows/backend.yml`: the vintage round-trip,
+  the public-archive recording, the backtest and correlations fidelity and the input-rule parity
+  tests.
+
+To be built: a guard that refuses a tag whose version differs from `package.json` or whose commit
+is not on an `analyst-sdk/releases-*` branch. Also to be built: both workflows add
+`analyst-sdk/releases-*` to their push branches. Until then neither workflow runs on a push to an
+SDK release branch.
+
+**Release notes.** Each tag gets a GitHub release. Its notes state:
+
+1. the archive format it reads (format 1, [D72](../decisions.md#d72));
+2. that it replays published report payloads byte for byte;
+3. the platform tag whose analytics code it matches, or "ahead of production" when it carries
+   `main` code no platform release has shipped. The SDK and the backend share code
+   (D57).
+
+**Install.** An analyst installs a release by its tag:
+
+```sh
+git clone --branch analyst-sdk-vA.B.C --depth 1 --filter=blob:none --sparse https://github.com/robotmoney/robotmoney-frontend.git
+cd robotmoney-frontend
+git sparse-checkout set packages/analyst-sdk
+```
