@@ -217,4 +217,11 @@ describe("a release's scope", () => {
     expect(v063.scope.find((e) => e.pr === 1406)?.check).toBe("Q36-judge-draw");
     expect(v063.scope.find((e) => e.pr === 1388)?.check).toBe("Q37-home-monument");
   });
+
+  test("v0.6.4's runtime bump (1441) has a version step and a production twin", () => {
+    const v064 = loadReleaseRunbook("v0.6.4");
+    const added = v064.steps.filter((s) => (s as RunbookStep).added === "v0.6.4").map((s) => s.id);
+    expect(added).toEqual(["Q35-runtime-bun", "C23-runtime-bun"]);
+    expect(v064.scope).toEqual([{ pr: 1441, what: "the Bun runtime is 1.4.4 in the backend image, the member-agent image and CI", check: "Q35-runtime-bun" }]);
+  });
 });
