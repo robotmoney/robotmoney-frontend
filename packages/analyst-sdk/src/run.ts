@@ -78,6 +78,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     if (asof < start) throw new RangeError(`asof ${asof} is before start ${start}`);
     let anyOnOrBefore = false;
     for (const id in rawIn) {
+      if (!READ_IDS.has(id)) continue;
       for (const r of rawIn[id]!) {
         if (r.date <= asof) anyOnOrBefore = true;
       }
@@ -96,6 +97,16 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     const rows = raw[id]!;
     if (rows.length && rows[rows.length - 1]!.date > maxDate) maxDate = rows[rows.length - 1]!.date;
   }
+  // An input with nothing the run reads, or a start after every row it reads,
+  // is an error rather than an all-null report (issue 1404, SDK-8).
+  let newestRead: string | null = null;
+  for (const id in raw) {
+    if (!READ_IDS.has(id)) continue;
+    const rows = raw[id]!;
+    if (rows.length && (newestRead === null || rows[rows.length - 1]!.date > newestRead)) newestRead = rows[rows.length - 1]!.date;
+  }
+  if (newestRead === null) throw new RangeError("the input has no series the run reads (registry indicator ids, or SPX, ETH, TBILL3M)");
+  if (newestRead < start) throw new RangeError(`start ${start} is after every input row the run reads (newest ${newestRead})`);
   // Required data is supplied or the run stops with a named error; a
   // downstream run never fetches (issue 1421, src/coverage.ts).
   assertRequiredCoverage(raw, asof ?? maxDate);

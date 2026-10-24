@@ -62,7 +62,15 @@ import {
 } from "./fixtures/regime/load.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
-import { computeBacktest, stripDailyFromSnapshot, type BacktestExtras } from "../src/analytics/analyze/backtest.ts";
+import {
+  computeBacktest,
+  stripDailyFromSnapshot,
+  simulatePortfolio,
+  periodStats,
+  scheduleFromLabels,
+  PORTFOLIO_SPECS,
+  type BacktestExtras,
+} from "../src/analytics/analyze/backtest.ts";
 import { computeCorrelations, type CorrelationExtras } from "../src/analytics/analyze/correlations.ts";
 import {
   buildDateAxis,
@@ -271,4 +279,40 @@ describe("issue 1421: backend backtest and correlations against the original byt
     expect(bt.eth!.composite!.cagr_out_sample).not.toBeNull(); // AN-10
     expect(bt.eth!.composite!.transitions).toBeGreaterThan(0); // AN-14: costs charged, Sharpe pre-cost
   });
+});
+
+// Issue 1404: the public simulatePortfolio + periodStats + scheduleFromLabels,
+// reached through the backend shim, reproduce computeBacktest byte for byte
+// (daily values included) and the ORIGINAL JS reference within the STRICT
+// bound above, over the same composite-strategy and baseline schedules.
+test("backtest generalized path (backend shim): simulatePortfolio + periodStats reproduce computeBacktest byte for byte", async () => {
+  const { result, dateAxis } = await replay();
+  const extras = await loadJsonGz<Extras>("regime-extras.json.gz");
+  const ref = await loadJsonGz<Reference>("regime-backtest-correlations-reference.json.gz");
+  const shared = computeBacktest(dateAxis, result, extras as BacktestExtras);
+  const price: Record<string, any[]> = { eth: extras.eth, sp500: extras.spx };
+  let compared = 0;
+  for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
+    const prices: Record<string, any[]> = {};
+    for (const a of spec.risky) prices[a] = price[a]!;
+    const run = (schedule: any) => {
+      const sim = simulatePortfolio(dateAxis, schedule, prices, extras.tbill3m);
+      return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+    };
+    const cases: [string, any][] = [
+      ["composite", scheduleFromLabels(result.regime, spec.weights)],
+      ["macro", scheduleFromLabels(result.panelRegimes.macro!, spec.weights)],
+      [spec.hodl.key, dateAxis.map(() => spec.hodl.weights)],
+      ["stables_only", dateAxis.map(() => ({ cash: 1 }))],
+    ];
+    for (const [name, schedule] of cases) {
+      const got = run(schedule);
+      expect(JSON.stringify(got), `${pKey}.${name}`).toBe(JSON.stringify(shared[pKey]![name]));
+      const { _daily, ...stripped } = got;
+      void _daily;
+      assertDeepClose(stripped, ref.backtest[pKey][name], `${pKey}.${name}`, 1e-9, { n: 0 });
+      compared++;
+    }
+  }
+  expect(compared).toBe(12);
 });

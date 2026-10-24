@@ -24,8 +24,7 @@ price series. Observed on one audited run: `factor_index` differed on some days 
 to 1.4e-4 (30 to 100 times the tolerance, amplified through ranking and weights), and
 the last-day weights differed by up to 1.2e-6. The size of the drift on another run is
 unknown. The fetched values are not stored, so that
-cause is an inference, not a measurement. See "Reproducing a published run" and
-"What changes after publication, and why" below.
+cause is an inference, not a measurement. See the quickstart and "What changes after publication, and why" below.
 
 ## Get the source
 
@@ -41,36 +40,144 @@ bun install
 
 Requires [bun](https://bun.sh) 1.2 or newer.
 
-## Input: raw indicator history
+## Quickstart: rerun a published run
 
-A CSV with exactly this header, in this order:
+Three stages, in order. Only the first one touches the network. From then on the
+SDK reads local files: preparation, the regime run, the backtest and the report make
+no HTTP request, and a missing input is an error, never a download.
 
-```csv
-date,indicator,value,source
-2024-01-02,VIX,13.2,fred
-2024-01-02,BTC_MVRV,1.84,coinmetrics
+**1. Get a local copy (acquisition).** A local copy is a directory of format 1 backups
+(`csv/<backup id>/backup.json` plus the gzipped archives it lists), the layout of
+robotmoney/csv-backups and of the public archive routes (see "Archives (format 1)").
+The archive tool, csvb, will own these fills (`csvb backup --source api`; its download
+client is follow-up issue 1436). Until then the API-only fill is these shell commands
+(`curl`, `jq`, `sha256sum`): list the sealed backups, and for each backup not yet in
+the copy fetch every archive its record lists, check each one's `sha256_gz`, and write
+the record last, so an interrupted backup is fetched again and never half-kept. `curl
+--retry` waits out a `429` or `503` with its `Retry-After`.
+
+<!-- readme-test: acquire -->
+```sh
+API="${API:-https://robotmoney.network/api/public/analytics}"
+fill() {
+  mkdir -p "$1/csv"
+  curl -fsS --retry 8 "$API/archive/backups?limit=1000" | jq -r '.backups[].record' | while read -r rec; do
+    [ -f "$1/$rec" ] && continue
+    curl -fsS --retry 8 "$API/archive/$rec" -o "$1/$rec.part" --create-dirs
+    jq -r '.append_only[].files[] | "\(.sha256_gz)  \(.path)"' "$1/$rec.part" | while read -r sum path; do
+      curl -fsS --retry 8 "$API/archive/$path" -o "$1/$path" --create-dirs
+      echo "$sum  $1/$path" | sha256sum -c --quiet
+    done
+    mv "$1/$rec.part" "$1/$rec"
+  done
+}
+fill api-copy
 ```
 
-| column      | meaning                                                                        |
-| ----------- | ------------------------------------------------------------------------------ |
-| `date`      | `YYYY-MM-DD`                                                                   |
-| `indicator` | an indicator id from the registry in `src/analyze/indicators.ts` (for example `VIX`) |
-| `value`     | the raw, pre-transform value, a finite number                                  |
-| `source`    | where the value came from (free text, kept for provenance, not used in compute) |
+That is the API-only fill, the path for outside analysts. Holders of read access to
+the private robotmoney/csv-backups repo can start from a clone of its backups instead
+and fetch only the increment: the same `fill` skips every backup the copy already
+holds. Here the first recorded backup stands in for the clone:
 
-Rules:
+<!-- readme-test: acquire -->
+```sh
+mkdir -p repo-copy/csv
+cp -R tests/fixtures/archive/api-recorded/csv/2001-01-02T000000Z repo-copy/csv/
+fill repo-copy
+```
 
-- A header that is not exactly `date,indicator,value,source` raises `CsvHeaderError`.
-  A bad date or value raises `InputRowError` naming the row.
-- If an `(indicator, date)` pair repeats, the last row wins.
-- Indicators the registry does not know are ignored. Registry indicators with no
-  rows count as missing and carry no weight.
-- Correlations and the backtest need price levels. Add indicators named `SPX`, `ETH`
-  (both) and `TBILL3M` (for the backtest) and those sections are filled. Without
-  them they are `null`.
+The public routes and the csv-backups repo each number their own backups, so the
+increment continues a copy filled from the same place; joining the two is csvb's work
+(issue 1436). Both fills give the same local copy for the same backup id.
+`tests/fixtures/archive/api-recorded/` is a recording of what the real archive routes
+serve for two synthetic regime runs (`backend/tests/analyst-sdk-public-archive-recording.test.ts`
+keeps it equal to the routes), and the package's tests replay it as a local API, so
+every command here runs as written with no private access.
 
-The same rows as JSON work too: an array of `{ "date", "indicator", "value", "source" }`
-objects. CSV and JSON of the same rows give byte-identical output.
+**2. Write the run's input.** `bun run inputs` reads the local copy, checks that every
+file its backup records list is present and matches its recorded SHA-256 and row count,
+finds the run's frozen vintage and writes exactly those source values:
+
+<!-- readme-test: run -->
+```sh
+bun run inputs --archive api-copy --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out api-fill
+bun run inputs --archive repo-copy --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out repo-fill
+cmp api-fill/inputs.csv repo-fill/inputs.csv
+cmp api-fill/inputs.manifest.json repo-fill/inputs.manifest.json
+```
+
+Each `--out` folder gets `inputs.csv` (or `inputs.json` with `--json`) and its sidecar
+`inputs.manifest.json`: the backup id, the run key, the as-of date, the acquisition
+source of that backup (`api` or `db`), the row count and SHA-256 of the input file, the
+run's methodology and the exact code revision the run recorded. `--as-of <backup id>`
+reads the copy as of an older backup. The command refuses an incomplete copy (a listed
+file missing, a backup missing from the chain), a corrupt one (a hash or row count that
+does not match, a listed path outside its backup), a vintage whose members are not all
+in the copy, and an existing output.
+
+**3. Run it.** A published run's vintage holds stored ratio values, so its input is in
+the historical replay contract and needs `--replay`. Pass the run's as-of date:
+
+<!-- readme-test: run -->
+```sh
+bun run regime api-fill/inputs.csv --replay --asof 2026-08-15
+bun run regime api-fill/inputs.csv --replay --asof 2026-08-15 --provenance
+```
+
+The first prints the report. The second prints the same report inside a provenance
+envelope, `{"pinned": true, "manifest": {...}, "report": {...}}`, after checking that the
+sidecar describes this exact file. An input with no sidecar still runs; its envelope is
+`{"pinned": false, "report": {...}}`:
+
+<!-- readme-test: run -->
+```sh
+bun run regime tests/fixtures/raw-indicator-history.csv --provenance
+```
+
+A relative path resolves from the folder you ran the command in, also under `bun run`.
+
+## Input files
+
+Three contracts. Each has a CSV form and an equivalent JSON form (an array of objects
+with the same keys); the same rows give byte-identical output.
+
+| contract | CSV header | use |
+| -------- | ---------- | --- |
+| source | `date,series,value` | source data you collected yourself; `series` is a source id (`<provider>:<symbol>`, D74) |
+| historical replay | `date,series,value,kind` | a published run's frozen inputs (`bun run inputs` writes it); needs `--replay` |
+| legacy raw history | `date,indicator,value,source` | the earlier format, kept as an adapter; the committed fixture uses it |
+
+```csv
+date,series,value
+2024-01-02,yahoo:^VIX,13.2
+2024-01-02,coinmetrics:btc.CapMVRVCur,1.84
+```
+
+| column | meaning |
+| ------ | ------- |
+| `date` | a real calendar date, `YYYY-MM-DD` |
+| `series` | source form: a source id, which `src/series-ids.ts` maps to the ids the run reads (`yahoo:^GSPC` feeds `SPX_TREND` and the correlations' and backtest's `SPX`). Replay form: any name the mapping reads, an input id (`VIX`, `SPX`), a storage key or a source id. Legacy form: the `indicator` column, an input id |
+| `value` | the raw, pre-transform value: a plain decimal with an optional sign and exponent |
+| `kind` | replay only: `source`, or `calculated` for a stored ratio value |
+
+Rules, for every contract:
+
+- A header that is not exactly one of the three raises `CsvHeaderError`. A date that is
+  not a real calendar date (`2026-02-30`), or a value that is not a plain decimal (hex
+  `0x10`, padding ` 1`, `NaN`, `Infinity`), raises `InputRowError` naming the row.
+- If a `(series, date)` pair repeats, the last row wins.
+- Series the run does not read are ignored (the model portfolio inputs, for example). They do not set the date axis. An input
+  with no series the run reads is an error, and so is one where no composite panel has
+  an observation on or before the as-of day (`CoverageError`).
+- Registry indicators with no rows count as missing and carry no weight.
+- Correlations need `SPX` and `ETH`; the backtest also needs `TBILL3M`. Without them
+  those sections are `null`.
+
+**Calculated ratios.** Eight indicators are ratios of two Yahoo series (`COPPER_GOLD`,
+`IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`). Their
+stored values are calculations, not source data. The source contract rejects a row for
+one of them, by its id or its storage key (`CalculatedRowError`). The replay contract
+carries them as kind `calculated`, exactly as stored; their legs are never invented.
 
 A real example lives in `tests/fixtures/raw-indicator-history.csv` (and `.json`).
 
@@ -81,9 +188,9 @@ bun run regime tests/fixtures/raw-indicator-history.csv            # JSON report
 bun run regime tests/fixtures/raw-indicator-history.json --full    # adds the per-day series
 bun run regime my-history.csv --start 2018-01-01                   # first day of the date axis
 bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
-bun run regime my-history.csv --factor                            # also report the factor panel
-bun test                                                            # package tests, every HTTP client is a thrower
-bunx tsc --noEmit                                                   # typecheck
+bun run regime my-history.csv --factor                             # also report the factor panel
+bun test                                                           # package tests, every HTTP client is a thrower
+bunx tsc --noEmit                                                  # typecheck
 ```
 
 The default report is checked against `tests/golden/regime-report.json`.
@@ -93,10 +200,12 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | option | meaning |
 | ------ | ------- |
 | `--start D` / `start` | first day of the date axis. Default `2018-01-01`. |
-| `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date in the input. |
+| `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date of any series the run reads. |
 | `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
+| `--replay` | accept the historical replay contract (`parseInput(text, { replay: true })`). |
 | required data | at least one composite panel (macro, on-chain) needs a registry indicator with a row on or before the as-of day, or `runRegime` throws the named `CoverageError` (the CLI exits 1). It never fetches to fill the gap. Optional inputs give a missing result instead: without `SPX` and `ETH`, `correlations` and `backtest` are `null`; without `TBILL3M`, `backtest` is `null`; without factor indicators, the `factor` figures are `null`. |
-| validation | invalid values throw a `RangeError` (the CLI exits 2): `asof` and `start` must be real `YYYY-MM-DD` dates, `asof` must not be before `start`, or before every input row (an `asof` later than the newest row is fine: values are forward-filled, as in production). `--start` and `--asof` need a value, and an unknown flag (such as the former `--panels`) or option field exits 2 or throws rather than being ignored. |
+| `--provenance` | print `{pinned, manifest, report}` instead of the bare report; see the quickstart. The report inside is unchanged. |
+| validation | the CLI exits 2 on a usage error: a second input file, an option given twice, an unknown option (such as the former `--panels`), an option missing its value, an invalid `start`/`asof` (real `YYYY-MM-DD` dates, `asof` not before `start` or every input row), a `start` after every input row. It exits 1 on a runtime failure: an unreadable or malformed input, a manifest that does not match its input. `runRegime` throws a `RangeError` for the same option errors. |
 
 `runRegime` builds its inputs with `prepareRegimeInputs`, the same function production
 calls, so the as-of cut for indicator rows, forward-fill and the 120-day cap
@@ -107,22 +216,13 @@ from `src/index.ts`.
 From code:
 
 ```ts
-import {
-  parseRawHistory,
-  toHistory,
-  runRegime,
-  buildReport,
-  forwardFillAge,
-  MAX_FORWARD_FILL_DAYS,
-} from "./src/index.ts";
+import { parseInput, runRegime, buildReport } from "./src/index.ts";
 
-const rows = parseRawHistory(await Bun.file("my-history.csv").text());
-const report = buildReport(runRegime(toHistory(rows)));
+const input = parseInput(await Bun.file("my-history.csv").text());
+const report = buildReport(runRegime(input.history));
 
 // cut the axis at a day, and compute the factor panel too
-const asOf = buildReport(
-  runRegime(toHistory(rows), { asof: "2026-10-05", factor: true }),
-);
+const asOf = buildReport(runRegime(input.history, { asof: "2026-10-05", factor: true }));
 ```
 
 ### Current-month values (MNA)
@@ -133,45 +233,53 @@ therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
 
-## Reproducing a published run
+## Backtest your own portfolio
 
-Each regime run is recorded in the immutable run ledger. To check a published figure,
-replay that run's inputs, not the current table.
+The backtest the report carries is one shared calculation, exposed for any assets and
+weights you have prices for. It does not choose weights; it takes them.
 
-1. Take the run's payload from `analytics_output_snapshots` (columns `run_id`,
-   `artifact_kind`, `payload_bytes` (bytea), `checksum`; `payload_json` exists only in
-   the CSV export), joined to `analytics_ledger_runs` on `run_id` with
-   `tool_id = 'regime'` and `artifact_kind = 'regime_snapshots'`.
-   Do not use `regime_snapshots`: that is a current view (next section). The ledger
-   starts on 2026-09-21 (migrations 0058/0059). Before that there is no record of
-   published payloads or revisions.
-2. Rebuild the inputs from `source_value_versions`: the rows with
-   `knowledge_time <=` the run's vintage cutoff
-   (`analytics_data_vintages.knowledge_time_cutoff`, not the run's start: the cutoff
-   falls after the run row is created, and revisions are written in between), newest
-   revision per `source_key` and `market_date`. `analytics_vintage_members` lists the
-   exact ids. In SQL shape:
+```ts
+import { simulatePortfolio, periodStats, scheduleFromLabels, PORTFOLIO_SPECS } from "./src/index.ts";
 
-   ```sql
-   SELECT DISTINCT ON (source_key, market_date) source_key, market_date, value
-   FROM source_value_versions
-   WHERE knowledge_time <= :knowledge_time_cutoff
-   ORDER BY source_key, market_date, knowledge_time DESC, id DESC;
-   ```
+// Target weights per date (null: no applicable weights, the date is skipped with its
+// market move). Nonnegative, finite, summing to 1; `cash` earns the cash rate.
+const schedule = dateAxis.map(() => ({ "yahoo:GLD": 0.4, "yahoo:SPY": 0.4, cash: 0.2 }));
+const sim = simulatePortfolio(dateAxis, schedule, { "yahoo:GLD": gld, "yahoo:SPY": spy }, tbillPercent, { costBps: 10 });
+const full = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+const year = periodStats(sim.values, "2025-01-01", "2025-12-31", { returns: sim.returns, trades: sim.trades });
 
-   The keys are `raw_indicator_history:<ID>` for each indicator, and
-   `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for the `SPX`, `ETH` and
-   `TBILL3M` price series.
-3. Write them in the input format above and run with `--asof` set to the run's as-of
-   date (and `--factor` if you want to check the factor figures):
+// The reference portfolios are data: a regime label series through a weight table.
+const ethSchedule = scheduleFromLabels(labels, PORTFOLIO_SPECS.eth.weights);
+```
 
-   ```sh
-   bun run regime run-inputs.csv --asof 2026-10-05 --full
-   ```
+The rules are the established ones, unchanged: a date's return uses the previous target
+weights and that date's price change; a change of target weights at the close costs
+one-sided turnover (half the sum of absolute weight changes) times `costBps` (default
+10); cash earns the previous day's annual percent yield, `(1 + y / 100) ** (1 / 365) - 1`,
+and zero before the first yield; prices are forward-filled; the simulation starts at
+the first date every supplied asset is priced, then at the first date with weights.
+`sim` carries the net daily values, the pre-cost daily returns, each trade's turnover
+and cost, and the start and end dates. `periodStats` uses the pre-cost returns for
+the Sharpe (mean / sample sd, annualized over 365 days, no risk-free subtraction, 0 at
+zero volatility), the net values for growth and drawdown, and years of 365.25 days; a
+different window or `splitDate` never changes the full-range figures.
+`computeBacktest` is exactly these three functions over the reference portfolios.
 
-The composite, panel indices, percentiles, labels, correlations and backtest then match
-the payload on the audited run (390); the Yahoo-sourced series are the exception, as
-above.
+From the command line, one fixed-target portfolio (weights in percent of NAV, summing to
+100; `cash` earns the input's `TBILL3M`, `fred:DTB3`):
+
+```sh
+bun run backtest my-portfolio.json my-prices.csv --from 2025-01-01 --to 2025-12-31 --cost-bps 10
+```
+
+`my-portfolio.json` is for example `{ "BTC": 10, "GOLD": 6, "cash": 84 }`. Each holding is
+checked against the Base asset universe first (`--universe <path>` swaps in your own file)
+and priced from the universe asset's `series` in the input. A holding outside the universe
+or over a cap is refused (exit 2) unless `--allow-outside-universe` is set, in which case it
+is priced from the input series named by the holding itself (`"yahoo:WIDGET": 5`). A
+yield series (`defillama-yields:`) is not a price and is refused. Missing price coverage
+exits 1 and names the series; the command never fetches. It prints the portfolio, the
+universe check and the statistics; `--full` adds the daily values, returns and trades.
 
 ## What changes after publication, and why
 
@@ -309,10 +417,13 @@ the data. Check each provider's terms before you republish what you download.
 ```
 src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
-src/input/       CSV and JSON loader
+src/input/       the input loaders, the manifest and the provenance envelope
+src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
 src/run.ts       raw history in, regime report out
 src/coverage.ts  required-data check (CoverageError)
-bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
+bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
+bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
+bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)

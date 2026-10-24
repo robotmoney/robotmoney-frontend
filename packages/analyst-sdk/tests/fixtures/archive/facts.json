@@ -1,0 +1,21 @@
+{
+  "backup": "2026-08-16T000000Z",
+  "runs": {
+    "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5e01": {
+      "asof": "2026-08-01",
+      "members": 1968
+    },
+    "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5e02": {
+      "asof": "2026-08-15",
+      "members": 2219
+    }
+  },
+  "revised": {
+    "series": "VIX",
+    "date": "2026-07-31",
+    "run1Value": "15.989999771118164",
+    "run2Value": "16.239999771118164"
+  },
+  "foreignKey": "model_portfolio:yahoo:GLD",
+  "build": "4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f"
+}
