@@ -6051,3 +6051,21 @@ The specification itself was accepted by the owner on 2026-10-19 (PR 1390).
 **Accepted costs.** A code or correction shipped by a release always takes effect
 no earlier than that release's tag; an urgent correction waits for a release. A
 scheduled activation that misses its release fails CI until it is rescheduled.
+
+---
+
+<a id="d77"></a>
+## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (proposed, 2026-10-24)
+
+**Status:** proposed. Specified in `docs/technical/release-runbooks.md` section 11. The tag guard and the workflow triggers are to be built.
+
+**Decision.**
+
+1. **Branch.** The SDK (`packages/analyst-sdk/`) ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own semver. The branch must not match `releases-*`: platform CI triggers on that glob, and `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform release line. Changes reach it from `main` only, by merge or cherry-pick, like D70 route (a). Feature PRs never target it. There is no QA branch, no stage run and no rc tag: the SDK runs on an analyst's machine and nothing deploys.
+2. **Tag.** A release is the tag `analyst-sdk-vA.B.C`, only on a commit of `analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in `packages/analyst-sdk/package.json`. This follows the `contract-v*` precedent: `contract/` has its own version and tag namespace, independent of the platform's `v*` tags (`.github/workflows/contract-publish.yml`).
+3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays published report payloads byte for byte, and name the platform tag whose analytics code it matches. When it carries `main` code no platform release has shipped, the notes say "ahead of production". The SDK and the backend share code (D57).
+4. **Gate.** Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. A guard refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows add `analyst-sdk/releases-*` to their push branches.
+5. **First tag.** The first tag is `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh number separates tagged releases from them.
+6. **Install by tag.** An analyst gets a released version by a sparse clone of the tag.
+
+**Why.** An analyst needs a fixed, named version to cite and rerun. The platform's release line rehearses on stage and cuts over production. None of that applies to a package that runs on an analyst's machine. A separate branch and tag namespace keeps platform tooling from treating an SDK release as a platform release.

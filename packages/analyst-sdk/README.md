@@ -33,7 +33,21 @@ cause is an inference, not a measurement. See the quickstart and "What changes a
 
 ## Get the source
 
-Only this directory is needed. A shallow, sparse clone fetches just that:
+Only this directory is needed. A shallow, sparse clone fetches just that.
+
+A released version is a tag `analyst-sdk-vA.B.C` (proposed in decision D77 in
+`docs/decisions.md`). No release is tagged yet; the first will be `analyst-sdk-v0.2.0`.
+To get a released version, clone its tag:
+
+```sh
+git clone --branch analyst-sdk-vA.B.C --depth 1 --filter=blob:none --sparse https://github.com/robotmoney/robotmoney-frontend.git
+cd robotmoney-frontend
+git sparse-checkout set packages/analyst-sdk
+cd packages/analyst-sdk
+bun install
+```
+
+For the latest code, clone `main`:
 
 ```sh
 git clone --depth 1 --filter=blob:none --sparse https://github.com/robotmoney/robotmoney-frontend.git
