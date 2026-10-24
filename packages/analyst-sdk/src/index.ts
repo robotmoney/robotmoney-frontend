@@ -24,3 +24,4 @@ export {
   computeChannelDivergence, computeLateCycle, TOP7, type ChannelInputs, type LateCycleInputs,
 } from "./analyze/research-signals.ts";
 export type { Gauge, ResearchPayload } from "./analyze/research.ts";
+export * from "./allocate/engine.ts";
