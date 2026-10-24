@@ -59,7 +59,7 @@ beforeAll(() => {
   docker(["network", "create", NETWORK]);
   docker([
     "run", "-d", "--name", API_CONTAINER, "--network", NETWORK, "--network-alias", "api",
-    "oven/bun:1.3.5", "bun", "-e",
+    "oven/bun:1.4.4", "bun", "-e",
     `Bun.serve({ port: 8787, hostname: "0.0.0.0", fetch(req) {
        const u = new URL(req.url);
        if (u.pathname === "/version") return Response.json({ commit: "build-${RUN}", tag: null });

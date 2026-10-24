@@ -28,7 +28,7 @@ ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b9948
 # client on their own machine). The onboarding EVAL's vanilla-ness is unchanged: the
 # eval still injects only the canonical prompt, and nothing Robot-Money-
 # specific is baked in.
-ARG BUN_VERSION=1.3.5
+ARG BUN_VERSION=1.4.4
 ARG BUN_LINUX_X64_SHA256=7051d86a924aefea3e0b96213b5fd8f79c0793f9cae6534233e627e5c3db4669
 
 FROM ubuntu:24.04
