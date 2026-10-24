@@ -11,6 +11,7 @@
     "regime": "bun run bin/regime.ts",
     "golden:regenerate": "bun run scripts/golden-regenerate.ts",
     "universe:check": "bun run bin/check-universe.ts",
+    "rules:check": "bun run bin/check-rule.ts",
     "universe:export": "bun run scripts/export-universe.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

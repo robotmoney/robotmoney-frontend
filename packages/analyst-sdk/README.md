@@ -315,7 +315,11 @@ src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file; the only I/O)
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
+src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)
+bin/check-rule.ts the `bun run rules:check` entry
 universe/        base-universe.json, the shipped universe
+rules/           the shipped rule files, all inside the universe
+rules-outside-universe/  rule files that hold assets or weights outside it
 ```
 
 `src/` stays pure: no `node:fs`, `postgres`, `bun:sqlite`, no `process.env`, nothing
@@ -335,6 +339,46 @@ They are never regenerated from later code.
 `loadUniverse()` returns the shipped file; `loadUniverse(json)` validates a parsed file of your own. `checkHoldings({ risk_off: {...}, neutral: {...}, risk_on: {...} }, universe)` returns one finding per holding that is not in the universe or is over its own cap, and per group over its cap, each naming the state, the holding and the cap. An empty array means the holdings fit. `bun run universe:check <holdings.json> [--universe <path>] [--allow-outside-universe]` runs the check from the command line on a JSON map of state to holding weights. It prints one line per finding to stderr and exits 2 on findings unless `--allow-outside-universe` is set. `--universe <path>` swaps in your own universe file (read in `bin/`, since `src/` reads no files).
 
 `bun run universe:export <assets.csv> [--groups groups.csv]` rebuilds the file from a CSV export of the Base Permissionless Asset Universe sheet. The file shipped today is a seed: the nine holdings and caps of the prototype's reference rule, until the sheet export replaces it.
+
+## Rule files
+
+A model portfolio is a JSON rule file, not code, so you can change one without touching the SDK. The shipped ones are in `rules/`. Every field is checked by `validateRuleFile(json)` (`src/allocate/rules.ts`), which returns a list of errors, each starting with the path of the field it is about (`states.neutral: weights sum to 99, not 100`). An empty list means the file is valid. `parseRuleFile(json)` returns the typed file or throws `RuleFileError` with every error. `bun run rules:check <rule.json> [--universe <path>] [--allow-outside-universe]` runs the same check from the command line and exits 2 on any error.
+
+Caps are not in a rule file. They come from the universe (`universe/base-universe.json`, above): `validateRuleFile` checks every holding with `checkHoldings` against it. Pass `{ universe }` to use your own, or `{ allowOutsideUniverse: true }` to skip the check, like the CLI flag.
+
+| Field | What it holds |
+|---|---|
+| `id`, `name`, `author` | Who wrote it and what it is. `id` is the file name without `.json`. |
+| `date` | `YYYY-MM-DD`, when it was written. |
+| `status` | `reference` (the model portfolio), `hypothesis` (a proposal) or `comparison` (a row to compare against). |
+| `description` | Optional. |
+| `drift` | When to trade back to the target: a holding has drifted when it is more than `max(points, relative × target)` away. `byHolding` overrides `points` for one holding. |
+| `label` + `states` | One weight set per regime state. `label` picks the state: `composite`, `conservative` or `aggressive` (the panel votes), each needing `risk_off`, `neutral` and `risk_on`; or `fixed`, which holds only `neutral`, every week. Each state's weights are percent of NAV and sum to 100. |
+| `engine` | Instead of `states`. `neutral` is the neutral portfolio (sums to 100). Each of `sleeves` tilts one risky holding by one `signal` (`composite`, `macro`, `onchain`, `indicator:<ID>`, `research:<id>`, `mean(...)`, `inverse(...)`; see `src/allocate/signals.ts`) inside its band `min`..`max`, which must contain the neutral weight, with z = (signal − 0.5) ÷ `scale`, and an optional `volTarget` (annualized percent). `buffer` is the cash holding. `dollarBook.instruments` are the holdings the yield program fills, highest `trailingDays` yield first. Every neutral holding is a sleeve, the buffer or an instrument. |
+
+A file has `states` or `engine`, never both, and any other field is an error. A worked example, an engine rule: Bitcoin between 0 and 10% on the composite, gold between 2 and 6% on the inverse of the composite, 2% cash, the rest in the dollar book. Check it with `bun run rules:check example.json`.
+
+```json
+{
+  "id": "example",
+  "name": "Bitcoin and gold tilted by the composite",
+  "author": "Your name",
+  "date": "2026-10-23",
+  "status": "hypothesis",
+  "engine": {
+    "neutral": { "USDC": 2, "SUSDS": 24, "SPARK": 11, "GT": 12, "STEAK": 7, "AAVE": 28, "COMP": 5, "GOLD": 6, "BTC": 5 },
+    "sleeves": [
+      { "holding": "BTC", "signal": "composite", "min": 0, "max": 10, "scale": 0.17 },
+      { "holding": "GOLD", "signal": "inverse(composite)", "min": 2, "max": 6, "scale": 0.17 }
+    ],
+    "buffer": "USDC",
+    "dollarBook": { "instruments": ["AAVE", "SUSDS", "GT", "SPARK", "STEAK", "COMP"], "trailingDays": 30 }
+  },
+  "drift": { "points": 2, "relative": 0.25, "byHolding": { "BTC": 3 } }
+}
+```
+
+`rules/` holds the reference rule `R1` (the Base policy portfolio moved by the composite label), `R1-frozen` (the same portfolio held still), `R2` (the engine with Lex's two research previews on the Bitcoin sleeve) and the engine versions `E0` (sleeves held still, dollar book by yield) to `E3` (with Bitcoin volatility scaling). Every file in `rules/` fits the shipped universe. `rules-outside-universe/` holds the files that do not: the three alternative portfolios as fixed weights (`P-A1` with Coinbase stocks, `P-B` multi-chain, `P-C` with KYC) and the engine versions with Bitcoin up to 20% (`E1w` to `E3w`). They validate only with `--allow-outside-universe`.
 
 ## Rebuilding inputs from raw sources (optional)
 

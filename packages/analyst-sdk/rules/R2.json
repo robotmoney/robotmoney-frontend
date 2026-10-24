@@ -1,0 +1,56 @@
+{
+  "id": "R2",
+  "name": "Engine v1 with Lex's two research previews on the Bitcoin sleeve",
+  "author": "Lex (the previews and their thresholds: channel divergence, late-cycle signals). Rule form and the 0.80 threshold on the three non-concentration gauges: Claude, 2026-10-08.",
+  "date": "2026-10-23",
+  "status": "hypothesis",
+  "description": "As E1, but Bitcoin moves on the mean of the composite, the channel-divergence preview and the late-cycle preview (each 0..1, high = risk-on), so a broken channel or a saturated late cycle pulls Bitcoin down even when the composite is loud. Ports prototype R2's two tilts (down one notch, halfway to neutral) to the sleeve-signal form.",
+  "engine": {
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "sleeves": [
+      {
+        "holding": "BTC",
+        "signal": "mean(composite,research:channel_divergence,research:late_cycle)",
+        "min": 0,
+        "max": 10,
+        "scale": 0.17
+      },
+      {
+        "holding": "GOLD",
+        "signal": "inverse(composite)",
+        "min": 2,
+        "max": 6,
+        "scale": 0.17
+      }
+    ],
+    "buffer": "USDC",
+    "dollarBook": {
+      "instruments": [
+        "AAVE",
+        "SUSDS",
+        "GT",
+        "SPARK",
+        "STEAK",
+        "COMP"
+      ],
+      "trailingDays": 30
+    }
+  },
+  "drift": {
+    "points": 2,
+    "relative": 0.25,
+    "byHolding": {
+      "BTC": 3
+    }
+  }
+}
