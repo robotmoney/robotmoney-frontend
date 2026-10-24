@@ -36,11 +36,34 @@ const ASOF = "2026-08-10";
 const EXTRA: Record<string, string> = { SPX: "backtest:^GSPC", ETH: "backtest:ETH-USD", TBILL3M: "backtest:DTB3" };
 const sha = (b: Uint8Array | string) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
+// Collected from stream events, ending on whichever of end or close comes
+// first, with a bound: a for-await over a COPY stream can miss its end under a
+// loaded full-suite run (the same pattern as tests/api/public-analytics-archives.test.ts).
 async function copyCsv(query: string): Promise<string> {
-  const stream = await sql.unsafe(`COPY (${query}) TO STDOUT WITH (FORMAT csv, HEADER)`).readable();
-  const chunks: Buffer[] = [];
-  for await (const c of stream) chunks.push(Buffer.from(c as Uint8Array));
-  return Buffer.concat(chunks).toString("utf8");
+  return sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL TimeZone = 'UTC'");
+    const stream = await tx.unsafe(`COPY (${query}) TO STDOUT WITH (FORMAT csv, HEADER)`).readable();
+    return new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      };
+      const timer = setTimeout(() => {
+        if (!done) reject(new Error(`COPY of ${query.slice(0, 60)} never ended`));
+      }, 60_000);
+      stream.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+      stream.on("end", finish);
+      stream.on("close", finish);
+      stream.on("error", (e: Error) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+  }) as Promise<string>;
 }
 
 test(
