@@ -1,10 +1,15 @@
 # @robotmoney/analyst-sdk
 
-Pure regime analytics for Robot Money. Give it a raw indicator history, get back the
-regime label, per-indicator ranks and weights, correlations and the backtest. It
-never calls the network, never reads a database and never reads the environment.
+Pure regime analytics for Robot Money. Give it source data, get back the
+regime label, per-indicator ranks and weights, correlations and the backtest. The
+computation never calls the network, never reads a database and never reads the
+environment. Only the optional source clients in `src/extract/` fetch.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
+
+The refactor preserves one shared calculation: identical effective inputs and report options produce byte-identical report payloads in the backend and SDK, before and after refactoring. This includes every backtest statistic, date, null, field order and number formatting. Calculation-methodology changes and a separate backend compatibility engine are outside its scope. Provider collection and archive downloads finish during extract; all later stages run from supplied data without HTTP, including on missing inputs.
+
+What this package is specified to do: [`docs/technical/analytics-requirements.md`](../../docs/technical/analytics-requirements.md) (the module the backend and the SDK share) and [`docs/technical/analyst-sdk-requirements.md`](../../docs/technical/analyst-sdk-requirements.md) (the client side). Terms (source data, calculated indicators, report, archive) are defined in [`docs/definitions.md`](../../docs/definitions.md).
 
 What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
 `transforms.ts`, `indicators.ts`, `backtest.ts`, `correlations.ts`) lives here; the
@@ -228,7 +233,7 @@ const asOf = buildReport(runRegime(input.history, { asof: "2026-10-05", factor: 
 ### Current-month values (MNA)
 
 The current month's value of a monthly series such as `MNA` (EDGAR filing counts) is
-stored at its month-end date and updated through the month. A raw history can
+stored at its month-end date and updated through the month. A source data report can
 therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
@@ -302,7 +307,7 @@ which is below the 0.67 `risk_on` bucket, and the label changed from `risk_on` t
 ## Public data API
 
 Optional, and independent of the SDK: the SDK never calls the network and the API
-never needs the SDK. A free, tokenless, read-only JSON API serves the raw inputs
+never needs the SDK. A free, tokenless, read-only JSON API serves source data and its revisions
 under `/api/public/analytics/`. Every route is GET only (any other method is a
 `405`), needs no `Authorization` header (a token changes nothing), and answers
 cross-origin requests (`Access-Control-Allow-Origin: *`). The routes, in the contract
@@ -311,7 +316,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 
 | route | serves | filters |
 | ----- | ------ | ------- |
-| `/api/public/analytics/raw-history` | raw indicator history, `date,indicator,value,source` | `indicator`, `from`, `to` |
+| `/api/public/analytics/raw-history` | source data for the indicators, `date,indicator,value,source` | `indicator`, `from`, `to` |
 | `/api/public/analytics/asset-prices` | daily asset closes in USD | `symbol`, `from`, `to` |
 | `/api/public/analytics/vintages` | frozen data vintages: run, methodology, cutoffs, digest, members | `run_key`, `tool_id`, `include=members` |
 | `/api/public/analytics/overwrite-events` | every recorded revision of a stored row | `table_name` |
@@ -323,7 +328,7 @@ as `ROUTES.publicAnalytics` and with a JSON schema per route in
 ```sh
 API=https://robotmoney.network
 
-# raw indicator history for one indicator, from a date (the SDK's CSV is this, as columns)
+# source data for one indicator, from a date (the SDK's CSV is this, as columns)
 curl -s "$API/api/public/analytics/raw-history?indicator=T10Y2Y&from=2024-01-01&limit=5"
 
 # asset prices
@@ -419,7 +424,7 @@ src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
 src/input/       the input loaders, the manifest and the provenance envelope
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
-src/run.ts       raw history in, regime report out
+src/run.ts       source data in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
@@ -491,7 +496,7 @@ A file has `states` or `engine`, never both, and any other field is an error. A 
 
 `rules/` holds the reference rule `R1` (the Base policy portfolio moved by the composite label), `R1-frozen` (the same portfolio held still), `R2` (the engine with Lex's two research previews on the Bitcoin sleeve) and the engine versions `E0` (sleeves held still, dollar book by yield) to `E3` (with Bitcoin volatility scaling). Every file in `rules/` fits the shipped universe. `rules-outside-universe/` holds the files that do not: the three alternative portfolios as fixed weights (`P-A1` with Coinbase stocks, `P-B` multi-chain, `P-C` with KYC) and the engine versions with Bitcoin up to 20% (`E1w` to `E3w`). They validate only with `--allow-outside-universe`.
 
-## Rebuilding inputs from raw sources (optional)
+## Rebuilding source data from the original sources (optional)
 
 `src/extract/` holds the keyless source clients (FRED, Yahoo, DefiLlama, blockchain.com, Coin Metrics, Shiller, EDGAR) and the indicator-to-fetch map. They are the only SDK code that touches the network, and only through `src/extract/http.ts`. Pass your own `fetch` with `configureHttp({ fetch })`. Add `cache` and `recordFetch` hooks to wrap each GET. With no hooks they use `globalThis.fetch` directly. The geckoterminal source needs a host adapter (`SourceExtensions`) and throws without one.
 
