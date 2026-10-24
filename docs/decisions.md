@@ -6055,9 +6055,9 @@ scheduled activation that misses its release fails CI until it is rescheduled.
 ---
 
 <a id="d77"></a>
-## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (owner, 2026-10-24)
+## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (proposed, 2026-10-24)
 
-**Status.** Accepted 2026-10-24. Specified in `docs/technical/release-runbooks.md` section 11. The tag guard and the workflow triggers are to be built.
+**Status:** proposed. Specified in `docs/technical/release-runbooks.md` section 11. The tag guard and the workflow triggers are to be built.
 
 **Decision.**
 

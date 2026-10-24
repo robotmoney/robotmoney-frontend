@@ -434,8 +434,8 @@ A release that adds an invariant adds a row here, with its red-control test, in 
 
 ## 11. Analyst SDK releases
 
-The analyst SDK (`packages/analyst-sdk/`) has its own release line ([D77](../decisions.md#d77),
-owner 2026-10-24). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
+The analyst SDK (`packages/analyst-sdk/`) has its own release line (proposed in
+[D77](../decisions.md#d77)). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
 release. The SDK runs on an analyst's machine. Nothing deploys, so there is no QA branch, no stage
 run, no rc tag and no production cutover.
 
