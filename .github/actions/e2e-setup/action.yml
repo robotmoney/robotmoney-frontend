@@ -41,7 +41,7 @@ runs:
       run: echo "RM_SMOKE_STATE_ROOT=$RUNNER_TEMP/smoke-state" >> "$GITHUB_ENV"
     - uses: oven-sh/setup-bun@v2
       with:
-        bun-version: "1.3.5"
+        bun-version: "1.4.4"
         no-cache: true
     # Playwright's CLI/transform runs on Node.js (its bin is `#!/usr/bin/env
     # node`); `bun run test:browser` shells out to it and `setup-bun` does NOT
