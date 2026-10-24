@@ -358,6 +358,20 @@ because those fetched values are recorded nowhere). Replaying a run from the led
 is described in
 [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
 
+**Replay against the production record (issue 1431).** The format 1 backups (D72) hold
+every run's vintage and published output. `backend/tests/regime-replay-archive.test.ts`
+replays every regime run since 2026-09-21 from a local copy (`RM_FORMAT1_ARCHIVE`), and
+skips with its reason printed when none is given. Against the backup of 2026-10-19
+(372 regime runs, 279 published, 93 failed or without an output package) every
+published as-of label reproduces. 6 runs reproduce every compared field. 273 runs, all
+from before issue 1421, differ in a number: 267 first in `factor_index` (the Yahoo
+factor ratios), 3 first in correlations, and 3 in the composite itself (runs 73, 111
+and 133, by 0.002 to 0.036, still with the published label). Required CI replays a
+committed sample of three of these runs (`tests/fixtures/published-replay/`, public
+data only, written by `backend/scripts/published-replay-sample.ts`) in
+`regime-replay-published.test.ts`: labels must match, and every other field must give
+exactly its recorded outcome.
+
 **Downstream never acquires.** After extract, every stage runs from the committed
 dataset and never calls the data source or an HTTP client. When neither composite
 panel (macro, on-chain) has an observation on or before the as-of day, the run stops
