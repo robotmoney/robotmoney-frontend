@@ -396,6 +396,36 @@ transforms and forward-fill ages are built. Its callers are
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
 
+### 8.1.1 Replay gaps against the published record (issue 1450)
+
+The replay of issue 1431 (section 8.1) found 273 runs whose replay differs from
+what they published. Every one is from before issue 1421. Each class below was
+diagnosed from the format 1 backup of 2026-10-19 (`backup 2026-10-19T202421Z`), read
+only, by replaying the run's frozen vintage and putting the observation the run
+computed from (the `raw_date` and `raw_value` of the indicator cards in its published
+as-of row) in place of the replayed one, one series at a time. No stored row, report
+or vintage is changed, and none is changed retroactively.
+
+| Class (first differing field) | Runs in the latest backup | Cause | What accounts for it |
+| --- | --- | --- | --- |
+| `composite` | 3 (runs 73, 111, 133) | `pre-1421-handoff` | Input data. Replaying with the computed observations gives the published composite exactly (residual 0), so the compute code accounts for none of the gap. Run 73 (-0.00163): `VIX` replayed 16.26, computed 15.98. Run 111 (+0.01654) and run 133 (-0.03562): `BTC_ACTIVE`, one day later in the vintage than the run used. Detail per series in `backend/tests/fixtures/composite-drift-diagnosis.json`. |
+| `factorIndex` | 267 | `pre-1421-handoff` | The factor panel is `SPX_TREND`, six Yahoo ratios and `SHILLER_CAPE`. In 265 runs the as-of observations of all of them equal the vintage (7 of these are re-runs of an earlier day, whose cards show later rows), and the gap (at most 8e-6) comes from history values the run fetched fresh and the ledger stored only to the D56 tolerance. In 2 runs (57 and 59) an as-of observation differs. Run 57 (`SPX_TREND`, -1.4e-4, the largest gap) drops to -3e-7 once its computed observation is put in. After that every run is within 8e-6, the size that moving a factor series inside its tolerance gives (up to 4e-6 in the trial). The composite is exact in all of them. |
+| `correlations` | 3 (runs 292, 360, 424) | `pre-1421-handoff` | Only correlations and backtest differ (rho by at most 9e-5). The label, composite, indices and percentiles are exact, so the macro and on-chain inputs are the same. The inputs left are the Yahoo `^GSPC` and `ETH-USD` price series, stored only to the D56 tolerance. The fresh values the run used were never stored, so this class is shown by elimination and by magnitude, not by an exact substitution. |
+
+All 273 runs predate the fix of issue 1421 (the latest backup holds no run after it), so
+the backup cannot show that a run after it replays exactly. The test for that is in
+`regime-replay-archive.test.ts` and runs when such a backup exists. No class has
+cause `other`, so no row links a fix issue.
+
+For the three composite runs the handoff is visible in the ledger. A run starts, reads
+the value stored at that moment, and computes. Its own ingest then commits newer values
+(`source_value_versions.knowledge_time` after the run's `created_at`), and the vintage
+is frozen after that commit. The replayed value is the one committed during the run.
+The computed value is the one committed before it, for example `VIX` 15.98 (committed
+15:20:55) against 16.26 (committed 15:34:48) for the run that started at 15:30:00. The
+compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
+today apart from comments.
+
 ### 8.2 Source ids and the storage mapping (D74, issue 1423)
 
 A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or

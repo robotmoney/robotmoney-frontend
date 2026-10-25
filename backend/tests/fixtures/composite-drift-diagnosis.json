@@ -1,0 +1,162 @@
+{
+  "73": {
+    "input_series": [
+      {
+        "series": "IWF_IWD",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 0.4973838766942089,
+          "version_id": 7146662,
+          "committed_at": "2026-09-24 15:34:16.780148+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 0.49718685675217394,
+          "version_id": 7022924,
+          "committed_at": "2026-09-24 15:20:58.154009+00"
+        },
+        "solo_composite_effect": 0
+      },
+      {
+        "series": "IWM_SPY",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 0.3659033053458604,
+          "version_id": 7153134,
+          "committed_at": "2026-09-24 15:34:29.525758+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 0.3661640060194638,
+          "version_id": null,
+          "committed_at": null
+        },
+        "solo_composite_effect": 0
+      },
+      {
+        "series": "SPX_TREND",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 7666.41015625,
+          "version_id": 7174777,
+          "committed_at": "2026-09-24 15:35:33.777064+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-23",
+          "value": 7706.02978515625,
+          "version_id": 5575091,
+          "committed_at": "2026-09-23 21:34:42.425475+00"
+        },
+        "solo_composite_effect": 0
+      },
+      {
+        "series": "VIX",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 16.260000228881836,
+          "version_id": 7162118,
+          "committed_at": "2026-09-24 15:34:48.185197+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 15.979999542236328,
+          "version_id": 7020956,
+          "committed_at": "2026-09-24 15:20:55.906706+00"
+        },
+        "solo_composite_effect": -0.00163041692456245
+      },
+      {
+        "series": "XLP_XLY",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 0.750774391175927,
+          "version_id": 7156536,
+          "committed_at": "2026-09-24 15:34:38.448157+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 0.7513189629968117,
+          "version_id": 7023862,
+          "committed_at": "2026-09-24 15:21:00.830548+00"
+        },
+        "solo_composite_effect": 0
+      },
+      {
+        "series": "XLU_SPY",
+        "replayed": {
+          "date": "2026-09-24",
+          "value": 0.051737683931295284,
+          "version_id": 7154551,
+          "committed_at": "2026-09-24 15:34:31.716536+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 0.05168735141596021,
+          "version_id": 7012657,
+          "committed_at": "2026-09-24 15:20:39.720151+00"
+        },
+        "solo_composite_effect": 0
+      }
+    ],
+    "replayed_vs_computed_delta": -0.00163041692456245,
+    "composite_effect": -0.00163041692456245,
+    "cause": "pre-1421-handoff",
+    "linked_issue": null
+  },
+  "111": {
+    "input_series": [
+      {
+        "series": "BTC_ACTIVE",
+        "replayed": {
+          "date": "2026-09-25",
+          "value": 520091,
+          "version_id": 10820084,
+          "committed_at": "2026-09-26 03:35:43.13155+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-24",
+          "value": 490018,
+          "version_id": 8151244,
+          "committed_at": "2026-09-25 03:31:46.009224+00"
+        },
+        "solo_composite_effect": 0.01654226065675013
+      }
+    ],
+    "replayed_vs_computed_delta": 0.01654226065675013,
+    "composite_effect": 0.01654226065675013,
+    "cause": "pre-1421-handoff",
+    "linked_issue": null
+  },
+  "133": {
+    "input_series": [
+      {
+        "series": "BTC_ACTIVE",
+        "replayed": {
+          "date": "2026-09-26",
+          "value": 448618,
+          "version_id": 13033339,
+          "committed_at": "2026-09-27 03:36:10.80109+00",
+          "committed_after_run_start": true
+        },
+        "computed": {
+          "date": "2026-09-25",
+          "value": 520091,
+          "version_id": 10820084,
+          "committed_at": "2026-09-26 03:35:43.13155+00"
+        },
+        "solo_composite_effect": -0.035619367700349236
+      }
+    ],
+    "replayed_vs_computed_delta": -0.035619367700349236,
+    "composite_effect": -0.035619367700349236,
+    "cause": "pre-1421-handoff",
+    "linked_issue": null
+  }
+}
