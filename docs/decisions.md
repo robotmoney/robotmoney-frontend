@@ -5921,16 +5921,16 @@ A run records methodology and code revision as provenance. Public simulation and
 
 Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
 
-### No migrations and no retroactive change (owner clarification, 2026-10-22)
-
-The analytics and analyst SDK work adds no database migration. No table, column, trigger, index or grant changes. Each feature works within the existing schema and grants. A requirement that cannot be met that way stops for an owner decision; a migration is never the fallback.
+### No retroactive change (owner clarification, 2026-10-22)
 
 No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
+
+_Removed 2026-10-25: the rule that the analytics and analyst SDK work adds no database migration was not an owner decision. Migrations follow the normal rules (D66, `docs/technical/smoke-production-spec.md` section 8)._
 
 This settles three points.
 
 1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
-2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, the revision capture waits for an owner decision.
+2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, a grant migration under the normal migration rules enables it.
 3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
 
 ---
