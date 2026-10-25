@@ -310,7 +310,7 @@ const PREWARM: readonly RenderArgs[] = [
 // "measured". It was 6-12x too high, and the next reader who checks would have
 // been right to stop trusting the rest of this comment.
 //
-// The bound must stay explicit and must stay generous. On the pinned bun 1.3.5
+// The bound must stay explicit and must stay generous. On bun 1.3.5
 // a `beforeAll` with NO timeout argument expires at 5000.16 ms, so dropping
 // this argument would silently put the prewarm back under the same default
 // that reddened PR #801 and make the whole hoist a no-op on CI. A budget only a

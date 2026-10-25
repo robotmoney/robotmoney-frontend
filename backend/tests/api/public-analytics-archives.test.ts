@@ -730,7 +730,7 @@ describe("archive: watermarks that never move", () => {
 });
 
 describe("archive: the encoder pin", () => {
-  test("this runtime's gzip is the pinned encoder (oven/bun:1.3.5, as backend/Dockerfile and CI pin)", async () => {
+  test("this runtime's gzip is the pinned encoder (oven/bun:1.4.4, as backend/Dockerfile and CI pin)", async () => {
     expect(await encoderFixtureSha256(), "the Bun runtime's zlib changed: every published archive identity would change").toBe(ARCHIVE_GZIP_FIXTURE_SHA256);
   });
 

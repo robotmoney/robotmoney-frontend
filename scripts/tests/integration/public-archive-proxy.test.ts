@@ -26,7 +26,7 @@ const NET = `rm-pap-net-${RUN}`;
 const UNTRUSTED_NET = `rm-pap-untrusted-${RUN}`;
 const API_CONTAINER = `rm-pap-api-${RUN}`;
 const WEB_CONTAINER = `rm-pap-web-${RUN}`;
-const BUN_IMAGE = "oven/bun:1.3.5";
+const BUN_IMAGE = "oven/bun:1.4.4";
 const BASE = "/api/public/analytics";
 
 const siteDir = mkdtempSync(join(tmpdir(), "rm-pap-site-"));

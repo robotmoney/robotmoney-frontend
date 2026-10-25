@@ -11,7 +11,7 @@
 // packages/analyst-sdk/tests/fixtures/archive/api-recorded/, which the SDK's
 // unit and analyst-sdk jobs replay with no database and no private repository.
 // The recording therefore stays what the real routes serve:
-//   - under the pinned encoder (Bun 1.3.5, ARCHIVE_GZIP_FIXTURE_SHA256), byte for byte;
+//   - under the pinned encoder (Bun 1.4.4, ARCHIVE_GZIP_FIXTURE_SHA256), byte for byte;
 //   - under another Bun, by content: each record with its gzip-dependent
 //     fields (bytes_gz, sha256_gz) left out, and each archive's uncompressed bytes.
 // RECORD_ANALYST_SDK_ARCHIVE=1 rewrites the recording instead (run it under the
@@ -215,7 +215,7 @@ test(
 
     // (2) The committed recording is what the real routes serve.
     if (process.env.RECORD_ANALYST_SDK_ARCHIVE === "1") {
-      expect(pinned, "record only under the pinned Bun (1.3.5), so CI's bytes are the recording").toBe(true);
+      expect(pinned, "record only under the pinned Bun (1.4.4), so CI's bytes are the recording").toBe(true);
       rmSync(RECORDING, { recursive: true, force: true });
       for (const [rel, bytes] of served) {
         mkdirSync(dirname(join(RECORDING, rel)), { recursive: true });

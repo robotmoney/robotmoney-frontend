@@ -848,15 +848,15 @@ async function buildTableFiles(backup: string, t: ArchiveTable, after: string, t
 // An archive's identity is the SHA-256 of its gzip bytes (format 1 records
 // `sha256_gz`, and the ETag is it). Those bytes depend on the zlib build in
 // the Bun runtime: node:zlib at level 9 gives different bytes under bun 1.3.5
-// and 1.3.14. So the encoder is pinned. A fixed fixture's gzip must hash to the
+// and 1.4.4. So the encoder is pinned. A fixed fixture's gzip must hash to the
 // value recorded here, measured under the Bun that backend/Dockerfile and CI
-// pin (oven/bun:1.3.5). When it does not, the archive routes refuse (503)
+// pin (oven/bun:1.4.4). When it does not, the archive routes refuse (503)
 // rather than publish different bytes under a name already published, and
 // the CI test that compares it fails the build. Changing the Bun version
 // therefore needs a decision about every published archive's identity.
 
-/** sha256 of the gzip of encoderFixture() under oven/bun:1.3.5. */
-export const ARCHIVE_GZIP_FIXTURE_SHA256 = "3878bc2a58589bf197450607629ee8c172c642efe20949199b504f9a4d2c98ef";
+/** sha256 of the gzip of encoderFixture() under oven/bun:1.4.4. */
+export const ARCHIVE_GZIP_FIXTURE_SHA256 = "3fd4bdd38286897f6e73d9948e594e5c0f765c5e170166592744d8cf66792408";
 
 function encoderFixture(): string {
   return Array.from({ length: 5000 }, (_, i) =>
