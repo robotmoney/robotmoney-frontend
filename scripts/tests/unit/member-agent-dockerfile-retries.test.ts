@@ -47,7 +47,7 @@ describe("member-agent Dockerfile download retries", () => {
     expect(dockerfile).toContain("ARG OPENCODE_VERSION=1.18.1");
     expect(dockerfile).toContain("ARG OPENCODE_LINUX_X64_SHA256=9ecce27cf529ade5f177fab478b4876b5c31d9ddc8216b994816acf192159511");
     expect(dockerfile).toContain("ARG BUN_VERSION=1.4.4");
-    expect(dockerfile).toContain("ARG BUN_LINUX_X64_SHA256=7051d86a924aefea3e0b96213b5fd8f79c0793f9cae6534233e627e5c3db4669");
+    expect(dockerfile).toContain("ARG BUN_LINUX_X64_SHA256=bf8ccbfb2b0b80159e0f9a6d15c55317add8077534dbc6130a3edb52fccb395c");
   });
 });
 
