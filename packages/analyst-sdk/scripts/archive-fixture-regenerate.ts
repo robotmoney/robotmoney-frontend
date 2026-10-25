@@ -146,7 +146,7 @@ function tablesFor(part: "all" | "b1" | "b2"): Table[] {
   return t;
 }
 
-// gzip bytes differ between zlib builds (bun 1.3.5 in CI, newer bun locally),
+// gzip bytes differ between zlib builds (bun 1.4.4 in CI, newer bun locally),
 // so the committed .gz is kept whenever it decompresses to exactly the rows
 // this script would write. The fixture is then judged by its content, and its
 // recorded sha256_gz stays the hash of the committed file.
