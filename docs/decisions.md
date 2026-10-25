@@ -5875,9 +5875,9 @@ for sessions published earlier.
 **Decision.**
 
 1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
-2. **Write-once.** An archive never changes after it is written. Its checksum names it. A backup only adds archives.
+2. **Write-once.** An archive never changes after it is written. Its identity is the SHA-256 of its uncompressed canonical bytes (`sha256_raw` in `backup.json`), and that hash names it. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, so no gzip encoder, Bun version or container image is part of an archive's identity, the ETag and the manifest hash are the content hash, and a client decompresses before it verifies. A backup only adds archives.
 3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
-4. **Same bytes.** The API and the database replica write byte-identical archives for the same state.
+4. **Same content.** The API and the database replica write archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
 
 **Why.** An analyst, the backup job and the API must agree on one record. One write-once format lets a repo clone and an API download produce the same local copy.
 

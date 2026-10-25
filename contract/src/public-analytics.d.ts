@@ -136,9 +136,7 @@ export interface ArchiveFileRecord {
   path: string;
   rows: number;
   bytes_raw: number;
-  bytes_gz: number;
   sha256_raw: string;
-  sha256_gz: string;
   id_min: string;
   id_max: string;
   sum_id: string;

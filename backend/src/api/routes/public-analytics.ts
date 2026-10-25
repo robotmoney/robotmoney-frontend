@@ -73,7 +73,6 @@ import { on, registerQuery } from "../../db/registry.ts";
 import { classifyDbFailure } from "../../db/client.ts";
 import {
   archiveBodyStream,
-  archiveEncoderMatches,
   BACKUP_ID_RE,
   cachedRecord,
   fileIn,
@@ -924,11 +923,6 @@ function building(): Response {
 async function archiveFile(req: Request, path: string, clientIp: string): Promise<Sent> {
   const m = ARCHIVE_PATH_RE.exec(path);
   if (!m || !(await isServedBackup(m[1]!))) return { res: problem(404, "no such backup or archive"), bytes: 0 };
-  // A runtime whose gzip is not the pinned encoder would publish different
-  // bytes under names already published: refuse instead (public-archive-store.ts).
-  if (!(await archiveEncoderMatches())) {
-    return { res: problem(503, "archives are unavailable: this server's encoder is not the pinned one", { "Retry-After": "3600" }), bytes: 0 };
-  }
   const built = await awaitRecord(m[1]!);
   if (!built) return { res: building(), bytes: 0 };
   if (m[2] === "backup.json") {
@@ -948,17 +942,18 @@ async function archiveFile(req: Request, path: string, clientIp: string): Promis
   const headers: Record<string, string> = {
     "Content-Type": "application/gzip",
     "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
-    ETag: strongEtag(hit.file.sha256_gz),
-    "X-Content-SHA256": hit.file.sha256_gz,
+    ETag: strongEtag(hit.file.sha256_raw),
+    "X-Content-SHA256": hit.file.sha256_raw,
   };
-  // The ETag is the record's sha256_gz: a revalidation never regenerates the body.
+  // The ETag is the record's sha256_raw (the content, never the gzip): a revalidation never regenerates the body.
   if (matchesEtag(req.headers.get("if-none-match"), headers.ETag!)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
   // Admission: the body's pages wait for gate slots once streaming, so a new
   // body is refused up front when the gate is already full.
   if (publicQueryGate.inUse() >= PUBLIC_ANALYTICS_MAX_CONCURRENT_QUERIES) throw new PublicBusyError(1);
-  // Charged in full on admission (§4.8): the client's byte budget may go negative.
-  budgets.chargeBytes(clientIp, hit.file.bytes_gz);
-  headers["Content-Length"] = String(hit.file.bytes_gz);
+  // Charged in full on admission (§4.8): the client's byte budget may go
+  // negative. The gzip size depends on the encoder, so the charge is the
+  // content size, an upper bound of what is sent.
+  budgets.chargeBytes(clientIp, hit.file.bytes_raw);
   return { res: new Response(archiveBodyStream(hit.table, hit.file), { status: 200, headers }), bytes: 0 };
 }
 

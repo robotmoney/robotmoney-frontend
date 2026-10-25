@@ -6,8 +6,10 @@
 // regime run of a copy with the same reader, so there is one archive reader.
 //
 // Every listed file of the selected backups is checked before anything is
-// returned: present and matching its recorded SHA-256. Files of the tables read
-// here are also parsed and row-counted against their record.
+// returned: present and, once gunzipped, matching its recorded SHA-256 (the hash
+// of the uncompressed bytes: gzip is only a transport encoding, so any encoder's
+// output verifies). Files of the tables read here are also parsed and row-counted
+// against their record.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -27,6 +29,17 @@ import {
 } from "../src/archive/format1.ts";
 
 const sha256 = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+
+// A listed archive's uncompressed bytes, or null when it is missing. A file that
+// is not a valid gzip is corrupt, not missing.
+function contentOf(abs: string): Uint8Array | null {
+  if (!existsSync(abs)) return null;
+  try {
+    return gunzipSync(readFileSync(abs));
+  } catch (err) {
+    throw new ArchiveError(`corrupt local copy: ${abs} is not a readable gzip (${(err as Error).message})`);
+  }
+}
 
 const tableOf = (f: FileRecord): string => f.path.split("/").pop()!.split(".")[0]!;
 
@@ -58,12 +71,11 @@ export function openLocalCopy(root: string, asOf?: string): LocalCopy {
 
   const readRows = (f: FileRecord): Row[] => {
     const abs = join(root, f.path);
-    if (!existsSync(abs)) verifyFile(f, { sha256_gz: null });
-    const gz = readFileSync(abs);
-    const digest = sha256(gz);
-    verifyFile(f, { sha256_gz: digest });
-    const rows = toObjects(parseCopyCsv(new TextDecoder().decode(gunzipSync(gz))));
-    verifyFile(f, { sha256_gz: digest, rows: rows.length });
+    const content = contentOf(abs);
+    const digest = content === null ? null : sha256(content);
+    verifyFile(f, { sha256_raw: digest });
+    const rows = toObjects(parseCopyCsv(new TextDecoder().decode(content!)));
+    verifyFile(f, { sha256_raw: digest, rows: rows.length });
     return rows;
   };
 
@@ -80,7 +92,8 @@ export function openLocalCopy(root: string, asOf?: string): LocalCopy {
       continue;
     }
     const abs = join(root, f.path);
-    verifyFile(f, { sha256_gz: existsSync(abs) ? sha256(readFileSync(abs)) : null });
+    const content = contentOf(abs);
+    verifyFile(f, { sha256_raw: content === null ? null : sha256(content) });
   }
 
   const files = (table: string) => all.filter((f) => tableOf(f) === table && f.path.includes("/data/"));

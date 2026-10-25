@@ -101,7 +101,7 @@ describe("executable fixtures", () => {
   };
   const file = {
     path: "csv/2026-10-01T000000Z/data/source_value_versions.2026-09-30T010000Z_2026-09-30T230000Z.csv.gz",
-    rows: 3, bytes_raw: 300, bytes_gz: 200, sha256_raw: H, sha256_gz: H, id_min: "1", id_max: "3", sum_id: "6",
+    rows: 3, bytes_raw: 300, sha256_raw: H, id_min: "1", id_max: "3", sum_id: "6",
     time_min: "2026-09-30 01:00:00.123456+00", time_max: "2026-09-30 23:00:00+00",
   };
   const table = (files: unknown[]) => ({

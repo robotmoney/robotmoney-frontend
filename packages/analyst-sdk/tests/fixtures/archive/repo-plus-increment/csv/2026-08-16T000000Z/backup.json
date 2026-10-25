@@ -16,9 +16,7 @@
           "path": "csv/2026-08-16T000000Z/data/source_value_versions.2026-08-10T120000Z_2026-08-15T230000Z.csv.gz",
           "rows": 252,
           "bytes_raw": 34325,
-          "bytes_gz": 4530,
-          "sha256_raw": "fef23a55b0fbcccd0d27fabec9433cd258a659fb08f5f3b24a4da4f60c2ab43d",
-          "sha256_gz": "f8f799b6558d236a25a95878f67ad9126677b87535e43d13b19c8fa37d4cf1b9"
+          "sha256_raw": "fef23a55b0fbcccd0d27fabec9433cd258a659fb08f5f3b24a4da4f60c2ab43d"
         }
       ]
     },
@@ -31,9 +29,7 @@
           "path": "csv/2026-08-16T000000Z/data/analytics_ledger_runs.2026-08-15T233000Z_2026-08-15T233000Z.csv.gz",
           "rows": 1,
           "bytes_raw": 224,
-          "bytes_gz": 181,
-          "sha256_raw": "e1e97215fe5ed161268ba912cb6513ab90d85187cb60ccc25316509630d90b2d",
-          "sha256_gz": "a3cfe24783464387b2dabaed7a695cae788c96429b05095cf6b485d382691c8e"
+          "sha256_raw": "e1e97215fe5ed161268ba912cb6513ab90d85187cb60ccc25316509630d90b2d"
         }
       ]
     },
@@ -46,9 +42,7 @@
           "path": "csv/2026-08-16T000000Z/data/analytics_data_vintages.2026-08-15T233000Z_2026-08-15T233000Z.csv.gz",
           "rows": 1,
           "bytes_raw": 370,
-          "bytes_gz": 257,
-          "sha256_raw": "39aaeb2206b762d3f80b1c1f32dc906cc5e2d5234a24e8d425d32ee43d0d535a",
-          "sha256_gz": "d1eaf668a1ad72c4d0170067c74946ef87e3677a17c8c1882804b8d5e004154b"
+          "sha256_raw": "39aaeb2206b762d3f80b1c1f32dc906cc5e2d5234a24e8d425d32ee43d0d535a"
         }
       ]
     },
@@ -61,9 +55,7 @@
           "path": "csv/2026-08-16T000000Z/data/analytics_vintage_members.2026-08-15T233000Z_2026-08-15T233000Z.csv.gz",
           "rows": 57,
           "bytes_raw": 2698,
-          "bytes_gz": 815,
-          "sha256_raw": "15193db7957d8ffad1f10cfc8557f9ad93423bcbd048c5a81aa35993a862d519",
-          "sha256_gz": "274859feae9aeaf3c78bef838a02f2bf7ee3aa9f7a9c8e5806528d0822a01927"
+          "sha256_raw": "15193db7957d8ffad1f10cfc8557f9ad93423bcbd048c5a81aa35993a862d519"
         }
       ]
     }

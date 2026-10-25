@@ -113,7 +113,7 @@ test(
       mkdirSync(join(root, `csv/${backup}/data`), { recursive: true });
       writeFileSync(join(root, path), gz);
       const rows = raw.trimEnd().split("\n").length - 1; // no multi-line field in these tables' fixture rows
-      append_only[table] = { watermark_before: null, watermark_after: "0", rows_added: rows, files: [{ path, rows, sha256_gz: sha(gz) }] };
+      append_only[table] = { watermark_before: null, watermark_after: "0", rows_added: rows, files: [{ path, rows, sha256_raw: sha(raw) }] };
     }
     writeFileSync(join(root, `csv/${backup}/backup.json`), JSON.stringify({ format: 1, backup, source: "db", append_only, revisions: {} }));
 

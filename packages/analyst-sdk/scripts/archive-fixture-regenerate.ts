@@ -146,10 +146,9 @@ function tablesFor(part: "all" | "b1" | "b2"): Table[] {
   return t;
 }
 
-// gzip bytes differ between zlib builds (bun 1.4.4 in CI, newer bun locally),
-// so the committed .gz is kept whenever it decompresses to exactly the rows
-// this script would write. The fixture is then judged by its content, and its
-// recorded sha256_gz stays the hash of the committed file.
+// gzip bytes differ between zlib builds, so the committed .gz is kept whenever
+// it decompresses to exactly the rows this script would write. A file's identity
+// is the hash of its uncompressed bytes (sha256_raw), never of its gzip.
 function stableGzip(path: string, raw: string): Buffer {
   if (existsSync(path)) {
     const committed = readFileSync(path);
@@ -181,7 +180,7 @@ function writeCopy(dir: string, backups: Backup[]) {
         watermark_before: before,
         watermark_after: String(max),
         rows_added: t.rows.length,
-        files: [{ path, rows: t.rows.length, bytes_raw: Buffer.byteLength(raw), bytes_gz: gz.length, sha256_raw: sha(raw), sha256_gz: sha(gz) }],
+        files: [{ path, rows: t.rows.length, bytes_raw: Buffer.byteLength(raw), sha256_raw: sha(raw) }],
       };
     }
     const record = { format: 1, backup: b.id, source: b.source, tool: { name: "archive-fixture-regenerate", commit: null }, append_only, revisions: {} };

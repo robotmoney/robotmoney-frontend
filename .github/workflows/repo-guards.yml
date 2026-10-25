@@ -62,3 +62,7 @@ jobs:
       # and scripts/tests/unit/no-swarm-email.test.ts now refuses the feature's
       # return outright — a strictly stronger guard than scanning for a
       # credential belonging to a vendor nothing calls.
+      # Issue 1444: an archive's identity is its content, never the gzip encoder
+      # or the runtime (D72). Fails if the encoder pin returns.
+      - name: Archive identity is content, not the encoder (D72)
+        run: bun test scripts/tests/unit/archive-identity-guard.test.ts
