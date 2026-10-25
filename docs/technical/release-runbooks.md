@@ -434,7 +434,7 @@ A release that adds an invariant adds a row here, with its red-control test, in 
 
 ## 11. Analyst SDK releases
 
-The analyst SDK (`packages/analyst-sdk/`) has its own release line (proposed in
+The analyst SDK (`packages/analyst-sdk/`) has its own release line (accepted in
 [D77](../decisions.md#d77)). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
 release. The SDK runs on an analyst's machine. Nothing deploys, so there is no QA branch, no stage
 run, no rc tag and no production cutover.
@@ -459,10 +459,11 @@ number separates tagged releases from them.
   the public-archive recording, the backtest and correlations fidelity and the input-rule parity
   tests.
 
-To be built: a guard that refuses a tag whose version differs from `package.json` or whose commit
-is not on an `analyst-sdk/releases-*` branch. Also to be built: both workflows add
-`analyst-sdk/releases-*` to their push branches. Until then neither workflow runs on a push to an
-SDK release branch.
+The guard is `.github/workflows/analyst-sdk-tag-guard.yml`. On a push of an `analyst-sdk-v*` tag it
+runs `scripts/check-analyst-sdk-tag.ts`, which refuses a tag whose version differs from
+`package.json` or whose commit is not on an `origin/analyst-sdk/releases-*` branch. Both workflows
+above carry `analyst-sdk/releases-*` in their push branches, so they run on a push to an SDK release
+branch.
 
 **Release notes.** Each tag gets a GitHub release. Its notes state:
 

@@ -67,7 +67,7 @@ The download client is a polite, resumable reader. It fetches archives under the
 
 - **One at a time.** One request in flight, at most 1 request a second.
 - **Retries.** Honour `Retry-After` exactly on 429 and 503. Otherwise back off with full jitter from 1 to 60 seconds, at most 5 retries per request. Do not retry any other 4xx.
-- **Identity.** Send a `User-Agent` that names the tool and its version. The version is read from the tool's `package.json`. The SDK's source clients follow the same rule with the SDK's version. A released SDK version is tagged `analyst-sdk-vA.B.C` on its own release line (proposed in [D77](../decisions.md#d77)).
+- **Identity.** Send a `User-Agent` that names the tool and its version. The version is read from the tool's `package.json`. The SDK's source clients follow the same rule with the SDK's version. A released SDK version is tagged `analyst-sdk-vA.B.C` on its own release line (accepted in [D77](../decisions.md#d77)).
 - **Estimate first.** Print the number of requests before the first one. Refuse a plan over `--max-requests` (default 500).
 - **Resumable.** An interrupted download adds no partial archive. The next run starts from the last committed watermark.
 - **Verified.** Each archive is checked against its served checksum before it joins the local copy.
