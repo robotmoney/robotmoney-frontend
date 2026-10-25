@@ -24,7 +24,7 @@ Non-goals:
 - **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, both before and after the refactor.
 - **One source of truth.** The backend runs the package's source files.
 - **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every value, date, label, null, field and serialized byte, including field ordering and number formatting. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
-- **No migrations, no retroactive change.** This work adds no database migration: no table, column, trigger, index or grant changes. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled (D74 clarification, 2026-10-22).
+- **No retroactive change.** Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled (D74 clarification, 2026-10-22).
 
 ## 3. Components
 
