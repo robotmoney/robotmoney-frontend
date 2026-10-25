@@ -243,6 +243,6 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/regime-fidelity.test.ts:7
           tests/backtest-correlations-fidelity.test.ts:7
-          tests/regime-replay-published.test.ts:1
+          tests/regime-replay-published.test.ts:5
           tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8

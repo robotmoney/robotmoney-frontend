@@ -14,11 +14,14 @@
 // day published figures computed from values no vintage holds, so its replay
 // could not reproduce its composite.
 //
-// The production record itself (every run since 2026-09-21) is not available
-// to CI: it lives in the production database, which no test may reach. Running
-// this replay against a database restored from a production dump is the same
-// loop over more rows.
+// The production record itself (every run since 2026-09-21) is not in CI: no
+// test may reach the production database. Issue 1431 replays it from the
+// format 1 backups (D72): every run in regime-replay-archive.test.ts against a
+// local copy, and a committed sample of runs in the second describe below.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
@@ -31,6 +34,8 @@ import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
+import { replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
+import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -97,4 +102,82 @@ describe("regime replay of every published run from 2026-09-21", () => {
     }
     expect(poison.attempts).toEqual([]);
   }, 300_000);
+});
+
+// Issue 1431: the same replay against the PUBLISHED PRODUCTION record, for a
+// committed sample of production runs (tests/fixtures/published-replay/,
+// written by scripts/published-replay-sample.ts from the format 1 backups,
+// D72). The sample holds only data the public API already serves (D58, D73):
+// each run's frozen vintage values as stored, and the as-of row of its
+// published regime_snapshots artifact. Every run of the record is replayed by
+// regime-replay-archive.test.ts against a local copy of the backups; required
+// CI has no copy, so it runs this sample. Each run's rebuilt input must hash to
+// the input `bun run inputs` writes for it, its replayed as-of label must equal
+// the published label, and every other field must give exactly the outcome
+// recorded from the full record (no tolerance).
+const SAMPLE_DIR = join(import.meta.dir, "fixtures/published-replay");
+
+interface SampleRun {
+  index: number;
+  runKey: string;
+  runId: string;
+  asof: string;
+  inputRows: number;
+  inputSha256: string;
+  publishedPayloadSha256: string;
+  publishedAsofRow: PublishedAsofRow;
+  replayDiffering: string[];
+  replayFirstDiff: { field: string; published: string; replay: string } | null;
+  replaySha256: string;
+}
+
+const sample = JSON.parse(readFileSync(join(SAMPLE_DIR, "runs.json"), "utf8")) as { backup: string; inputsSha256Gz: string; runs: SampleRun[] };
+const sampleGz = readFileSync(join(SAMPLE_DIR, "inputs.csv.gz"));
+const sampleLines = new TextDecoder().decode(gunzipSync(sampleGz)).trimEnd().split("\n");
+const sampleRows = sampleLines.slice(1).map((l) => {
+  const [date, series, value, kind, runs] = l.split(",") as [string, string, string, "source" | "calculated", string];
+  return { date, series, value, kind, runs: new Set(runs.split(";").map(Number)) };
+});
+
+describe("regime replay of a committed sample of published production runs (issue 1431)", () => {
+  test("the sample fixture is the one its record names", () => {
+    expect(new Bun.CryptoHasher("sha256").update(sampleGz).digest("hex")).toBe(sample.inputsSha256Gz);
+    expect(sampleLines[0]).toBe("date,series,value,kind,runs");
+    expect(sample.runs.length).toBeGreaterThanOrEqual(2);
+    for (const r of sample.runs) expect(r.asof >= LEDGER_START).toBe(true);
+  });
+
+  for (const run of sample.runs) {
+    test(`run ${run.runKey} (as of ${run.asof}) replays to its published as-of row`, () => {
+      const mine = sampleRows
+        .filter((r) => r.runs.has(run.index))
+        .map(({ date, series, value, kind }) => ({ date, series, value, kind }))
+        .sort((a, b) => (a.series < b.series ? -1 : a.series > b.series ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      expect(mine.length).toBe(run.inputRows);
+      const text = serializeInputs(mine, "csv");
+      expect(new Bun.CryptoHasher("sha256").update(text).digest("hex")).toBe(run.inputSha256);
+
+      const poison = poisonNetwork("during replay");
+      let outcome;
+      try {
+        outcome = replayPublishedRun(text, run.asof, run.publishedAsofRow);
+      } finally {
+        poison.restore();
+      }
+      expect(poison.attempts).toEqual([]);
+      expect({ run: run.runKey, asof: run.asof, label: outcome.replayLabel }).toEqual({ run: run.runKey, asof: run.asof, label: run.publishedAsofRow.regime });
+      // Every other field: exactly the outcome recorded from the full record. A
+      // pre-1421 run's numbers can differ from what it published (fresh Yahoo
+      // values, packages/analyst-sdk/README.md); those differences are named in
+      // the fixture and the whole replayed row is pinned by hash, so nothing is
+      // tolerated: any changed value, or a different set of differing fields, fails.
+      expect({ run: run.runKey, differing: outcome.differing, firstDiff: outcome.firstDiff, replaySha256: outcome.replaySha256 }).toEqual({
+        run: run.runKey,
+        differing: run.replayDiffering,
+        firstDiff: run.replayFirstDiff,
+        replaySha256: run.replaySha256,
+      });
+      if (run.replayDiffering.length > 0) console.log(`run ${run.runKey} as of ${run.asof}: label matches; recorded pre-1421 differences in ${run.replayDiffering.join(", ")}`);
+    }, 120_000);
+  }
 });
