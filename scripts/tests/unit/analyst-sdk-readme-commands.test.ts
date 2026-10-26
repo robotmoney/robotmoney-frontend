@@ -12,7 +12,7 @@
 // Then the generated inputs and reports are checked, the two fills compared,
 // and the explicit errors for missing or wrong inputs.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exportPackage, sh } from "./support/analyst-sdk-export.ts";
 
@@ -105,6 +105,38 @@ describe("README quickstart, executed", () => {
     const fetchedData = served.filter((p) => p.includes("/data/"));
     expect(fetchedData.filter((p) => p.includes("2001-01-02T000000Z")).length).toBe(recorded.filter((f) => f.startsWith("csv/2001-01-02T000000Z/data/")).length);
     for (const f of recorded) expect(readFileSync(join(DIR, "api-copy", f)).equals(readFileSync(join(RECORDING, f)))).toBe(true);
+  });
+
+  test("acquisition refuses an archive that inflates past its record's bytes_raw", async () => {
+    // Plant a record whose archive is the real one but whose bytes_raw is one byte short.
+    const rec = readdirSync(join(RECORDING, "csv")).sort()[0]!;
+    const recPath = `csv/${rec}/backup.json`;
+    const record = JSON.parse(readFileSync(join(RECORDING, recPath), "utf8"));
+    const f = Object.values(record.append_only as Record<string, { files: { path: string; bytes_raw: number }[] }>).flatMap((t) => t.files)[0]!;
+    f.bytes_raw -= 1;
+    const bad = join(DIR, "bad-recording");
+    mkdirSync(join(bad, "csv", rec), { recursive: true });
+    writeFileSync(join(bad, recPath), JSON.stringify(record));
+    mkdirSync(join(bad, f.path, ".."), { recursive: true });
+    writeFileSync(join(bad, f.path), readFileSync(join(RECORDING, f.path)));
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const rel = new URL(req.url).pathname.slice("/api/public/analytics/archive/".length);
+        const file = rel === "backups" ? undefined : join(bad, rel);
+        if (rel === "backups") return Response.json({ backups: [{ record: recPath }] });
+        return file && existsSync(file) ? new Response(readFileSync(file)) : new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const fill = acquire[0]!.replace(/^fill api-copy$/m, "fill bad-copy");
+      const r = await sh(["bash", "-euo", "pipefail", "-c", fill], DIR, { API: `http://127.0.0.1:${srv.port}/api/public/analytics` });
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain(`corrupt: ${f.path}`);
+      expect(existsSync(join(DIR, "bad-copy", recPath))).toBe(false);
+    } finally {
+      srv.stop(true);
+    }
   });
 
   test("every later command runs as written and exits 0, with no HTTP request", async () => {

@@ -83,9 +83,12 @@ fill() {
   curl -fsS --retry 8 "$API/archive/backups?limit=1000" | jq -r '.backups[].record' | while read -r rec; do
     [ -f "$1/$rec" ] && continue
     curl -fsS --retry 8 "$API/archive/$rec" -o "$1/$rec.part" --create-dirs
-    jq -r '.append_only[].files[] | "\(.sha256_raw)  \(.path)"' "$1/$rec.part" | while read -r sum path; do
+    jq -r '.append_only[].files[] | "\(.sha256_raw)  \(.bytes_raw)  \(.path)"' "$1/$rec.part" | while read -r sum raw path; do
       curl -fsS --retry 8 "$API/archive/$path" -o "$1/$path" --create-dirs
-      [ "$(gunzip -c "$1/$path" | sha256sum | cut -d' ' -f1)" = "$sum" ] || { echo "corrupt: $path" >&2; exit 1; }
+      # Read at most bytes_raw + 1 inflated bytes, so a hostile gzip cannot fill the disk.
+      gunzip -c "$1/$path" 2>/dev/null | head -c $((raw+1)) > "$1/$path.raw" || true
+      got="$(wc -c < "$1/$path.raw")"; hash="$(sha256sum < "$1/$path.raw" | cut -d' ' -f1)"; rm -f "$1/$path.raw"
+      [ "$got" = "$raw" ] && [ "$hash" = "$sum" ] || { echo "corrupt: $path" >&2; exit 1; }
     done || return 1
     mv "$1/$rec.part" "$1/$rec"
   done

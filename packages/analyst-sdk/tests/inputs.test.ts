@@ -12,6 +12,7 @@ import { openLocalCopy } from "../bin/local-copy.ts";
 import {
   ArchiveError,
   RunInputCollector,
+  inflateBounded,
   parseCopyCsv,
   selectBackups,
   serializeInputs,
@@ -347,6 +348,63 @@ describe("archive identity is the content, not the gzip encoder", () => {
     for (const make of [() => Bun.gzipSync(Buffer.from(other)), () => gzipSync(Buffer.from(other), { level: 1 })]) {
       expect(() => openLocalCopy(copyWith(make()))).toThrow(/content sha256 .* does not match the record/);
     }
+  });
+
+  const copyRecorded = (gz: Uint8Array, file: Record<string, unknown>): string => {
+    const root = copyWith(gz);
+    const rec = JSON.parse(readFileSync(join(root, `csv/${ID}/backup.json`), "utf8"));
+    rec.append_only[TABLE].files[0] = { ...rec.append_only[TABLE].files[0], ...file };
+    for (const k of Object.keys(file)) if (file[k] === undefined) delete rec.append_only[TABLE].files[0][k];
+    writeFileSync(join(root, `csv/${ID}/backup.json`), JSON.stringify(rec));
+    return root;
+  };
+
+  test("a small gzip that inflates far past the record's bytes_raw is refused, naming the file", () => {
+    // 80 MB of zeros is about 80 KB on disk: the reader must stop at bytes_raw + 1 bytes.
+    const bomb = gzipSync(Buffer.alloc(80 * 1024 * 1024));
+    expect(bomb.length).toBeLessThan(200_000);
+    const root = copyRecorded(bomb, { bytes_raw: 10 });
+    let err: unknown;
+    try {
+      openLocalCopy(root);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(ArchiveError);
+    expect((err as Error).message).toContain(PATH);
+    expect((err as Error).message).toContain("bytes_raw");
+  });
+
+  test("an inflated length of bytes_raw + 1 is refused before hashing", () => {
+    const content = CONTENT + "x";
+    const root = copyRecorded(gzipSync(Buffer.from(content)), { bytes_raw: Buffer.byteLength(CONTENT), sha256_raw: sha(content) });
+    // The record's hash matches the longer content, so only the length check can refuse it.
+    expect(() => openLocalCopy(root)).toThrow(/inflates to .*bytes_raw/);
+    // And a shorter inflate is refused the same way.
+    const short = copyRecorded(gzipSync(Buffer.from(CONTENT)), { bytes_raw: Buffer.byteLength(CONTENT) + 1 });
+    expect(() => openLocalCopy(short)).toThrow(/inflates to .*bytes_raw/);
+  });
+
+  test("inflateBounded passes maxOutputLength of min(bytes_raw, 64 MB) + 1 to gunzip", () => {
+    for (const [bytesRaw, want] of [[10, 11], [100 * 1024 * 1024, 67108865]] as const) {
+      const seen: unknown[] = [];
+      const spy = ((buf: Uint8Array, opts?: { maxOutputLength?: number }) => {
+        seen.push(opts?.maxOutputLength);
+        return new Uint8Array(bytesRaw > 1000 ? 0 : bytesRaw);
+      }) as unknown as typeof gunzipSync;
+      try {
+        inflateBounded(new Uint8Array(0), bytesRaw, "f", spy);
+      } catch (e) {
+        expect(e).toBeInstanceOf(ArchiveError);
+      }
+      expect(seen).toEqual([want]);
+      expect(want).toBe(Math.min(bytesRaw, 67108864) + 1);
+    }
+  });
+
+  test("a listed file with no sha256_raw is refused, naming the field", () => {
+    const root = copyRecorded(gzipSync(Buffer.from(CONTENT)), { sha256_raw: undefined });
+    expect(() => openLocalCopy(root)).toThrow(/sha256_raw/);
   });
 
   test("a file that is not a gzip is corrupt, and a missing one is incomplete", () => {
