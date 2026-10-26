@@ -246,7 +246,8 @@ line prints one.
 **Postflight and soak.** S01-verify-version to S06-host-guards verify identity, product (readonly tier), logs, the baseline
 comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): S07-soak-gate grades logs since
 READY, S08-soak-checks runs the standing invariants against the READY baseline, and
-S09-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+S09-collect-logs copies every container's logs and `docker inspect` into the journal. S10 to S12 (SV.8,
+from v0.7.0) run the analyst SDK against the target from the control machine, read-only. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
@@ -329,7 +330,9 @@ version check is a file `scripts/release/version-checks/<release>/<name>.ts`, ru
 `scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
 `onlyFor: stage`.
 
-`scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
+keeps the runbook it ran, unedited (the SDK steps S10 to S12 are `since: v0.7.0`, so v0.6.2's file is
+unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
@@ -389,6 +392,7 @@ recorded owner decision.
 | SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
 | SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
 | SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and prints its published report byte for byte, and the SDK package tests pass | S10-archive-routes, S11-sdk-quickstart, S12-sdk-tests |
 | SW.1 | The soak: logs since READY graded | S07-soak-gate |
 | SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
@@ -462,7 +466,8 @@ number separates tagged releases from them.
 
 **Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag
 `vA.B.C` exists. The platform runbook (QA on stage, cutover, soak) has then completed with the SDK
-checks passing, so the SDK is fully tested. Before tagging, these are green at the commit:
+checks passing (S10-archive-routes to S12-sdk-tests, and the release's own SDK version checks), so
+the SDK is fully tested. Before tagging, these are green at the commit:
 
 - the `analyst-sdk` workflow (`.github/workflows/analyst-sdk.yml`);
 - the backend analyst SDK parity tests in `.github/workflows/backend.yml`: the vintage round-trip,

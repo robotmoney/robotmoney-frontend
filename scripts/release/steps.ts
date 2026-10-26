@@ -122,6 +122,13 @@ export interface StepTemplate {
    */
   readonly maxMinutes?: number;
   /**
+   * The first release whose runbook must carry this template step (`vA.B.C`).
+   * A template that gains a step names the release that gains it, so the
+   * runbook of an earlier release, a record of what it ran, stays untouched
+   * (runbook.ts checkAddOnly). Absent: every release carries the step.
+   */
+  readonly since?: string;
+  /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
    * P01-checkout sets it: every release names a new release checkout on the host

@@ -177,3 +177,40 @@ describe("a release's scope", () => {
     expect(() => parseTemplate(text.replace('  - id: "S09-collect-logs"\n    standing: ["SW.4"]\n    host: "target"\n    phase: "soak"', '  - id: "V09-collect-logs"\n    standing: ["SW.4"]\n    host: "target"\n    phase: "version"'), "kitchen-sink")).toThrow("a template has no version checks");
   });
 });
+
+// ── a template step with `since`: the release that gains it carries it, an earlier release's runbook stays as it ran (issue 1476) ──
+describe("a template step's since", () => {
+  const sdkSteps = ["S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"];
+
+  test("the template's SDK steps name v0.7.0, and v0.6.2 (which predates them) still only adds", () => {
+    for (const id of sdkSteps) expect(template.steps.find((s) => s.id === id)?.since).toBe("v0.7.0");
+    expect(loadReleaseRunbook("v0.6.2").steps.some((s) => sdkSteps.includes(s.id))).toBe(false);
+    expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
+  });
+
+  test("v0.7.0 carries the SDK steps unmarked, ten added version checks, and every version step in its scope", () => {
+    const v070 = loadReleaseRunbook("v0.7.0");
+    for (const id of sdkSteps) expect(v070.steps.find((s) => s.id === id)?.added).toBeUndefined();
+    const versions = v070.steps.filter((s) => s.phase === "version");
+    expect(versions.length).toBe(10);
+    expect(versions.every((s) => s.added === "v0.7.0")).toBe(true);
+    // A scope entry names one check per PR. PR 1418 (D75) ships two: V03 is its entry, V04 is its second check (migrations 0126 and 0127).
+    for (const s of versions.filter((x) => x.id !== "V04-migration-ledger")) expect(v070.scope.some((e) => e.check === s.id), s.id).toBe(true);
+    expect(v070.recovery.trim()).not.toBe("");
+  });
+
+  test("red: from v0.7.0 on, a runbook without an SDK step is refused; so is one that edits it; a bad since refuses", () => {
+    const without = template.steps.filter((s) => s.id !== "S11-sdk-quickstart");
+    expect(checkAddOnly(template, runbook(without, "v0.7.0")).join()).toContain("template step S11-sdk-quickstart is missing");
+    expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain("template step S11-sdk-quickstart is missing");
+    const edited = template.steps.map((s) => (s.id === "S12-sdk-tests" ? { ...s, maxMinutes: 1 } : s));
+    expect(checkAddOnly(template, runbook(edited, "v0.7.0")).join()).toContain("S12-sdk-tests differs");
+    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+    expect(() => parseTemplate(text.replace('since: "v0.7.0"', 'since: "soon"'), "kitchen-sink")).toThrow("since is a release name");
+  });
+
+  test("a step the earlier release added under a template id it predates is still its own addition", () => {
+    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id)), { ...added("S11-sdk-quickstart", "v0.6.9"), phase: "soak" as const }];
+    expect(checkAddOnly(template, runbook(early, "v0.6.9"))).toEqual([]);
+  });
+});

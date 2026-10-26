@@ -91,7 +91,7 @@ export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, 
 
 const STEP_KEYS = new Set([
   "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
-  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added",
+  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
 /** The three phases, in the order they run (D70 as amended 2026-10-15). */
@@ -131,9 +131,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   }
   if (raw.triage !== undefined && typeof raw.triage !== "boolean") errors.push(`${at}: triage is a boolean`);
   if (raw.maxMinutes !== undefined && !(Number.isInteger(raw.maxMinutes) && (raw.maxMinutes as number) > 0)) errors.push(`${at}: maxMinutes is a positive integer`);
-  for (const k of ["cloneFrom", "gateAbsent", "added"] as const) {
+  for (const k of ["cloneFrom", "gateAbsent", "added", "since"] as const) {
     if (raw[k] !== undefined && (typeof raw[k] !== "string" || raw[k] === "")) errors.push(`${at}: ${k} is a non-empty string`);
   }
+  if (raw.since !== undefined && typeof raw.since === "string" && !/^v\d+\.\d+\.\d+$/.test(raw.since)) errors.push(`${at}: since is a release name (vA.B.C)`);
   if (errors.length > 0) return { errors };
 
   // Fixed key order inside receipts and notBefore: the hash sees them as the code wrote them before the YAML did.
@@ -143,7 +144,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
   };
-  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added"] as const) {
+  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since"] as const) {
     if (raw[k] !== undefined) step[k] = raw[k];
   }
   if (nb !== undefined) step.notBefore = { afterStep: (nb as NotBeforeTemplate).afterStep, hours: (nb as NotBeforeTemplate).hours };
@@ -230,9 +231,11 @@ function stable(v: unknown): string {
  * is. Every template step must appear, unchanged, in the template's order. Every
  * other step must carry `added: <the release>` and an id the template lacks.
  */
-export function checkAddOnly(template: Template, runbook: ReleaseRunbook): string[] {
+export function checkAddOnly(fullTemplate: Template, runbook: ReleaseRunbook): string[] {
   const out: string[] = [];
   const where = `runbook ${runbook.release}`;
+  // A template step with `since` binds the releases from that one on; an earlier release's runbook stays as it ran.
+  const template: Template = { ...fullTemplate, steps: fullTemplate.steps.filter((s) => s.since === undefined || !releaseBefore(runbook.release, s.since)) };
   if (runbook.template !== template.name) out.push(`${where}: uses template ${runbook.template}, checked against ${template.name}`);
   const templateIds = new Set(template.steps.map((s) => s.id));
   let next = 0;
@@ -243,14 +246,22 @@ export function checkAddOnly(template: Template, runbook: ReleaseRunbook): strin
       else if (t > next) for (const missed of template.steps.slice(next, t)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
       if (t >= next) next = t + 1;
       if (step.added !== undefined) out.push(`${where}: ${step.id} is a template step, so it carries no added`);
-      const { added: _added, ...body } = step;
-      if (stable(body) !== stable(template.steps[t])) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
+      const { added: _added, since: _since, ...body } = step;
+      const { since: _tsince, ...templateBody } = template.steps[t]!;
+      if (stable(body) !== stable(templateBody)) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
     } else if (step.added !== runbook.release) {
       out.push(`${where}: ${step.id} is not a template step, so it carries added: ${runbook.release}`);
     }
   }
   for (const missed of template.steps.slice(next)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
   return out;
+}
+
+/** PURE. True when release `a` (vA.B.C) is older than release `b`. */
+export function releaseBefore(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => v.replace(/^v/, "").split(".").map(Number));
+  for (let i = 0; i < 3; i++) if (x![i] !== y![i]) return x![i]! < y![i]!;
+  return false;
 }
 
 /** The path of a template. */

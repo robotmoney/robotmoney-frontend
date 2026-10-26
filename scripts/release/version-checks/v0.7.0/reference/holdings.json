@@ -1,0 +1,35 @@
+{
+  "risk_off": {
+    "USDC": 5,
+    "SUSDS": 27,
+    "SPARK": 8,
+    "GT": 12,
+    "STEAK": 2,
+    "AAVE": 35,
+    "COMP": 5,
+    "GOLD": 6,
+    "BTC": 0
+  },
+  "neutral": {
+    "USDC": 2,
+    "SUSDS": 24,
+    "SPARK": 11,
+    "GT": 12,
+    "STEAK": 7,
+    "AAVE": 28,
+    "COMP": 5,
+    "GOLD": 6,
+    "BTC": 5
+  },
+  "risk_on": {
+    "USDC": 2,
+    "SUSDS": 22,
+    "SPARK": 11,
+    "GT": 12,
+    "STEAK": 7,
+    "AAVE": 27,
+    "COMP": 5,
+    "GOLD": 4,
+    "BTC": 10
+  }
+}

@@ -42,9 +42,9 @@ describe("watchHoursFor: the slowest subject's first publish after READY", () =>
 });
 
 describe("the soak length is target data; the step list stays one list (owner, 2026-10-14)", () => {
-  test("S07-soak-gate, S08-soak-checks and S09-collect-logs wait C11-ready + watchHours in the template, and nothing else waits; a release's version checks wait too", () => {
+  test("S07-soak-gate to S12-sdk-tests wait C11-ready + watchHours in the template, and nothing else waits; a release's version checks wait too", () => {
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours]))
-      .toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"]]);
+      .toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"], ["S10-archive-routes", "C11-ready", "watchHours"], ["S11-sdk-quickstart", "C11-ready", "watchHours"], ["S12-sdk-tests", "C11-ready", "watchHours"]]);
     const versionChecks = V062.filter((s) => s.phase === "version");
     expect(versionChecks.length).toBeGreaterThan(0);
     for (const s of versionChecks) expect([s.id, s.notBefore]).toEqual([s.id, { afterStep: "C11-ready", hours: "watchHours" }]);
