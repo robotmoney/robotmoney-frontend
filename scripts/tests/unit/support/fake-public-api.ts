@@ -13,6 +13,8 @@ export const RUN_KEY = "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2";
 export const COMMIT = "a".repeat(40);
 
 export interface FakeOptions {
+  /** The recorded archive to serve; default the committed recording. */
+  recording?: string;
   /** Published reports: the list rows; empty means the target has none. */
   reports?: { run_key: string; asof: string; bytes: Uint8Array }[];
   /** Plant: answer the archive routes with this status. */
@@ -49,7 +51,7 @@ export function fakeNet(opts: FakeOptions = {}): Net & { requests: string[] } {
     if (p.startsWith(`${API}/archive/`)) {
       if (opts.archiveStatus) return json({ error: "x" }, opts.archiveStatus);
       const rel = p.slice(`${API}/archive/`.length);
-      const file = join(RECORDING, rel === "backups" ? "backups.json" : rel);
+      const file = join(opts.recording ?? RECORDING, rel === "backups" ? "backups.json" : rel);
       if (!existsSync(file) || rel.includes("..")) return json({ error: "not found" }, 404);
       const raw = readFileSync(file);
       const content = rel.endsWith(".gz") ? gunzipSync(raw) : raw;

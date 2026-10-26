@@ -330,6 +330,11 @@ version check is a file `scripts/release/version-checks/<release>/<name>.ts`, ru
 `scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
 `onlyFor: stage`.
 
+A release that carries a `compat: breaking` migration on purpose names the file in `breaking:` (D75, §8.5). P07-baseline
+reads the release from `RM_RELEASE` (set by the runner from the target file) and accepts a breaking pending migration only
+when that release's runbook names it. The cutover steps still run the rolling order: the breaking order (down, migrate, up)
+is the release's `notes`, and a runner variant of it is not built.
+
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
 keeps the runbook it ran, unedited (the SDK steps S10 to S12 are `since: v0.7.0`, so v0.6.2's file is
 unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
@@ -392,7 +397,7 @@ recorded owner decision.
 | SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
 | SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
 | SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
-| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and prints its published report byte for byte, and the SDK package tests pass | S10-archive-routes, S11-sdk-quickstart, S12-sdk-tests |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | S10-archive-routes, S11-sdk-quickstart, S12-sdk-tests |
 | SW.1 | The soak: logs since READY graded | S07-soak-gate |
 | SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |

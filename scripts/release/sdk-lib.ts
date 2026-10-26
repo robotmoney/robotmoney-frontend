@@ -121,14 +121,6 @@ export function copyDifferences(a: Record<string, string>, b: Record<string, str
   return out;
 }
 
-/** PURE. Why the printed report is not the published one; empty when they are the same bytes. */
-export function reportDifferences(printed: Uint8Array, published: Uint8Array): string[] {
-  const [p, q] = [sha256Hex(printed), sha256Hex(published)];
-  if (p === q) return [];
-  const hint = sha256Hex(text(printed).replace(/\n$/, "")) === q ? " (they differ only by the printed report's final newline)" : "";
-  return [`the printed report is not the published one: sha256 ${p} (${printed.length} bytes) against ${q} (${published.length} bytes)${hint}`];
-}
-
 export interface CheckResult {
   readonly found: Record<string, unknown>;
   readonly problems: string[];
@@ -145,8 +137,12 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
 /**
  * S11: the SDK quickstart from a sparse clone of the release commit against the
  * target. `fill`, then `bun run inputs --archive <copy> --run <latest run>`,
- * then `bun run regime <inputs.csv> --replay --asof <date>`; the printed report
- * must hash to the bytes `/reports?run=<key>` serves.
+ * then `bun run regime <inputs.csv> --replay --asof <date>` (it must run), then
+ * scripts/release/replay-row.ts: the SDK's as-of row for the run is compared,
+ * field by field and by the sha256 of its canonical JSON, with the as-of row of
+ * the run's published `regime_snapshots` artifact (the comparison of PR 1448).
+ * The published report (`/reports?run=`) is {asof, toolId, results}, which the
+ * CLI never prints, so it is not compared byte for byte.
  */
 export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
@@ -163,11 +159,15 @@ export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<Ch
   if (inputs.code !== 0) return { found, problems: [`bun run inputs --run ${run_key} exited ${inputs.code}: ${tail(inputs.stderr)}`] };
   const regime = await deps.run(["bun", "run", "regime", join(out, "inputs.csv"), "--replay", "--asof", asof], { cwd: sdk.sdkDir });
   if (regime.code !== 0) return { found, problems: [`bun run regime --replay --asof ${asof} exited ${regime.code}: ${tail(regime.stderr)}`] };
-  const res = await getWithRetry(deps.net, `${PUBLIC_API}/reports?run=${encodeURIComponent(run_key)}`);
-  if (res.status !== 200) return { found, problems: [`GET ${PUBLIC_API}/reports?run=${run_key} answered ${res.status}`] };
-  const published = new Uint8Array(await res.arrayBuffer());
-  Object.assign(found, { printed_sha256: sha256Hex(regime.stdout), published_sha256: sha256Hex(published), printed_bytes: regime.stdout.length, published_bytes: published.length });
-  return { found, problems: reportDifferences(regime.stdout, published) };
+  const cmp = await deps.run(
+    ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv")],
+    { cwd: sdk.sdkDir },
+  );
+  let body: { problems?: string[]; publishedSha256?: string | null; replaySha256?: string; differing?: string[] } = {};
+  try { body = JSON.parse(text(cmp.stdout)); } catch { /* reported below */ }
+  Object.assign(found, { publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null });
+  if (cmp.code === 0 && body.problems?.length === 0) return { found, problems: [] };
+  return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
 }
 
 /** S12: the SDK package's own tests pass at the release commit. */

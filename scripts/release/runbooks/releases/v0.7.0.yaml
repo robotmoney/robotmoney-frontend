@@ -19,13 +19,31 @@ notes: |
   Migrations (D75, issue 1034):
   - 0126_pipeline_worker_token_and_receipts: compat additive. The pipeline-worker token holder
     and the api's ingestion receipts.
-  - 0127_rm_worker_retired: compat BREAKING. rm_worker loses every privilege. By spec section
-    8.5 a breaking migration is not run under the serving release: the order is down, migrate,
-    boot. P07-baseline refuses a pending migration that is not `compat: additive`, and
-    C05-migrate runs under the running release, so the production cutover of this release needs
-    its own plan under section 8.5 and an owner decision before the preflight. This file does
-    not make that decision. V04-migration-ledger asserts the ledger ends at the last migration
-    and nothing is pending.
+  - 0127_rm_worker_retired: compat BREAKING. rm_worker loses every privilege. The `breaking:`
+    list below declares it, and only a release that names a file there may carry a breaking
+    pending migration: P07-baseline (which reads the release from RM_RELEASE, set by the runner
+    from the target file) refuses any other. D75's accepted costs put a release that carries 0127
+    under spec section 8.5's breaking order, and issue 1220 provides the maintenance page and the
+    off-host fallback for the window.
+
+  Breaking-order plan (stage only until the owner cuts an rc; nothing here touches production):
+  1. Maintenance page on for the window (issue 1220): nginx answers /api/ from the maintenance
+     fallback and the off-host fallback page is in place.
+  2. bun smoke:down: the stack stops (the previous release no longer serves).
+  3. bun run migrate: 0126 and 0127 apply with rm_owner, against the stopped stack.
+  4. bun smoke --static-port: the full stack comes up on this release (the website switch and the
+     probe grade as in the rolling case).
+  5. Maintenance page off. Rollback is closed after the migrate (spec section 8.4): fix forward
+     on v0.7.1, or restore the C01-backup dump with the write loss it implies.
+
+  NOT BUILT. The template's cutover steps still run the rolling order: C05-migrate migrates under
+  the running release, C10-rolling-boot replaces services one at a time, and C13-probe-grade fails
+  the release on any probe answer that is not 200 or any gap, which the maintenance window breaks.
+  Making the cutover follow down, migrate, up needs a runner change this release does not carry:
+  a breaking-order variant of C04 to C13 (a smoke:down step before the migrate, a full boot in
+  place of the rolling one, the maintenance page on and off around them, and a probe grade that
+  allows the declared window). P07-baseline accepts the declaration and the steps do not yet
+  follow it.
 
   Added checks. S10 to S12 (SV.8) are the template's: the archive routes, the SDK quickstart
   and the SDK tests, from a sparse clone of the release commit, on the control machine.
@@ -34,6 +52,8 @@ notes: |
   commit; the reference portfolio, prices, holdings and golden are in
   scripts/release/version-checks/v0.7.0/reference/. Every check is read-only against the
   target. V02, V05 and S11 need a published run; on a target with none they fail and name it.
+breaking:
+  - 0127_rm_worker_retired.sql
 recovery: |
   0126 is compat: additive. 0127 is compat: breaking and takes every privilege from rm_worker.
   - Before the migrate step (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a
@@ -509,7 +529,7 @@ steps:
     host: "control"
     phase: "soak"
     since: "v0.7.0"
-    description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the printed report equals the run's published report byte for byte (sha256). A target with no published run fails"
+    description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
     cmds:
       - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
     expectExit: 0

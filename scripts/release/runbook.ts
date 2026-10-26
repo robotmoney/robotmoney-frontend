@@ -47,6 +47,12 @@ export interface ReleaseRunbook {
   readonly template: TemplateName;
   /** The release's prose: identity, migrations, exceptions and owner decisions. The runner reads none of it. */
   readonly notes?: string;
+  /**
+   * Pending migrations the release declares `compat: breaking` and carries on purpose (spec §8.5: bun smoke:down,
+   * bun run migrate, bun smoke --static-port). P07-baseline refuses any breaking pending migration the release
+   * does not name here. Absent: every pending migration must be additive.
+   */
+  readonly breaking?: readonly string[];
   /** The recovery decision (SC.1): what to do before, at and after the first irreversible step. Required; the runner journals its sha256. */
   readonly recovery: string;
   /** Every PR the release ships, each with the step that checks it or why none does (Q05-scope proves the list complete). */
@@ -195,17 +201,20 @@ export function parseReleaseRunbook(text: string, release: string): ReleaseRunbo
   const where = `runbook ${release}`;
   const errors: string[] = [];
   if (!isObject(doc)) throw new Error(`${where}: not a mapping`);
-  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "scope", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
+  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "scope", "breaking", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
   if (typeof doc.recovery !== "string" || doc.recovery.trim() === "") errors.push(`${where}: recovery is the release's recovery decision, as text (SC.1)`);
   if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (doc.release !== release) errors.push(`${where}: names release ${String(doc.release)}`);
   const template = doc.template ?? DEFAULT_TEMPLATE;
   if (!isTemplateName(template)) errors.push(`${where}: template ${String(template)} is not one of ${TEMPLATE_NAMES.join(", ")}`);
+  if (doc.breaking !== undefined && !(isStringArray(doc.breaking) && doc.breaking.length > 0 && doc.breaking.every((n) => /^\d{4}_[a-z0-9_]+\.sql$/.test(n)))) {
+    errors.push(`${where}: breaking is a non-empty list of migration file names (NNNN_name.sql)`);
+  }
   const steps = parseSteps(doc.steps, where, errors);
   errors.push(...scopeProblems(doc.scope, steps, where));
   if (errors.length > 0) throw new Error(errors.join("\n"));
   const scope = (doc.scope as Record<string, unknown>[]).map((e) => ({ pr: e.pr as number, what: e.what as string, ...(typeof e.check === "string" ? { check: e.check } : {}), ...(typeof e.none === "string" ? { none: e.none } : {}) }));
-  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), recovery: doc.recovery as string, scope: deepFreeze(scope), steps: deepFreeze(steps) };
+  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), ...(doc.breaking !== undefined ? { breaking: doc.breaking as string[] } : {}), recovery: doc.recovery as string, scope: deepFreeze(scope), steps: deepFreeze(steps) };
 }
 
 /** PURE. The recovery decision a release runbook's YAML text holds, or undefined. Reads that one key only. */
