@@ -49,21 +49,24 @@ export class ArchiveError extends Error {
 export const MAX_PART_BYTES = 67108864;
 
 // Inflate a downloaded archive with its output bounded by the record's bytes_raw
-// (never more than one part, plus one byte to see an overrun), so a small hostile
+// (at most one part, plus one byte to see an overrun; a bytes_raw over the part cap is refused), so a small hostile
 // gzip cannot exhaust memory. Refuses a file whose inflated length is not exactly
 // bytesRaw, before anything hashes it. `gunzip` is a parameter so a test can spy
 // on the options it is given.
 export function inflateBounded(buf: Uint8Array, bytesRaw: number, path = "archive", gunzip: typeof gunzipSync = gunzipSync): Uint8Array {
   if (!Number.isSafeInteger(bytesRaw) || bytesRaw < 0) throw new ArchiveError(`corrupt local copy: ${path} has no valid bytes_raw in its record (got ${JSON.stringify(bytesRaw)})`);
+  const overCap = () => new ArchiveError(`corrupt local copy: ${path} records bytes_raw ${bytesRaw}, over the ${MAX_PART_BYTES} byte part cap`);
   let out: Uint8Array;
   try {
     out = gunzip(buf, { maxOutputLength: Math.min(bytesRaw, MAX_PART_BYTES) + 1 });
   } catch (err) {
     if ((err as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") {
+      if (bytesRaw > MAX_PART_BYTES) throw overCap();
       throw new ArchiveError(`corrupt local copy: ${path} inflates to more than the record's bytes_raw ${bytesRaw}`);
     }
     throw err;
   }
+  if (bytesRaw > MAX_PART_BYTES) throw overCap();
   if (out.length !== bytesRaw) throw new ArchiveError(`corrupt local copy: ${path} inflates to ${out.length} bytes, the record says bytes_raw ${bytesRaw}`);
   return out;
 }

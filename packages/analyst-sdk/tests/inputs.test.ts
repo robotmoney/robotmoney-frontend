@@ -408,6 +408,11 @@ describe("archive identity is the content, not the gzip encoder", () => {
     expect(() => inflateBounded(gzipSync(Buffer.alloc(MAX + 1)), MAX, "f")).toThrow(ArchiveError);
   });
 
+  test("a bytes_raw over the 64 MiB part cap is refused, even when the gzip inflates to exactly that length", () => {
+    const MAX = 67108864;
+    expect(() => inflateBounded(gzipSync(Buffer.alloc(MAX + 1)), MAX + 1, "big.csv.gz")).toThrow(/big\.csv\.gz.*67108864 byte part cap/);
+  });
+
   test("a listed file with no sha256_raw is refused, naming the field", () => {
     const root = copyRecorded(gzipSync(Buffer.from(CONTENT)), { sha256_raw: undefined });
     expect(() => openLocalCopy(root)).toThrow(/sha256_raw/);
