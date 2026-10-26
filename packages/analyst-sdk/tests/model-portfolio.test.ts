@@ -108,13 +108,13 @@ describe("the model portfolio inventory", () => {
     expect(base.proxy!.provenance).toContain("PR 1397");
   });
 
-  test("every Base universe asset with a series is in the inventory; an asset without one would be a recorded limitation", () => {
+  test("every Base universe asset with a series is in the inventory; an asset without one names why in its unavailable marker", () => {
     const universe = loadUniverse();
     expect(universe.assets.length).toBeGreaterThan(0);
     for (const a of universe.assets) {
-      // An asset with no price history names no series: it must then be named in a limitation.
+      // An asset the model portfolio inputs do not read names no series: its unavailable marker says why.
       if (a.series === null) {
-        expect(inventory.series.some((s) => s.limitation?.includes(a.id))).toBe(true);
+        expect(a.unavailable?.series, `${a.id}: null series without a reason`).toMatch(/\S/);
         continue;
       }
       expect(byId.has(a.series), `${a.id}: ${a.series} missing from the inventory`).toBe(true);
