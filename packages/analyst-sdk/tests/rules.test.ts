@@ -160,7 +160,7 @@ describe("validateRuleFile names the field", () => {
     r.states.risk_on.BTC = 12; r.states.risk_on.AAVE = 25;
     expect(validateRuleFile(r)).toEqual([
       "states.risk_on.BTC: risk_on: BTC at 12% is over its cap of 10%",
-      "states.risk_on: risk_on: group Bitcoin (BTC) at 12% is over its cap of 10%",
+      "states.risk_on: risk_on: group Bitcoin (BTC, TBTC, LBTC, WBTC) at 12% is over its cap of 10%",
     ]);
   });
 
