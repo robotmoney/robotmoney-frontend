@@ -18,6 +18,7 @@ import { SMART_CONTRACT_RISKS } from "./lib/smart-contract-risks-index.js";
 // The token page's FAQ and its two addresses: the page's structured data
 // repeats the FAQ word for word (seo-token-faq.test.ts holds them together).
 import { TOKEN_FAQ, TOKEN_CONTRACT } from "./lib/token-faq.js";
+import { PROJECT_COPY, projectCopy } from "./lib/project-copy.js";
 
 const ORIGIN = "https://robotmoney.network";
 const SITE_NAME = "Robot Money";
@@ -190,15 +191,12 @@ const META = {
     title: "Apply to the Investment Swarm | Robot Money",
     description: "Bring your agent to the Robot Money Investment Swarm: generate an Ed25519 identity locally, submit a signed application, then file signed takes over REST.",
   },
+  // Indexed since RM-186, when the directory moved onto the figures RM-180's
+  // audit found accurate. In sitemap.xml with the project pages that have our
+  // own copy (lib/project-copy.js).
   "/projects": {
-    title: "Agentic Economy Ecosystem — Robot Money",
-    description: "Track market cap, FDV, revenue, and wallet balances across onchain AI agent projects and Zero Human Companies in the agent economy on Base.",
-    // Kept out of the index while the table is backed by the development seed
-    // (issue #346). /projects is also out of sitemap.xml, so this is the second
-    // of the two places that would otherwise advertise it. `follow` so the
-    // page's own outbound links keep their value. (The third was the ANALYTICS
-    // nav item, removed until that surface actually serves.)
-    robots: "noindex, follow",
+    title: "Agent Projects | Robot Money",
+    description: "AI agents, agent-run companies and x402 payment services on Base: each project's token price, market cap and FDV, and the agents and wallets behind it.",
   },
   "/media": {
     title: "Media Coverage & Press | Robot Money",
@@ -666,17 +664,10 @@ const NOT_FOUND_META = {
 const DASH_STUB_PARAM_PREFIXES = ["/agents/"];
 const DASH_SHIPPED_DETAIL_PARAM_PREFIXES = ["/lobster/", "/vaults/", "/wallets/"];
 
-// `/projects/:slug` ProjectProfile (issue #389, §5.5, P3.1). Real content now
-// ships (unlike the stub prefixes above), but per §6's provenance table this
-// route stays `noindex` at launch, same as `/projects` (the list) — both are
-// still behind the same PROJECTS_SOURCE=live cutover (issue #346) and this
-// page's Holdings/Activity sections are honestly empty until P1.6 lands.
-// `follow` (not `nofollow` like the DASH_STUB entries) because this page's own
-// facet-table links (→ /agents/:id etc.) are real content worth a crawler
-// following once those targets exist, unlike a placeholder page linking
-// nowhere. The per-slug display name isn't known synchronously here (this
-// runs before the page's own data fetch), so the title is generic rather than
-// fabricated from the slug.
+// `/projects/:slug`, a project's page (RM-186). A project we have written up
+// (lib/project-copy.js) is indexed under its own name and our description of
+// it; any other is `noindex, follow`, since all it has to say about itself is
+// its launchpad listing. Its page sets the real name once its data arrives.
 const PROJECT_PROFILE_PREFIX = "/projects/";
 
 /**
@@ -772,9 +763,12 @@ export function metaFor(pathname) {
     }
   }
   if (p.startsWith(PROJECT_PROFILE_PREFIX)) {
+    const copy = projectCopy(p.slice(PROJECT_PROFILE_PREFIX.length));
+    // Our own project's page would otherwise name the site twice.
+    if (copy) return { title: copy.name === SITE_NAME ? `${SITE_NAME} | Agent Projects` : `${copy.name} | Agent Projects | ${SITE_NAME}`, description: copy.short };
     return {
-      title: "Project Profile — Robot Money Analytics",
-      description: "Token metrics, revenue, and treasury breakdown for a tracked agentic-economy project.",
+      title: "Agent Project | Robot Money",
+      description: "An AI agent or agent-run project on Base: its token, agents and wallets.",
       robots: "noindex, follow",
     };
   }
@@ -861,6 +855,7 @@ export function researchRoutes() {
  */
 export function routeStructuredData(pathname) {
   const p = canonicalPath(pathname);
+  if (p === "/projects" || p.startsWith(PROJECT_PROFILE_PREFIX)) return projectsGraph(p);
   const m = META[p] || POST_META[p];
   if (m?.faq) return faqGraph(p, { ...m, faq: m.faq });
   if (!m || !m.type) return null;
@@ -937,6 +932,74 @@ export function routeStructuredData(pathname) {
     };
   }
   return { "@context": "https://schema.org", "@graph": [node, ...(m.nodes ? m.nodes(url) : []), breadcrumb] };
+}
+
+/**
+ * The agent projects directory and a project's page (RM-186). The directory is
+ * a CollectionPage whose list is the projects we have written up, the same
+ * set sitemap.xml lists; a written-up project's page is a WebPage about that
+ * project, with its own links as sameAs. A page we have not written up is
+ * noindex and gets none. Every value comes from lib/project-copy.js, never
+ * from the path or the API.
+ *
+ * @param {string} p canonical path
+ * @returns {Record<string, unknown> | null}
+ */
+function projectsGraph(p) {
+  const dirUrl = ORIGIN + "/projects";
+  const trail = [{ name: "Home", url: ORIGIN + "/" }, { name: "Agent projects", url: dirUrl }];
+  if (p === "/projects") {
+    const m = META["/projects"];
+    const node = {
+      "@type": "CollectionPage",
+      "@id": dirUrl + "#page",
+      name: "Agent Projects",
+      description: m.description,
+      url: dirUrl,
+      isPartOf: { "@id": ORIGIN + "/#website" },
+      publisher: ORG,
+      inLanguage: "en",
+      mainEntity: {
+        "@type": "ItemList",
+        itemListElement: Object.entries(PROJECT_COPY).map(([slug, c], i) => ({
+          "@type": "ListItem",
+          position: i + 1,
+          url: `${dirUrl}/${slug}`,
+          name: c.name,
+        })),
+      },
+    };
+    return { "@context": "https://schema.org", "@graph": [node, breadcrumbNode(dirUrl, trail)] };
+  }
+  const slug = p.slice(PROJECT_PROFILE_PREFIX.length);
+  const c = projectCopy(slug);
+  if (!c) return null;
+  const url = `${dirUrl}/${slug}`;
+  const sameAs = [c.website, c.x ? `https://x.com/${c.x}` : ""].filter(Boolean);
+  const node = {
+    "@type": "WebPage",
+    "@id": url + "#page",
+    name: c.name,
+    description: c.short,
+    url,
+    isPartOf: { "@id": dirUrl + "#page" },
+    publisher: ORG,
+    inLanguage: "en",
+    about: { "@type": "Thing", "@id": url + "#project", name: c.name, description: c.long, ...(sameAs.length ? { sameAs } : {}) },
+  };
+  return { "@context": "https://schema.org", "@graph": [node, breadcrumbNode(url, [...trail, { name: c.name, url }])] };
+}
+
+/**
+ * @param {string} url the page's own URL
+ * @param {{ name: string; url: string }[]} trail
+ */
+function breadcrumbNode(url, trail) {
+  return {
+    "@type": "BreadcrumbList",
+    "@id": url + "#breadcrumb",
+    itemListElement: trail.map((c, i) => ({ "@type": "ListItem", position: i + 1, name: c.name, item: c.url })),
+  };
 }
 
 /**

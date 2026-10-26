@@ -1,38 +1,29 @@
-// Render + interaction tests for the ported /projects directory (issue #70;
-// fidelity upgrades from issue #388, §5.4). Same harness as
-// analytics-views.spec.ts: the SPA + view HTML are served by the backend at
-// baseURL, vendor CDN scripts are fulfilled from node_modules, and the
-// /api/projects response is STUBBED with a deterministic DTO so the assertions are
-// network-free. We verify routing to /projects, table row rendering with the a2
-// tokens, facet pills, the inline sparkline, interactive column sorting, the
-// Definitions dialog, column drag-resize persistence, the synced scroll
-// mirror, and row links to the profile route.
+// Render + interaction tests for the /projects directory (RM-186). The SPA
+// and view HTML are served at baseURL, vendor CDN scripts are fulfilled from
+// node_modules, and /api/projects is STUBBED with a deterministic DTO, so the
+// assertions are network-free. Covered: the two lists (projects with a token,
+// as a sortable table; every other project by name), the figures each row
+// carries and the ones it must not, links to the project pages, the nav and
+// the robots directive, and a phone that never scrolls sideways.
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PROJECT_COPY } from "../../public/assets/js/app/lib/project-copy.js";
+import { mockVendorScripts } from "./vendor-scripts.ts";
 import { navigate } from "./navigation.ts";
 
-const vendorScripts = {
-  "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
-    "node_modules/alpinejs/dist/cdn.min.js",
-  "https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js":
-    "node_modules/chart.js/dist/chart.umd.min.js",
-  "https://cdn.jsdelivr.net/npm/p5@1.11.2/lib/p5.min.js":
-    "node_modules/p5/lib/p5.min.js",
-};
-
-// Deterministic /api/projects payload (matches the @robotmoney/contract Project DTO
-// the projectsView() factory consumes). Alpha leads on the default fdv-desc sort;
-// Zeta has the higher wallet balance; Sticky is pinned first on load despite 0 mcap.
-// (issue #346: revenue30d is no longer part of the DTO — dropped here too.)
+// Deterministic /api/projects payload (the @robotmoney/contract Project DTO).
+// Alpha leads on market cap; Zeta's price is unknown; three projects have no
+// token, two of them x402 services.
 const PROJECTS = {
   projects: [
     {
       id: "p-sticky", slug: "sticky", displayName: "Sticky Co", logoUrl: null,
-      description: "pinned on first load", websiteUrl: null, twitterHandle: null,
+      description: "Discovered from Virtuals Protocol (STK)", websiteUrl: null, twitterHandle: null,
       dataCoverageScore: 60, isSticky: true,
       facets: { agent: true, x402: false, coin: false, wallet: false, vault: false },
       coins: [], wallets: [], walletTotalUsd: 0,
-      maxMarketCap: 0, maxFdv: 0, sparkline: [],
+      maxMarketCap: 0, maxFdv: 0, sparkline: [], tvlUsd: 0,
     },
     {
       id: "p-alpha", slug: "alpha", displayName: "Alpha Labs",
@@ -40,11 +31,10 @@ const PROJECTS = {
       websiteUrl: "https://alpha.example/", twitterHandle: "@alpha",
       dataCoverageScore: 92, isSticky: false,
       facets: { agent: true, x402: true, coin: true, wallet: true, vault: true },
-      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2, priceUsd: 1.5, volume24h: 800_000, refreshedAt: null, stale: true }],
+      coins: [{ id: "c-alp", ticker: "ALP", name: "Alpha", marketCap: 12_000_000, fdv: 40_000_000, percentChange24h: 4.2, priceUsd: 1.5, volume24h: 800_000, refreshedAt: "2026-10-20T14:10:00Z", stale: false }],
       wallets: [{ id: "w1", label: "Treasury", chain: "base", balanceUsd: 1500, refreshedAt: null, stale: true }],
       walletTotalUsd: 1500,
-      maxMarketCap: 12_000_000, maxFdv: 40_000_000, sparkline: [1.0, 1.1, 1.3, 1.5],
-      volume24h: 800_000, tvlUsd: 1_000_000,
+      maxMarketCap: 12_000_000, maxFdv: 40_000_000, sparkline: [1.0, 1.1, 1.3, 1.5], tvlUsd: 1_000_000,
     },
     {
       id: "p-zeta", slug: "zeta", displayName: "Zeta Systems",
@@ -55,7 +45,7 @@ const PROJECTS = {
       coins: [{ id: "c-zet", ticker: "ZET", name: "Zeta", marketCap: 3_000_000, fdv: 6_000_000, percentChange24h: -2.1, priceUsd: null, volume24h: null, refreshedAt: null, stale: true }],
       wallets: [{ id: "w-zet", label: "Zeta Treasury", chain: "base", balanceUsd: 9000, refreshedAt: null, stale: true }],
       walletTotalUsd: 9000,
-      maxMarketCap: 3_000_000, maxFdv: 6_000_000, sparkline: [2.0, 1.8, 1.6],
+      maxMarketCap: 3_000_000, maxFdv: 6_000_000, sparkline: [2.0, 1.8, 1.6], tvlUsd: 0,
     },
     {
       id: "p-tokenless-active", slug: "tokenless-active", displayName: "Tokenless Active",
@@ -64,7 +54,7 @@ const PROJECTS = {
       dataCoverageScore: 60, isSticky: false,
       facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
       coins: [], wallets: [], walletTotalUsd: 0,
-      maxMarketCap: 0, maxFdv: 0, sparkline: [100, 200, 300],
+      maxMarketCap: 0, maxFdv: 0, sparkline: [100, 200, 300], tvlUsd: 0,
     },
     {
       id: "p-tokenless-empty", slug: "tokenless-empty", displayName: "Tokenless Empty",
@@ -73,98 +63,172 @@ const PROJECTS = {
       dataCoverageScore: 60, isSticky: false,
       facets: { agent: true, x402: true, coin: false, wallet: false, vault: false },
       coins: [], wallets: [], walletTotalUsd: 0,
-      maxMarketCap: 0, maxFdv: 0, sparkline: [],
-    }
+      maxMarketCap: 0, maxFdv: 0, sparkline: [], tvlUsd: 0,
+    },
   ],
 };
 
 async function stubEnvironment(page: Page) {
-  for (const [url, file] of Object.entries(vendorScripts)) {
-    await page.route(url, (route) => route.fulfill({
-      path: join(process.cwd(), file),
-      contentType: "application/javascript",
-    }));
-  }
+  await mockVendorScripts(page);
   await page.route("**/api/projects*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PROJECTS) }));
 }
 
-const rowNames = (page: Page) => page.locator(".pj-table tbody tr .pj-name__text");
+const tokenRows = (page: Page) => page.locator(".pjd__tokens tbody tr");
+const tokenNames = (page: Page) => page.locator(".pjd__tokens tbody th .pjd__lnk");
 
-test("routes to /projects and renders the directory table with a2 tokens", async ({ page }) => {
+test("renders the directory: projects with a token, then every other project", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
   await navigate(page, "/projects");
 
-  // Header + a2 gradient token.
-  await expect(page.locator(".a2-hero__title")).toContainText("Agentic Economy");
-  await expect(page.locator(".a2-hero__title .a2-grad")).toBeVisible();
+  await expect(page.locator(".a2-hero__title")).toHaveText("Agent Projects");
+  const meta = page.locator(".pjd__meta");
+  await expect(meta).toContainText("Projects 5");
+  await expect(meta).toContainText("With a token 2");
+  await expect(meta).toContainText("x402 services 3");
+  await expect(meta).toContainText("Oct 20, 14:10 UTC");
 
-  // Data present → the "No projects yet." empty state must not be shown (issue #87).
-  await expect(page.locator(".pj-status", { hasText: "No projects yet" })).toBeHidden();
+  // Market cap, largest first.
+  await expect(tokenRows(page)).toHaveCount(2);
+  await expect(tokenNames(page)).toHaveText(["Alpha Labs", "Zeta Systems"]);
+  const alpha = tokenRows(page).filter({ hasText: "Alpha Labs" });
+  await expect(alpha).toContainText("ALP");
+  await expect(alpha).toContainText("$1.5");
+  await expect(alpha).toContainText("+4.2%");
+  await expect(alpha).toContainText("$12.00M");
+  await expect(alpha).toContainText("$40.00M");
+  await expect(alpha).toContainText("30.0%"); // MC/FDV
+  await expect(alpha).toContainText("92"); // coverage
+  await expect(alpha.locator(".pjd__facets")).toHaveText("Agent · x402 · Token · Wallet · Vault");
+  await expect(alpha.locator(".pjd__trend svg")).toHaveCount(1);
+  await expect(alpha.locator(".alp__mv")).toHaveClass(/\bup\b/);
+  await expect(tokenRows(page).filter({ hasText: "Zeta Systems" }).locator(".alp__mv")).toHaveText("−2.1%");
+  await expect(page.locator(".pjd")).not.toContainText("Development data");
 
-  // One row per project in the stub.
-  await expect(page.locator(".pj-table tbody tr")).toHaveCount(5);
-
-  // Alpha's row surfaces its aggregated numbers — every metric comes from the
-  // /api/projects DTO the pipelines populate (market cap, 24h change, wallet).
-  const alpha = page.locator(".pj-table tbody tr", { hasText: "Alpha Labs" });
-  await expect(alpha).toContainText("$12.00M"); // max market cap
-  await expect(alpha).toContainText("$40.00M"); // max fdv
-  await expect(alpha).toContainText("+4.20%");  // 24h change
-  await expect(alpha).toContainText("$1.5K");   // wallet balance (no revenue column, issue #346)
-  await expect(alpha.locator(".pj-link", { hasText: "alpha.example" })).toBeVisible();
-  await expect(alpha.locator(".pj-link", { hasText: "@alpha" })).toBeVisible();
-
-  // Facet pills: all five present, all lit for Alpha.
-  const alphaPills = alpha.locator(".pj-pill");
-  await expect(alphaPills).toHaveCount(5);
-  await expect(alpha.locator(".pj-pill--on")).toHaveCount(5);
-
-  // Inline sparkline SVG renders for a project with a price series.
-  await expect(alpha.locator("svg.pj-spark")).toBeVisible();
-
-  // Tokenless x402 row renders sparkline <polyline> when activity exists, em-dash when absent.
-  const tokenlessAct = page.locator(".pj-table tbody tr", { hasText: "Tokenless Active" });
-  await expect(tokenlessAct.locator("svg.pj-spark polyline")).toBeVisible();
-
-  const tokenlessEmp = page.locator(".pj-table tbody tr", { hasText: "Tokenless Empty" });
-  await expect(tokenlessEmp.locator(".pj-spark-empty")).toBeVisible();
+  // The rest, by name, an x402 service saying so and a scraped "Discovered
+  // from" line never shown.
+  const others = page.locator(".pjd__others tbody tr");
+  await expect(others).toHaveCount(3);
+  await expect(others.locator(".pjd__lnk")).toHaveText(["Sticky Co", "Tokenless Active", "Tokenless Empty"]);
+  await expect(others.filter({ hasText: "Tokenless Active" })).toContainText("x402 service");
+  await expect(others.filter({ hasText: "Tokenless Active" }).locator(".pjd__trend svg")).toHaveCount(1);
+  await expect(page.locator(".pjd")).not.toContainText("Discovered from");
 });
 
-// ANALYTICS is unpublished: neither the dead external destination nor the
-// development-only in-domain table may be advertised in the shell.
-test("ANALYTICS is absent and /projects is de-advertised", async ({ page }) => {
+// A figure the data cannot back reads "Missing", with why, never a wrong
+// number: the wallet balance counts ETH only, and a trend needs two readings.
+test("shows Missing where the data cannot back a figure", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  const alpha = tokenRows(page).filter({ hasText: "Alpha Labs" });
+  const wallet = alpha.locator(".rm-missing");
+  await expect(wallet).toHaveText("Missing");
+  await expect(wallet).toHaveAttribute("title", /ETH only/);
+  await expect(alpha).toContainText("1 wallet");
+  await expect(alpha).not.toContainText("$1.5K");
+
+  // No wallets is "—", not Missing; no trend is Missing.
+  const empty = page.locator(".pjd__others tbody tr").filter({ hasText: "Tokenless Empty" });
+  await expect(empty.locator(".pjd__trend .rm-missing")).toHaveAttribute("title", /two daily readings/);
+  await expect(empty.locator("td").nth(1)).toContainText("—");
+});
+
+test("the agents and services table pages and searches", async ({ page }) => {
+  const many = structuredClone(PROJECTS);
+  for (let i = 0; i < 60; i++) {
+    many.projects.push({ ...structuredClone(PROJECTS.projects[0]), id: `p-n${i}`, slug: `n${i}`, displayName: `Agent ${String(i).padStart(2, "0")}`, isSticky: false });
+  }
+  await mockVendorScripts(page);
+  await page.route("**/api/projects*", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(many) }));
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  const rows = page.locator(".pjd__others tbody tr");
+  await expect(rows).toHaveCount(50);
+  await expect(page.locator(".rr-pager [role=status]")).toHaveText("1 to 50 of 63");
+  await page.locator(".rr-pager button", { hasText: "Next" }).click();
+  await expect(rows).toHaveCount(13);
+  await expect(page.locator(".rr-pager [role=status]")).toHaveText("51 to 63 of 63");
+
+  await page.locator("#others-q").fill("tokenless");
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator(".rr-pager")).toHaveCount(0);
+  await page.locator("#others-q").fill("nothing like it");
+  await expect(rows).toHaveText(["No project matches"]);
+});
+
+test("a column heading sorts the table and says which way", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  const mcap = page.locator(".pjd__tokens thead th.pjd__mc");
+  await expect(mcap).toHaveAttribute("aria-sort", "descending");
+  await mcap.locator(".rr-sort").click();
+  await expect(mcap).toHaveAttribute("aria-sort", "ascending");
+  await expect(tokenNames(page)).toHaveText(["Zeta Systems", "Alpha Labs"]);
+
+  const name = page.locator(".pjd__tokens thead th").first();
+  await name.locator(".rr-sort").click();
+  await expect(name).toHaveAttribute("aria-sort", "ascending");
+  await expect(mcap).not.toHaveAttribute("aria-sort", /.+/);
+  await expect(tokenNames(page)).toHaveText(["Alpha Labs", "Zeta Systems"]);
+});
+
+test("every row links to its project's page", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+
+  await expect(tokenRows(page).filter({ hasText: "Alpha Labs" }).locator("a.pjd__who")).toHaveAttribute("href", "/projects/alpha");
+  await expect(page.locator(".pjd__others a.pjd__who", { hasText: "Sticky Co" })).toHaveAttribute("href", "/projects/sticky");
+});
+
+test("the directory is in the nav and the footer, and indexed", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
 
-  // Desktop and mobile nav omit the item, and no link retains either destination.
-  const analytics = page.locator('.nav a:has-text("Analytics")');
-  await expect(analytics).toHaveCount(0);
+  await expect(page.locator('.nav a.nav__item[href="/projects"]')).toHaveCount(1);
+  await expect(page.locator('.footer a[href="/projects"]')).toHaveCount(1);
+  // The dead analytics subdomain stays unlinked.
   await expect(page.locator('a[href="https://analytics.robotmoney.net/projects"]')).toHaveCount(0);
-  await expect(page.locator('a[href="/projects"]')).toHaveCount(0);
 
-  // The route still resolves for anyone holding the URL, and says what backs it.
   await navigate(page, "/projects");
-  await expect(page.locator(".pj-provenance")).toBeVisible();
-  await expect(page.locator(".pj-provenance")).toContainText("seeded for development");
-
-  // ...but it asks not to be indexed, and the directive is restored on the way out
-  // so a noindex route cannot leak onto the next one.
-  //
-  // Keep these as retrying matchers as defense in depth. `navigate` now waits
-  // for the router's matching rm:view-changed event, so the route metadata is
-  // already applied when it resolves.
-  const robots = page.locator('meta[name="robots"]');
-  await expect(robots).toHaveAttribute("content", "noindex, follow");
-  await navigate(page, "/regime");
-  await expect(robots).toHaveAttribute("content", "index, follow, max-image-preview:large, max-snippet:-1");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "index, follow, max-image-preview:large, max-snippet:-1");
+  await expect(page.locator('.nav__group[data-nav-section="research"] > .nav__top')).toHaveClass(/nav__top--active/);
 });
 
+test("a phone reads the directory without scrolling sideways", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/projects");
+  await expect(tokenRows(page)).toHaveCount(2);
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  // The name, the token, its market cap and its move; the price and the FDV
+  // are on the project's page.
+  const alpha = tokenRows(page).filter({ hasText: "Alpha Labs" });
+  await expect(alpha.locator(".pjd__mc")).toBeVisible();
+  await expect(alpha.locator(".pjd__pct")).toBeVisible();
+  await expect(alpha.locator(".pjd__fdv")).toBeHidden();
+});
+
+// navigate() resolves on the router's own completion event for the route it
+// asked for, never on one for a route it left. Starts from a project page
+// that is not indexed, so a stale directive would show.
 test("navigate waits for the completion event for its requested route", async ({ page }) => {
   await stubEnvironment(page);
+  await page.route(/\/api\/projects\/[^/]+$/, (route) =>
+    route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "project not found" }) }));
   await page.goto("/");
-  await navigate(page, "/projects");
+  await navigate(page, "/projects/sticky");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex, follow");
 
   await page.route("**/views/regime.html", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -172,7 +236,7 @@ test("navigate waits for the completion event for its requested route", async ({
   });
   await page.evaluate(() => {
     window.addEventListener("popstate", () => {
-      window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname: "/projects" } }));
+      window.dispatchEvent(new CustomEvent("rm:view-changed", { detail: { pathname: "/projects/sticky" } }));
     }, { once: true });
   });
 
@@ -198,91 +262,12 @@ test("navigate rejects within its configured timeout when completion never arriv
   );
 });
 
-// Issue #388 (P2.8, docs/bot-analytics-ui-port-plan.md §5.4): fidelity
-// upgrades on the existing /projects directory — Definitions dialog, dual
-// synced horizontal scrollbars, column resizing with localStorage
-// persistence, and row links to the (still-stubbed) /projects/:slug profile
-// route. Item 4 (sticky-left Project column) and item 6 (wallet/facet
-// tooltips) were already shipped before this issue (native `title` attrs +
-// `.a2-sticky`), so no new coverage is added for those.
-
-test("row name links to the project profile route (§5.4 item 5)", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/projects");
-
-  const alphaLink = page.locator(".pj-table tbody tr", { hasText: "Alpha Labs" }).locator("a.pj-name__link");
-  await expect(alphaLink).toHaveAttribute("href", "/projects/alpha");
-});
-
-test("Definitions dialog lists a term for every column and closes on Escape (§5.4 item 1)", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/projects");
-
-  await expect(page.locator(".pj-dialog-overlay")).toBeHidden();
-  await page.locator(".pj-defs-trigger").click();
-  await expect(page.locator(".pj-dialog-overlay")).toBeVisible();
-
-  const terms = page.locator(".pj-defs__item dt");
-  await expect(terms).toHaveCount(13);
-  await expect(page.locator(".pj-defs__item", { hasText: "Wallet Balance" })).toBeVisible();
-
-  await page.keyboard.press("Escape");
-  await expect(page.locator(".pj-dialog-overlay")).toBeHidden();
-});
-
-test("column drag-resize persists to localStorage['projects-col-widths-v2'] (§5.4 item 3)", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/projects");
-
-  const handle = page.locator('[data-col-resize="mcap"]');
-  const box = await handle.boundingBox();
-  if (!box) throw new Error("resize handle not found");
-
-  const startX = box.x + box.width / 2;
-  const startY = box.y + box.height / 2;
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  await page.mouse.move(startX + 80, startY, { steps: 5 });
-  await page.mouse.up();
-
-  const stored = await page.evaluate(() => localStorage.getItem("projects-col-widths-v2"));
-  expect(stored).not.toBeNull();
-  const widths = JSON.parse(stored as string);
-  expect(widths.mcap).toBeGreaterThanOrEqual(130 + 80 - 5); // allow small rounding slack
-});
-
-test("the top scroll mirror stays in sync with the table's horizontal scroll (§5.4 item 2)", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/projects");
-
-  // Widen nothing needed — the table is already wider than the viewport with
-  // 12 fixed-width columns; scroll the main container and assert the mirror
-  // follows, then the reverse.
-  await page.locator(".pj-scroll").evaluate((el) => { el.scrollLeft = 40; });
-  await expect(page.locator(".pj-scroll-mirror")).toHaveJSProperty("scrollLeft", 40);
-
-  await page.locator(".pj-scroll-mirror").evaluate((el) => { el.scrollLeft = 15; });
-  await expect(page.locator(".pj-scroll")).toHaveJSProperty("scrollLeft", 15);
-});
-
-test("sticky project pins first on load; clicking a header re-sorts and releases the pin", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/projects");
-
-  await expect(rowNames(page)).toHaveCount(5);
-  // First load: sticky pinned first, then market cap desc (Alpha > Zeta > Tokenless...).
-  await expect(rowNames(page)).toHaveText(["Sticky Co", "Alpha Labs", "Zeta Systems", "Tokenless Active", "Tokenless Empty"]);
-
-  // Sort by Wallet Balance desc → Zeta (9000) leads, sticky pin released.
-  await page.locator(".pj-table thead .pj-sort", { hasText: "Wallet Balance" }).click();
-  await expect(rowNames(page)).toHaveText(["Zeta Systems", "Alpha Labs", "Sticky Co", "Tokenless Active", "Tokenless Empty"]);
-
-  // Toggle to ascending → order reverses (ties keep their original relative order).
-  await page.locator(".pj-table thead .pj-sort", { hasText: "Wallet Balance" }).click();
-  await expect(rowNames(page)).toHaveText(["Sticky Co", "Tokenless Active", "Tokenless Empty", "Alpha Labs", "Zeta Systems"]);
+// The project pages in sitemap.xml are exactly the ones we have written up:
+// a page with copy that is not listed is never crawled, and one listed
+// without copy is noindex, which a sitemap must not advertise.
+test("the sitemap lists exactly the project pages we have written up", () => {
+  const xml = readFileSync(join(__dirname, "../../public/sitemap.xml"), "utf8");
+  const listed = [...xml.matchAll(/<loc>https:\/\/robotmoney\.network\/projects\/([^<]+)<\/loc>/g)].map((m) => m[1]).sort();
+  expect(listed).toEqual(Object.keys(PROJECT_COPY).sort());
+  expect(xml).toContain("<loc>https://robotmoney.network/projects</loc>");
 });

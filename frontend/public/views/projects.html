@@ -1,336 +1,182 @@
-<!-- Projects — "Agentic Economy Ecosystem" directory
-     Ported from robotmoney-bot-analytics/src/pages/Projects.tsx (Supabase → the
-     new Bun/Postgres backend, issue #70). Buildless: the table is driven by the
-     boot-registered projectsView() factory (alpine/views.js) over /api/projects.
-     Uses the a2 design tokens (shared with /performance + /allocation). Inline
-     <style> applies when the router injects this fragment; the inline factory is
-     registered at boot, not here (router injects via innerHTML — scripts are dead).
--->
+<!-- Agent projects (RM-186): the directory of the agent economy on Base that
+     the roster pipeline tracks (backend/src/projects). The hero, a row of
+     facts, then two tables: the projects with a token, sorted by market cap,
+     and every other project by name. Each links to its page.
 
-<section class="a2 container" x-data="projectsView()" x-init="load()">
+     Every field the roster has is shown. One the data cannot back yet reads
+     "Missing" (.rm-missing) with the reason on hover, never a wrong number:
+     a wallet balance counts native ETH only, and a trend needs two daily
+     readings. They fill in as frontend issues 1359 to 1365 land.
 
-  <!-- Header — full-bleed hero, matching /performance + /allocation -->
+     Factory: projectsView() (alpine/views/projects.js). Copy and the list of
+     projects that are indexed: lib/project-copy.js. -->
+<section class="pjd" x-data="projectsView()" x-init="load()">
+
   <header class="a2-hero">
     <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
     <div class="a2-hero__inner">
-      <h1 class="a2-hero__title">Agentic Economy <span class="a2-grad">Ecosystem</span></h1>
-      <p class="a2-hero__lede">
-        Zero Human Companies, onchain AI agents, and other AI-native economics
-        experiments. Market cap, FDV, and wallet balances per project, with the
-        facets each one covers.
-      </p>
+      <h1 class="a2-hero__title">Agent Projects</h1>
+      <p class="a2-hero__lede">AI agents, agent-run companies and x402 payment services on Base, with their tokens' market data and the agents and wallets behind them.</p>
     </div>
   </header>
 
-  <!-- Provenance (issue #346). The rows this table renders come from the
-       development seed (backend/src/projects/demo-seed.ts, behind
-       DEMO_SEED_PROJECTS), which synthesizes figures for real, named companies.
-       Remove this notice in the same change that gives /api/projects a real
-       source.
+  <div class="pjd__body rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the directory</p>
 
-       The pointer to analytics.robotmoney.net is GONE along with the nav item
-       it referred to: that surface does not serve yet, and sending a reader who
-       has just been told this data is synthetic to a dead link is the worst of
-       both. Restore both together when analytics is released. -->
-  <p class="pj-status pj-provenance">
-    Development data. These figures are seeded for development and are not a
-    published record of any company.
-  </p>
-
-  <!-- States -->
-  <p x-show="loading" class="pj-status">Loading…</p>
-  <p x-show="error" x-text="error" class="pj-status pj-status--error" x-cloak></p>
-  <p x-show="!loading && !error && rows.length === 0" class="pj-status" x-cloak>
-    No projects yet.
-  </p>
-
-  <!-- Table toolbar: Definitions dialog trigger (§5.4 item 1; D9 keeps the
-       dialog regardless of the BrandHeader-chrome decision, which is
-       deferred to the P5.3 pixel-QA sweep). -->
-  <div class="pj-toolbar" x-show="!loading && rows.length > 0" x-cloak>
-    <button type="button" class="pj-defs-trigger" @click="defsOpen = true" aria-haspopup="dialog">
-      <span aria-hidden="true">?</span> What am I looking at?
-    </button>
-  </div>
-
-  <!-- Definitions dialog: one <dt>/<dd> per column, matching this table's
-       actual columns (the original's "Revenue 30d" term is replaced by
-       "Social" here — issue #346 already dropped the revenue column for
-       lacking a non-fabricated source; documenting a term for a column that
-       does not exist would not be fidelity). -->
-  <div
-    class="pj-dialog-overlay"
-    x-show="defsOpen"
-    x-cloak
-    @click.self="defsOpen = false"
-    @keydown.escape.window="defsOpen = false"
-  >
-    <div class="pj-dialog" role="dialog" aria-modal="true" aria-labelledby="pj-defs-title">
-      <div class="pj-dialog__head">
-        <h2 id="pj-defs-title">Column definitions</h2>
-        <button type="button" class="pj-dialog__close" @click="defsOpen = false" aria-label="Close">×</button>
-      </div>
-      <dl class="pj-defs">
-        <div class="pj-defs__item"><dt>Project</dt><dd>The tracked company or protocol this row aggregates.</dd></div>
-        <div class="pj-defs__item"><dt>Market Cap</dt><dd>Largest market cap across the project's coins.</dd></div>
-        <div class="pj-defs__item"><dt>FDV</dt><dd>Fully-diluted valuation at max total supply, per coin.</dd></div>
-        <div class="pj-defs__item"><dt>MC/FDV</dt><dd>Market cap as a percentage of FDV — how much supply is circulating.</dd></div>
-        <div class="pj-defs__item"><dt>24h %</dt><dd>Largest-magnitude 24-hour price move across the project's coins.</dd></div>
-        <div class="pj-defs__item"><dt>30d</dt><dd>30-day price trend sparkline for the project's primary coin.</dd></div>
-        <div class="pj-defs__item"><dt>Data Quality</dt><dd>Coverage score reflecting how complete this project's tracked data is.</dd></div>
-        <div class="pj-defs__item"><dt>Description</dt><dd>Short overview of what the project does.</dd></div>
-        <div class="pj-defs__item"><dt>Website</dt><dd>The project's official website, if known.</dd></div>
-        <div class="pj-defs__item"><dt>Social</dt><dd>The project's X/Twitter handle, if known.</dd></div>
-        <div class="pj-defs__item"><dt>Facets</dt><dd>Which economic roles the project covers: agent, x402, coin, wallet, vault.</dd></div>
-        <div class="pj-defs__item"><dt>Wallet Balance</dt><dd>Summed USD balance across the project's tracked wallets.</dd></div>
-        <div class="pj-defs__item"><dt>Caveats</dt><dd>Figures come from the source noted above the table — see that notice for what backs this page today.</dd></div>
-      </dl>
+    <div class="rr-meta pjd__meta">
+      <template x-for="f in facts()" :key="f.k">
+        <span class="rr-meta__i"><span x-text="f.k"></span> <b x-text="f.v"></b></span>
+      </template>
     </div>
+
+    <p class="sv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <!-- The swarm pages' skeleton (views.css .sv__skel): it holds the height
+         the two tables will take, so nothing below jumps when they land. -->
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-rows">
+        <div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div>
+        <div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-rows">
+        <div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div><div class="sv__skel-row"></div>
+      </div>
+    </div>
+
+    <!-- ── With a token: one row per project, its largest token's figures. -->
+    <section class="rr-sec" id="tokens" aria-labelledby="tokens-h" x-show="!loading">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="tokens-h">With a token</h2>
+      </div>
+      <div class="rr-tablewrap rr-tablewrap--tips">
+        <table class="rr-table pjd__tokens" aria-labelledby="tokens-h">
+          <thead>
+            <tr>
+              <th scope="col" :aria-sort="ariaSort('name')"><button type="button" class="rr-sort" @click="sortBy('name')">Project</button></th>
+              <th scope="col">Token</th>
+              <th scope="col" class="q pjd__price">Price</th>
+              <th scope="col" class="q pjd__pct" :aria-sort="ariaSort('pct')"><button type="button" class="rr-sort" @click="sortBy('pct')">24h</button></th>
+              <th scope="col" class="q pjd__mc" :aria-sort="ariaSort('mcap')"><button type="button" class="rr-sort" @click="sortBy('mcap')">Market cap</button></th>
+              <th scope="col" class="q pjd__fdv" :aria-sort="ariaSort('fdv')"><button type="button" class="rr-sort" @click="sortBy('fdv')">FDV</button><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What FDV means">i</button><span class="rm-tip__bub" role="tooltip">Fully diluted valuation: the token's price times its maximum supply.</span></span></th>
+              <th scope="col" class="q pjd__x">MC/FDV<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What MC/FDV means">i</button><span class="rm-tip__bub" role="tooltip">Market cap as a share of FDV: how much of the supply circulates.</span></span></th>
+              <th scope="col" class="q pjd__x">30d</th>
+              <th scope="col" class="q pjd__x">Wallets</th>
+              <th scope="col" class="q pjd__x" :aria-sort="ariaSort('coverage')"><button type="button" class="rr-sort" @click="sortBy('coverage')">Coverage</button><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What coverage means">i</button><span class="rm-tip__bub" role="tooltip">How complete the record of this project is, out of 100: its identity, its onchain facets and its recent activity.</span></span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in tokenRows()" :key="r.p.id">
+              <tr>
+                <th scope="row">
+                  <a class="pjd__who" :href="r.href">
+                    <template x-if="r.p.logoUrl"><img class="pjd__logo" :src="r.p.logoUrl" alt="" loading="lazy" width="28" height="28"></template>
+                    <template x-if="!r.p.logoUrl"><span class="pjd__logo pjd__logo--none" aria-hidden="true" x-text="initials(r.name)"></span></template>
+                    <span class="pjd__name">
+                      <span class="pjd__lnk" x-text="r.name"></span>
+                      <small x-show="r.short" x-text="r.short"></small>
+                      <small class="pjd__facets" x-text="r.facets"></small>
+                    </span>
+                  </a>
+                </th>
+                <td class="pjd__tk" x-text="r.tickers"></td>
+                <td class="q pjd__price" x-text="tokenPrice(r.price)"></td>
+                <td class="q pjd__pct"><span class="alp__mv" :class="pctClass(r.pct)" x-text="pctText(r.pct)"></span></td>
+                <td class="q pjd__mc" x-text="usdCompact(r.mcap)"></td>
+                <td class="q pjd__fdv" x-text="usdCompact(r.fdv)"></td>
+                <td class="q pjd__x" x-text="r.mcfdv"></td>
+                <td class="q pjd__x pjd__trend">
+                  <template x-if="r.trend"><span x-html="r.trend"></span></template>
+                  <template x-if="!r.trend"><span class="rm-missing" :title="r.trendCell.why" x-text="r.trendCell.text"></span></template>
+                </td>
+                <td class="q pjd__x">
+                  <span :class="r.wallet.missing && 'rm-missing'" :title="r.wallet.why" x-text="r.wallet.text"></span>
+                  <small x-show="r.walletCount" x-text="`${r.walletCount} ${r.walletCount === 1 ? 'wallet' : 'wallets'}`"></small>
+                </td>
+                <td class="q pjd__x" x-text="r.coverage"></td>
+              </tr>
+            </template>
+            <template x-if="!tokenRows().length">
+              <tr><td class="rr-table__empty" colspan="10"><span class="rr-empty__t" x-text="loading ? 'Loading' : (error ? 'No data available' : 'No data yet')"></span></td></tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <p class="rr-note">Each project's largest token, priced across every market it trades on, from CoinGecko and DexScreener. The 30-day line is its price.</p>
+    </section>
+
+    <!-- ── Agents and services with no token of their own, by name. -->
+    <section class="rr-sec" id="agents" aria-labelledby="agents-h" x-show="!loading">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="agents-h">Agents and services</h2>
+        <div class="rr-search" role="search">
+          <label class="rm-visually-hidden" for="others-q">Search agents and services</label>
+          <input class="rr-search__in" id="others-q" type="search" maxlength="200" placeholder="Name or what it does"
+                 autocomplete="off" spellcheck="false"
+                 @input.debounce.200ms="searchOthers($event.target.value)" @search="searchOthers($event.target.value)">
+        </div>
+      </div>
+      <div class="rr-tablewrap rr-tablewrap--tips">
+        <table class="rr-table pjd__others" aria-labelledby="agents-h">
+          <thead>
+            <tr>
+              <th scope="col">Project</th>
+              <th scope="col" class="q pjd__x">30d</th>
+              <th scope="col" class="q pjd__x">Wallets</th>
+              <th scope="col" class="q pjd__x">Coverage</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="r in otherPageRows()" :key="r.p.id">
+              <tr>
+                <th scope="row">
+                  <a class="pjd__who" :href="r.href">
+                    <template x-if="r.p.logoUrl"><img class="pjd__logo" :src="r.p.logoUrl" alt="" loading="lazy" width="28" height="28"></template>
+                    <template x-if="!r.p.logoUrl"><span class="pjd__logo pjd__logo--none" aria-hidden="true" x-text="initials(r.name)"></span></template>
+                    <span class="pjd__name">
+                      <span class="pjd__lnk" x-text="r.name"></span>
+                      <small x-show="r.short || r.kind" x-text="r.short || r.kind"></small>
+                      <small class="pjd__facets" x-text="r.facets"></small>
+                    </span>
+                  </a>
+                </th>
+                <td class="q pjd__x pjd__trend">
+                  <template x-if="r.trend"><span x-html="r.trend"></span></template>
+                  <template x-if="!r.trend"><span class="rm-missing" :title="r.trendCell.why" x-text="r.trendCell.text"></span></template>
+                </td>
+                <td class="q pjd__x">
+                  <span :class="r.wallet.missing && 'rm-missing'" :title="r.wallet.why" x-text="r.wallet.text"></span>
+                  <small x-show="r.walletCount" x-text="`${r.walletCount} ${r.walletCount === 1 ? 'wallet' : 'wallets'}`"></small>
+                </td>
+                <td class="q pjd__x" x-text="r.coverage"></td>
+              </tr>
+            </template>
+            <template x-if="!otherRows().length">
+              <tr><td class="rr-table__empty" colspan="4"><span class="rr-empty__t" x-text="loading ? 'Loading' : error ? 'No data available' : othersQuery ? 'No project matches' : 'No data yet'"></span></td></tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <template x-if="othersPaged()">
+        <nav class="rr-pager" aria-label="Agents and services pages">
+          <span role="status" x-text="othersRange()"></span>
+          <div>
+            <button type="button" class="rr-btn" :disabled="othersPage === 0" @click="othersPage -= 1">Previous</button>
+            <button type="button" class="rr-btn" :disabled="!othersMore()" @click="othersPage += 1">Next</button>
+          </div>
+        </nav>
+      </template>
+      <p class="rr-note">For an x402 service, the 30-day line is its payment activity.</p>
+    </section>
   </div>
-
-  <!-- Synced top scrollbar mirror (§5.4 item 2): a thin bar above the table
-       whose scrollLeft stays in lockstep with the main scroll container, so a
-       wide table can be scrolled from a bar that is always visible even when
-       the table body itself is tall. -->
-  <div
-    class="pj-scroll-mirror hide-x-scrollbar-visual"
-    x-ref="scrollMirror"
-    @scroll="onMirrorScroll($event)"
-    x-show="!loading && rows.length > 0"
-    x-cloak
-  >
-    <div :style="{ width: tableWidth + 'px' }"></div>
-  </div>
-
-  <!-- Directory table -->
-  <div class="a2-table__scroll pj-scroll hide-x-scrollbar-visual" x-ref="scrollMain" @scroll="onMainScroll($event)" x-show="!loading && rows.length > 0" x-cloak>
-    <table class="a2-table pj-table" :style="{ tableLayout: 'fixed', width: tableWidth + 'px' }">
-      <colgroup>
-        <col :style="{ width: colWidths.name + 'px' }">
-        <col :style="{ width: colWidths.mcap + 'px' }">
-        <col :style="{ width: colWidths.fdv + 'px' }">
-        <col :style="{ width: colWidths.mcfdv + 'px' }">
-        <col :style="{ width: colWidths.pct24h + 'px' }">
-        <col :style="{ width: colWidths.spark + 'px' }">
-        <col :style="{ width: colWidths.score + 'px' }">
-        <col :style="{ width: colWidths.desc + 'px' }">
-        <col :style="{ width: colWidths.website + 'px' }">
-        <col :style="{ width: colWidths.social + 'px' }">
-        <col :style="{ width: colWidths.facets + 'px' }">
-        <col :style="{ width: colWidths.wallet + 'px' }">
-      </colgroup>
-      <thead>
-        <tr>
-          <th class="a2-sticky pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('name') && 'pj-sort--active'" @click="sortBy('name')">
-              Project <span class="pj-sort__i" x-text="sortIcon('name')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('name', $event)" data-col-resize="name"></span>
-          </th>
-          <th class="pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('mcap') && 'pj-sort--active'" @click="sortBy('mcap')">
-              Market Cap <span class="pj-sort__i" x-text="sortIcon('mcap')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('mcap', $event)" data-col-resize="mcap"></span>
-          </th>
-          <th class="pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('fdv') && 'pj-sort--active'" @click="sortBy('fdv')">
-              FDV <span class="pj-sort__i" x-text="sortIcon('fdv')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('fdv', $event)" data-col-resize="fdv"></span>
-          </th>
-          <th class="pj-resizable">MC/FDV
-            <span class="pj-resize-handle" @mousedown="startResize('mcfdv', $event)" data-col-resize="mcfdv"></span>
-          </th>
-          <th class="pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('pct24h') && 'pj-sort--active'" @click="sortBy('pct24h')">
-              24h % <span class="pj-sort__i" x-text="sortIcon('pct24h')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('pct24h', $event)" data-col-resize="pct24h"></span>
-          </th>
-          <th class="pj-resizable">30d
-            <span class="pj-resize-handle" @mousedown="startResize('spark', $event)" data-col-resize="spark"></span>
-          </th>
-          <th class="pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('score') && 'pj-sort--active'" @click="sortBy('score')">
-              Data Quality <span class="pj-sort__i" x-text="sortIcon('score')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('score', $event)" data-col-resize="score"></span>
-          </th>
-          <th class="pj-l pj-resizable">Description
-            <span class="pj-resize-handle" @mousedown="startResize('desc', $event)" data-col-resize="desc"></span>
-          </th>
-          <th class="pj-l pj-resizable">Website
-            <span class="pj-resize-handle" @mousedown="startResize('website', $event)" data-col-resize="website"></span>
-          </th>
-          <th class="pj-l pj-resizable">Social
-            <span class="pj-resize-handle" @mousedown="startResize('social', $event)" data-col-resize="social"></span>
-          </th>
-          <th class="pj-l pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('facets') && 'pj-sort--active'" @click="sortBy('facets')">
-              Facets <span class="pj-sort__i" x-text="sortIcon('facets')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('facets', $event)" data-col-resize="facets"></span>
-          </th>
-          <th class="pj-resizable">
-            <button type="button" class="pj-sort" :class="isSort('wallet') && 'pj-sort--active'" @click="sortBy('wallet')">
-              Wallet Balance <span class="pj-sort__i" x-text="sortIcon('wallet')"></span>
-            </button>
-            <span class="pj-resize-handle" @mousedown="startResize('wallet', $event)" data-col-resize="wallet"></span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        <template x-for="row in sortedRows" :key="row.p.id">
-          <tr>
-            <!-- Project — links to the profile route (§5.4 item 5; routes.js
-                 already wires /projects/:slug ungated, issue #380). -->
-            <td class="a2-sticky pj-name">
-              <a class="pj-name__link" :href="profileHref(row.p)">
-                <div class="pj-name__inner">
-                  <template x-if="row.p.logoUrl">
-                    <img :src="row.p.logoUrl" alt="" class="pj-logo" loading="lazy" />
-                  </template>
-                  <template x-if="!row.p.logoUrl">
-                    <span class="pj-logo pj-logo--fallback" x-text="initials(row.p.displayName)"></span>
-                  </template>
-                  <span class="pj-name__text" x-text="row.p.displayName"></span>
-                </div>
-              </a>
-            </td>
-
-            <!-- Market Cap (per coin) -->
-            <td class="a2-r">
-              <template x-if="row.p.coins.length > 0">
-                <div>
-                  <template x-for="c in row.p.coins" :key="c.id + '-mc'">
-                    <div class="pj-coinline"><i x-text="c.ticker || '?'"></i> <span x-text="fmtUsd(c.marketCap)"></span></div>
-                  </template>
-                </div>
-              </template>
-              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
-            </td>
-
-            <!-- FDV (per coin) -->
-            <td class="a2-r">
-              <template x-if="row.p.coins.length > 0">
-                <div>
-                  <template x-for="c in row.p.coins" :key="c.id + '-fdv'">
-                    <div class="pj-coinline"><i x-text="c.ticker || '?'"></i> <span x-text="fmtUsd(c.fdv)"></span></div>
-                  </template>
-                </div>
-              </template>
-              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
-            </td>
-
-            <!-- MC/FDV -->
-            <td class="a2-r" x-text="mcFdvPct(row.p)"></td>
-
-            <!-- 24h % (per coin) -->
-            <td class="a2-r">
-              <template x-if="row.p.coins.length > 0">
-                <div>
-                  <template x-for="c in row.p.coins" :key="c.id + '-pct'">
-                    <div class="pj-coinline" :style="`color:${pctColor(c.percentChange24h)}`" x-text="pctText(c.percentChange24h)"></div>
-                  </template>
-                </div>
-              </template>
-              <span x-show="row.p.coins.length === 0" class="a2-dim">—</span>
-            </td>
-
-            <!-- 30d sparkline -->
-            <td class="pj-c"><span x-html="sparkSvg(row.p.sparkline)"></span></td>
-
-            <!-- Data quality -->
-            <td class="a2-r pj-score" x-text="row.p.dataCoverageScore ?? '—'"></td>
-
-            <!-- Description -->
-            <td class="pj-l pj-desc"><span x-text="row.p.description || '—'"></span></td>
-
-            <!-- Website -->
-            <td class="pj-l">
-              <template x-if="row.p.websiteUrl">
-                <a :href="row.p.websiteUrl" target="_blank" rel="noreferrer" class="pj-link" x-text="cleanUrl(row.p.websiteUrl)"></a>
-              </template>
-              <span x-show="!row.p.websiteUrl" class="a2-dim">—</span>
-            </td>
-
-            <!-- Social -->
-            <td class="pj-l">
-              <template x-if="row.p.twitterHandle">
-                <a :href="twitterUrl(row.p.twitterHandle)" target="_blank" rel="noreferrer" class="pj-link" x-text="twitterLabel(row.p.twitterHandle)"></a>
-              </template>
-              <span x-show="!row.p.twitterHandle" class="a2-dim">—</span>
-            </td>
-
-            <!-- Facets -->
-            <td class="pj-l">
-              <div class="pj-facets">
-                <template x-for="f in facetPills(row.p)" :key="f.label">
-                  <span class="pj-pill" :class="f.on ? 'pj-pill--on' : 'pj-pill--off'" :title="f.hint" x-text="f.label"></span>
-                </template>
-              </div>
-            </td>
-
-            <!-- Wallet balance -->
-            <td class="a2-r">
-              <template x-if="row.p.wallets.length > 0">
-                <div :title="row.p.wallets.map(w => w.label + ' (' + (w.chain || '?') + '): ' + fmtUsd(w.balanceUsd)).join('\n')">
-                  <span x-text="fmtUsd(row.p.walletTotalUsd)"></span>
-                  <i x-text="row.p.wallets.length + (row.p.wallets.length !== 1 ? ' wallets' : ' wallet')"></i>
-                </div>
-              </template>
-              <span x-show="row.p.wallets.length === 0" class="a2-dim">—</span>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
-  </div>
-
 </section>
 
 <style>
-/* ── a2 base tokens (this fragment carries its own copy; the router-injected view
-      does not load /performance's inline styles) ─────────────────────────────── */
-.a2 {
-  max-width: 80rem;
-  margin: 0 auto;
-  /* No top padding: the hero below is full-bleed, so container padding
-     above it pushes the whole band down and the headline lands 48px lower
-     than every other page. Matches /allocation and /performance. */
-  padding: 0 1.5rem 5rem;
-  color: var(--color-text);
-}
-.a2-eyebrow {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.3em;
-  color: var(--color-accent);
-  margin-bottom: 1rem;
-}
-.a2-grad {
-  color: var(--color-text);
-  font-style: normal;
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-}
-.a2-section__head { margin-bottom: 2rem; }
-.a2-section__lede {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  margin: 0.75rem 0 0;
-  max-width: 46rem;
-  line-height: 1.6;
-}
-.a2-dim { color: var(--color-text-muted); }
+.pjd { background: var(--color-void); color: var(--color-text); padding: 0 0 5rem; font-family: var(--font-sans); }
 
-/* Hero — full-bleed (breaks out of the 1400px .a2 content band), matching
-   /performance + /allocation so every a2 page opens the same way. */
+/* Hero: full-bleed and flat, as the treasury's. The shared rules in
+   components.css pin its headline's size and offset. */
 .a2-hero {
   position: relative;
   width: 100vw;
@@ -340,331 +186,56 @@
   display: flex;
   align-items: center;
   overflow: hidden;
-  border: none;
-  border-radius: 0;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-void);
-  margin-bottom: 3rem;
 }
 .a2-hero__viz { position: absolute; inset: 0; z-index: 0; }
-.a2-hero__viz::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, var(--color-void), transparent 60%);
-}
 .a2-hero__viz canvas { display: block; width: 100%; height: 100%; }
-.a2-hero__inner {
-  position: relative;
-  z-index: 2;
-  width: 100%;
-  max-width: 80rem;
-  margin-inline: auto;
-  padding: 2.5rem 1.5rem;
-}
-.a2-hero__title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 2.5rem;
-  line-height: 1.05;
-  margin: 0 0 1rem;
-}
-.a2-hero__lede {
-  color: var(--color-text-muted);
-  font-size: 1rem;
-  line-height: 1.6;
-  margin: 0;
-  max-width: 42rem;
-}
-.pj-status {
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-}
-.pj-status--error { color: var(--color-warn); }
-/* Provenance notice (issue #346). Hairline box, no rail, no fill and no warm
-   accent: this is a standing statement of fact rather than an alert, so it reads
-   in the muted body colour the other pj-status lines use. */
-.pj-provenance {
-  border: 1px solid var(--color-border);
-  padding: 0.6rem 0.75rem;
-  margin: 0 0 1rem;
-  max-width: 72ch;
-  line-height: 1.6;
-}
+.a2-hero__inner { position: relative; z-index: 2; width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
+.a2-hero__title { font-family: var(--font-display); font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; line-height: 1.05; margin: 0 0 1.25rem; }
+.a2-hero__lede { margin: 0; max-width: 44rem; font-size: 1.0625rem; line-height: 1.65; color: var(--color-text-muted); }
 
-/* ── Table (a2 look) ─────────────────────────────────────────────────────── */
-.a2-table__scroll {
-  overflow-x: auto;
-  border: 1px solid var(--color-border);
-}
-.pj-scroll { max-height: calc(100vh - 220px); }
-.a2-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-.a2-table thead tr {
-  background: var(--color-surface-light);
-  border-bottom: 1px solid var(--color-border);
-}
-.a2-table thead {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-}
-.a2-table th {
-  padding: 0.7rem 1rem;
-  color: var(--color-text-muted);
-  font-weight: 500;
-  text-align: right;
-  background: var(--color-surface-light);
-}
-.a2-table th.pj-l { text-align: left; }
-.a2-table th.a2-sticky,
-.a2-table td.a2-sticky {
-  text-align: left;
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  background: var(--color-surface-light);
-}
-.a2-table tbody td.a2-sticky { background: var(--color-surface); z-index: 1; }
-.a2-table tbody tr {
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-  vertical-align: top;
-}
-.a2-table tbody tr:nth-child(even) { background: var(--color-deep); }
-.a2-table tbody tr:nth-child(even) td.a2-sticky { background: var(--color-deep); }
-.a2-table td { padding: 0.6rem 1rem; color: var(--color-text); }
-.a2-table td.a2-r { text-align: right; }
-.a2-table td.pj-l { text-align: left; white-space: normal; }
-.a2-table td.pj-c { text-align: center; }
+.pjd__body { max-width: 80rem; margin: 0 auto; padding: 0 1.5rem; overflow-x: clip; }
+.pjd__meta { border-top: 0; }
 
-/* Sortable header buttons */
-.pj-sort {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.pj-sort:hover { color: var(--color-text); }
-.pj-sort--active { color: var(--color-text); }
-.pj-sort__i { opacity: 0.55; font-size: 0.7em; }
-.pj-sort--active .pj-sort__i { opacity: 1; }
+/* A project: its mark, then its name over what it is. The whole cell is the
+   link; the name carries the underline. */
+.pjd__who { display: flex; align-items: center; gap: 0.75rem; color: inherit; text-decoration: none; min-width: 0; }
+.pjd__logo { flex: none; width: 1.75rem; height: 1.75rem; object-fit: cover; border: 1px solid var(--color-border); background: var(--color-surface); }
+.pjd__logo--none { display: grid; place-items: center; font-family: var(--font-mono); font-size: 0.5625rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
+.pjd__name { display: block; min-width: 0; }
+.pjd__lnk { font-weight: 500; font-size: 0.875rem; color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
+  text-decoration-thickness: 1px; text-underline-offset: 4px; transition: text-decoration-color 100ms var(--ease-out-expo); }
+.pjd__who:hover .pjd__lnk, .pjd__who:focus-visible .pjd__lnk { text-decoration-color: var(--color-link); }
+.pjd__name small { display: block; margin-top: 0.25rem; font-size: 0.75rem; font-weight: 400; line-height: 1.5; color: var(--color-text-muted); white-space: normal; }
 
-/* Project name cell — link wraps the logo + name (§5.4 item 5). The name is
-   the link text, so it carries the link's underline and the logo does not. */
-.pj-name__link { display: block; color: var(--color-link); text-decoration: none; }
-.pj-name__link .pj-name__text {
-  text-decoration-line: underline; text-decoration-color: var(--color-link-line);
-  text-decoration-thickness: 1px; text-underline-offset: 4px;
-}
-.pj-name__link:hover .pj-name__text { text-decoration-color: var(--color-link); }
-.pj-name__inner { display: flex; align-items: center; gap: 0.55rem; }
-.pj-logo {
-  width: 26px; height: 26px;
-  border: 1px solid var(--color-border);
-  flex-shrink: 0;
-  object-fit: cover;
-}
-.pj-logo--fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-surface-light);
-  font-size: 0.6rem;
-  color: var(--color-text-muted);
-}
-.pj-name__text { font-weight: 700; }
+.pjd__tokens { min-width: 60rem; }
+.pjd__tokens tbody th { width: 30%; }
+.pjd__tk { color: var(--color-text); }
+.pjd__mc { color: var(--color-text); }
 
-.pj-coinline { line-height: 1.5; }
-.pj-coinline i { font-style: normal; color: var(--color-text-muted); margin-right: 0.4rem; }
-.pj-score { font-weight: 700; }
-.pj-desc { max-width: 22rem; color: var(--color-text-muted); line-height: 1.5; }
-.pj-desc span { display: block; white-space: normal; word-break: break-word; }
+.pjd__facets { font-family: var(--font-mono); font-size: 0.625rem !important; letter-spacing: 0.04em; }
+.pjd__others { min-width: 36rem; }
+.pjd__others tbody th { width: 60%; }
+.pjd__trend svg { display: inline-block; vertical-align: middle; }
+.pjd__tokens td small, .pjd__others td small { font-size: 0.6875rem; }
 
-/* Text links are monochrome, as everywhere on the site: --color-link over a
-   --color-link-line underline that goes to --color-link on hover. The
-   provenance notice has no link today; its pointer returns with analytics. */
-.pj-link, .pj-provenance a {
-  color: var(--color-link);
-  text-decoration-line: underline; text-decoration-color: var(--color-link-line);
-  text-decoration-thickness: 1px; text-underline-offset: 4px;
-}
-.pj-link:hover, .pj-provenance a:hover { text-decoration-color: var(--color-link); }
-
-.a2-table td.a2-r i {
-  display: block;
-  font-style: normal;
-  font-size: 0.6rem;
-  color: var(--color-text-muted);
-  margin-top: 1px;
-}
-
-/* Facet pills: the site's chip, mono caps at the chip rung. A facet the
-   project covers is edged in the text colour, as a selected chip is; one it
-   lacks stays muted. No hue either way. */
-.pj-facets { display: flex; gap: 0.25rem; flex-wrap: wrap; }
-.pj-pill {
-  padding: 0.1rem 0.35rem;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  border: 1px solid;
-}
-.pj-pill--on {
-  color: var(--color-text);
-  border-color: var(--color-text);
-  background: transparent;
-}
-.pj-pill--off {
-  color: var(--color-text-muted);
-  border-color: var(--color-border);
-  background: transparent;
-}
-
-/* Sparkline */
-.pj-spark { display: inline-block; vertical-align: middle; }
-.pj-spark-empty { color: var(--color-text-muted); }
-
-/* ── Definitions dialog (§5.4 item 1) ───────────────────────────────────── */
-.pj-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
-/* The site's secondary button: a neutral outline that goes to the text
-   colour on hover, never cyan. */
-.pj-defs-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: transparent;
-  border: 1px solid var(--color-border-light);
-  padding: 0.35rem 0.7rem;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--color-text);
-  cursor: pointer;
-}
-.pj-defs-trigger:hover { border-color: var(--color-text); background: var(--color-surface); }
-.pj-defs-trigger span { opacity: 0.7; }
-.pj-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1.5rem;
-}
-.pj-dialog {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  max-width: 40rem;
-  width: 100%;
-  max-height: min(80vh, 640px);
-  overflow-y: auto;
-  padding: 1.5rem;
-}
-.pj-dialog__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-}
-.pj-dialog__head h2 {
-  font-family: var(--font-display);
-  font-size: 1.1rem;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  margin: 0;
-}
-.pj-dialog__close {
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  font-size: 1.25rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0.1rem 0.4rem;
-}
-.pj-dialog__close:hover { color: var(--color-text); }
-.pj-defs { margin: 0; }
-.pj-defs__item {
-  border-left: 2px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
-  padding: 0.35rem 0 0.35rem 0.75rem;
-  margin-bottom: 0.75rem;
-}
-.pj-defs__item:last-child { margin-bottom: 0; }
-.pj-defs__item dt {
-  font-family: var(--font-mono);
-  font-weight: 700;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-accent);
-}
-.pj-defs__item dd {
-  margin: 0.2rem 0 0;
-  font-size: 0.8rem;
-  color: var(--color-text-muted);
-  line-height: 1.5;
-}
-
-/* ── Dual synced horizontal scrollbars (§5.4 item 2) ────────────────────── */
-.pj-scroll-mirror {
-  overflow-x: auto;
-  overflow-y: hidden;
-  height: 14px;
-  border: 1px solid var(--color-border);
-  border-bottom: none;
-}
-.pj-scroll-mirror > div { height: 1px; }
-/* Hides the browser scrollbar chrome while keeping the element scrollable —
-   the mirror bar (or the top-edge sliver of it) is the only visible track;
-   the main container's own x-scrollbar is likewise hidden (§2/§5.4 item 2:
-   "main container hides its x-scrollbar via .hide-x-scrollbar"). */
-.hide-x-scrollbar-visual { scrollbar-width: thin; }
-.hide-x-scrollbar-visual::-webkit-scrollbar { height: 6px; }
-.a2-table__scroll.pj-scroll { border-top: none; }
-
-/* ── Column resizing (§5.4 item 3) ──────────────────────────────────────── */
-.pj-resizable { position: relative; }
-.pj-resize-handle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  user-select: none;
-  touch-action: none;
-}
-.pj-resize-handle:hover,
-.pj-resize-handle:active { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
-
-@media (min-width: 768px) {
-  .a2 { padding: 0 2rem 5rem; }
-  .a2-hero__inner { padding: 2.5rem 2rem; }
-  .a2-hero__title { font-size: 3.25rem; }
-}
-@media (min-width: 1024px) {
-  .a2-hero__title { font-size: 3.75rem; }
+@media (max-width: 640px) {
+  /* A phone keeps the name, the token, its market cap and its move, on two
+     lines; the rest of a row's figures are on the project's page. */
+  .pjd__tokens, .pjd__others { min-width: 0; }
+  .pjd__tokens thead, .pjd__others thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .pjd__tokens tbody tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; column-gap: 0.75rem; row-gap: 0.375rem;
+    padding: 0.875rem 0; border-bottom: 1px solid var(--color-border); }
+  .pjd__tokens tbody tr:last-of-type { border-bottom: 0; }
+  .pjd__tokens tbody th, .pjd__tokens tbody td { display: block; padding: 0; border: 0; width: auto; }
+  .pjd__tokens tbody th { grid-column: 1 / -1; }
+  .pjd__tokens .pjd__price, .pjd__tokens .pjd__fdv, .pjd__tokens .pjd__x,
+  .pjd__others .pjd__x { display: none; }
+  .pjd__tokens .pjd__tk { grid-column: 1; grid-row: 2; padding-left: 2.5rem; }
+  .pjd__tokens .pjd__mc { grid-column: 2; grid-row: 2; text-align: left; }
+  .pjd__tokens .pjd__pct { grid-column: 3; grid-row: 2; }
+  .pjd__tokens td.rr-table__empty { grid-column: 1 / -1; }
+  .pjd__others tbody th { width: auto; }
 }
 </style>

@@ -251,11 +251,9 @@ test("the deposit hero pairs the headline with the install card and runs the tre
 // vault route has since been rolled back, but the lesson is why this list is
 // derived: the next page added to the nav is covered the day it lands, not the
 // day someone remembers to edit an array.
-const EXTRA_HERO_ROUTES = [
-  // Routed and hero-shaped, but deliberately not advertised in the nav:
-  // /projects is linked from content only.
-  "/projects",
-];
+// Routed and hero-shaped, but not advertised in the nav. None today: the
+// projects directory, the last one, joined the nav with RM-186.
+const EXTRA_HERO_ROUTES: string[] = [];
 
 // The hero bands components.css pins to one offset. Since RM-124 the nav also
 // reaches pages that open without one (a vault, a subject, the docs), and the

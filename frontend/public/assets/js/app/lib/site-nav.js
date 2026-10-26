@@ -16,7 +16,7 @@ export const NAV_SECTIONS = [
   { key: "swarm", prefixes: ["/swarm", "/committee"] },
   {
     key: "research",
-    prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks"],
+    prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks", "/projects"],
   },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
   { key: "company", prefixes: ["/tokenomics", "/media", "/treasury", "/performance", "/swarm/subjects/robotmoney-treasury"] },
