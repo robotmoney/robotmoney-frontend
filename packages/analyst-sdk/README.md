@@ -454,7 +454,7 @@ bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)
 bin/check-rule.ts the `bun run rules:check` entry
-universe/        base-universe.json, the shipped universe
+universe/        base-universe.json (the shipped universe), groups.csv and series.csv (its export inputs)
 rules/           the shipped rule files, all inside the universe
 rules-outside-universe/  rule files that hold assets or weights outside it
 ```
@@ -471,11 +471,13 @@ They are never regenerated from later code.
 
 ## The Base asset universe
 
-`universe/base-universe.json` lists the assets a model portfolio may hold on Base: per asset its id (the name a rule file uses), name, sleeve, chain, contract, liquidity, yield, tier (`eligible` or `watchlist`), its own cap (`maxWeight`, percent of NAV) and its price or yield series (`<provider>:<symbol>`). The group caps (Sky, Aave, Morpho, Morpho V2, Compound, Bitcoin, Gold) are data in the same file. `exported` is the date the file was built, `source` says from what.
+`universe/base-universe.json` lists the assets a model portfolio may hold on Base: per asset its id (the name a rule file uses), name, sleeve, chain, contract, liquidity, yield, tier (`eligible`, `watchlist` or `speculative`), its own cap (`maxWeight`, percent of NAV) and its price or yield series (`<provider>:<symbol>`). The file holds the 55 assets of the Base Permissionless Asset Universe sheet. Rule files name the nine reference holdings by short ids (`USDC`, `SUSDS`, `SPARK`, `GT`, `STEAK`, `AAVE`, `COMP`, `GOLD`, `BTC`); every other asset is its sheet id in capitals (`AAVE_TOKEN` is the sheet's `aave` token). The group caps are data in the same file: Sky 35, Aave 35, Morpho 30, Morpho V2 12, one group per Morpho curator at 12 (Gauntlet, Steakhouse, SparkDAO, Moonwell), Compound 10, Bitcoin 10, US equity 10 and Gold 6.
+
+A field the sheet leaves empty (contract, liquidity, yield) or that has no source (`series`) is `null`, and the asset's `unavailable` map says why: `"unavailable": { "yieldPct": "the sheet cell is empty" }`. The map has one entry per null field (`contract`, `liquidityUsd`, `yieldPct`, `series`) and none for a field that has a value. A contract that is not a `0x` address in the sheet (`various ...`, `market-specific`) loads as `null` with the sheet's words in the reason, never a made-up address. `series` is set only for the assets whose price or yield the model portfolio inputs read. `exported` is the date the file was built, `source` says from what.
 
 `loadUniverse()` returns the shipped file; `loadUniverse(json)` validates a parsed file of your own. `checkHoldings({ risk_off: {...}, neutral: {...}, risk_on: {...} }, universe)` returns one finding per holding that is not in the universe or is over its own cap, and per group over its cap, each naming the state, the holding and the cap. An empty array means the holdings fit. `bun run universe:check <holdings.json> [--universe <path>] [--allow-outside-universe]` runs the check from the command line on a JSON map of state to holding weights. It prints one line per finding to stderr and exits 2 on findings unless `--allow-outside-universe` is set. `--universe <path>` swaps in your own universe file (read in `bin/`, since `src/` reads no files).
 
-`bun run universe:export <assets.csv> [--groups groups.csv]` rebuilds the file from a CSV export of the Base Permissionless Asset Universe sheet. The file shipped today is a seed: the nine holdings and caps of the prototype's reference rule, until the sheet export replaces it.
+`bun run universe:export <assets.csv> [--groups groups.csv] [--series series.csv] [--exported YYYY-MM-DD]` rebuilds the file from a CSV export of the sheet (`universe/groups.csv` holds the group caps from the sheet's Notes column, `universe/series.csv` the source ids). The shipped file was built from the owner's export of 2026-10-26: `bun run universe:export tests/fixtures/base-universe-sheet.csv --groups universe/groups.csv --series universe/series.csv --exported 2026-10-26`.
 
 ## Rule files
 
