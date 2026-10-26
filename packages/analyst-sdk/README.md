@@ -81,9 +81,13 @@ API="${API:-https://robotmoney.network/api/public/analytics}"
 fill() {
   mkdir -p "$1/csv"
   curl -fsS --retry 8 "$API/archive/backups?limit=1000" | jq -r '.backups[].record' | while read -r rec; do
+    case "$rec" in /*|*..*|*[!A-Za-z0-9._/-]*) echo "bad path" >&2; exit 1;; esac
     [ -f "$1/$rec" ] && continue
     curl -fsS --retry 8 "$API/archive/$rec" -o "$1/$rec.part" --create-dirs
     jq -r '.append_only[].files[] | "\(.sha256_raw)  \(.bytes_raw)  \(.path)"' "$1/$rec.part" | while read -r sum raw path; do
+      case "$raw" in ''|*[!0-9]*) echo "bad bytes_raw" >&2; exit 1;; esac
+      [ "$raw" -le 67108864 ] || { echo "bytes_raw over 64 MiB" >&2; exit 1; }
+      case "$path" in /*|*..*|*[!A-Za-z0-9._/-]*) echo "bad path" >&2; exit 1;; esac
       curl -fsS --retry 8 "$API/archive/$path" -o "$1/$path" --create-dirs
       # Read at most bytes_raw + 1 inflated bytes, so a hostile gzip cannot fill the disk.
       gunzip -c "$1/$path" 2>/dev/null | head -c $((raw+1)) > "$1/$path.raw" || true

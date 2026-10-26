@@ -139,6 +139,51 @@ describe("README quickstart, executed", () => {
     }
   });
 
+  // A hostile record host: serves `record` as the only backup, and a gzip for every other path.
+  async function hostileFill(record: unknown, name: string) {
+    const gz = Bun.gzipSync(Buffer.from("id\n1\n"));
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const rel = new URL(req.url).pathname.slice("/api/public/analytics/archive/".length);
+        if (rel === "backups") return Response.json({ backups: [{ record: "csv/2001-01-01T000000Z/backup.json" }] });
+        if (rel.endsWith("backup.json")) return Response.json(record);
+        return new Response(gz);
+      },
+    });
+    try {
+      const fill = acquire[0]!.replace(/^fill api-copy$/m, `fill ${name}`);
+      return await sh(["bash", "-euo", "pipefail", "-c", fill], DIR, { API: `http://127.0.0.1:${srv.port}/api/public/analytics` });
+    } finally {
+      srv.stop(true);
+    }
+  }
+  const hostileRecord = (file: Record<string, unknown>) => ({
+    format: 1,
+    backup: "2001-01-01T000000Z",
+    append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ rows: 1, sha256_raw: "0".repeat(64), ...file }] } },
+    revisions: {},
+  });
+
+  test("acquisition never evaluates a bytes_raw from the record", async () => {
+    const marker = join(DIR, "x");
+    const r = await hostileFill(hostileRecord({ path: "csv/2001-01-01T000000Z/data/t.csv.gz", bytes_raw: "a[$(touch${IFS}x)]" }), "inj-copy");
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("bad bytes_raw");
+    expect(existsSync(marker)).toBe(false);
+    const big = await hostileFill(hostileRecord({ path: "csv/2001-01-01T000000Z/data/t.csv.gz", bytes_raw: 67108865 }), "big-copy");
+    expect(big.code).not.toBe(0);
+    expect(big.stderr).toContain("bytes_raw over 64 MiB");
+  });
+
+  test("acquisition refuses a path that leaves the copy", async () => {
+    const r = await hostileFill(hostileRecord({ path: "../escaped.gz", bytes_raw: 10 }), "esc-copy");
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("bad path");
+    expect(existsSync(join(DIR, "escaped.gz"))).toBe(false);
+    expect(existsSync(join(DIR, "esc-copy", "csv/2001-01-01T000000Z/backup.json"))).toBe(false);
+  });
+
   test("every later command runs as written and exits 0, with no HTTP request", async () => {
     expect(acquired).toBeGreaterThan(0);
     fake.stop(true);
