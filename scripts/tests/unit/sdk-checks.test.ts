@@ -4,7 +4,7 @@
 // run the SDK use a local export of the working tree for the sparse clone, a
 // fake API for the target and the real `bun`, `bash`, `curl` and `jq`.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
@@ -152,18 +152,35 @@ describe("S12-sdk-tests", () => {
   });
 
   test("the sparse clone checks out the named commit with only the SDK, and refuses a commit that is not one", async () => {
-    const head = text((await spawnRunner(["git", "rev-parse", "HEAD"], { cwd: repoRoot })).stdout).trim();
+    // A small repository of its own (the checkout under test may be shallow): the SDK package plus a folder that must not come along.
+    const repo = homeScratch("sdk-origin-test-");
+    cleanup.push(repo);
+    const src = exportPackage("rm-sdk-origin-src-");
+    cleanup.push(src);
+    mkdirSync(join(repo, "packages"), { recursive: true });
+    cpSync(src, join(repo, "packages", "analyst-sdk"), { recursive: true });
+    mkdirSync(join(repo, "backend"), { recursive: true });
+    writeFileSync(join(repo, "backend", "only.txt"), "not the SDK\n");
+    const git = async (...a: string[]) => {
+      const r = await spawnRunner(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...a], {});
+      expect(r.code, r.stderr).toBe(0);
+      return text(r.stdout).trim();
+    };
+    await git("init", "-q", "-b", "main");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "sdk");
+    const head = await git("rev-parse", "HEAD");
+    const prepare = sparseCloneSdk(`file://${repo}`, spawnRunner);
     const scratch = homeScratch("sdk-clone-test-");
     cleanup.push(scratch);
-    const prepare = sparseCloneSdk(`file://${repoRoot}`, spawnRunner);
     const ok = await prepare(head, scratch);
     expect("sdkDir" in ok, JSON.stringify(ok)).toBe(true);
     if ("sdkDir" in ok) {
       expect(existsSync(join(ok.sdkDir, "package.json"))).toBe(true);
       expect(existsSync(join(scratch, "clone", "backend"))).toBe(false);
     }
+    // red: not a sha, and a sha the repository does not have.
     expect("problem" in (await prepare("not-a-sha", homeScratch("sdk-clone-test-")))).toBe(true);
-    mkdirSync(join(scratch, "x"), { recursive: true });
     expect(JSON.stringify(await prepare("0".repeat(40), homeScratch("sdk-clone-test-")))).toContain("problem");
   });
 });
