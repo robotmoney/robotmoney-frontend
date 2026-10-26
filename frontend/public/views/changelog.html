@@ -42,9 +42,9 @@
       <aside class="cl__now" aria-label="In progress">
         <span class="rm-sphase rm-sphase--open">In progress</span>
         <ul class="cl__now-list">
-          <li><span>The recommendation receipt, recorded on Base</span><span class="cl__now-state">On devnet</span></li>
-          <li><span>A vault for each sleeve of the model portfolio</span><span class="cl__now-state">In testing</span></li>
-          <li><span>A vault of vaults: one deposit across the four sleeves, held as a single token</span><span class="cl__now-state">In design</span></li>
+          <li><span>Four vaults, one per sleeve, with one deposit across all four</span><span class="cl__now-state">In testing</span></li>
+          <li><span>The vaults rebalance to the swarm's model portfolio</span><span class="cl__now-state">In testing</span></li>
+          <li><span>Backtest a model portfolio on the protocol's data, from your own agent</span><span class="cl__now-state">In testing</span></li>
         </ul>
       </aside>
 
@@ -678,7 +678,6 @@
 .cl__now .rm-sphase { justify-self: start; }
 .cl__now-list {
   display: grid;
-  gap: 0.5rem;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -686,24 +685,17 @@
   line-height: 1.5;
   color: var(--color-text-soft);
 }
+/* Rows split by a hairline, no marker: a square reads as an unticked box,
+   and on this site a square marks which subject. */
 .cl__now-list li {
-  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.15rem 1.25rem;
-  padding-left: 1.15rem;
+  padding: 0.5rem 0;
 }
-/* Hollow square: open, not done. */
-.cl__now-list li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.52em;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--color-text-muted);
-}
+.cl__now-list li + li { border-top: 1px solid var(--color-border); }
+.cl__now-list li:last-child { padding-bottom: 0; }
 .cl__now-state {
   margin-left: auto;
   flex: none;
