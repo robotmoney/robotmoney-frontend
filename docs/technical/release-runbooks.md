@@ -436,8 +436,9 @@ A release that adds an invariant adds a row here, with its red-control test, in 
 
 The analyst SDK (`packages/analyst-sdk/`) has its own release line (accepted in
 [D77](../decisions.md#d77)). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
-release. The SDK runs on an analyst's machine. Nothing deploys, so there is no QA branch, no stage
-run, no rc tag and no production cutover.
+release, except that the SDK tag is cut after the matching platform release. The SDK runs on an
+analyst's machine. Nothing deploys, so it has no QA branch, no stage run, no rc tag and no production
+cutover of its own.
 
 **Branch.** The SDK ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own
 semver. The `analyst-sdk/` prefix is required. Platform CI triggers on `releases-*`, and
@@ -452,7 +453,9 @@ release line. Changes reach the branch from `main` only, by merge or cherry-pick
 `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh
 number separates tagged releases from them.
 
-**Gate.** Before tagging, these are green at the commit:
+**Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag
+`vA.B.C` exists. The platform runbook (QA on stage, cutover, soak) has then completed with the SDK
+checks passing, so the SDK is fully tested. Before tagging, these are green at the commit:
 
 - the `analyst-sdk` workflow (`.github/workflows/analyst-sdk.yml`);
 - the backend analyst SDK parity tests in `.github/workflows/backend.yml`: the vintage round-trip,
@@ -469,8 +472,7 @@ branch.
 
 1. the archive format it reads (format 1, [D72](../decisions.md#d72));
 2. that it replays published report payloads byte for byte;
-3. the platform tag whose analytics code it matches, or "ahead of production" when it carries
-   `main` code no platform release has shipped. The SDK and the backend share code
+3. the platform tag whose analytics code it matches, always. The SDK and the backend share code
    (D57).
 
 **Install.** An analyst installs a release by its tag:
