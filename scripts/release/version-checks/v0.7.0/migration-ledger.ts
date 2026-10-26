@@ -1,4 +1,4 @@
-// V04-migration-ledger (D75, migrations 0126 and 0127): the migration ledger
+// Q41-migration-ledger/C29-migration-ledger (D75, migrations 0126 and 0127): the migration ledger
 // ends at the release's last migration and nothing is pending. The release's
 // migrations are the files of backend/migrations in the checkout this runs in
 // (the release commit, installed by P01-checkout); the ledger is

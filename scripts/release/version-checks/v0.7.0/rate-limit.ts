@@ -1,4 +1,4 @@
-// V10-rate-limit (PR 1429): over its budget a client of the public routes gets
+// Q47-rate-limit/C35-rate-limit (PR 1429): over its budget a client of the public routes gets
 // 429 with Retry-After. A report's bytes cost 10 of a client's 100 tokens a
 // minute (PUBLIC_ANALYTICS_HEAVY_COST, PUBLIC_ANALYTICS_TOKENS_PER_MINUTE), so
 // the check asks for the newest run's report with its ETag as If-None-Match

@@ -1,4 +1,4 @@
-// V05-report-bytes-etag (PR 1427): the public reports route serves a run's
+// Q42-report-bytes-etag/C30-report-bytes-etag (PR 1427): the public reports route serves a run's
 // report bytes exactly as stored, with a strong ETag equal to their sha256. For
 // the newest published run the check requires: 200; ETag is the quoted sha256 of
 // the bytes served; X-Content-SHA256 and the list's `checksum` are that hash;
