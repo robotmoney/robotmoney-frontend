@@ -12,10 +12,10 @@
 // against their record.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
 import {
   ArchiveError,
   INPUT_TABLES,
+  inflateBounded,
   RunInputCollector,
   listedFiles,
   parseCopyCsv,
@@ -30,13 +30,15 @@ import {
 
 const sha256 = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
-// A listed archive's uncompressed bytes, or null when it is missing. A file that
-// is not a valid gzip is corrupt, not missing.
-function contentOf(abs: string): Uint8Array | null {
+// A listed archive's uncompressed bytes, or null when it is missing. The inflate
+// is bounded by the record's bytes_raw. A file that is not a valid gzip is
+// corrupt, not missing.
+function contentOf(abs: string, f: FileRecord): Uint8Array | null {
   if (!existsSync(abs)) return null;
   try {
-    return gunzipSync(readFileSync(abs));
+    return inflateBounded(readFileSync(abs), f.bytes_raw, abs);
   } catch (err) {
+    if (err instanceof ArchiveError) throw err;
     throw new ArchiveError(`corrupt local copy: ${abs} is not a readable gzip (${(err as Error).message})`);
   }
 }
@@ -71,7 +73,7 @@ export function openLocalCopy(root: string, asOf?: string): LocalCopy {
 
   const readRows = (f: FileRecord): Row[] => {
     const abs = join(root, f.path);
-    const content = contentOf(abs);
+    const content = contentOf(abs, f);
     const digest = content === null ? null : sha256(content);
     verifyFile(f, { sha256_raw: digest });
     const rows = toObjects(parseCopyCsv(new TextDecoder().decode(content!)));
@@ -92,7 +94,7 @@ export function openLocalCopy(root: string, asOf?: string): LocalCopy {
       continue;
     }
     const abs = join(root, f.path);
-    const content = contentOf(abs);
+    const content = contentOf(abs, f);
     verifyFile(f, { sha256_raw: content === null ? null : sha256(content) });
   }
 
