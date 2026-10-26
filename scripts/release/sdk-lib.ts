@@ -1,5 +1,5 @@
 // scripts/release/sdk-lib.ts — what the SDK release checks share (issue 1476):
-// the S10 to S12 steps of the template's soak (scripts/release/sdk-check.ts)
+// the Q35 to Q37 (C23 to C25) steps of the template's soak (scripts/release/sdk-check.ts)
 // and the v0.7.0 SDK 0.2.0 version checks (version-checks/v0.7.0/sdk-*.ts).
 //
 // The SDK runs from a sparse clone of the release commit, the way an analyst
@@ -135,7 +135,7 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
 }
 
 /**
- * S11: the SDK quickstart from a sparse clone of the release commit against the
+ * Q36/C24: the SDK quickstart from a sparse clone of the release commit against the
  * target. `fill`, then `bun run inputs --archive <copy> --run <latest run>`,
  * then `bun run regime <inputs.csv> --replay --asof <date>` (it must run), then
  * scripts/release/replay-row.ts: the SDK's as-of row for the run is compared,
@@ -170,7 +170,7 @@ export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<Ch
   return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
 }
 
-/** S12: the SDK package's own tests pass at the release commit. */
+/** Q37/C25: the SDK package's own tests pass at the release commit. */
 export async function packageTestsCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
@@ -197,7 +197,7 @@ export function archiveRouteProblems(list: { status: number; body: unknown }, re
   return out;
 }
 
-/** S10: the public archive routes answer 200 with format 1. */
+/** Q35/C23: the public archive routes answer 200 with format 1. */
 export async function archiveRoutesCheck(net: Net): Promise<CheckResult> {
   const json = async (path: string) => {
     const res = await getWithRetry(net, path);

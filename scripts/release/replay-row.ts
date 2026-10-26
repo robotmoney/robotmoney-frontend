@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/replay-row.ts — S11's comparison (issue 1476): replay a
+// scripts/release/replay-row.ts — Q36/C24's comparison (issue 1476): replay a
 // published run with the analyst SDK and compare the SDK's as-of row, field by
 // field, with the as-of row the run published.
 //

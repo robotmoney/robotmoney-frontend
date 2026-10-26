@@ -6,12 +6,12 @@
 //   bun scripts/release/sdk-check.ts --check quickstart      --origin <url> --commit <sha>
 //   bun scripts/release/sdk-check.ts --check package-tests   --origin <url> --commit <sha>
 //
-// S10-archive-routes: the public archive routes answer 200 with format 1.
-// S11-sdk-quickstart: the SDK from a sparse clone of the release commit runs the
+// Q35-archive-routes/C23-archive-routes: the public archive routes answer 200 with format 1.
+// Q36-sdk-quickstart/C24-sdk-quickstart: the SDK from a sparse clone of the release commit runs the
 //   README quickstart against the target, and its as-of row for the latest run equals
 //   the as-of row of the run's published regime_snapshots artifact (field by field and
 //   by sha256; scripts/release/replay-row.ts). A target with no published run FAILS.
-// S12-sdk-tests: the SDK package's tests pass at the release commit.
+// Q37-sdk-tests/C25-sdk-tests: the SDK package's tests pass at the release commit.
 //
 // The clone comes from this checkout's `origin` (override: --repo-url). Exit 0
 // only when the check found no problem.

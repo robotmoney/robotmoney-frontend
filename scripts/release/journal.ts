@@ -73,7 +73,7 @@ export interface RunJournal {
   stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string; tree?: string };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
-  /** C05-migrate's start to C11-ready's end, once both passed: the cutover window. The website stays up through it (C13-probe-grade). */
+  /** The migrate's start to READY's end, once both passed: the cutover window (Q18-migrate to Q23-ready on stage, C05-migrate to C11-ready on production). The website stays up through it (the probe's grade). */
   cutoverSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };

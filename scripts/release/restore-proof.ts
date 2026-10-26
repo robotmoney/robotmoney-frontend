@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-// scripts/release/restore-proof.ts — release step C03-restore-proof, run ON THE CAPTURE HOST.
+// scripts/release/restore-proof.ts — release step Q16-restore-proof/C03-restore-proof, run ON THE CAPTURE HOST.
 // Standing check SP.2: the backup is taken AND its restore is proven, with the
 // restore time recorded (policy 4.3).
 //
-//   bun scripts/release/restore-proof.ts --dump <C01-backup capture dir> --receipt-dir <dir>
+//   bun scripts/release/restore-proof.ts --dump <Q14-backup/C01-backup capture dir> --receipt-dir <dir>
 //
 // Restores the run's fresh capture into a THROWAWAY local Postgres container
 // through the repo's one restore path (scripts/lib/restore-container.ts,
@@ -43,7 +43,7 @@ async function main(): Promise<number> {
   });
   const ok = !("error" in result);
   const record = {
-    step: "C03-restore-proof",
+    step: "restore-proof",
     dump,
     ...(ok ? { stamp: result.stamp, ledgerCount: result.ledgerCount, restoreSeconds: Math.round(restoreMs / 1000) } : { error: result.error }),
     totalSeconds: Math.round((Date.now() - started) / 1000),
