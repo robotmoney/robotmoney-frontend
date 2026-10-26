@@ -35,6 +35,8 @@ const KNOBS = [
   "BASE_RPC_RETRY_BASE_MS",
   "BASE_RPC_MAX_CALLS_PER_SEC",
   "BASE_RPC_RETRY_TOTAL_MS",
+  "BASE_RPC_RATE_LIMIT_RETRIES",
+  "BASE_RPC_RATE_LIMIT_BACKOFF_MS",
 ] as const;
 
 function okResult(result: unknown): Response {
@@ -50,6 +52,8 @@ function rpcError(code: number, message: string): Response {
 beforeEach(() => {
   // Keep retries plentiful but each backoff ~instant so the suite is quick.
   process.env.BASE_RPC_RETRY_BASE_MS = "1";
+  // The rate-limit schedule is seconds by default (5 s, 10 s, ...). Tiny here so the suite stays quick.
+  process.env.BASE_RPC_RATE_LIMIT_BACKOFF_MS = "1";
   // Pacing OFF for this file. The transport now paces by default (0.25 calls/s
   // — chain/base-rpc-client.ts::DEFAULT_RATE_PER_SEC), and a 429 deliberately
   // DRAINS that bucket, so every retry assertion below would otherwise measure
@@ -121,6 +125,7 @@ test("Retry-After as an HTTP-date in the past yields an immediate (0ms) retry", 
 
 test("persistent 429 with retries EXHAUSTED still THROWS (caller degrades to stale)", async () => {
   process.env.BASE_RPC_MAX_RETRIES = "2";
+  process.env.BASE_RPC_RATE_LIMIT_RETRIES = "2";
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
@@ -156,6 +161,7 @@ test("Base JSON-RPC -32016 over-rate-limit then success retries and returns the 
 
 test("persistent Base JSON-RPC -32016 exhausts retries and still throws", async () => {
   process.env.BASE_RPC_MAX_RETRIES = "2";
+  process.env.BASE_RPC_RATE_LIMIT_RETRIES = "2";
   let calls = 0;
   globalThis.fetch = (async () => {
     calls++;
@@ -366,4 +372,87 @@ test("multicall3Aggregate3 with no calls makes zero network requests", async () 
   expect(out).toEqual([]);
   expect(ethCalls).toBe(0);
   globalThis.fetch = realFetch;
+});
+
+// ── the rate-limit retry schedule (v0.6.2 stage QA, run B, 2026-10-16) ───────
+// Four 429s in a row inside the old ~12 s retry horizon degraded the buyback scan. A rate-limit answer now
+// gets its own, longer schedule: two more retries than BASE_RPC_MAX_RETRIES, backing off from 5 s.
+
+test("by default a rate limit is retried MAX_RETRIES + 2 times: five 429s then success returns the result", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return calls <= 5 ? status(429) : okResult("0x5");
+  }) as unknown as typeof fetch;
+  expect(await rpcRequest<string>("eth_getLogs", [{}], OK)).toBe("0x5");
+  expect(calls).toBe(6); // the first attempt, then five retries
+});
+
+test("red: six 429s exhaust the default rate-limit retries and the last one throws", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return status(429);
+  }) as unknown as typeof fetch;
+  await expect(rpcRequest<string>("eth_getLogs", [{}], OK)).rejects.toThrow(/Base RPC HTTP 429/);
+  expect(calls).toBe(6);
+});
+
+test("other transient statuses keep the short schedule: a 503 gets MAX_RETRIES retries, not the rate-limit ones", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return status(503);
+  }) as unknown as typeof fetch;
+  await expect(rpcRequest<string>("eth_getLogs", [{}], OK)).rejects.toThrow(/Base RPC HTTP 503/);
+  expect(calls).toBe(4); // the first attempt plus MAX_RETRIES (3)
+});
+
+test("BASE_RPC_RATE_LIMIT_RETRIES overrides the count; BASE_RPC_MAX_RETRIES=0 still means no retry at all", async () => {
+  process.env.BASE_RPC_RATE_LIMIT_RETRIES = "1";
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return status(429);
+  }) as unknown as typeof fetch;
+  await expect(rpcRequest<string>("eth_call", [{}], OK)).rejects.toThrow(/Base RPC HTTP 429/);
+  expect(calls).toBe(2);
+  process.env.BASE_RPC_MAX_RETRIES = "0";
+  calls = 0;
+  await expect(rpcRequest<string>("eth_call", [{}], OK)).rejects.toThrow(/Base RPC HTTP 429/);
+  expect(calls).toBe(1);
+});
+
+test("the rate-limit backoff doubles from its base and honors Retry-After; each retry says so in the log", async () => {
+  process.env.BASE_RPC_RATE_LIMIT_BACKOFF_MS = "40";
+  const warnings: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { warnings.push(a.join(" ")); };
+  const stamps: number[] = [];
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    stamps.push(Date.now());
+    calls++;
+    return calls <= 3 ? status(429) : okResult("0x7");
+  }) as unknown as typeof fetch;
+  try {
+    expect(await rpcRequest<string>("eth_getLogs", [{}], OK)).toBe("0x7");
+  } finally {
+    console.warn = realWarn;
+  }
+  // Waits are 40-80 ms, 80-120 ms, 160-200 ms: the third gap is at least four times the base.
+  expect(stamps[1]! - stamps[0]!).toBeGreaterThanOrEqual(35);
+  expect(stamps[3]! - stamps[2]!).toBeGreaterThanOrEqual(150);
+  expect(warnings).toHaveLength(3);
+  expect(warnings[0]).toContain("Base RPC rate limited (eth_getLogs, HTTP 429): retry 1 of 5");
+});
+
+test("a JSON-RPC -32016 follows the rate-limit schedule too: five of them then success returns the result", async () => {
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return calls <= 5 ? rpcError(-32016, "over rate limit") : okResult("0x8");
+  }) as unknown as typeof fetch;
+  expect(await rpcRequest<string>("eth_call", [{}], OK)).toBe("0x8");
+  expect(calls).toBe(6);
 });
