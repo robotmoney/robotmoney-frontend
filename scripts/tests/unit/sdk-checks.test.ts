@@ -1,5 +1,5 @@
-// The template's SDK soak steps (issue 1476, SV.8): S10-archive-routes,
-// S11-sdk-quickstart, S12-sdk-tests (scripts/release/sdk-check.ts, sdk-lib.ts).
+// The template's SDK soak steps (issue 1476, SV.8): Q35-archive-routes/C23-archive-routes,
+// Q36-sdk-quickstart/C24-sdk-quickstart, Q37-sdk-tests/C25-sdk-tests (scripts/release/sdk-check.ts, sdk-lib.ts).
 // Each check's decision has a passing case and a red control. The checks that
 // run the SDK use a local export of the working tree for the sparse clone, a
 // fake API for the target and the real `bun`, `bash`, `curl` and `jq`.
@@ -41,7 +41,7 @@ describe("the public read helpers", () => {
   });
 });
 
-describe("S10-archive-routes", () => {
+describe("Q35-archive-routes/C23-archive-routes", () => {
   test("passes against the recorded archive routes", async () => {
     const r = await archiveRoutesCheck(fakeNet());
     expect(r.problems).toEqual([]);
@@ -106,7 +106,7 @@ function recordingWithArtifact(row: Record<string, unknown>): string {
   return dir;
 }
 
-describe("S11-sdk-quickstart", () => {
+describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
   let replayed: Record<string, unknown>;
   const withApi = async (recording: string, reports: boolean, body: (net: SdkDeps["net"]) => Promise<void>) => {
     const api = fakeServer({ recording, reports: reports ? [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }] : [] });
@@ -191,7 +191,7 @@ describe("the as-of row comparison (PR 1448)", () => {
   });
 });
 
-describe("S12-sdk-tests", () => {
+describe("Q37-sdk-tests/C25-sdk-tests", () => {
   const fakeRun = (code: number): SdkDeps["run"] => async () => ({ code, stdout: new Uint8Array(), stderr: code === 0 ? "" : "1 fail" });
   test("passes when the package tests exit 0 and fails, naming the exit, when they do not", async () => {
     expect((await packageTestsCheck(localDeps(fakeNet(), fakeRun(0)), COMMIT)).problems).toEqual([]);
@@ -234,12 +234,12 @@ describe("S12-sdk-tests", () => {
 });
 
 describe("the template carries the SDK steps from v0.7.0", () => {
-  test("S10 to S12 are control-machine soak steps with a since, and the sdk-check usage refuses a missing argument", async () => {
+  test("Q35 to Q37 and C23 to C25 are control-machine steps with a since, and the sdk-check usage refuses a missing argument", async () => {
     const { loadTemplate } = await import("../../release/runbook.ts");
     const t = loadTemplate();
-    for (const id of ["S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"]) {
+    for (const id of ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]) {
       const s = t.steps.find((x) => x.id === id)!;
-      expect([s.host, s.phase, s.since, s.standing]).toEqual(["control", "soak", "v0.7.0", ["SV.8"]]);
+      expect([s.host, s.phase, s.since, s.standing]).toEqual(["control", s.id[0] === "Q" ? "qa" : "cutover", "v0.7.0", ["SV.8"]]);
     }
     const r = await spawnRunner(["bun", join(repoRoot, "scripts/release/sdk-check.ts"), "--check", "quickstart", "--origin", "http://x"], {});
     expect(r.code).toBe(2);

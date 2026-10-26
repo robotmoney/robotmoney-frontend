@@ -1,4 +1,4 @@
-// The read-only rm_owner login proof of release step P02-identity
+// The read-only rm_owner login proof of release step P02-host-identity
 // (backend/scripts/owner-login-check.ts): exactly SELECT 1 through the
 // registry, a refusal that names `bun run role-passwords --target <target>`,
 // and no password in any message.
@@ -24,7 +24,7 @@ function fake(fail?: string): { issued: string[]; closed: () => boolean; connect
   };
 }
 
-describe("proveOwnerLogin (release step P02-identity)", () => {
+describe("proveOwnerLogin (release step P02-host-identity)", () => {
   test("issues exactly SELECT 1 and closes the connection", async () => {
     const f = fake();
     await proveOwnerLogin(URL_, "stage", f.connect);

@@ -45,18 +45,20 @@ describe("the kitchen-sink template", () => {
     const text = readFileSync(templatePath("kitchen-sink"), "utf8");
     expect(() => parseTemplate(text.replace('  - id: "P03-install"\n', '  - id: "P03-install"\n    bogus: 1\n'), "kitchen-sink")).toThrow("unknown key bogus");
     expect(() => parseTemplate(text.replace('  - id: "P03-install"\n', '  - id: "P03-install"\n    added: "v0.6.2"\n'), "kitchen-sink")).toThrow("carries no added");
-    expect(() => parseTemplate(text.replace('  - id: "P03-install"', '  - id: "P02-identity"'), "kitchen-sink")).toThrow("P02-identity appears twice");
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"', '  - id: "P02-host-identity"'), "kitchen-sink")).toThrow("P02-host-identity appears twice");
     expect(() => parseTemplate(text.replace(/\n    irreversible: true\n/, "\n"), "kitchen-sink")).toThrow("irreversible is a boolean");
  
   });
 
-  test("the phases (D70 as amended 2026-10-15): every step names one, its id says which, and they run qa, preflight, cutover, soak, version", () => {
+  test("the phases (owner, 2026-10-16): every step names one, its id says which, and they run qa (stage), preflight, cutover (production)", () => {
     const text = readFileSync(templatePath("kitchen-sink"), "utf8");
-    const order = ["qa", "preflight", "cutover", "soak", "version"];
+    const order = ["qa", "preflight", "cutover"];
     expect(template.steps.map((s) => s.phase)).toEqual([...template.steps.map((s) => s.phase)].sort((a, b) => order.indexOf(a) - order.indexOf(b)));
+    for (const s of template.steps) expect(s.onlyFor, s.id).toBe(s.phase === "qa" ? "stage" : "prod");
     // red: a missing or unknown phase.
-    expect(() => parseTemplate(text.replace('  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n    phase: "preflight"\n', '  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n'), "kitchen-sink")).toThrow("phase is one of qa, preflight, cutover, soak, version");
+    expect(() => parseTemplate(text.replace('  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n    phase: "preflight"\n', '  - id: "P03-install"\n    standing: ["SP.1"]\n    host: "target"\n'), "kitchen-sink")).toThrow("phase is one of qa, preflight, cutover");
     expect(() => parseTemplate(text.replace('    phase: "preflight"\n', '    phase: "warmup"\n'), "kitchen-sink")).toThrow("phase is one of");
+    expect(() => parseTemplate(text.replace('    phase: "preflight"\n', '    phase: "soak"\n'), "kitchen-sink")).toThrow("phase is one of qa, preflight, cutover");
     // red: an id whose letter is not its phase's.
     expect(() => parseTemplate(text.replace('  - id: "P03-install"', '  - id: "C99-install"'), "kitchen-sink")).toThrow("a preflight step's id starts with P");
     // red: a cutover step moved before a preflight one.
@@ -65,6 +67,30 @@ describe("the kitchen-sink template", () => {
     const c02 = text.indexOf('  - id: "C02-backup-sums"');
     const moved = text.slice(0, p08) + text.slice(c01, c02) + text.slice(p08, c01) + text.slice(c02);
     expect(() => parseTemplate(moved, "kitchen-sink")).toThrow("P08-log-baseline (preflight) comes after C01-backup (cutover)");
+  });
+
+  test("a step runs on one target: a qa step on stage only, a preflight or cutover step on production only", () => {
+    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+    expect(() => parseTemplate(text.replace('  - id: "Q06-checkout"', '  - id: "Q06-checkout"').replace(/(  - id: "Q08-install"[\s\S]*?onlyFor: )"stage"/, '$1"prod"'), "kitchen-sink")).toThrow("a qa step runs on stage only");
+    expect(() => parseTemplate(text.replace(/(  - id: "C05-migrate"[\s\S]*?onlyFor: )"prod"/, '$1"stage"'), "kitchen-sink")).toThrow("a cutover step runs on prod only");
+  });
+
+  test("production runs only what stage ran: every P and C step has a Q twin of the same name and commands, in the same order", () => {
+    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+    // red: a production step whose stage twin is gone.
+    const q = text.indexOf('  - id: "Q08-install"');
+    const q2 = text.indexOf('  - id: "Q09-capture-checkout"');
+    expect(() => parseTemplate(text.slice(0, q) + text.slice(q2), "kitchen-sink")).toThrow("P03-install has no QA twin named install");
+    // red: a stage step with no production twin and no stageOnly mark.
+    const p = text.indexOf('  - id: "P03-install"');
+    const p2 = text.indexOf('  - id: "P04-capture-checkout"');
+    expect(() => parseTemplate(text.slice(0, p) + text.slice(p2), "kitchen-sink")).toThrow("Q08-install has no production twin named install");
+    // red: a twin whose commands differ.
+    expect(() => parseTemplate(text.replace(/(  - id: "Q08-install"[\s\S]*?"--frozen-lockfile")/, '$1, "--silent"'), "kitchen-sink")).toThrow("Q08-install and P03-install differ");
+    // the version tag is production's only step without a twin, and stage's preparation has none.
+    const names = template.steps.map((st) => st.id);
+    expect(names).toContain("C06-version-tag");
+    expect(names.some((n) => n.endsWith("-version-tag") && n.startsWith("Q"))).toBe(false);
   });
 });
 
@@ -91,8 +117,8 @@ describe("a release runbook only adds", () => {
     const { added: _a, ...unmarked } = added("X1");
     expect(checkAddOnly(template, runbook([...template.steps, unmarked])).join()).toContain("carries added: v9.9.9");
     expect(checkAddOnly(template, runbook([...template.steps, added("X1", "v0.0.1")])).join()).toContain("carries added: v9.9.9");
-    const marked = template.steps.map((s) => (s.id === "S07-soak-gate" ? { ...s, added: "v9.9.9" } : s));
-    expect(checkAddOnly(template, runbook(marked)).join()).toContain("S07-soak-gate is a template step, so it carries no added");
+    const marked = template.steps.map((s) => (s.id === "C20-soak-gate" ? { ...s, added: "v9.9.9" } : s));
+    expect(checkAddOnly(template, runbook(marked)).join()).toContain("C20-soak-gate is a template step, so it carries no added");
   });
 
   test("the key order a file writes never matters; the content does", () => {
@@ -118,10 +144,10 @@ describe("a release runbook only adds", () => {
     const steps = text.slice(text.indexOf("\nsteps:") + 1);
     writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\ntemplate: kitchen-sink\n${SCOPE}${steps}`);
     expect(loadReleaseRunbook("v9.9.9", dir).steps.map((s) => s.id)).toEqual(ids);
-    const r25 = steps.indexOf('  - id: "P08-log-baseline"');
-    const c01 = steps.indexOf('  - id: "C01-backup"');
-    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\n${SCOPE}${steps.slice(0, r25)}${steps.slice(c01)}`);
-    expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step P08-log-baseline is missing");
+    const q01 = steps.indexOf('  - id: "Q01-lockfile"');
+    const q02 = steps.indexOf('  - id: "Q02-dump"');
+    writeFileSync(releaseRunbookPath("v9.9.9", dir), `release: v9.9.9\nrecovery: fix forward\n${SCOPE}${steps.slice(0, q01)}${steps.slice(q02)}`);
+    expect(() => loadReleaseRunbook("v9.9.9", dir)).toThrow("template step Q01-lockfile is missing");
   });
 });
 
@@ -144,13 +170,13 @@ describe("the committed release runbooks", () => {
 
 // ── scope: every PR a release ships, each with its check or a reason (owner, 2026-10-15) ──
 describe("a release's scope", () => {
-  const steps = [{ id: "V01-a" }, { id: "S01-b" }];
+  const steps = [{ id: "Q35-a" }, { id: "C14-b" }];
   test("an entry names its PR and exactly one of check: <step of this runbook> or none: <reason>", () => {
-    expect(scopeProblems([{ pr: 1, what: "x", check: "V01-a" }, { pr: 2, what: "y", none: "docs only" }], steps, "w")).toEqual([]);
+    expect(scopeProblems([{ pr: 1, what: "x", check: "Q35-a" }, { pr: 2, what: "y", none: "docs only" }], steps, "w")).toEqual([]);
     // red: none at all, both, a check that is no step, a duplicate PR, an unknown key, an empty list.
     expect(scopeProblems([{ pr: 1, what: "x" }], steps, "w").join()).toContain("exactly one of");
-    expect(scopeProblems([{ pr: 1, what: "x", check: "V01-a", none: "r" }], steps, "w").join()).toContain("exactly one of");
-    expect(scopeProblems([{ pr: 1, what: "x", check: "V09-gone" }], steps, "w").join()).toContain("V09-gone is no step");
+    expect(scopeProblems([{ pr: 1, what: "x", check: "Q35-a", none: "r" }], steps, "w").join()).toContain("exactly one of");
+    expect(scopeProblems([{ pr: 1, what: "x", check: "Q99-gone" }], steps, "w").join()).toContain("Q99-gone is no step");
     expect(scopeProblems([{ pr: 1, what: "x", none: "r" }, { pr: 1, what: "x", none: "r" }], steps, "w").join()).toContain("appears twice");
     expect(scopeProblems([{ pr: 1, what: "x", none: "r", owner: "z" }], steps, "w").join()).toContain("unknown key owner");
     expect(scopeProblems([], steps, "w").join()).toContain("scope lists every PR");
@@ -159,29 +185,35 @@ describe("a release's scope", () => {
 
   test("the PRs a range ships are its subjects' (#n), and the scope must list exactly them", () => {
     expect(prsOf(["fix(x): a thing (#1338)", "Merge branch 'a' into b", "feat: two (#12) and (#13)", "again (#1338)"])).toEqual([12, 13, 1338]);
-    const scope = [{ pr: 12, what: "a", none: "docs" }, { pr: 13, what: "b", check: "V01-a" }];
+    const scope = [{ pr: 12, what: "a", none: "docs" }, { pr: 13, what: "b", check: "Q35-a" }];
     expect(scopeCoverage([12, 13], scope)).toEqual([]);
     // red: a shipped PR the scope misses, and a listed PR no commit carries.
     expect(scopeCoverage([12, 13, 14], scope).join()).toContain("PR 14 ships in this release");
     expect(scopeCoverage([12], scope).join()).toContain("scope lists PR 13");
   });
 
-  test("v0.6.2's scope checks every product change with a version step, and the template holds no version step", () => {
+  test("v0.6.2's scope checks every product change with a version step: each is a Q step and a C twin, or a stage-only Q step", () => {
     const v062 = loadReleaseRunbook("v0.6.2");
-    const versionIds = v062.steps.filter((s) => s.phase === "version").map((s) => s.id);
-    expect(versionIds.length).toBeGreaterThanOrEqual(11);
-    for (const id of versionIds) expect(v062.scope.some((e) => e.check === id), id).toBe(true);
-    expect(v062.steps.filter((s) => s.phase === "version").every((s) => s.added === "v0.6.2")).toBe(true);
-    expect(template.steps.some((s) => s.phase === "version")).toBe(false);
-    // red: a template that carries a version step refuses.
-    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
-    expect(() => parseTemplate(text.replace('  - id: "S09-collect-logs"\n    standing: ["SW.4"]\n    host: "target"\n    phase: "soak"', '  - id: "V09-collect-logs"\n    standing: ["SW.4"]\n    host: "target"\n    phase: "version"'), "kitchen-sink")).toThrow("a template has no version checks");
+    const addedSteps = v062.steps.filter((s) => (s as RunbookStep).added === "v0.6.2");
+    expect(addedSteps.every((s) => s.phase === "qa" || s.phase === "cutover")).toBe(true);
+    const qaChecks = addedSteps.filter((s) => s.phase === "qa");
+    expect(qaChecks.length).toBeGreaterThanOrEqual(11);
+    for (const s of qaChecks) expect(v062.scope.some((e) => e.check === s.id), s.id).toBe(true);
+    // Production repeats every version check that does not write.
+    const prodNames = new Set(addedSteps.filter((s) => s.phase === "cutover").map((s) => s.id.slice(4)));
+    for (const s of qaChecks) expect(prodNames.has(s.id.slice(4)) !== ((s as { stageOnly?: boolean }).stageOnly === true), s.id).toBe(true);
+    expect(template.steps.some((s) => (s as RunbookStep).added !== undefined)).toBe(false);
+    // red: a release that drops a version check's production twin refuses.
+    const text = readFileSync(join(repoRoot, "scripts", "release", "runbooks", "releases", "v0.6.2.yaml"), "utf8");
+    const c23 = text.indexOf('  - id: "C23-subject-spacing"');
+    const c24 = text.indexOf('  - id: "C24-maintenance-fallback"');
+    expect(() => parseReleaseRunbook(text.slice(0, c23) + text.slice(c24), "v0.6.2")).toThrow("Q35-subject-spacing has no production twin named subject-spacing");
   });
 });
 
 // ── a template step with `since`: the release that gains it carries it, an earlier release's runbook stays as it ran (issue 1476) ──
 describe("a template step's since", () => {
-  const sdkSteps = ["S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"];
+  const sdkSteps = ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"];
 
   test("the template's SDK steps name v0.7.0, and v0.6.2 (which predates them) still only adds", () => {
     for (const id of sdkSteps) expect(template.steps.find((s) => s.id === id)?.since).toBe("v0.7.0");
@@ -192,26 +224,29 @@ describe("a template step's since", () => {
   test("v0.7.0 carries the SDK steps unmarked, ten added version checks, and every version step in its scope", () => {
     const v070 = loadReleaseRunbook("v0.7.0");
     for (const id of sdkSteps) expect(v070.steps.find((s) => s.id === id)?.added).toBeUndefined();
-    const versions = v070.steps.filter((s) => s.phase === "version");
-    expect(versions.length).toBe(10);
-    expect(versions.every((s) => s.added === "v0.7.0")).toBe(true);
-    // A scope entry names one check per PR. PR 1418 (D75) ships two: V03 is its entry, V04 is its second check (migrations 0126 and 0127).
-    for (const s of versions.filter((x) => x.id !== "V04-migration-ledger")) expect(v070.scope.some((e) => e.check === s.id), s.id).toBe(true);
+    const versions = v070.steps.filter((s) => s.added === "v0.7.0");
+    expect(versions.length).toBe(20);
+    expect(versions.map((s) => s.id.slice(0, 3))).toEqual([..."Q38 Q39 Q40 Q41 Q42 Q43 Q44 Q45 Q46 Q47 C26 C27 C28 C29 C30 C31 C32 C33 C34 C35".split(" ")]);
+    // Every version check is read-only against the target, so each QA step has a production twin of the same name.
+    expect(versions.some((s) => (s as { stageOnly?: boolean }).stageOnly === true)).toBe(false);
+    expect(versions.filter((s) => s.phase === "qa").map((s) => s.id.slice(4))).toEqual(versions.filter((s) => s.phase === "cutover").map((s) => s.id.slice(4)));
+    // A scope entry names one check per PR. PR 1418 (D75) ships two: Q40 is its entry, Q41 is its second check (migrations 0126 and 0127).
+    for (const s of versions.filter((x) => x.phase === "qa" && x.id !== "Q41-migration-ledger")) expect(v070.scope.some((e) => e.check === s.id), s.id).toBe(true);
     expect(v070.recovery.trim()).not.toBe("");
   });
 
   test("red: from v0.7.0 on, a runbook without an SDK step is refused; so is one that edits it; a bad since refuses", () => {
-    const without = template.steps.filter((s) => s.id !== "S11-sdk-quickstart");
-    expect(checkAddOnly(template, runbook(without, "v0.7.0")).join()).toContain("template step S11-sdk-quickstart is missing");
-    expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain("template step S11-sdk-quickstart is missing");
-    const edited = template.steps.map((s) => (s.id === "S12-sdk-tests" ? { ...s, maxMinutes: 1 } : s));
-    expect(checkAddOnly(template, runbook(edited, "v0.7.0")).join()).toContain("S12-sdk-tests differs");
+    const without = template.steps.filter((s) => s.id !== "Q36-sdk-quickstart");
+    expect(checkAddOnly(template, runbook(without, "v0.7.0")).join()).toContain("template step Q36-sdk-quickstart is missing");
+    expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain("template step Q36-sdk-quickstart is missing");
+    const edited = template.steps.map((s) => (s.id === "Q37-sdk-tests" ? { ...s, maxMinutes: 1 } : s));
+    expect(checkAddOnly(template, runbook(edited, "v0.7.0")).join()).toContain("Q37-sdk-tests differs");
     const text = readFileSync(templatePath("kitchen-sink"), "utf8");
     expect(() => parseTemplate(text.replace('since: "v0.7.0"', 'since: "soon"'), "kitchen-sink")).toThrow("since is a release name");
   });
 
   test("a step the earlier release added under a template id it predates is still its own addition", () => {
-    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id)), { ...added("S11-sdk-quickstart", "v0.6.9"), phase: "soak" as const }];
+    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id)), { ...added("Q36-sdk-quickstart", "v0.6.9"), phase: "qa" as const }];
     expect(checkAddOnly(template, runbook(early, "v0.6.9"))).toEqual([]);
   });
 });
@@ -252,8 +287,11 @@ describe("a release's breaking declaration", () => {
     expect(sql.split("\n")[0]).toBe("-- compat: breaking");
     expect(loadReleaseRunbook("v0.6.2").breaking).toBeUndefined();
     const target = loadTarget(join(repoRoot, "scripts", "release", "targets", "stage.json"));
-    const rendered = renderStep(template.steps.find((s) => s.id === "P07-baseline")!, target, templateValues(target, "a".repeat(40), "20260101T000000Z"));
-    expect(rendered.remote).toContain(`RM_RELEASE=${target.release}`);
+    // The baseline step reads it on stage and on production, so the QA run proves the declaration the cutover relies on.
+    for (const id of ["Q12-state-baseline", "P07-state-baseline"]) {
+      const rendered = renderStep(template.steps.find((s) => s.id === id)!, target, templateValues(target, "a".repeat(40), "20260101T000000Z"));
+      expect(rendered.remote, id).toContain(`RM_RELEASE=${target.release}`);
+    }
     // red: no other step gets the variable.
     const other = renderStep(template.steps.find((s) => s.id === "P08-log-baseline")!, target, templateValues(target, "a".repeat(40), "20260101T000000Z"));
     expect(other.remote).not.toContain("RM_RELEASE");
