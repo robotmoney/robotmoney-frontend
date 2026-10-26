@@ -100,7 +100,7 @@ scope:
   - {pr: 1479, what: "feat(release): SDK checks in the platform runbook, plus the v0.7.0 and SDK 0.2.0 checks", none: "release tooling: the run itself exercises it (Q35-archive-routes to Q47-rate-limit)"}
   - {pr: 1481, what: "docs(release): the SDK tag is cut after the matching platform release (D77)", none: "docs only"}
   - {pr: 1483, what: "docs(release): a new release branch is created from main, never from the previous release line", none: "docs only"}
-  - {pr: 1486, what: "feat(release): the 2026-10-16 three-phase release model on main, and the v0.7.0 runbook re-based on it", none: "release tooling: the run itself exercises it"}
+  - {pr: 1488, what: "feat(release): the 2026-10-16 three-phase release model on main, and the v0.7.0 runbook re-based on it", none: "release tooling: the run itself exercises it"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).
