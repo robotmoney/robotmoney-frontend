@@ -398,7 +398,7 @@ describe("archive identity is the content, not the gzip encoder", () => {
         expect(e).toBeInstanceOf(ArchiveError);
       }
       expect(seen).toEqual([want]);
-      expect(want).toBe(Math.min(bytesRaw, 67108864) + 1);
+      expect(Number(want)).toBe(Math.min(bytesRaw, 67108864) + 1);
     }
   });
 
