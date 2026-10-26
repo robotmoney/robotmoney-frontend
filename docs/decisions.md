@@ -5786,6 +5786,10 @@ without forbidding the squash. Tagging at the cutover keeps production from
 ever running a commit no version names, and makes every pre-cutover check the
 place a release can still stop.
 
+**Owner clarification (2026-10-26).** The owner said: "releases 0.7.x is branched from main, NOT
+0.6.x". A new release branch `releases-A.B.x` is branched from main, not from the previous release
+line, and its scope reaches it from `main` by route (a).
+
 ---
 
 <a id="d71"></a>
