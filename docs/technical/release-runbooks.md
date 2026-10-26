@@ -57,6 +57,10 @@ The release branch takes changes by two routes only ([D70](../decisions.md#d70),
   `qa/A.B.x-<YYYY-MM-DD>`, that branch is squash-merged onto `releases-A.B.x`. The squash commit's
   tree must equal the tree stage passed.
 
+A new release line's branch `releases-A.B.x` is created from `main`, at the commit the release's
+scope is chosen at, never from the previous release line (owner, 2026-10-26). Its scope then reaches
+it from `main` by route (a). Nothing on `releases-A.B.x` descends from the previous line's branch.
+
 No commit lands on the release branch during a QA session. Session fixes reach `main` afterwards by
 a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
 instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Tags land on the release
@@ -342,6 +346,9 @@ claims the gate ran and passed.
 Not a gate. Every fix made on a QA branch reaches the release branch in the stage-passed squash
 (§2 route (b)), and reaches `main` afterwards by a separate PR from the QA branch, evaluated against
 `main` as it is then.
+
+A change made on a previous release line reaches a later release only through `main`, so it is
+backported to `main` by pull request first (§2).
 
 ## 8. Compatibility contract
 
