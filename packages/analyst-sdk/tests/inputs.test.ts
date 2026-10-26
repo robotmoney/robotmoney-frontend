@@ -292,7 +292,7 @@ describe("run membership (pure)", () => {
   test("a listed path outside its backup directory is refused", () => {
     const id = "2026-01-01T000000Z";
     const rec = (path: string) =>
-      JSON.stringify({ format: 1, backup: id, revisions: {}, append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ path, rows: 1, sha256_raw: "0".repeat(64) }] } } });
+      JSON.stringify({ format: 1, backup: id, revisions: {}, append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ path, rows: 1, bytes_raw: 1, sha256_raw: "0".repeat(64) }] } } });
     const bad = ["/abs/x.csv.gz", `csv/${id}/../../outside/x`, `csv/${id}/data/../x.csv.gz`, "csv/2026-01-02T000000Z/data/x.csv.gz", `csv/${id}//x`, `csv/${id}/./x`, `csv/${id}\\..\\x`, `csv/${id}/x\0y`];
     for (const p of bad) expect(() => selectBackups({ [id]: rec(p) }), p).toThrow(/is not a file inside/);
     expect(selectBackups({ [id]: rec(`csv/${id}/data/t.csv.gz`) }).length).toBe(1);
