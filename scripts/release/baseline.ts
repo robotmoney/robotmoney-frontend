@@ -34,6 +34,7 @@ import { openReadOnly, readCounts, readDatabaseSize } from "./db-read.ts";
 import { ledgerProblems, MIGRATIONS_DIR, readRunningVersion, reconcileLedger, repoMigrations, runningPinRef, type ReconcileReceipt } from "./ledger.ts";
 import { parsePendingHeader } from "../../backend/src/db/schema-compat.ts";
 import { releaseStateDir } from "./release-state.ts";
+import { loadReleaseRunbook } from "./runbook.ts";
 
 /** The in-house seats migration 0101 must never clear (runbook P07-baseline). */
 /** Sessions in flight at the baseline; V01-subject-spacing checks each one published on its normal close. */
@@ -85,8 +86,11 @@ export function baselineProblems(reconcile: ReconcileReceipt, wouldClear: readon
  * PURE. Why the pending set cannot migrate under a running previous release;
  * empty when every pending file declares `compat: additive`. `read` returns a
  * file's text. A file with no declaration, or one that fails to parse, refuses.
+ * A `compat: breaking` file passes only when the release runbook names it in
+ * `breaking:` (spec §8.5: the release then migrates in the breaking order, not
+ * under the running release); an undeclared breaking file still refuses.
  */
-export function rollingMigrationProblems(pending: readonly string[], read: (name: string) => string): string[] {
+export function rollingMigrationProblems(pending: readonly string[], read: (name: string) => string, declaredBreaking: readonly string[] = []): string[] {
   const out: string[] = [];
   for (const name of pending) {
     let compat: string | null;
@@ -96,8 +100,9 @@ export function rollingMigrationProblems(pending: readonly string[], read: (name
       out.push(`${name}: its compat header does not parse (${error instanceof Error ? error.message : String(error)})`);
       continue;
     }
+    if (compat === "breaking" && declaredBreaking.includes(name)) continue;
     if (compat !== "additive") {
-      out.push(`${name} is ${compat ?? "undeclared"}, not additive: a rolling release migrates while the previous release serves, so a breaking migration needs its own plan`);
+      out.push(`${name} is ${compat ?? "undeclared"}, not additive: a rolling release migrates while the previous release serves, so a breaking migration needs its own plan (the release runbook names it in breaking: to declare it, spec §8.5)`);
     }
   }
   return out;
@@ -137,7 +142,13 @@ async function main(): Promise<number> {
     const reconcile = reconcileLedger(ledger, pinRef === null ? {} : { pinRef });
     const pending = reconcile.pending;
     const problems = baselineProblems(reconcile, wouldClear);
-    problems.push(...rollingMigrationProblems(pending, (name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8")));
+    // The release the runner names (RM_RELEASE) declares its breaking migrations in its own runbook; no release, no declaration.
+    const release = process.env.RM_RELEASE;
+    let declaredBreaking: readonly string[] = [];
+    if (release) {
+      try { declaredBreaking = loadReleaseRunbook(release).breaking ?? []; } catch (error) { problems.push(`the runbook of ${release} could not be read for its breaking declaration: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`); }
+    }
+    problems.push(...rollingMigrationProblems(pending, (name) => readFileSync(join(MIGRATIONS_DIR, name), "utf8"), declaredBreaking));
     if (pinRef === null) problems.push(`the running stack at ${origin} reports no version to pin the applied migration bytes to (${(version as { error: string }).error})`);
 
     const dir = releaseStateDir(instance, run);
@@ -161,6 +172,7 @@ async function main(): Promise<number> {
       wouldClear,
       repoMigrations: repo.length,
       pending: { count: pending.length, names: pending },
+      breakingDeclared: declaredBreaking,
       running: pinRef === null ? null : { origin, pinRef },
       reconcile,
       counts,

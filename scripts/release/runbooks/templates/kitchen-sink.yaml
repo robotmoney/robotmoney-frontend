@@ -420,3 +420,43 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
     irreversible: false
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  # ── The analyst SDK against the release (issue 1476, SV.8): on the control
+  # machine, read-only against the target, after the soak like the rest of S.
+  - id: "S10-archive-routes"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "soak"
+    since: "v0.7.0"
+    description: "The public archive routes answer 200 with format 1 (the backups listing and the first backup's record), not 404"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "archive-routes", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "S11-sdk-quickstart"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "soak"
+    since: "v0.7.0"
+    description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 90
+  - id: "S12-sdk-tests"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "soak"
+    since: "v0.7.0"
+    description: "The SDK package's tests pass at the release commit, run from a sparse clone of it"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "package-tests", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 30
