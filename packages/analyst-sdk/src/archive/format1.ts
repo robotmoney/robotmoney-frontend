@@ -11,7 +11,7 @@
 //   csv/<backup id>/data/<table>.<start>_<end>.csv.gz rows this backup added
 //   csv/<backup id>/revisions/<table>.csv.gz          revised-table changes
 // Every file is listed in its record with its row count and the SHA-256 of its
-// gzipped bytes. Append-only tables chain: each backup's watermark_before is
+// uncompressed bytes (gzip is only a transport encoding). Append-only tables chain: each backup's watermark_before is
 // the previous backup's watermark_after. Values are Postgres COPY CSV text.
 //
 // A run's inputs are exactly its vintage: analytics_data_vintages names the
@@ -24,7 +24,8 @@ import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind
 export interface FileRecord {
   path: string;
   rows: number;
-  sha256_gz: string;
+  // SHA-256 of the file's uncompressed bytes: its identity. The gzip is only a transport encoding.
+  sha256_raw: string;
 }
 
 export interface BackupRecord {
@@ -196,11 +197,12 @@ export function listedFiles(records: readonly BackupRecord[]): FileRecord[] {
   return out;
 }
 
-// A listed file against what was read: present, same SHA-256, and (when its
-// rows were parsed) the same row count.
-export function verifyFile(f: FileRecord, got: { sha256_gz: string | null; rows?: number }): void {
-  if (got.sha256_gz === null) throw new ArchiveError(`incomplete local copy: ${f.path} is listed in its backup record but missing`);
-  if (got.sha256_gz !== f.sha256_gz) throw new ArchiveError(`corrupt local copy: ${f.path} sha256 ${got.sha256_gz} does not match the record's ${f.sha256_gz}`);
+// A listed file against what was read: present, same SHA-256 of its uncompressed
+// bytes (never of the gzip, which any encoder may write differently), and (when
+// its rows were parsed) the same row count.
+export function verifyFile(f: FileRecord, got: { sha256_raw: string | null; rows?: number }): void {
+  if (got.sha256_raw === null) throw new ArchiveError(`incomplete local copy: ${f.path} is listed in its backup record but missing`);
+  if (got.sha256_raw !== f.sha256_raw) throw new ArchiveError(`corrupt local copy: ${f.path} content sha256 ${got.sha256_raw} does not match the record's ${f.sha256_raw}`);
   if (got.rows !== undefined && got.rows !== f.rows) throw new ArchiveError(`corrupt local copy: ${f.path} has ${got.rows} rows, the record says ${f.rows}`);
 }
 

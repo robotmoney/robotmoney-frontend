@@ -30,7 +30,7 @@ import {
   handlePublicAnalytics,
 } from "../../src/api/routes/public-analytics.ts";
 import { createClientBudgets, createQueryGate, PublicBusyError, publicQueryGate } from "../../src/api/public-analytics-limits.ts";
-import { _resetArchiveForTests, _setArchiveClockForTests, _setArchiveEncoderPinForTests, encoderFixtureSha256 } from "../../src/analytics/store/public-archive-store.ts";
+import { _resetArchiveForTests, _setArchiveClockForTests } from "../../src/analytics/store/public-archive-store.ts";
 import { saveRawIndicatorHistory } from "../../src/analytics/store/raw-history-store.ts";
 import { resolveClientIp } from "../../src/api/client-ip.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
@@ -49,7 +49,6 @@ async function get(path: string, ip: string, init: RequestInit = {}): Promise<Re
 
 beforeAll(async () => {
   _resetArchiveForTests();
-  _setArchiveEncoderPinForTests(await encoderFixtureSha256());
   _setArchiveClockForTests(() => Date.parse("2002-01-03T12:00:00Z"));
   await saveRawIndicatorHistory({ LIM: Array.from({ length: 28 }, (_, i) => ({ date: `2002-01-${String(i + 1).padStart(2, "0")}`, value: i })) }, undefined, "seed");
   // Unicode in a stored value the list routes serve (an asset's config identity).
@@ -68,7 +67,6 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(() => {
-  _setArchiveEncoderPinForTests(null);
   _setArchiveClockForTests(null);
   _resetArchiveForTests();
 });
@@ -208,7 +206,7 @@ describe("bytes through the handler: what is charged is what is sent", () => {
     const reader = body.body!.getReader();
     await reader.read();
     await reader.cancel();
-    expect(_publicAnalyticsBudgetForTests(ip).bytes).toBe(before - f.bytes_gz);
+    expect(_publicAnalyticsBudgetForTests(ip).bytes).toBe(before - f.bytes_raw);
 
     // Drive the budget to zero: the next request, of any kind, is 429 + Retry-After.
     _chargePublicAnalyticsBytesForTests(ip, _publicAnalyticsBudgetForTests(ip).bytes);

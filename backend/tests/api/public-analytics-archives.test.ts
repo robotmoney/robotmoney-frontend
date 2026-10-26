@@ -25,7 +25,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { gunzipSync, gzipSync } from "node:zlib";
+import { Transform } from "node:stream";
+import { createGzip, gunzipSync, gzipSync } from "node:zlib";
 import { ARCHIVE_BACKUP_RECORD_SCHEMA, ARCHIVE_PART_BYTES, PUBLIC_ANALYTICS_SCHEMAS, ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import { _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../../src/api/routes/public-analytics.ts";
@@ -33,11 +34,9 @@ import { publicQueryGate } from "../../src/api/public-analytics-limits.ts";
 import {
   _resetArchiveForTests,
   _setArchiveClockForTests,
-  _setArchiveEncoderPinForTests,
+  _setArchiveGzipForTests,
   _setArchivePartBytesForTests,
-  ARCHIVE_GZIP_FIXTURE_SHA256,
   ARCHIVE_TABLES,
-  encoderFixtureSha256,
 } from "../../src/analytics/store/public-archive-store.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 import { fixtureDb } from "../support/fixture-db.ts";
@@ -95,9 +94,6 @@ beforeAll(async () => {
   _resetArchiveForTests();
   _setArchivePartBytesForTests(null);
   _setArchiveClockForTests(() => NOW);
-  // The archive tests run under any Bun: the encoder pin itself is asserted by
-  // its own test below, against ARCHIVE_GZIP_FIXTURE_SHA256.
-  _setArchiveEncoderPinForTests(await encoderFixtureSha256());
   const [mv] = await fixtureDb<{ id: string }[]>`
     INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest, created_at)
     VALUES ('regime', 'regime-v3', '{"panels": ["macro", "onchain"], "note": "a,b"}', repeat('a', 64), '2001-01-01 01:00:00.123456+00')
@@ -176,7 +172,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(() => {
-  _setArchiveEncoderPinForTests(null);
+  _setArchiveGzipForTests(null);
   _setArchiveClockForTests(null);
   _setArchivePartBytesForTests(null);
   _resetArchiveForTests();
@@ -451,20 +447,19 @@ describe("archive: records and bodies", () => {
           const body = await get(`${P.archiveFiles}${f.path}`);
           expect(body.status, f.path).toBe(200);
           expect(body.headers.get("Content-Type")).toBe("application/gzip");
-          expect(body.headers.get("ETag")).toBe(`"${f.sha256_gz}"`);
-          expect(body.headers.get("Content-Length")).toBe(String(f.bytes_gz));
+          expect(body.headers.get("ETag")).toBe(`"${f.sha256_raw}"`);
+          expect(body.headers.get("X-Content-SHA256")).toBe(f.sha256_raw);
           const gz = await bytesOf(body);
-          expect(gz.length).toBe(f.bytes_gz);
-          expect(sha256(gz)).toBe(f.sha256_gz);
           const text = gunzipSync(gz).toString("utf8");
           expect(sha256(text)).toBe(f.sha256_raw);
+          expect(Buffer.byteLength(text)).toBe(f.bytes_raw);
           // The parity check: Postgres's own COPY CSV of the same rows, as
-          // csvb selects them, is the same text, and gzipped as csvb does
-          // (node:zlib, level 9) the same bytes.
+          // csvb selects them, is the same text (its identity is the hash of
+          // that text, whatever gzip carries it).
           if (f.rows <= PARITY_ROWS) {
             const copy = await copyCsv(csvbSelect(table, f.id_min, f.id_max));
             expect(text === copy, `${f.path} differs from COPY CSV`).toBe(true);
-            expect(sha256(gzipSync(Buffer.from(copy), { level: 9 }))).toBe(f.sha256_gz);
+            expect(sha256(copy)).toBe(f.sha256_raw);
           } else {
             // A large archive is compared on its first PARITY_ROWS rows: COPY
             // of the same id range is the same text as the archive's prefix.
@@ -494,9 +489,9 @@ describe("archive: records and bodies", () => {
     const f = body.append_only.source_value_versions.files[0];
     const releases = [await publicQueryGate.acquire(), await publicQueryGate.acquire()];
     try {
-      const cond = await get(`${P.archiveFiles}${f.path}`, { headers: { "If-None-Match": `"${f.sha256_gz}"` } });
+      const cond = await get(`${P.archiveFiles}${f.path}`, { headers: { "If-None-Match": `"${f.sha256_raw}"` } });
       expect(cond.status).toBe(304);
-      expect(cond.headers.get("ETag")).toBe(`"${f.sha256_gz}"`);
+      expect(cond.headers.get("ETag")).toBe(`"${f.sha256_raw}"`);
       expect(cond.headers.get("Cache-Control")).toBe("public, max-age=31536000, immutable");
       const recCond = await get(`${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`, { headers: { "If-None-Match": `"${sha256((await record("2001-01-02T000000Z")).bytes)}"` } });
       expect(recCond.status).toBe(304);
@@ -603,7 +598,7 @@ describe("archive: records and bodies", () => {
       });
     }
     const ok = await get(`${P.archiveFiles}${f.path}`);
-    expect(sha256(await bytesOf(ok))).toBe(f.sha256_gz);
+    expect(sha256(gunzipSync(await bytesOf(ok)))).toBe(f.sha256_raw);
   });
 
   test("a cancelled download leaves nothing behind: the next request gets the whole verified body", async () => {
@@ -615,7 +610,7 @@ describe("archive: records and bodies", () => {
     await reader.cancel();
     await Bun.sleep(200);
     expect(publicQueryGate.inUse()).toBe(0);
-    expect(sha256(await bytesOf(await get(`${P.archiveFiles}${f.path}`)))).toBe(f.sha256_gz);
+    expect(sha256(gunzipSync(await bytesOf(await get(`${P.archiveFiles}${f.path}`))))).toBe(f.sha256_raw);
   }, 60_000);
 
   test("compression runs off the event loop: timers keep firing and a normal request completes while a large archive streams", async () => {
@@ -637,7 +632,7 @@ describe("archive: records and bodies", () => {
       expect(normal.status).toBe(200);
       const normalMs = performance.now() - started;
       const gz = await download;
-      expect(sha256(gz)).toBe(f.sha256_gz);
+      expect(sha256(gunzipSync(gz))).toBe(f.sha256_raw);
       expect(normalMs).toBeLessThan(2000);
       expect(worst).toBeLessThan(500);
     } finally {
@@ -729,22 +724,68 @@ describe("archive: watermarks that never move", () => {
   }, 120_000);
 });
 
-describe("archive: the encoder pin", () => {
-  test("this runtime's gzip is the pinned encoder (oven/bun:1.4.4, as backend/Dockerfile and CI pin)", async () => {
-    expect(await encoderFixtureSha256(), "the Bun runtime's zlib changed: every published archive identity would change").toBe(ARCHIVE_GZIP_FIXTURE_SHA256);
+// Three gzip encoders that write different bytes for the same content: Bun's
+// gzip, and node:zlib at level 1 and level 9.
+function bunGzip(): Transform {
+  const parts: Buffer[] = [];
+  return new Transform({
+    transform(chunk, _enc, cb) {
+      parts.push(Buffer.from(chunk));
+      cb();
+    },
+    flush(cb) {
+      cb(null, Buffer.from(Bun.gzipSync(Buffer.concat(parts))));
+    },
   });
+}
+const ENCODERS: Record<string, () => Transform> = { bun: bunGzip, "zlib-1": () => createGzip({ level: 1 }), "zlib-9": () => createGzip({ level: 9 }) };
 
-  test("a server whose encoder is not the pinned one refuses archives instead of publishing other bytes", async () => {
-    _setArchiveEncoderPinForTests("0".repeat(64));
+describe("archive: identity is the content, never the gzip encoder", () => {
+  test("the same content under three gzip encoders: the same identity, ETag and manifest entry, with no 503 and no encoder pin", async () => {
+    const id = "2001-01-02T000000Z";
+    const recordTexts = new Set<string>();
+    const etags = new Set<string>();
+    const gzHashes = new Set<string>();
+    const contentHashes = new Set<string>();
+    let file: any;
     try {
-      const res = await get(`${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`);
-      expect(res.status).toBe(503);
-      expect(res.headers.get("Retry-After")).toBe("3600");
-      expect(res.headers.get("Cache-Control")).toBe("no-store");
+      for (const [name, make] of Object.entries(ENCODERS)) {
+        _setArchiveGzipForTests(make);
+        _resetArchiveForTests();
+        const { body, bytes } = await record(id);
+        recordTexts.add(new TextDecoder().decode(bytes));
+        file = body.append_only.source_value_versions.files[0];
+        const res = await get(`${P.archiveFiles}${file.path}`);
+        expect(res.status, `${name} must not be refused`).toBe(200);
+        etags.add(res.headers.get("ETag")!);
+        const gz = await bytesOf(res);
+        gzHashes.add(sha256(gz));
+        contentHashes.add(sha256(gunzipSync(gz)));
+        expect(res.headers.get("X-Content-SHA256")).toBe(file.sha256_raw);
+        // A revalidation by the content hash is a 304 whatever the encoder.
+        const cond = await get(`${P.archiveFiles}${file.path}`, { headers: { "If-None-Match": `"${file.sha256_raw}"` } });
+        expect(cond.status).toBe(304);
+      }
     } finally {
-      _setArchiveEncoderPinForTests(await encoderFixtureSha256());
+      _setArchiveGzipForTests(null);
+      _resetArchiveForTests();
     }
-    expect((await get(`${P.archiveFiles}csv/2001-01-02T000000Z/backup.json`)).status).toBe(200);
+    expect(gzHashes.size, "the encoders must write different gzip bytes for this to test anything").toBeGreaterThan(1);
+    expect(recordTexts.size).toBe(1);
+    expect([...etags]).toEqual([`"${file.sha256_raw}"`]);
+    expect([...contentHashes]).toEqual([file.sha256_raw]);
+  }, 120_000);
+
+  test("content gzipped by each encoder has one identity: the hash of the uncompressed bytes", () => {
+    const content = Buffer.from(Array.from({ length: 4000 }, (_, i) => `${i},raw_indicator_history:X${i % 7},${(i * 1.25).toFixed(3)}\n`).join(""));
+    const identities = new Set<string>();
+    const gzips = new Set<string>();
+    for (const gz of [Bun.gzipSync(content), gzipSync(content, { level: 1 }), gzipSync(content, { level: 9 })]) {
+      gzips.add(sha256(gz));
+      identities.add(sha256(gunzipSync(gz)));
+    }
+    expect(gzips.size).toBeGreaterThan(1);
+    expect([...identities]).toEqual([sha256(content)]);
   });
 
   test("an encoded slash names no route", async () => {

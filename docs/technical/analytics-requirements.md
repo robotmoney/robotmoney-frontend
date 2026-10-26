@@ -106,6 +106,7 @@ There is one archive format: format 1, the layout robotmoney/csv-backups writes 
 - **Write-once.** A backup only adds archives. Nothing is overwritten.
 - **Two kinds of archive.** Data archives only gain rows. They hold every observed version of source data (`source_value_versions`), the run ledger, the vintages and the published reports (`analytics_output_snapshots`). Revision archives hold the rows that are new or changed since the last backup, with `_backup` and `_op` columns. They cover `raw_indicator_history`, `asset_prices` and `regime_snapshots`. The state at any backup is the replay of the revision archives up to it.
 - **Pinning.** A backup id names an exact state. `csvb resolve --as-of <id>` returns a report as of that backup.
+- **Identity.** An archive is identified by the SHA-256 of its uncompressed canonical bytes, recorded in `backup.json` as `sha256_raw` beside `bytes_raw`. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, and no gzip encoder, Bun version or container image is part of an archive's identity. A client decompresses an archive, then verifies the hash. `backup.json` records no hash or size of the gzip bytes.
 - **Provenance.** `backup.json` records `source` (`db` or `api`) and `consistency` (`snapshot` or `paged`).
 - **Location.** Backups live outside this repo. The tool refuses a backup directory inside a checkout of this repo.
 - **Access.** The csv-backups repo is private and holds production data.
@@ -117,7 +118,7 @@ The API serves archives in format 1. A client downloads archives and writes them
 - **Data archives.** Served as `<table>.<start>_<end>.csv.gz`, with the same columns and the same COPY CSV text as a backup.
 - **Revision archives.** Served with the `_backup` and `_op` columns.
 - **Backups.** Archives are grouped by backup id, and a `backup.json` describes each backup. A client lists the backups, then fetches only the archives past its watermark.
-- **Same bytes.** The API and the replica produce byte-identical archives for the same state.
+- **Same content.** The API and the replica produce archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
 - **Coverage.** Every report in a backup is served with full history. That includes the source data the correlations and the backtest read (`yahoo:^GSPC`, `yahoo:ETH-USD` and `fred:DTB3`).
 
 Model portfolio inputs (asset prices, lending yields and the T-bill rate) are source data under sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Any workflow using them receives them as supplied data and follows the same extract-only HTTP boundary; their absence never authorizes a downstream request.
@@ -128,7 +129,7 @@ Archives are the unit of transfer. A chunk is one archive.
 
 - **Size.** An archive is at most 90 MB, as the csv-backups tool writes it (`--part-mb`, default 64), because GitHub rejects files over 100 MB.
 - **Naming.** A data archive is named by the earliest and latest row time it holds. A client picks archives by name, without opening them.
-- **Write-once.** A served archive never changes. Its checksum is its identity.
+- **Write-once.** A served archive never changes. Its content hash (`sha256_raw`) is its identity, never its gzip bytes.
 - **Watermarks.** A client holds, per table, the last id or time it has. It asks only for archives past that point, so a second run costs only what changed.
 - **Lists.** Listing the backups and their archives is a small request. Archive bodies are separate requests.
 
@@ -139,9 +140,9 @@ Public traffic must never starve the site. These limits apply to every public an
 - **Concurrency gate.** At most 2 public-analytics queries run at once, process-wide. Beyond that the API answers 503 with `Retry-After`. Public traffic holds at most 2 of the 10 pool connections.
 - **Statement timeout.** Every public query runs with a 5 second timeout. A timed-out query answers 503 with `Retry-After`, never 500, and frees its connection.
 - **Cost-weighted rate limit.** 100 tokens a minute per client ip. A list request costs 1. A heavy request costs 10: an archive of a large table, or a frozen run output.
-- **Byte budget.** 50 MB served a minute per client ip. An archive request is admitted when the client has any budget left. The full archive is charged and the budget may go negative; later requests answer 429 with `Retry-After` until it recovers. Existing archives are never re-chunked to fit the budget.
+- **Byte budget.** 50 MB served a minute per client ip. An archive request is admitted when the client has any budget left. The full archive is charged, by its uncompressed size because the gzip size depends on the encoder, and the budget may go negative; later requests answer 429 with `Retry-After` until it recovers. Existing archives are never re-chunked to fit the budget.
 - **Async compression.** Gzip runs off the event loop, so a large response cannot stall other routes.
-- **Caching.** A served archive is immutable. Its ETag is its checksum, read by a metadata query before any bytes. A matching `If-None-Match` answers 304 without reading the archive. A 200 carries `Cache-Control: public, max-age=31536000, immutable`. Lists carry `max-age=300`.
+- **Caching.** A served archive is immutable. Its ETag is its content hash (`sha256_raw`, the hash of the uncompressed bytes), read by a metadata query before any bytes. A matching `If-None-Match` answers 304 without reading the archive. A 200 carries `Cache-Control: public, max-age=31536000, immutable`. Lists carry `max-age=300`.
 - **Edge cache.** The web server caches `GET /api/public/analytics/*` with a lock, so concurrent misses reach the API once. The cache is bounded (256 MB) and sets `X-Cache-Status`.
 - **Vendor-neutral client identity.** The rate limit keys on `X-Client-IP`, which the web server sets from its resolved address. The web server drops any `X-Client-IP` the caller sent. No CDN rule is involved.
 - **One way in.** Only the web server can reach the api port. The api publishes no port on a public interface, so no caller can set its own client identity.

@@ -5,9 +5,10 @@
 // scripts/archive-fixture-regenerate.ts). Generation is the real bin/inputs.ts
 // process; every later stage runs with fetch replaced by a thrower (preload).
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { openLocalCopy } from "../bin/local-copy.ts";
 import {
   ArchiveError,
   RunInputCollector,
@@ -186,7 +187,7 @@ describe("incomplete or corrupt copies are refused", () => {
     rmSync(svvPath(missing, FACTS.backup));
     const [a, c, m] = await Promise.all([generate(corrupt, RUN1), generate(counted, RUN1), generate(missing, RUN1)]);
     expect(a.code).toBe(1);
-    expect(a.stderr).toMatch(/corrupt local copy: .*source_value_versions.* sha256/);
+    expect(a.stderr).toMatch(/corrupt local copy: .*source_value_versions.* (is not a readable gzip|content sha256)/);
     expect(c.code).toBe(1);
     expect(c.stderr).toMatch(/corrupt local copy: .*analytics_vintage_members.* rows, the record says/);
     expect(m.code).toBe(1);
@@ -290,7 +291,7 @@ describe("run membership (pure)", () => {
   test("a listed path outside its backup directory is refused", () => {
     const id = "2026-01-01T000000Z";
     const rec = (path: string) =>
-      JSON.stringify({ format: 1, backup: id, revisions: {}, append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ path, rows: 1, sha256_gz: "0".repeat(64) }] } } });
+      JSON.stringify({ format: 1, backup: id, revisions: {}, append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ path, rows: 1, sha256_raw: "0".repeat(64) }] } } });
     const bad = ["/abs/x.csv.gz", `csv/${id}/../../outside/x`, `csv/${id}/data/../x.csv.gz`, "csv/2026-01-02T000000Z/data/x.csv.gz", `csv/${id}//x`, `csv/${id}/./x`, `csv/${id}\\..\\x`, `csv/${id}/x\0y`];
     for (const p of bad) expect(() => selectBackups({ [id]: rec(p) }), p).toThrow(/is not a file inside/);
     expect(selectBackups({ [id]: rec(`csv/${id}/data/t.csv.gz`) }).length).toBe(1);
@@ -302,5 +303,56 @@ describe("run membership (pure)", () => {
     expect(p.rows).toEqual([["1", 'x,"y"\nz', null], ["2", "", "3"]]);
     expect(() => parseCopyCsv('a,b\n1,"x\n')).toThrow(ArchiveError);
     expect(() => parseCopyCsv("a,b\n1,2,3\n")).toThrow(ArchiveError);
+  });
+});
+
+// Issue 1444: an archive's identity is its content. The downloader (the local
+// copy reader) decompresses, then verifies the hash of the uncompressed bytes,
+// so a correct archive is accepted whatever gzip encoder wrote it.
+describe("archive identity is the content, not the gzip encoder", () => {
+  const ID = "2026-01-01T000000Z";
+  const TABLE = "analytics_ledger_runs";
+  const CONTENT = "id,run_key\n1,a\n2,b\n";
+  const PATH = `csv/${ID}/data/${TABLE}.2026-01-01T000000Z_2026-01-01T000000Z.csv.gz`;
+  const copyWith = (gz: Uint8Array, content = CONTENT): string => {
+    const root = mkdtempSync(join(TMP, "enc-"));
+    mkdirSync(join(root, `csv/${ID}/data`), { recursive: true });
+    writeFileSync(join(root, PATH), gz);
+    const file = { path: PATH, rows: 2, bytes_raw: Buffer.byteLength(content), sha256_raw: sha(content) };
+    writeFileSync(
+      join(root, `csv/${ID}/backup.json`),
+      JSON.stringify({ format: 1, backup: ID, append_only: { [TABLE]: { watermark_before: null, watermark_after: "2", files: [file] } }, revisions: {} }),
+    );
+    return root;
+  };
+  const encoders: Record<string, () => Uint8Array> = {
+    bun: () => Bun.gzipSync(Buffer.from(CONTENT)),
+    "zlib-1": () => gzipSync(Buffer.from(CONTENT), { level: 1 }),
+    "zlib-9": () => gzipSync(Buffer.from(CONTENT), { level: 9 }),
+  };
+
+  test("a correct archive is accepted whatever encoder produced its gzip", () => {
+    const gzips = new Set<string>();
+    for (const [name, make] of Object.entries(encoders)) {
+      const gz = make();
+      gzips.add(sha(gz));
+      const copy = openLocalCopy(copyWith(gz));
+      expect(copy.tables[TABLE], name).toEqual([{ id: "1", run_key: "a" }, { id: "2", run_key: "b" }]);
+    }
+    expect(gzips.size, "the encoders must differ for this to test anything").toBeGreaterThan(1);
+  });
+
+  test("an archive whose decompressed bytes differ is refused, even when its gzip is valid", () => {
+    const other = CONTENT.replace("b\n", "c\n");
+    for (const make of [() => Bun.gzipSync(Buffer.from(other)), () => gzipSync(Buffer.from(other), { level: 1 })]) {
+      expect(() => openLocalCopy(copyWith(make()))).toThrow(/content sha256 .* does not match the record/);
+    }
+  });
+
+  test("a file that is not a gzip is corrupt, and a missing one is incomplete", () => {
+    expect(() => openLocalCopy(copyWith(Buffer.from("not gzip")))).toThrow(/not a readable gzip/);
+    const root = copyWith(gzipSync(Buffer.from(CONTENT)));
+    rmSync(join(root, PATH));
+    expect(() => openLocalCopy(root)).toThrow(/incomplete local copy/);
   });
 });

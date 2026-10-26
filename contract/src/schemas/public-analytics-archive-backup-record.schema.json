@@ -126,9 +126,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -148,15 +146,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -236,9 +226,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -258,15 +246,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -346,9 +326,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -368,15 +346,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -456,9 +426,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -478,15 +446,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -566,9 +526,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -588,15 +546,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -676,9 +626,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -698,15 +646,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -786,9 +726,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -808,15 +746,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },
@@ -896,9 +826,7 @@
                   "path",
                   "rows",
                   "bytes_raw",
-                  "bytes_gz",
                   "sha256_raw",
-                  "sha256_gz",
                   "id_min",
                   "id_max",
                   "sum_id",
@@ -918,15 +846,7 @@
                     "type": "integer",
                     "minimum": 1
                   },
-                  "bytes_gz": {
-                    "type": "integer",
-                    "minimum": 1
-                  },
                   "sha256_raw": {
-                    "type": "string",
-                    "pattern": "^[0-9a-f]{64}$"
-                  },
-                  "sha256_gz": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$"
                   },

@@ -70,8 +70,8 @@ no HTTP request, and a missing input is an error, never a download.
 robotmoney/csv-backups and of the public archive routes (see "Archives (format 1)").
 The archive tool, csvb, will own these fills (`csvb backup --source api`; its download
 client is follow-up issue 1436). Until then the API-only fill is these shell commands
-(`curl`, `jq`, `sha256sum`): list the sealed backups, and for each backup not yet in
-the copy fetch every archive its record lists, check each one's `sha256_gz`, and write
+(`curl`, `jq`, `gunzip`, `sha256sum`): list the sealed backups, and for each backup not yet in
+the copy fetch every archive its record lists, check each one's `sha256_raw` (the hash of its uncompressed bytes, so any gzip encoder's output verifies), and write
 the record last, so an interrupted backup is fetched again and never half-kept. `curl
 --retry` waits out a `429` or `503` with its `Retry-After`.
 
@@ -83,10 +83,10 @@ fill() {
   curl -fsS --retry 8 "$API/archive/backups?limit=1000" | jq -r '.backups[].record' | while read -r rec; do
     [ -f "$1/$rec" ] && continue
     curl -fsS --retry 8 "$API/archive/$rec" -o "$1/$rec.part" --create-dirs
-    jq -r '.append_only[].files[] | "\(.sha256_gz)  \(.path)"' "$1/$rec.part" | while read -r sum path; do
+    jq -r '.append_only[].files[] | "\(.sha256_raw)  \(.path)"' "$1/$rec.part" | while read -r sum path; do
       curl -fsS --retry 8 "$API/archive/$path" -o "$1/$path" --create-dirs
-      echo "$sum  $1/$path" | sha256sum -c --quiet
-    done
+      [ "$(gunzip -c "$1/$path" | sha256sum | cut -d' ' -f1)" = "$sum" ] || { echo "corrupt: $path" >&2; exit 1; }
+    done || return 1
     mv "$1/$rec.part" "$1/$rec"
   done
 }
@@ -420,7 +420,7 @@ hour past. Its record, `backup.json`, lists each archive with its row count, id 
 watermarks and SHA-256s; an archive is `<table>.<start>_<end>.csv.gz`, at most 64 MB
 uncompressed, the rows as Postgres COPY CSV text. A sealed backup never changes. List the
 backups, fetch each record past your watermark, then each archive it lists, and check
-`sha256_gz` before you keep it. The revised tables (`raw_indicator_history`,
+`sha256_raw`, the SHA-256 of the archive's uncompressed bytes, before you keep it. Gzip is only a transport encoding, so decompress first and hash the result. The revised tables (`raw_indicator_history`,
 `asset_prices`, `regime_snapshots`) have no revision archives here; read their current
 values from the list routes above.
 

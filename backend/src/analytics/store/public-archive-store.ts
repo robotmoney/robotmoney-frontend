@@ -25,7 +25,9 @@
 //     function, timestamps in UTC), split into parts of at most
 //     ARCHIVE_PART_BYTES uncompressed (a row is never cut), each named
 //     `<table>.<start>_<end>.csv.gz` by the earliest and latest row time in it,
-//     gzipped at level 9 with node:zlib (csvb's GzFile).
+//     gzipped at level 9 with node:zlib. A file's identity is the SHA-256 of
+//     its uncompressed bytes: the gzip is only a transport encoding, and any
+//     runtime may produce any valid gzip of the same bytes.
 //
 // WHAT IT SERVES. The append-only tables a run's inputs and its published
 // output are read from: the source data versions, the run ledger, the
@@ -47,6 +49,7 @@
 // reads a provider or recomputes an analytics value: every byte comes from the
 // committed rows.
 import { createHash } from "node:crypto";
+import type { Transform } from "node:stream";
 import { createGzip } from "node:zlib";
 import { ARCHIVE_FORMAT, ARCHIVE_PART_BYTES, ARCHIVE_SETTLE_MS } from "@robotmoney/contract";
 import type { TransactionSql } from "postgres";
@@ -62,9 +65,7 @@ export interface ArchiveFileRecord {
   path: string;
   rows: number;
   bytes_raw: number;
-  bytes_gz: number;
   sha256_raw: string;
-  sha256_gz: string;
   id_min: string;
   id_max: string;
   sum_id: string;
@@ -749,20 +750,24 @@ async function* rowsOf(t: ArchiveTable, after: string, through: string): AsyncGe
   }
 }
 
-/** Gzip as csvb's GzFile does (node:zlib, level 9, on the threadpool), hashing both sides. */
+let gzipFactory: () => Transform = () => createGzip({ level: 9 });
+/** Use another gzip encoder for archive bodies (tests only: the identity must not change). Null restores the default. */
+export function _setArchiveGzipForTests(make: (() => Transform) | null): void {
+  gzipFactory = make ?? (() => createGzip({ level: 9 }));
+}
+
+/**
+ * Gzip the body as it is written. An archive's identity is the SHA-256 of its
+ * uncompressed bytes (`sha256_raw`); the gzip is a transport encoding that any
+ * valid encoder may produce, so only the raw side is hashed.
+ */
 class GzSink {
-  private gz = createGzip({ level: 9 });
+  private gz = gzipFactory();
   private rawHash = createHash("sha256");
-  private gzHash = createHash("sha256");
   bytesRaw = 0;
-  bytesGz = 0;
   private done: Promise<void>;
   constructor(onChunk?: (c: Uint8Array) => void) {
-    this.gz.on("data", (c: Buffer) => {
-      this.gzHash.update(c);
-      this.bytesGz += c.length;
-      onChunk?.(c);
-    });
+    this.gz.on("data", (c: Buffer) => onChunk?.(c));
     this.done = new Promise((resolve, reject) => {
       this.gz.on("end", () => resolve());
       this.gz.on("error", reject);
@@ -775,10 +780,10 @@ class GzSink {
     this.bytesRaw += b.length;
     if (!this.gz.write(b)) await new Promise<void>((r) => this.gz.once("drain", () => r()));
   }
-  async close(): Promise<{ bytes_raw: number; bytes_gz: number; sha256_raw: string; sha256_gz: string }> {
+  async close(): Promise<{ bytes_raw: number; sha256_raw: string }> {
     this.gz.end();
     await this.done;
-    return { bytes_raw: this.bytesRaw, bytes_gz: this.bytesGz, sha256_raw: this.rawHash.digest("hex"), sha256_gz: this.gzHash.digest("hex") };
+    return { bytes_raw: this.bytesRaw, sha256_raw: this.rawHash.digest("hex") };
   }
   destroy(): void {
     this.gz.destroy();
@@ -842,52 +847,6 @@ async function buildTableFiles(backup: string, t: ArchiveTable, after: string, t
   }
   await flush();
   return files;
-}
-
-// ── The encoder pin ────────────────────────────────────────────────────────
-// An archive's identity is the SHA-256 of its gzip bytes (format 1 records
-// `sha256_gz`, and the ETag is it). Those bytes depend on the zlib build in
-// the Bun runtime: node:zlib at level 9 gives different bytes under bun 1.3.5
-// and 1.4.4. So the encoder is pinned. A fixed fixture's gzip must hash to the
-// value recorded here, measured under the Bun that backend/Dockerfile and CI
-// pin (oven/bun:1.4.4). When it does not, the archive routes refuse (503)
-// rather than publish different bytes under a name already published, and
-// the CI test that compares it fails the build. Changing the Bun version
-// therefore needs a decision about every published archive's identity.
-
-/** sha256 of the gzip of encoderFixture() under oven/bun:1.4.4. */
-export const ARCHIVE_GZIP_FIXTURE_SHA256 = "3fd4bdd38286897f6e73d9948e594e5c0f765c5e170166592744d8cf66792408";
-
-function encoderFixture(): string {
-  return Array.from({ length: 5000 }, (_, i) =>
-    encodeCsvRow([String(i), `raw_indicator_history:X${i % 7}`, `2001-01-0${(i % 9) + 1}`, (i * 1.25).toFixed(3), 'a, "b"\n'])).join("");
-}
-
-/** The SHA-256 of the fixture gzipped by this runtime, through the same path every archive takes. */
-export async function encoderFixtureSha256(): Promise<string> {
-  const sink = new GzSink();
-  await sink.write(encoderFixture());
-  return (await sink.close()).sha256_gz;
-}
-
-let encoderPin: string = ARCHIVE_GZIP_FIXTURE_SHA256;
-let encoderVerdict: Promise<boolean> | null = null;
-/** Pin the encoder to another hash (tests run under any Bun; the pin itself is asserted separately). */
-export function _setArchiveEncoderPinForTests(sha256: string | null): void {
-  encoderPin = sha256 ?? ARCHIVE_GZIP_FIXTURE_SHA256;
-  encoderVerdict = null;
-}
-
-/** Does this runtime's gzip produce the pinned bytes? Measured once per process. */
-export function archiveEncoderMatches(): Promise<boolean> {
-  if (!encoderVerdict) {
-    const pin = encoderPin;
-    encoderVerdict = encoderFixtureSha256().then((got) => {
-      if (got !== pin) console.error(`[public-archive] this runtime's gzip hashes the encoder fixture to ${got}, the pin is ${pin}: archives are not served`);
-      return got === pin;
-    });
-  }
-  return encoderVerdict;
 }
 
 const records = new Map<string, BuiltRecord>();
@@ -980,8 +939,8 @@ export function fileIn(built: BuiltRecord, path: string): { table: ArchiveTable;
 
 /**
  * The archive body as a stream: its rows regenerated from their id range,
- * gzipped as they arrive. The stream errors, rather than ends, when the bytes
- * do not hash to the record's sha256_gz, so a client never receives a complete
+ * gzipped as they arrive (by any valid encoder). The stream errors, rather than ends, when the bytes
+ * do not hash to the record's sha256_raw, so a client never receives a complete
  * body that differs from what the record names.
  */
 export function archiveBodyStream(table: ArchiveTable, file: ArchiveFileRecord): ReadableStream<Uint8Array> {
@@ -1000,8 +959,8 @@ export function archiveBodyStream(table: ArchiveTable, file: ArchiveFileRecord):
           await sink.write(r.line);
         }
         const w = await sink.close();
-        if (w.sha256_gz !== file.sha256_gz) {
-          throw new Error(`${file.path}: regenerated bytes hash to ${w.sha256_gz}, the record says ${file.sha256_gz}`);
+        if (w.sha256_raw !== file.sha256_raw) {
+          throw new Error(`${file.path}: regenerated content hashes to ${w.sha256_raw}, the record says ${file.sha256_raw}`);
         }
         controller.close();
       } catch (err) {

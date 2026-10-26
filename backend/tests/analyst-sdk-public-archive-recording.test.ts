@@ -4,18 +4,17 @@
 // Two committed regime runs are seeded into the ephemeral Postgres with fixed
 // times. The test acquires them the way the README's API-only fill does: list
 // `archive/backups`, fetch each `backup.json`, then each archive it lists, and
-// check every archive's sha256_gz. It drives the real handler
+// check every archive's sha256_raw (the hash of its uncompressed bytes). It drives the real handler
 // (handlePublicAnalytics), as the issue 1422 archive tests do.
 //
 // Every response body is compared with the recording committed at
 // packages/analyst-sdk/tests/fixtures/archive/api-recorded/, which the SDK's
 // unit and analyst-sdk jobs replay with no database and no private repository.
-// The recording therefore stays what the real routes serve:
-//   - under the pinned encoder (Bun 1.4.4, ARCHIVE_GZIP_FIXTURE_SHA256), byte for byte;
-//   - under another Bun, by content: each record with its gzip-dependent
-//     fields (bytes_gz, sha256_gz) left out, and each archive's uncompressed bytes.
-// RECORD_ANALYST_SDK_ARCHIVE=1 rewrites the recording instead (run it under the
-// pinned Bun only; the test then refuses to write under any other).
+// The recording therefore stays what the real routes serve, compared by
+// content under every runtime: backup.json and the list byte for byte (they
+// carry no gzip), each archive by the bytes it decompresses to. An archive's
+// identity is its content, so the gzip bytes of the recording are not compared.
+// RECORD_ANALYST_SDK_ARCHIVE=1 rewrites the recording instead.
 //
 // The acquired copy then goes through the SDK's real `bin/inputs.ts`: the
 // generated input is exactly the frozen vintage's members, and the report is
@@ -25,15 +24,12 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { ROUTES } from "@robotmoney/contract";
 import { _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../src/api/routes/public-analytics.ts";
 import {
   _resetArchiveForTests,
   _setArchiveClockForTests,
-  _setArchiveEncoderPinForTests,
-  ARCHIVE_GZIP_FIXTURE_SHA256,
-  encoderFixtureSha256,
 } from "../src/analytics/store/public-archive-store.ts";
 import { parseInput, parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
 import { seriesForStorageKey } from "../../packages/analyst-sdk/src/archive/format1.ts";
@@ -58,18 +54,12 @@ const RUN1 = { key: "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea1", asof: "2026-08-01" }
 const RUN2 = { key: "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2", asof: "2026-08-15" };
 const BUILD = "4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f";
 const EXTRA: Record<string, string> = { SPX: "backtest:^GSPC", ETH: "backtest:ETH-USD", TBILL3M: "backtest:DTB3" };
-let pinned = false;
 let vintage2 = "";
 const revised = { key: "raw_indicator_history:VIX", date: "2026-07-31" };
 
 beforeAll(async () => {
   _resetArchiveForTests();
   _setArchiveClockForTests(() => NOW);
-  const here = await encoderFixtureSha256();
-  pinned = here === ARCHIVE_GZIP_FIXTURE_SHA256;
-  // Under another Bun the archives are served with this runtime's encoder, and
-  // compared with the recording by content (see the header).
-  if (!pinned) _setArchiveEncoderPinForTests(here);
 
   const text = readFileSync(join(SDK, "tests/fixtures/raw-indicator-history.csv"), "utf8");
   const rows = parseRawHistory(text).filter((r) => r.date >= FROM);
@@ -144,7 +134,6 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(() => {
-  _setArchiveEncoderPinForTests(null);
   _setArchiveClockForTests(null);
   _resetArchiveForTests();
   rmSync(TMP, { recursive: true, force: true });
@@ -178,16 +167,11 @@ const listFiles = (root: string): string[] => {
   return out;
 };
 
-// A record without its gzip-dependent fields: what must match across Bun versions.
-function encoderFree(recordText: string): unknown {
-  const r = JSON.parse(recordText);
-  for (const t of Object.values(r.append_only) as { files: Record<string, unknown>[] }[]) {
-    for (const f of t.files) {
-      delete f.bytes_gz;
-      delete f.sha256_gz;
-    }
-  }
-  return r;
+// A recorded file against what is served now, by content only: an archive by
+// the bytes it decompresses to, anything else by its text.
+function sameContent(rel: string, committed: Uint8Array, served: Uint8Array): boolean {
+  if (rel.endsWith(".gz")) return sha256(gunzipSync(committed)) === sha256(gunzipSync(served));
+  return new TextDecoder().decode(committed) === new TextDecoder().decode(served);
 }
 
 test(
@@ -203,10 +187,10 @@ test(
       const recBytes = await get(`${P.archiveFiles}${record}`);
       served.set(record, recBytes);
       const rec = JSON.parse(new TextDecoder().decode(recBytes));
-      for (const t of Object.values(rec.append_only) as { files: { path: string; sha256_gz: string; rows: number }[] }[]) {
+      for (const t of Object.values(rec.append_only) as { files: { path: string; sha256_raw: string; rows: number }[] }[]) {
         for (const f of t.files) {
           const body = await get(`${P.archiveFiles}${f.path}`);
-          expect(sha256(body), f.path).toBe(f.sha256_gz);
+          expect(sha256(gunzipSync(body)), f.path).toBe(f.sha256_raw);
           served.set(f.path, body);
         }
       }
@@ -215,7 +199,6 @@ test(
 
     // (2) The committed recording is what the real routes serve.
     if (process.env.RECORD_ANALYST_SDK_ARCHIVE === "1") {
-      expect(pinned, "record only under the pinned Bun (1.4.4), so CI's bytes are the recording").toBe(true);
       rmSync(RECORDING, { recursive: true, force: true });
       for (const [rel, bytes] of served) {
         mkdirSync(dirname(join(RECORDING, rel)), { recursive: true });
@@ -225,10 +208,7 @@ test(
     expect(listFiles(RECORDING).sort()).toEqual([...served.keys()].sort());
     for (const [rel, bytes] of served) {
       const committed = new Uint8Array(readFileSync(join(RECORDING, rel)));
-      if (pinned) expect(sha256(committed), rel).toBe(sha256(bytes));
-      else if (rel.endsWith(".gz")) expect(sha256(gunzipSync(committed)), rel).toBe(sha256(gunzipSync(bytes)));
-      else if (rel === "backups.json") expect(new TextDecoder().decode(committed)).toBe(new TextDecoder().decode(bytes));
-      else expect(encoderFree(new TextDecoder().decode(committed))).toEqual(encoderFree(new TextDecoder().decode(bytes)));
+      expect(sameContent(rel, committed, bytes), rel).toBe(true);
     }
 
     // (3) The acquired local copy, through the SDK's real input command.
@@ -271,3 +251,22 @@ test(
   },
   { timeout: 180_000 },
 );
+
+test("the committed recording is compared by content: re-gzipped with another encoder or level it is still the same", () => {
+  let gzFiles = 0;
+  for (const rel of listFiles(RECORDING)) {
+    const committed = new Uint8Array(readFileSync(join(RECORDING, rel)));
+    if (!rel.endsWith(".gz")) {
+      expect(sameContent(rel, committed, committed), rel).toBe(true);
+      continue;
+    }
+    gzFiles++;
+    const content = gunzipSync(committed);
+    for (const other of [Bun.gzipSync(content), gzipSync(content, { level: 1 }), gzipSync(content, { level: 9 })]) {
+      expect(sameContent(rel, committed, new Uint8Array(other)), rel).toBe(true);
+    }
+    // A different content is a different recording.
+    expect(sameContent(rel, committed, new Uint8Array(gzipSync(Buffer.concat([content, Buffer.from("x")])))), rel).toBe(false);
+  }
+  expect(gzFiles).toBeGreaterThan(0);
+});
