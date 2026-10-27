@@ -241,7 +241,8 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(stepListHash([...RELEASE_STEPS])).toBe(stepListHash());
     const ids = stepIds();
     for (const gone of ["R6.2a", "R6.7c", "R6.7d", "S8.1", "R6.2b", "R5.rc"]) expect(ids).not.toContain(gone);
-    for (const s of RELEASE_STEPS) {
+    // The one exception is a release that declares breaking: (issue 1484): its breakingOnly steps stop the stack inside the declared window, and no other release runs them.
+    for (const s of RELEASE_STEPS.filter((x) => x.breakingOnly !== true)) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/credentials-init|rebind-members|\bretire\b|tmux|--legacy|--session(?!s)|--project\b/);
     }
     // red control: a stage journal at the previous list's hash no longer satisfies SP.8.
@@ -336,8 +337,8 @@ describe("one step list for every target (D61 rule 2)", () => {
 
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     // Every Q step runs on stage only, every P and C step on production only; the version tag is the one production step stage has no twin for.
-    expect(RELEASE_STEPS.filter((s) => s.onlyFor === "stage").every((s) => /^Q\d\d-/.test(s.id))).toBe(true);
-    expect(RELEASE_STEPS.filter((s) => s.onlyFor === "prod").every((s) => /^[PC]\d\d-/.test(s.id))).toBe(true);
+    expect(RELEASE_STEPS.filter((s) => s.onlyFor === "stage").every((s) => /^Q\d\d[a-z]?-/.test(s.id))).toBe(true);
+    expect(RELEASE_STEPS.filter((s) => s.onlyFor === "prod").every((s) => /^[PC]\d\d[a-z]?-/.test(s.id))).toBe(true);
     expect(RELEASE_STEPS.every((s) => s.onlyFor !== undefined)).toBe(true);
     const tags = RELEASE_STEPS.filter((s) => s.id.endsWith("-version-tag")).map((s) => s.id);
     expect(tags).toEqual(["C06-version-tag"]);
@@ -1095,12 +1096,15 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
   });
   test("the upgrade is rolling on both targets: no step stops the stack, the probe brackets it, and the version tag follows production's migrate (owner, 2026-10-14)", () => {
     const ids = RELEASE_STEPS.map((s) => s.id);
-    for (const s of RELEASE_STEPS) {
+    // The one exception is a release that declares breaking: (issue 1484): its breakingOnly steps stop the stack inside the declared window, and no other release runs them.
+    for (const s of RELEASE_STEPS.filter((x) => x.breakingOnly !== true)) {
       for (const c of s.cmds) expect(c.join(" "), s.id).not.toMatch(/smoke:down|stop-legacy|compose down|\bdown\b/);
     }
     expect(ids).not.toContain("R6.1");
     // The first irreversible step of each target is its migrate, and nothing else is irreversible.
-    expect(RELEASE_STEPS.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["Q18-migrate", "C05-migrate"]);
+    expect(RELEASE_STEPS.filter((s) => s.irreversible && s.breakingOnly !== true).map((s) => s.id)).toEqual(["Q18-migrate", "C05-migrate"]);
+    // A release that declares breaking: migrates at the breaking step instead, which is irreversible too (issue 1484).
+    expect(RELEASE_STEPS.filter((s) => s.irreversible && s.breakingOnly === true).map((s) => s.id)).toEqual(["Q18c-migrate-breaking", "C05c-migrate-breaking"]);
     expect(RELEASE_STEPS.find((s) => s.irreversible)?.id).toBe("Q18-migrate");
     // Each target's probe starts before its migrate and is graded after the rolling boot and the site switch.
     for (const [probeStart, migrate, boot, site, grade] of [["Q17-probe-start", "Q18-migrate", "Q22-rolling-boot", "Q24-site", "Q25-probe-grade"], ["C04-probe-start", "C05-migrate", "C10-rolling-boot", "C12-site", "C13-probe-grade"]] as const) {
@@ -1109,7 +1113,8 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
       expect(ids.indexOf(grade)).toBeGreaterThan(ids.indexOf(boot));
     }
     // The version tag is cut as soon as production's cutover starts (D70); stage tags nothing.
-    expect(ids.indexOf("C06-version-tag")).toBe(ids.indexOf("C05-migrate") + 1);
+    // The breaking steps sit between the rolling migrate and the tag; a rolling release skips them, a breaking one tags right after its breaking migrate.
+    expect(ids.indexOf("C06-version-tag")).toBe(ids.indexOf("C05c-migrate-breaking") + 1);
     expect(RELEASE_STEPS.find((s) => s.id === "C06-version-tag")!.onlyFor).toBe("prod");
     for (const [name, bootId] of [["prod", "C10-rolling-boot"], ["stage", "Q22-rolling-boot"]] as const) {
       const t = loadTarget(join(targetsDir, `${name}.json`));
@@ -1198,14 +1203,14 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
     // Stage's upgrade, soak, then production's preflight and cutover, in the order they run.
     expect(RELEASE_STEPS.filter((s) => s.phase === "qa").map((s) => s.id).slice(5)).toEqual([
       "Q06-checkout", "Q07-host-identity", "Q08-install", "Q09-capture-checkout", "Q10-capture-identity", "Q11-capture-install", "Q12-state-baseline", "Q13-log-baseline",
-      "Q14-backup", "Q15-backup-sums", "Q16-restore-proof", "Q17-probe-start", "Q18-migrate", "Q19-env-rewrite", "Q20-set-identity", "Q21-tokens", "Q22-rolling-boot", "Q23-ready", "Q24-site", "Q25-probe-grade",
+      "Q14-backup", "Q15-backup-sums", "Q16-restore-proof", "Q17-probe-start", "Q18-migrate", "Q18a-maintenance-on", "Q18b-smoke-down", "Q18c-migrate-breaking", "Q19-env-rewrite", "Q20-set-identity", "Q21-tokens", "Q22-rolling-boot", "Q22a-full-boot", "Q23-ready", "Q24-site", "Q24a-maintenance-off", "Q25-probe-grade",
       "Q26-verify-version", "Q27-verify-product", "Q28-log-verdict", "Q29-soak-record", "Q30-compare-baseline", "Q31-host-guards", "Q32-soak-gate", "Q33-soak-checks", "Q34-collect-logs",
       // The analyst SDK checks (since v0.7.0), on the control machine: read-only against the target, after the soak.
       "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests",
     ]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline"]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "cutover").map((s) => s.id)).toEqual([
-      "C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate", "C06-version-tag", "C07-env-rewrite", "C08-set-identity", "C09-tokens", "C10-rolling-boot", "C11-ready", "C12-site", "C13-probe-grade",
+      "C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C06-version-tag", "C07-env-rewrite", "C08-set-identity", "C09-tokens", "C10-rolling-boot", "C10a-full-boot", "C11-ready", "C12-site", "C12a-maintenance-off", "C13-probe-grade",
       "C14-verify-version", "C15-verify-product", "C16-log-verdict", "C17-soak-record", "C18-compare-baseline", "C19-host-guards", "C20-soak-gate", "C21-soak-checks", "C22-collect-logs",
       "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests",
     ]);

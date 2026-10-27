@@ -213,12 +213,14 @@ describe("a release's scope", () => {
 
 // ── a template step with `since`: the release that gains it carries it, an earlier release's runbook stays as it ran (issue 1476) ──
 describe("a template step's since", () => {
+  // The breaking-cutover steps (issue 1484) are since v0.7.0 as well, so an earlier release does not carry them.
+  const breakingSteps = ["Q18a-maintenance-on", "Q18b-smoke-down", "Q18c-migrate-breaking", "Q22a-full-boot", "Q24a-maintenance-off", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C10a-full-boot", "C12a-maintenance-off"];
   const sdkSteps = ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"];
 
   test("the template's SDK steps name v0.7.0, and v0.6.2 (which predates them) still only adds", () => {
-    for (const id of sdkSteps) expect(template.steps.find((s) => s.id === id)?.since).toBe("v0.7.0");
+    for (const id of [...sdkSteps, ...breakingSteps]) expect(template.steps.find((s) => s.id === id)?.since).toBe("v0.7.0");
     expect(loadReleaseRunbook("v0.6.2").steps.some((s) => sdkSteps.includes(s.id))).toBe(false);
-    expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
+    expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
   });
 
   test("v0.7.0 carries the SDK steps unmarked, ten added version checks, and every version step in its scope", () => {
@@ -246,7 +248,7 @@ describe("a template step's since", () => {
   });
 
   test("a step the earlier release added under a template id it predates is still its own addition", () => {
-    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id)), { ...added("Q36-sdk-quickstart", "v0.6.9"), phase: "qa" as const }];
+    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id)), { ...added("Q36-sdk-quickstart", "v0.6.9"), phase: "qa" as const }];
     expect(checkAddOnly(template, runbook(early, "v0.6.9"))).toEqual([]);
   });
 });
