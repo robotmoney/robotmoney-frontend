@@ -1,4 +1,4 @@
-// Issue 1421: the SDK reproduces the original (pre-refactor) report bytes for
+// Issue 1421: the SDK reproduces the original (pre-refactor) reports for
 // identical effective inputs and options, for every input variant:
 //   - the shared calculation artifact JSON.stringify({correlations, backtest}),
 //     the SAME original bytes backend/tests/regime-fidelity.test.ts compares the
@@ -6,7 +6,11 @@
 //   - the daily portfolio values of every portfolio and strategy;
 //   - each CLI envelope (default, and --full --factor) against its own golden,
 //     both in process and through the real CLI on a file.
-// Byte equality only: no numeric tolerance, no re-serialization of the original.
+// Proposed decision D78 (compensated arithmetic) moves numbers in their last
+// bits, so the originals are now matched value by value (support/numeric-diff.ts):
+// identical structure, field order, labels, nulls and integers, and no number
+// moved by more than rounding. The in-process and CLI outputs still agree byte
+// for byte with each other. The originals themselves are never regenerated.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +19,7 @@ import { parseRawHistory, toHistory } from "../src/input/load.ts";
 import { buildReport, EXTRA_IDS, runRegime, type RunResult } from "../src/run.ts";
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { cutAtAsof } from "../src/prepare.ts";
+import { expectSameUpToRounding } from "./support/numeric-diff.ts";
 import {
   VARIANTS,
   bytesEqual,
@@ -55,10 +60,14 @@ for (const v of VARIANTS) {
   };
 }
 
-function expectBytes(got: string, file: string) {
-  const original = readOriginal(file);
-  expect(firstDifference(got, original), file).toBeNull();
-  expect(bytesEqual(got, original), file).toBe(true);
+// The original, matched up to rounding (D78): no structural or discrete difference.
+function expectOriginal(got: string, file: string) {
+  expectSameUpToRounding(got, readOriginal(file), file);
+}
+
+function expectBytes(got: string, want: string, label: string) {
+  expect(firstDifference(got, want), label).toBeNull();
+  expect(bytesEqual(got, want), label).toBe(true);
 }
 
 function cli(args: string[]): string {
@@ -71,13 +80,13 @@ for (const v of VARIANTS) {
   describe(`report parity: ${v} variant`, () => {
     const c = computed[v];
 
-    test("shared correlations/backtest artifact equals the original bytes", () => {
+    test("shared correlations/backtest artifact equals the original up to rounding", () => {
       expect(c.run.correlations).toBeDefined();
       expect(c.run.backtest).toBeDefined();
-      expectBytes(sharedAnalysisBytes({ correlations: c.run.correlations, backtest: c.run.backtest }), originalFile.sharedAnalysis(v));
+      expectOriginal(sharedAnalysisBytes({ correlations: c.run.correlations, backtest: c.run.backtest }), originalFile.sharedAnalysis(v));
     });
 
-    test("daily portfolio values of every portfolio and strategy equal the original bytes", () => {
+    test("daily portfolio values of every portfolio and strategy equal the original up to rounding", () => {
       const asof = c.run.dateAxis[c.run.dateAxis.length - 1]!;
       const bt = computeBacktest(c.run.dateAxis, c.run.result, {
         spx: cutAtAsof(c.history[EXTRA_IDS.spx] ?? [], asof),
@@ -85,17 +94,17 @@ for (const v of VARIANTS) {
         tbill3m: cutAtAsof(c.history[EXTRA_IDS.tbill3m] ?? [], asof),
       });
       expect(Object.keys(bt)).toEqual(["eth", "sp500", "mixed"]);
-      expectBytes(dailyEvidenceBytes(bt), originalFile.daily(v));
+      expectOriginal(dailyEvidenceBytes(bt), originalFile.daily(v));
     });
 
-    test("default report envelope equals its original, in process and through the CLI", () => {
-      expectBytes(c.defaultEnvelope, originalFile.sdkReport(v));
-      expectBytes(cli([c.csvPath]), originalFile.sdkReport(v));
+    test("default report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
+      expectOriginal(c.defaultEnvelope, originalFile.sdkReport(v));
+      expectBytes(cli([c.csvPath]), c.defaultEnvelope, `${v} CLI`);
     });
 
-    test("--full --factor report envelope equals its original, in process and through the CLI", () => {
-      expectBytes(c.fullFactorEnvelope, originalFile.sdkReportFull(v));
-      expectBytes(cli([c.csvPath, "--full", "--factor"]), originalFile.sdkReportFull(v));
+    test("--full --factor report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
+      expectOriginal(c.fullFactorEnvelope, originalFile.sdkReportFull(v));
+      expectBytes(cli([c.csvPath, "--full", "--factor"]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
     });
   });
 }

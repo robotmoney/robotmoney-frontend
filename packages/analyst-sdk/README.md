@@ -7,7 +7,9 @@ environment. Only the optional source clients in `src/extract/` fetch.
 The backend runs this same code (`backend/src/analytics/` re-exports it). See decision
 D57 in `docs/decisions.md`.
 
-The refactor preserves one shared calculation: identical effective inputs and report options produce byte-identical report payloads in the backend and SDK, before and after refactoring. This includes every backtest statistic, date, null, field order and number formatting. Calculation-methodology changes and a separate backend compatibility engine are outside its scope. Provider collection and archive downloads finish during extract; all later stages run from supplied data without HTTP, including on missing inputs.
+The refactor preserves one shared calculation: identical effective inputs and report options produce byte-identical report payloads in the backend and SDK. This includes every backtest statistic, date, null, field order and number formatting. A separate backend compatibility engine is outside its scope.
+
+Numerical methodology (proposed decision D78 in `docs/decisions.md`): every sum, mean, variance, dot product, correlation and compounding product is computed in error-free (compensated) arithmetic and rounded once, so on real data it is the correctly rounded exact value of the inputs (`src/transform/exact.ts`). This changed published numbers in their last bits, up to 9e-12 relative where a result is near zero, and changed no label, percentile rank, sign or displayed value on any fixture. A payload published before it therefore replays up to rounding, not byte for byte: same structure, labels and nulls, numbers within rounding. Payloads computed by this code replay byte for byte. Provider collection and archive downloads finish during extract; all later stages run from supplied data without HTTP, including on missing inputs.
 
 What this package is specified to do: [`docs/technical/analytics-requirements.md`](../../docs/technical/analytics-requirements.md) (the module the backend and the SDK share) and [`docs/technical/analyst-sdk-requirements.md`](../../docs/technical/analyst-sdk-requirements.md) (the client side). Terms (source data, calculated indicators, report, archive) are defined in [`docs/definitions.md`](../../docs/definitions.md).
 
@@ -16,7 +18,7 @@ What reproduces, and how exactly. The compute core (`compute.ts`, `math.ts`,
 backend files are one-line re-exports of these, so the backend runs the same source
 files. On the audited run (ledger run 390, 3066 of 3066 days, 5232 of 5232 correlation
 and backtest leaves) the composite, the panel indices, the percentiles, the labels, the
-correlations and the backtest reproduced bit-exactly from the persisted inputs. The
+correlations and the backtest reproduced bit-exactly from the persisted inputs under the arithmetic of the time; since D78 the same inputs give the same labels and numbers that differ only in their last bits. The
 Yahoo-sourced indicators are the exception and can drift on another run: they are
 persisted only to a relative tolerance (1e-6 for float32 series, 5e-6 for ratios of
 two series; decision D56, `backend/src/analytics/source-tolerance.ts`). Runs before
@@ -281,13 +283,15 @@ const ethSchedule = scheduleFromLabels(labels, PORTFOLIO_SPECS.eth.weights);
 The rules are the established ones, unchanged: a date's return uses the previous target
 weights and that date's price change; a change of target weights at the close costs
 one-sided turnover (half the sum of absolute weight changes) times `costBps` (default
-10); cash earns the previous day's annual percent yield, `(1 + y / 100) ** (1 / 365) - 1`,
-and zero before the first yield; prices are forward-filled; the simulation starts at
-the first date every supplied asset is priced, then at the first date with weights.
+10); cash earns the previous day's annual percent yield, `(1 + y / 100) ** (1 / 365) - 1`
+(evaluated as `expm1(log1p(y / 100) / 365)`), and zero before the first yield; prices are
+forward-filled; the simulation starts at the first date every supplied asset is priced,
+then at the first date with weights. Equity compounds unrounded (D78): each daily value
+is the exact product of the growth and cost factors so far, rounded once.
 `sim` carries the net daily values, the pre-cost daily returns, each trade's turnover
 and cost, and the start and end dates. `periodStats` uses the pre-cost returns for
 the Sharpe (mean / sample sd, annualized over 365 days, no risk-free subtraction, 0 at
-zero volatility), the net values for growth and drawdown, and years of 365.25 days; a
+zero volatility, which since D78 includes any run of bit-identical returns), the net values for growth and drawdown, and years of 365.25 days; a
 different window or `splitDate` never changes the full-range figures.
 `computeBacktest` is exactly these three functions over the reference portfolios.
 
@@ -466,8 +470,10 @@ from the backend, no csvb, and no HTTP outside `src/extract/http.ts`; nothing ou
 
 `tests/fixtures/originals/` holds the report bytes captured from the pre-refactor code
 (issue 1421; `manifest.json` names the commit, the commands and each file's sha256).
-`tests/report-parity.test.ts` compares the current output with them byte for byte.
-They are never regenerated from later code.
+`tests/report-parity.test.ts` compares the current output with them value by value
+(`tests/support/numeric-diff.ts`): any change of structure, field order, label, null or
+integer, or any number moved by more than rounding, fails it. Byte equality ended with
+the compensated arithmetic of D78. They are never regenerated from later code.
 
 ## The Base asset universe
 

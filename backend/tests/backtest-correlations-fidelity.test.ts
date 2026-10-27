@@ -49,13 +49,13 @@ import { cutAtAsof, prepareRegimeInputs } from "../src/analytics/prepare.ts";
 import { variantInputs } from "./support/originals-source.ts";
 import {
   VARIANTS,
-  bytesEqual,
   dailyEvidenceBytes,
   originalFile,
   readOriginal,
   sharedAnalysisBytes,
 } from "../../packages/analyst-sdk/tests/support/originals.ts";
 import { AN_SKIPPED_DAY, anPins, anScenario } from "../../packages/analyst-sdk/tests/support/an-scenario.ts";
+import { expectSameUpToRounding } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
 import {
   loadRawIndicatorHistory,
   loadJsonGz,
@@ -248,6 +248,9 @@ test("backtest+correlations TRACKING: metrics track the committed snapshot withi
 // the SDK's report-parity test uses: the shared correlations/backtest artifact
 // and the daily portfolio values. And the established backtest behaviours
 // AN-5/6/9/10/14 must equal their named original values through the shim.
+// Since proposed decision D78 (compensated arithmetic) the originals are
+// matched up to rounding: identical structure, labels, nulls and integers, no
+// number moved by more than rounding.
 describe("issue 1421: backend backtest and correlations against the original bytes", () => {
   for (const v of VARIANTS) {
     test(`${v}: shared artifact and daily portfolio values equal the originals`, () => {
@@ -257,8 +260,8 @@ describe("issue 1421: backend backtest and correlations against the original byt
       const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };
       const full = computeBacktest(dateAxis, r2, extras);
       const shared = sharedAnalysisBytes({ correlations: computeCorrelations(dateAxis, r2, extras), backtest: stripDailyFromSnapshot(full) });
-      expect(bytesEqual(shared, readOriginal(originalFile.sharedAnalysis(v)))).toBe(true);
-      expect(bytesEqual(dailyEvidenceBytes(full), readOriginal(originalFile.daily(v)))).toBe(true);
+      expectSameUpToRounding(shared, readOriginal(originalFile.sharedAnalysis(v)), `${v} shared artifact`);
+      expectSameUpToRounding(dailyEvidenceBytes(full), readOriginal(originalFile.daily(v)), `${v} daily values`);
     }, 120_000);
   }
 
@@ -269,9 +272,9 @@ describe("issue 1421: backend backtest and correlations against the original byt
     const pins = anPins(bt);
     expect(Object.keys(pins)).toEqual(Object.keys(original.pins));
     for (const [name, value] of Object.entries(pins)) {
-      expect(bytesEqual(JSON.stringify(value), JSON.stringify(original.pins[name])), name).toBe(true);
+      expectSameUpToRounding(JSON.stringify(value), JSON.stringify(original.pins[name]), name);
     }
-    expect(bytesEqual(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2))).toBe(true);
+    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2), "AN scenario backtest");
     // The behaviours themselves, not only the numbers.
     expect(bt.mixed!.blend_hodl!.transitions).toBe(0); // AN-5
     expect([bt.eth!.composite!.start_date, bt.eth!.eth_hodl!.start_date]).toEqual(["2024-01-27", "2024-01-25"]); // AN-6
