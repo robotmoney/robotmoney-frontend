@@ -287,7 +287,7 @@ soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
 UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
-step) fails until the newest archived run is post-1421, and C24 asserts only the labels for a run made before that fix.
+step) fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label), and C24 asserts only the labels for a run of the old producer.
 
 **A boot or a rolling boot is uneventful (issue 1378).** The services hold this
 contract, so a runbook needs no step to drain or clean the queue by hand:
