@@ -73,6 +73,13 @@
     "reason": "A worker job's first api call ran before the api listened after a boot (backend/src/worker/loop.ts: the job is re-queued with a backoff, 'failed, retry in <n>s'); the same boot race as expected-scheduler-first-connect-retry, on the worker side. Seen once on worker-analytics (analytics.parity_sweep) right after boot 2 of the v0.6.1 production run 20261010T004257Z, accepted by the owner on 2026-10-10 (issue 1280), and ×2 on the v0.5.4 run. Held to the retrying form: a job whose retries run out logs '— DEAD' instead, which stays unclassified and fails, and the dead job's stored last_error is graded on its own ('jobs:' source). Any other message behind the same job line stays unclassified."
   },
   {
+    "id": "expected-worker-waits-for-api",
+    "match": "^\\[analytics-<n>\\] api not ready at http://api:<n>/health: Unable to connect\\. Is the computer able to access the url\\?; retrying$",
+    "source": "worker-",
+    "class": "expected",
+    "reason": "worker-analytics claims no job until the api's /health answers (backend/src/worker/boot.ts waitForApiReady, issue 1378). Each failed probe logs this line and the wait retries with a capped backoff, so a boot where the api starts a second later logs it once or twice and then goes on. Seen ×2 on worker-analytics at the boot of the v0.6.3 stage target, run 20261020T212227Z, followed by no further line and a healthy worker. Held to the retrying form on a worker container: a worker whose api never answers logs the line without end and fails the healthy-container check, and every other message from the wait stays unclassified."
+  },
+  {
     "id": "expected-judge-subscribe-connect-retry",
     "match": "^\\[judge:[^\\]]+\\] subscription error: Unable to connect\\. Is the computer able to access the url\\?$",
     "source": "participant-judge-",
@@ -188,6 +195,18 @@
     "reason": "GeckoTerminal rate limiting; the code retries, then degrades to last-persisted data."
   },
   {
+    "id": "external-dexscreener-rate-limit-extractor",
+    "match": "\\[projects\\.sync_revenue\\] extractor failed — keeping last-persisted rows \\(degraded\\): dexscreener 429$",
+    "class": "external",
+    "reason": "DexScreener answered HTTP 429 (rate limit) to projects.sync_revenue. The handler keeps the last-persisted revenue rows, marks the run degraded and retries the job (backend/src/worker/handlers/projects.ts); nothing synthetic is written. Seen on stage-2 at the v0.6.2 QA baseline, 2026-10-16, against production's v0.6.1 stack. Only status 429 is classified: any other DexScreener status stays unclassified and fails."
+  },
+  {
+    "id": "external-dexscreener-rate-limit-job-degraded",
+    "match": "job \\S+ \\(projects\\.sync_revenue\\) DEGRADED — kept last-persisted[^:]*: dexscreener 429$",
+    "class": "external",
+    "reason": "The job-level line for the same DexScreener HTTP 429: the job kept the last-persisted rows and was rescheduled with a backoff. See external-dexscreener-rate-limit-extractor."
+  },
+  {
     "id": "external-wallet-balances-live-read-degraded",
     "match": "wallet-balances: [\\w<>-]+ live read failed, degrading to last-persisted sample",
     "class": "external",
@@ -226,9 +245,9 @@
   },
   {
     "id": "external-base-rpc",
-    "match": "Base RPC HTTP|buyback-logs: live index failed",
+    "match": "Base RPC HTTP|Base RPC rate limited|buyback-logs: live index failed",
     "class": "external",
-    "reason": "The Base chain RPC endpoint failing; buyback indexing keeps its persisted rows."
+    "reason": "The Base chain RPC endpoint failing or rate limiting; the client backs off and retries a rate limit on its own schedule (5 s, 10 s, 20 s, 30 s), and buyback indexing keeps its persisted rows if it still fails."
   },
   {
     "id": "external-token-metrics",
