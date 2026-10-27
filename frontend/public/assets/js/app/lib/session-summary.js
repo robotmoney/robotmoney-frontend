@@ -39,6 +39,14 @@ const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 // four sleeves every time.
 export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
 
+// Sleeves the framework has closed. Each keeps its place in BUCKET_ORDER, and
+// so its hue and its name, because the sessions and receipts filed while it
+// was open still carry it. A view of the portfolio NOW leaves one out only
+// while it holds nothing (retiredAndEmpty): an old session's 5% still prints.
+// Agent Tokens closed on 2026-10-22 (RM-190): the model portfolio is three
+// sleeves.
+export const RETIRED_BUCKETS = ["agent_tokens"];
+
 // Named, not humanised from the key. The names are RM-97's (2026-09-15):
 // the API and the archive still send the framework's first names, which match
 // through LEGACY_LABELS and never print.
@@ -94,6 +102,19 @@ const bucketIndex = (idOrName) => {
 export function bucketRank(idOrName) {
   const i = bucketIndex(idOrName);
   return i < 0 ? BUCKET_ORDER.length : i;
+}
+/** @param {unknown} idOrName */
+export function isRetiredBucket(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i >= 0 && RETIRED_BUCKETS.includes(BUCKET_ORDER[i]);
+}
+// A closed sleeve with no weight to show: a 0, or no figure at all. A weight
+// it still carries is data and is never dropped.
+/** @param {unknown} idOrName @param {unknown} weight */
+export function retiredAndEmpty(idOrName, weight) {
+  if (!isRetiredBucket(idOrName)) return false;
+  const w = Number(weight);
+  return weight == null || !Number.isFinite(w) || w === 0;
 }
 /** @param {unknown} idOrName @param {number} [fallback] */
 export function bucketHue(idOrName, fallback = 0) {

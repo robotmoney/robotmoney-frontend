@@ -60,8 +60,8 @@ describe("frontend route resolution", () => {
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 
-  test("/vault/:slug resolves the four vault pages, and nothing else under /vault/", () => {
-    for (const slug of ["rmusdc", "rmagent", "rmproto", "rmrwa"]) {
+  test("/vault/:slug resolves the three vault pages, and nothing else under /vault/", () => {
+    for (const slug of ["rmusdc", "rmproto", "rmrwa"]) {
       expect({ slug, view: viewFor(`/vault/${slug}`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
       expect({ slug, view: viewFor(`/vault/${slug}/`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
       expect(routeMetaFor(`/vault/${slug}`)).toBeNull();
@@ -70,6 +70,10 @@ describe("frontend route resolution", () => {
     expect(existsSync(join(repoRoot, "frontend/public", VAULT_DETAIL_VIEW))).toBe(true);
     // An unknown slug, an address, or a path below a vault is not found, never
     // the catch-all's per-path fragment.
+    // rmAGENT closed with its sleeve: its address is the allocation view, as
+    // bare /vault is, and router.js moves it to /allocation#vaults.
+    expect(viewFor("/vault/rmagent")).toBe("/views/allocation.html");
+    expect(viewFor("/vault/rmagent/")).toBe("/views/allocation.html");
     expect(viewFor("/vault/nope")).toBe(NOT_FOUND_VIEW);
     expect(viewFor("/vault/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd")).toBe(NOT_FOUND_VIEW);
     expect(viewFor("/vault/rmusdc/x")).toBe(NOT_FOUND_VIEW);

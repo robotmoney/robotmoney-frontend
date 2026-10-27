@@ -15,14 +15,6 @@
       "address": null
     },
     {
-      "label": "rmAGENT",
-      "kind": "vault",
-      "vault": "rmagent",
-      "sleeve": "agent_tokens",
-      "chain": "devnet",
-      "address": null
-    },
-    {
       "label": "rmPROTO",
       "kind": "vault",
       "vault": "rmproto",
@@ -44,7 +36,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-03",
       "source_type": "vault_tvl",
-      "total_value_usd": 78000,
+      "total_value_usd": 72000,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -54,15 +46,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 60000
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 6000
         },
         {
           "label": "rmPROTO",
@@ -121,84 +104,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 866.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 833.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 833.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 833.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 833.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 800,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 733.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 266.68,
-          "price_usd": 1,
-          "value_usd": 266.68,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3857.14,
+          "value_usd": 4692.85,
           "vault": "rmproto"
         },
         {
@@ -207,16 +118,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3214.29,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1671.43,
+          "value_usd": 4050.01,
           "vault": "rmproto"
         },
         {
@@ -262,7 +164,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-04",
       "source_type": "vault_tvl",
-      "total_value_usd": 79571.43,
+      "total_value_usd": 73357.14,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -272,15 +174,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 60857.14
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 6214.29
         },
         {
           "label": "rmPROTO",
@@ -339,84 +232,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 897.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 863.1,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 863.1,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 863.1,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 863.1,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 828.57,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 759.52,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 276.18,
-          "price_usd": 1,
-          "value_usd": 276.18,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4010.2,
+          "value_usd": 4879.07,
           "vault": "rmproto"
         },
         {
@@ -425,16 +246,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3341.84,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1737.75,
+          "value_usd": 4210.72,
           "vault": "rmproto"
         },
         {
@@ -480,7 +292,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-05",
       "source_type": "vault_tvl",
-      "total_value_usd": 81142.86,
+      "total_value_usd": 74714.29,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -490,15 +302,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 61714.29
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 6428.57
         },
         {
           "label": "rmPROTO",
@@ -557,84 +360,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 928.57,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 892.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 892.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 892.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 892.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 857.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 785.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 285.71,
-          "price_usd": 1,
-          "value_usd": 285.71,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4163.27,
+          "value_usd": 5065.31,
           "vault": "rmproto"
         },
         {
@@ -643,16 +374,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3469.39,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1804.08,
+          "value_usd": 4371.43,
           "vault": "rmproto"
         },
         {
@@ -698,7 +420,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-06",
       "source_type": "vault_tvl",
-      "total_value_usd": 82714.29,
+      "total_value_usd": 76071.43,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -708,15 +430,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 62571.43
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 6642.86
         },
         {
           "label": "rmPROTO",
@@ -775,84 +488,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 959.52,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 922.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 922.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 922.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 922.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 885.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 811.91,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 295.24,
-          "price_usd": 1,
-          "value_usd": 295.24,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4316.33,
+          "value_usd": 5251.53,
           "vault": "rmproto"
         },
         {
@@ -861,16 +502,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3596.94,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1870.41,
+          "value_usd": 4532.15,
           "vault": "rmproto"
         },
         {
@@ -916,7 +548,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-07",
       "source_type": "vault_tvl",
-      "total_value_usd": 84285.71,
+      "total_value_usd": 77428.57,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -926,15 +558,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 63428.57
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 6857.14
         },
         {
           "label": "rmPROTO",
@@ -993,84 +616,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 990.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 952.38,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 952.38,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 952.38,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 952.38,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 914.29,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 838.09,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 304.76,
-          "price_usd": 1,
-          "value_usd": 304.76,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4469.39,
+          "value_usd": 5437.76,
           "vault": "rmproto"
         },
         {
@@ -1079,16 +630,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3724.49,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1936.73,
+          "value_usd": 4692.85,
           "vault": "rmproto"
         },
         {
@@ -1134,7 +676,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-08",
       "source_type": "vault_tvl",
-      "total_value_usd": 85857.14,
+      "total_value_usd": 78785.71,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -1144,15 +686,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 64285.71
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 7071.43
         },
         {
           "label": "rmPROTO",
@@ -1211,84 +744,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1021.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 982.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 982.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 982.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 982.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 942.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 864.29,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 314.29,
-          "price_usd": 1,
-          "value_usd": 314.29,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4622.45,
+          "value_usd": 5623.98,
           "vault": "rmproto"
         },
         {
@@ -1297,16 +758,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3852.04,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2003.06,
+          "value_usd": 4853.57,
           "vault": "rmproto"
         },
         {
@@ -1352,7 +804,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-09",
       "source_type": "vault_tvl",
-      "total_value_usd": 87428.57,
+      "total_value_usd": 80142.86,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -1362,15 +814,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 65142.86
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 7285.71
         },
         {
           "label": "rmPROTO",
@@ -1429,84 +872,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1052.38,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1011.9,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1011.9,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1011.9,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1011.9,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 971.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 890.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 323.82,
-          "price_usd": 1,
-          "value_usd": 323.82,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4775.51,
+          "value_usd": 5810.2,
           "vault": "rmproto"
         },
         {
@@ -1515,16 +886,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 3979.59,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2069.39,
+          "value_usd": 5014.28,
           "vault": "rmproto"
         },
         {
@@ -1570,7 +932,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-10",
       "source_type": "vault_tvl",
-      "total_value_usd": 89000,
+      "total_value_usd": 81500,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -1580,15 +942,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 66000
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 7500
         },
         {
           "label": "rmPROTO",
@@ -1647,84 +1000,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1083.33,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1041.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1041.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1041.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1041.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1000,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 916.67,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 333.32,
-          "price_usd": 1,
-          "value_usd": 333.32,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4928.57,
+          "value_usd": 5996.42,
           "vault": "rmproto"
         },
         {
@@ -1733,16 +1014,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4107.14,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2135.71,
+          "value_usd": 5175.0,
           "vault": "rmproto"
         },
         {
@@ -1788,7 +1060,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-11",
       "source_type": "vault_tvl",
-      "total_value_usd": 90571.43,
+      "total_value_usd": 82857.14,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -1798,15 +1070,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 66857.14
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 7714.29
         },
         {
           "label": "rmPROTO",
@@ -1865,84 +1128,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1114.29,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1071.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1071.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1071.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1071.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1028.57,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 942.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 342.85,
-          "price_usd": 1,
-          "value_usd": 342.85,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5081.63,
+          "value_usd": 6182.65,
           "vault": "rmproto"
         },
         {
@@ -1951,16 +1142,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4234.69,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2202.04,
+          "value_usd": 5335.71,
           "vault": "rmproto"
         },
         {
@@ -2006,7 +1188,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-12",
       "source_type": "vault_tvl",
-      "total_value_usd": 92142.86,
+      "total_value_usd": 84214.29,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -2016,15 +1198,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 67714.29
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 7928.57
         },
         {
           "label": "rmPROTO",
@@ -2083,84 +1256,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1145.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1101.19,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1101.19,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1101.19,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1101.19,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1057.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 969.05,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 352.38,
-          "price_usd": 1,
-          "value_usd": 352.38,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5234.7,
+          "value_usd": 6368.89,
           "vault": "rmproto"
         },
         {
@@ -2169,16 +1270,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4362.25,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2268.37,
+          "value_usd": 5496.43,
           "vault": "rmproto"
         },
         {
@@ -2224,7 +1316,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-13",
       "source_type": "vault_tvl",
-      "total_value_usd": 93714.29,
+      "total_value_usd": 85571.43,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -2234,15 +1326,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 68571.43
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 8142.86
         },
         {
           "label": "rmPROTO",
@@ -2301,84 +1384,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1176.19,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1130.95,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1130.95,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1130.95,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1130.95,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1085.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 995.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 361.92,
-          "price_usd": 1,
-          "value_usd": 361.92,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5387.76,
+          "value_usd": 6555.11,
           "vault": "rmproto"
         },
         {
@@ -2387,16 +1398,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4489.8,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2334.69,
+          "value_usd": 5657.15,
           "vault": "rmproto"
         },
         {
@@ -2442,7 +1444,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-14",
       "source_type": "vault_tvl",
-      "total_value_usd": 95285.71,
+      "total_value_usd": 86928.57,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -2452,15 +1454,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 69428.57
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 8357.14
         },
         {
           "label": "rmPROTO",
@@ -2519,84 +1512,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1207.14,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1160.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1160.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1160.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1160.71,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1114.29,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1021.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 371.44,
-          "price_usd": 1,
-          "value_usd": 371.44,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5540.82,
+          "value_usd": 6741.33,
           "vault": "rmproto"
         },
         {
@@ -2605,16 +1526,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4617.35,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2401.02,
+          "value_usd": 5817.86,
           "vault": "rmproto"
         },
         {
@@ -2660,7 +1572,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-15",
       "source_type": "vault_tvl",
-      "total_value_usd": 96857.14,
+      "total_value_usd": 88285.71,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -2670,15 +1582,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 70285.71
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 8571.43
         },
         {
           "label": "rmPROTO",
@@ -2737,84 +1640,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1238.1,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1190.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1190.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1190.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1190.48,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1142.86,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1047.62,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 380.93,
-          "price_usd": 1,
-          "value_usd": 380.93,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5693.88,
+          "value_usd": 6927.56,
           "vault": "rmproto"
         },
         {
@@ -2823,16 +1654,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4744.9,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2467.35,
+          "value_usd": 5978.57,
           "vault": "rmproto"
         },
         {
@@ -2878,7 +1700,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-16",
       "source_type": "vault_tvl",
-      "total_value_usd": 98428.57,
+      "total_value_usd": 89642.86,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -2888,15 +1710,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 71142.86
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 8785.71
         },
         {
           "label": "rmPROTO",
@@ -2955,84 +1768,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1269.05,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1220.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1220.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1220.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1220.24,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1171.43,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1073.81,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 390.46,
-          "price_usd": 1,
-          "value_usd": 390.46,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5846.94,
+          "value_usd": 7113.77,
           "vault": "rmproto"
         },
         {
@@ -3041,16 +1782,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 4872.45,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2533.67,
+          "value_usd": 6139.28,
           "vault": "rmproto"
         },
         {
@@ -3096,7 +1828,7 @@
       "subject_id": "robotmoney-vault",
       "date": "2026-09-17",
       "source_type": "vault_tvl",
-      "total_value_usd": 100000,
+      "total_value_usd": 91000,
       "wallets": [
         {
           "label": "rmUSDC",
@@ -3106,15 +1838,6 @@
           "chain": "devnet",
           "address": null,
           "value_usd": 72000
-        },
-        {
-          "label": "rmAGENT",
-          "kind": "vault",
-          "vault": "rmagent",
-          "sleeve": "agent_tokens",
-          "chain": "devnet",
-          "address": null,
-          "value_usd": 9000
         },
         {
           "label": "rmPROTO",
@@ -3173,84 +1896,12 @@
           "vault": "rmusdc"
         },
         {
-          "token": "ROBOTMONEY",
-          "name": "RobotMoney",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1300,
-          "vault": "rmagent"
-        },
-        {
-          "token": "JUNO",
-          "name": "Juno",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1250,
-          "vault": "rmagent"
-        },
-        {
-          "token": "WOON",
-          "name": "Woon",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1250,
-          "vault": "rmagent"
-        },
-        {
-          "token": "PEAQ",
-          "name": "Peaq",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1250,
-          "vault": "rmagent"
-        },
-        {
-          "token": "ZYFAI",
-          "name": "Zyfai",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1250,
-          "vault": "rmagent"
-        },
-        {
-          "token": "GIZA",
-          "name": "Giza",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1200,
-          "vault": "rmagent"
-        },
-        {
-          "token": "DEUS",
-          "name": "DEUS",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 1100,
-          "vault": "rmagent"
-        },
-        {
-          "token": "USDC",
-          "name": "Idle USDC",
-          "chain": "devnet",
-          "balance": 400,
-          "price_usd": 1,
-          "value_usd": 400,
-          "vault": "rmagent"
-        },
-        {
           "token": "WBTC",
           "name": "BTC",
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 6000,
+          "value_usd": 7300.0,
           "vault": "rmproto"
         },
         {
@@ -3259,16 +1910,7 @@
           "chain": "devnet",
           "balance": null,
           "price_usd": null,
-          "value_usd": 5000,
-          "vault": "rmproto"
-        },
-        {
-          "token": "HYPE",
-          "name": "HYPE",
-          "chain": "devnet",
-          "balance": null,
-          "price_usd": null,
-          "value_usd": 2600,
+          "value_usd": 6300.0,
           "vault": "rmproto"
         },
         {

@@ -9,6 +9,6 @@
 export const BUCKET_NOTES = {
   conservative_defi_yield: "Lending USDC. The lowest-volatility sleeve, aimed at capital preservation.",
   agent_tokens: "Tokens of the agents that hold $ROBOTMONEY.",
-  protocol_tokens: "Large-cap crypto and DeFi assets.",
+  protocol_tokens: "The two largest crypto assets: Bitcoin and Ether.",
   real_world_assets: "Tokenised traditional instruments: equity index and commodities.",
 };

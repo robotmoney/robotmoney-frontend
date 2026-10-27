@@ -1,10 +1,11 @@
-// The four Robot Money vaults as data: who they are, and the arithmetic that
+// The three Robot Money vaults as data: who they are, and the arithmetic that
 // sets each one's recommended, applied and actual weight against the others.
 //
-// The stack is a PortfolioRouter plus four leg vaults, one per sleeve. The
+// The stack is a PortfolioRouter plus three leg vaults, one per sleeve. The
 // router routes new deposits by its applied weights and holds nothing itself.
-// Production runs rmUSDC alone on Base; the other three exist on the staging
-// devnet only, until the mainnet decision.
+// Production runs rmUSDC alone on Base; the other two exist on the staging
+// devnet only, until the mainnet decision. rmAGENT, the fourth, closed with
+// its sleeve (RETIRED_VAULTS).
 //
 // PURE: no fetching, no DOM, no page state. lib/vault-source.js does the I/O
 // and picks the data source; /allocation, /vault/:slug and the vault swarm
@@ -26,7 +27,7 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * @property {string} [legacyName] The sleeve's first framework name, still what the API sends; matched, never printed.
  * @property {string} bucket      The framework's bucket id.
  * @property {string} key         The allocation DTO's bucket key.
- * @property {string} color       CATEGORICAL by published position: one hue everywhere.
+ * @property {string} color       CATEGORICAL by the sleeve's place in BUCKET_ORDER: one hue everywhere.
  * @property {string} category
  * @property {string | null} baseAddress  The production contract on Base, where one exists.
  */
@@ -72,8 +73,10 @@ import { BUCKET_NOTES } from "./sleeve-notes.js";
  * }} Overview
  */
 
-// In the framework's published bucket order (session-summary.js BUCKET_ORDER),
-// so VAULTS[i].color === CATEGORICAL[i] === bucketHue(VAULTS[i].bucket).
+// In the framework's published bucket order (session-summary.js BUCKET_ORDER).
+// Each colour is the sleeve's own slot in that order, not the vault's index
+// here, so color === bucketHue(bucket): rmPROTO keeps CATEGORICAL[2] with the
+// slot before it closed.
 /** @type {VaultIdentity[]} */
 export const VAULTS = [
   {
@@ -88,17 +91,6 @@ export const VAULTS = [
     category: "Lending",
     // The ERC-4626 vault on Base; source of truth frontend/public/skill.md.
     baseAddress: "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
-  },
-  {
-    slug: "rmagent",
-    symbol: "rmAGENT",
-    name: "Small Cap Tokens",
-    legacyName: "Agent Tokens",
-    bucket: "agent_tokens",
-    key: "agent-tokens",
-    color: CATEGORICAL[1],
-    category: "Token basket",
-    baseAddress: null,
   },
   {
     slug: "rmproto",
@@ -124,7 +116,25 @@ export const VAULTS = [
 
 export const VAULT_SLUGS = VAULTS.map((v) => v.slug);
 
-// The four-vault read the backend will serve (Lucas's lane). Deliberately not
+// Vaults whose sleeve closed (session-summary.js RETIRED_BUCKETS). Not a page,
+// not a row and not a layer: /vault/rmagent goes to /allocation. Kept so a
+// sleeve note can still name what an old session held.
+/** @type {VaultIdentity[]} */
+export const RETIRED_VAULTS = [
+  {
+    slug: "rmagent",
+    symbol: "rmAGENT",
+    name: "Small Cap Tokens",
+    legacyName: "Agent Tokens",
+    bucket: "agent_tokens",
+    key: "agent-tokens",
+    color: CATEGORICAL[1],
+    category: "Token basket",
+    baseAddress: null,
+  },
+];
+
+// The vault read the backend will serve (Lucas's lane). Deliberately not
 // in contract ROUTES until it exists: vault-source.js probes it and falls back.
 export const VAULTS_ENDPOINT = "/api/dashboards/robotmoney-vaults";
 
@@ -269,14 +279,21 @@ export function vaultBySlug(slug) {
 // published name ("Conservative DeFi Yield"). Not a slug: vaultBySlug is.
 /** @param {unknown} idKeyOrName @returns {VaultIdentity | null} */
 export function vaultForBucket(idKeyOrName) {
-  const n = normKey(idKeyOrName);
-  if (!n) return null;
-  return VAULTS.find((v) => normKey(v.bucket) === n || normKey(v.key) === n || normKey(v.name) === n || normKey(v.legacyName) === n) ?? null;
+  return identityForBucket(VAULTS, idKeyOrName);
 }
 
+/** @param {VaultIdentity[]} list @param {unknown} idKeyOrName @returns {VaultIdentity | null} */
+function identityForBucket(list, idKeyOrName) {
+  const n = normKey(idKeyOrName);
+  if (!n) return null;
+  return list.find((v) => normKey(v.bucket) === n || normKey(v.key) === n || normKey(v.name) === n || normKey(v.legacyName) === n) ?? null;
+}
+
+// A closed sleeve still has its note: an old session that held it says what
+// it was.
 /** @param {unknown} key */
 export function sleeveNote(key) {
-  const v = vaultForBucket(key);
+  const v = vaultForBucket(key) ?? identityForBucket(RETIRED_VAULTS, key);
   return v ? SLEEVE_NOTE[v.key] ?? "" : "";
 }
 
@@ -344,8 +361,8 @@ export function bpsFromWeights(weights) {
   return out;
 }
 
-// A layer of four weights is only a layer when all four are known and they
-// add up. Anything else is reported as missing, never rescaled to 100%.
+// A layer of weights, one per vault, is only a layer when every one is known
+// and they add up. Anything else is reported as missing, never rescaled to 100%.
 /** @param {Array<number | null | undefined>} values */
 export function layerComplete(values) {
   if (!Array.isArray(values) || values.length !== VAULTS.length) return false;
@@ -354,12 +371,12 @@ export function layerComplete(values) {
   return Math.abs(sum - 10000) <= 1;
 }
 
-// The one reading of the four vaults. Recomputes actual, the gaps, combined
+// The one reading of the vaults. Recomputes actual, the gaps, combined
 // TVL and tracking error from the inputs; a server's own figures for those are
 // ignored, so a backend that computes them differently cannot put two answers
 // on one page. Idempotent on its own output.
 //
-//   actual     = a vault's TVL over the four vaults' TVL. A vault confirmed
+//   actual     = a vault's TVL over the vaults' combined TVL. A vault confirmed
 //                absent from the network counts as zero; an unreadable or
 //                missing one makes every actual null (never renormalised).
 //   target     = the weights in force: the router's applied weights once it
@@ -369,7 +386,7 @@ export function layerComplete(values) {
 //   governance = target - recommended    (a vote not yet applied)
 //   flow       = actual - target         (deposits not yet routed)
 //   total      = actual - recommended
-//   tracking error = half the sum of |flow| over the four vaults: how far the
+//   tracking error = half the sum of |flow| over the vaults: how far the
 //                money is from the target, as the /allocation ring's gaps.
 //                Without a target, half the sum of |total|.
 /** @param {any} source @returns {Overview} */
@@ -458,7 +475,7 @@ function trackingError(vaults, gap) {
     : null;
 }
 
-// Whether the four vaults have a target to be measured against: the router's
+// Whether the vaults have a target to be measured against: the router's
 // weights or the published policy's. With one, each vault has a governance
 // gap (target against the recommendation) and a flow gap (actual against the
 // target); without, one gap, actual against the recommendation.

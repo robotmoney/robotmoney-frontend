@@ -147,11 +147,6 @@ const META = {
     description: "rmUSDC, the Robot Money vault for the Fixed Income sleeve.",
     robots: "noindex, follow",
   },
-  "/vault/rmagent": {
-    title: "rmAGENT: Small Cap Tokens Vault | Robot Money",
-    description: "rmAGENT, the Robot Money vault for the Small Cap Tokens sleeve.",
-    robots: "noindex, follow",
-  },
   "/vault/rmproto": {
     title: "rmPROTO: Protocol Tokens Vault | Robot Money",
     description: "rmPROTO, the Robot Money vault for the Protocol Tokens sleeve.",
@@ -622,6 +617,9 @@ const LEGACY_ALIASES = [
   // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
   // /allocation.
   ["/vault", "/allocation", "exact"],
+  // rmAGENT closed with the Small Cap Tokens sleeve (RM-190) and its address
+  // renders the allocation view, so it names /allocation canonical too.
+  ["/vault/rmagent", "/allocation", "exact"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META

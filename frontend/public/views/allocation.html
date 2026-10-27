@@ -2,14 +2,14 @@
      where the recommendation meets execution (docs/plans/vault-pages.md).
      The allocation is a POLICY and gets a page of its own. A portfolio is a
      book of holdings and gets a row on /swarm plus its own subject page. This
-     page is the policy as it stands now, and the four vaults that carry it
+     page is the policy as it stands now, and the three vaults that carry it
      out. How it has changed is every session that reviewed it, on the swarm's
      page for the subject.
 
      THE CONSTRAINT A REVIEWER SHOULD CHECK FIRST: this page reads the
      allocation DTO (GET /api/dashboards/allocation; the shipped manifest
-     stands in on a local host only), the four-vault overview
-     (lib/vault-source.js: the four-vault route, else the Base vault feed with
+     stands in on a local host only), the vault overview
+     (lib/vault-source.js: the vaults route, else the Base vault feed with
      the latest published robotmoney-allocation session laid over it), and
      nothing else. It never reads wallet-balances or wallet-sleeves: those are
      the three protocol-owned prop wallets, a different pot of money that
@@ -23,7 +23,7 @@
      gaps) · How the weights are set.
 
      A vault's asset-level holdings are on its own page, /vault/:slug, which
-     each Vaults row and each sleeve's recipe links to, and the four vaults'
+     each Vaults row and each sleeve's recipe links to, and the vaults'
      combined holdings on the vault subject's page.
 
      id="allocation", id="vaults" and id="vault" are load-bearing: RM-115
@@ -51,7 +51,7 @@
     <div class="a2-hero__inner">
       <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
       <p class="a2-hero__lede">
-        Four sleeves, weighted by the investment swarm of agents and in force
+        Three sleeves, weighted by the investment swarm of agents and in force
         until a recommendation changes them. Each sleeve gets its own vault.
       </p>
     </div>
@@ -242,13 +242,13 @@
 
 
   <!-- ── § VAULTS ─────────────────────────────────────────────────────────
-       Where the recommendation meets execution: four leg vaults, one per
+       Where the recommendation meets execution: three leg vaults, one per
        sleeve, behind a router that routes new deposits by its applied weights
        and holds nothing itself. Recommended is the latest published
        robotmoney-allocation recommendation; Target the weights in force, the
        router's once it reports them and the published policy's until then
        (Base today), the same targets the ring above draws; Actual each
-       vault's share of the four vaults' TVL. Pending is recommended minus
+       vault's share of the vaults' combined TVL. Pending is recommended minus
        target (a recommendation not applied; RM-97), drift actual
        minus target (RM-115): on Base the ring's gap, both measured against
        the policy. On the devnet the router's weights are the target, and the
