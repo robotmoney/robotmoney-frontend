@@ -6102,6 +6102,7 @@ scheduled activation that misses its release fails CI until it is rescheduled.
 | daily portfolio values, production fixture | 38,308 | 37,129 | 1.9e-14 | 1.2e-14 |
 | weighting comparison | 1,623 | 1,506 | 1.6e-14 | 7.2e-13 |
 | regime-eq comparison | 1,445 | 1,253 | 3.9e-14 | 1.2e-12 |
+| v0.7.0 release check golden (`scripts/release/version-checks/v0.7.0/reference/backtest.golden.json`, regenerated) | 15 | 9 | 8.6e-13 | 3.8e-13 |
 
 The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3437433689646): its returns are the nearly constant cash rate, which the `expm1(log1p)` form now gets right to the last digits, and a near-constant series amplifies that in the ratio. The largest relative change is a CAGR near zero (-8.04e-5), where `pow(...) - 1` cancelled.
 
