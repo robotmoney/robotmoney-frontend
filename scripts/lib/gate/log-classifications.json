@@ -61,27 +61,27 @@
   },
   {
     "id": "expected-scheduler-first-connect-retry",
-    "match": "^\\[system-scheduler\\] initial connect failed: Unable to connect\\. Is the computer able to access the url\\?$",
+    "match": "^\\[system-scheduler\\] initial connect failed: (ECONNREFUSED: )?Unable to connect\\. Is the computer able to access the url\\?$",
     "class": "expected",
     "reason": "The scheduler's first stream connect (scripts/lib/system-scheduler/runtime.ts start()) ran before the api listened; it then takes the same reconnect loop as every later drop (spec §3.2). An api that never answers fails readiness scheduler-initial-rebuild and the gate's healthy-container check. Seen once at boot on stage-2, 2026-10-07."
   },
   {
     "id": "expected-worker-job-first-connect-retry",
-    "match": "^job \\S+ \\([\\w.]+\\) failed, retry in <n>s: Unable to connect\\. Is the computer able to access the url\\?$",
+    "match": "^job \\S+ \\([\\w.]+\\) failed, retry in <n>s: (ECONNREFUSED: )?Unable to connect\\. Is the computer able to access the url\\?$",
     "source": "worker-",
     "class": "expected",
     "reason": "A worker job's first api call ran before the api listened after a boot (backend/src/worker/loop.ts: the job is re-queued with a backoff, 'failed, retry in <n>s'); the same boot race as expected-scheduler-first-connect-retry, on the worker side. Seen once on worker-analytics (analytics.parity_sweep) right after boot 2 of the v0.6.1 production run 20261010T004257Z, accepted by the owner on 2026-10-10 (issue 1280), and ×2 on the v0.5.4 run. Held to the retrying form: a job whose retries run out logs '— DEAD' instead, which stays unclassified and fails, and the dead job's stored last_error is graded on its own ('jobs:' source). Any other message behind the same job line stays unclassified."
   },
   {
     "id": "expected-worker-waits-for-api",
-    "match": "^\\[analytics-<n>\\] api not ready at http://api:<n>/health: Unable to connect\\. Is the computer able to access the url\\?; retrying$",
+    "match": "^(\\[analytics-<n>\\]|pipeline_startup:) api not ready at http://api:<n>/health: (ECONNREFUSED: )?Unable to connect\\. Is the computer able to access the url\\?; retrying$",
     "source": "worker-",
     "class": "expected",
     "reason": "worker-analytics claims no job until the api's /health answers (backend/src/worker/boot.ts waitForApiReady, issue 1378). Each failed probe logs this line and the wait retries with a capped backoff, so a boot where the api starts a second later logs it once or twice and then goes on. Seen ×2 on worker-analytics at the boot of the v0.6.3 stage target, run 20261020T212227Z, followed by no further line and a healthy worker. Held to the retrying form on a worker container: a worker whose api never answers logs the line without end and fails the healthy-container check, and every other message from the wait stays unclassified."
   },
   {
     "id": "expected-judge-subscribe-connect-retry",
-    "match": "^\\[judge:[^\\]]+\\] subscription error: Unable to connect\\. Is the computer able to access the url\\?$",
+    "match": "^\\[judge:[^\\]]+\\] subscription error: (ECONNREFUSED: )?Unable to connect\\. Is the computer able to access the url\\?$",
     "source": "participant-judge-",
     "class": "expected",
     "reason": "The judge participant's SSE subscribe (scripts/agent/participant/judge-client.ts runJudgeClient) could not reach the api; the client sleeps reconnectMs and subscribes again, exactly as it does after any stream drop, so one such line is a reconnect, not a dead judge. The same connect race as expected-scheduler-first-connect-retry and expected-worker-job-first-connect-retry, on the judge side. Seen once on participant-judge-themis-1 during the v0.6.1 production R2.5 baseline on 2026-10-10 (issue 1278), followed by 'subscribed'. Held to that one message and to judge participant containers: a refused token (HTTP 401/403) makes the client exit, which the participants check catches as a restart; 'judge subscription failed: HTTP <n>' and every other subscription error stay unclassified and fail; a judge that never reconnects fails the sessions check as an unjudged publish."

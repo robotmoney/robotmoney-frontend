@@ -83,3 +83,21 @@ describe("a worker waiting for the api is expected (issue 1378)", () => {
     expect(groupsOf(["[analytics-<n>] api not ready at http://api:<n>/health: HTTP 503; retrying"])[0]!.rule).toBeNull();
   });
 });
+
+describe("Bun 1.4 prefixes a refused connect with ECONNREFUSED, and the worker start-up check logs under pipeline_startup", () => {
+  const CONN = "Unable to connect. Is the computer able to access the url?";
+  test("the v0.7.0 stage lines are classified expected", () => {
+    const wait = `pipeline_startup: api not ready at http://api:<n>/health: ECONNREFUSED: ${CONN}; retrying`;
+    expect(groupsOf([wait])[0]!.rule?.id).toBe("expected-worker-waits-for-api");
+    const sched = `[system-scheduler] initial connect failed: ECONNREFUSED: ${CONN}`;
+    expect(groupsOf([sched], "rm_smoke_stack-system-scheduler-1")[0]!.rule?.id).toBe("expected-scheduler-first-connect-retry");
+    const job = `job 7 (analytics.parity_sweep) failed, retry in 2s: ECONNREFUSED: ${CONN}`;
+    expect(groupsOf([job])[0]!.rule?.id).toBe(RULE);
+    const v = inventoryVerdict(groupsOf([wait]), "post-release", "v0.7.0");
+    expect(v.failures).toEqual([]);
+  });
+  test("RED CONTROLS: the start-up wait from a non-worker container, or with another cause, stays unclassified", () => {
+    expect(groupsOf([`pipeline_startup: api not ready at http://api:<n>/health: ECONNREFUSED: ${CONN}; retrying`], "rm_prod_stack-api-1")[0]!.rule).toBeNull();
+    expect(groupsOf(["pipeline_startup: api not ready at http://api:<n>/health: ECONNREFUSED: HTTP 503; retrying"])[0]!.rule).toBeNull();
+  });
+});
