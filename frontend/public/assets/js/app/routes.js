@@ -67,10 +67,10 @@ const ABOUT_VIEW = `${VIEW_DIR}/dash/about.html`;
 // ahead of the coming-soon placeholder above; see dash-ask-roboto.js for why
 // this is a deterministic rule-based matcher, never an LLM call.
 const ASK_ROBOTO_VIEW = `${VIEW_DIR}/dash/ask-roboto.html`;
-// /projects/:slug "ProjectProfile" dossier (issue #389, §5.5, P3.1) — the
-// first PARAM route (DASH_PARAM_ROUTES below, not DASH_ROUTES) to ship real
-// content ahead of the coming-soon placeholder.
-const PROJECT_PROFILE_VIEW = `${VIEW_DIR}/dash/project-profile.html`;
+// /projects/:slug, a project's page (RM-186). It was the dashboards'
+// "ProjectProfile" dossier (issue #389) inside their sidebar layout; it is now
+// a public research record like a swarm member's page, with no layout.
+const PROJECT_VIEW = `${VIEW_DIR}/project.html`;
 // /lobster/:id, /vaults/:id, /wallets/:id detail dossiers (issue #391, §5.10/
 // §5.12/§5.14, P3.3/P3.4/P3.5) — the first PARAM routes to ship real content
 // ahead of the coming-soon placeholder (§4.1's "5 param regexes").
@@ -104,20 +104,14 @@ const DASH_ROUTES = {
   "/submit": { view: SUBMIT_VIEW, layout: DASH_LAYOUT_VIEW, gated: false },
 };
 
-// Param-route regexes (§4.1's "5 param regexes"). `/projects/:slug` is the
-// odd one out: its header in the plan (§5.5) explicitly marks ProjectProfile
-// "— public" (unlike its siblings) because /projects (the list) is already a
-// live, ungated page in this repo (INV-C §4) — gating its own profile
-// sub-route would be a product regression this issue does not own. Issue
-// #389 (P3.1) graduates it off the shared placeholder onto its own real
-// fragment — the first param route to do so; the other four are unchanged.
+// Param-route regexes (§4.1's "5 param regexes"). `/projects/:slug` was the
+// fifth; since RM-186 it is a public page outside the dashboards (viewFor).
 /** @type {Array<{ test: RegExp; route: DashRoute }>} */
 const DASH_PARAM_ROUTES = [
   { test: /^\/agents\/[^/]+\/?$/, route: { view: AGENT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/lobster\/[^/]+\/?$/, route: { view: COIN_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/vaults\/[^/]+\/?$/, route: { view: VAULT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/wallets\/[^/]+\/?$/, route: { view: WALLET_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
-  { test: /^\/projects\/[^/]+\/?$/, route: { view: PROJECT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: false } },
 ];
 
 /** @param {string} pathname @returns {DashRoute | null} */
@@ -238,6 +232,8 @@ export function viewFor(pathname) {
   // reads location.pathname to pick a section. Otherwise the catch-all
   // below would request a nonexistent per-path view fragment and 404.
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return ADMIN_VIEW;
+  // A project's page (RM-186): one fragment for every slug.
+  if (/^\/projects\/[^/]+\/?$/.test(pathname)) return PROJECT_VIEW;
   if (/^\/swarm\/members\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/swarm/member.html`;
   }

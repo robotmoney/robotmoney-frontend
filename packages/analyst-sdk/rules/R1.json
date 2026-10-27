@@ -1,0 +1,51 @@
+{
+  "id": "R1",
+  "name": "Lex's 3-state regime rule on the Base policy portfolio (A v8)",
+  "author": "Lex (method: the 3-state rule in backtest.ts and the May 2026 treasury post; bucket behavior from the swarm manifest, 2026-06-02). Numeric translation: Claude, 2026-10-08, using only the page's floors, targets and caps.",
+  "date": "2026-10-08",
+  "status": "reference",
+  "description": "The composite label picks one of three weight sets. neutral is A v8 unchanged. risk_off: Bitcoin to 0, gold stays at its 6% cap, cash buffer 5%, 8 points move from the Morpho curated vaults and 2 from Bitcoin into sUSDS and Aave (the manifest: the yield book is the principal anchor and grows in risk-off). risk_on: Bitcoin to its 10% cap, gold 4% (the counter-cycle sleeve), the yield book keeps A's mix. Decision every Monday, regime computed as-of the previous Friday, trade at Monday's close.",
+  "label": "composite",
+  "states": {
+    "risk_off": {
+      "USDC": 5,
+      "SUSDS": 27,
+      "SPARK": 8,
+      "GT": 12,
+      "STEAK": 2,
+      "AAVE": 35,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 0
+    },
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 24,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5
+    },
+    "risk_on": {
+      "USDC": 2,
+      "SUSDS": 22,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 27,
+      "COMP": 5,
+      "GOLD": 4,
+      "BTC": 10
+    }
+  },
+  "drift": {
+    "points": 2,
+    "relative": 0.25,
+    "byHolding": {
+      "BTC": 3
+    }
+  }
+}

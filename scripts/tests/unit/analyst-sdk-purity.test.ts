@@ -240,3 +240,178 @@ describe("analyst-sdk purity", () => {
     });
   });
 });
+
+// ── issue 1421: extract is the only stage that reaches acquisition ──────────
+// After extract, every downstream stage runs from supplied data. Mechanically:
+//   - no SDK file imports csvb (the SDK consumes prepared inputs, it never
+//     downloads archives) or a third-party HTTP client;
+//   - provider HTTP exists only in packages/analyst-sdk/src/extract/http.ts:
+//     no other SDK file calls fetch or names XMLHttpRequest, WebSocket,
+//     EventSource or navigator.sendBeacon;
+//   - no downstream module (SDK files outside src/extract/; backend analytics
+//     analyze/, transform/, report/, prepare.ts and coverage.ts) reaches an
+//     acquisition client DIRECTLY OR TRANSITIVELY through its relative imports
+//     (backend shims are followed into the SDK), and none calls fetch itself.
+// The graph check runs over planted positive and negative fixtures too, so a
+// resolver that follows nothing cannot pass for a clean tree.
+const CSVB_IMPORT = /(^|\/)(csvb|csv-backups)(\/|$|\.ts$)|^@robotmoney\/csvb/;
+const HTTP_CLIENT_PACKAGES = new Set(["axios", "node-fetch", "undici", "got", "ky", "superagent", "cross-fetch", "isomorphic-fetch", "ws", "needle", "request"]);
+const DIRECT_HTTP: Array<[RegExp, string]> = [
+  [/(?<![\w$.])fetch\s*\(/, "calls fetch"],
+  [/\bglobalThis\s*\.\s*fetch\b/, "uses globalThis.fetch"],
+  [/\b(XMLHttpRequest|WebSocket|EventSource)\b/, "names a browser HTTP client"],
+  [/\bnavigator\s*\.\s*sendBeacon\b/, "uses navigator.sendBeacon"],
+];
+
+/** codeOnly() with string and template literal contents blanked, for checks on code alone. */
+function codeWithoutStrings(text: string): string {
+  return codeOnly(text).replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+}
+
+function resolveRelative(from: string, spec: string): string | null {
+  if (!spec.startsWith(".")) return null;
+  const parts = from.split("/").slice(0, -1);
+  for (const seg of spec.split("/")) {
+    if (seg === "." || seg === "") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  const p = parts.join("/");
+  return p.endsWith(".ts") ? p : `${p}.ts`;
+}
+
+export interface ImportGraphRules {
+  /** Files whose import graph must never reach `forbidden`. */
+  downstream: (path: string) => boolean;
+  /** Acquisition modules (extract clients, data sources, ledgers, HTTP clients). */
+  forbidden: (path: string) => boolean;
+  /** The one module allowed to perform provider HTTP. */
+  httpModule: string;
+  /** Files the direct-HTTP and csvb rules apply to. */
+  sdkFile: (path: string) => boolean;
+}
+
+/** Violations over a set of files keyed by repo-relative path. */
+export function importGraphViolations(files: ReadonlyMap<string, string>, rules: ImportGraphRules): string[] {
+  const found: string[] = [];
+  const edges = new Map<string, string[]>();
+  for (const [path, text] of files) {
+    const specs = specifiers(codeOnly(text));
+    edges.set(path, specs.map((s) => resolveRelative(path, s)).filter((p): p is string => p !== null));
+    if (rules.sdkFile(path)) {
+      for (const s of specs) {
+        if (CSVB_IMPORT.test(s)) found.push(`${path}: imports ${s} (the SDK never imports csvb)`);
+        if (HTTP_CLIENT_PACKAGES.has(s)) found.push(`${path}: imports the HTTP client ${s}`);
+      }
+      if (path !== rules.httpModule) {
+        const code = codeWithoutStrings(text);
+        for (const [re, what] of DIRECT_HTTP) if (re.test(code)) found.push(`${path}: ${what} (provider HTTP lives only in ${rules.httpModule})`);
+      }
+    } else if (rules.downstream(path)) {
+      const code = codeWithoutStrings(text);
+      for (const [re, what] of DIRECT_HTTP) if (re.test(code)) found.push(`${path}: ${what} (a downstream module never performs HTTP)`);
+    }
+  }
+  for (const start of files.keys()) {
+    if (!rules.downstream(start)) continue;
+    const seen = new Set<string>([start]);
+    const queue: string[][] = [[start]];
+    while (queue.length) {
+      const chain = queue.shift()!;
+      for (const next of edges.get(chain[chain.length - 1]!) ?? []) {
+        if (seen.has(next)) continue;
+        seen.add(next);
+        if (rules.forbidden(next)) {
+          found.push(`${start}: reaches acquisition module ${next} via ${[...chain, next].join(" -> ")}`);
+          continue;
+        }
+        queue.push([...chain, next]);
+      }
+    }
+  }
+  return found;
+}
+
+const SDK_REL = "packages/analyst-sdk/src";
+const BA = "backend/src/analytics";
+const REPO_RULES: ImportGraphRules = {
+  sdkFile: (p) => p.startsWith(`${SDK_REL}/`),
+  httpModule: `${SDK_REL}/extract/http.ts`,
+  downstream: (p) =>
+    (p.startsWith(`${SDK_REL}/`) && !p.startsWith(`${SDK_REL}/extract/`)) ||
+    /^backend\/src\/analytics\/(analyze|transform|report)\//.test(p) ||
+    p === `${BA}/prepare.ts` ||
+    p === `${BA}/coverage.ts`,
+  forbidden: (p) =>
+    p.startsWith(`${SDK_REL}/extract/`) ||
+    p.startsWith(`${BA}/extract/`) ||
+    [`${BA}/access/data-source.ts`, `${BA}/access/hermetic-source.ts`, `${BA}/source-ledger.ts`, `${BA}/api-client.ts`, `${BA}/telemetry-client.ts`, `${BA}/edgar-incremental-refresh.ts`].includes(p),
+};
+
+describe("issue 1421: no downstream acquisition", () => {
+  const repoFiles = new Map<string, string>();
+  for (const dir of [SDK_SRC, join(root, "backend/src")]) {
+    for (const f of tsFiles(dir)) repoFiles.set(relative(root, f), readFileSync(f, "utf8"));
+  }
+
+  test("the graph is non-vacuous: downstream files exist and their imports resolve to real files", () => {
+    const downstream = [...repoFiles.keys()].filter(REPO_RULES.downstream);
+    expect(downstream.length).toBeGreaterThan(30);
+    // run.ts really does import prepare.ts: the resolver follows relative imports.
+    const runImports = specifiers(codeOnly(repoFiles.get(`${SDK_REL}/run.ts`)!)).map((s) => resolveRelative(`${SDK_REL}/run.ts`, s));
+    expect(runImports).toContain(`${SDK_REL}/prepare.ts`);
+    for (const p of runImports) if (p) expect(repoFiles.has(p), p).toBe(true);
+  });
+
+  test("the real tree: no csvb, no HTTP client, provider HTTP only in extract/http.ts, no downstream path to acquisition", () => {
+    expect(importGraphViolations(repoFiles, REPO_RULES)).toEqual([]);
+  });
+
+  test("extract/http.ts really is where the SDK's provider HTTP lives", () => {
+    const code = codeWithoutStrings(repoFiles.get(REPO_RULES.httpModule)!);
+    expect(/globalThis\s*\.\s*fetch\b/.test(code)).toBe(true);
+  });
+
+  describe("planted import-graph fixtures", () => {
+    const S = SDK_REL;
+    const clean = new Map([
+      [`${S}/run.ts`, 'import { prepare } from "./prepare.ts";\nexport const run = () => prepare();'],
+      [`${S}/prepare.ts`, 'import { mean } from "./transform/math.ts";\nexport const prepare = () => mean([1]);'],
+      [`${S}/transform/math.ts`, "export const mean = (xs: number[]) => xs[0];"],
+      [`${S}/extract/http.ts`, "export const get = (u: string) => globalThis.fetch(u);"],
+      [`${S}/extract/yahoo.ts`, 'import { get } from "./http.ts";\nexport const fetchYahoo = (s: string) => get(s);\nconsole.log("fetch (yahoo) done");'],
+    ]);
+    const plant = (path: string, code: string) => new Map([...clean, [path, code]]);
+
+    test("positive: a clean downstream graph and an extractor using http.ts pass", () => {
+      expect(importGraphViolations(clean, REPO_RULES)).toEqual([]);
+    });
+
+    const negatives: Array<[string, Map<string, string>, RegExp]> = [
+      ["a downstream file importing an extractor directly", plant(`${S}/analyze/x.ts`, 'import { fetchYahoo } from "../extract/yahoo.ts";'), /reaches acquisition module .*extract\/yahoo\.ts/],
+      ["a downstream file reaching an extractor transitively", plant(`${S}/transform/math.ts`, 'import { fetchYahoo } from "../extract/yahoo.ts";\nexport const mean = () => 1;'), /run\.ts: reaches acquisition module .*run\.ts -> .*prepare\.ts -> .*math\.ts -> .*yahoo\.ts/],
+      ["a downstream file calling fetch", plant(`${S}/analyze/y.ts`, 'export const y = () => fetch("https://x");'), /calls fetch/],
+      ["a downstream file using globalThis.fetch", plant(`${S}/analyze/y.ts`, "export const y = globalThis.fetch;"), /globalThis\.fetch/],
+      ["a WebSocket in the SDK", plant(`${S}/analyze/y.ts`, 'export const y = () => new WebSocket("wss://x");'), /browser HTTP client/],
+      ["an XMLHttpRequest in the SDK", plant(`${S}/analyze/y.ts`, "export const y = () => new XMLHttpRequest();"), /browser HTTP client/],
+      ["an extractor other than http.ts calling fetch (provider HTTP outside http.ts)", plant(`${S}/extract/yahoo.ts`, 'export const fetchYahoo = (s: string) => fetch(s);'), /extract\/yahoo\.ts: calls fetch \(provider HTTP lives only in/],
+      ["an SDK import of csvb", plant(`${S}/input/archive.ts`, 'import { download } from "csvb";'), /never imports csvb/],
+      ["an SDK import of csvb by relative path", plant(`${S}/input/archive.ts`, 'import { download } from "../../../csv-backups/src/cli.ts";'), /never imports csvb/],
+      ["an SDK import of a third-party HTTP client", plant(`${S}/analyze/y.ts`, 'import axios from "axios";'), /HTTP client axios/],
+      ["a backend analyze module importing the live data source", plant(`${BA}/analyze/z.ts`, 'import { liveDataSource } from "../access/data-source.ts";'), /reaches acquisition module backend\/src\/analytics\/access\/data-source\.ts/],
+      ["a backend report module reaching the source ledger through a helper", new Map([...clean, [`${BA}/report/r.ts`, 'import { h } from "./h.ts";'], [`${BA}/report/h.ts`, 'import { captureSourceAcquisition } from "../source-ledger.ts";\nexport const h = 1;']]), /report\/r\.ts: reaches acquisition module .*source-ledger\.ts/],
+      ["a backend shim leading into an SDK extractor", new Map([...clean, [`${BA}/transform/s.ts`, 'export * from "../../../../packages/analyst-sdk/src/extract/yahoo.ts";']]), /transform\/s\.ts: reaches acquisition module packages\/analyst-sdk\/src\/extract\/yahoo\.ts/],
+    ];
+    for (const [name, files, expected] of negatives) {
+      test(`negative: flags ${name}`, () => {
+        const v = importGraphViolations(files, REPO_RULES);
+        expect(v.some((m) => expected.test(m)), v.join("\n") || "(no violations)").toBe(true);
+      });
+    }
+
+    test("a log message or comment naming fetch is not a fetch call", () => {
+      const files = plant(`${S}/analyze/y.ts`, '// we never fetch( here\nexport const y = () => console.log(`fetch (${1}) skipped`, "fetch(x)");\nexport const viaClient = (o: { get: () => void; fetch: () => void }) => o.fetch();');
+      expect(importGraphViolations(files, REPO_RULES).join("\n")).toBe("");
+    });
+  });
+});

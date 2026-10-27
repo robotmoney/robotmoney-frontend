@@ -1,0 +1,380 @@
+<!-- A project's page, /projects/:slug (RM-186), as a research record: the
+     breadcrumb, the project, a row of facts, what it is, its figures, its
+     tokens and their history, then its agents, wallets, vaults, activity and
+     how complete its record is. It replaces the dashboard dossier
+     (views/dash/project-profile.html), which sat in the gated dashboards'
+     sidebar.
+
+     Every field the API returns is shown. One the data cannot back yet reads
+     "Missing" (.rm-missing) with the reason on hover, never a wrong number;
+     projectView() (alpine/views/project.js) lists which and why. Our own copy
+     for a project, and whether its page is indexed: lib/project-copy.js. -->
+<section class="cv cv--detail" x-data="projectView()">
+  <div class="sv__body sv__body--narrow rr pjp">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the project</p>
+    <div class="sv__skel" x-show="loading" aria-hidden="true">
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-cols">
+        <div class="sv__skel-box"></div><div class="sv__skel-box"></div><div class="sv__skel-box"></div>
+      </div>
+      <div class="sv__skel-h"></div>
+      <div class="sv__skel-card"></div><div class="sv__skel-card"></div>
+    </div>
+
+    <template x-if="!loading && (error || notFound)">
+      <article class="rr-missing">
+        <nav class="rr-crumbs" aria-label="Breadcrumb"><a href="/projects">Agent projects</a></nav>
+        <header class="rr-head">
+          <h1 class="sv__detail-title" x-text="notFound ? 'Project not found' : 'Project unavailable'"></h1>
+          <p class="sv__lede sv__lede--compact" x-text="notFound ? 'No project is listed at this address.' : error"></p>
+        </header>
+        <div class="rr-missing__acts">
+          <template x-if="!notFound"><button type="button" class="rr-cta" @click="location.reload()"><span>Try again</span><span aria-hidden="true">↻</span></button></template>
+          <a class="rr-cta" href="/projects"><span>All agent projects</span><span aria-hidden="true">→</span></a>
+        </div>
+      </article>
+    </template>
+
+    <template x-if="!loading && project">
+      <article>
+        <nav class="rr-crumbs" aria-label="Breadcrumb">
+          <a href="/projects">Agent projects</a><span aria-hidden="true">/</span>
+          <span aria-current="page" x-text="name()"></span>
+        </nav>
+
+        <header class="rr-head rr-profile">
+          <template x-if="project.logoUrl"><img class="rr-profile__mark pjp__logo" :src="project.logoUrl" alt="" width="72" height="72"></template>
+          <template x-if="!project.logoUrl"><span class="rr-profile__mark pjp__logo pjp__logo--none" aria-hidden="true" x-text="initials()"></span></template>
+          <div>
+            <div class="rm-named">
+              <h1 class="sv__detail-title" x-text="name()"></h1>
+              <template x-if="kinds()"><span class="rm-role" x-text="kinds()"></span></template>
+            </div>
+            <template x-if="short()"><p class="sv__lede sv__lede--compact" x-text="short()"></p></template>
+            <p class="rr-links" x-show="websiteUrl() || handle()">
+              <template x-if="websiteUrl()"><a class="rr-lnk" :href="websiteUrl()" target="_blank" rel="noopener noreferrer">Website</a></template>
+              <template x-if="handle()"><a class="rr-lnk" :href="twitterUrl()" target="_blank" rel="noopener noreferrer" x-text="twitterLabel()"></a></template>
+            </p>
+          </div>
+        </header>
+
+        <div class="rr-meta">
+          <template x-for="f in facts()" :key="f.k">
+            <span class="rr-meta__i"><span x-text="f.k"></span> <b><span :class="f.cls ? `alp__mv ${f.cls}` : ''" x-text="f.v"></span></b></span>
+          </template>
+        </div>
+
+        <!-- What it is: our words where we have written them, else the
+             project's own listing, quoted as its. -->
+        <template x-if="about() || listing()">
+          <section class="rr-sec" id="about" aria-labelledby="about-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="about-h">About</h2>
+            </div>
+            <template x-if="about()"><p class="rr-prose pjp__about" x-text="about()"></p></template>
+            <template x-if="!about() && listing()">
+              <div>
+                <p class="rr-prose pjp__listing" x-text="listing()"></p>
+                <p class="rr-note">From the project's own listing.</p>
+              </div>
+            </template>
+          </section>
+        </template>
+
+        <!-- The money and the ratios. What is not read yet says so. -->
+        <section class="rr-sec" id="figures" aria-labelledby="figures-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="figures-h">Figures</h2>
+          </div>
+          <dl class="rr-dl pjp__figs">
+            <template x-for="f in figures()" :key="f.k">
+              <div><dt x-text="f.k"></dt><dd><span :class="f.c.missing && 'rm-missing'" :title="f.c.why" x-text="f.c.text"></span></dd></div>
+            </template>
+          </dl>
+        </section>
+
+        <!-- Its tokens, then the largest one's market cap a day at a time. -->
+        <template x-if="coins().length">
+          <section class="rr-sec" id="token" aria-labelledby="token-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="token-h" x-text="coins().length > 1 ? 'Tokens' : 'Token'"></h2>
+            </div>
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact pjp__coins" aria-labelledby="token-h">
+                <thead>
+                  <tr>
+                    <th scope="col">Token</th>
+                    <th scope="col" class="q">Price</th>
+                    <th scope="col" class="q">24h</th>
+                    <th scope="col" class="q">Market cap</th>
+                    <th scope="col" class="q">FDV</th>
+                    <th scope="col" class="q">Volume 24h</th>
+                    <th scope="col" class="q">Liquidity</th>
+                    <th scope="col">Chain</th>
+                    <th scope="col">Other chains</th>
+                    <th scope="col" class="q">90d</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="c in coins()" :key="c.id">
+                    <tr>
+                      <th scope="row"><span x-text="c.ticker || c.name"></span><small x-show="c.ticker && c.name && c.name !== c.ticker" x-text="c.name"></small></th>
+                      <td class="q" x-text="tokenPrice(c.priceUsd)"></td>
+                      <td class="q"><span class="alp__mv" :class="pctClass(c.percentChange24h)" x-text="pctText(c.percentChange24h)"></span></td>
+                      <td class="q" x-text="usdCompact(c.marketCap)"></td>
+                      <td class="q" x-text="usdCompact(c.fdv)"></td>
+                      <td class="q" x-text="usdCompact(c.volume24h)"></td>
+                      <td class="q"><span class="rm-missing" :title="liquidityMissing.why" x-text="liquidityMissing.text"></span></td>
+                      <td class="rr-table__text" x-text="chainName(c.chain)"></td>
+                      <td><span class="rm-missing" :title="chainsMissing.why" x-text="chainsMissing.text"></span></td>
+                      <td class="q pjp__trend">
+                        <template x-if="coinTrend(c)"><span x-html="coinTrend(c)"></span></template>
+                        <template x-if="!coinTrend(c)"><span class="rm-missing" :title="trendMissing.why" x-text="trendMissing.text"></span></template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="rr-note"><span>Priced across every market the token trades on, from CoinGecko and DexScreener.</span><template x-if="asOf()"><span x-text="` As of ${asOf()}.`"></span></template></p>
+
+            <figure class="rr-area pjp__chart">
+              <figcaption class="rr-area__head">
+                <h3 class="rr-subhead__h">Over time</h3>
+                <div class="rm-chips" role="group" aria-label="Series">
+                  <template x-for="s in seriesList" :key="s.key">
+                    <button type="button" class="rm-chip" :aria-pressed="String(series === s.key)" @click="pickSeries(s.key)" x-text="s.label"></button>
+                  </template>
+                </div>
+              </figcaption>
+              <template x-if="seriesGap()">
+                <div class="rr-empty rr-empty--chart rm-nodata">
+                  <p class="rm-nodata__h" x-text="seriesGap().title"></p>
+                  <template x-if="seriesGap().why"><p class="rm-nodata__d" x-text="seriesGap().why"></p></template>
+                </div>
+              </template>
+              <template x-if="!seriesGap()">
+                <div class="rr-area__frame">
+                  <div class="rr-area__y" aria-hidden="true">
+                    <template x-for="t in tvlYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+                  </div>
+                  <div class="rr-area__plot" tabindex="0" role="img" :aria-label="tvlLabel()"
+                       @pointermove="tvlMove($event)" @pointerdown="tvlMove($event)" @pointerleave="tvlAt = null" @keydown="tvlKey($event)" @blur="tvlAt = null">
+                    <div class="rr-area__svg" x-html="tvlSvg()"></div>
+                    <template x-for="p in tvlDots()" :key="p.key">
+                      <i class="rr-area__pt" :style="`left:${p.left}%;top:${p.top}%;background:var(--color-green)`" aria-hidden="true"></i>
+                    </template>
+                    <template x-if="tvlPoint(tvlAt)">
+                      <div class="rr-area__cross" :style="`left:${tvlPoint(tvlAt).left}%`"></div>
+                    </template>
+                    <template x-if="tvlPoint(tvlAt)">
+                      <i class="rr-area__pt is-on" :style="`left:${tvlPoint(tvlAt).left}%;top:${tvlPoint(tvlAt).top}%;background:var(--color-green)`" aria-hidden="true"></i>
+                    </template>
+                    <template x-if="tvlPoint(tvlAt)">
+                      <div class="rr-area__tip" :class="tvlPoint(tvlAt).left > 62 ? 'is-left' : ''" :style="`left:${tvlPoint(tvlAt).left}%`">
+                        <p class="rr-area__tip-h" style="margin:0"><b x-text="tvlPoint(tvlAt).date"></b><span x-text="tvlPoint(tvlAt).value"></span></p>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="rr-area__x" aria-hidden="true">
+                    <template x-for="t in tvlXTicks()" :key="t.key"><span :class="[t.cls, t.i === tvlAt ? 'is-on' : '']" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+                  </div>
+                </div>
+              </template>
+            </figure>
+          </section>
+        </template>
+
+        <!-- The agents the roster links to this project. -->
+        <template x-if="agents().length">
+          <section class="rr-sec" id="agents" aria-labelledby="agents-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="agents-h" x-text="agents().length > 1 ? 'Agents' : 'Agent'"></h2>
+            </div>
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact pjp__agents" aria-labelledby="agents-h">
+                <thead>
+                  <tr>
+                    <th scope="col">Agent</th><th scope="col">Kind</th>
+                    <th scope="col" class="q">x402 score</th><th scope="col" class="q">x402 transactions</th>
+                    <th scope="col" class="q">Revenue, 30 days</th><th scope="col" class="q">Productivity</th>
+                    <th scope="col" class="q">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="a in agents()" :key="a.id">
+                    <tr x-data="{ cells: agentCells(a) }">
+                      <th scope="row" x-text="a.name"></th>
+                      <td class="rr-table__text" x-text="agentKind(a.protocolStandard)"></td>
+                      <td class="q"><span :class="cells.score.missing && 'rm-missing'" :title="cells.score.why" x-text="cells.score.text"></span></td>
+                      <td class="q"><span :class="cells.txns.missing && 'rm-missing'" :title="cells.txns.why" x-text="cells.txns.text"></span></td>
+                      <td class="q"><span :class="cells.revenue.missing && 'rm-missing'" :title="cells.revenue.why" x-text="cells.revenue.text"></span></td>
+                      <td class="q"><span :class="cells.productivity.missing && 'rm-missing'" :title="cells.productivity.why" x-text="cells.productivity.text"></span></td>
+                      <td class="q" x-text="a.isActive ? 'Active' : 'Inactive'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </template>
+
+        <!-- Its wallets: the address, on its explorer, and the ETH it holds. -->
+        <template x-if="wallets().length">
+          <section class="rr-sec" id="wallets" aria-labelledby="wallets-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="wallets-h" x-text="wallets().length > 1 ? 'Wallets' : 'Wallet'"></h2>
+            </div>
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact pjp__wallets" aria-labelledby="wallets-h">
+                <thead><tr><th scope="col">Wallet</th><th scope="col">Address</th><th scope="col">Chain</th><th scope="col" class="q">ETH held</th><th scope="col" class="q">Balance</th><th scope="col" class="q">Last transaction</th></tr></thead>
+                <tbody>
+                  <template x-for="w in wallets()" :key="w.id">
+                    <tr>
+                      <th scope="row" x-text="w.label"></th>
+                      <td>
+                        <template x-if="explorerHref(w.chain, w.address)"><a class="rr-lnk" :href="explorerHref(w.chain, w.address)" target="_blank" rel="noopener noreferrer" x-text="shortAddr(w.address)"></a></template>
+                        <template x-if="!explorerHref(w.chain, w.address)"><span x-text="shortAddr(w.address)"></span></template>
+                      </td>
+                      <td class="rr-table__text" x-text="chainName(w.chain)"></td>
+                      <td class="q" x-text="ethUsd(w.balanceUsd)"></td>
+                      <td class="q"><span class="rm-missing" :title="balanceMissing.why" x-text="balanceMissing.text"></span></td>
+                      <td class="q"><span class="rm-missing" :title="lastTxMissing.why" x-text="lastTxMissing.text"></span></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p class="rr-note">ETH held is each wallet's ether, in dollars.</p>
+          </section>
+        </template>
+
+        <!-- Vaults, where the project runs one. -->
+        <template x-if="vaults().length">
+          <section class="rr-sec" id="vaults" aria-labelledby="vaults-h">
+            <div class="rr-sec__head">
+              <h2 class="rr-sec__h" id="vaults-h" x-text="vaults().length > 1 ? 'Vaults' : 'Vault'"></h2>
+            </div>
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact pjp__vaults" aria-labelledby="vaults-h">
+                <thead><tr><th scope="col">Vault</th><th scope="col">Address</th><th scope="col">Protocol</th><th scope="col">Strategy</th><th scope="col">Chain</th><th scope="col" class="q">TVL</th><th scope="col" class="q">Yield</th></tr></thead>
+                <tbody>
+                  <template x-for="v in vaults()" :key="v.id">
+                    <tr>
+                      <th scope="row" x-text="v.name"></th>
+                      <td>
+                        <template x-if="explorerHref(v.chain, v.vaultAddress)"><a class="rr-lnk" :href="explorerHref(v.chain, v.vaultAddress)" target="_blank" rel="noopener noreferrer" x-text="shortAddr(v.vaultAddress)"></a></template>
+                        <template x-if="!explorerHref(v.chain, v.vaultAddress)"><span x-text="shortAddr(v.vaultAddress)"></span></template>
+                      </td>
+                      <td class="rr-table__text" x-text="v.protocol || '—'"></td>
+                      <td class="rr-table__text" x-text="strategyName(v.strategyType)"></td>
+                      <td class="rr-table__text" x-text="chainName(v.chain)"></td>
+                      <td class="q" x-text="usdCompact(v.tvlUsd)"></td>
+                      <td class="q"><span :class="vaultApy(v).missing && 'rm-missing'" :title="vaultApy(v).why" x-text="vaultApy(v).text"></span></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </template>
+
+        <!-- What its agents did, newest first. -->
+        <section class="rr-sec" id="activity" aria-labelledby="activity-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="activity-h">Activity</h2>
+          </div>
+          <template x-if="activity().length">
+            <div class="rr-tablewrap">
+              <table class="rr-table rr-table--compact pjp__activity" aria-labelledby="activity-h">
+                <thead><tr><th scope="col">When</th><th scope="col">Agent</th><th scope="col">Action</th><th scope="col">Status</th><th scope="col">Summary</th></tr></thead>
+                <tbody>
+                  <template x-for="e in activity()" :key="e.id">
+                    <tr>
+                      <th scope="row" x-text="e.occurredAt ? e.occurredAt.slice(0, 10) : '—'"></th>
+                      <td class="rr-table__text" x-text="e.agentName"></td>
+                      <td class="rr-table__text" x-text="e.actionType"></td>
+                      <td class="rr-table__text" x-text="e.status"></td>
+                      <td class="rr-table__text" x-text="e.commitSummary || '—'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </template>
+          <template x-if="!activity().length">
+            <div class="rr-empty"><span class="rm-missing" :title="activityMissing.why" x-text="activityMissing.text"></span><p class="rm-nodata__d" x-text="activityMissing.why"></p></div>
+          </template>
+        </section>
+
+        <!-- How complete the record of this project is, and what it covers. -->
+        <section class="rr-sec" id="coverage" aria-labelledby="coverage-h">
+          <div class="rr-sec__head">
+            <h2 class="rr-sec__h" id="coverage-h">Coverage</h2>
+            <template x-if="coverageAsOf()"><span class="rr-sec__aside" x-text="`As of ${coverageAsOf()}`"></span></template>
+          </div>
+          <div class="rr-split rr-split--rule">
+            <div>
+              <div class="rr-stat">
+                <p class="rr-stat__v" x-text="score(project.dataCoverageScore)"></p>
+                <p class="rr-stat__sub">Out of 100: how complete the record of this project is.</p>
+              </div>
+              <ul class="rr-tags pjp__facets">
+                <template x-for="f in facets()" :key="f.key">
+                  <li :class="f.on ? 'is-on' : 'is-off'" x-text="f.label"></li>
+                </template>
+              </ul>
+            </div>
+            <dl class="rr-dl pjp__scores">
+              <template x-for="b in scores" :key="b.key">
+                <div>
+                  <dt x-text="b.label"></dt>
+                  <dd><span class="pjp__bar" aria-hidden="true"><i :style="`width:${scoreWidth(project[b.key])}`"></i></span><b x-text="score(project[b.key])"></b></dd>
+                </div>
+              </template>
+            </dl>
+          </div>
+        </section>
+
+      </article>
+    </template>
+  </div>
+</section>
+
+<style>
+.pjp__logo { object-fit: cover; border: 1px solid var(--color-border); background: var(--color-surface); }
+.pjp__logo--none { display: grid; place-items: center; font-family: var(--font-mono); font-size: 1rem; letter-spacing: 0.04em; color: var(--color-text-muted); }
+.pjp .rr-links { margin-top: 0.75rem; }
+.pjp__about { margin: 0; max-width: 48rem; }
+.pjp__listing { margin: 0; white-space: pre-line; max-width: 48rem; }
+.pjp__chart { margin-top: 2.25rem; }
+.pjp__figs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 2.25rem; }
+.pjp__figs > div { grid-template-columns: minmax(0, 1fr) auto; }
+.pjp__figs dd { font-family: var(--font-mono); font-variant-numeric: tabular-nums; text-align: right; }
+.pjp__trend svg { display: inline-block; vertical-align: middle; }
+.pjp__activity { min-width: 36rem; }
+.pjp__facets { margin-top: 1.5rem; }
+.pjp__facets li.is-on { color: var(--color-text); border-color: var(--color-text); }
+.pjp__facets li.is-off { color: var(--color-text-muted); border-color: var(--color-border); }
+.pjp__scores > div { grid-template-columns: 6rem minmax(0, 1fr); }
+.pjp__scores dd { display: grid; grid-template-columns: minmax(0, 1fr) 2.5rem; align-items: center; gap: 1rem; }
+.pjp__scores dd b { font-family: var(--font-mono); font-weight: 400; text-align: right; }
+.pjp__bar { position: relative; display: block; height: 0.375rem; background: var(--color-surface-light); }
+.pjp__bar i { position: absolute; inset: 0 auto 0 0; background: var(--color-text-muted); }
+.pjp__coins { min-width: 56rem; }
+.pjp__agents { min-width: 44rem; }
+.pjp__wallets, .pjp__vaults { min-width: 40rem; }
+.pjp__coins tbody th, .pjp__wallets tbody th, .pjp__vaults tbody th, .pjp__agents tbody th { font-size: 0.8125rem; }
+/* A phone keeps every table inside the column rather than scrolling it, on
+   the columns that name a row and its main figure; the rest of each row is a
+   wider screen away. The figures list goes to one column. */
+@media (max-width: 640px) {
+  .pjp__coins, .pjp__wallets, .pjp__vaults, .pjp__agents, .pjp__activity { min-width: 0; }
+  .pjp__coins th:nth-child(n+5), .pjp__coins td:nth-child(n+5),
+  .pjp__agents th:nth-child(n+3), .pjp__agents td:nth-child(n+3),
+  .pjp__wallets th:nth-child(n+3):not(:nth-child(4)), .pjp__wallets td:nth-child(n+3):not(:nth-child(4)),
+  .pjp__vaults th:nth-child(n+3):not(:nth-child(6)), .pjp__vaults td:nth-child(n+3):not(:nth-child(6)),
+  .pjp__activity th:nth-child(n+4), .pjp__activity td:nth-child(n+4) { display: none; }
+  .pjp__figs { grid-template-columns: minmax(0, 1fr); }
+}
+</style>

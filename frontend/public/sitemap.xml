@@ -19,6 +19,24 @@
   <url><loc>https://robotmoney.network/changelog</loc><lastmod>2026-10-16</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://robotmoney.network/blog</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://robotmoney.network/smart-contract-risks</loc><lastmod>2026-09-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
+  <url><loc>https://robotmoney.network/projects</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.6</priority></url>
+  <url><loc>https://robotmoney.network/projects/diem-venice-ai-74b155</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/bankr-agent-614b56</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/aixbt-c5d6b3</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/daydreams-x402-agent-dc4764</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/gitlawb-9d1271</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/zyfai-c96427</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/woon-4bac8b</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/clawbank-d4c0b6</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/mr-roboto-3b40fd</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/giza-267335</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/juno-b1676d</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/felix-craft-ai-d5cd5d</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/moltycash-9a5f34</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/halo</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/coinbase-x402-facilitator-94fcf5</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/thirdweb-036c8c</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
+  <url><loc>https://robotmoney.network/projects/x402rs-facilitator-145016</loc><lastmod>2026-10-20</lastmod><changefreq>daily</changefreq><priority>0.4</priority></url>
 
   <!-- Research. These four carry their own titles and descriptions in
        assets/js/app/seo.js and are linked from /blog, /media and /regime, but

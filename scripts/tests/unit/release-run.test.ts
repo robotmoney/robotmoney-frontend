@@ -336,7 +336,7 @@ describe("one step list for every target (D61 rule 2)", () => {
   test("the prod-only tag is data: the hash is shared, and dropping onlyFor changes it; the rc is no step (D64)", () => {
     const tags = RELEASE_STEPS.filter((s) => s.onlyFor === "prod").map((s) => s.id);
     expect(tags).toEqual(["C06-version-tag"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "C04-probe-start", "C06-version-tag", "C13-probe-grade"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "C04-probe-start", "C06-version-tag", "C13-probe-grade", "S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
     const unmarked = RELEASE_STEPS.map((s) => (s.id === "C06-version-tag" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
@@ -345,8 +345,8 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
-    expect(ids.slice(-3)).toEqual(["S07-soak-gate", "S08-soak-checks", "S09-collect-logs"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"]]);
+    expect(ids.slice(-6)).toEqual(["S07-soak-gate", "S08-soak-checks", "S09-collect-logs", "S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["S07-soak-gate", "C11-ready", "watchHours"], ["S08-soak-checks", "C11-ready", "watchHours"], ["S09-collect-logs", "C11-ready", "watchHours"], ["S10-archive-routes", "C11-ready", "watchHours"], ["S11-sdk-quickstart", "C11-ready", "watchHours"], ["S12-sdk-tests", "C11-ready", "watchHours"]]);
     // red control: S07-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "S07-soak-gate")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
@@ -1130,7 +1130,7 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
     expect(phases.indexOf("soak")).toBeGreaterThan(phases.lastIndexOf("cutover"));
     expect(phases).not.toContain("version");
     for (const s of RELEASE_STEPS) expect(s.id[0], s.id).toBe(({ qa: "Q", preflight: "P", cutover: "C", soak: "S", version: "V" } as const)[s.phase]);
-    expect(RELEASE_STEPS.filter((s) => s.phase === "soak").map((s) => s.id)).toEqual(["S01-verify-version", "S02-verify-product", "S03-log-verdict", "S04-soak-record", "S05-compare-baseline", "S06-host-guards", "S07-soak-gate", "S08-soak-checks", "S09-collect-logs"]);
+    expect(RELEASE_STEPS.filter((s) => s.phase === "soak").map((s) => s.id)).toEqual(["S01-verify-version", "S02-verify-product", "S03-log-verdict", "S04-soak-record", "S05-compare-baseline", "S06-host-guards", "S07-soak-gate", "S08-soak-checks", "S09-collect-logs", "S10-archive-routes", "S11-sdk-quickstart", "S12-sdk-tests"]);
     const qa = RELEASE_STEPS.filter((s) => s.phase === "qa");
     expect(qa.map((s) => [s.id, s.host, s.onlyFor])).toEqual([["Q01-lockfile", "control", "stage"], ["Q02-dump", "control", "stage"], ["Q03-stage-up", "control", "stage"], ["Q04-role-passwords", "control", "stage"], ["Q05-scope", "control", "stage"]]);
     expect(qa.map((s) => s.standing)).toEqual([["SP.9"], ["SR.0"], ["SR.0"], ["SR.1"], ["SR.2"]]);

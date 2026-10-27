@@ -47,6 +47,12 @@ export interface ReleaseRunbook {
   readonly template: TemplateName;
   /** The release's prose: identity, migrations, exceptions and owner decisions. The runner reads none of it. */
   readonly notes?: string;
+  /**
+   * Pending migrations the release declares `compat: breaking` and carries on purpose (spec §8.5: bun smoke:down,
+   * bun run migrate, bun smoke --static-port). P07-baseline refuses any breaking pending migration the release
+   * does not name here. Absent: every pending migration must be additive.
+   */
+  readonly breaking?: readonly string[];
   /** The recovery decision (SC.1): what to do before, at and after the first irreversible step. Required; the runner journals its sha256. */
   readonly recovery: string;
   /** Every PR the release ships, each with the step that checks it or why none does (Q05-scope proves the list complete). */
@@ -91,7 +97,7 @@ export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, 
 
 const STEP_KEYS = new Set([
   "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
-  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added",
+  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
 /** The three phases, in the order they run (D70 as amended 2026-10-15). */
@@ -131,9 +137,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   }
   if (raw.triage !== undefined && typeof raw.triage !== "boolean") errors.push(`${at}: triage is a boolean`);
   if (raw.maxMinutes !== undefined && !(Number.isInteger(raw.maxMinutes) && (raw.maxMinutes as number) > 0)) errors.push(`${at}: maxMinutes is a positive integer`);
-  for (const k of ["cloneFrom", "gateAbsent", "added"] as const) {
+  for (const k of ["cloneFrom", "gateAbsent", "added", "since"] as const) {
     if (raw[k] !== undefined && (typeof raw[k] !== "string" || raw[k] === "")) errors.push(`${at}: ${k} is a non-empty string`);
   }
+  if (raw.since !== undefined && typeof raw.since === "string" && !/^v\d+\.\d+\.\d+$/.test(raw.since)) errors.push(`${at}: since is a release name (vA.B.C)`);
   if (errors.length > 0) return { errors };
 
   // Fixed key order inside receipts and notBefore: the hash sees them as the code wrote them before the YAML did.
@@ -143,7 +150,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
   };
-  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added"] as const) {
+  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since"] as const) {
     if (raw[k] !== undefined) step[k] = raw[k];
   }
   if (nb !== undefined) step.notBefore = { afterStep: (nb as NotBeforeTemplate).afterStep, hours: (nb as NotBeforeTemplate).hours };
@@ -194,17 +201,20 @@ export function parseReleaseRunbook(text: string, release: string): ReleaseRunbo
   const where = `runbook ${release}`;
   const errors: string[] = [];
   if (!isObject(doc)) throw new Error(`${where}: not a mapping`);
-  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "scope", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
+  for (const k of Object.keys(doc)) if (!["release", "template", "notes", "recovery", "scope", "breaking", "steps"].includes(k)) errors.push(`${where}: unknown key ${k}`);
   if (typeof doc.recovery !== "string" || doc.recovery.trim() === "") errors.push(`${where}: recovery is the release's recovery decision, as text (SC.1)`);
   if (doc.notes !== undefined && typeof doc.notes !== "string") errors.push(`${where}: notes is text`);
   if (doc.release !== release) errors.push(`${where}: names release ${String(doc.release)}`);
   const template = doc.template ?? DEFAULT_TEMPLATE;
   if (!isTemplateName(template)) errors.push(`${where}: template ${String(template)} is not one of ${TEMPLATE_NAMES.join(", ")}`);
+  if (doc.breaking !== undefined && !(isStringArray(doc.breaking) && doc.breaking.length > 0 && doc.breaking.every((n) => /^\d{4}_[a-z0-9_]+\.sql$/.test(n)))) {
+    errors.push(`${where}: breaking is a non-empty list of migration file names (NNNN_name.sql)`);
+  }
   const steps = parseSteps(doc.steps, where, errors);
   errors.push(...scopeProblems(doc.scope, steps, where));
   if (errors.length > 0) throw new Error(errors.join("\n"));
   const scope = (doc.scope as Record<string, unknown>[]).map((e) => ({ pr: e.pr as number, what: e.what as string, ...(typeof e.check === "string" ? { check: e.check } : {}), ...(typeof e.none === "string" ? { none: e.none } : {}) }));
-  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), recovery: doc.recovery as string, scope: deepFreeze(scope), steps: deepFreeze(steps) };
+  return { release, template: template as TemplateName, ...(typeof doc.notes === "string" ? { notes: doc.notes } : {}), ...(doc.breaking !== undefined ? { breaking: doc.breaking as string[] } : {}), recovery: doc.recovery as string, scope: deepFreeze(scope), steps: deepFreeze(steps) };
 }
 
 /** PURE. The recovery decision a release runbook's YAML text holds, or undefined. Reads that one key only. */
@@ -230,9 +240,11 @@ function stable(v: unknown): string {
  * is. Every template step must appear, unchanged, in the template's order. Every
  * other step must carry `added: <the release>` and an id the template lacks.
  */
-export function checkAddOnly(template: Template, runbook: ReleaseRunbook): string[] {
+export function checkAddOnly(fullTemplate: Template, runbook: ReleaseRunbook): string[] {
   const out: string[] = [];
   const where = `runbook ${runbook.release}`;
+  // A template step with `since` binds the releases from that one on; an earlier release's runbook stays as it ran.
+  const template: Template = { ...fullTemplate, steps: fullTemplate.steps.filter((s) => s.since === undefined || !releaseBefore(runbook.release, s.since)) };
   if (runbook.template !== template.name) out.push(`${where}: uses template ${runbook.template}, checked against ${template.name}`);
   const templateIds = new Set(template.steps.map((s) => s.id));
   let next = 0;
@@ -243,14 +255,22 @@ export function checkAddOnly(template: Template, runbook: ReleaseRunbook): strin
       else if (t > next) for (const missed of template.steps.slice(next, t)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
       if (t >= next) next = t + 1;
       if (step.added !== undefined) out.push(`${where}: ${step.id} is a template step, so it carries no added`);
-      const { added: _added, ...body } = step;
-      if (stable(body) !== stable(template.steps[t])) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
+      const { added: _added, since: _since, ...body } = step;
+      const { since: _tsince, ...templateBody } = template.steps[t]!;
+      if (stable(body) !== stable(templateBody)) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
     } else if (step.added !== runbook.release) {
       out.push(`${where}: ${step.id} is not a template step, so it carries added: ${runbook.release}`);
     }
   }
   for (const missed of template.steps.slice(next)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
   return out;
+}
+
+/** PURE. True when release `a` (vA.B.C) is older than release `b`. */
+export function releaseBefore(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((v) => v.replace(/^v/, "").split(".").map(Number));
+  for (let i = 0; i < 3; i++) if (x![i] !== y![i]) return x![i]! < y![i]!;
+  return false;
 }
 
 /** The path of a template. */

@@ -340,14 +340,46 @@ last axis day, so the as-of day is revised by construction when D moves forward 
 day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
 section 6 and is not restated here.
 
-**Persistence tolerance (D56).** The persisted raw floor is the compute input only
-up to the per-source tolerance of D56 (`docs/decisions.md`): a point within tolerance
-is not rewritten (Yahoo ratios relative 5e-6, Yahoo float32 relative 1e-6). A run
-computes from the freshly fetched in-memory values, so a replay from the stored floor
-or ledger can differ slightly. The audit saw `factor_index` differ by up to 1.4e-4
-on 786 of 3,066 days (an inference from the stored data, not confirmed, because the
-fetched values are not recorded anywhere). Replaying a run from the ledger is described in
+**Persistence tolerance (D56) and the committed dataset.** A point within its
+source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative
+5e-6, Yahoo float32 relative 1e-6). Since issue 1421 a run computes only from what
+ingestion committed: `runAnalytics` runs every source call first, reads the raw
+floor back after writing it, and takes each backtest extra and research input from
+the ledger head `saveSourceAcquisition` returns for it. A within-tolerance re-fetch
+therefore reaches the computation as the stored value under the stored version, and
+a material revision as its new version, so a replay from the run's frozen vintage
+reproduces its published figures (`backend/tests/regime-replay-published.test.ts`).
+The run's telemetry carries a `committed-input-evidence` artifact counting the
+collected values that differed from the committed ones. Before issue 1421 a run
+computed from the freshly fetched in-memory values, so a replay of an earlier run
+from the stored floor or ledger can differ slightly: the audit saw `factor_index`
+differ by up to 1.4e-4 on 786 of 3,066 days (an inference from the stored data,
+because those fetched values are recorded nowhere). Replaying a run from the ledger
+is described in
 [`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
+
+**Replay against the production record (issue 1431).** The format 1 backups (D72) hold
+every run's vintage and published output. `backend/tests/regime-replay-archive.test.ts`
+replays every regime run since 2026-09-21 from a local copy (`RM_FORMAT1_ARCHIVE`), and
+skips with its reason printed when none is given. Against the backup of 2026-10-19
+(372 regime runs, 279 published, 93 failed or without an output package) every
+published as-of label reproduces. 6 runs reproduce every compared field. 273 runs, all
+from before issue 1421, differ in a number: 267 first in `factor_index` (the Yahoo
+factor ratios), 3 first in correlations, and 3 in the composite itself (runs 73, 111
+and 133, by 0.002 to 0.036, still with the published label). Required CI replays a
+committed sample of three of these runs (`tests/fixtures/published-replay/`, public
+data only, written by `backend/scripts/published-replay-sample.ts`) in
+`regime-replay-published.test.ts`: labels must match, and every other field must give
+exactly its recorded outcome.
+
+**Downstream never acquires.** After extract, every stage runs from the committed
+dataset and never calls the data source or an HTTP client. When neither composite
+panel (macro, on-chain) has an observation on or before the as-of day, the run stops
+with the named `CoverageError` (`packages/analyst-sdk/src/coverage.ts`, also raised
+by the SDK's `runRegime`). A missing optional input gives its documented missing
+result instead: no factor figures, no correlations or backtest pairs without SPX and
+ETH, no cash yield without TBILL3M. `scripts/tests/unit/analyst-sdk-purity.test.ts`
+rejects any import path from a downstream module to an acquisition client.
 
 **`regime_snapshots` is a current view; the ledger is the record.** Every run
 recomputes the full history and rewrites the table. What an earlier run showed
@@ -363,6 +395,80 @@ transforms and forward-fill ages are built. Its callers are
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
+
+### 8.1.1 Replay gaps against the published record (issue 1450)
+
+The replay of issue 1431 (section 8.1) found 273 runs whose replay differs from
+what they published. Every one is from before issue 1421. Each class below was
+diagnosed from the format 1 backup of 2026-10-19 (`backup 2026-10-19T202421Z`), read
+only, by replaying the run's frozen vintage and putting the observation the run
+computed from (the `raw_date` and `raw_value` of the indicator cards in its published
+as-of row) in place of the replayed one, one series at a time. No stored row, report
+or vintage is changed, and none is changed retroactively.
+
+| Class (first differing field) | Runs in the latest backup | Cause | What accounts for it |
+| --- | --- | --- | --- |
+| `composite` | 3 (runs 73, 111, 133) | `pre-1421-handoff` | Input data. Replaying with the computed observations gives the published composite exactly (residual 0), so the compute code accounts for none of the gap. Run 73 (-0.00163): `VIX` replayed 16.26, computed 15.98. Run 111 (+0.01654) and run 133 (-0.03562): `BTC_ACTIVE`, one day later in the vintage than the run used. Detail per series in `backend/tests/fixtures/composite-drift-diagnosis.json`. |
+| `factorIndex` | 267 | `pre-1421-handoff` | The factor panel is `SPX_TREND`, six Yahoo ratios and `SHILLER_CAPE`. In 265 runs the as-of observations of all of them equal the vintage (7 of these are re-runs of an earlier day, whose cards show later rows), and the gap (at most 8e-6) comes from history values the run fetched fresh and the ledger stored only to the D56 tolerance. In 2 runs (57 and 59) an as-of observation differs. Run 57 (`SPX_TREND`, -1.4e-4, the largest gap) drops to -3e-7 once its computed observation is put in. After that every run is within 8e-6, the size that moving a factor series inside its tolerance gives (up to 4e-6 in the trial). The composite is exact in all of them. |
+| `correlations` | 3 (runs 292, 360, 424) | `pre-1421-handoff` | Only correlations and backtest differ (rho by at most 9e-5). The label, composite, indices and percentiles are exact, so the macro and on-chain inputs are the same. The inputs left are the Yahoo `^GSPC` and `ETH-USD` price series, stored only to the D56 tolerance. The fresh values the run used were never stored, so this class is shown by elimination and by magnitude, not by an exact substitution. |
+
+All 273 runs predate the fix of issue 1421 (the latest backup holds no run after it), so
+the backup cannot show that a run after it replays exactly. The test for that is in
+`regime-replay-archive.test.ts` and runs when such a backup exists. No class has
+cause `other`, so no row links a fix issue.
+
+For the three composite runs the handoff is visible in the ledger. A run starts, reads
+the value stored at that moment, and computes. Its own ingest then commits newer values
+(`source_value_versions.knowledge_time` after the run's `created_at`), and the vintage
+is frozen after that commit. The replayed value is the one committed during the run.
+The computed value is the one committed before it, for example `VIX` 15.98 (committed
+15:20:55) against 16.26 (committed 15:34:48) for the run that started at 15:30:00. The
+compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
+today apart from comments.
+
+### 8.2 Source ids and the storage mapping (D74, issue 1423)
+
+A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or
+`fred:DTB3`. Stored rows keep their existing keys. No row, vintage, report or
+archive is renamed or rewritten, and there is no migration. The one mapping
+between the two lives in `packages/analyst-sdk/src/series-ids.ts`
+(`SERIES_MAPPING`, re-exported by `backend/src/analytics/extras.ts`).
+
+- **Per consumer.** A consumer is one computation that reads source data: each
+  registry indicator (`indicator:<ID>`), the correlations and the backtest. Each
+  consumer reads the storage keys it read before: `raw_indicator_history:<ID>`
+  for an indicator, `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for
+  the correlations and the backtest. Tests pin this list per consumer.
+- **Two streams, one id.** `raw_indicator_history:SPX_TREND` and `backtest:^GSPC`
+  both map to `yahoo:^GSPC`. So do `raw_indicator_history:ETH_TREND` and
+  `backtest:ETH-USD` for `yahoo:ETH-USD`. Their same-date values can differ. They
+  stay separate streams: `selectConsumerObservations` gives each consumer only
+  its own keys, and every observation keeps its storage key as provenance.
+- **Ambiguity.** The mapping is rejected when it loads if one consumer would read
+  two storage keys for one source id. The error names both keys. One source id
+  read by two consumers through two keys is allowed.
+- **Ratios.** A ratio indicator stores a calculated value, so its key maps to the
+  indicator id with kind `calculated`, and its two legs are listed.
+- **Source ids without a provider symbol.** The provider is the registry's
+  `source`, the name the ledger already records. Providers with no series use a
+  fixed symbol: `defillama_tvl:total`, `defillama_stables:total`,
+  `geckoterminal_newpools:new_pools`, `shiller_cape:CAPE`. Coin Metrics uses
+  `<asset>.<metric>`, for example `coinmetrics:eth.AdrActCnt`.
+- **SDK input names.** The computation still reads its inputs under the ids it
+  read before: registry ids, plus `SPX`, `ETH` and `TBILL3M`. So identical
+  observations give byte-identical reports. `runRegime` accepts a stream under
+  that id, under its storage key, or under its source id when only one stream
+  holds that id. A source id alone feeds every consumer that reads it. An input
+  that names one consumer's stream twice is rejected with both names, for
+  example `SPX_TREND` and `yahoo:^GSPC`. With two streams for one source id, name
+  each by its storage key.
+- **Writes** use the reverse mapping. `storageKeyForSourceId(consumer, id)` gives
+  the key, and `EXTRA_WRITE_KEYS` gives the keys `fetchBacktestExtras` writes.
+- **Storage to inputs.** `inputHistoryFromStorage` turns stored rows, for example
+  a reloaded vintage's members, into the history `runRegime` reads.
+  `backend/tests/analytics-offline-replay.test.ts` freezes the SDK fixture into a
+  vintage and reloads it offline. The test rebuilds the committed golden report
+  byte for byte.
 
 ## 9. Deliberate v0 divergences
 

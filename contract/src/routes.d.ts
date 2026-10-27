@@ -121,6 +121,10 @@ export const ROUTES: {
     assetPrices: string;
     vintages: string;
     overwriteEvents: string;
+    sourceVersions: string;
+    reports: string;
+    archiveBackups: string;
+    archiveFiles: string;
   };
   pipeline: {
     claim: string;
@@ -134,6 +138,9 @@ export const ROUTES: {
     whoami: string;
     read: string;
     ingest: string;
+  };
+  referrals: {
+    code: string;
   };
   analytics: {
     readiness: string;
@@ -173,6 +180,7 @@ export const ROUTES: {
     researchRawSeries: string;
     researchSignal: string;
     researchRerun: string;
+    referralCorrections: string;
   };
 };
 

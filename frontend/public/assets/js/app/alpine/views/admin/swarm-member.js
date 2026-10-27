@@ -176,6 +176,15 @@ export function registerAdminSwarmMember(Alpine) {
 
     memberBiases() { return Array.isArray(this.member?.biases) ? this.member.biases : []; },
 
+    // Issue 1371: AdminMember.referral's state, spelled for the page. `enabled`
+    // is exactly state === "active"; a scheduled or draft code says so.
+    referralStateLabel() {
+      const r = this.member?.referral;
+      if (!r) return "—";
+      const labels = { active: "Active", scheduled: "Scheduled (not active yet)", disabled: "Disabled", draft: "Draft (never activated)" };
+      return labels[r.state] || String(r.state);
+    },
+
     // ── Avatar (RM-184) ──────────────────────────────────────────────────────
     canUploadAvatar() {
       return Boolean(ROUTES.swarm.admin.memberAvatar) && UPLOADABLE_ID_RE.test(this.member?.id || "");

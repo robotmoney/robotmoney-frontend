@@ -1,8 +1,30 @@
 # Backend
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers the one-code lookup, shared RPC evidence reads and private operator report boundary.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371). Shipped surfaces:
+>
+> - `GET /api/referrals/codes/:code` (`api/routes/referrals.ts`, answer in
+>   `referrals/lookup.ts`): public, one code per request, the exact §6 bodies,
+>   uniform 404, `Cache-Control: public, max-age=60` on 200 and 404, its own
+>   instance of `api/rate-limit.ts` at 100 requests per 60 s per trusted client ip
+>   (`api/client-ip.ts`), 429 and 503 `no-store`. One database read: the member row
+>   by primary key through a registered `rm_app` query. No chain read.
+> - `GET /api/admin/referrals/corrections` (`api/routes/admin.ts`): privileged,
+>   read-only view of the correction log with its signature, nonce, expiry and code
+>   checks (EIP-1271 costs one `eth_call` through the shared transport).
+> - `AdminMember.referral` on every admin member response (`swarm/admin.ts`
+>   `toMemberAdmin`), from the registry file; no public member DTO carries it.
+> - The operator report CLI `backend/scripts/referrals-report.ts` (`scan`,
+>   `explain`, `verify`): finalized cutoff by number and hash, bounded log ranges
+>   with a local checkpoint file, evidence through `ethGetBlockHeader`,
+>   `ethGetTransactionReceiptBatch`, `ethGetTransactionByHashBatch` and
+>   `ethGetBlockHeaderBatch` in `chain/base-rpc-client.ts`, canonical payload and
+>   digest via `analytics/run-ledger.ts`, private JSON/CSV/provenance/receipt
+>   artifacts. It opens no database and is run by an agent from the control
+>   machine (D61). Release revisions are recorded by
+>   `backend/scripts/referrals-accept-revision.ts`.
+>
+> No request path scans the chain. The existing boundaries below remain authoritative.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 

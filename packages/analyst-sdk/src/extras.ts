@@ -3,6 +3,8 @@
 // ledger/tolerance key (backend data-source.ts, SOURCE_TOLERANCES), the SDK
 // input pseudo-indicator id (run.ts EXTRA_IDS), and the upstream provider
 // symbol. Production rows exist under these ledger keys: never rename them.
+// The D74 storage mapping (source id <-> storage key, per consumer) is built
+// from this map and the indicator registry in series-ids.ts (issue 1423).
 // Pure: no fs/env/db.
 export interface LedgerExtra {
   readonly ledgerKey: string;

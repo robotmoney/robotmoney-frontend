@@ -534,6 +534,14 @@
    chart container; the chart itself is not drawn. */
 .rm-nodata--fill { position: absolute; inset: 0; }
 @media (forced-colors: active) { .rm-nodata::before { background: CanvasText; } }
+/* A figure the data cannot back yet, in a table cell or a row of facts: the
+   word "Missing" in place of a wrong number or a zero that means unknown,
+   with the reason in its title (the projects pages, RM-186). Mono caps on a
+   dashed edge, no hue and no fill, so a column of them reads as gaps to fill
+   and never as a value or a loss. */
+.rm-missing { display: inline-block; padding: 0.0625rem 0.375rem; border: 1px dashed var(--color-border-light);
+  font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 400; line-height: 1.6; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--color-text-muted); white-space: nowrap; cursor: help; }
 .rm-error, .rv__error, .sv__error { color: var(--color-warn); font-family: var(--font-mono); }
 
 /* section head + title + as-of */

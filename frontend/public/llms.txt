@@ -71,6 +71,9 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - [https://robotmoney.network/api/public/analytics/asset-prices](https://robotmoney.network/api/public/analytics/asset-prices): Daily USD closes of the tracked assets. About 400 B a row.
 - [https://robotmoney.network/api/public/analytics/vintages](https://robotmoney.network/api/public/analytics/vintages): Frozen data vintages an analytics run committed to. About 600 B a vintage; members about 70 B a row.
 - [https://robotmoney.network/api/public/analytics/overwrite-events](https://robotmoney.network/api/public/analytics/overwrite-events): Every recorded revision of a stored analytics row. From 300 B a row for raw history to about 0.5 MB for a regime snapshot.
+- [https://robotmoney.network/api/public/analytics/source-versions](https://robotmoney.network/api/public/analytics/source-versions): Every collected version of the source data, with when it was observed. About 200 B a row.
+- [https://robotmoney.network/api/public/analytics/reports](https://robotmoney.network/api/public/analytics/reports): Each analytics run's published report, byte for byte. About 200 B a listed report; a report itself is its stored size.
+- [https://robotmoney.network/api/public/analytics/archive/backups](https://robotmoney.network/api/public/analytics/archive/backups): The sealed format 1 archive backups. About 80 B a backup.
 - `https://robotmoney.network/api/dashboards/research-signals/{key}`: One named research signal series. 330 KB to 650 KB depending on the key.
 - [https://robotmoney.network/api/swarm/members](https://robotmoney.network/api/swarm/members): The Investment Swarm roster. About 20 KB.
 - `https://robotmoney.network/api/swarm/members/{id}`: One swarm member's profile. Under 1 KB.
@@ -105,6 +108,7 @@ Every number on this site is served by these endpoints. They answer a plain GET 
 - `https://robotmoney.network/api/projects/{slug}`: One project dossier. About 7 KB.
 - [https://robotmoney.network/api/dashboards/activity](https://robotmoney.network/api/dashboards/activity): Agent activity feed. Under 1 KB while empty.
 - [https://robotmoney.network/api/comments](https://robotmoney.network/api/comments): Public comments. Under 1 KB.
+- `https://robotmoney.network/api/referrals/codes/{code}`: Whether one referral code is active right now. Under 200 B.
 
 <!-- END GENERATED ENDPOINTS -->
 

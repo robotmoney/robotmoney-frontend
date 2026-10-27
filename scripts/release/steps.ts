@@ -122,6 +122,13 @@ export interface StepTemplate {
    */
   readonly maxMinutes?: number;
   /**
+   * The first release whose runbook must carry this template step (`vA.B.C`).
+   * A template that gains a step names the release that gains it, so the
+   * runbook of an earlier release, a record of what it ran, stays untouched
+   * (runbook.ts checkAddOnly). Absent: every release carries the step.
+   */
+  readonly since?: string;
+  /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
    * P01-checkout sets it: every release names a new release checkout on the host
@@ -252,6 +259,9 @@ export interface RenderedStep {
   readonly maxMillis: number;
 }
 
+/** The steps that read the release (`RM_RELEASE`): P07-baseline honours the release runbook's `breaking:` declaration. Others get no new variable. */
+export const RELEASE_AWARE_STEPS: readonly string[] = ["P07-baseline"];
+
 /** Turn one template into the command a host runs. */
 export function renderStep(step: StepTemplate, target: ReleaseTarget, values: TemplateValues): RenderedStep {
   const common = {
@@ -278,6 +288,8 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
   for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
   if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
+  // The release the target file names: a step that honours what only this release declares (P07-baseline and `breaking:`) reads it.
+  if (!onCapture && RELEASE_AWARE_STEPS.includes(step.id)) envPairs.push(`RM_RELEASE=${shellQuote(target.release)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);
   const envCmd = (argv: readonly string[]) => `env -i ${envPairs.join(" ")} ${argv.map((a) => shellQuote(fill(a, values))).join(" ")}`;

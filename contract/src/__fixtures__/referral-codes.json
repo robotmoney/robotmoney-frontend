@@ -1,0 +1,25 @@
+{
+  "description": "Shared referral-code format cases (docs/technical/referrals-spec.md §3, §9). The public lookup, the deposit skill and the attribution report are all held to these. `normalized` is what normalizeReferralCode returns for user input; `carrierValid` is whether the same string, read from chain evidence, is a valid recorded code (only an already-normalized string is). Synthetic codes only.",
+  "cases": [
+    { "input": " RM_ALICE ", "normalized": "rm_alice", "carrierValid": false },
+    { "input": "rm_alice", "normalized": "rm_alice", "carrierValid": true },
+    { "input": "rm_a lice", "normalized": null, "carrierValid": false },
+    { "input": "Rm_Team-Site", "normalized": "rm_team-site", "carrierValid": false },
+    { "input": "rm_team-site", "normalized": "rm_team-site", "carrierValid": true },
+    { "input": "rm_", "normalized": null, "carrierValid": false },
+    { "input": "rm_-alice", "normalized": null, "carrierValid": false },
+    { "input": "rm_alice-", "normalized": null, "carrierValid": false },
+    { "input": "rm_alice--bob", "normalized": null, "carrierValid": false },
+    { "input": "rm_alice_bob", "normalized": null, "carrierValid": false },
+    { "input": "alice", "normalized": null, "carrierValid": false },
+    { "input": "rm_ålice", "normalized": null, "carrierValid": false },
+    { "input": "rm_alİce", "normalized": null, "carrierValid": false },
+    { "input": "rm_alice\u0000", "normalized": null, "carrierValid": false },
+    { "input": "\trm_alice\n", "normalized": "rm_alice", "carrierValid": false },
+    { "input": "rm_abcdefghijklmnopqrstuvwxyz123", "normalized": "rm_abcdefghijklmnopqrstuvwxyz123", "carrierValid": true },
+    { "input": "rm_abcdefghijklmnopqrstuvwxyz1234", "normalized": null, "carrierValid": false },
+    { "input": "rm_%", "normalized": null, "carrierValid": false },
+    { "input": "rm_*", "normalized": null, "carrierValid": false },
+    { "input": "", "normalized": null, "carrierValid": false }
+  ]
+}

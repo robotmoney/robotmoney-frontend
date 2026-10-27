@@ -38,7 +38,7 @@ carried on chain is decided by `robotmoney-core` (§3), not by this repository.
 This repository proposes no contract changes, payouts, public attribution
 leaderboard, editable admin code registry, automatic discretionary credit or
 cross-chain identity. Admin corrections (§4) are the one administrator write;
-where they are stored is open in §8. A CLI report reconstructs
+they are stored as a reviewed, append-only config log (§8, [D76](../decisions.md#d76)). A CLI report reconstructs
 evidence; public API requests must not trigger chain scans. If correctness requires a new persistence or
 contract boundary, amend this specification before implementing that expansion.
 
@@ -109,6 +109,11 @@ assume them:
   receiver, the vault or router, and the amount.
 - It records the code exactly as the depositor chose it, so this repository
   never repairs or substitutes a code.
+- It names the payer, the receiver and the amount beside the code (owner,
+  2026-10-19), so the payer is proven for every wallet type. One carrier event
+  is one deposit authorization, keyed `(chainId, transactionHash,
+  carrierLogIndex)`; the router legs it covers group under it. A deposit with no
+  carrier event is uncoded (issue 1371).
 
 If core's carrier lacks one of these properties, amend this specification
 before implementing.
@@ -177,7 +182,8 @@ operator issues a code by a reviewed change to that configuration, and the code
 reaches production only in a release. Each record contains normalized code,
 immutable beneficiary kind and ID (a member ID, or a team channel name),
 display snapshot, terms version, activation time,
-and disabling time. A member's code is `rm_` plus the member's handle at issue time;
+and disabling time. A member's code is `rm_` plus the member's handle at issue time
+(a rejoin, which needs a new code, adds a `-<suffix>`);
 a later handle rename does not change the code. Times are ISO 8601 UTC strings, compared as Unix seconds
 against block timestamps. One global launch block and the deployment manifest
 are versioned alongside the rules. No environment variable grants
@@ -193,7 +199,8 @@ of a beneficiary. Activation intervals are half-open and may not overlap for
 the same beneficiary; a replacement may start exactly when the old one stops.
 
 A draft may acquire its first prospective activation time through review.
-Scheduled records may be cancelled before activation with retained history.
+Scheduled records may be cancelled before activation with retained history
+(a `cancelledAt` time on the record, which then never becomes active).
 Once active, identity, terms and activation are immutable; disabling must be
 prospective when approved. Rejoining uses a new code and accepted terms. Registry
 validation compares against the previous accepted revision, which is the
@@ -335,8 +342,10 @@ revisions, registry digest, evidence digest, per-range coverage, completeness,
 errors, and run time. Rows carry wallet, beneficiary/code or null, first
 qualifying deposit, chosen event identity, binding status, candidate outcomes
 and reasons. Reasons include `bound`, `already_bound`, `uncoded`, `late`,
-`before_launch`, `code_inactive`, `gift`, `invalid_code`, and
-`evidence_unavailable`. A binding from a correction (§4) carries its kind,
+`before_launch`, `code_inactive`, `gift`, `invalid_code`, `unknown_code` (a
+well-formed code absent from the registry), `conflicting_codes` (more than one
+carrier event for one deposit), `zero_assets`, `correction_rejected`,
+`correction_revoked` and `evidence_unavailable`. A binding from a correction (§4) carries its kind,
 `verified` or `override`, its recording time and the correction's log
 identifier; a revoked correction stays visible with its revocation time.
 Observations can be known
@@ -391,7 +400,7 @@ resumable checkpoint, never silently shorten history.
 | `contract/` | Route catalogue, public DTO and admin DTO. Contract sync produces frontend artifacts during implementation, not this docs PR. |
 | `frontend/public/skill.md` and deposit flow | Owner-authorized referral choice, never-block fallback, previews and results for direct and router deposits and every supported signer; integrate with the eventual deposit skill path from #1090. |
 | `frontend/public/views/admin/swarm-member.html` and its controller | Read-only referral projection with state and timestamps, following the established admin auth and buildless frontend. |
-| Admin correction surface | Record and revoke corrections (§4) through the established admin auth. **Storage is open:** the correction log needs durable, append-only records that the report reads as an input. Options are a reviewed config entry per correction, or a new table with an insert-only grant, which touches [D66](../decisions.md#d66). Decide before implementation. |
+| Admin correction surface | Record and revoke corrections (§4). **Storage decided ([D76](../decisions.md#d76)):** a reviewed, append-only config log (`backend/src/referrals/config/corrections.json`) shipped in a release, validated against the previous accepted revision like the registry; no table and no admin-route write ([D66](../decisions.md#d66)). The admin panel verifies signatures, nonces and expiry and shows the log read-only through the established admin auth. |
 | Agent catalogue and goldens | Document the callable lookup and use fixture-only code identities; keep public/private shapes distinct. |
 | Existing Postgres schema | Member identity remains in `swarm_members`. No referral table is proposed beyond the correction log, if storage chooses a table (row above). Derived reports are not a new request-path index. |
 
@@ -474,8 +483,8 @@ The product owner accepting #1358 must expressly accept or amend these proposals
 | On-chain rejection | **Owned by `robotmoney-core`; pending.** “Invalid” on chain means a bad format only; activity is judged by the report (§3). Core decides whether and how to reject. |
 | Experience and disclosure | **Accepted with a change by the owner, 2026-10-19.** A referral never blocks a deposit (§6); codes are discoverable; admin projection includes explicit state. |
 | Report authority | **Accepted by the owner, 2026-10-19.** One finalized snapshot, complete legacy manifest, pinned revisions, private exports and measured operator budget. |
-| Gift deposits | Proposed: a gift never binds and is not reviewed (§2), replacing RM-174's review rule. Owner to confirm. |
-| Correction storage | **Open; implementation owner decides (§8).** |
+| Gift deposits | Implemented as proposed by issue 1371: a gift never binds, never starts the clock and is not reviewed (§2), replacing RM-174's review rule. The owner may still amend it. |
+| Correction storage | **Decided by the implementation owner, 2026-10-22 ([D76](../decisions.md#d76)):** a reviewed append-only config log, no new table (§8). |
 
 Review on 2026-10-16 found these open items beyond the table above. Each must
 be resolved or explicitly deferred before acceptance:
@@ -483,10 +492,10 @@ be resolved or explicitly deferred before acceptance:
 | Open item | Gap and proposed resolution |
 |---|---|
 | On-chain rejection versus successful deposit | **Resolved 2026-10-19.** “Invalid” on chain means format only (§3); activity stays with the registry and the report. |
-| Payer evidence for every signer | **Resolved 2026-10-19 by the owner's choice of core's carrier.** Core emits an event naming payer, receiver, amount and code. §3 still lists three carrier properties; add this as the fourth once core documents the event. |
-| Deployment time of registry revisions | §5 requires a revision to be deployed before its activation or disable time. Nothing records deployment time, so validation and the report cannot enforce it. Record the release tag time as a report input, or reject effective times earlier than that tag. |
-| Missing report reasons | §9 expects explained outcomes for conflicting codes on one deposit and for a well-formed code absent from the registry. §7 lists no reason for either. Add `conflicting_codes` and `unknown_code`. |
-| Deposit authorization key | §7 deduplicates by `(chainId, transactionHash, logIndex)`, but a router deposit emits one Deposit log per leg. Define the key that groups legs into one authorization, ideally supplied by core's carrier event. |
+| Payer evidence for every signer | **Resolved 2026-10-19 by the owner's choice of core's carrier.** Core emits an event naming payer, receiver, amount and code; §3 lists it as the fourth property. |
+| Deployment time of registry revisions | **Resolved by issue 1371.** The release tag time is the revision's deployment time, recorded in `accepted-revisions.json`; validation rejects any newly introduced activation, cancellation, disable or correction time earlier than it ([D76](../decisions.md#d76)). |
+| Missing report reasons | **Resolved by issue 1371.** §7 adds `conflicting_codes` and `unknown_code`. |
+| Deposit authorization key | **Resolved by issue 1371.** The key is the carrier event, `(chainId, transactionHash, carrierLogIndex)`; an uncoded direct deposit is keyed by its Deposit log. |
 | Source ticket | **Resolved 2026-10-19.** RM-174 now says this specification governs. Its product rules are reflected in §2, §4, §5 and §6; its implementation notes are not binding. |
 
 The implementation owner supplies the exact deployment manifest, verifies the
@@ -524,3 +533,23 @@ The adversarial examples originated in offline review of those proposals; they
 are not evidence of production exploits or implemented functionality. Those PRs
 cite the Linear ticket RM-174 as their source; this specification was reconciled
 with that ticket's product rules on 2026-10-19.
+
+## 13. Implementation map (issue 1371)
+
+| Spec | Delivered in | Evidence (offline fixtures unless stated) |
+|---|---|---|
+| §3 code format | `contract/src/referrals.js` (`normalizeReferralCode`, `isNormalizedReferralCode`), shared cases in `contract/src/__fixtures__/referral-codes.json` | `contract/tests/unit/referrals.test.ts`, `backend/tests/api/referrals.test.ts`, `scripts/tests/unit/referral-skill.test.ts` |
+| §3 carrier | `backend/src/referrals/carrier.ts`, **core conformance pending**: a placeholder `ReferralRecorded(address indexed payer, address indexed receiver, uint256 amount, string code)` emitted by a manifest address after the Deposit logs it covers | `backend/tests/referrals-attribution.test.ts` |
+| §2, §4, §7 rules | `backend/src/referrals/evidence.ts` (transaction, receipt and block to deposit authorizations), `attribution.ts` (rows) | `backend/tests/referrals-attribution.test.ts` (every §9 row) |
+| §4 corrections | `backend/src/referrals/corrections.ts`, `config/corrections.json`, EIP-191 and EIP-1271 over `eth-crypto.ts` | `backend/tests/referrals-corrections.test.ts` |
+| §5 registry | `backend/src/referrals/registry.ts`, `config-files.ts`, `config/registry.json`, `config/accepted-revisions.json`, `backend/scripts/referrals-accept-revision.ts` | `backend/tests/referrals-registry.test.ts` |
+| §6 lookup and admin | `backend/src/api/routes/referrals.ts`, `backend/src/referrals/lookup.ts`, `AdminMember.referral`, `GET /api/admin/referrals/corrections`, the admin member page and the Referral corrections tab | `backend/tests/api/referrals.test.ts`, `frontend/test/browser/admin-view.spec.ts` |
+| §6 skill | `frontend/public/skill.md`, "Referral codes" | `scripts/tests/unit/referral-skill.test.ts` (text only; not an agent or wallet execution) |
+| §7 report | `backend/src/referrals/collect.ts`, `report.ts`, `backend/scripts/referrals-report.ts` (`scan`, `explain`, `verify`), `config/manifest.json` | `backend/tests/referrals-report.test.ts` (fake RPC through the real transport) |
+
+Shipped state: the registry has no code and no launch block, and every manifest
+entry is an unconfirmed candidate, so any report today is incomplete by
+construction. Still owner-gated (§10): a live coded deposit against each
+deployment, direct and via the router, from an EOA and a multisig with
+owner-authorized funds; core's carrier conformance; the confirmed manifest; the
+measured launch-range scan and its approved budget; activation.

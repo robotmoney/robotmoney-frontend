@@ -4767,10 +4767,22 @@ observed off) if either would change.
 | `backtest:^GSPC` | yahoo | relative 1e-6 |
 | `backtest:ETH-USD` | yahoo | relative 1e-6 |
 | `backtest:DTB3` | fred | exact |
+| `yahoo:GLD` | yahoo | relative 1e-6 |
+| `defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84` | defillama-yields | exact |
+| `defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501` | defillama-yields | exact |
+| `yahoo:USDC-USD` | yahoo | relative 1e-6 |
+| `defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72` | defillama-yields | exact |
+| `defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c` | defillama-yields | exact |
+| `defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469` | defillama-yields | exact |
+| `defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c` | defillama-yields | exact |
+| `defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19` | defillama-yields | exact |
 
 `backend/tests/analytics-source-tolerance.test.ts` reads the keys out of every
 capture call site under `src/analytics/extract` and `src/analytics/access`, and
-fails if one has no entry here or in `SOURCE_TOLERANCES`.
+fails if one has no entry here or in `SOURCE_TOLERANCES`. The last nine rows
+are the model portfolio inputs recorded under their own source id (issue 1398),
+including the Base universe assets; the test reads them from
+`packages/analyst-sdk/inventory/model-portfolio.json`.
 
 **Why 1e-6 for Yahoo, and exact for everything else.** The only measured noise
 is Yahoo's. Its chart API serves float32-derived numbers
@@ -5103,6 +5115,8 @@ prevent.
 ---
 
 ## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
+
+> **Superseded in part by [D73](#d73) on 2026-10-21.** The bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated" no longer hold. The API now serves the record as it was, under the D73 load limits. The rest of this decision stands.
 
 **Decision.** Four read-only routes serve the raw analytics inputs to anyone, with
 no credential: `raw-history` (`raw_indicator_history`), `asset-prices`
@@ -5772,6 +5786,10 @@ without forbidding the squash. Tagging at the cutover keeps production from
 ever running a commit no version names, and makes every pre-cutover check the
 place a release can still stop.
 
+**Owner clarification (2026-10-26).** The owner said: "releases 0.7.x is branched from main, NOT
+0.6.x". A new release branch `releases-A.B.x` is branched from main, not from the previous release
+line, and its scope reaches it from `main` by route (a).
+
 ---
 
 <a id="d71"></a>
@@ -5851,6 +5869,76 @@ exemption (issue 1335), judges voting or merging answers, verifiable randomness,
 turning outside judging on in production (issue 1396) and filling in draw records
 for sessions published earlier.
 
+---
+
+<a id="d72"></a>
+## D72 — Archive format 1 is the one archive format for analytics data (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.5.
+
+**Decision.**
+
+1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+2. **Write-once.** An archive never changes after it is written. Its identity is the SHA-256 of its uncompressed canonical bytes (`sha256_raw` in `backup.json`), and that hash names it. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, so no gzip encoder, Bun version or container image is part of an archive's identity, the ETag and the manifest hash are the content hash, and a client decompresses before it verifies. A backup only adds archives.
+3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
+4. **Same content.** The API and the database replica write archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
+
+**Why.** An analyst, the backup job and the API must agree on one record. One write-once format lets a repo clone and an API download produce the same local copy.
+
+---
+
+<a id="d73"></a>
+## D73 — The public analytics API serves the record as it was, under fixed load limits (supersedes the D58 bullets "Bounded reads", "Rate limit", "Client ip" and "Regime outputs are not duplicated"; owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` sections 4.4, 4.6 and 4.8. The rest of D58 stands: the public prefix, GET only, the contract, the grant and the data terms.
+
+**Decision.**
+
+1. **The record as it was.** The API serves source data as the external party published it when we collected it, with every later revision as a new version. It serves each run's published report byte for byte, with its vintage. A later run adds a report and never edits an earlier one.
+2. **No recomputation.** The API never computes a calculated indicator. Calculated indicators reach it only inside a published report.
+3. **Archives.** The API serves archives in format 1 (D72), grouped by backup, with watermarks.
+4. **Load limits.** At most 2 public queries at once, a 5 second statement timeout, a cost-weighted limit of 100 tokens a minute per client, a byte budget of 50 MB a minute per client, gzip off the event loop, immutable caching keyed on checksums and a bounded edge cache. A query that is gated or times out answers 503 with `Retry-After`.
+5. **Client identity.** The rate limit keys on `X-Client-IP`, which the web server sets and the caller cannot. Only the web server reaches the api port. No CDN rule is involved.
+
+**Why.** An analyst can check a published regime only against the data and the report as they were at the time. The current tables change after publication. Public traffic must never starve the site, and the D58 limits counted requests, not cost.
+
+---
+
+<a id="d74"></a>
+## D74 — Every source series has one id, `<provider>:<symbol>` (owner, 2026-10-21)
+
+**Status.** Accepted 2026-10-21. Specified in `docs/technical/analytics-requirements.md` section 4.1 and `docs/definitions.md`.
+
+**Decision.**
+
+1. **One id.** A source series is named `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input files and new public API contracts use that id. Existing database and historical archive keys may remain behind one shared storage-boundary mapping. Immutable archives and vintage references are preserved.
+2. **One mapping.** No canonical id names the code that reads it. Computation uses canonical ids rather than `backtest:`, `SPX`, `ETH` or `TBILL3M` aliases. Existing storage keys are translated through one shared mapping, including the reverse mapping for existing writes. The mapping preserves values, dates, ordering and vintage membership and rejects ambiguity; a database rename is not required.
+3. **Ratio legs.** Each leg of a ratio is a source series with its own id. A ratio is a calculated indicator and is never stored as source data.
+
+**Why.** The same series carried three names: the provider symbol, the ledger key and the SDK input id. A table existed only to translate them, and the ledger key named its consumer. One canonical identity removes competing names from computation. One shared storage mapping preserves the historical record without requiring a database migration.
+
+### Analytics report compatibility (owner clarification, 2026-10-22)
+
+The analytics and analyst SDK refactor uses one shared calculation. Identical effective input observations, dates, schedules and report options produce byte-identical report payloads through backend and SDK before and after the refactor. This includes values, labels, nulls, field order and number formatting. There is no alternative methodology selector or backend-only engine for old results. Changes to numerical methodology are outside this refactor.
+
+A run records methodology and code revision as provenance. Public simulation and statistics APIs expose and generalize the established rules, including target-weight returns, missing-label behavior, baseline start dates, pre-cost Sharpe and split-date conventions. They do not introduce holding drift, risk-free subtraction or revised edge-case defaults. Original reports and historical ratio inputs remain immutable.
+
+Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
+
+### No retroactive change (owner clarification, 2026-10-22)
+
+No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
+
+_Removed 2026-10-25: the rule that the analytics and analyst SDK work adds no database migration was not an owner decision. Migrations follow the normal rules (D66, `docs/technical/smoke-production-spec.md` section 8)._
+
+This settles three points.
+
+1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
+2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, a grant migration under the normal migration rules enables it.
+3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
+
+---
+
 <a id="d75"></a>
 ## D75 — Only the api holds a database credential; the pipeline worker writes through /api/pipeline/** (supersedes D52 decision 2's rm_worker carve-out; owner, 2026-10-22)
 
@@ -5923,3 +6011,66 @@ Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
 `CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
 pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
 connection pooler.
+
+---
+
+<a id="d76"></a>
+## D76 — Referral attribution: the accepted specification governs; codes and admin corrections are reviewed config, not tables (implementation owner, 2026-10-22)
+
+**Status.** Accepted 2026-10-22 as the implementation-owner decision the
+[referral specification](technical/referrals-spec.md) §8 and §11 left open
+("Correction storage: implementation owner decides"). Implemented by issue 1371.
+The specification itself was accepted by the owner on 2026-10-19 (PR 1390).
+
+**Decision.**
+
+1. **Policy authority.** `docs/technical/referrals-spec.md` governs referral
+   attribution in this repository. Attribution only: no payment, fee or reward
+   logic lives here. A policy change returns to owner review first.
+2. **Codes are reviewed configuration.** The registry
+   (`backend/src/referrals/config/registry.json`: codes, lifecycle times, the one
+   launch block) changes only by a reviewed change shipped in a release. No
+   environment variable grants attribution.
+3. **Admin corrections are an append-only reviewed config log**
+   (`backend/src/referrals/config/corrections.json`), not a new table and not an
+   admin-route write. D66 makes every production data change a migration and
+   rejects an admin-route write with an audit row; a table with an insert-only
+   grant would need its own owner sign-off. Review supplies the "who"; each entry
+   records `recordedBy`, `recordedAt`, `reason` and its evidence, and a revocation
+   is a later entry. The admin panel verifies and shows the log read-only.
+4. **The previous accepted revision is committed data.** `accepted-revisions.json`
+   holds the registry, correction log and manifest as they stood at each
+   production version tag (D64, D70), with the tag time as that revision's
+   deployment time. A revision is validated against its predecessor at its own tag
+   time: no deleted history, no reassignment, no retroactive edit, and no newly
+   introduced effective time earlier than the deployment. CI validates the working
+   files against the last accepted revision with "now" as the earliest deployment,
+   because its checkout has no git history.
+5. **The carrier is robotmoney-core's.** The report decodes core's event (payer,
+   receiver, amount, code, owner choice 2026-10-19) in one adapter,
+   `backend/src/referrals/carrier.ts`. Until core publishes the event's ABI the
+   adapter decodes a clearly marked placeholder; conformance is checked at
+   launch (spec §10), never as a merge gate, and needs no contract change here.
+
+**Accepted costs.** A code or correction shipped by a release always takes effect
+no earlier than that release's tag; an urgent correction waits for a release. A
+scheduled activation that misses its release fails CI until it is rescheduled.
+
+---
+
+<a id="d77"></a>
+## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (owner, 2026-10-25)
+
+**Status:** Accepted 2026-10-25. Specified in `docs/technical/release-runbooks.md` section 11. Built by issue 1449: the tag guard (`.github/workflows/analyst-sdk-tag-guard.yml`, logic in `scripts/check-analyst-sdk-tag.ts`) and the workflow triggers.
+
+**Decision.**
+
+1. **Branch.** The SDK (`packages/analyst-sdk/`) ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own semver. The branch must not match `releases-*`: platform CI triggers on that glob, and `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform release line. Changes reach it from `main` only, by merge or cherry-pick, like D70 route (a). Feature PRs never target it. There is no QA branch, no stage run and no rc tag: the SDK runs on an analyst's machine and nothing deploys.
+2. **Tag.** A release is the tag `analyst-sdk-vA.B.C`, only on a commit of `analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in `packages/analyst-sdk/package.json`. This follows the `contract-v*` precedent: `contract/` has its own version and tag namespace, independent of the platform's `v*` tags (`.github/workflows/contract-publish.yml`).
+3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays published report payloads byte for byte, and always name the platform tag whose analytics code it matches. The SDK and the backend share code (D57).
+4. **Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag `vA.B.C` exists. Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches.
+5. **First tag.** The first tag is `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh number separates tagged releases from them.
+6. **Install by tag.** An analyst gets a released version by a sparse clone of the tag.
+7. **Order.** The platform release is cut first, then the SDK tag. The SDK is fully tested only when the platform runbook has completed with the SDK checks passing on stage in QA and on production in the soak. The SDK tag is cut after the matching platform release.
+
+**Why.** An analyst needs a fixed, named version to cite and rerun. The platform's release line rehearses on stage and cuts over production. None of that applies to a package that runs on an analyst's machine. A separate branch and tag namespace keeps platform tooling from treating an SDK release as a platform release.

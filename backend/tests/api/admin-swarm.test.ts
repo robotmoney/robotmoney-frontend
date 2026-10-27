@@ -493,6 +493,8 @@ test("members: update writes every editable field, bumps version, and the projec
     // Issue 1269: counted on the admin list only; a single-member response is null.
     silentSessions: null,
     silentThreshold: 7,
+    // Issue 1371: the registry ships no codes, so a member has none.
+    referral: null,
   });
   expect(member).not.toHaveProperty("token_hash");
   expect(member).not.toHaveProperty("public_key");

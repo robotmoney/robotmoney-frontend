@@ -132,7 +132,6 @@ const CONSOLIDATED_VIEWS = [
   "dash-wallet-profile.js",
   "dash-vault-profile.js",
   "dash-agent-profile.js",
-  "dash-project-profile.js",
   "dash-coin-profile.js",
   "dash-ask-roboto.js",
   "dash-lobster.js",

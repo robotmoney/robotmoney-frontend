@@ -1610,6 +1610,7 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 /* Member avatar (RM-184): current and picked image side by side, each in the
    public pages' own .sv__avatar box. */
 .adm-avatar { margin: 0 0 2rem; }
+.adm-referral { margin: 0 0 2rem; }
 .adm-avatar__row { display: flex; gap: 1.5rem; }
 .adm-avatar__slot { margin: 0; display: grid; justify-items: start; gap: 0.4rem; font-size: 0.75rem; }
 .adm-avatar .adm-toolbar { margin-bottom: 0.5rem; }

@@ -1,0 +1,36 @@
+{
+  "id": "P-A1",
+  "name": "A1: Base permissionless plus Coinbase stocks, fixed weights",
+  "author": "the four proposals, first version of the page (Oct 8, 2026)",
+  "date": "2026-10-08",
+  "status": "comparison",
+  "description": "A with 10 points moved from sUSDS to the 7 Coinbase tokenized stocks, equal weight. Held still; trades only on drift.",
+  "label": "fixed",
+  "states": {
+    "neutral": {
+      "USDC": 2,
+      "SUSDS": 14,
+      "SPARK": 11,
+      "GT": 12,
+      "STEAK": 7,
+      "AAVE": 28,
+      "COMP": 5,
+      "GOLD": 6,
+      "BTC": 5,
+      "AAPL": 1.4285714285714286,
+      "NVDA": 1.4285714285714286,
+      "META": 1.4285714285714286,
+      "GOOGL": 1.4285714285714286,
+      "AMZN": 1.4285714285714286,
+      "MSFT": 1.4285714285714286,
+      "TSLA": 1.4285714285714286
+    }
+  },
+  "drift": {
+    "points": 2,
+    "relative": 0.25,
+    "byHolding": {
+      "BTC": 3
+    }
+  }
+}

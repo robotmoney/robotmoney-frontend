@@ -221,15 +221,14 @@ describe("frontend route resolution", () => {
     }
   });
 
-  // Issue #389 (§5.5, P3.1): the one param route the plan explicitly marks
-  // public — /projects (the list) is already a live, ungated page, and
-  // gating its own profile sub-route would regress that. Graduates off the
-  // shared coming-soon placeholder onto its own real fragment (the first
-  // param route to do so).
-  test("/projects/:slug (issue #389) resolves to its own real fragment, public (ungated) under the dash layout", () => {
-    expect(viewFor("/projects/robotmoney-vault")).toBe("/views/dash/project-profile.html");
-    expect(routeMetaFor("/projects/robotmoney-vault")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
-    expect(routeMetaFor("/projects/robotmoney-vault/")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: false });
+  // /projects/:slug (RM-186): a project's page is a public record outside the
+  // dashboards (it was the dash-layout "ProjectProfile" dossier, issue #389),
+  // so it resolves to its own fragment with no layout and no gate.
+  test("/projects/:slug (RM-186) resolves to its own public fragment, outside the dashboards", () => {
+    expect(viewFor("/projects/robotmoney-vault")).toBe("/views/project.html");
+    expect(viewFor("/projects/robotmoney-vault/")).toBe("/views/project.html");
+    expect(routeMetaFor("/projects/robotmoney-vault")).toBeNull();
+    expect(routeMetaFor("/projects/robotmoney-vault/")).toBeNull();
   });
 
   // /lobster/:id, /vaults/:id, /wallets/:id detail dossiers (issue #391,

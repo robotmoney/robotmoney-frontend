@@ -1,0 +1,35 @@
+# Guard for the analyst SDK's own release tags (issue 1449; D77 item 4; runbook
+# section 11). Separate file, like contract-publish.yml, because it runs ONLY on
+# a push of an `analyst-sdk-v*` tag: never on a PR, never on a merge to main.
+#
+# It refuses a tag whose version differs from packages/analyst-sdk/package.json
+# or whose commit is not on an `origin/analyst-sdk/releases-*` branch. The check
+# logic lives in scripts/check-analyst-sdk-tag.ts (unit tested); this file only
+# fetches full history and calls it.
+#
+# Not part of the nightly-mirrors-merge-set invariant: no `push: branches` and no
+# `schedule:`. CI taxonomy: a release check, not a test, so CI_CLASS: ignore.
+name: analyst-sdk-tag-guard
+env:
+  CI_CLASS: ignore
+on:
+  push:
+    tags: ["analyst-sdk-v*"]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and all remote branches: the reachability check needs
+          # origin/analyst-sdk/releases-* and the commits behind them.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+          no-cache: true
+      - name: Verify tag version and release-branch reachability
+        run: bun scripts/check-analyst-sdk-tag.ts "$GITHUB_REF_NAME" "$GITHUB_SHA"

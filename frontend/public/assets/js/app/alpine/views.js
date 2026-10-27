@@ -41,7 +41,7 @@ import { registerDashLobsterView } from "./views/dash-lobster.js";
 import { registerDashVaultsView } from "./views/dash-vaults.js";
 import { registerDashWalletsView } from "./views/dash-wallets.js";
 import { registerAskRobotoView } from "./views/dash-ask-roboto.js";
-import { registerProjectProfileView } from "./views/dash-project-profile.js";
+import { registerProjectView } from "./views/project.js";
 import { registerCoinProfileView } from "./views/dash-coin-profile.js";
 import { registerVaultProfileView } from "./views/dash-vault-profile.js";
 import { registerWalletProfileView } from "./views/dash-wallet-profile.js";
@@ -79,7 +79,7 @@ export function registerViews(Alpine) {
   registerDashVaultsView(Alpine);
   registerDashWalletsView(Alpine);
   registerAskRobotoView(Alpine);
-  registerProjectProfileView(Alpine);
+  registerProjectView(Alpine);
   registerCoinProfileView(Alpine);
   registerVaultProfileView(Alpine);
   registerWalletProfileView(Alpine);
