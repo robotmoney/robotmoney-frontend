@@ -103,6 +103,10 @@ scope:
   - {pr: 1481, what: "docs(release): the SDK tag is cut after the matching platform release (D77)", none: "docs only"}
   - {pr: 1483, what: "docs(release): a new release branch is created from main, never from the previous release line", none: "docs only"}
   - {pr: 1488, what: "feat(release): the 2026-10-16 three-phase release model on main, and the v0.7.0 runbook re-based on it", none: "release tooling: the run itself exercises it"}
+  - {pr: 1490, what: "fix(release): the V08 backtest golden matches the 55-asset universe", check: "Q45-sdk-backtest-golden"}
+  - {pr: 1487, what: "fix(release): backport the v0.6.2 to v0.6.4 application and gate changes to main", none: "backport to main of changes production already runs at v0.6.4; the soak gate (Q32-soak-gate/C20-soak-gate) applies the classifications it carries"}
+  - {pr: 1491, what: "feat(release): the breaking-migration cutover order for a release that declares breaking", none: "release tooling: the run itself exercises it"}
+  - {pr: 1493, what: "feat(release): a version check for the referrals feature in the v0.7.0 runbook", check: "Q48-referral-lookup"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).
