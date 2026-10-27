@@ -122,9 +122,9 @@ order:
 
 | Phase | Ids | Target and when | What it does |
 |---|---|---|---|
-| **QA** | `Q01` to `Q46` | Stage only, as often as needed, on a QA branch commit | The whole rehearsal. Preparation first: the lockfile, the dump, the stage target, its role passwords, the scope. Then the upgrade exactly as production will run it: checkouts and installs, the baseline, backup and restore proof, the migrate, the rolling boot, the site, the probe. Then the soak. Then the release's own version checks, one per change it ships |
+| **QA** | `Q01` to `Q48` | Stage only, as often as needed, on a QA branch commit | The whole rehearsal. Preparation first: the lockfile, the dump, the stage target, its role passwords, the scope. Then the upgrade exactly as production will run it: checkouts and installs, the baseline, backup and restore proof, the migrate, the rolling boot, the site, the probe. Then the soak. Then the release's own version checks, one per change it ships |
 | **Preflight** | `P01` to `P08` | Production only, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates that assume every QA step passed: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
-| **Cutover** | `C01` to `C32` | Production only, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade, then the soak and the version checks as stage ran them |
+| **Cutover** | `C01` to `C36` | Production only, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade, then the soak and the version checks as stage ran them |
 
 **Words.** "The cutover" is the production run (§4.7). Stage never runs a cutover. Its Q steps are
 the rehearsal of one.

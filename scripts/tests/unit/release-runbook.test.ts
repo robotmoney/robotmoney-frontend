@@ -223,12 +223,12 @@ describe("a template step's since", () => {
     expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
   });
 
-  test("v0.7.0 carries the SDK steps unmarked, ten added version checks, and every version step in its scope", () => {
+  test("v0.7.0 carries the SDK steps unmarked, eleven added version checks, and every version step in its scope", () => {
     const v070 = loadReleaseRunbook("v0.7.0");
     for (const id of sdkSteps) expect(v070.steps.find((s) => s.id === id)?.added).toBeUndefined();
     const versions = v070.steps.filter((s) => s.added === "v0.7.0");
-    expect(versions.length).toBe(20);
-    expect(versions.map((s) => s.id.slice(0, 3))).toEqual([..."Q38 Q39 Q40 Q41 Q42 Q43 Q44 Q45 Q46 Q47 C26 C27 C28 C29 C30 C31 C32 C33 C34 C35".split(" ")]);
+    expect(versions.length).toBe(22);
+    expect(versions.map((s) => s.id.slice(0, 3))).toEqual([..."Q38 Q39 Q40 Q41 Q42 Q43 Q44 Q45 Q46 Q47 Q48 C26 C27 C28 C29 C30 C31 C32 C33 C34 C35 C36".split(" ")]);
     // Every version check is read-only against the target, so each QA step has a production twin of the same name.
     expect(versions.some((s) => (s as { stageOnly?: boolean }).stageOnly === true)).toBe(false);
     expect(versions.filter((s) => s.phase === "qa").map((s) => s.id.slice(4))).toEqual(versions.filter((s) => s.phase === "cutover").map((s) => s.id.slice(4)));
