@@ -1,9 +1,9 @@
-// The four-vault data layer: lib/vault-data.js (identity, the drift maths,
+// The vault data layer: lib/vault-data.js (identity, the drift maths,
 // formatters) and lib/vault-source.js (the mock-data switch and every read).
 //
 // The REAL modules run, against the SHIPPED fixtures and archive files: a
 // mocked global fetch serves frontend/public as the static server would, and
-// answers /api/* per test. So "the devnet overview gives 700 bps of tracking
+// answers /api/* per test. So "the devnet overview gives 87.91 bps of tracking
 // error" and "a production host never reads /data/vaults" are assertions
 // about the files and code a browser gets, not about a double.
 //
@@ -15,8 +15,9 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CATEGORICAL } from "../../../frontend/public/assets/js/app/lib/chart-theme.js";
-import { BUCKET_ORDER, bookSleeveShares, bucketHue, sessionSummary } from "../../../frontend/public/assets/js/app/lib/session-summary.js";
+import { BUCKET_ORDER, RETIRED_BUCKETS, bookSleeveShares, bucketHue, sessionSummary } from "../../../frontend/public/assets/js/app/lib/session-summary.js";
 import {
+  RETIRED_VAULTS,
   VAULTS,
   VAULT_SLUGS,
   VAULTS_ENDPOINT,
@@ -131,17 +132,19 @@ beforeEach(() => {
 });
 
 describe("vault identity", () => {
-  test("four vaults in the framework's order, one categorical hue each", () => {
-    expect(VAULTS.map((v) => v.bucket)).toEqual(BUCKET_ORDER);
-    expect(VAULT_SLUGS).toEqual(["rmusdc", "rmagent", "rmproto", "rmrwa"]);
-    VAULTS.forEach((v, i) => {
-      expect(v.color).toBe(CATEGORICAL[i]);
+  test("three vaults in the framework's order, each in its sleeve's hue", () => {
+    expect(VAULTS.map((v) => v.bucket)).toEqual(BUCKET_ORDER.filter((b) => !RETIRED_BUCKETS.includes(b)));
+    expect(VAULT_SLUGS).toEqual(["rmusdc", "rmproto", "rmrwa"]);
+    // A vault's hue is its sleeve's slot in the published order, so rmPROTO
+    // keeps CATEGORICAL[2] with rmAGENT gone.
+    for (const v of [...VAULTS, ...RETIRED_VAULTS]) {
+      expect(v.color).toBe(CATEGORICAL[BUCKET_ORDER.indexOf(v.bucket)]);
       expect(bucketHue(v.bucket)).toBe(v.color);
-    });
+    }
     expect(VAULTS_ENDPOINT).toBe("/api/dashboards/robotmoney-vaults");
   });
 
-  test("routes.js spells out exactly the four slugs as the /vault/:slug route", () => {
+  test("routes.js spells out exactly the three slugs as the /vault/:slug route", () => {
     const routesSrc = readFileSync(join(publicDir, "assets/js/app/routes.js"), "utf8");
     const m = routesSrc.match(/\/\^\\\/vault\\\/\(([a-z|]+)\)\\\/\?\$\//);
     expect(m).not.toBeNull();
@@ -167,6 +170,15 @@ describe("vault identity", () => {
     expect(vaultBySlug("nope")).toBeNull();
   });
 
+  test("rmAGENT is retired: no page and no row, but history still reads it", () => {
+    expect(RETIRED_VAULTS.map((v) => v.slug)).toEqual(["rmagent"]);
+    expect(vaultBySlug("rmagent")).toBeNull();
+    expect(vaultForBucket("agent_tokens")).toBeNull();
+    expect(vaultBySlug("rmagent", { withRetired: true })?.bucket).toBe("agent_tokens");
+    expect(vaultForBucket("Agent Tokens", { withRetired: true })?.slug).toBe("rmagent");
+    expect(vaultForBucket("protocol_tokens", { withRetired: true })?.slug).toBe("rmproto");
+  });
+
   test("the sleeve note is one source, with no network in the yield line", () => {
     expect(sleeveNote("conservative_defi_yield")).toBe("Lending USDC. The lowest-volatility sleeve, aimed at capital preservation.");
     expect(sleeveNote("rwa")).toBe(SLEEVE_NOTE.rwa);
@@ -179,16 +191,15 @@ describe("vault identity", () => {
 describe("normalizeOverview: the drift maths", () => {
   test("the devnet overview gives the documented figures", () => {
     const o = normalizeOverview(DEVNET);
-    expect(o.combined).toEqual({ tvlUsd: 100000, vaultsLive: 4 });
+    expect(o.combined).toEqual({ tvlUsd: 91000, vaultsLive: 3 });
     // Against the target in force, the router's Applied: half of |flow|.
-    expect(o.trackingErrorBps).toBe(200);
+    expect(o.trackingErrorBps).toBe(87.91);
     expect(o.targetSource).toBe("router");
     expect(layer(o, "targetBps")).toEqual(layer(o, "appliedBps"));
-    expect(layer(o, "actualBps")).toEqual([7200, 900, 1400, 500]);
-    expect(bySlug(o, "rmusdc").gaps).toEqual({ governance: 500, flow: 200, total: 700 });
-    expect(bySlug(o, "rmagent").gaps).toEqual({ governance: -500, flow: -100, total: -600 });
-    expect(bySlug(o, "rmproto").gaps).toEqual({ governance: 0, flow: -100, total: -100 });
-    expect(bySlug(o, "rmrwa").gaps).toEqual({ governance: 0, flow: 0, total: 0 });
+    expect(layer(o, "actualBps")).toEqual([7912.09, 1538.46, 549.45]);
+    expect(bySlug(o, "rmusdc").gaps).toEqual({ governance: 500, flow: -87.91, total: 412.09 });
+    expect(bySlug(o, "rmproto").gaps).toEqual({ governance: -500, flow: 38.46, total: -461.54 });
+    expect(bySlug(o, "rmrwa").gaps).toEqual({ governance: 0, flow: 49.45, total: 49.45 });
     expect(o.router).toEqual({ address: null, availability: "live", appliedAt: "2026-09-01T10:00:00Z" });
   });
 
@@ -224,7 +235,7 @@ describe("normalizeOverview: the drift maths", () => {
     const o = normalizeOverview(reversed);
     expect(o.vaults.map((v) => v.slug)).toEqual(VAULT_SLUGS);
     expect(o.vaults.map((v) => v.color)).toEqual(VAULTS.map((v) => v.color));
-    expect(layer(o, "actualBps")).toEqual([7200, 900, 1400, 500]);
+    expect(layer(o, "actualBps")).toEqual([7912.09, 1538.46, 549.45]);
   });
 
   test("an unreadable vault makes every actual, the combined TVL and tracking error null; Recommended stays", () => {
@@ -234,7 +245,7 @@ describe("normalizeOverview: the drift maths", () => {
     expect(o.combined.tvlUsd).toBeNull();
     expect(o.combined.vaultsLive).toBeNull();
     expect(o.trackingErrorBps).toBeNull();
-    expect(bySlug(o, "rmusdc").recommendedBps).toBe(6500);
+    expect(bySlug(o, "rmusdc").recommendedBps).toBe(7500);
     expect(bySlug(o, "rmusdc").gaps.governance).toBe(500);
   });
 
@@ -242,15 +253,16 @@ describe("normalizeOverview: the drift maths", () => {
     const o = normalizeOverview(applyReviewState(DEVNET, "no-recommendation"));
     expect(o.recommendation).toBeNull();
     expect(o.vaults.every((v) => v.recommendedBps === null && v.gaps.governance === null)).toBe(true);
-    expect(o.trackingErrorBps).toBe(200);
-    expect(bySlug(o, "rmrwa").gaps.flow).toBe(0);
-    expect(gapParts(bySlug(o, "rmrwa").gaps.flow).label).toBe("0 pp");
+    expect(o.trackingErrorBps).toBe(87.91);
+    expect(bySlug(o, "rmrwa").gaps.flow).toBe(49.45);
+    expect(gapParts(bySlug(o, "rmrwa").gaps.flow).label).toBe("+0.49 pp");
+    expect(gapParts(0).label).toBe("0 pp");
   });
 
   test("a recommendation object with no weights on the rows is null, not 0", () => {
     const raw = clone(DEVNET);
     for (const v of raw.vaults) delete v.recommendedBps;
-    expect(layer(normalizeOverview(raw), "recommendedBps")).toEqual([null, null, null, null]);
+    expect(layer(normalizeOverview(raw), "recommendedBps")).toEqual([null, null, null]);
   });
 
   test("all-zero TVL is no allocation at all: actual is null; the zero total is a real zero", () => {
@@ -269,7 +281,7 @@ describe("normalizeOverview: the drift maths", () => {
     const duplicated = clone(DEVNET);
     duplicated.vaults.push(clone(duplicated.vaults[0]));
     expect(normalizeOverview(duplicated).combined.tvlUsd).toBeNull();
-    expect(normalizeOverview(null).vaults.map((v) => v.availability)).toEqual(["unavailable", "unavailable", "unavailable", "unavailable"]);
+    expect(normalizeOverview(null).vaults.map((v) => v.availability)).toEqual(["unavailable", "unavailable", "unavailable"]);
   });
 });
 
@@ -283,15 +295,26 @@ describe("layers", () => {
     expect(bpsFromWeights([0.5, null, "x", -0.1])).toEqual([5000, null, null, null]);
   });
 
-  test("layerComplete: four known weights within a basis point of 10000", () => {
-    expect(layerComplete([6500, 1500, 1500, 500])).toBe(true);
-    expect(layerComplete([6500, 1500, 1500, 501])).toBe(true);
-    expect(layerComplete([6500, 1500, 1500, 502])).toBe(false);
-    expect(layerComplete([6500, 1500, 2000, null])).toBe(false);
-    expect(layerComplete([7000, 1000, 2000])).toBe(false);
+  test("layerComplete: one known weight per vault, within a basis point of 10000", () => {
+    expect(layerComplete([8000, 1500, 500])).toBe(true);
+    expect(layerComplete([8000, 1500, 501])).toBe(true);
+    expect(layerComplete([8000, 1500, 502])).toBe(false);
+    expect(layerComplete([8000, 2000, null])).toBe(false);
+    expect(layerComplete([7000, 1000, 1500, 500])).toBe(false);
   });
 
-  test("a 3-bucket recommendation is no recommended layer at all, never rescaled", () => {
+  test("a recommendation that weighs Small Cap Tokens is no layer over three vaults; one that gives it 0 is", () => {
+    const rec = (weights: Record<string, number>) => recommendationFromSession({ id: "x", swarmRecommendation: { type: "bucket_weights", weights } });
+    const over = (r: any) => layer(normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), r)), "recommendedBps");
+    // The sleeve's 3% is kept, so the three vaults hold 9700: never rescaled.
+    const old = rec(ALLOCATION_2026_06_24_FRACTIONS);
+    expect(old?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(over(old)).toEqual([null, null, null]);
+    const closed = rec({ conservative_defi_yield: 0.95, agent_tokens: 0, protocol_tokens: 0.03, real_world_assets: 0.02 });
+    expect(over(closed)).toEqual([9500, 300, 200]);
+  });
+
+  test("a recommendation missing a sleeve is no recommended layer at all, never rescaled", () => {
     const rec = recommendationFromSession({
       id: "11111111-2222-3333-4444-555555555555",
       subjectId: "robotmoney-allocation",
@@ -300,17 +323,17 @@ describe("layers", () => {
     });
     expect(rec?.bpsByBucket.real_world_assets).toBeNull();
     const o = normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), rec));
-    expect(layer(o, "recommendedBps")).toEqual([null, null, null, null]);
+    expect(layer(o, "recommendedBps")).toEqual([null, null, null]);
     expect(o.trackingErrorBps).toBeNull();
   });
 
   test("an applied layer summing to 9000 is null everywhere, and so are governance and flow", () => {
     const raw = clone(DEVNET);
-    raw.vaults[0].appliedBps = 6000;
+    raw.vaults[0].appliedBps = 7000;
     const o = normalizeOverview(raw);
-    expect(layer(o, "appliedBps")).toEqual([null, null, null, null]);
+    expect(layer(o, "appliedBps")).toEqual([null, null, null]);
     expect(o.vaults.every((v) => v.gaps.governance === null && v.gaps.flow === null)).toBe(true);
-    expect(o.trackingErrorBps).toBe(700);
+    expect(o.trackingErrorBps).toBe(461.54);
   });
 
   test("bps rejects what is not a weight; zero is a weight", () => {
@@ -379,13 +402,13 @@ describe("the Base feed as an overview", () => {
     expect(usdc.exitFeeBps).toBe(25);
     expect(usdc.auditStatus).toBe("Not audited");
     expect(usdc.sharePrice).toBeCloseTo(1.01196, 4);
-    for (const slug of ["rmagent", "rmproto", "rmrwa"]) {
+    for (const slug of ["rmproto", "rmrwa"]) {
       expect(bySlug(o, slug).availability).toBe("not_on_network");
       expect(bySlug(o, slug).actualBps).toBe(0);
       expect(statusLabel(bySlug(o, slug), o.network?.label)).toBe("Not live on Base");
     }
-    expect(layer(o, "appliedBps")).toEqual([null, null, null, null]);
-    expect(layer(o, "recommendedBps")).toEqual([null, null, null, null]);
+    expect(layer(o, "appliedBps")).toEqual([null, null, null]);
+    expect(layer(o, "recommendedBps")).toEqual([null, null, null]);
     expect(o.router?.availability).toBe("not_on_network");
     expect(o.network).toEqual({ chainId: 8453, label: "Base", testData: false });
     expect(o.combined).toEqual({ tvlUsd: 199.697519, vaultsLive: 1 });
@@ -415,7 +438,7 @@ describe("the Base feed as an overview", () => {
     expect(raw.network.testData).toBe(true);
   });
 
-  test("the 2026-06-24 recommendation over it: total gaps and tracking error, governance unknown", () => {
+  test("the 2026-06-24 recommendation over it: it still weighs Small Cap Tokens, so no layer, but its date and link read", () => {
     const rec = {
       sessionId: null,
       date: "2026-06-24",
@@ -426,12 +449,20 @@ describe("the Base feed as an overview", () => {
       bpsByBucket: ALLOCATION_2026_06_24,
     };
     const o = normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), rec));
-    expect(layer(o, "recommendedBps")).toEqual([9500, 300, 0, 200]);
-    expect(o.vaults.map((v) => v.gaps.total)).toEqual([500, -300, 0, -200]);
-    expect(o.vaults.every((v) => v.gaps.governance === null)).toBe(true);
-    expect(o.trackingErrorBps).toBe(500);
+    expect(layer(o, "recommendedBps")).toEqual([null, null, null]);
+    expect(o.vaults.every((v) => v.gaps.total === null && v.gaps.governance === null)).toBe(true);
+    expect(o.trackingErrorBps).toBeNull();
     expect(recommendationHref(o.recommendation)).toBe("/swarm/2026-06-24/robotmoney-allocation");
     expect(fmtDate(recommendationDate(o.recommendation))).toBe("Jun 24, 2026");
+  });
+
+  test("a three-sleeve recommendation over it: total gaps and tracking error, governance unknown", () => {
+    const bpsByBucket = { conservative_defi_yield: 9500, agent_tokens: 0, protocol_tokens: 300, real_world_assets: 200 };
+    const o = normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), { sessionId: "x", bpsByBucket }));
+    expect(layer(o, "recommendedBps")).toEqual([9500, 300, 200]);
+    expect(o.vaults.map((v) => v.gaps.total)).toEqual([500, -300, -200]);
+    expect(o.vaults.every((v) => v.gaps.governance === null)).toBe(true);
+    expect(o.trackingErrorBps).toBe(500);
   });
 
   test("a DTO that carries its own recommendation keeps it", () => {
@@ -699,7 +730,7 @@ describe("loadVaultOverview", () => {
     expect(load.mode).toBe("devnet");
     expect(load.label).toBe("Devnet test data");
     expect(load.error).toBeNull();
-    expect(load.overview?.combined).toEqual({ tvlUsd: 100000, vaultsLive: 4 });
+    expect(load.overview?.combined).toEqual({ tvlUsd: 91000, vaultsLive: 3 });
     expect(requests.some((u) => u.startsWith("/api/"))).toBe(false);
   });
 
@@ -713,12 +744,12 @@ describe("loadVaultOverview", () => {
     expect(statusLabel(bySlug(paused.overview, "rmusdc"))).toBe("Paused");
   });
 
-  test("the four-vault route answering is authoritative, and labelled when it serves test data", async () => {
+  test("the vaults route answering is authoritative, and labelled when it serves test data", async () => {
     serve({ [VAULTS_ENDPOINT]: json(DEVNET) });
     const load = await loadVaultOverview({ ...baseAt("robotmoney.network"), endpoint: VAULTS_ENDPOINT });
     expect(load.source).toBe("api");
     expect(load.label).toBe("Devnet test data");
-    expect(load.overview?.trackingErrorBps).toBe(200);
+    expect(load.overview?.trackingErrorBps).toBe(87.91);
     expect(requests.some((u) => u.startsWith("/api/swarm"))).toBe(false);
   });
 
@@ -728,7 +759,9 @@ describe("loadVaultOverview", () => {
     expect(load.source).toBe("legacy");
     expect(load.label).toBeNull();
     expect(load.recommendationError).toBe(false);
-    expect(layer(load.overview, "recommendedBps")).toEqual([9500, 300, 0, 200]);
+    // The archive's 2026-06-24 recommendation still weighs Small Cap Tokens,
+    // so it is the recommendation of record with no layer over three vaults.
+    expect(layer(load.overview, "recommendedBps")).toEqual([null, null, null]);
     expect(recommendationHref(load.overview?.recommendation)).toBe("/swarm/2026-06-24/robotmoney-allocation");
     expect(bySlug(load.overview, "rmusdc").actualBps).toBe(10000);
   });
@@ -747,23 +780,50 @@ describe("loadVaultOverview", () => {
   });
 
   test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {
+    // The three-sleeve framework #1496 publishes.
+    const policy = {
+      strategy: [
+        { label: "Conservative DeFi Yield", targetPct: 100 },
+        { label: "Protocol Tokens", targetPct: 0 },
+        { label: "Real World Assets", targetPct: 0 },
+      ],
+      buckets: [
+        { key: "defi-yield", label: "Conservative DeFi Yield", items: [] },
+        { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
+        { key: "rwa", label: "Real World Assets", items: [] },
+      ],
+      asOf: "2026-10-27",
+    };
     serve({
       [VAULTS_ENDPOINT]: statusOnly(404),
       "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS),
-      "/api/dashboards/allocation": json(GOLDEN_ALLOCATION),
+      "/api/dashboards/allocation": json(policy),
     });
     const load = await loadVaultOverview(baseAt("127.0.0.1"));
     const o = load.overview;
     expect(o?.targetSource).toBe("policy");
     expect(hasTargetLayer(o)).toBe(true);
-    const targets = GOLDEN_ALLOCATION.strategy.map((s: { targetPct: number }) => Math.round(s.targetPct * 100));
-    expect(layer(o, "targetBps")).toEqual(targets);
+    expect(layer(o, "targetBps")).toEqual([10000, 0, 0]);
     // The router reported nothing: Applied stays empty, only Target fills.
-    expect(layer(o, "appliedBps")).toEqual([null, null, null, null]);
+    expect(layer(o, "appliedBps")).toEqual([null, null, null]);
     const usdc = bySlug(o, "rmusdc");
-    expect(usdc.gaps.flow).toBe(10000 - targets[0]);
-    expect(usdc.gaps.governance).toBe(targets[0] - 9500);
-    expect(o?.trackingErrorBps).toBe(10000 - targets[0]);
+    expect(usdc.gaps.flow).toBe(0);
+    // The archive's recommendation is no layer over three vaults, so there is
+    // no governance gap to read.
+    expect(usdc.gaps.governance).toBeNull();
+    expect(o?.trackingErrorBps).toBe(0);
+  });
+
+  test("a policy that still funds Small Cap Tokens is no target over three vaults", async () => {
+    serve({
+      [VAULTS_ENDPOINT]: statusOnly(404),
+      "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS),
+      "/api/dashboards/allocation": json(GOLDEN_ALLOCATION),
+    });
+    const o = (await loadVaultOverview(baseAt("127.0.0.1"))).overview;
+    expect(GOLDEN_ALLOCATION.strategy.map((s: { targetPct: number }) => s.targetPct)).toEqual([95, 5, 0, 0]);
+    expect(o?.targetSource).toBeNull();
+    expect(hasTargetLayer(o)).toBe(false);
   });
 
   test("with no policy to read, there is no target and one gap", async () => {
@@ -802,7 +862,7 @@ describe("loadVaultOverview", () => {
     expect(load.source).toBe("saved");
     expect(load.label).toBe("Saved Base snapshot");
     expect(bySlug(load.overview, "rmusdc").tvlUsd).toBe(199.697519);
-    expect(layer(load.overview, "recommendedBps")).toEqual([9500, 300, 0, 200]);
+    expect(layer(load.overview, "recommendedBps")).toEqual([null, null, null]);
     expect(requests).toContain("/data/vaults/base/vault-economics.json");
   });
 
@@ -855,8 +915,10 @@ describe("loadVaultDetail", () => {
     expect(detail.slug).toBe("rmusdc");
     expect(detail.flags.depositsPaused).toBe(true);
     expect(statusLabel(detail)).toBe("Paused");
-    const agent = await loadVaultDetail("rmagent", load);
-    expect(agent.detail.holdings.reduce((n: number, h: any) => n + h.valueUsd, 0)).toBe(9000);
+    const proto = await loadVaultDetail("rmproto", load);
+    expect(proto.detail.holdings.reduce((n: number, h: any) => n + h.valueUsd, 0)).toBe(14000);
+    expect(proto.detail.holdings.map((h: any) => h.label)).not.toContain("HYPE");
+    expect(await loadVaultDetail("rmagent", load)).toEqual({ detail: null, error: "Vault detail unavailable" });
   });
 
   test("the Base feed: the overview row is the detail", async () => {
@@ -864,8 +926,8 @@ describe("loadVaultDetail", () => {
     const load = await loadVaultOverview({ hostname: "127.0.0.1", search: "", storage: new MemStorage(), recommendation: false });
     const { detail } = await loadVaultDetail("rmusdc", load);
     expect(detail.holdings).toHaveLength(3);
-    const agent = await loadVaultDetail("rmagent", load);
-    expect(agent.detail.availability).toBe("not_on_network");
+    const proto = await loadVaultDetail("rmproto", load);
+    expect(proto.detail.availability).toBe("not_on_network");
   });
 
   test("the API: a detail for another vault or another chain is refused", async () => {
@@ -934,11 +996,11 @@ describe("the shipped fixtures", () => {
     expect(new Set(details.map((d) => JSON.stringify(d.activity))).size).toBe(VAULTS.length);
   });
 
-  test("the subject book: a router holding nothing and four vaults, one per sleeve", () => {
+  test("the subject book: a router holding nothing and three vaults, one per sleeve", () => {
     const [router, ...vaults] = subject.wallets;
     expect(router).toMatchObject({ kind: "router", address: null });
     expect(router.value_usd).toBeUndefined();
-    expect(vaults.map((w: any) => w.kind)).toEqual(["vault", "vault", "vault", "vault"]);
+    expect(vaults.map((w: any) => w.kind)).toEqual(["vault", "vault", "vault"]);
     expect(vaults.map((w: any) => w.sleeve)).toEqual(VAULTS.map((v) => v.bucket));
     expect(vaults.map((w: any) => w.vault)).toEqual(VAULT_SLUGS);
   });
@@ -958,7 +1020,7 @@ describe("the shipped fixtures", () => {
       }
     }
     const last = subject.snapshots.at(-1);
-    expect(last.total_value_usd).toBe(100000);
+    expect(last.total_value_usd).toBe(91000);
     for (const row of DEVNET.vaults) {
       const held = last.positions.filter((p: any) => p.vault === row.slug).reduce((n: number, p: any) => n + p.value_usd, 0);
       expect(held).toBeCloseTo(row.tvlUsd, 6);
@@ -968,7 +1030,7 @@ describe("the shipped fixtures", () => {
   test("the subject fixture loads oldest first, on a local host only", async () => {
     serve();
     const fx = await loadVaultSubjectFixture({ hostname: "127.0.0.1" });
-    expect(fx?.wallets).toHaveLength(5);
+    expect(fx?.wallets).toHaveLength(4);
     expect(fx?.snapshots.map((s: any) => s.date)).toEqual([...fx!.snapshots.map((s: any) => s.date)].sort());
     requests = [];
     expect(await loadVaultSubjectFixture({ hostname: "robotmoney.network" })).toBeNull();
@@ -1021,15 +1083,23 @@ describe("the vault stack's book in sleeves", () => {
   const book = readJson("data/vaults/devnet/subject.json").snapshots.at(-1);
   const shares = (m: Map<string, number>) => BUCKET_ORDER.map((id) => Math.round((m.get(id) ?? NaN) * 10000));
 
-  test("idle USDC inside rmAGENT is Agent Tokens money, not Conservative DeFi Yield", () => {
+  test("idle USDC inside rmAGENT is Agent Tokens money, in a book read before rmAGENT closed", () => {
     expect(framework.buckets[0].tokens).toContain("USDC");
-    const idle = book.positions.find((p: any) => p.vault === "rmagent" && p.token === "USDC");
-    expect(idle?.value_usd).toBe(400);
-    expect(shares(bookSleeveShares(framework, book, "2026-09-17"))).toEqual([7200, 900, 1400, 500]);
+    const before = {
+      date: "2026-09-17",
+      total_value_usd: 1000,
+      positions: [
+        { token: "USDC", value_usd: 600, vault: "rmusdc" },
+        { token: "USDC", value_usd: 400, vault: "rmagent" },
+      ],
+    };
+    expect(shares(bookSleeveShares(framework, before, "2026-09-17"))).toEqual([6000, 4000, 0, 0]);
+    expect(shares(bookSleeveShares(null, before, "2026-09-17"))).toEqual([6000, 4000, 0, 0]);
   });
 
   test("a book whose every position names its vault needs no framework", () => {
-    expect(shares(bookSleeveShares(null, book, "2026-09-17"))).toEqual([7200, 900, 1400, 500]);
+    expect(shares(bookSleeveShares(framework, book, "2026-09-17"))).toEqual([7912, 0, 1538, 549]);
+    expect(shares(bookSleeveShares(null, book, "2026-09-17"))).toEqual([7912, 0, 1538, 549]);
     // Still dated: a book read after the session is not what it acted on.
     expect(bookSleeveShares(null, book, "2026-09-16").size).toBe(0);
   });

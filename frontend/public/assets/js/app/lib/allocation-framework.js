@@ -105,7 +105,7 @@ async function archivedFramework() {
     /** @param {unknown} w */
     const itemPct = (w) => (w !== null && w !== "" && Number.isFinite(Number(w)) ? Math.round(Number(w) * 10000) / 100 : null);
     const buckets = (raw.buckets || []).map((/** @type {any} */ b) => ({
-      key: vaultForBucket(b.id)?.key ?? b.id,
+      key: vaultForBucket(b.id, { withRetired: true })?.key ?? b.id,
       label: b.name || b.id || "",
       items: (b.items || []).map((/** @type {any} */ it) => ({ label: it.name || it.id || "", targetPct: itemPct(it.target_weight) })),
     }));

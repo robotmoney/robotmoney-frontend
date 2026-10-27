@@ -161,10 +161,12 @@ export function bucketNote(idOrName) {
 // lists and a valued snapshot are both in hand and the snapshot was read on
 // or before `date`: a book read after the session is not what it acted on.
 //
-// A position that names its vault (the four-vault stack: `vault` is a slug)
+// A position that names its vault (the vault stack: `vault` is a slug)
 // counts toward that vault's sleeve, whatever its token: idle USDC inside
-// rmAGENT is Agent Tokens money. A book whose every position names its vault
-// needs no token lists, and is summed over the four published sleeves.
+// rmAGENT is Agent Tokens money, rmAGENT's retirement notwithstanding, since a
+// book read before it closed still holds it. A book whose every position
+// names its vault needs no token lists, and is summed over every published
+// sleeve.
 /**
  * @param {{ buckets?: Array<{ id: string, tokens: string[] }> } | null | undefined} framework
  * @param {{ date?: unknown, totalValueUsd?: unknown, total_value_usd?: unknown, positions?: any[] } | null | undefined} snapshot
@@ -177,7 +179,7 @@ export function bookSleeveShares(framework, snapshot, date) {
   const buckets = framework?.buckets || [];
   const positions = snapshot?.positions || [];
   const total = Number(snapshot?.totalValueUsd ?? snapshot?.total_value_usd ?? 0);
-  const vaultOf = (/** @type {any} */ p) => vaultBySlug(p?.vault);
+  const vaultOf = (/** @type {any} */ p) => vaultBySlug(p?.vault, { withRetired: true });
   const ids = buckets.length
     ? buckets.map((b) => b.id)
     : positions.length && positions.every((p) => vaultOf(p)) ? BUCKET_ORDER : [];

@@ -268,18 +268,21 @@ const DAY_MS = 86400000;
 /** @param {unknown} v */
 const normKey = (v) => String(v ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
-/** @param {unknown} slug @returns {VaultIdentity | null} */
-export function vaultBySlug(slug) {
+// `withRetired` also finds a vault whose sleeve closed (RETIRED_VAULTS), for
+// reading what an old session or book held. Pages, routes and the live layers
+// leave it out, so /vault/rmagent is no page and no row.
+/** @param {unknown} slug @param {{ withRetired?: boolean }} [opts] @returns {VaultIdentity | null} */
+export function vaultBySlug(slug, { withRetired = false } = {}) {
   const s = String(slug ?? "").toLowerCase();
-  return VAULTS.find((v) => v.slug === s) ?? null;
+  return VAULTS.find((v) => v.slug === s) ?? (withRetired ? RETIRED_VAULTS.find((v) => v.slug === s) : null) ?? null;
 }
 
 // A sleeve spelled any of the ways it arrives: the framework id
 // ("conservative_defi_yield"), the allocation DTO key ("defi-yield") or the
 // published name ("Conservative DeFi Yield"). Not a slug: vaultBySlug is.
-/** @param {unknown} idKeyOrName @returns {VaultIdentity | null} */
-export function vaultForBucket(idKeyOrName) {
-  return identityForBucket(VAULTS, idKeyOrName);
+/** @param {unknown} idKeyOrName @param {{ withRetired?: boolean }} [opts] @returns {VaultIdentity | null} */
+export function vaultForBucket(idKeyOrName, { withRetired = false } = {}) {
+  return identityForBucket(VAULTS, idKeyOrName) ?? (withRetired ? identityForBucket(RETIRED_VAULTS, idKeyOrName) : null);
 }
 
 /** @param {VaultIdentity[]} list @param {unknown} idKeyOrName @returns {VaultIdentity | null} */
@@ -293,7 +296,7 @@ function identityForBucket(list, idKeyOrName) {
 // it was.
 /** @param {unknown} key */
 export function sleeveNote(key) {
-  const v = vaultForBucket(key) ?? identityForBucket(RETIRED_VAULTS, key);
+  const v = vaultForBucket(key, { withRetired: true });
   return v ? SLEEVE_NOTE[v.key] ?? "" : "";
 }
 
