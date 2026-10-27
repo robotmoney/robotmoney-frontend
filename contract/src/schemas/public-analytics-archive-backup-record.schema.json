@@ -144,7 +144,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -244,7 +245,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -344,7 +346,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -444,7 +447,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -544,7 +548,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -644,7 +649,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -744,7 +750,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",
@@ -844,7 +851,8 @@
                   },
                   "bytes_raw": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "maximum": 67108864
                   },
                   "sha256_raw": {
                     "type": "string",

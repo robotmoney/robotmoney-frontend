@@ -18,12 +18,15 @@
 // run's vintage, analytics_vintage_members lists its source_value_versions ids
 // as ranges, and those versions are the committed observations the run used.
 // Their stored value text is copied unchanged.
+import { gunzipSync } from "node:zlib";
 import { SERIES_MAPPING } from "../series-ids.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
   path: string;
   rows: number;
+  // Length of the file's uncompressed bytes: the bound on its inflate (requirements 4.5, at most 64 MB).
+  bytes_raw: number;
   // SHA-256 of the file's uncompressed bytes: its identity. The gzip is only a transport encoding.
   sha256_raw: string;
 }
@@ -40,6 +43,32 @@ export interface BackupRecord {
 
 export class ArchiveError extends Error {
   override readonly name = "ArchiveError";
+}
+
+// The largest archive part, uncompressed (requirements section 4.5).
+export const MAX_PART_BYTES = 67108864;
+
+// Inflate a downloaded archive with its output bounded by the record's bytes_raw
+// (at most one part, plus one byte to see an overrun; a bytes_raw over the part cap is refused), so a small hostile
+// gzip cannot exhaust memory. Refuses a file whose inflated length is not exactly
+// bytesRaw, before anything hashes it. `gunzip` is a parameter so a test can spy
+// on the options it is given.
+export function inflateBounded(buf: Uint8Array, bytesRaw: number, path = "archive", gunzip: typeof gunzipSync = gunzipSync): Uint8Array {
+  if (!Number.isSafeInteger(bytesRaw) || bytesRaw < 0) throw new ArchiveError(`corrupt local copy: ${path} has no valid bytes_raw in its record (got ${JSON.stringify(bytesRaw)})`);
+  const overCap = () => new ArchiveError(`corrupt local copy: ${path} records bytes_raw ${bytesRaw}, over the ${MAX_PART_BYTES} byte part cap`);
+  let out: Uint8Array;
+  try {
+    out = gunzip(buf, { maxOutputLength: Math.min(bytesRaw, MAX_PART_BYTES) + 1 });
+  } catch (err) {
+    if ((err as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") {
+      if (bytesRaw > MAX_PART_BYTES) throw overCap();
+      throw new ArchiveError(`corrupt local copy: ${path} inflates to more than the record's bytes_raw ${bytesRaw}`);
+    }
+    throw err;
+  }
+  if (bytesRaw > MAX_PART_BYTES) throw overCap();
+  if (out.length !== bytesRaw) throw new ArchiveError(`corrupt local copy: ${path} inflates to ${out.length} bytes, the record says bytes_raw ${bytesRaw}`);
+  return out;
 }
 
 export const BACKUP_ID_RE = /^\d{4}-\d{2}-\d{2}T\d{6}Z$/;
@@ -158,7 +187,10 @@ export function selectBackups(recordTexts: Record<string, string>, asOf?: string
     if (rec.backup !== id) throw new ArchiveError(`csv/${id}/backup.json: record says backup ${rec.backup}`);
     if (rec.source !== undefined && rec.source !== "api" && rec.source !== "db") throw new ArchiveError(`csv/${id}/backup.json: source must be "api" or "db"`);
     if (!rec.append_only || typeof rec.append_only !== "object") throw new ArchiveError(`csv/${id}/backup.json: no append_only section`);
-    for (const f of listedFiles([rec])) checkFilePath(f.path, id);
+    for (const f of listedFiles([rec])) {
+      checkFilePath(f.path, id);
+      if (typeof f.sha256_raw !== "string") throw new ArchiveError(`csv/${id}/backup.json: ${f.path} has no string sha256_raw`);
+    }
     out.push(rec);
   }
   const last = new Map<string, string | null>();

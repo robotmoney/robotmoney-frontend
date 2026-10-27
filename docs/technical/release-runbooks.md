@@ -57,6 +57,10 @@ The release branch takes changes by two routes only ([D70](../decisions.md#d70),
   `qa/A.B.x-<YYYY-MM-DD>`, that branch is squash-merged onto `releases-A.B.x`. The squash commit's
   tree must equal the tree stage passed.
 
+A new release line's branch `releases-A.B.x` is created from `main`, at the commit the release's
+scope is chosen at, never from the previous release line (owner, 2026-10-26). Its scope then reaches
+it from `main` by route (a). Nothing on `releases-A.B.x` descends from the previous line's branch.
+
 No commit lands on the release branch during a QA session. Session fixes reach `main` afterwards by
 a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
 instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Tags land on the release
@@ -242,7 +246,8 @@ line prints one.
 **Postflight and soak.** S01-verify-version to S06-host-guards verify identity, product (readonly tier), logs, the baseline
 comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): S07-soak-gate grades logs since
 READY, S08-soak-checks runs the standing invariants against the READY baseline, and
-S09-collect-logs copies every container's logs and `docker inspect` into the journal. Sessions are deferred in the
+S09-collect-logs copies every container's logs and `docker inspect` into the journal. S10 to S12 (SV.8,
+from v0.7.0) run the analyst SDK against the target from the control machine, read-only. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
 
@@ -325,7 +330,14 @@ version check is a file `scripts/release/version-checks/<release>/<name>.ts`, ru
 `scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
 `onlyFor: stage`.
 
-`scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+A release that carries a `compat: breaking` migration on purpose names the file in `breaking:` (D75, §8.5). P07-baseline
+reads the release from `RM_RELEASE` (set by the runner from the target file) and accepts a breaking pending migration only
+when that release's runbook names it. The cutover steps still run the rolling order: the breaking order (down, migrate, up)
+is the release's `notes`, and a runner variant of it is not built.
+
+A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
+keeps the runbook it ran, unedited (the SDK steps S10 to S12 are `since: v0.7.0`, so v0.6.2's file is
+unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
@@ -342,6 +354,9 @@ claims the gate ran and passed.
 Not a gate. Every fix made on a QA branch reaches the release branch in the stage-passed squash
 (§2 route (b)), and reaches `main` afterwards by a separate PR from the QA branch, evaluated against
 `main` as it is then.
+
+A change made on a previous release line reaches a later release only through `main`, so it is
+backported to `main` by pull request first (§2).
 
 ## 8. Compatibility contract
 
@@ -382,6 +397,7 @@ recorded owner decision.
 | SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
 | SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
 | SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | S10-archive-routes, S11-sdk-quickstart, S12-sdk-tests |
 | SW.1 | The soak: logs since READY graded | S07-soak-gate |
 | SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
@@ -436,8 +452,9 @@ A release that adds an invariant adds a row here, with its red-control test, in 
 
 The analyst SDK (`packages/analyst-sdk/`) has its own release line (accepted in
 [D77](../decisions.md#d77)). Sections 2 to 10 govern platform releases only. None of them applies to an SDK
-release. The SDK runs on an analyst's machine. Nothing deploys, so there is no QA branch, no stage
-run, no rc tag and no production cutover.
+release, except that the SDK tag is cut after the matching platform release. The SDK runs on an
+analyst's machine. Nothing deploys, so it has no QA branch, no stage run, no rc tag and no production
+cutover of its own.
 
 **Branch.** The SDK ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own
 semver. The `analyst-sdk/` prefix is required. Platform CI triggers on `releases-*`, and
@@ -452,7 +469,10 @@ release line. Changes reach the branch from `main` only, by merge or cherry-pick
 `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh
 number separates tagged releases from them.
 
-**Gate.** Before tagging, these are green at the commit:
+**Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag
+`vA.B.C` exists. The platform runbook (QA on stage, cutover, soak) has then completed with the SDK
+checks passing (S10-archive-routes to S12-sdk-tests, and the release's own SDK version checks), so
+the SDK is fully tested. Before tagging, these are green at the commit:
 
 - the `analyst-sdk` workflow (`.github/workflows/analyst-sdk.yml`);
 - the backend analyst SDK parity tests in `.github/workflows/backend.yml`: the vintage round-trip,
@@ -469,8 +489,7 @@ branch.
 
 1. the archive format it reads (format 1, [D72](../decisions.md#d72));
 2. that it replays published report payloads byte for byte;
-3. the platform tag whose analytics code it matches, or "ahead of production" when it carries
-   `main` code no platform release has shipped. The SDK and the backend share code
+3. the platform tag whose analytics code it matches, always. The SDK and the backend share code
    (D57).
 
 **Install.** An analyst installs a release by its tag:

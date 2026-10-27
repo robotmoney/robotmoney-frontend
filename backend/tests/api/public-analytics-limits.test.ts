@@ -154,7 +154,7 @@ describe("tokens through the handler", () => {
   });
 });
 
-describe("bytes through the handler: what is charged is what is sent", () => {
+describe("bytes through the handler: the byte budget charges the bytes the handler sends", () => {
   test("UTF-8 bytes, not characters; gzip bytes when gzipped; nothing for a 304", async () => {
     const ip = "198.18.1.1";
     const res = await get(`${P.assetPrices}?symbol=UNI`, ip);

@@ -1,0 +1,10 @@
+id,series
+usdc,yahoo:USDC-USD
+susds,defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72
+aave_usdc_base,defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84
+morpho_gtusdcp_v1,defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469
+morpho_spark_usdc,defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c
+morpho_steak_prime_v2,defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c
+compound_v3_usdc_base,defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19
+dgld,yahoo:GLD
+cbbtc,yahoo:BTC-USD

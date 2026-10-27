@@ -7,7 +7,11 @@
 // and passed in as parsed JSON.
 import shipped from "../../universe/base-universe.json" with { type: "json" };
 
-export type UniverseTier = "eligible" | "watchlist";
+export type UniverseTier = "eligible" | "watchlist" | "speculative";
+
+/** The fields that may be null. */
+export type UnavailableField = "contract" | "liquidityUsd" | "yieldPct" | "series";
+const UNAVAILABLE_FIELDS: readonly UnavailableField[] = ["contract", "liquidityUsd", "yieldPct", "series"];
 
 export interface UniverseAsset {
   /** The id a rule file names the holding by (BTC, AAVE, SUSDS, ...). */
@@ -25,6 +29,8 @@ export interface UniverseAsset {
   maxWeight: number;
   /** The price or yield series, as a `<provider>:<symbol>` source id, or null. */
   series: string | null;
+  /** Why a null field is null: field name to reason. A null field has an entry, a set field has none. */
+  unavailable?: Partial<Record<UnavailableField, string>>;
 }
 
 export interface UniverseGroup {
@@ -76,7 +82,15 @@ export function loadUniverse(data: unknown = shipped): Universe {
     if (!isStrOrNull(a.contract)) throw new UniverseError(`${where}: contract must be a string or null`);
     if (!isStrOrNull(a.series)) throw new UniverseError(`${where}: series must be a string or null`);
     for (const k of ["liquidityUsd", "yieldPct"] as const) if (!isNumOrNull(a[k])) throw new UniverseError(`${where}: ${k} must be a number or null`);
-    if (a.tier !== "eligible" && a.tier !== "watchlist") throw new UniverseError(`${where}: tier must be eligible or watchlist`);
+    if (a.tier !== "eligible" && a.tier !== "watchlist" && a.tier !== "speculative") throw new UniverseError(`${where}: tier must be eligible, watchlist or speculative`);
+    if (a.unavailable !== undefined) {
+      if (!isObj(a.unavailable)) throw new UniverseError(`${where}: unavailable must be an object of field to reason`);
+      for (const [k, reason] of Object.entries(a.unavailable)) {
+        if (!(UNAVAILABLE_FIELDS as readonly string[]).includes(k)) throw new UniverseError(`${where}: unavailable.${k} is not a nullable field`);
+        if (!isStr(reason)) throw new UniverseError(`${where}: unavailable.${k} needs a reason`);
+        if (a[k] !== null) throw new UniverseError(`${where}: unavailable.${k} is set but ${k} has a value`);
+      }
+    }
     if (!isPct(a.maxWeight)) throw new UniverseError(`${where}: maxWeight must be a percent, 0 to 100`);
   });
   const groupIds = new Set<string>();
