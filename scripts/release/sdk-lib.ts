@@ -143,30 +143,38 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
   return latest === undefined ? { problem: noRunMessage(what) } : { run: latest };
 }
 
-/** The run keys in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
-export function archivedRunKeys(copyDir: string): Set<string> {
-  const keys = new Set<string>();
+/**
+ * The instant issue 1421's fix (PR 1427) merged. A run created before it computed from freshly fetched
+ * source values that the ledger stored only to a relative tolerance (D56), so its numbers can differ
+ * from what it published and its replay is not exact (backend/tests/regime-replay-archive.test.ts).
+ * A run created after it replays every field exactly, which is what Q36/C24 asserts.
+ */
+export const REPLAY_EXACT_SINCE = "2026-10-23 18:32:15+00";
+
+/** The run keys (with created_at) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
+export function archivedRuns(copyDir: string): Map<string, string> {
+  const runs = new Map<string, string>();
   const csv = join(copyDir, "csv");
-  if (!existsSync(csv)) return keys;
+  if (!existsSync(csv)) return runs;
   for (const backup of readdirSync(csv)) {
     const data = join(csv, backup, "data");
     if (!existsSync(data)) continue;
     for (const f of readdirSync(data)) {
       if (!/^analytics_ledger_runs\..*\.csv\.gz$/.test(f)) continue;
       for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
-        const m = /^\d+,([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}),/.exec(line);
-        if (m) keys.add(m[1]!);
+        const m = /^\d+,([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}),.*,(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[^,]*)$/.exec(line);
+        if (m) runs.set(m[1]!, m[2]!);
       }
     }
   }
-  return keys;
+  return runs;
 }
 
-/** PURE. The newest published report (highest report id) whose run is in `archived`, or undefined. */
-export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlySet<string>): ReportRow | undefined {
-  return latestReport(reports.filter((r) => archived.has(r.run_key)));
+/** PURE. The newest published report (highest report id) whose run is archived and was created at or after `since` (UTC, "YYYY-MM-DD HH:MM:SS+00"), or undefined. */
+export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, string>, since: string): ReportRow | undefined {
+  const at = (iso: string): number => Date.parse(iso.replace(" ", "T").replace(/\+00$/, "Z"));
+  return latestReport(reports.filter((r) => { const created = archived.get(r.run_key); return created !== undefined && at(created) >= at(since); }));
 }
-
 
 /**
  * Q36/C24: the SDK quickstart from a sparse clone of the release commit against the
@@ -178,7 +186,7 @@ export function newestArchivedReport(reports: readonly ReportRow[], archived: Re
  * The published report (`/reports?run=`) is {asof, toolId, results}, which the
  * CLI never prints, so it is not compared byte for byte.
  */
-export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
+export async function quickstartCheck(deps: SdkDeps, commit: string, exactSince: string = REPLAY_EXACT_SINCE): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
   const listed = await listReports(deps.net);
   if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
@@ -188,12 +196,13 @@ export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<Ch
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
-  // The archive is sealed daily, so the newest published run may postdate the newest sealed backup:
-  // the run to replay is the newest published one the filled copy holds.
-  const archived = archivedRunKeys(join(sdk.sdkDir, "api-copy"));
-  const run = newestArchivedReport(listed.reports, archived);
+  // The archive is sealed daily, so the newest published run may postdate the newest sealed backup,
+  // and a run from before issue 1421's fix is not exactly replayable: the run to replay is the
+  // newest published one the filled copy holds that the fixed producer made.
+  const archived = archivedRuns(join(sdk.sdkDir, "api-copy"));
+  const run = newestArchivedReport(listed.reports, archived, exactSince);
   Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
-  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): ${PUBLIC_API}/archive/backups has no sealed backup holding a published run yet`] };
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is both in the filled archive copy (${archived.size} run(s) in its ledger) and made at or after ${exactSince}, when issue 1421's fix merged: the archive seals a day at a time, so the first run of the fixed release is replayable once the day it ran in is sealed (newest published: ${newest.run_key}, as of ${newest.asof})`] };
   const { run_key, asof } = run;
   Object.assign(found, { run_key, asof });
   const out = join(sdk.sdkDir, "api-fill");

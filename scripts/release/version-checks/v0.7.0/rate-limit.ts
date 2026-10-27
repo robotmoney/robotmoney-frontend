@@ -41,8 +41,10 @@ export async function rateLimit(net: Net): Promise<{ found: Record<string, unkno
   await first.arrayBuffer();
   const probes: Probe[] = [];
   for (let i = 0; i < MAX_REQUESTS; i++) {
-    // No retry here: a 429 is the answer being asserted.
-    const res = await net.fetch(`${net.origin}${path}`, etag ? { headers: { "If-None-Match": etag } } : undefined);
+    // No retry here: a 429 is the answer being asserted. The web server caches this immutable URL
+    // (nginx proxy_cache_revalidate), so a repeat of one URL is answered there and never reaches the
+    // api's limiter; each probe adds a query value the route ignores, so each one is a cache miss.
+    const res = await net.fetch(`${net.origin}${path}&probe=${i}-${Date.now()}`, etag ? { headers: { "If-None-Match": etag } } : undefined);
     probes.push({ status: res.status, retryAfter: res.headers.get("retry-after"), body: await res.text() });
     if (res.status === 429) break;
   }

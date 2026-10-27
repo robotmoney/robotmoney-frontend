@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
-  acquireBlocks, archivedRunKeys, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, newestArchivedReport, packageTestsCheck, quickstartCheck,
+  acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, newestArchivedReport, packageTestsCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
 import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
@@ -106,6 +106,9 @@ function recordingWithArtifact(row: Record<string, unknown>): string {
   return dir;
 }
 
+// The recording is from 2001: replay it whatever the fix instant.
+const ALL_TIME = "1970-01-01 00:00:00+00";
+
 describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
   let replayed: Record<string, unknown>;
   const withApi = async (recording: string, reports: boolean, body: (net: SdkDeps["net"]) => Promise<void>) => {
@@ -132,30 +135,37 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
 
   test("passes: the SDK's as-of row equals the published as-of row, and both hashes are reported", async () => {
     await withApi(recordingWithArtifact(replayed), true, async (net) => {
-      const r = await quickstartCheck(localDeps(net), COMMIT);
+      const r = await quickstartCheck(localDeps(net), COMMIT, ALL_TIME);
       expect(r.problems).toEqual([]);
       expect(r.found.sdkRowSha256).toBe(r.found.publishedRowSha256);
       expect(String(r.found.sdkRowSha256)).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 
+  test("red: with the real fix instant, the 2001 recording is a run from before the fix and is not replayed", async () => {
+    await withApi(recordingWithArtifact(replayed), true, async (net) => {
+      const r = await quickstartCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("issue 1421's fix merged");
+    });
+  });
+
   test("red: a published row with one field changed fails and names the field and both hashes", async () => {
     await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
-      const r = await quickstartCheck(localDeps(net), COMMIT);
+      const r = await quickstartCheck(localDeps(net), COMMIT, ALL_TIME);
       expect(r.problems.join()).toContain("differs from the published one in composite");
       expect(r.problems.join()).toContain("sha256 published");
     });
     await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-label" }), true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("regime");
+      expect((await quickstartCheck(localDeps(net), COMMIT, ALL_TIME)).problems.join()).toContain("regime");
     });
   });
 
   test("red: a published artifact with no row for the as-of day fails; a copy with no artifact at all fails", async () => {
     await withApi(recordingWithArtifact({ ...replayed, date: "2001-01-01" }), true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no as-of row for 2026-08-15");
+      expect((await quickstartCheck(localDeps(net), COMMIT, ALL_TIME)).problems.join()).toContain("has no as-of row for 2026-08-15");
     });
     await withApi(RECORDING, true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no regime_snapshots artifact");
+      expect((await quickstartCheck(localDeps(net), COMMIT, ALL_TIME)).problems.join()).toContain("has no regime_snapshots artifact");
     });
   });
 
@@ -169,7 +179,7 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
     const api = fakeServer({ reports: [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }], archiveStatus: 404 });
     try {
       const net = { ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) };
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("fill api-copy exited");
+      expect((await quickstartCheck(localDeps(net), COMMIT, ALL_TIME)).problems.join()).toContain("fill api-copy exited");
     } finally {
       api.server.stop(true);
     }
@@ -244,22 +254,29 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
   });
 });
 
-describe("the quickstart replays the newest published run the archive holds", () => {
-  test("a run published after the newest sealed backup is skipped; with none archived, nothing is chosen", () => {
+describe("the quickstart replays the newest published run the archive holds, made by the fixed producer", () => {
+  test("a run published after the newest sealed backup, or made before the fix, is skipped; with none left, nothing is chosen", () => {
     const dir = homeScratch("sdk-ledger-test-");
     cleanup.push(dir);
     const data = join(dir, "csv", "2026-01-02T000000Z", "data");
     mkdirSync(data, { recursive: true });
-    const k1 = "11111111-1111-4111-8111-111111111111";
-    const k2 = "22222222-2222-4222-8222-222222222222";
-    const k3 = "33333333-3333-4333-8333-333333333333";
-    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync(`id,run_key,asof,tool_id\n1,${k1},2026-01-01,regime\n2,${k2},2026-01-02,regime\n`));
-    const keys = archivedRunKeys(dir);
-    expect([...keys].sort()).toEqual([k1, k2]);
-    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-01-0" + id, checksum: "c", byte_length: 1 });
-    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3)], keys)?.run_key).toBe(k2);
-    expect(newestArchivedReport([row(3, k3)], keys)).toBeUndefined();
-    expect(archivedRunKeys(join(dir, "missing")).size).toBe(0);
+    const [k1, k2, k3, k4] = ["1", "2", "3", "4"].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`);
+    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync([
+      "id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at",
+      `1,${k1},2026-10-20,regime,live,1,pkg:0.1.0+bun:1.4.4,,2026-10-20 21:30:00.5+00`,
+      `2,${k2},2026-10-24,regime,live,1,abc,,2026-10-24 21:30:00.5+00`,
+      `3,${k3},2026-10-26,regime,live,1,abc,,2026-10-26 21:30:00.5+00`,
+    ].join("\n") + "\n"));
+    const runs = archivedRuns(dir);
+    expect([...runs.keys()].sort()).toEqual([k1, k2, k3]);
+    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-10-2" + id, checksum: "c", byte_length: 1 });
+    const since = "2026-10-23 18:32:15+00";
+    // k4 is published but not archived; k3 is the newest archived and made after the fix.
+    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3), row(4, k4)], runs, since)?.run_key).toBe(k3);
+    // only a run from before the fix is archived: nothing to replay yet.
+    expect(newestArchivedReport([row(1, k1), row(4, k4)], runs, since)).toBeUndefined();
+    expect(newestArchivedReport([row(1, k1)], runs, "2026-10-20 00:00:00+00")?.run_key).toBe(k1);
+    expect(archivedRuns(join(dir, "missing")).size).toBe(0);
   });
 });
 
