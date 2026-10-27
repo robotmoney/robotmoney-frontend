@@ -8,7 +8,7 @@
 //   - both encodings answer the same ETag and the same X-Content-SHA256.
 // Reads only: GETs of the public archive routes.
 import { gunzipSync } from "node:zlib";
-import { getWithRetry, PUBLIC_API, realNet, sha256Hex, type Net } from "../../public-analytics-read.ts";
+import { getWithRetry, originEtag, PUBLIC_API, realNet, sha256Hex, type Net } from "../../public-analytics-read.ts";
 import type { VersionCheck } from "../../version-check.ts";
 
 export interface Sample {
@@ -51,7 +51,7 @@ async function sample(net: Net, path: string, encoding: "gzip" | "identity"): Pr
     const body = new Uint8Array(await res.arrayBuffer());
     actualSha = sha256Hex(path.endsWith(".gz") ? gunzipSync(body) : body);
   }
-  return { path, encoding, status: res.status, etag: res.headers.get("etag"), xsha: res.headers.get("x-content-sha256"), actualSha };
+  return { path, encoding, status: res.status, etag: originEtag(res), xsha: res.headers.get("x-content-sha256"), actualSha };
 }
 
 /** The samples of the first backup's record and its smallest file, both encodings each. */

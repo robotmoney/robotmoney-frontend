@@ -11,7 +11,8 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net } from "./public-analytics-read.ts";
+import { gunzipSync } from "node:zlib";
+import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net, type ReportRow } from "./public-analytics-read.ts";
 
 export interface RunResult {
   readonly code: number;
@@ -26,7 +27,7 @@ export interface SdkDeps {
   /** A fresh empty folder for one check (under ~/tmp). */
   readonly scratch: () => string;
   /** The folder holding `packages/analyst-sdk` at `commit`; the default makes a sparse clone. */
-  readonly prepareSdk: (commit: string, scratch: string) => Promise<{ sdkDir: string } | { problem: string }>;
+  readonly prepareSdk: (commit: string, scratch: string, withRepoFiles?: boolean) => Promise<{ sdkDir: string } | { problem: string }>;
 }
 
 export const text = (b: Uint8Array): string => new TextDecoder().decode(b);
@@ -47,16 +48,24 @@ export function homeScratch(prefix = "sdk-check-"): string {
 }
 
 /**
+ * The repository folders the package's own tests read outside the package (universe.test.ts imports
+ * backend/src/analytics/source-tolerance.ts; originals-provenance.test.ts checks that the fixtures'
+ * producers, backend/scripts/capture-analytics-originals.ts among them, exist). Only Q37/C25 add them:
+ * the quickstart still runs from the package alone, the way an analyst installs it.
+ */
+export const TEST_REPO_DIRS = ["backend/src/analytics", "backend/scripts"] as const;
+
+/**
  * A sparse clone of `repoUrl` at `commit`, with `packages/analyst-sdk`
  * installed frozen: the install of the README (§11), for the release commit.
  */
 export function sparseCloneSdk(repoUrl: string, run: Runner): SdkDeps["prepareSdk"] {
-  return async (commit, scratch) => {
+  return async (commit, scratch, withRepoFiles = false) => {
     if (!/^[0-9a-f]{40}$/.test(commit)) return { problem: `the release commit "${commit}" is not a 40-hex sha` };
     const dir = join(scratch, "clone");
     const steps: string[][] = [
       ["git", "clone", "--quiet", "--no-checkout", "--filter=blob:none", repoUrl, dir],
-      ["git", "-C", dir, "sparse-checkout", "set", "packages/analyst-sdk"],
+      ["git", "-C", dir, "sparse-checkout", "set", "packages/analyst-sdk", ...(withRepoFiles ? TEST_REPO_DIRS : [])],
     ];
     for (const s of steps) {
       const r = await run(s, {});
@@ -134,6 +143,31 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
   return latest === undefined ? { problem: noRunMessage(what) } : { run: latest };
 }
 
+/** The run keys in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
+export function archivedRunKeys(copyDir: string): Set<string> {
+  const keys = new Set<string>();
+  const csv = join(copyDir, "csv");
+  if (!existsSync(csv)) return keys;
+  for (const backup of readdirSync(csv)) {
+    const data = join(csv, backup, "data");
+    if (!existsSync(data)) continue;
+    for (const f of readdirSync(data)) {
+      if (!/^analytics_ledger_runs\..*\.csv\.gz$/.test(f)) continue;
+      for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
+        const m = /^\d+,([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}),/.exec(line);
+        if (m) keys.add(m[1]!);
+      }
+    }
+  }
+  return keys;
+}
+
+/** PURE. The newest published report (highest report id) whose run is in `archived`, or undefined. */
+export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlySet<string>): ReportRow | undefined {
+  return latestReport(reports.filter((r) => archived.has(r.run_key)));
+}
+
+
 /**
  * Q36/C24: the SDK quickstart from a sparse clone of the release commit against the
  * target. `fill`, then `bun run inputs --archive <copy> --run <latest run>`,
@@ -146,14 +180,22 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
  */
 export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
-  const latest = await latestRun(deps.net, "the SDK quickstart");
-  if ("problem" in latest) return { found, problems: [latest.problem] };
-  const { run_key, asof } = latest.run;
-  Object.assign(found, { run_key, asof });
+  const listed = await listReports(deps.net);
+  if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
+  const newest = latestReport(listed.reports);
+  if (newest === undefined) return { found, problems: [noRunMessage("the SDK quickstart")] };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
+  // The archive is sealed daily, so the newest published run may postdate the newest sealed backup:
+  // the run to replay is the newest published one the filled copy holds.
+  const archived = archivedRunKeys(join(sdk.sdkDir, "api-copy"));
+  const run = newestArchivedReport(listed.reports, archived);
+  Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): ${PUBLIC_API}/archive/backups has no sealed backup holding a published run yet`] };
+  const { run_key, asof } = run;
+  Object.assign(found, { run_key, asof });
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
   if (inputs.code !== 0) return { found, problems: [`bun run inputs --run ${run_key} exited ${inputs.code}: ${tail(inputs.stderr)}`] };
@@ -173,7 +215,7 @@ export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<Ch
 /** Q37/C25: the SDK package's own tests pass at the release commit. */
 export async function packageTestsCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
-  const sdk = await deps.prepareSdk(commit, deps.scratch());
+  const sdk = await deps.prepareSdk(commit, deps.scratch(), true);
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const r = await deps.run(["bun", "test"], { cwd: sdk.sdkDir });
   found.exit = r.code;
