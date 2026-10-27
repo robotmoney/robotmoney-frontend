@@ -15,7 +15,7 @@ notes: |
   Scope is regenerated at the QA commit. The `scope:` below was built from
   `git log v0.6.4..origin/main` when this file was written (34 PRs). Q05-scope refuses the QA
   commit if the range then carries a PR the list lacks, so regenerate the list at the QA commit
-  and keep the checks it maps. One entry says NO CHECK YET (the referral specification, 1424).
+  and keep the checks it maps.
 
   Migrations (D75, issue 1034):
   - 0126_pipeline_worker_token_and_receipts: compat additive. The pipeline-worker token holder
@@ -51,9 +51,9 @@ notes: |
 
   Added checks. Q35 to Q37 and their production twins C23 to C25 (SV.8) are the template's: the
   archive routes, the SDK quickstart and the SDK tests, from a sparse clone of the release commit,
-  on the control machine. Q38 to Q47 and C26 to C35 are this release's version checks (SV.7).
-  Q38 to Q42 and Q47 read the target (Q47, rate-limit, spends this client's rate-limit minute, so
-  it runs last). Q43 to Q46 are the SDK 0.2.0 checks, run on the control machine from the release
+  on the control machine. Q38 to Q48 and C26 to C36 are this release's version checks (SV.7).
+  Q38 to Q42, Q47 and Q48 read the target (Q47, rate-limit, spends this client's rate-limit minute, so
+  it runs last of the analytics checks; Q48, referral-lookup, has its own limiter). Q43 to Q46 are the SDK 0.2.0 checks, run on the control machine from the release
   commit; the reference portfolio, prices, holdings and golden are in
   scripts/release/version-checks/v0.7.0/reference/. Every check is read-only against the
   target, so none is stageOnly and each has a production twin. Q36, Q39 and Q42 need a published run;
@@ -90,7 +90,7 @@ scope:
   - {pr: 1433, what: "the Base asset universe as a file, with a holdings check", check: "Q46-sdk-universe-check"}
   - {pr: 1427, what: "exact shared reports", check: "Q42-report-bytes-etag"}
   - {pr: 1430, what: "fix(analytics): reconcile series names while preserving observations and historical identity", none: "data reconciliation: Q36-sdk-quickstart replays the published record it preserves"}
-  - {pr: 1424, what: "feat(referrals): implement the accepted referral specification", none: "NO CHECK YET: the referral specification (1424) has no version step; add one before the QA run (Q05-scope does not require it)"}
+  - {pr: 1424, what: "feat(referrals): implement the accepted referral specification", check: "Q48-referral-lookup"}
   - {pr: 1420, what: "fix(gate): R8.v warns on a Base RPC 429 and fails on any other live index failure", none: "gate rule: Q32-soak-gate/C20-soak-gate applies it"}
   - {pr: 1418, what: "api-only database access with bounded connection concurrency", check: "Q40-db-credential-api-only"}
   - {pr: 1419, what: "feat(token-market): investigate CoinGecko onchain 500s and timeouts in worker-analytics", none: "an investigation of CoinGecko onchain errors; no behaviour changes"}
@@ -795,6 +795,20 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q48-referral-lookup"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.0"
+    description: "The referral code lookup route answers as the referral specification says: a uniform cached 404 for a code that is not active (1424)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "referral-lookup", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-referral-lookup.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
@@ -1418,6 +1432,20 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-rate-limit.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C36-referral-lookup"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.0"
+    description: "The referral code lookup route answers as the referral specification says: a uniform cached 404 for a code that is not active (1424)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "referral-lookup", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-referral-lookup.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}

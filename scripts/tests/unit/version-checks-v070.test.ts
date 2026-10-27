@@ -13,6 +13,7 @@ import { archiveSamples, integrityProblems, type Sample } from "../../release/ve
 import { credentialProblems, credentialsIn } from "../../release/version-checks/v0.7.0/db-credential-api-only.ts";
 import { ledgerEndProblems } from "../../release/version-checks/v0.7.0/migration-ledger.ts";
 import { MAX_REQUESTS, rateLimit, rateLimitProblems } from "../../release/version-checks/v0.7.0/rate-limit.ts";
+import { NOT_FOUND_BODY, PROBES, referralLookup, referralLookupProblems } from "../../release/version-checks/v0.7.0/referral-lookup.ts";
 import { reportBytesEtag, reportServeProblems } from "../../release/version-checks/v0.7.0/report-bytes-etag.ts";
 import { goldenProblems, REFERENCE_DIR, sdkBacktestGolden } from "../../release/version-checks/v0.7.0/sdk-backtest-golden.ts";
 import { ruleProblems, sdkRulesCheck } from "../../release/version-checks/v0.7.0/sdk-rules-check.ts";
@@ -144,6 +145,41 @@ describe("Q47-rate-limit/C35-rate-limit (1429)", () => {
     expect(rateLimitProblems([{ status: 429, retryAfter: "5", body: "" }]).join()).toContain("does not say why");
     expect(rateLimitProblems([{ status: 500, retryAfter: null, body: "" }, { status: 429, retryAfter: "5", body: "rate limit exceeded" }]).join()).toContain("answered 500");
     expect((await rateLimit(fakeNet({ reports: [] }))).problems).toEqual([noRunMessage("the rate limit check")]);
+  });
+});
+
+describe("Q48-referral-lookup/C36-referral-lookup (1424)", () => {
+  const answer = (over: Record<string, unknown> = {}) => ({ name: "unknown code", status: 404, cacheControl: "public, max-age=60", setCookie: null, body: NOT_FOUND_BODY, ...over });
+  const net = (over: (path: string) => Partial<{ status: number; body: string; headers: Record<string, string> }> = () => ({})) => {
+    const seen: string[] = [];
+    return {
+      seen,
+      origin: "https://t.example",
+      sleep: async () => {},
+      fetch: async (url: string, init?: RequestInit) => {
+        const path = url.slice("https://t.example".length);
+        seen.push(`${init?.method ?? "GET"} ${path}`);
+        const o = over(path);
+        return new Response(o.body ?? NOT_FOUND_BODY, { status: o.status ?? 404, headers: { "Cache-Control": "public, max-age=60", ...(o.headers ?? {}) } });
+      },
+    };
+  };
+  test("passes: every probe answers the uniform cached 404, by GET only", async () => {
+    const n = net();
+    const r = await referralLookup(n);
+    expect(r.problems).toEqual([]);
+    expect(r.found.statuses).toEqual([404, 404, 404, 404]);
+    expect(n.seen).toEqual(PROBES.map((p) => `GET ${p.path}`));
+  });
+  test("red: a route that is absent, a 200, a wrong body, a missing cache header, a cookie and a rate-limited retry", async () => {
+    expect((await referralLookup(net(() => ({ status: 200, body: '{"code":"rm_x"}' })))).problems.join()).toContain("answered 200, not 404");
+    expect((await referralLookup(net(() => ({ body: "<html>Not Found</html>", headers: { "Cache-Control": "no-store" } })))).problems.join()).toContain("not {\"error\":\"not found\"}");
+    expect((await referralLookup(net(() => ({ headers: { "Cache-Control": "no-store" } })))).problems.join()).toContain("Cache-Control");
+    expect((await referralLookup(net(() => ({ status: 503, body: '{"error":"service unavailable"}' })))).problems.join()).toContain("answered 503");
+    expect(referralLookupProblems([answer()])).toEqual([]);
+    expect(referralLookupProblems([answer({ setCookie: "a=b" })]).join()).toContain("sets a cookie");
+    expect(referralLookupProblems([answer({ status: 405 })]).join()).toContain("answered 405");
+    expect(referralLookupProblems([]).join()).toContain("no answer");
   });
 });
 
