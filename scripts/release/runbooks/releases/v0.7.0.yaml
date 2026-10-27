@@ -57,7 +57,12 @@ notes: |
   commit; the reference portfolio, prices, holdings and golden are in
   scripts/release/version-checks/v0.7.0/reference/. Every check is read-only against the
   target, so none is stageOnly and each has a production twin. Q36, Q39 and Q42 need a published run;
-  on a target with none they fail and name it.
+  on a target with none they fail and name it. Q36 and C24 replay the newest archived run: its as-of
+  labels must equal the published ones, and its whole row too if the run was made after issue 1421's fix
+  (a v0.6.4 run differs by about 1e-6 in factorIndex, regime-engine.md 8.1.1: then the differences are
+  info and the step prints that the full-row check is deferred). The archive seals a UTC day at a time, so the
+  full-row replay of a v0.7.0 run is the post-seal check, run on its own and not a cutover step:
+  `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod`.
 breaking:
   - 0127_rm_worker_retired.sql
 recovery: |

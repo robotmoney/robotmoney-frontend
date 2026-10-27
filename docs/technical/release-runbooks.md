@@ -311,7 +311,10 @@ READY, C21-soak-checks runs the standing invariants against the READY baseline, 
 C22-collect-logs copies every container's logs and `docker inspect` into the journal. Q35 to Q37 and C23 to C25 (SV.8,
 from v0.7.0) run the analyst SDK against the target from the control machine, read-only. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
-`bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
+`bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
+full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
+UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
+step) fails until the newest archived run is post-1421, and C24 asserts only the labels for a run made before that fix.
 
 **A boot or a rolling boot is uneventful (issue 1378).** The services hold this
 contract, so a runbook needs no step to drain or clean the queue by hand:

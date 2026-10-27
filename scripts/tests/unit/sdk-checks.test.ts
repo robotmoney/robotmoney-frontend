@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
-  acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, newestArchivedReport, packageTestsCheck, quickstartCheck,
+  acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, madeSince, newestArchivedReport, packageTestsCheck, postSealCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
 import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
@@ -142,10 +142,47 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
     });
   });
 
-  test("red: with the real fix instant, the 2001 recording is a run from before the fix and is not replayed", async () => {
-    await withApi(recordingWithArtifact(replayed), true, async (net) => {
+  test("tier 1, a run from before the fix: the labels are asserted, the rest is info, and the deferral is printed", async () => {
+    // The 2001 recording is a run from before issue 1421's fix, under the real instant.
+    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
       const r = await quickstartCheck(localDeps(net), COMMIT);
-      expect(r.problems.join()).toContain("issue 1421's fix merged");
+      expect(r.problems).toEqual([]);
+      expect(r.found.tier).toBe("label");
+      expect(r.found.differingFields).toContain("composite");
+      expect(r.notes?.join()).toContain("FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT");
+    });
+  });
+
+  test("RED CONTROL: a label that differs fails in either tier", async () => {
+    await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-regime" }), true, async (net) => {
+      const r = await quickstartCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("as-of label differs from the published one in regime");
+    });
+  });
+
+  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
+    const api = fakeServer({ recording: recordingWithArtifact(replayed), reports: [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }] });
+    try {
+      const r = await quickstartCheck(localDeps({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) }), COMMIT);
+      expect(r.problems.join()).toContain("no sealed backup holds a published run yet");
+    } finally {
+      api.server.stop(true);
+    }
+  });
+
+  test("post-seal: a run from before the fix fails naming the sealed days; a fixed run's whole row must match", async () => {
+    await withApi(recordingWithArtifact(replayed), true, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("predates issue 1421's fix");
+      expect(r.problems.join()).toContain("sealed backups run through");
+    });
+    await withApi(recordingWithArtifact(replayed), true, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT, ALL_TIME)).problems).toEqual([]);
+    });
+    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT, ALL_TIME);
+      expect(r.found.tier).toBe("full");
+      expect(r.problems.join()).toContain("differs from the published one in composite");
     });
   });
 
@@ -254,8 +291,8 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
   });
 });
 
-describe("the quickstart replays the newest published run the archive holds, made by the fixed producer", () => {
-  test("a run published after the newest sealed backup, or made before the fix, is skipped; with none left, nothing is chosen", () => {
+describe("the quickstart replays the newest published run the archive holds", () => {
+  test("a run published after the newest sealed backup is skipped; the fix instant splits the runs", () => {
     const dir = homeScratch("sdk-ledger-test-");
     cleanup.push(dir);
     const data = join(dir, "csv", "2026-01-02T000000Z", "data");
@@ -272,10 +309,10 @@ describe("the quickstart replays the newest published run the archive holds, mad
     const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-10-2" + id, checksum: "c", byte_length: 1 });
     const since = "2026-10-23 18:32:15+00";
     // k4 is published but not archived; k3 is the newest archived and made after the fix.
-    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3), row(4, k4)], runs, since)?.run_key).toBe(k3);
-    // only a run from before the fix is archived: nothing to replay yet.
-    expect(newestArchivedReport([row(1, k1), row(4, k4)], runs, since)).toBeUndefined();
-    expect(newestArchivedReport([row(1, k1)], runs, "2026-10-20 00:00:00+00")?.run_key).toBe(k1);
+    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3), row(4, k4)], runs)?.run_key).toBe(k3);
+    expect(newestArchivedReport([row(4, k4)], runs)).toBeUndefined();
+    expect(madeSince(runs.get(k1)!, since)).toBe(false);
+    expect(madeSince(runs.get(k2)!, since)).toBe(true);
     expect(archivedRuns(join(dir, "missing")).size).toBe(0);
   });
 });

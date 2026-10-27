@@ -88,6 +88,20 @@ export function publishedAsofRow(payloadText: string, asof: string): AsofRow | n
   return rows.find((r) => r.date === asof) ?? null;
 }
 
+/** The as-of labels: a replay must reproduce them exactly for any archived run (issue 1431). */
+export const LABEL_FIELDS = ["regime", "macroRegime", "onchainRegime", "factorRegime"] as const;
+
+/**
+ * PURE. The label tier: only the as-of labels must be equal. Any other differing field is info, not a
+ * problem: a run made before issue 1421's fix computed from freshly fetched values stored to a relative
+ * tolerance (D56), so its numbers differ by about 1e-6 (regime-engine.md 8.1.1). A missing published row is a problem.
+ */
+export function labelProblems(c: RowComparison, run: string, asof: string): string[] {
+  if (c.publishedSha256 === null) return [`run ${run}: the published regime_snapshots artifact has no as-of row for ${asof}`];
+  const bad = c.differing.filter((f) => (LABEL_FIELDS as readonly string[]).includes(f));
+  return bad.length === 0 ? [] : [`run ${run} as of ${asof}: the SDK's as-of label differs from the published one in ${bad.join(", ")}`];
+}
+
 /** PURE. Why a comparison is a problem, in one line per fact; empty when the rows are equal. */
 export function comparisonProblems(c: RowComparison, run: string, asof: string): string[] {
   if (c.match) return [];
@@ -160,7 +174,7 @@ const flag = (name: string): string | undefined => {
 async function main(): Promise<number> {
   const [sdkDir, archive, run, inputs] = [flag("--sdk"), flag("--archive"), flag("--run"), flag("--inputs")];
   if (!sdkDir || !archive || !run || !inputs) {
-    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> --inputs <inputs.csv> [--print-row]");
+    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> --inputs <inputs.csv> [--tier full|label] [--print-row]");
     return 2;
   }
   const sdk = await loadSdk(sdkDir);
@@ -194,8 +208,13 @@ async function main(): Promise<number> {
     return 1;
   }
   const c = compareRows(published, replay);
-  const problems = comparisonProblems(c, run, asof);
-  console.log(JSON.stringify({ run, asof, match: c.match, differing: c.differing, publishedSha256: c.publishedSha256, replaySha256: c.replaySha256, problems }));
+  const tier = flag("--tier") ?? "full";
+  if (tier !== "full" && tier !== "label") {
+    console.error("--tier is full or label");
+    return 2;
+  }
+  const problems = tier === "label" ? labelProblems(c, run, asof) : comparisonProblems(c, run, asof);
+  console.log(JSON.stringify({ run, asof, tier, match: c.match, differing: c.differing, publishedSha256: c.publishedSha256, replaySha256: c.replaySha256, problems }));
   return problems.length === 0 ? 0 : 1;
 }
 
