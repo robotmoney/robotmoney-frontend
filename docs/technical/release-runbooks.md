@@ -35,7 +35,7 @@ v0.6.0. This document owns the release gates, phases, evidence and approval.
 4. Everything runs from the control machine over SSH. No step asks a person to log in to a host.
 
 **The website never goes down (owner, 2026-10-14).** Every release, on stage and on production, is a
-rolling upgrade (§4.7). No step stops the whole stack. No tmux session drives or holds any process.
+rolling upgrade (§4.7), except a release that declares `breaking:`, which stops the stack inside one declared window. No other step stops the whole stack. No tmux session drives or holds any process.
 
 **Every production data change ships as a migration** ([D66](../decisions.md#d66), owner
 2026-10-09). No admin-route write, no SQL by hand, no one-off script. C05-migrate is the one step that
@@ -367,8 +367,12 @@ version check is a file `scripts/release/version-checks/<release>/<name>.ts`, ru
 
 A release that carries a `compat: breaking` migration on purpose names the file in `breaking:` (D75, §8.5). Q12-state-baseline
 and P07-state-baseline read the release from `RM_RELEASE` (set by the runner from the target file) and accept a breaking pending migration only
-when that release's runbook names it. The cutover steps still run the rolling order: the breaking order (down, migrate, up)
-is the release's `notes`, and a runner variant of it is not built.
+when that release's runbook names it. Such a release cuts over in the breaking order (§8.5 of the smoke spec), on stage and on
+production alike: the runner skips the rolling `migrate` and `rolling-boot` steps and runs the template's `breakingOnly: true`
+steps instead, in this order: `maintenance-on` (Q18a, C05a), `smoke-down` (Q18b, C05b), `migrate-breaking` (Q18c, C05c),
+`full-boot` (Q22a, C10a) and `maintenance-off` (Q24a, C12a). Any other release records those steps skipped, so its step list and
+hash are unchanged. The probe grade (Q25, C13) allows exactly the window from the start of `maintenance-on` to the end of
+`maintenance-off`, read from the run journal, and still fails a gap outside it or a window that never closed.
 
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
 keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is

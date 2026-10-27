@@ -243,6 +243,48 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
     irreversible: true
     onlyFor: "stage"
+  - id: "Q18a-maintenance-on"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover (spec 8.5, issue 1484): the maintenance page on (maintenance.json, state active, in the instance's web directory). The declared window the probe grade allows opens at the start of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "on", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q18b-smoke-down"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 10
+  - id: "Q18c-migrate-breaking"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: migrate every pending file, the breaking ones included, against the stopped stack. The upgrade's first irreversible step for a release that declares breaking: (the rolling migrate does not run); rollback is closed after it (spec 8.4)"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "stage"
   - id: "Q19-env-rewrite"
     standing: ["SV.6"]
     host: "target"
@@ -293,6 +335,22 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 30
+  - id: "Q22a-full-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the full bun smoke --static-port boot of every service on this release, in place of the rolling boot. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    expectExit: 0
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
   - id: "Q23-ready"
     standing: ["SV.2"]
     host: "target"
@@ -311,6 +369,19 @@ steps:
     description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
     cmds:
       - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q24a-maintenance-off"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the maintenance page off (maintenance.json removed) once the site is switched. The declared window the probe grade allows closes at the end of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "off", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -646,6 +717,48 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
     irreversible: true
     onlyFor: "prod"
+  - id: "C05a-maintenance-on"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover (spec 8.5, issue 1484): the maintenance page on (maintenance.json, state active, in the instance's web directory). The declared window the probe grade allows opens at the start of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "on", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C05b-smoke-down"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 10
+  - id: "C05c-migrate-breaking"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: migrate every pending file, the breaking ones included, against the stopped stack. The upgrade's first irreversible step for a release that declares breaking: (the rolling migrate does not run); rollback is closed after it (spec 8.4)"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "prod"
   - id: "C06-version-tag"
     standing: ["SW.3"]
     host: "control"
@@ -707,6 +820,22 @@ steps:
     irreversible: false
     onlyFor: "prod"
     maxMinutes: 30
+  - id: "C10a-full-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the full bun smoke --static-port boot of every service on this release, in place of the rolling boot. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    expectExit: 0
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 30
   - id: "C11-ready"
     standing: ["SV.2"]
     host: "target"
@@ -725,6 +854,19 @@ steps:
     description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
     cmds:
       - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C12a-maintenance-off"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the maintenance page off (maintenance.json removed) once the site is switched. The declared window the probe grade allows closes at the end of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "off", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false

@@ -47,9 +47,9 @@ import {
 import { checkAfterPreflight, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
-  CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
-import { loadReleaseRunbook } from "./runbook.ts";
+import { loadReleaseRunbook, stepNameOf } from "./runbook.ts";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
 export { receiptPathsInOutput, type RunnerDeps } from "./step-exec.ts";
@@ -148,7 +148,7 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
  * adds to its template; a missing runbook or one that drops a template step
  * refuses. `stepList` replaces it in tests.
  */
-export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[]): Promise<number> {
+export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[], options: { readonly breaking?: boolean } = {}): Promise<number> {
   const args = parseArgs(argv);
   if ("error" in args) {
     deps.error(`[${NAME}] ${args.error}`);
@@ -156,9 +156,15 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   let target: ReleaseTarget;
   let steps: readonly StepTemplate[];
+  // True when the release's runbook declares `breaking:`: its cutover is down, migrate, up (spec section 8.5).
+  let breaking = options.breaking === true;
   try {
     target = loadTarget(targetPath(args.target!));
-    steps = stepList ?? loadReleaseRunbook(target.release).steps;
+    if (stepList === undefined) {
+      const runbook = loadReleaseRunbook(target.release);
+      steps = runbook.steps;
+      breaking = runbook.breaking !== undefined;
+    } else steps = stepList;
   } catch (error) {
     deps.error(`[${NAME}] ${error instanceof Error ? error.message : String(error)}`);
     return 2;
@@ -372,7 +378,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     mkdirSync(stepDir, { recursive: true, mode: 0o700 });
 
     // A prod-only step (the release tags) is recorded skipped on any other policy.
-    const skip = skipReason(template, target);
+    const skip = skipReason(template, target, breaking);
     if (skip !== undefined) {
       const now = deps.now().toISOString();
       journal.steps[id] = {
@@ -486,14 +492,19 @@ export async function resolveGo(go: GoRecord, deps: Pick<RunnerDeps, "collect">)
 }
 
 /** PURE. Why a step does not run on this target, or undefined when it runs. */
-export function skipReason(step: StepTemplate, target: ReleaseTarget): string | undefined {
+export function skipReason(step: StepTemplate, target: ReleaseTarget, breaking = false): string | undefined {
   if (step.onlyFor !== undefined && step.onlyFor !== target.rmEnv) return target.rmEnv;
+  // A release that declares `breaking:` cuts over down, migrate, up: the rolling migrate and boot do not run, and the breaking steps do.
+  if (breaking && BREAKING_SKIPS.includes(stepNameOf(step.id))) return "the release declares breaking: its cutover is down, migrate, up";
+  if (!breaking && step.breakingOnly === true) return "the release declares no breaking: its cutover is rolling";
   return undefined;
 }
 
 type Side = "stage" | "prod";
 /** The migrate under the running release, the upgrade's first irreversible step. */
 const MIGRATE_STEP: Readonly<Record<Side, string>> = { stage: "Q18-migrate", prod: "C05-migrate" };
+/** A release that declares `breaking:` migrates here instead (spec section 8.5): the same irreversible step, against the stopped stack. */
+const BREAKING_MIGRATE_STEP: Readonly<Record<Side, string>> = { stage: "Q18c-migrate-breaking", prod: "C05c-migrate-breaking" };
 /** The step whose end is READY: the soak steps count their window from it, and the soak gate grades sessions since it. */
 const READY_STEP: Readonly<Record<Side, string>> = { stage: "Q23-ready", prod: "C11-ready" };
 /** The step that grades the website probe. */
@@ -501,7 +512,7 @@ const PROBE_GRADE_STEP: Readonly<Record<Side, string>> = { stage: "Q25-probe-gra
 
 /** PURE. The cutover window: the migrate's start to READY's end, in seconds, once both are ok. The website stays up through it (the probe's grade). */
 export function cutoverSeconds(journal: Pick<RunJournal, "steps">, side: Side): number | undefined {
-  const a = journal.steps[MIGRATE_STEP[side]];
+  const a = [journal.steps[MIGRATE_STEP[side]], journal.steps[BREAKING_MIGRATE_STEP[side]]].find((r) => r?.status === "ok") ?? journal.steps[MIGRATE_STEP[side]];
   const b = journal.steps[READY_STEP[side]];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);

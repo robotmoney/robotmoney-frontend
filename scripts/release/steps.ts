@@ -130,6 +130,12 @@ export interface StepTemplate {
    */
   readonly since?: string;
   /**
+   * The step belongs to the breaking cutover (spec section 8.5): it runs only for a release whose
+   * runbook declares `breaking:` and is recorded skipped for any other. The rolling steps it replaces
+   * (BREAKING_SKIPS) are the converse: a release that declares `breaking:` skips them.
+   */
+  readonly breakingOnly?: boolean;
+  /**
    * The step creates its checkout when it is missing: before it cds in, it
    * runs `git clone <cloneFrom> <checkout>` unless `<checkout>/.git` exists.
    * P01-checkout sets it: every release names a new release checkout on the host
@@ -260,6 +266,9 @@ export interface RenderedStep {
   readonly maxMillis: number;
 }
 
+/** The rolling cutover steps (by name) a release that declares `breaking:` does not run: the migrate under the running release and the one-at-a-time boot. Their breaking replacements are the `breakingOnly` steps. */
+export const BREAKING_SKIPS: readonly string[] = ["migrate", "rolling-boot"];
+
 /** The steps that read the release (`RM_RELEASE`): the baseline step, on stage and on production, honours the release runbook's `breaking:` declaration. Others get no new variable. */
 export const RELEASE_AWARE_STEPS: readonly string[] = ["Q12-state-baseline", "P07-state-baseline"];
 
@@ -315,6 +324,8 @@ export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): st
     id: s.id, standing: s.standing, description: s.description, host: s.host, phase: s.phase, cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
     onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
+    // Only a step that carries it: every earlier release's list hashes as it did.
+    ...(s.breakingOnly === true ? { breakingOnly: true } : {}),
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };

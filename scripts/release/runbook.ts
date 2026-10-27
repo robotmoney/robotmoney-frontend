@@ -97,7 +97,7 @@ export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, 
 
 const STEP_KEYS = new Set([
   "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
-  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly",
+  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly", "breakingOnly",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
 /** The three phases, in the order they run (owner, 2026-10-16): QA is every stage step, preflight and cutover are production's. */
@@ -108,7 +108,7 @@ export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({
 export const PHASE_TARGET: Readonly<Record<StepPhase, "stage" | "prod">> = Object.freeze({ qa: "stage", preflight: "prod", cutover: "prod" });
 
 /** A step's name: its id without the phase letter and number (`Q18-migrate` and `C05-migrate` are both `migrate`). */
-export const stepNameOf = (id: string): string => id.replace(/^[A-Z]\d{2}-/, "");
+export const stepNameOf = (id: string): string => id.replace(/^[A-Z]\d{2}[a-z]?-/, "");
 
 /** The QA steps with no production twin: stage's own preparation. */
 export const QA_ONLY_NAMES: readonly string[] = ["lockfile", "dump", "stage-up", "role-passwords", "scope"];
@@ -155,6 +155,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   for (const k of ["cloneFrom", "gateAbsent", "added", "since"] as const) {
     if (raw[k] !== undefined && (typeof raw[k] !== "string" || raw[k] === "")) errors.push(`${at}: ${k} is a non-empty string`);
   }
+  if (raw.breakingOnly !== undefined && typeof raw.breakingOnly !== "boolean") errors.push(`${at}: breakingOnly is a boolean`);
   if (raw.since !== undefined && typeof raw.since === "string" && !/^v\d+\.\d+\.\d+$/.test(raw.since)) errors.push(`${at}: since is a release name (vA.B.C)`);
   if (errors.length > 0) return { errors };
 
@@ -165,7 +166,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
   };
-  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly"] as const) {
+  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly", "breakingOnly"] as const) {
     if (raw[k] !== undefined) step[k] = raw[k];
   }
   if (nb !== undefined) step.notBefore = { afterStep: (nb as NotBeforeTemplate).afterStep, hours: (nb as NotBeforeTemplate).hours };
@@ -184,7 +185,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
 export function twinProblems(steps: readonly RunbookStep[], where: string): string[] {
   const out: string[] = [];
   const norm = (v: unknown): unknown => {
-    if (typeof v === "string") return v.replace(/\b[QPC]\d{2}-/g, "");
+    if (typeof v === "string") return v.replace(/\b[QPC]\d{2}[a-z]?-/g, "");
     if (Array.isArray(v)) return v.map(norm);
     if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, norm(x)]));
     return v;
