@@ -1,4 +1,4 @@
-// V08-sdk-backtest-golden (SDK 0.2.0, PR 1426): `bun run backtest` for the
+// Q45-sdk-backtest-golden/C33-sdk-backtest-golden (SDK 0.2.0, PR 1426): `bun run backtest` for the
 // reference portfolio prints its golden output. The reference is data in this
 // folder (reference/portfolio.json over reference/prices.csv, 2025-01-01 to
 // 2025-04-30, the default 10 bps cost) and reference/backtest.golden.json is

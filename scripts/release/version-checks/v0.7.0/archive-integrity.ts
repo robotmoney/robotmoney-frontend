@@ -1,4 +1,4 @@
-// V01-archive-integrity (PR 1461): an archive's identity is its content, never
+// Q38-archive-integrity/C26-archive-integrity (PR 1461): an archive's identity is its content, never
 // the gzip encoder or the runtime. For a sealed backup's record and its
 // smallest archive file the check fetches the route twice, once asking for
 // gzip and once for identity, and requires:

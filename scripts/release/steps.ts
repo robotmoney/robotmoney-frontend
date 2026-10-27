@@ -33,27 +33,28 @@ import type { ReleaseTarget } from "./target.ts";
 
 /**
  * Where a step runs: the target host, the capture host, or the control
- * machine itself (the release tag, S09-collect-logs).
+ * machine itself (the release tag, C22-collect-logs).
  */
 export type StepHost = "target" | "capture" | "control";
 
 /**
- * Which part of a release a step belongs to (D70 as amended 2026-10-15):
- *   - `qa`: stage only, as often as needed. It builds the stage target; a stage
- *     run then runs the preflight and cutover steps exactly as production does.
- *   - `preflight`: read-only gates on the target. Production runs them once per
- *     rc with `--preflight`, at most 60 minutes before the cutover, and the
- *     cutover carries their records instead of running them again.
- *   - `cutover`: the release as it happens, backup and restore proof first,
- *     through the site switch and the probe's grade.
- *   - `soak`: the general checks every release runs after READY, on stage and
- *     production alike: identity, product, logs, the baseline comparison, host
- *     guards, the 30-minute soak and every container's log.
- *   - `version`: this release's own checks, one per change in its scope (did a
- *     feature land, a bug get fixed, a feature retire). Only a release runbook
- *     adds them; a template has none.
+ * Which part of a release a step belongs to (owner, 2026-10-16). A step runs on
+ * one target only, and its id's letter names its phase:
+ *   - `qa` (Q): stage only, as often as needed. Stage's preparation (the
+ *     lockfile, the dump, the target, its passwords, the scope), then the whole
+ *     upgrade as production will run it (checkout, install, baseline, backup and
+ *     restore proof, migrate, rolling boot, site), then the soak, then the
+ *     release's own version checks. A stage run that passes is the rehearsal.
+ *   - `preflight` (P): production only. Read-only gates, once per rc, at most 60
+ *     minutes before the cutover; it assumes every QA step passed. The cutover
+ *     carries their records instead of running them again.
+ *   - `cutover` (C): production only. The release as it happens, backup and
+ *     restore proof first, through the site switch and the probe's grade, then
+ *     the soak and the version checks, as stage ran them.
+ * Every production step has a QA twin of the same name and commands
+ * (./runbook.ts twinProblems), so production runs only what stage ran.
  */
-export type StepPhase = "qa" | "preflight" | "cutover" | "soak" | "version";
+export type StepPhase = "qa" | "preflight" | "cutover";
 
 /** The runner's host name for a control-machine step; never an ssh alias. */
 export const CONTROL_HOST = "(control)";
@@ -61,7 +62,7 @@ export const CONTROL_HOST = "(control)";
 /**
  * The one PATH every remote command runs with (`env -i`), the same on every
  * host. It finds bun in either host user's ~/.bun/bin, and docker and git
- * in the system directories. P02-identity and P05-capture-identity prove each tool resolves under it
+ * in the system directories. P02-host-identity and P05-capture-identity prove each tool resolves under it
  * and record where.
  */
 export const REMOTE_PATH = "/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -96,7 +97,7 @@ export interface StepTemplate {
   /**
    * The step runs only for this policy and is recorded `skipped: <rmEnv>` on
    * any other. It is data in the template, so the hash is the same for every
-   * target. The release tag (S09-collect-logs) is prod's: a stage run tags nothing. The rc is
+   * target. The release tag (C22-collect-logs) is prod's: a stage run tags nothing. The rc is
    * no step (D64): it is cut after the stage run passes, before the production
    * go names it (`bun scripts/release/tag.ts rc`). Stage's preparation (Q02-dump to
    * Q04-role-passwords: the dump, the target, its role passwords) is stage's: production has
@@ -204,7 +205,7 @@ export interface TemplateValues {
 /**
  * The template values of one run of one target. `ref` is what the go wrote
  * (the rc tag on prod, the commit on stage, D64); P01-checkout and P04-capture-checkout detach at it,
- * S01-verify-version checks it. It defaults to the commit.
+ * C14-verify-version checks it. It defaults to the commit.
  */
 export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
   return {
@@ -259,8 +260,8 @@ export interface RenderedStep {
   readonly maxMillis: number;
 }
 
-/** The steps that read the release (`RM_RELEASE`): P07-baseline honours the release runbook's `breaking:` declaration. Others get no new variable. */
-export const RELEASE_AWARE_STEPS: readonly string[] = ["P07-baseline"];
+/** The steps that read the release (`RM_RELEASE`): the baseline step, on stage and on production, honours the release runbook's `breaking:` declaration. Others get no new variable. */
+export const RELEASE_AWARE_STEPS: readonly string[] = ["Q12-state-baseline", "P07-state-baseline"];
 
 /** Turn one template into the command a host runs. */
 export function renderStep(step: StepTemplate, target: ReleaseTarget, values: TemplateValues): RenderedStep {
@@ -288,7 +289,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
   const envPairs: string[] = [`HOME=${shellQuote(home)}`];
   for (const [k, v] of Object.entries(BASE_ENV)) envPairs.push(`${k}=${shellQuote(v)}`);
   if (!onCapture) envPairs.push(`RM_ENV=${shellQuote(target.rmEnv)}`);
-  // The release the target file names: a step that honours what only this release declares (P07-baseline and `breaking:`) reads it.
+  // The release the target file names: a step that honours what only this release declares (the baseline step and `breaking:`) reads it.
   if (!onCapture && RELEASE_AWARE_STEPS.includes(step.id)) envPairs.push(`RM_RELEASE=${shellQuote(target.release)}`);
   for (const [k, v] of Object.entries(step.env ?? {})) envPairs.push(`${k}=${shellQuote(fill(v, values))}`);
   if (step.bootEnv) for (const [k, v] of Object.entries(target.bootEnv).sort()) envPairs.push(`${k}=${shellQuote(v)}`);

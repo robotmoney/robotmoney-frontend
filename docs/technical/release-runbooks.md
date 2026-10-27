@@ -68,7 +68,8 @@ branch, never on `main` or a QA branch.
 
 **QA branches (owner, 2026-10-06 and 2026-10-07).** A QA session cuts one
 `qa/A.B.x-<YYYY-MM-DD>` branch from the release branch tip and pushes it. Every patch of the
-session, runbook corrections included, merges there by PR. A pushed QA branch is never rewritten:
+session, runbook corrections included, is committed straight to that branch and pushed as a
+fast-forward (owner, 2026-10-16). No pull request opens into a QA branch. A pushed QA branch is never rewritten:
 no force push, reset or rebase. A new base means a new branch, `qa/A.B.x-<YYYY-MM-DD>-2`, and the
 session report names which branch each piece of evidence ran on. Every CI workflow runs on a push
 to `qa/**`, so the commit stage runs carries its own green CI (SP.7).
@@ -115,23 +116,37 @@ Consequences, stated because each looks like a mistake and none is:
 Each gate blocks. A failed gate stops the release until it passes or the owner records an
 exception in the release's YAML.
 
-**Three phases (owner, 2026-10-15).** Every step of a runbook belongs to one phase, its id names it,
-and the phases run in this order:
+**Three phases (owner, 2026-10-16).** Every step of a runbook belongs to one phase and runs on one
+target. Its id names its phase: `Q` for stage, `P` and `C` for production. The phases run in this
+order:
 
-| Phase | Ids | Where and when | What it does |
+| Phase | Ids | Target and when | What it does |
 |---|---|---|---|
-| **QA** | `Q01`… | Stage only, as often as needed, on a QA branch commit | Checks the lockfile, picks or captures the dump, builds the stage target, sets its role passwords. A stage run then runs the preflight and cutover steps exactly as production does |
-| **Preflight** | `P01`… | Production, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
-| **Cutover** | `C01`… | Production, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade |
-| **Soak** | `S01`… | Every release, on stage (QA) and on production | The general checks: identity, product (readonly tier), logs, the baseline comparison, host guards, then 30 minutes after READY the log gate and the standing invariants (no crashed container, no pipeline errors), then every container's log |
-| **Version** | `V01`… | Every release, on stage (QA) and on production, after the soak | The release's own checks, one per change it ships: a feature landed, a bug is fixed, a feature retired. Only a release runbook adds them; a template has none. A check that must write runs on stage only |
+| **QA** | `Q01` to `Q46` | Stage only, as often as needed, on a QA branch commit | The whole rehearsal. Preparation first: the lockfile, the dump, the stage target, its role passwords, the scope. Then the upgrade exactly as production will run it: checkouts and installs, the baseline, backup and restore proof, the migrate, the rolling boot, the site, the probe. Then the soak. Then the release's own version checks, one per change it ships |
+| **Preflight** | `P01` to `P08` | Production only, once per rc, at most 60 minutes before the cutover (`--preflight`) | Read-only gates that assume every QA step passed: checkouts and installs at the rc, host identity, `~/.env` keys and the rm_owner login, the ledger and its pending set, the log baseline. Nothing a running service uses changes |
+| **Cutover** | `C01` to `C32` | Production only, once (`--after-preflight`) | The release as it happens: backup and restore proof, the rolling upgrade, the site switch, the probe's grade, then the soak and the version checks as stage ran them |
 
-A stage run is QA: it builds stage, then runs the preflight, cutover, soak and version steps exactly
-as production will, so production's checks have passed on stage before production runs them. Stage has
-no separate preflight: the stage pass earns the rc, and nothing reruns on stage for it.
-Production's cutover refuses without a green preflight of the same rc and step list from the last
-60 minutes, and carries the preflight steps' records instead of running them again. Preflights are
-cheap: run a new one rather than stretch an old one.
+**Words.** "The cutover" is the production run (§4.7). Stage never runs a cutover. Its Q steps are
+the rehearsal of one.
+
+**Twins.** Every production step has a QA twin: the same name and the same commands, run on stage.
+`Q18-migrate` is `C05-migrate`, `Q22-rolling-boot` is `C10-rolling-boot`, `Q32-soak-gate` is
+`C20-soak-gate`. The runner refuses a step list where a P or C step has no twin, where a twin's
+commands differ, or where the twins run in a different order (`twinProblems` in
+`scripts/release/runbook.ts`). Four steps have no twin: stage's preparation (`Q01` to `Q05`) and
+`C06-version-tag`, which stage never runs. A version check that must write is `stageOnly: true` and
+has no production twin.
+
+A stage run is the QA phase end to end, so production's checks have passed on stage before
+production runs them. Stage runs no preflight: the stage pass earns the rc. Production's cutover
+refuses without a green preflight of the same rc and step list from the last 60 minutes, and
+carries the preflight steps' records instead of running them again. Preflights are cheap: run a new
+one rather than stretch an old one.
+
+**QA collects every error (owner, 2026-10-16).** A stage run does not stop at its first failed step.
+It records the failure, runs the rest, and ends failed with every failure listed. A soak step whose
+READY step failed is recorded as not run and failed. Stage is disposable. Production's cutover is
+not: it stops at its first failed step, and the preflight reports every finding it can.
 
 ### 4.1. Code readiness
 
@@ -145,7 +160,7 @@ The tracking issue itself stays open until §4.9.
 tag, CI on its commit (`P.ci`), a passed stage run of the same tree and step list (`P.stage`), the
 recovery decision (`P.recovery`) and that no run is in flight. It then runs the preflight steps on
 the hosts. P01-checkout to P06-capture-install put the release and capture checkouts at the rc and
-install them frozen. P02-identity proves the host, `~/.env` and the rm_owner login. P07-baseline
+install them frozen. P02-host-identity proves the host, `~/.env` and the rm_owner login. P07-state-baseline
 records production's state through `rm_readonly`: the ledger and its reconciliation with
 `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
 flight and the database size. It refuses any pending migration that is not `compat: additive`
@@ -173,12 +188,32 @@ QA runs the release's YAML unmodified against the production-shaped stage target
 bun run release:run --target stage --go <stage go>
 ```
 
-Q01-lockfile to Q04-role-passwords build the target (`onlyFor: stage`; production records them
-skipped, and the step-list hash is the same for both, SP.8). Q04-role-passwords sets the role
-passwords through the stage database: its doadmin is a disposable stage credential, passed on a
-pipe and stored in no file, so the D61 rule on doadmin, which is production's, is kept. The
-preflight and cutover steps then run as production runs them. A failed step resumes with
-`--run <ts> --from <step>`. QA runs as many times as the fixes need.
+**Before the run.** Run the scope check on the control machine against the QA commit, so a PR
+missing from the release YAML's `scope:` is fixed before the stage run, not found by it:
+`bun scripts/release/scope.ts --release vA.B.C --commit <QA commit> --origin <production origin>`.
+Commit any scope or runbook fix to the QA branch first. Every commit after a stage run changes the
+tree that run passed, so the run to count is the one at the final QA tip (§3 step 3).
+
+**Running it.** A run lasts longer than one tool or terminal session. Start it detached from the
+shell that launches it (`setsid nohup <script> </dev/null &`) and write its output to a log. A
+run started inside a session that ends is killed with it, and the remote step it was driving keeps
+running with nothing attached. Kill that remote step (`stage-target.js remote`, `pg_restore`) before
+resuming, and match processes by an exact name: a `pkill -f` pattern that appears in your own command
+line kills your own shell.
+
+Q01-lockfile to Q05-scope prepare the target (production never runs them, and the step-list hash is
+the same for both targets, SP.8). Q04-role-passwords sets the role passwords through the stage
+database: its doadmin is a disposable stage credential, passed on a pipe and stored in no file, so
+the D61 rule on doadmin, which is production's, is kept. Q06-checkout to Q34-collect-logs then run
+the upgrade and the soak as production will run C01-backup to C22-collect-logs, and the release's
+version checks follow. The run goes on past a failed step and ends with every failure listed (§4).
+After fixes, rerun the whole QA at the new QA tip: the run that counts passes every Q step at the
+final tip. `--run <ts> --from <step>` retries from one failed step while a fix is tried. A
+log-baseline finding that is the old release's own defect, fixed by this release, is triaged in a
+file passed with `--triage <file>` (`scripts/release/triage.ts`).
+
+**Bounded runs.** The runner has no stop-after option. To run part of the QA, run the steps one at a
+time with `--only <step> --run <ts>`. A bounded run is never a pass.
 
 Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
 `bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
@@ -225,7 +260,7 @@ website down:
 1. **C04-probe-start** starts the website probe on the control machine: the public origin's `/` and
    `/version.json` every 2 s.
 2. **C05-migrate** migrates while the previous release still serves. Only `compat: additive` migrations
-   may run this way; P07-baseline refused anything else. A breaking migration needs its own plan.
+   may run this way; P07-state-baseline refused anything else. A breaking migration needs its own plan.
 3. **C06-version-tag** tags `vA.B.C` (production only).
 4. **C09-tokens** keeps every valid service token. A running holder keeps authenticating, and only a
    missing or stale token is minted.
@@ -243,10 +278,10 @@ file: the admin types it into `bun run role-passwords` before the run, and no pr
 `--confirm-target`. No container receives a privileged credential, and no receipt, journal or log
 line prints one.
 
-**Postflight and soak.** S01-verify-version to S06-host-guards verify identity, product (readonly tier), logs, the baseline
-comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): S07-soak-gate grades logs since
-READY, S08-soak-checks runs the standing invariants against the READY baseline, and
-S09-collect-logs copies every container's logs and `docker inspect` into the journal. S10 to S12 (SV.8,
+**Postflight and soak.** C14-verify-version to C19-host-guards (Q26 to Q31 on stage) verify identity, product (readonly tier), logs, the baseline
+comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): C20-soak-gate grades logs since
+READY, C21-soak-checks runs the standing invariants against the READY baseline, and
+C22-collect-logs copies every container's logs and `docker inspect` into the journal. Q35 to Q37 and C23 to C25 (SV.8,
 from v0.7.0) run the analyst SDK against the target from the control machine, read-only. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`.
@@ -330,13 +365,13 @@ version check is a file `scripts/release/version-checks/<release>/<name>.ts`, ru
 `scripts/release/version-check.ts` on the target host; it reads, and a check that must write is
 `onlyFor: stage`.
 
-A release that carries a `compat: breaking` migration on purpose names the file in `breaking:` (D75, §8.5). P07-baseline
-reads the release from `RM_RELEASE` (set by the runner from the target file) and accepts a breaking pending migration only
+A release that carries a `compat: breaking` migration on purpose names the file in `breaking:` (D75, §8.5). Q12-state-baseline
+and P07-state-baseline read the release from `RM_RELEASE` (set by the runner from the target file) and accept a breaking pending migration only
 when that release's runbook names it. The cutover steps still run the rolling order: the breaking order (down, migrate, up)
 is the release's `notes`, and a runner variant of it is not built.
 
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
-keeps the runbook it ran, unedited (the SDK steps S10 to S12 are `since: v0.7.0`, so v0.6.2's file is
+keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is
 unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
@@ -374,12 +409,12 @@ recorded owner decision.
 
 | ID | Check | Steps |
 |---|---|---|
-| SP.1 | Position: which release, which commit, which phase; clean checkouts | P01-checkout to P06-capture-install |
-| SP.2 | Backup taken and restore proven, with the restore time | C01-backup, C02-backup-sums, C03-restore-proof |
-| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | P07-baseline |
-| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | C10-rolling-boot |
-| SP.5 | Log baseline, triaged before the cutover | P08-log-baseline |
-| SP.6 | Product baseline: row counts and database size | P07-baseline |
+| SP.1 | Position: which release, which commit, which phase; clean checkouts | Q06-checkout to Q11-capture-install, P01-checkout to P06-capture-install |
+| SP.2 | Backup taken and restore proven, with the restore time | Q14-backup to Q16-restore-proof, C01-backup to C03-restore-proof |
+| SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | Q12-state-baseline, P07-state-baseline |
+| SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | Q22-rolling-boot, C10-rolling-boot |
+| SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
+| SP.6 | Product baseline: row counts and database size | Q12-state-baseline, P07-state-baseline |
 | SP.7 | CI green on the commit | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
@@ -388,20 +423,20 @@ recorded owner decision.
 | SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
 | SC.3 | The operator's go is recorded before the run | `--go` |
-| SC.4 | The website never goes down: every probe answer 200, no gap | C04-probe-start, C13-probe-grade |
-| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | P07-baseline, C05-migrate, C09-tokens, C10-rolling-boot, C12-site |
-| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | S01-verify-version |
-| SV.2 | Smoke status: preflight and readiness green | C11-ready |
-| SV.3 | Product verification, readonly tier | S02-verify-product |
-| SV.4 | Log verdict after the release | S03-log-verdict |
-| SV.5 | Row counts only grow; the database did not balloon | S05-compare-baseline |
-| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | C07-env-rewrite, S06-host-guards |
-| SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version steps (V01…) |
-| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | S10-archive-routes, S11-sdk-quickstart, S12-sdk-tests |
-| SW.1 | The soak: logs since READY graded | S07-soak-gate |
-| SW.2 | The standing invariants over the soak (§10) | S04-soak-record, S08-soak-checks |
+| SC.4 | The website never goes down: every probe answer 200, no gap | Q17-probe-start, Q25-probe-grade, C04-probe-start, C13-probe-grade |
+| SC.5 | Rolling upgrade: additive migrations under the running release, services one at a time, website-server kept, valid tokens kept | P07-state-baseline, C05-migrate, C09-tokens, C10-rolling-boot, C12-site |
+| SV.1 | Identity: `/api/version` and `/version.json` carry the commit and the rc tag | Q26-verify-version, C14-verify-version |
+| SV.2 | Smoke status: preflight and readiness green | Q23-ready, C11-ready |
+| SV.3 | Product verification, readonly tier | Q27-verify-product, C15-verify-product |
+| SV.4 | Log verdict after the release | Q28-log-verdict, C16-log-verdict |
+| SV.5 | Row counts only grow; the database did not balloon | Q30-compare-baseline, C18-compare-baseline |
+| SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | Q19-env-rewrite, Q31-host-guards, C07-env-rewrite, C19-host-guards |
+| SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version checks (the steps it adds after the template's: Q on stage, C on production) |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | Q35-archive-routes, Q36-sdk-quickstart, Q37-sdk-tests, C23-archive-routes, C24-sdk-quickstart, C25-sdk-tests |
+| SW.1 | The soak: logs since READY graded | Q32-soak-gate, C20-soak-gate |
+| SW.2 | The standing invariants over the soak (§10) | Q29-soak-record, Q33-soak-checks, C17-soak-record, C21-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
-| SW.4 | Every container's logs and inspect since READY in the journal | S09-collect-logs |
+| SW.4 | Every container's logs and inspect since READY in the journal | Q34-collect-logs, C22-collect-logs |
 
 Retired: SC.2 (2026-10-08, replaced by the go, D61).
 
@@ -415,7 +450,7 @@ read-only session, reads container logs and `docker inspect`, and holds no admin
 superuser and no Docker socket. T0 is the instant the stack became READY (`--since`). Run it once
 with `--record` at READY: R8.d and R8.p compare with that baseline (without one R8.p FAILS and
 R8.d is unverified). `--full` adds the slow vintage join of R8.l. Every check has a unit test with
-a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at S04-soak-record and runs the full check over the soak at S08-soak-checks.
+a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records the baseline at Q29-soak-record (C17-soak-record on production) and runs the full check over the soak at Q33-soak-checks (C21-soak-checks).
 
 | Id | Invariant | Status | Note |
 |---|---|---|---|
@@ -471,7 +506,7 @@ number separates tagged releases from them.
 
 **Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag
 `vA.B.C` exists. The platform runbook (QA on stage, cutover, soak) has then completed with the SDK
-checks passing (S10-archive-routes to S12-sdk-tests, and the release's own SDK version checks), so
+checks passing (Q35-archive-routes to Q37-sdk-tests and their production twins C23 to C25, and the release's own SDK version checks), so
 the SDK is fully tested. Before tagging, these are green at the commit:
 
 - the `analyst-sdk` workflow (`.github/workflows/analyst-sdk.yml`);

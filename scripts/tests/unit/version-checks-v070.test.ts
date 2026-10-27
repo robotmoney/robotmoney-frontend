@@ -1,4 +1,4 @@
-// v0.7.0's version checks V01 to V10 (scripts/release/version-checks/v0.7.0/,
+// v0.7.0's version checks Q38 to Q47 (C26 to C35) (scripts/release/version-checks/v0.7.0/,
 // issue 1476): each check's decision with a passing case and a red control.
 // The checks that read the public API run against a fake of it
 // (support/fake-public-api.ts); the SDK 0.2.0 checks run the real SDK from a
@@ -31,7 +31,7 @@ const localDeps = (net = fakeNet(), prepare?: (dir: string) => void): SdkDeps =>
   prepareSdk: async () => { const dir = exportPackage("rm-sdk-v070-"); cleanup.push(dir); prepare?.(dir); return { sdkDir: dir }; },
 });
 
-describe("V01-archive-integrity (1461)", () => {
+describe("Q38-archive-integrity/C26-archive-integrity (1461)", () => {
   const good = (path: string, encoding: "gzip" | "identity", sha = "a".repeat(64)): Sample => ({ path, encoding, status: 200, etag: `"${sha}"`, xsha: sha, actualSha: sha });
   test("passes: the ETag and X-Content-SHA256 are the content hash under both encodings", () => {
     expect(integrityProblems([good("p", "gzip"), good("p", "identity")], { p: "a".repeat(64) })).toEqual([]);
@@ -57,7 +57,7 @@ describe("V01-archive-integrity (1461)", () => {
   });
 });
 
-describe("V02-vintage-build-identity (1445)", () => {
+describe("Q39-vintage-build-identity/C27-vintage-build-identity (1445)", () => {
   test("passes when every vintage of the newest run carries the commit /api/version reports", async () => {
     const r = await vintageIdentity(fakeNet(withRun));
     expect(r.problems).toEqual([]);
@@ -73,7 +73,7 @@ describe("V02-vintage-build-identity (1445)", () => {
   });
 });
 
-describe("V03-db-credential-api-only (D75)", () => {
+describe("Q40-db-credential-api-only/C28-db-credential-api-only (D75)", () => {
   const row = (service: string, env: string[] | null) => ({ container: `rm_stack-${service}-1`, service, env });
   const clean = ["PATH=/usr/bin", "API_BASE_URL=http://api:3000", "PIPELINE_TOKEN_FILE=token-file"];
   test("passes: the api holds its credential and nothing else does", () => {
@@ -96,7 +96,7 @@ describe("V03-db-credential-api-only (D75)", () => {
   });
 });
 
-describe("V04-migration-ledger (0126, 0127)", () => {
+describe("Q41-migration-ledger/C29-migration-ledger (0126, 0127)", () => {
   const repo = repoMigrations();
   test("the release ships 0127 among its migrations", () => {
     expect(repo).toContain("0127_rm_worker_retired.sql");
@@ -111,7 +111,7 @@ describe("V04-migration-ledger (0126, 0127)", () => {
   });
 });
 
-describe("V05-report-bytes-etag (1427)", () => {
+describe("Q42-report-bytes-etag/C30-report-bytes-etag (1427)", () => {
   test("passes: the bytes served hash to the ETag, the list's checksum and X-Content-SHA256, and the ETag revalidates to 304", async () => {
     const r = await reportBytesEtag(fakeNet(withRun));
     expect(r.problems).toEqual([]);
@@ -130,7 +130,7 @@ describe("V05-report-bytes-etag (1427)", () => {
   });
 });
 
-describe("V10-rate-limit (1429)", () => {
+describe("Q47-rate-limit/C35-rate-limit (1429)", () => {
   test("passes: a 429 with a Retry-After in whole seconds and a reason arrives within the request cap", async () => {
     const r = await rateLimit(fakeNet({ ...withRun, limitAfter: 11 }));
     expect(r.problems).toEqual([]);
@@ -147,7 +147,7 @@ describe("V10-rate-limit (1429)", () => {
   });
 });
 
-describe("V06-sdk-fill-parity (SDK 0.2.0)", () => {
+describe("Q43-sdk-fill-parity/C31-sdk-fill-parity (SDK 0.2.0)", () => {
   test("passes: the fill into a fresh folder and the fill from the first recorded backup are the same copy", async () => {
     const api = fakeServer();
     try {
@@ -174,7 +174,7 @@ describe("V06-sdk-fill-parity (SDK 0.2.0)", () => {
   });
 });
 
-describe("V07-sdk-rules-check (SDK 0.2.0)", () => {
+describe("Q44-sdk-rules-check/C32-sdk-rules-check (SDK 0.2.0)", () => {
   test("passes for every shipped rule file; red: an invalid rule file in rules/ fails and is named", async () => {
     const ok = await sdkRulesCheck(localDeps(), COMMIT);
     expect(ok.problems).toEqual([]);
@@ -186,7 +186,7 @@ describe("V07-sdk-rules-check (SDK 0.2.0)", () => {
   });
 });
 
-describe("V08-sdk-backtest-golden (SDK 0.2.0)", () => {
+describe("Q45-sdk-backtest-golden/C33-sdk-backtest-golden (SDK 0.2.0)", () => {
   test("passes: the reference portfolio prints its golden output", async () => {
     expect((await sdkBacktestGolden(localDeps(), COMMIT)).problems).toEqual([]);
   });
@@ -208,7 +208,7 @@ describe("V08-sdk-backtest-golden (SDK 0.2.0)", () => {
   });
 });
 
-describe("V09-sdk-universe-check (SDK 0.2.0)", () => {
+describe("Q46-sdk-universe-check/C34-sdk-universe-check (SDK 0.2.0)", () => {
   test("passes for the reference holdings; red: a holding over its cap exits 2", async () => {
     expect((await sdkUniverseCheck(localDeps(), COMMIT)).problems).toEqual([]);
     const dir = homeScratch("sdk-ref-test-");

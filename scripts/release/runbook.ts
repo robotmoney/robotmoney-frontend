@@ -49,7 +49,7 @@ export interface ReleaseRunbook {
   readonly notes?: string;
   /**
    * Pending migrations the release declares `compat: breaking` and carries on purpose (spec §8.5: bun smoke:down,
-   * bun run migrate, bun smoke --static-port). P07-baseline refuses any breaking pending migration the release
+   * bun run migrate, bun smoke --static-port). Q12-state-baseline and P07-state-baseline refuse any breaking pending migration the release
    * does not name here. Absent: every pending migration must be additive.
    */
   readonly breaking?: readonly string[];
@@ -97,13 +97,23 @@ export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, 
 
 const STEP_KEYS = new Set([
   "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
-  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since",
+  "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
-/** The three phases, in the order they run (D70 as amended 2026-10-15). */
-export const PHASES: readonly StepPhase[] = ["qa", "preflight", "cutover", "soak", "version"];
-/** A step's id names its phase: Q02-dump, P02-identity, C10-rolling-boot, S07-soak-gate, V01-subject-spacing. */
-export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({ qa: "Q", preflight: "P", cutover: "C", soak: "S", version: "V" });
+/** The three phases, in the order they run (owner, 2026-10-16): QA is every stage step, preflight and cutover are production's. */
+export const PHASES: readonly StepPhase[] = ["qa", "preflight", "cutover"];
+/** A step's id names its phase: Q06-checkout (stage), P02-host-identity and C10-rolling-boot (production). */
+export const PHASE_PREFIX: Readonly<Record<StepPhase, string>> = Object.freeze({ qa: "Q", preflight: "P", cutover: "C" });
+/** The target each phase runs on: QA on stage only, preflight and cutover on production only. */
+export const PHASE_TARGET: Readonly<Record<StepPhase, "stage" | "prod">> = Object.freeze({ qa: "stage", preflight: "prod", cutover: "prod" });
+
+/** A step's name: its id without the phase letter and number (`Q18-migrate` and `C05-migrate` are both `migrate`). */
+export const stepNameOf = (id: string): string => id.replace(/^[A-Z]\d{2}-/, "");
+
+/** The QA steps with no production twin: stage's own preparation. */
+export const QA_ONLY_NAMES: readonly string[] = ["lockfile", "dump", "stage-up", "role-passwords", "scope"];
+/** The one production step with no QA twin: stage tags nothing. */
+export const PROD_ONLY_NAMES: readonly string[] = ["version-tag"];
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
@@ -131,6 +141,11 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   }
   if (typeof raw.irreversible !== "boolean") errors.push(`${at}: irreversible is a boolean`);
   if (raw.onlyFor !== undefined && raw.onlyFor !== "prod" && raw.onlyFor !== "stage") errors.push(`${at}: onlyFor is prod or stage`);
+  else if (PHASES.includes(raw.phase as StepPhase) && raw.onlyFor !== PHASE_TARGET[raw.phase as StepPhase]) {
+    errors.push(`${at}: a ${raw.phase as string} step runs on ${PHASE_TARGET[raw.phase as StepPhase]} only: onlyFor: "${PHASE_TARGET[raw.phase as StepPhase]}"`);
+  }
+  if (raw.stageOnly !== undefined && raw.stageOnly !== true) errors.push(`${at}: stageOnly is true or absent`);
+  if (raw.stageOnly === true && raw.phase !== "qa") errors.push(`${at}: only a qa step is stageOnly`);
   const nb = raw.notBefore;
   if (nb !== undefined && !(isObject(nb) && typeof nb.afterStep === "string" && (nb.hours === "watchHours" || (typeof nb.hours === "number" && nb.hours > 0)) && Object.keys(nb).length === 2)) {
     errors.push(`${at}: notBefore is {afterStep, hours} with hours a positive number or watchHours`);
@@ -150,11 +165,58 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
   };
-  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since"] as const) {
+  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly"] as const) {
     if (raw[k] !== undefined) step[k] = raw[k];
   }
   if (nb !== undefined) step.notBefore = { afterStep: (nb as NotBeforeTemplate).afterStep, hours: (nb as NotBeforeTemplate).hours };
   return { step: step as unknown as RunbookStep };
+}
+
+/**
+ * PURE. Why a step list is not a rehearsal: every production step (preflight or
+ * cutover) has a QA step of the same name and body, in the same order, so what
+ * stage ran is what production runs. Preparation (QA_ONLY_NAMES) and the version
+ * tag (PROD_ONLY_NAMES) have no twin; a QA step marked `stageOnly` (it writes
+ * where production must not) has none either. Ids, phase, onlyFor, added and
+ * descriptions differ by construction and are not compared; every other field
+ * is, with phase letters and numbers stripped from the step ids it names.
+ */
+export function twinProblems(steps: readonly RunbookStep[], where: string): string[] {
+  const out: string[] = [];
+  const norm = (v: unknown): unknown => {
+    if (typeof v === "string") return v.replace(/\b[QPC]\d{2}-/g, "");
+    if (Array.isArray(v)) return v.map(norm);
+    if (isObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, norm(x)]));
+    return v;
+  };
+  const body = (s: RunbookStep) => {
+    const { id: _id, phase: _phase, onlyFor: _onlyFor, added: _added, stageOnly: _stageOnly, description: _description, ...rest } = s as RunbookStep & { stageOnly?: boolean };
+    return stable(norm(rest));
+  };
+  const qa = steps.filter((s) => s.phase === "qa");
+  const prod = steps.filter((s) => s.phase !== "qa");
+  const qaByName = new Map(qa.map((s) => [stepNameOf(s.id), s]));
+  const prodByName = new Map(prod.map((s) => [stepNameOf(s.id), s]));
+  if (qaByName.size !== qa.length) out.push(`${where}: two qa steps share a name`);
+  if (prodByName.size !== prod.length) out.push(`${where}: two production steps share a name`);
+  for (const s of prod) {
+    const n = stepNameOf(s.id);
+    if (PROD_ONLY_NAMES.includes(n)) continue;
+    const twin = qaByName.get(n);
+    if (twin === undefined) out.push(`${where}: ${s.id} has no QA twin named ${n}; production runs only what stage ran`);
+    else if (body(twin) !== body(s)) out.push(`${where}: ${twin.id} and ${s.id} differ; a QA step and its production twin run the same commands`);
+  }
+  for (const s of qa) {
+    const n = stepNameOf(s.id);
+    const stageOnly = QA_ONLY_NAMES.includes(n) || (s as RunbookStep & { stageOnly?: boolean }).stageOnly === true;
+    if (!stageOnly && !prodByName.has(n)) out.push(`${where}: ${s.id} has no production twin named ${n}; mark it stageOnly if it must not run on production`);
+    if (stageOnly && prodByName.has(n)) out.push(`${where}: ${s.id} is stage-only but production has a step named ${n}`);
+  }
+  const order = (list: readonly RunbookStep[]) => list.map((s) => stepNameOf(s.id));
+  const qaOrder = order(qa).filter((n) => prodByName.has(n));
+  const prodOrder = order(prod).filter((n) => qaByName.has(n));
+  if (qaOrder.join(",") !== prodOrder.join(",")) out.push(`${where}: the QA steps run in a different order than their production twins`);
+  return out;
 }
 
 function parseSteps(raw: unknown, where: string, errors: string[]): RunbookStep[] {
@@ -171,7 +233,7 @@ function parseSteps(raw: unknown, where: string, errors: string[]): RunbookStep[
   const ids = steps.map((s) => s.id);
   const dup = ids.find((id, i) => ids.indexOf(id) !== i);
   if (dup !== undefined) errors.push(`${where}: step id ${dup} appears twice`);
-  // The phases run in order: QA (stage), then preflight, then cutover. A step out of its phase's place refuses.
+  // The phases run in order: QA (stage), then preflight, then cutover (both production). A step out of its phase's place refuses.
   for (let i = 1; i < steps.length; i++) {
     if (PHASES.indexOf(steps[i]!.phase) < PHASES.indexOf(steps[i - 1]!.phase)) errors.push(`${where}: ${steps[i]!.id} (${steps[i]!.phase}) comes after ${steps[i - 1]!.id} (${steps[i - 1]!.phase}); the phases run ${PHASES.join(", ")}`);
   }
@@ -190,7 +252,7 @@ export function parseTemplate(text: string, name: TemplateName): Template {
   if (doc.template !== name) errors.push(`${where}: names itself ${String(doc.template)}`);
   const steps = parseSteps(doc.steps, where, errors);
   for (const s of steps) if (s.added !== undefined) errors.push(`${where} ${s.id}: a template step carries no added`);
-  for (const s of steps) if (s.phase === "version") errors.push(`${where} ${s.id}: a template has no version checks; a release runbook adds its own`);
+  errors.push(...twinProblems(steps, where));
   if (errors.length > 0) throw new Error(errors.join("\n"));
   return { name, steps: deepFreeze(steps) };
 }
@@ -211,6 +273,7 @@ export function parseReleaseRunbook(text: string, release: string): ReleaseRunbo
     errors.push(`${where}: breaking is a non-empty list of migration file names (NNNN_name.sql)`);
   }
   const steps = parseSteps(doc.steps, where, errors);
+  errors.push(...twinProblems(steps, where));
   errors.push(...scopeProblems(doc.scope, steps, where));
   if (errors.length > 0) throw new Error(errors.join("\n"));
   const scope = (doc.scope as Record<string, unknown>[]).map((e) => ({ pr: e.pr as number, what: e.what as string, ...(typeof e.check === "string" ? { check: e.check } : {}), ...(typeof e.none === "string" ? { none: e.none } : {}) }));

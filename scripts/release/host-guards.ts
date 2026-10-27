@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/host-guards.ts — release step S06-host-guards, run ON THE TARGET HOST.
+// scripts/release/host-guards.ts — release step Q31-host-guards/C19-host-guards, run ON THE TARGET HOST.
 // Standing check SV.6.
 //
 //   bun scripts/release/host-guards.ts --instance <name> --receipt-dir <dir>
@@ -157,7 +157,7 @@ function main(): number {
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "host-guards.json");
   writeFileSync(file, `${JSON.stringify({
-    step: "S06-host-guards", instance, project: record?.project ?? null, containers: containers.length, socketMounts: mounting,
+    step: "host-guards", instance, project: record?.project ?? null, containers: containers.length, socketMounts: mounting,
     envKeys: keys, keysOutsideAllowlist: outside,
     scanRoots, exposedPostgresUrls: exposed,
     tokenFiles: tokenFiles.map((t) => ({ path: t.path, mode: t.mode === null ? null : (t.mode & 0o777).toString(8) })),

@@ -1,4 +1,4 @@
-// V02-vintage-build-identity (PR 1445): a vintage's build identity is the image's
+// Q39-vintage-build-identity/C27-vintage-build-identity (PR 1445): a vintage's build identity is the image's
 // git commit, the same value `/api/version` reports. The check reads the commit
 // the running api reports, then the vintages of the newest published run
 // (`/vintages?run_key=`), and requires every one to carry that commit. A vintage

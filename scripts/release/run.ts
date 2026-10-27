@@ -50,9 +50,6 @@ import {
   CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 import { loadReleaseRunbook } from "./runbook.ts";
-
-/** The step whose end is READY: the watch steps count their window from it, and S07-soak-gate grades sessions since it. */
-const READY_STEP = "C11-ready";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
 
 export { receiptPathsInOutput, type RunnerDeps } from "./step-exec.ts";
@@ -363,6 +360,11 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   // The preflight steps a green preflight already ran are carried, never run again.
   const carried = new Set(journal.afterPreflight === undefined ? [] : preflightSteps(steps).map((s) => s.id).filter((id) => journal.steps[id]?.status === "ok"));
 
+  // QA collects every error (owner, 2026-10-16): a stage run goes on past a failed step, records it, and fails at the end
+  // with all of them listed. Stage is disposable. Production's cutover is irreversible and stops at its first failure.
+  const collectAll = target.rmEnv === "stage";
+  const failedSteps: string[] = [];
+
   for (const id of selected) {
     if (carried.has(id)) continue;
     const template = steps[ids.indexOf(id)]!;
@@ -389,6 +391,20 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     if (notBefore !== undefined) {
       const anchor = journal.steps[notBefore.afterStep];
       if (anchor?.status !== "ok" || !anchor.endedAt) {
+        if (collectAll && anchor?.status === "failed") {
+          // Its anchor failed, so the window it waits for never opens: record it failed, not run, and go on.
+          const now = deps.now().toISOString();
+          journal.steps[id] = {
+            id, status: "failed", exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now, durationMs: 0, receipts: [],
+            attempt: (journal.steps[id]?.attempt ?? 0) + 1, error: `not run: ${notBefore.afterStep} did not pass, so there is no READY to wait from`,
+          };
+          writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(journal.steps[id], null, 2)}\n`, { mode: 0o600 });
+          journal.status = runStatus(journal, ids);
+          writeJournal(runDir, journal);
+          deps.error(`[${NAME}] ${id} NOT RUN: ${journal.steps[id]!.error}`);
+          failedSteps.push(id);
+          continue;
+        }
         deps.error(`[${NAME}] ${id} runs only after ${notBefore.afterStep} passed in this run; it has not.`);
         return 2;
       }
@@ -402,7 +418,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       }
     }
 
-    const readyIso = journal.steps[READY_STEP]?.status === "ok" ? journal.steps[READY_STEP]!.endedAt : undefined;
+    const readyStep = journal.steps[READY_STEP[target.rmEnv]];
+    const readyIso = readyStep?.status === "ok" ? readyStep.endedAt : undefined;
     const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
     const started = deps.now();
     const record: StepRecord = {
@@ -421,6 +438,11 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     journal.updatedAt = record.endedAt!;
     writeJournal(runDir, journal);
 
+    if (!ok && collectAll) {
+      failedSteps.push(id);
+      deps.error(`[${NAME}] ${id} FAILED: ${record.error}. QA goes on: it collects every error.`);
+      continue;
+    }
     if (!ok) {
       deps.error(`[${NAME}] ${id} FAILED: ${record.error}. Nothing after it ran.`);
       if (step.irreversible) deps.error(`[${NAME}] ${id} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
@@ -432,9 +454,18 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   journal.status = runStatus(journal, ids);
-  journal.cutoverSeconds = cutoverSeconds(journal);
+  if (failedSteps.length > 0) {
+    deps.error(`\n[${NAME}] ${failedSteps.length} step(s) failed in this run, all of them listed here:`);
+    for (const id of failedSteps) {
+      deps.error(`  - ${id}: ${journal.steps[id]?.error ?? "failed"}`);
+      if (!steps[ids.indexOf(id)]!.irreversible) deps.error(`    or record the owner's acceptance of it:\n      ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
+    }
+    deps.error(`[${NAME}] after the fixes, rerun the whole QA at the new QA tip. To retry only these: resume with\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: failedSteps[0]!, stageJournal: args.stageJournal })}`);
+  }
+  journal.cutoverSeconds = cutoverSeconds(journal, target.rmEnv);
   writeJournal(runDir, journal);
-  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window C05-migrate to READY (C11-ready): ${journal.cutoverSeconds} s; the website stayed up (C13-probe-grade)`);
+  const side: Side = target.rmEnv;
+  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s; the website stayed up (${PROBE_GRADE_STEP[side]})`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
@@ -460,13 +491,18 @@ export function skipReason(step: StepTemplate, target: ReleaseTarget): string | 
   return undefined;
 }
 
-/** The cutover's first irreversible step: the migrate under the running release. */
-const CUTOVER_STEP = "C05-migrate";
+type Side = "stage" | "prod";
+/** The migrate under the running release, the upgrade's first irreversible step. */
+const MIGRATE_STEP: Readonly<Record<Side, string>> = { stage: "Q18-migrate", prod: "C05-migrate" };
+/** The step whose end is READY: the soak steps count their window from it, and the soak gate grades sessions since it. */
+const READY_STEP: Readonly<Record<Side, string>> = { stage: "Q23-ready", prod: "C11-ready" };
+/** The step that grades the website probe. */
+const PROBE_GRADE_STEP: Readonly<Record<Side, string>> = { stage: "Q25-probe-grade", prod: "C13-probe-grade" };
 
-/** PURE. The cutover window: C05-migrate's start to READY (C11-ready's end), in seconds, once both are ok. The website stays up through it (C13-probe-grade). */
-export function cutoverSeconds(journal: Pick<RunJournal, "steps">): number | undefined {
-  const a = journal.steps[CUTOVER_STEP];
-  const b = journal.steps[READY_STEP];
+/** PURE. The cutover window: the migrate's start to READY's end, in seconds, once both are ok. The website stays up through it (the probe's grade). */
+export function cutoverSeconds(journal: Pick<RunJournal, "steps">, side: Side): number | undefined {
+  const a = journal.steps[MIGRATE_STEP[side]];
+  const b = journal.steps[READY_STEP[side]];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);
 }

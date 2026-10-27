@@ -1,6 +1,6 @@
 // scripts/release/public-analytics-read.ts — read-only access to the public
 // analytics routes (/api/public/analytics/**) for the release checks (issue
-// 1476): the SDK checks of the template's soak (S10 to S12) and the v0.7.0
+// 1476): the SDK checks of the template's soak (Q35 to Q37 (C23 to C25)) and the v0.7.0
 // version checks. Every function takes the fetcher and the sleeper as
 // parameters, so a unit test runs offline against a fake API.
 //
