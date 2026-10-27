@@ -133,6 +133,8 @@ export function copyDifferences(a: Record<string, string>, b: Record<string, str
 export interface CheckResult {
   readonly found: Record<string, unknown>;
   readonly problems: string[];
+  /** Printed, never a failure: what the check did not assert and where it is asserted instead. */
+  readonly notes?: string[];
 }
 
 /** The latest published run, or the problem that says there is none. */
@@ -170,10 +172,15 @@ export function archivedRuns(copyDir: string): Map<string, string> {
   return runs;
 }
 
-/** PURE. The newest published report (highest report id) whose run is archived and was created at or after `since` (UTC, "YYYY-MM-DD HH:MM:SS+00"), or undefined. */
-export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, string>, since: string): ReportRow | undefined {
+/** PURE. The newest published report (highest report id) whose run is in the archive copy, or undefined. */
+export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, string>): ReportRow | undefined {
+  return latestReport(reports.filter((r) => archived.has(r.run_key)));
+}
+
+/** PURE. Whether a run created at `created` ("YYYY-MM-DD HH:MM:SS.ffffff+00") is at or after `since`. */
+export function madeSince(created: string, since: string): boolean {
   const at = (iso: string): number => Date.parse(iso.replace(" ", "T").replace(/\+00$/, "Z"));
-  return latestReport(reports.filter((r) => { const created = archived.get(r.run_key); return created !== undefined && at(created) >= at(since); }));
+  return at(created) >= at(since);
 }
 
 /**
@@ -187,38 +194,68 @@ export function newestArchivedReport(reports: readonly ReportRow[], archived: Re
  * CLI never prints, so it is not compared byte for byte.
  */
 export async function quickstartCheck(deps: SdkDeps, commit: string, exactSince: string = REPLAY_EXACT_SINCE): Promise<CheckResult> {
-  const found: Record<string, unknown> = { commit };
+  return replayNewestArchivedRun(deps, commit, exactSince, "cutover");
+}
+
+/**
+ * The post-seal check, run on its own after the UTC day a fixed-release run ran in is sealed (never a
+ * cutover step): the same replay, but the newest archived run must have been made at or after the fix,
+ * and its whole as-of row must be equal.
+ */
+export async function postSealCheck(deps: SdkDeps, commit: string, exactSince: string = REPLAY_EXACT_SINCE): Promise<CheckResult> {
+  return replayNewestArchivedRun(deps, commit, exactSince, "post-seal");
+}
+
+/**
+ * Two tiers. Cutover: the newest archived published run is replayed; its as-of LABELS must equal the
+ * published ones exactly; its whole row must too if the run was made at or after issue 1421's fix, else the
+ * differences are recorded as info and the whole-row check is deferred to the post-seal report. Post-seal:
+ * the newest archived run must be post-fix, else the check fails naming the missing sealed day.
+ */
+async function replayNewestArchivedRun(deps: SdkDeps, commit: string, exactSince: string, mode: "cutover" | "post-seal"): Promise<CheckResult> {
+  const found: Record<string, unknown> = { commit, mode };
   const listed = await listReports(deps.net);
   if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
   const newest = latestReport(listed.reports);
-  if (newest === undefined) return { found, problems: [noRunMessage("the SDK quickstart")] };
+  if (newest === undefined) return { found, problems: [noRunMessage(mode === "cutover" ? "the SDK quickstart" : "the post-seal check")] };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
-  // The archive is sealed daily, so the newest published run may postdate the newest sealed backup,
-  // and a run from before issue 1421's fix is not exactly replayable: the run to replay is the
-  // newest published one the filled copy holds that the fixed producer made.
+  // The archive is sealed a UTC day at a time, so the newest published run may postdate the newest sealed backup.
   const archived = archivedRuns(join(sdk.sdkDir, "api-copy"));
-  const run = newestArchivedReport(listed.reports, archived, exactSince);
+  const run = newestArchivedReport(listed.reports, archived);
   Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
-  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is both in the filled archive copy (${archived.size} run(s) in its ledger) and made at or after ${exactSince}, when issue 1421's fix merged: the archive seals a day at a time, so the first run of the fixed release is replayable once the day it ran in is sealed (newest published: ${newest.run_key}, as of ${newest.asof})`] };
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): no sealed backup holds a published run yet`] };
   const { run_key, asof } = run;
-  Object.assign(found, { run_key, asof });
+  const created = archived.get(run_key)!;
+  const fixed = madeSince(created, exactSince);
+  Object.assign(found, { run_key, asof, created, madeAfterFix1421: fixed });
+  if (mode === "post-seal" && !fixed) {
+    const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
+    return { found, problems: [`the newest archived run (${run_key}, made ${created}) predates issue 1421's fix (${exactSince}): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; the day that run was made in is sealed one hour after its UTC midnight, then rerun this check`] };
+  }
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
   if (inputs.code !== 0) return { found, problems: [`bun run inputs --run ${run_key} exited ${inputs.code}: ${tail(inputs.stderr)}`] };
   const regime = await deps.run(["bun", "run", "regime", join(out, "inputs.csv"), "--replay", "--asof", asof], { cwd: sdk.sdkDir });
   if (regime.code !== 0) return { found, problems: [`bun run regime --replay --asof ${asof} exited ${regime.code}: ${tail(regime.stderr)}`] };
+  const tier = fixed ? "full" : "label";
   const cmp = await deps.run(
-    ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv")],
+    ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv"), "--tier", tier],
     { cwd: sdk.sdkDir },
   );
   let body: { problems?: string[]; publishedSha256?: string | null; replaySha256?: string; differing?: string[] } = {};
   try { body = JSON.parse(text(cmp.stdout)); } catch { /* reported below */ }
-  Object.assign(found, { publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null });
-  if (cmp.code === 0 && body.problems?.length === 0) return { found, problems: [] };
-  return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
+  Object.assign(found, { tier, publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null, differingFields: body.differing ?? null });
+  if (!(cmp.code === 0 && body.problems?.length === 0)) {
+    return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
+  }
+  const notes: string[] = [];
+  if (tier === "label") {
+    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created}, before issue 1421's fix (${exactSince}), so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
+  }
+  return { found, problems: [], notes };
 }
 
 /** Q37/C25: the SDK package's own tests pass at the release commit. */
