@@ -146,16 +146,23 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
 }
 
 /**
- * The instant issue 1421's fix (PR 1427) merged. A run created before it computed from freshly fetched
- * source values that the ledger stored only to a relative tolerance (D56), so its numbers can differ
- * from what it published and its replay is not exact (backend/tests/regime-replay-archive.test.ts).
- * A run created after it replays every field exactly, which is what Q36/C24 asserts.
+ * A run's build identity says whether the fixed producer made it. Before this release it was a package
+ * label (`pkg:0.1.0+bun:1.4.4`); since PR 1445 it is the image's commit, and the same release carries issue
+ * 1421's fix (PR 1427). A run with a package label computed from freshly fetched source values that the
+ * ledger stored only to a relative tolerance (D56), so its numbers differ from what it published by about
+ * 1e-6 (regime-engine.md 8.1.1) and its replay is not exactly equal; a run with a commit identity replays
+ * every field exactly. (The merge instant of the fix is no marker: production ran the old build after it.)
  */
-export const REPLAY_EXACT_SINCE = "2026-10-23 18:32:15+00";
+export const isFixedProducer = (buildIdentity: string): boolean => buildIdentity !== "" && !buildIdentity.startsWith("pkg:");
 
-/** The run keys (with created_at) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
-export function archivedRuns(copyDir: string): Map<string, string> {
-  const runs = new Map<string, string>();
+export interface ArchivedRun {
+  readonly created: string;
+  readonly buildIdentity: string;
+}
+
+/** The runs (by key) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
+export function archivedRuns(copyDir: string): Map<string, ArchivedRun> {
+  const runs = new Map<string, ArchivedRun>();
   const csv = join(copyDir, "csv");
   if (!existsSync(csv)) return runs;
   for (const backup of readdirSync(csv)) {
@@ -163,9 +170,10 @@ export function archivedRuns(copyDir: string): Map<string, string> {
     if (!existsSync(data)) continue;
     for (const f of readdirSync(data)) {
       if (!/^analytics_ledger_runs\..*\.csv\.gz$/.test(f)) continue;
+      // id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at
       for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
-        const m = /^\d+,([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}),.*,(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d[^,]*)$/.exec(line);
-        if (m) runs.set(m[1]!, m[2]!);
+        const c = line.split(",");
+        if (c.length === 9 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c[1]!)) runs.set(c[1]!, { created: c[8]!, buildIdentity: c[6]! });
       }
     }
   }
@@ -173,14 +181,8 @@ export function archivedRuns(copyDir: string): Map<string, string> {
 }
 
 /** PURE. The newest published report (highest report id) whose run is in the archive copy, or undefined. */
-export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, string>): ReportRow | undefined {
+export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, ArchivedRun>): ReportRow | undefined {
   return latestReport(reports.filter((r) => archived.has(r.run_key)));
-}
-
-/** PURE. Whether a run created at `created` ("YYYY-MM-DD HH:MM:SS.ffffff+00") is at or after `since`. */
-export function madeSince(created: string, since: string): boolean {
-  const at = (iso: string): number => Date.parse(iso.replace(" ", "T").replace(/\+00$/, "Z"));
-  return at(created) >= at(since);
 }
 
 /**
@@ -193,8 +195,8 @@ export function madeSince(created: string, since: string): boolean {
  * The published report (`/reports?run=`) is {asof, toolId, results}, which the
  * CLI never prints, so it is not compared byte for byte.
  */
-export async function quickstartCheck(deps: SdkDeps, commit: string, exactSince: string = REPLAY_EXACT_SINCE): Promise<CheckResult> {
-  return replayNewestArchivedRun(deps, commit, exactSince, "cutover");
+export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
+  return replayNewestArchivedRun(deps, commit, "cutover");
 }
 
 /**
@@ -202,8 +204,8 @@ export async function quickstartCheck(deps: SdkDeps, commit: string, exactSince:
  * cutover step): the same replay, but the newest archived run must have been made at or after the fix,
  * and its whole as-of row must be equal.
  */
-export async function postSealCheck(deps: SdkDeps, commit: string, exactSince: string = REPLAY_EXACT_SINCE): Promise<CheckResult> {
-  return replayNewestArchivedRun(deps, commit, exactSince, "post-seal");
+export async function postSealCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
+  return replayNewestArchivedRun(deps, commit, "post-seal");
 }
 
 /**
@@ -212,7 +214,7 @@ export async function postSealCheck(deps: SdkDeps, commit: string, exactSince: s
  * differences are recorded as info and the whole-row check is deferred to the post-seal report. Post-seal:
  * the newest archived run must be post-fix, else the check fails naming the missing sealed day.
  */
-async function replayNewestArchivedRun(deps: SdkDeps, commit: string, exactSince: string, mode: "cutover" | "post-seal"): Promise<CheckResult> {
+async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cutover" | "post-seal"): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit, mode };
   const listed = await listReports(deps.net);
   if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
@@ -228,12 +230,12 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, exactSince
   Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
   if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): no sealed backup holds a published run yet`] };
   const { run_key, asof } = run;
-  const created = archived.get(run_key)!;
-  const fixed = madeSince(created, exactSince);
-  Object.assign(found, { run_key, asof, created, madeAfterFix1421: fixed });
+  const { created, buildIdentity } = archived.get(run_key)!;
+  const fixed = isFixedProducer(buildIdentity);
+  Object.assign(found, { run_key, asof, created, buildIdentity, fixedProducer: fixed });
   if (mode === "post-seal" && !fixed) {
     const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
-    return { found, problems: [`the newest archived run (${run_key}, made ${created}) predates issue 1421's fix (${exactSince}): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; the day that run was made in is sealed one hour after its UTC midnight, then rerun this check`] };
+    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
   }
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
@@ -253,7 +255,7 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, exactSince
   }
   const notes: string[] = [];
   if (tier === "label") {
-    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created}, before issue 1421's fix (${exactSince}), so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
+    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created} by the old producer (build identity ${buildIdentity}), before issue 1421's fix, so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
   }
   return { found, problems: [], notes };
 }
@@ -288,7 +290,8 @@ export function archiveRouteProblems(list: { status: number; body: unknown }, re
 /** Q35/C23: the public archive routes answer 200 with format 1. */
 export async function archiveRoutesCheck(net: Net): Promise<CheckResult> {
   const json = async (path: string) => {
-    const res = await getWithRetry(net, path);
+    // A sealed backup's record is built on first request after a boot and answers 503 + Retry-After until it is: wait longer than the default.
+    const res = await getWithRetry(net, path, undefined, 15);
     let body: unknown = null;
     try { body = await res.json(); } catch { body = null; }
     return { status: res.status, body };

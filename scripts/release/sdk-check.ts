@@ -12,11 +12,11 @@
 //   the as-of row of the run's published regime_snapshots artifact (field by field and
 //   by sha256; scripts/release/replay-row.ts). A target with no published run FAILS.
 //   Two tiers: the newest archived run's as-of LABELS must equal the published ones; its whole row must too if
-//   the run was made after issue 1421's fix, else the differences are info and the step prints that the
+//   the run was made by the fixed producer (an image-commit build identity), else the differences are info and the step prints that the
 //   full-row check is deferred to the post-seal report.
 // post-seal (not a cutover step; run on its own after the day a fixed-release run ran in is sealed):
 //   bun scripts/release/sdk-check.ts --check post-seal --target stage|prod [--commit <sha>]
-//   the newest archived run must be post-1421 and its whole row must equal the published one.
+//   the newest archived run must be from the fixed producer and its whole row must equal the published one.
 // Q37-sdk-tests/C25-sdk-tests: the SDK package's tests pass at the release commit.
 //
 // The clone comes from this checkout's `origin` (override: --repo-url). Exit 0
