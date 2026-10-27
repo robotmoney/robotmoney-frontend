@@ -255,3 +255,16 @@ describe("Q46-sdk-universe-check/C34-sdk-universe-check (SDK 0.2.0)", () => {
     expect(red.problems.join()).toContain("universe:check exited 2");
   });
 });
+
+describe("a CDN that compresses on the fly weakens the ETag; the origin's tag is what the checks read", () => {
+  const res = (headers: Record<string, string>) => ({ headers: new Headers(headers) });
+  test("W/ is dropped only from an encoded response", async () => {
+    const { originEtag } = await import("../../release/public-analytics-read.ts");
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    expect(originEtag(res({ etag: '"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    // RED CONTROLS: an unencoded or identity response keeps a weak tag, so an origin that sends one still fails; no tag is no tag.
+    expect(originEtag(res({ etag: 'W/"abc"' }))).toBe('W/"abc"');
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "identity" }))).toBe('W/"abc"');
+    expect(originEtag(res({}))).toBeNull();
+  });
+});

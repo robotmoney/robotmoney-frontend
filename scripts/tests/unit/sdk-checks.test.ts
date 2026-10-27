@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
-  acquireBlocks, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, packageTestsCheck, quickstartCheck,
+  acquireBlocks, archivedRunKeys, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, newestArchivedReport, packageTestsCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
 import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
@@ -209,6 +209,10 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
     cpSync(src, join(repo, "packages", "analyst-sdk"), { recursive: true });
     mkdirSync(join(repo, "backend"), { recursive: true });
     writeFileSync(join(repo, "backend", "only.txt"), "not the SDK\n");
+    mkdirSync(join(repo, "backend", "src", "other"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "other", "x.ts"), "not the SDK\n");
+    mkdirSync(join(repo, "backend", "src", "analytics"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "analytics", "source-tolerance.ts"), "export const SOURCE_TOLERANCES = {};\n");
     const git = async (...a: string[]) => {
       const r = await spawnRunner(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...a], {});
       expect(r.code, r.stderr).toBe(0);
@@ -227,9 +231,35 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
       expect(existsSync(join(ok.sdkDir, "package.json"))).toBe(true);
       expect(existsSync(join(scratch, "clone", "backend"))).toBe(false);
     }
+    // the package-tests check also takes the repository folders the package's tests read (Q37/C25).
+    const scratch2 = homeScratch("sdk-clone-test-");
+    cleanup.push(scratch2);
+    const withRepo = await prepare(head, scratch2, true);
+    expect("sdkDir" in withRepo, JSON.stringify(withRepo)).toBe(true);
+    expect(existsSync(join(scratch2, "clone", "backend", "src", "analytics", "source-tolerance.ts"))).toBe(true);
+    expect(existsSync(join(scratch2, "clone", "backend", "src", "other", "x.ts"))).toBe(false);
     // red: not a sha, and a sha the repository does not have.
     expect("problem" in (await prepare("not-a-sha", homeScratch("sdk-clone-test-")))).toBe(true);
     expect(JSON.stringify(await prepare("0".repeat(40), homeScratch("sdk-clone-test-")))).toContain("problem");
+  });
+});
+
+describe("the quickstart replays the newest published run the archive holds", () => {
+  test("a run published after the newest sealed backup is skipped; with none archived, nothing is chosen", () => {
+    const dir = homeScratch("sdk-ledger-test-");
+    cleanup.push(dir);
+    const data = join(dir, "csv", "2026-01-02T000000Z", "data");
+    mkdirSync(data, { recursive: true });
+    const k1 = "11111111-1111-4111-8111-111111111111";
+    const k2 = "22222222-2222-4222-8222-222222222222";
+    const k3 = "33333333-3333-4333-8333-333333333333";
+    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync(`id,run_key,asof,tool_id\n1,${k1},2026-01-01,regime\n2,${k2},2026-01-02,regime\n`));
+    const keys = archivedRunKeys(dir);
+    expect([...keys].sort()).toEqual([k1, k2]);
+    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-01-0" + id, checksum: "c", byte_length: 1 });
+    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3)], keys)?.run_key).toBe(k2);
+    expect(newestArchivedReport([row(3, k3)], keys)).toBeUndefined();
+    expect(archivedRunKeys(join(dir, "missing")).size).toBe(0);
   });
 });
 

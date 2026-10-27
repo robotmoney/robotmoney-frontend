@@ -47,6 +47,19 @@ export async function getWithRetry(net: Net, path: string, init?: RequestInit, t
   return res;
 }
 
+/**
+ * The response's ETag as the origin set it. A CDN that compresses a response on the fly (Cloudflare
+ * does, for a `Content-Encoding: gzip` answer) weakens a strong validator to `W/"..."` and changes
+ * nothing else, so for an encoded response the check reads the tag without that prefix. An
+ * unencoded response keeps its tag as sent: a weak tag there is the origin's own and still fails.
+ */
+export function originEtag(res: Pick<Response, "headers">): string | null {
+  const etag = res.headers.get("etag");
+  if (etag === null || !etag.startsWith("W/")) return etag;
+  const enc = res.headers.get("content-encoding");
+  return enc !== null && enc.toLowerCase() !== "identity" ? etag.slice(2) : etag;
+}
+
 export interface ReportRow {
   readonly report_id: number;
   readonly run_key: string;
