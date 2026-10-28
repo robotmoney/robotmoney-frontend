@@ -11,7 +11,8 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net } from "./public-analytics-read.ts";
+import { gunzipSync } from "node:zlib";
+import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net, type ReportRow } from "./public-analytics-read.ts";
 
 export interface RunResult {
   readonly code: number;
@@ -26,7 +27,7 @@ export interface SdkDeps {
   /** A fresh empty folder for one check (under ~/tmp). */
   readonly scratch: () => string;
   /** The folder holding `packages/analyst-sdk` at `commit`; the default makes a sparse clone. */
-  readonly prepareSdk: (commit: string, scratch: string) => Promise<{ sdkDir: string } | { problem: string }>;
+  readonly prepareSdk: (commit: string, scratch: string, withRepoFiles?: boolean) => Promise<{ sdkDir: string } | { problem: string }>;
 }
 
 export const text = (b: Uint8Array): string => new TextDecoder().decode(b);
@@ -47,16 +48,24 @@ export function homeScratch(prefix = "sdk-check-"): string {
 }
 
 /**
+ * The repository folders the package's own tests read outside the package (universe.test.ts imports
+ * backend/src/analytics/source-tolerance.ts; originals-provenance.test.ts checks that the fixtures'
+ * producers, backend/scripts/capture-analytics-originals.ts among them, exist). Only Q37/C25 add them:
+ * the quickstart still runs from the package alone, the way an analyst installs it.
+ */
+export const TEST_REPO_DIRS = ["backend/src/analytics", "backend/scripts"] as const;
+
+/**
  * A sparse clone of `repoUrl` at `commit`, with `packages/analyst-sdk`
  * installed frozen: the install of the README (§11), for the release commit.
  */
 export function sparseCloneSdk(repoUrl: string, run: Runner): SdkDeps["prepareSdk"] {
-  return async (commit, scratch) => {
+  return async (commit, scratch, withRepoFiles = false) => {
     if (!/^[0-9a-f]{40}$/.test(commit)) return { problem: `the release commit "${commit}" is not a 40-hex sha` };
     const dir = join(scratch, "clone");
     const steps: string[][] = [
       ["git", "clone", "--quiet", "--no-checkout", "--filter=blob:none", repoUrl, dir],
-      ["git", "-C", dir, "sparse-checkout", "set", "packages/analyst-sdk"],
+      ["git", "-C", dir, "sparse-checkout", "set", "packages/analyst-sdk", ...(withRepoFiles ? TEST_REPO_DIRS : [])],
     ];
     for (const s of steps) {
       const r = await run(s, {});
@@ -124,6 +133,8 @@ export function copyDifferences(a: Record<string, string>, b: Record<string, str
 export interface CheckResult {
   readonly found: Record<string, unknown>;
   readonly problems: string[];
+  /** Printed, never a failure: what the check did not assert and where it is asserted instead. */
+  readonly notes?: string[];
 }
 
 /** The latest published run, or the problem that says there is none. */
@@ -132,6 +143,46 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
   if (problems.length > 0) return { problem: problems.join("; ") };
   const latest = latestReport(reports);
   return latest === undefined ? { problem: noRunMessage(what) } : { run: latest };
+}
+
+/**
+ * A run's build identity says whether the fixed producer made it. Before this release it was a package
+ * label (`pkg:0.1.0+bun:1.4.4`); since PR 1445 it is the image's commit, and the same release carries issue
+ * 1421's fix (PR 1427). A run with a package label computed from freshly fetched source values that the
+ * ledger stored only to a relative tolerance (D56), so its numbers differ from what it published by about
+ * 1e-6 (regime-engine.md 8.1.1) and its replay is not exactly equal; a run with a commit identity replays
+ * every field exactly. (The merge instant of the fix is no marker: production ran the old build after it.)
+ */
+export const isFixedProducer = (buildIdentity: string): boolean => buildIdentity !== "" && !buildIdentity.startsWith("pkg:");
+
+export interface ArchivedRun {
+  readonly created: string;
+  readonly buildIdentity: string;
+}
+
+/** The runs (by key) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
+export function archivedRuns(copyDir: string): Map<string, ArchivedRun> {
+  const runs = new Map<string, ArchivedRun>();
+  const csv = join(copyDir, "csv");
+  if (!existsSync(csv)) return runs;
+  for (const backup of readdirSync(csv)) {
+    const data = join(csv, backup, "data");
+    if (!existsSync(data)) continue;
+    for (const f of readdirSync(data)) {
+      if (!/^analytics_ledger_runs\..*\.csv\.gz$/.test(f)) continue;
+      // id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at
+      for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
+        const c = line.split(",");
+        if (c.length === 9 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c[1]!)) runs.set(c[1]!, { created: c[8]!, buildIdentity: c[6]! });
+      }
+    }
+  }
+  return runs;
+}
+
+/** PURE. The newest published report (highest report id) whose run is in the archive copy, or undefined. */
+export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, ArchivedRun>): ReportRow | undefined {
+  return latestReport(reports.filter((r) => archived.has(r.run_key)));
 }
 
 /**
@@ -145,35 +196,74 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
  * CLI never prints, so it is not compared byte for byte.
  */
 export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
-  const found: Record<string, unknown> = { commit };
-  const latest = await latestRun(deps.net, "the SDK quickstart");
-  if ("problem" in latest) return { found, problems: [latest.problem] };
-  const { run_key, asof } = latest.run;
-  Object.assign(found, { run_key, asof });
+  return replayNewestArchivedRun(deps, commit, "cutover");
+}
+
+/**
+ * The post-seal check, run on its own after the UTC day a fixed-release run ran in is sealed (never a
+ * cutover step): the same replay, but the newest archived run must have been made at or after the fix,
+ * and its whole as-of row must be equal.
+ */
+export async function postSealCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
+  return replayNewestArchivedRun(deps, commit, "post-seal");
+}
+
+/**
+ * Two tiers. Cutover: the newest archived published run is replayed; its as-of LABELS must equal the
+ * published ones exactly; its whole row must too if the run was made at or after issue 1421's fix, else the
+ * differences are recorded as info and the whole-row check is deferred to the post-seal report. Post-seal:
+ * the newest archived run must be post-fix, else the check fails naming the missing sealed day.
+ */
+async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cutover" | "post-seal"): Promise<CheckResult> {
+  const found: Record<string, unknown> = { commit, mode };
+  const listed = await listReports(deps.net);
+  if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
+  const newest = latestReport(listed.reports);
+  if (newest === undefined) return { found, problems: [noRunMessage(mode === "cutover" ? "the SDK quickstart" : "the post-seal check")] };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
+  // The archive is sealed a UTC day at a time, so the newest published run may postdate the newest sealed backup.
+  const archived = archivedRuns(join(sdk.sdkDir, "api-copy"));
+  const run = newestArchivedReport(listed.reports, archived);
+  Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): no sealed backup holds a published run yet`] };
+  const { run_key, asof } = run;
+  const { created, buildIdentity } = archived.get(run_key)!;
+  const fixed = isFixedProducer(buildIdentity);
+  Object.assign(found, { run_key, asof, created, buildIdentity, fixedProducer: fixed });
+  if (mode === "post-seal" && !fixed) {
+    const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
+    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
+  }
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
   if (inputs.code !== 0) return { found, problems: [`bun run inputs --run ${run_key} exited ${inputs.code}: ${tail(inputs.stderr)}`] };
   const regime = await deps.run(["bun", "run", "regime", join(out, "inputs.csv"), "--replay", "--asof", asof], { cwd: sdk.sdkDir });
   if (regime.code !== 0) return { found, problems: [`bun run regime --replay --asof ${asof} exited ${regime.code}: ${tail(regime.stderr)}`] };
+  const tier = fixed ? "full" : "label";
   const cmp = await deps.run(
-    ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv")],
+    ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv"), "--tier", tier],
     { cwd: sdk.sdkDir },
   );
   let body: { problems?: string[]; publishedSha256?: string | null; replaySha256?: string; differing?: string[] } = {};
   try { body = JSON.parse(text(cmp.stdout)); } catch { /* reported below */ }
-  Object.assign(found, { publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null });
-  if (cmp.code === 0 && body.problems?.length === 0) return { found, problems: [] };
-  return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
+  Object.assign(found, { tier, publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null, differingFields: body.differing ?? null });
+  if (!(cmp.code === 0 && body.problems?.length === 0)) {
+    return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
+  }
+  const notes: string[] = [];
+  if (tier === "label") {
+    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created} by the old producer (build identity ${buildIdentity}), before issue 1421's fix, so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
+  }
+  return { found, problems: [], notes };
 }
 
 /** Q37/C25: the SDK package's own tests pass at the release commit. */
 export async function packageTestsCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit };
-  const sdk = await deps.prepareSdk(commit, deps.scratch());
+  const sdk = await deps.prepareSdk(commit, deps.scratch(), true);
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const r = await deps.run(["bun", "test"], { cwd: sdk.sdkDir });
   found.exit = r.code;
@@ -200,7 +290,8 @@ export function archiveRouteProblems(list: { status: number; body: unknown }, re
 /** Q35/C23: the public archive routes answer 200 with format 1. */
 export async function archiveRoutesCheck(net: Net): Promise<CheckResult> {
   const json = async (path: string) => {
-    const res = await getWithRetry(net, path);
+    // A sealed backup's record is built on first request after a boot and answers 503 + Retry-After until it is: wait longer than the default.
+    const res = await getWithRetry(net, path, undefined, 15);
     let body: unknown = null;
     try { body = await res.json(); } catch { body = null; }
     return { status: res.status, body };
