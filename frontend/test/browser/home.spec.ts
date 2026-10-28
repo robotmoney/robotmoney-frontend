@@ -179,7 +179,7 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
     .toBe("DAOs");
   await expect(hero.locator(".hm-hero__cta .btn-primary")).toHaveAttribute("href", "/deposit");
   await expect(hero.locator(".hm-hero__cta .btn-primary")).toContainText("Deposit USDC");
-  await expect(hero.locator(".hm-hero__cta .rr-btn")).toHaveAttribute("href", "/allocation");
+  await expect(hero.locator(".hm-hero__cta .rr-btn")).toHaveAttribute("href", "/model-portfolio");
 
   // Fixed and clear over the monument: a WebGL canvas is not sampled by
   // backdrop-filter, so a frosted fill would read as a lid.
