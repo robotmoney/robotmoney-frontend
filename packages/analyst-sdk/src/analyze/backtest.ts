@@ -272,7 +272,8 @@ function simulate(
   };
 }
 
-const YEAR_MS = 365.25 * 86400 * 1000;
+/** The year periodStats annualizes over: 365.25 days, in milliseconds. */
+export const YEAR_MS = 365.25 * 86400 * 1000;
 
 // The established statistics over [from, to] (analytics requirements 5.4). A
 // value dated in the window counts; a return or trade counts when dated after

@@ -14,7 +14,7 @@ import { mean, pearson, rollingBeta, rollingSum, sma, std, stddev } from "../src
 import { pearson as rankPearson, ranks } from "../src/analyze/correlations.ts";
 import { rollingBetaSeries } from "../src/analyze/research-signals.ts";
 import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
-import { meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
+import { correlation, meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
 import type { Point } from "../src/types.ts";
 import {
   exactBeta,
@@ -145,6 +145,24 @@ describe("pearson at any scale", () => {
     const tiny = [1, 2, 3, 4].map((x) => x * 1e-150);
     expect(plainPearson(big, big)).toBe(0);
     expect(plainPearson(tiny, tiny)).toBe(Infinity);
+  });
+
+  test("scales beyond 2^±1000 are removed exactly, also at odd exponents", () => {
+    const a0 = [1.5, 2.25, 3.125, 4.0625, 5.5, 6.75];
+    const b0 = [5.5, 3.25, 4.75, 1.125, 2.5, 6.0625];
+    for (const k of [-1074 + 60, -1003, -1001, 1001, 1003]) {
+      const a = a0.map((x) => x * 2 ** k);
+      const b = b0.map((x) => x * 2 ** k);
+      expect(pearson(a, b)).toBe(exactPearson(a0, b0));
+      expect(rankPearson(a, b)).toBe(exactPearson(a0, b0));
+      expect(std(a)).toBe(exactStd(a, 0));
+      expect(stddev(a)).toBe(exactStd(a, 1));
+    }
+  });
+
+  test("the exact and rank correlations refuse series of different lengths instead of truncating", () => {
+    expect(() => rankPearson([1, 2, 3], [1, 2, 3, 4])).toThrow(RangeError);
+    expect(() => correlation([1, 2, 3], [3, 2])).toThrow(RangeError);
   });
 
   test("mixed scales and anti-correlation", () => {

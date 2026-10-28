@@ -194,13 +194,17 @@ export function scaleOf(xs: readonly number[]): number {
 
 /** xs divided by scaleOf(xs): exact (a power of two), so ratios such as a correlation are unchanged. */
 function rescaled(xs: readonly number[], s: number): number[] {
-  // Two steps when 1 / s itself would overflow or underflow.
   if (s >= 2 ** -1000 && s <= 2 ** 1000) {
     const inv = 1 / s;
     return xs.map((x) => x * inv);
   }
-  const r = Math.sqrt(s);
-  return xs.map((x) => x / r / (s / r));
+  // 1 / s would overflow or underflow: multiply by two powers of two whose exponents sum to -log2(s). Each factor and
+  // each product is exact. (sqrt(s) is irrational for an odd exponent, so dividing by it twice rounds.)
+  const e = Math.round(Math.log2(s));
+  const h = Math.trunc(e / 2);
+  const a = 2 ** -h;
+  const b = 2 ** (h - e);
+  return xs.map((x) => x * a * b);
 }
 
 /**
@@ -293,6 +297,7 @@ function centeredMoments(x: readonly number[], y: readonly number[], mx: number,
  * formed in double-double, so it is rounded once. Clipped to [-1, 1].
  */
 export function correlation(xs: readonly number[], ys: readonly number[]): number {
+  if (xs.length !== ys.length) throw new RangeError(`correlation: series of length ${xs.length} and ${ys.length}`);
   if (xs.length === 0) return NaN;
   const sx = scaleOf(xs);
   const sy = scaleOf(ys);
