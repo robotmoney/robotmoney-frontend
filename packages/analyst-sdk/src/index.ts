@@ -7,7 +7,7 @@ export { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indica
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
-  BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END,
+  BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END, YEAR_MS,
   type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
   type TradeEvidence, type PeriodStatsOptions,
 } from "./analyze/backtest.ts";

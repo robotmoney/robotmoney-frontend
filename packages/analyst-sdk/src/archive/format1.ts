@@ -38,7 +38,8 @@ export interface BackupRecord {
   // API fill existed; those were all read from the database replica.
   source?: "api" | "db";
   append_only: Record<string, { watermark_before: string | null; watermark_after: string | null; files: FileRecord[] }>;
-  revisions: Record<string, { file: FileRecord | null }>;
+  // Per revised table: the columns that identify a row (a revision upserts or deletes by them) and the changes file.
+  revisions: Record<string, { key: string[]; file: FileRecord | null }>;
 }
 
 export class ArchiveError extends Error {
