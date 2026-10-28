@@ -20,12 +20,12 @@
       <div class="sv__skel-h"></div>
       <div class="sv__skel-card"></div><div class="sv__skel-card"></div>
     </div>
-    <template x-if="error && !id"><div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/allocation#vaults">Allocation</a></p></div></template>
+    <template x-if="error && !id"><div class="rr-head"><p class="sv__error" x-text="error"></p><p class="rr-links"><a class="rr-lnk" href="/model-portfolio#vaults">Model portfolio</a></p></div></template>
 
     <template x-if="!loading && id">
       <div>
         <nav class="rr-crumbs" aria-label="Breadcrumb">
-          <a href="/allocation#vaults">Allocation</a><span aria-hidden="true">/</span>
+          <a href="/model-portfolio#vaults">Model portfolio</a><span aria-hidden="true">/</span>
           <span class="rr-sym" aria-current="page" x-text="id.symbol"></span>
         </nav>
 
@@ -218,7 +218,7 @@
              vault: a vault that is not live holds nothing, and says so. -->
         <section class="rr-sec" id="allocation" aria-labelledby="alloc-h">
           <div class="rr-sec__head">
-            <h2 class="rr-sec__h" id="alloc-h">Sleeve allocation</h2>
+            <h2 class="rr-sec__h" id="alloc-h">Sleeve weights</h2>
           </div>
           <div class="rr-split rr-split--rule">
             <div>

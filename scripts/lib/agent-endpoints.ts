@@ -131,7 +131,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "rmUSDC vault TVL, share price, APY and per-adapter split",
     description:
       "ROBOT MONEY'S OWN rmUSDC vault: the ERC-4626 vault on Base, its total value locked in USD, share price, deposit cap, and the per-adapter breakdown across Morpho, Aave and Compound. This is the number to quote for \"Robot Money vault TVL\"; the `vaultTvlUsd` on the overview endpoint is a different dataset entirely. `asOf` is when the values were read onchain and `stale` says whether that read is older than the refresh interval, so a caller can decide for itself whether to quote the number.",
-    backs: ["/allocation"],
+    backs: ["/model-portfolio"],
     contractType: "VaultEconomics",
     sizeHint: "about 1 KB",
   },
@@ -142,7 +142,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Target allocation: strategy sleeves and bucket weights",
     description:
       "The target weights the protocol is managed against: the strategy sleeves (95 percent conservative DeFi yield, 5 percent agent tokens) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.",
-    backs: ["/allocation", "/"],
+    backs: ["/model-portfolio", "/"],
     contractType: "AllocationFramework",
     sizeHint: "about 1 KB",
   },
@@ -153,7 +153,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Per-wallet holdings grouped into the allocation sleeves",
     description:
       "What each Robot Money protocol wallet actually holds, grouped into the same sleeves that `allocation` sets targets for. This is the realised side of the target/actual pair.",
-    backs: ["/allocation", "/treasury"],
+    backs: ["/model-portfolio", "/treasury"],
     contractType: "WalletSleeves",
     sizeHint: "about 2 KB",
   },
@@ -164,7 +164,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "Live protocol wallet valuation plus daily history",
     description:
       "Every tracked protocol wallet, every holding in it, and the daily total-value history since inception. Each holding carries a `provenance` field (live, stub, stale, seed, backfilled): treat anything other than `live` as an estimate. Days with no persisted snapshot are absent from the history rather than interpolated, so gaps are real gaps.",
-    backs: ["/treasury", "/allocation"],
+    backs: ["/treasury", "/model-portfolio"],
     contractType: "WalletBalances",
     sizeHint: "about 55 KB, the largest of the treasury reads",
   },
@@ -186,7 +186,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     summary: "$ROBOTMONEY buyback history",
     description:
       "Each recorded buyback: date, transaction hash on Base, amount spent and tokens acquired. `stale` reports whether the indexer has caught up, so an empty tail is distinguishable from a quiet period.",
-    backs: ["/tokenomics", "/allocation"],
+    backs: ["/tokenomics", "/model-portfolio"],
     contractType: "{ asOf, source, stale, rows }",
     sizeHint: "about 2 KB",
   },
