@@ -38,7 +38,7 @@ cause is an inference, not a measurement. See the quickstart and "What changes a
 Only this directory is needed. A shallow, sparse clone fetches just that.
 
 A released version is a tag `analyst-sdk-vA.B.C` (decision D77 in
-`docs/decisions.md`, accepted). No release is tagged yet; the first will be `analyst-sdk-v0.2.0`.
+`docs/decisions.md`, accepted). Each minor version ships from its own `analyst-sdk/releases-A.B.x` branch.
 To get a released version, clone its tag:
 
 ```sh
