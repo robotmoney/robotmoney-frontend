@@ -20,7 +20,7 @@
 //   - any as-of LABEL that differs from the published label (issue 1431);
 //   - any field that differs by more than rounding on a run created after
 //     issue 1421 merged (POST_1421): since then a run computes from the
-//     committed values, so its replay must reproduce every field. Proposed
+//     committed values, so its replay must reproduce every field. Accepted
 //     decision D78 (compensated arithmetic) moves numbers in their last bits,
 //     so a run published before it replays up to rounding (status
 //     "rounding": same labels, nulls and keys, numbers within rounding).

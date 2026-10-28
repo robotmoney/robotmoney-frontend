@@ -102,11 +102,13 @@ jobs:
           tests/input-rule.test.ts:10
           tests/extract.test.ts:9
       # Decision D78: the exact-arithmetic suite ran (results against BigInt
-      # rationals on real data, the pearson scale cases, the constant-return Sharpe).
+      # rationals on real data, the pearson scale cases, the constant-return Sharpe),
+      # and the up-to-rounding comparison rejected every mutated original.
       - name: Exact numerics suite ran (D78)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/exact-numerics.test.ts:34
+          tests/numeric-diff-negative-control.test.ts:11
       # Issue 1399: the as-of label suite ran, the 419-run hindsight case included.
       - name: As-of label suite ran (issue 1399)
         run: >-

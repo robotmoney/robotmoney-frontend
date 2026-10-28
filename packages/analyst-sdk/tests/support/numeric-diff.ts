@@ -8,7 +8,8 @@
 //               is structural.
 //   discrete    a number moved by more than rounding could move it: a sign
 //               change (including to or from zero), a change between two
-//               integers, or |a - b| > DISCRETE_TOL * max(1, |a|, |b|). A
+//               integers, or |a - b| > DISCRETE_TOL * max(|a|, |b|): more
+//               than 1e-9 of the number's size, however small it is. A
 //               percentile rank stepping by 1/n, a flipped toFixed digit or a
 //               diverged backtest all land here.
 //   rounding    any other numeric change: the last-bit drift D78 expects.
@@ -52,7 +53,7 @@ function walk(a: unknown, b: unknown, path: string, out: NumericDiff): void {
     }
     const signFlip = Math.sign(a) !== Math.sign(b);
     const integers = Number.isInteger(a) && Number.isInteger(b);
-    if (signFlip || integers || abs > DISCRETE_TOL * Math.max(1, Math.abs(a), Math.abs(b))) {
+    if (signFlip || integers || abs > DISCRETE_TOL * Math.max(Math.abs(a), Math.abs(b))) {
       out.differences.push({ path, kind: "discrete", before: a, after: b });
     }
     return;
