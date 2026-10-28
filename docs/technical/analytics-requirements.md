@@ -10,7 +10,7 @@ Two consumers use the module: the backend analytics run and the analyst SDK clie
 
 Non-goals:
 
-- Changing any regime, correlation, research-signal or backtest calculation methodology, including correcting numerical edge cases as part of the refactor.
+- Changing any regime, correlation, research-signal or backtest calculation methodology, including correcting numerical edge cases as part of the refactor. The compensated arithmetic of D78 is a separate, deliberate change, not part of the refactor.
 - Optimizers, return forecasts, intraday data and live trading.
 - A user interface. Output is JSON and CSV.
 - Scoring a swarm member's submission. That is a backend feature.
@@ -21,9 +21,9 @@ Non-goals:
 - **HTTP only during extract.** Extract is the acquisition stage: it collects provider data or downloads archived data before computation starts. After extract, input preparation, alignment, transforms, ratio calculation, regime calculation, research signals, allocation policies, backtesting, statistics and report generation make no outbound HTTP requests. This applies to their callbacks, adapters and transitive dependencies, including when inputs are missing. SDK provider requests go only through `src/extract/http.ts`; csvb archive requests belong to the acquisition stage. A local input run does not start or invoke acquisition.
 - **Committed inputs.** Source-update jitter handling belongs to ingestion. After the update commits, extract supplies the exact committed values and versions to every downstream consumer. Fresh provider values discarded as jitter never enter calculation. Backend, archives and SDK use the same committed observations for a run.
 - **JSON in, JSON out.** Every function takes plain data and returns plain data.
-- **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, both before and after the refactor.
+- **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, and a payload published before D78 replays up to rounding: the same structure, field order, labels and nulls, with numbers that differ only in their last bits.
 - **One source of truth.** The backend runs the package's source files.
-- **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every value, date, label, null, field and serialized byte, including field ordering and number formatting. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
+- **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. D78 changed its arithmetic separately: every published reduction is computed in error-free arithmetic and rounded once. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every date, label, null and field, including field ordering and number formatting; a report published before D78 replays its numbers up to rounding. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
 - **No retroactive change.** Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled (D74 clarification, 2026-10-22).
 
 ## 3. Components
@@ -161,7 +161,7 @@ The backtest does not choose weights. It takes them as input.
 
 ### 5.2 Calculation rules and weights
 
-The backend and SDK run one shared backtest calculation. Generalizing the API preserves the established production results byte for byte. The following behaviors are part of that contract, including numerical edge cases.
+The backend and SDK run one shared backtest calculation. Generalizing the API preserves the established production results byte for byte for results computed with the D78 arithmetic, and a result published before D78 replays up to rounding with every label, null and field unchanged. The following behaviors are part of that contract, including numerical edge cases.
 
 - **Weights.** Nonnegative shares per asset id, cash included, summing to 1. An asset id is any source id with supplied prices; the module has no fixed asset list.
 - **Schedule.** Supplies the target weights for each date. Reference schedules preserve the existing label-to-weight mapping and dates with missing labels.
@@ -184,7 +184,7 @@ The backend and SDK run one shared backtest calculation. Generalizing the API pr
 | `cashRate` | Supplied annual cash yield in percent. |
 | `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points, matching existing reports. |
 
-The result includes the daily value series, trade count, cost evidence and the pre-cost daily returns needed by period statistics. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization remain byte-identical.
+The result includes the daily value series, trade count, cost evidence and the pre-cost daily returns needed by period statistics. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization are unchanged; the numbers of a payload published before D78 replay up to rounding.
 
 Weights set at today's close apply to later returns; changing today's target can change today's cost, but cannot change today's pre-cost return or earlier values. Computation reads no file and makes no HTTP request.
 
@@ -222,7 +222,7 @@ The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existi
 - **As-of runs.** `runRegime` takes `asof`. Source data dated after it is ignored. Missing values are forward-filled, capped at `MAX_FORWARD_FILL_DAYS` (120). Semantics are in `regime-engine.md` section 8.1.
 - **Pinned source data.** A run is only reproducible against pinned source data. An unpinned read can differ from a published run, because external parties revise source data.
 - **Run manifest.** A run records the input files it used and their hashes, its vintage id, methodology id and exact code revision. The code revision is the image's baked git commit (`RM_BUILD_COMMIT`), the value `/version` reports (AC-ID-03). Package and runtime versions are never part of it. An image built without a commit records `unavailable: RM_BUILD_COMMIT is unset or blank`. Historical runs retain their recorded identity, including the earlier `pkg:<version>+bun:<runtime>` label (issue 1442); any supplemental replay metadata is stored separately from immutable reports.
-- **Compatibility evidence.** Representative published runs across market regimes, dates and missing-data patterns provide pinned inputs and complete expected outputs. Comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values and every statistic. Identical inputs and report options must produce byte-identical serialized reports through the pre-refactor backend, pre-refactor SDK, refactored backend and refactored SDK. Changes to floating-point operation order, serialization, null handling or dates are regressions even when differences are small. Report comparison is byte for byte; no numerical tolerance applies.
+- **Compatibility evidence.** Representative published runs across market regimes, dates and missing-data patterns provide pinned inputs and complete expected outputs. Comparisons cover indicators, panel indices, composites, labels, correlations, daily portfolio values and every statistic. Identical inputs and report options must produce byte-identical serialized reports through the refactored backend and refactored SDK. Against reports from before D78 (the pre-refactor backend and SDK, the frozen originals and the published runs) the comparison is value by value: structure, field order, labels, nulls and integers must be identical, and a number may differ only by rounding, at most 1e-9 of its size. Changes to serialization, null handling or dates are regressions even when differences are small. A change of floating-point operation order changes the methodology and needs its own decision, as D78 did.
 - **Replay.** The ledger starts on 2026-09-21. A published run is replayed from the source data in force at its vintage cutoff, not from the current table.
 - **Source updates.** Ingestion applies D56 when deciding whether a provider value changes the stored record. Once committed, values are used exactly throughout preparation, calculation, archives and SDK inputs. No source-specific tolerance applies to downstream calculations or report comparison.
 - **What changes after publication.** The current table is not the record. Source data lags and restatements by external parties, and the final-day weight refresh, can move a calculated indicator. Labels amplify small composite changes.
@@ -241,15 +241,15 @@ Package paths are relative to `packages/analyst-sdk/`.
 | The input rules of section 4.2 hold: bad dates and values reject the file, unread series are ignored and set no date axis, missing series give `null` sections. | `tests/input-rule.test.ts` |
 | The source-only loader calculates ratios from legs and rejects ratio-id rows; historical replay preserves original ratio inputs. | `tests/prepare.test.ts` |
 | Every exported function has a test. | `tests/*.test.ts` |
-| Reference portfolios give byte-identical reports and identical daily values through the pre-refactor and refactored backend and SDK, including `simulatePortfolio` and `computeBacktest`. | `tests/backtest.test.ts` |
-| Complete serialized reports for representative pinned production inputs match byte for byte across backend and SDK before and after refactoring, including field order, formatting and nulls. | `backend/tests/regime-replay-published.test.ts` |
+| Reference portfolios give byte-identical reports and identical daily values through backend and SDK, and match the pre-refactor originals published before D78 up to rounding with identical structure and labels, including `simulatePortfolio` and `computeBacktest`. | `tests/backtest.test.ts` |
+| Complete serialized reports for representative pinned production inputs match byte for byte across backend and SDK, and reports published before D78 match up to rounding, including field order, formatting and nulls. | `backend/tests/regime-replay-published.test.ts` |
 | Storage key translation preserves values, dates, ordering and vintage membership; each consumer reads the same storage keys as before; two streams for one source id stay separate; ambiguous mappings reject. | `tests/input-rule.test.ts` |
 | Historical ratio inputs replay unchanged; calculation from pinned legs preserves ratios before production adoption. | `tests/prepare.test.ts` |
 | Changing a date's weights does not change earlier values or that date's pre-cost return; its close-of-day cost follows the established rules. | `tests/backtest.test.ts` |
 | A date with no applicable weights preserves the established skip behavior and daily return observations. | `tests/backtest.test.ts` |
 | Reference baselines retain their existing target-weight behavior, keys and start dates without introducing holding drift. | `tests/backtest.test.ts` |
 | `periodStats` with original pre-cost returns and boundary evidence reproduces existing full-range and split statistics, including Sharpe on a path with costs. | `tests/backtest.test.ts` |
-| A replay with the original effective inputs reproduces the complete published report byte for byte. The run uses the exact committed input versions; source-update jitter handling provides no replay exception. | `backend/tests/regime-replay-published.test.ts` |
+| A replay with the original effective inputs reproduces the complete published report byte for byte when it was computed with the D78 arithmetic, and up to rounding with the same labels when it was published before D78. The run uses the exact committed input versions; source-update jitter handling provides no replay exception. | `backend/tests/regime-replay-published.test.ts` |
 | As-of regime labels match the published record from 2026-09-21 (issue 1182). | `backend/tests/regime-replay-published.test.ts` |
 | The API and the replica write byte-identical archives for the same state. | `backend/tests/api/public-analytics-archives.test.ts` |
 | A report served for a run is byte-identical on every request, and its checksum matches the stored one. | `backend/tests/api/public-analytics.test.ts` |

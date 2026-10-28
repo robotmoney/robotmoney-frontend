@@ -5112,6 +5112,13 @@ analysts clone it (shallow, see its README). Copying the files instead of moving
 them: two copies of the classifier is the drift D56's fidelity tests exist to
 prevent.
 
+**Amendment note (proposed [D78](#d78), 2026-10-27).** The shared compute still has
+one source of truth, so backend and SDK give byte-identical payloads. D78 changed
+its arithmetic: a payload published before D78 replays up to rounding, not byte for
+byte. The fidelity and parity tests against reports from before D78 compare value by
+value (`packages/analyst-sdk/tests/support/numeric-diff.ts`), with every label, null,
+integer and field still exact.
+
 ---
 
 ## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
@@ -5925,6 +5932,8 @@ A run records methodology and code revision as provenance. Public simulation and
 
 Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
 
+**Amendment note (proposed [D78](#d78), 2026-10-27).** D78 is a change of numerical methodology, made deliberately and separately from this refactor. It keeps one shared calculation and changes no label, null, field or displayed value on any fixture. A payload published before D78 replays up to rounding, not byte for byte. Acceptance comparisons against those reports are value by value, and any structural or discrete difference still blocks cutover. Stored reports keep their bytes.
+
 ### No retroactive change (owner clarification, 2026-10-22)
 
 No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
@@ -6067,7 +6076,7 @@ scheduled activation that misses its release fails CI until it is rescheduled.
 
 1. **Branch.** The SDK (`packages/analyst-sdk/`) ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own semver. The branch must not match `releases-*`: platform CI triggers on that glob, and `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform release line. Changes reach it from `main` only, by merge or cherry-pick, like D70 route (a). Feature PRs never target it. There is no QA branch, no stage run and no rc tag: the SDK runs on an analyst's machine and nothing deploys.
 2. **Tag.** A release is the tag `analyst-sdk-vA.B.C`, only on a commit of `analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in `packages/analyst-sdk/package.json`. This follows the `contract-v*` precedent: `contract/` has its own version and tag namespace, independent of the platform's `v*` tags (`.github/workflows/contract-publish.yml`).
-3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays published report payloads byte for byte, and always name the platform tag whose analytics code it matches. The SDK and the backend share code (D57).
+3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays report payloads computed with its own arithmetic byte for byte and that payloads published before [D78](#d78) replay up to rounding, and always name the platform tag whose analytics code it matches. The SDK and the backend share code (D57). _Amended by proposed D78 (2026-10-27): the release note said every published payload replays byte for byte._
 4. **Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag `vA.B.C` exists. Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches.
 5. **First tag.** The first tag is `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh number separates tagged releases from them.
 6. **Install by tag.** An analyst gets a released version by a sparse clone of the tag.

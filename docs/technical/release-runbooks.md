@@ -527,7 +527,9 @@ branch.
 **Release notes.** Each tag gets a GitHub release. Its notes state:
 
 1. the archive format it reads (format 1, [D72](../decisions.md#d72));
-2. that it replays published report payloads byte for byte;
+2. that it replays report payloads computed with its own arithmetic byte for byte, and that payloads
+   published before [D78](../decisions.md#d78) replay up to rounding: the same structure, labels and
+   nulls, with numbers that differ only in their last bits;
 3. the platform tag whose analytics code it matches, always. The SDK and the backend share code
    (D57).
 
