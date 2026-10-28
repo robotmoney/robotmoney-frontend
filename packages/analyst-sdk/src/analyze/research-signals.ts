@@ -15,6 +15,7 @@ import {
   rollingPercentileRank,
   pctChangeLag,
 } from "../transform/math.ts";
+import { centeredCrossDD, Compounder, ddDiv, ddDivD, ddValue, mean2, sumDD } from "../transform/exact.ts";
 
 const CHANNEL_START = "2018-01-01";
 const LATECYCLE_START = "2010-01-01";
@@ -30,23 +31,27 @@ export const TOP7 = ["NVDA", "MSFT", "AAPL", "GOOGL", "AMZN", "META", "AVGO"];
 
 // OLS beta of y on x over a trailing window of n obs → a SERIES (one beta per
 // day). beta = cov(x,y)/var(x); NaN-tolerant, needs ≥ n/2 paired finite obs.
+// Decision D78: the moments are the compensated centered sums of each
+// window, not the one-pass sxx/c - mx² form (which cancels catastrophically);
+// a window whose x is constant (variance exactly 0) still has no beta.
 // (math.ts::rollingBeta returns only the final scalar; the research signal needs
 // the whole history for percentile ranking, so the series form lives here.)
 export function rollingBetaSeries(y: number[], x: number[], n: number): number[] {
   const out = new Array(y.length).fill(NaN);
   for (let i = n - 1; i < y.length; i++) {
-    let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
+    const xs: number[] = [];
+    const ys: number[] = [];
     for (let j = i - n + 1; j <= i; j++) {
       const xv = x[j], yv = y[j];
       if (!Number.isFinite(xv) || !Number.isFinite(yv)) continue;
-      sx += xv; sy += yv; sxx += xv * xv; sxy += xv * yv; c++;
+      xs.push(xv);
+      ys.push(yv);
     }
-    if (c < Math.floor(n / 2)) continue;
-    const mx = sx / c, my = sy / c;
-    const varX = sxx / c - mx * mx;
-    if (varX <= 0) continue;
-    const covXY = sxy / c - mx * my;
-    out[i] = covXY / varX;
+    if (xs.length < Math.floor(n / 2)) continue;
+    const mx = mean2(xs);
+    const varX = centeredCrossDD(xs, xs, mx, mx);
+    if (!(varX[0] > 0)) continue;
+    out[i] = ddValue(ddDiv(centeredCrossDD(xs, ys, mx, mean2(ys)), varX));
   }
   return out;
 }
@@ -57,7 +62,8 @@ export function rollingBetaSeries(y: number[], x: number[], n: number): number[]
 export function buildEqualWeightIndex(alignedSeries: number[][], n: number): number[] {
   const out = new Array(n).fill(NaN);
   let started = false;
-  let level = 1;
+  // The level compounds unrounded (D78): factor 1 + mean(rets) formed exactly.
+  const level = new Compounder(1);
   for (let i = 1; i < n; i++) {
     const rets: number[] = [];
     let allFinite = true;
@@ -69,15 +75,15 @@ export function buildEqualWeightIndex(alignedSeries: number[][], n: number): num
       rets.push(s[i] / s[i - 1] - 1);
     }
     if (!allFinite) {
-      if (started) out[i] = level;
+      if (started) out[i] = level.value;
       continue;
     }
     if (!started) {
       started = true;
-      out[i - 1] = level;
+      out[i - 1] = level.value;
     }
-    level *= 1 + rets.reduce((a, b) => a + b, 0) / rets.length;
-    out[i] = level;
+    level.growDD(ddDivD(sumDD(rets), rets.length));
+    out[i] = level.value;
   }
   return out;
 }
@@ -209,7 +215,7 @@ export function computeChannelDivergence(inputs: ChannelInputs, asof: string): R
   const flowLast = positionalLast(flow);
   const flowPct = positionalLast(flowPctSeries);
   const channelPct = [betaPct, ratioPctLast, flowPct].filter(Number.isFinite);
-  const composite = channelPct.length ? channelPct.reduce((a, b) => a + b, 0) / channelPct.length : NaN;
+  const composite = channelPct.length ? ddValue(ddDivD(sumDD(channelPct), channelPct.length)) : NaN;
 
   // Every reading goes through gaugeNum: finite → rounded number, non-finite →
   // explicit null (#505). BTC_QQQ_RATIO is the one deliberately MIXED gauge —

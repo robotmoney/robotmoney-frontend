@@ -34,7 +34,9 @@ import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
-import { replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
+import { replayPublishedRun, type PublishedAsofRow, type ReplayOutcome } from "./support/published-replay.ts";
+import { numericDiff } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
+import { canonicalStringify } from "../src/analytics/run-ledger.ts";
 import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
 
 useCleanDatabase(import.meta.file);
@@ -113,8 +115,12 @@ describe("regime replay of every published run from 2026-09-21", () => {
 // regime-replay-archive.test.ts against a local copy of the backups; required
 // CI has no copy, so it runs this sample. Each run's rebuilt input must hash to
 // the input `bun run inputs` writes for it, its replayed as-of label must equal
-// the published label, and every other field must give exactly the outcome
-// recorded from the full record (no tolerance).
+// the published label, and every other field must give the outcome recorded
+// from the full record. The record was made before decision D78
+// (compensated arithmetic), which moves numbers in their last bits, so the
+// recorded outcome is matched up to rounding: the same fields differ beyond
+// rounding as recorded, the recorded first difference reproduces up to
+// rounding, and every other field equals the published one up to rounding.
 const SAMPLE_DIR = join(import.meta.dir, "fixtures/published-replay");
 
 interface SampleRun {
@@ -138,6 +144,10 @@ const sampleRows = sampleLines.slice(1).map((l) => {
   const [date, series, value, kind, runs] = l.split(",") as [string, string, string, "source" | "calculated", string];
   return { date, series, value, kind, runs: new Set(runs.split(";").map(Number)) };
 });
+
+// One field of the replayed row and of the published row, as canonical JSON.
+const replayedField = (o: ReplayOutcome, field: string): string => o.fields[field]!;
+const publishedField = (row: PublishedAsofRow, field: string): string => canonicalStringify((row as unknown as Record<string, unknown>)[field] ?? null);
 
 describe("regime replay of a committed sample of published production runs (issue 1431)", () => {
   test("the sample fixture is the one its record names", () => {
@@ -166,17 +176,27 @@ describe("regime replay of a committed sample of published production runs (issu
       }
       expect(poison.attempts).toEqual([]);
       expect({ run: run.runKey, asof: run.asof, label: outcome.replayLabel }).toEqual({ run: run.runKey, asof: run.asof, label: run.publishedAsofRow.regime });
-      // Every other field: exactly the outcome recorded from the full record. A
-      // pre-1421 run's numbers can differ from what it published (fresh Yahoo
-      // values, packages/analyst-sdk/README.md); those differences are named in
-      // the fixture and the whole replayed row is pinned by hash, so nothing is
-      // tolerated: any changed value, or a different set of differing fields, fails.
-      expect({ run: run.runKey, differing: outcome.differing, firstDiff: outcome.firstDiff, replaySha256: outcome.replaySha256 }).toEqual({
-        run: run.runKey,
-        differing: run.replayDiffering,
-        firstDiff: run.replayFirstDiff,
-        replaySha256: run.replaySha256,
-      });
+      // Every other field: the outcome recorded from the full record. A pre-1421
+      // run's numbers can differ from what it published (fresh Yahoo values,
+      // packages/analyst-sdk/README.md); those differences are named in the
+      // fixture. Since D78 the comparison is up to rounding: the fields that
+      // differ beyond rounding are exactly the recorded ones, the recorded first
+      // difference reproduces (its published side exactly, its replay side up to
+      // rounding), and any other differing field moved only by rounding. The
+      // recorded replaySha256 pinned the pre-D78 arithmetic; it is no longer
+      // reproducible and a re-recorded sample (scripts/published-replay-sample.ts)
+      // would pin the new one.
+      expect({ run: run.runKey, beyondRounding: outcome.beyondRounding }).toEqual({ run: run.runKey, beyondRounding: run.replayDiffering });
+      if (run.replayFirstDiff === null) {
+        expect(outcome.beyondRounding).toEqual([]);
+      } else {
+        const recorded = run.replayFirstDiff;
+        expect(outcome.differing).toContain(recorded.field);
+        const firstMaterial = outcome.beyondRounding[0]!;
+        expect(firstMaterial).toBe(recorded.field);
+        expect(numericDiff(recorded.replay, replayedField(outcome, recorded.field)).differences).toEqual([]);
+        expect(publishedField(run.publishedAsofRow, recorded.field)).toBe(recorded.published);
+      }
       if (run.replayDiffering.length > 0) console.log(`run ${run.runKey} as of ${run.asof}: label matches; recorded pre-1421 differences in ${run.replayDiffering.join(", ")}`);
     }, 120_000);
   }

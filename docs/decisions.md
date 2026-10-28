@@ -5112,6 +5112,13 @@ analysts clone it (shallow, see its README). Copying the files instead of moving
 them: two copies of the classifier is the drift D56's fidelity tests exist to
 prevent.
 
+**Amendment note ([D78](#d78), 2026-10-28).** The shared compute still has
+one source of truth, so backend and SDK give byte-identical payloads. D78 changed
+its arithmetic: a payload published before D78 replays up to rounding, not byte for
+byte. The fidelity and parity tests against reports from before D78 compare value by
+value (`packages/analyst-sdk/tests/support/numeric-diff.ts`), with every label, null,
+integer and field still exact.
+
 ---
 
 ## D58 — Raw analytics data is readable without a token, under `/api/public/analytics/` (refines D52; issue #1095)
@@ -5925,6 +5932,8 @@ A run records methodology and code revision as provenance. Public simulation and
 
 Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
 
+**Amendment note ([D78](#d78), 2026-10-28).** D78 is a change of numerical methodology, made deliberately and separately from this refactor. It keeps one shared calculation and changes no label, null, field or displayed value on any fixture. A payload published before D78 replays up to rounding, not byte for byte. Acceptance comparisons against those reports are value by value, and any structural or discrete difference still blocks cutover. Stored reports keep their bytes.
+
 ### No retroactive change (owner clarification, 2026-10-22)
 
 No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
@@ -6061,16 +6070,55 @@ scheduled activation that misses its release fails CI until it is rescheduled.
 <a id="d77"></a>
 ## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (owner, 2026-10-25)
 
-**Status:** Accepted 2026-10-25. Specified in `docs/technical/release-runbooks.md` section 11. Built by issue 1449: the tag guard (`.github/workflows/analyst-sdk-tag-guard.yml`, logic in `scripts/check-analyst-sdk-tag.ts`) and the workflow triggers.
+**Status:** Accepted 2026-10-25. Items 3, 4 and 7 amended by the owner 2026-10-28. Specified in `docs/technical/release-runbooks.md` section 11. Built by issue 1449: the tag guard (`.github/workflows/analyst-sdk-tag-guard.yml`, logic in `scripts/check-analyst-sdk-tag.ts`) and the workflow triggers.
 
 **Decision.**
 
 1. **Branch.** The SDK (`packages/analyst-sdk/`) ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own semver. The branch must not match `releases-*`: platform CI triggers on that glob, and `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform release line. Changes reach it from `main` only, by merge or cherry-pick, like D70 route (a). Feature PRs never target it. There is no QA branch, no stage run and no rc tag: the SDK runs on an analyst's machine and nothing deploys.
 2. **Tag.** A release is the tag `analyst-sdk-vA.B.C`, only on a commit of `analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in `packages/analyst-sdk/package.json`. This follows the `contract-v*` precedent: `contract/` has its own version and tag namespace, independent of the platform's `v*` tags (`.github/workflows/contract-publish.yml`).
-3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays published report payloads byte for byte, and always name the platform tag whose analytics code it matches. The SDK and the backend share code (D57).
-4. **Gate.** The SDK tag is cut only after the matching platform release has been cut: its version tag `vA.B.C` exists. Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches.
+3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays report payloads computed with its own arithmetic byte for byte and that payloads published before [D78](#d78) replay up to rounding, and name the platform tag whose analytics code it matches when one exists. The SDK and the backend share code (D57). _Amended by D78 (2026-10-28): the release note said every published payload replays byte for byte. Amended by the owner (2026-10-28): the note always named a matching platform tag._
+4. **Gate.** Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches. _Amended by the owner (2026-10-28): the gate also required the matching platform version tag `vA.B.C` to exist._
 5. **First tag.** The first tag is `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh number separates tagged releases from them.
 6. **Install by tag.** An analyst gets a released version by a sparse clone of the tag.
-7. **Order.** The platform release is cut first, then the SDK tag. The SDK is fully tested only when the platform runbook has completed with the SDK checks passing on stage in QA and on production in the soak. The SDK tag is cut after the matching platform release.
+7. **Cadence.** The SDK releases at any cadence, independent of the platform. An SDK tag needs no matching platform release. _Amended by the owner (2026-10-28): this item said the platform release is cut first, then the SDK tag. That order was a one-off instruction for v0.7.0 and applied to that release only._
 
 **Why.** An analyst needs a fixed, named version to cite and rerun. The platform's release line rehearses on stage and cuts over production. None of that applies to a package that runs on an analyst's machine. A separate branch and tag namespace keeps platform tooling from treating an SDK release as a platform release.
+
+---
+
+<a id="d78"></a>
+## D78 — The analytics reductions are computed in error-free arithmetic and rounded once; earlier published payloads replay up to rounding, not byte for byte (owner, 2026-10-28)
+
+**Status:** Proposed 2026-10-27. Accepted by the owner 2026-10-28. Built by issue 1498 in `packages/analyst-sdk/src/transform/exact.ts` and its callers. It amends D57's byte-identical replay promise, the "Analytics report compatibility" clarification under D74 ("Changes to numerical methodology are outside this refactor"; this is such a change, made deliberately and separately) and D77 (3)'s release-note sentence.
+
+**Decision.**
+
+1. **Compensated reductions.** Every sum, mean, variance, standard deviation, dot product, correlation and compounding product in the compute core that feeds a published number is computed with error-free transformations (TwoSum, Dekker TwoProd, Sum2 and Dot2 of Ogita, Rump and Oishi) and finished in double-double, so it is rounded once. That covers `math.ts` (`mean`, `std`, `stddev`, `pearson`, `rollingBeta`, `sma`, `rollingSum`, the inverse-correlation weight sums and `capWeights`), `compute.ts` (panel weighted mean, composite mean, fast-track sigma), `correlations.ts` (`pearson` behind the Spearman ranks), `backtest.ts`, `research-signals.ts` (`rollingBetaSeries`, the equal-weight index, the channel composite) and the backtests in `weighting-comparison.ts` and `regime-eq-comparison.ts`.
+2. **Backtests.** Equity compounds as an unrounded double-double: each factor `1 + r` is formed exactly (`twoSum(1, r)`), a cost factor `1 - turnover x cost` keeps its product exact, and each published daily value is the correctly rounded current level. A day's portfolio return and the turnover are compensated sums. The daily cash rate is `expm1(log1p(rate / 100) / 365)` and CAGR is `expm1(log(ratio) / years)`, instead of the `pow(...) - 1` forms, which lose the leading digits of a small result to the final subtraction.
+3. **Scale.** `pearson`, `std` and `stddev` rescale each series by a power of two before the products (exact, so the value does not change), and the correlation's denominator is `sqrt(vx) x sqrt(vy)` in double-double. Self-correlation of `[1,2,3,4] x 1e150` is 1, not 0 (`dx * dy` overflowed), and of `x 1e-150` is 1, not Infinity.
+4. **Contracts unchanged.** Empty input, `n < 2`, non-finite handling, pairwise dropping of non-finite points and the zero-variance results (0 in `math.ts`, NaN in `correlations.ts`, Sharpe 0) are as before. There is no variance epsilon: a variance is 0 exactly when the exact variance of the doubles is 0.
+5. **The test oracle is exact arithmetic.** `packages/analyst-sdk/tests/exact-numerics.test.ts` checks the results against BigInt rational arithmetic over the same doubles (`tests/support/exact-reference.ts`), on the committed SPX and ETH closes and indicator levels, and checks that the plain loops miss on the same data.
+
+**Defect fixed.** Constant returns gave a nonzero Sharpe. A real `simulatePortfolio` run with 30% cash at a 5% yield and 70% in a flat asset produces 3,000 bit-identical daily returns. The plain mean was not exactly that return, so the centered differences were not zero: `periodStats` reported sample variance 3.68e-36 and Sharpe 3.99e14. The exact variance is 0, so the Sharpe is now 0 under the existing zero-volatility rule. The test above runs this case through the real simulator.
+
+**Measured magnitudes.** Against exact rationals, before this change: on 2,250 common-date Yahoo returns (the rosemarys-baby numerics review, 2026-10-27) the relative errors were 1.8e-15 (mean), 1.5e-15 (population std), 1.6e-15 (sample std) and 4.3e-15 (Pearson); a 200-day BTC rolling sum was off by up to 1.1e-15; SPY buy-and-hold final equity was 2.9686250659744187 against the exact 2.968625065974424. After it, every one of these equals the correctly rounded exact value on the SDK's own fixtures. Old code against new on the committed fixtures:
+
+| output | numbers | changed | max abs change | max rel change |
+| --- | ---: | ---: | ---: | ---: |
+| `tests/golden/regime-report.json` | 1,615 | 1,407 | 6.3e-12 | 9.1e-12 |
+| daily regime result, production fixture (labels, percentiles, ranks, weights, indices) | 97,033 | 5,315 | 7.2e-16 | 6.9e-15 |
+| daily regime result, 8-year fixture | 184,199 | 10,296 | 5.6e-16 | 4.0e-15 |
+| daily portfolio values, production fixture | 38,308 | 37,129 | 1.9e-14 | 1.2e-14 |
+| weighting comparison | 1,623 | 1,506 | 1.6e-14 | 7.2e-13 |
+| regime-eq comparison | 1,445 | 1,253 | 3.9e-14 | 1.2e-12 |
+| v0.7.0 release check golden (`scripts/release/version-checks/v0.7.0/reference/backtest.golden.json`, regenerated) | 15 | 9 | 8.6e-13 | 3.8e-13 |
+
+The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3437433689646): its returns are the nearly constant cash rate, which the `expm1(log1p)` form now gets right to the last digits, and a near-constant series amplifies that in the ratio. The largest relative change is a CAGR near zero (-8.04e-5), where `pow(...) - 1` cancelled.
+
+**Discrete outputs.** None changed. Across the three original-report variants (production, missing-label, zero-volatility; default and `--full --factor` envelopes, the shared analysis artifact and the daily portfolio values), the production and 8-year fixtures with and without the factor panel, and both research generators, every regime label, percentile rank, sign, integer, null and key is identical, and no number moved by more than 1e-9 of its size. No value rounded for display (`toFixed`) changed.
+
+**Replay consequence.** A payload published before this change does not replay byte for byte: re-running its inputs gives numbers that differ in the last one to four significant bits (up to 9e-12 relative where a result is near zero or a ratio is ill-conditioned), with the same structure, labels and nulls. Stored rows, published reports and archives keep their bytes (the "No retroactive change" clarification under D74). The parity tests against the frozen originals (`tests/fixtures/originals/`, never regenerated) now compare value by value (`tests/support/numeric-diff.ts`): any structural or discrete difference still fails them. On the committed sample of published production runs (`backend/tests/fixtures/published-replay/`), run `c65a5db6` (as of 2026-10-19) replayed byte for byte before; it now keeps its label and differs in `composite`, `macroIndex`, `onchainIndex` and `factorIndex` by rounding only (composite 0.47705666099868727 published, 0.4770566609986872 replayed). The two pre-1421 runs keep exactly their recorded beyond-rounding differences; their recorded replay hashes pinned the old arithmetic and are no longer asserted (a sample re-recorded by `backend/scripts/published-replay-sample.ts` would pin the new ones). New runs replay byte for byte against reports produced by this code. The published blog data `frontend/public/data/weighting-comparison.json` and `regime-eq-comparison.json` are not regenerated; regenerating them would move numbers by up to 1.2e-12 relative with no discrete change. The SDK release notes (D77 (3)) say which methodology a tag computes, and a tag with this change states that earlier payloads replay up to rounding.
+
+**Why.** The published numbers should be the exact result of the published inputs, not of a particular summation order. The plain loops were accurate to a few ulps on these data, so no report moved materially, but they made a zero variance nonzero, which turned a constant return into a Sharpe of 4e14, and they made the backtest depend on the order of additions. Error-free arithmetic fixes both without a tolerance, at no runtime cost on the regime pipeline (a full run takes about 0.65 s, against 1.1 s before, because the fused correlation pass replaced per-pair array building).
+
+**Left alone.** `rollingPercentileRank` and `percentileInWindow` only compare and count. `pctChange`, `pctChangeLag`, `ratio` and the ratio transforms are one rounded operation each. The 1e-9 weight-sum checks in `backtest.ts` and `allocate/` validate input and publish nothing. The allocation engine (`allocate/engine.ts`, `allocate/signals.ts`) sums a handful of percent weights and percentiles; it is outside the compute core and keeps plain sums. Max drawdown is one division per day. A label change can still come from a genuine tie at a bucket edge on other data; none occurs on the fixtures.

@@ -161,7 +161,8 @@ test(
 // mapping, and the report rebuilt from the reloaded members equals the
 // committed golden byte for byte (no tolerance, no regenerated file).
 const SDK_TESTS = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "tests");
-const GOLDEN_SHA256 = "119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce";
+// Regenerated once on purpose by decision D78 (compensated arithmetic; was 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce).
+const GOLDEN_SHA256 = "08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba";
 
 test(
   "a frozen regime vintage reloads offline with unchanged membership and rebuilds the golden report bytes through the D74 mapping",

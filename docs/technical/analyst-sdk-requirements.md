@@ -18,7 +18,7 @@ Non-goals:
 
 ## 2. Principles
 
-- **One shared calculation.** Identical effective inputs and report options produce byte-identical report payloads in backend and SDK before and after the refactor. Existing operation order, dates, nulls, field order and number formatting are preserved. This refactor introduces no alternative calculation methodology or backend-only compatibility engine.
+- **One shared calculation.** Identical effective inputs and report options produce byte-identical report payloads in backend and SDK, and a payload published before D78 replays up to rounding: the same structure, field order, labels and nulls, with numbers that differ only in their last bits. Existing dates, nulls, field order and number formatting are preserved. This refactor introduces no alternative calculation methodology or backend-only compatibility engine; the compensated arithmetic of D78 is a separate, deliberate change.
 - **Pure computation.** The computation calls no network, reads no database and reads no environment. Only the source clients in `src/extract/` fetch, and only through `src/extract/http.ts`. Tests run with `fetch` replaced by a thrower.
 - **Files only at the edge.** The command line is the only place that reads or writes a file.
 - **Install alone.** The package installs from a sparse clone of its own directory.
@@ -79,7 +79,7 @@ The download client is a polite, resumable reader. It fetches archives under the
 - **Paths.** A relative path resolves from the folder the analyst ran the command in.
 - **Bad arguments.** The command exits non-zero with a message on any of these: a second input file, a repeated option, an unknown option, a `--start` after every input row, or an input with no series the run reads.
 - **Pinning.** An explicit provenance output envelope carries the report and its `manifest`. With no manifest the envelope carries `pinned: false`. The existing report-only output retains its shape.
-- **Calculation identity.** Replay records the original methodology and code revision for audit. Backend and SDK use the same shared calculation; no methodology-selection option is introduced by this refactor. With identical pinned inputs and options, replay through the refactored module preserves the original serialized report byte for byte.
+- **Calculation identity.** Replay records the original methodology and code revision for audit. Backend and SDK use the same shared calculation; no methodology-selection option is introduced by this refactor. With identical pinned inputs and options, replay through the refactored module preserves a serialized report computed with the D78 arithmetic byte for byte, and a payload published before D78 replays up to rounding with the same labels, nulls and fields.
 
 ## 7. Success criteria and tests
 
@@ -98,8 +98,8 @@ Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative t
 | An API-only fill and a repo fill give the same local copy for the same backup id. | csvb `tests/fill-parity.test.ts` |
 | The download client never has two requests in flight, waits `Retry-After`, stays inside the retry bounds, and adds no partial archive when interrupted. | csvb `tests/download-client.test.ts` |
 | Canonical input generation preserves stored values, dates and vintage membership, including historical replay inputs. | csvb `tests/rerun-vintage.test.ts` |
-| Identical pinned inputs and options produce byte-identical report payloads through backend and SDK before and after refactoring, including all backtest statistics; daily simulation values also match. | `tests/regime.test.ts`, `tests/backtest.test.ts` |
-| A rerun with the original effective inputs produces the published report byte for byte. Backend and SDK use the same committed observations; ingestion tolerances provide no downstream exception. | csvb `tests/rerun-vintage.test.ts` |
+| Identical pinned inputs and options produce byte-identical report payloads through backend and SDK, and payloads published before D78 replay up to rounding, including all backtest statistics; daily simulation values also match. | `tests/regime.test.ts`, `tests/backtest.test.ts` |
+| A rerun with the original effective inputs produces the published report byte for byte when it was computed with the D78 arithmetic, and up to rounding when it was published before D78. Backend and SDK use the same committed observations; ingestion tolerances provide no downstream exception. | csvb `tests/rerun-vintage.test.ts` |
 
 ## 8. Open decisions
 

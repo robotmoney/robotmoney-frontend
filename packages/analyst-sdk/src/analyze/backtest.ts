@@ -21,10 +21,21 @@
 // output is byte-identical to the pre-refactor code (tests/backtest.test.ts
 // against tests/reference/backtest-pre-refactor.ts). Spec: analytics
 // requirements section 5 (docs/technical/analytics-requirements.md).
+//
+// Accuracy (decision D78): equity compounds as an unrounded
+// double-double (each factor 1 + r formed exactly), each day's portfolio return
+// and the turnover are compensated sums, the daily cash rate is
+// expm1(log1p(rate) / 365), CAGR is expm1(log(ratio) / years), and periodStats
+// takes a compensated mean and sample variance. The old plain-loop mean made
+// bit-identical returns look volatile (variance 3.7e-36, Sharpe 4e14); exact
+// variance is 0, so Sharpe is 0 under the zero-volatility convention. The
+// frozen pre-refactor copy (tests/reference/backtest-pre-refactor.ts) keeps the
+// old arithmetic and now agrees to within rounding, not byte for byte.
 import type { RegimeComputeResult } from "./compute.ts";
 import type { Point } from "../types.ts";
 import { toDateMap } from "./correlations.ts";
 import { PANELS } from "./indicators.ts";
+import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 
 export const BACKTEST_COST_PER_REBALANCE = 0.001;
 export const BACKTEST_IN_SAMPLE_END = "2024-01-31";
@@ -209,7 +220,7 @@ function simulate(
   firstIdx: number,
   costRate: number,
 ): SimulationResult {
-  let equity = 1;
+  const equity = new Compounder(1);
   let lastWeights: Weights | null = null;
   const values: Point[] = [];
   const returns: Point[] = [];
@@ -223,28 +234,33 @@ function simulate(
 
     // Day i's portfolio return = lastWeights · (day i's asset returns).
     if (lastWeights != null) {
-      const dailyTbill = Math.pow(1 + (tbillDaily[i - 1] || 0) / 100, 1 / 365) - 1;
-      let portRet = (lastWeights.cash || 0) * dailyTbill;
-      for (const [asset, ws] of Object.entries(lastWeights)) {
-        if (asset === "cash" || ws === 0) continue;
+      const dailyTbill = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
+      // portRet = cash weight x daily cash rate + sum of weight x asset return,
+      // as one compensated dot product.
+      const ws: number[] = [lastWeights.cash || 0];
+      const rs: number[] = [dailyTbill];
+      for (const [asset, wa] of Object.entries(lastWeights)) {
+        if (asset === "cash" || wa === 0) continue;
         const p0 = assetSeries[asset]?.[i - 1];
         const p1 = assetSeries[asset]?.[i];
         if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) {
-          portRet += ws * (p1! / p0! - 1);
+          ws.push(wa);
+          rs.push(p1! / p0! - 1);
         }
       }
-      equity *= 1 + portRet;
+      const portRet = ddValue(dotDD(ws, rs));
+      equity.grow(portRet);
       returns.push({ date: dateAxis[i]!, value: portRet });
     }
 
     // Rebalance at close of today if weights changed (turnover-based cost).
     if (lastWeights != null && !sameWeights(lastWeights, w)) {
       const turnover = turnoverBetween(lastWeights, w);
-      equity *= 1 - turnover * costRate;
+      equity.shrinkByProduct(turnover, costRate);
       trades.push({ date: dateAxis[i]!, turnover, cost: turnover * costRate });
     }
     lastWeights = w;
-    values.push({ date: dateAxis[i]!, value: equity });
+    values.push({ date: dateAxis[i]!, value: equity.value });
   }
 
   return {
@@ -275,7 +291,8 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
   const dailyReturns = options.returns.filter((p) => p.date > from && p.date <= to).map((p) => p.value);
   const transitions = (options.trades ?? []).filter((t) => t.date > from && t.date <= to).length;
   const base = window.length ? window[0]!.value : 1;
-  const equity = window.length ? window[window.length - 1]!.value / base : 1;
+  const equityDD = window.length ? ddDiv([window[window.length - 1]!.value, 0], [base, 0]) : ([1, 0] as const);
+  const equity = ddValue(equityDD);
 
   let peak = base;
   let maxDd = 0;
@@ -286,12 +303,12 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
   }
 
   const years = (+new Date(endDate) - +new Date(startDate)) / YEAR_MS;
-  const cagr = years > 0 ? Math.pow(equity, 1 / years) - 1 : 0;
-  const mean = dailyReturns.reduce((s, v) => s + v, 0) / Math.max(1, dailyReturns.length);
-  const variance =
-    dailyReturns.reduce((s, v) => s + (v - mean) ** 2, 0) / Math.max(1, dailyReturns.length - 1);
-  const sd = Math.sqrt(variance);
-  const sharpe = sd > 0 ? (mean * 365) / (sd * Math.sqrt(365)) : 0;
+  const cagr = years > 0 ? annualizedGrowth(equityDD, years) : 0;
+  // Compensated mean and sample sd. With no returns the mean is 0 and with one
+  // the sd is 0 (the old max(1, n) and max(1, n - 1) divisors); either way, and
+  // whenever the returns are all equal, sd is exactly 0 and Sharpe is 0.
+  const { mean, sd } = dailyReturns.length === 0 ? { mean: [0, 0] as const, sd: [0, 0] as const } : meanAndSampleSd(dailyReturns);
+  const sharpe = sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0;
 
   const splitDate = options.splitDate ?? BACKTEST_IN_SAMPLE_END;
   let isEquityStart: number | null = null;
@@ -309,10 +326,10 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
   const yearsIs = (+new Date(splitDate) - +new Date(startDate)) / YEAR_MS;
   const yearsOos = (+new Date(endDate) - +new Date(splitDate)) / YEAR_MS;
   const cagrIs =
-    isEquityStart && isEquityEnd && yearsIs > 0 ? Math.pow(isEquityEnd / isEquityStart, 1 / yearsIs) - 1 : null;
+    isEquityStart && isEquityEnd && yearsIs > 0 ? annualizedGrowth(ddDiv([isEquityEnd, 0], [isEquityStart, 0]), yearsIs) : null;
   const cagrOos =
     oosEquityStart && oosEquityEnd && yearsOos > 0
-      ? Math.pow(oosEquityEnd / oosEquityStart, 1 / yearsOos) - 1
+      ? annualizedGrowth(ddDiv([oosEquityEnd, 0], [oosEquityStart, 0]), yearsOos)
       : null;
 
   const monthEnd = new Map<string, Point>();
@@ -433,11 +450,17 @@ function sameWeights(a: Weights, b: Weights): boolean {
   return true;
 }
 
+// One-sided turnover (∑|Δw|/2): each difference is kept exact as a twoSum pair
+// (with its sign folded in), and the pairs are summed compensated.
 function turnoverBetween(a: Weights, b: Weights): number {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  let s = 0;
-  for (const k of keys) s += Math.abs((a[k] || 0) - (b[k] || 0));
-  return s / 2; // one-sided turnover (∑|Δw|/2)
+  const parts: number[] = [];
+  for (const k of keys) {
+    const [d, e] = twoSum(a[k] || 0, -(b[k] || 0));
+    if (d < 0 || (d === 0 && e < 0)) parts.push(-d, -e);
+    else parts.push(d, e);
+  }
+  return ddValue(sumDD(parts)) / 2;
 }
 
 // Strip the per-day `_daily` series from every strategy for the persisted snapshot
