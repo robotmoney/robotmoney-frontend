@@ -246,3 +246,11 @@ jobs:
           tests/regime-replay-published.test.ts:5
           tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8
+      # Issue 1498: the vault TVL conversion keeps the raw amount as a BigInt
+      # until one correctly rounded raw / 10^decimals, proven against BigInt
+      # rational arithmetic with every case run and none skipped.
+      - name: Vault TVL fidelity proofs ran (issue 1498)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/projects-pipelines-fidelity.test.ts:14
