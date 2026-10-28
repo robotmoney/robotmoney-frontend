@@ -1,4 +1,4 @@
-// Proposed decision D78: the SDK's reductions are compensated, so on real data
+// Decision D78: the SDK's reductions are compensated, so on real data
 // they return the correctly rounded exact value of the binary64 inputs. Every
 // expectation here is an exact BigInt rational computation over the same
 // doubles (support/exact-reference.ts), rounded once, never another

@@ -3,7 +3,7 @@
 // a NAMED original value captured from the pre-refactor computeBacktest
 // (fixtures/originals/an-behaviours.json.gz), plus the property that makes
 // each one what it is. backend/tests/backtest-correlations-fidelity.test.ts
-// asserts the same pins through the backend shim. Since proposed decision D78
+// asserts the same pins through the backend shim. Since decision D78
 // (compensated arithmetic) the originals match up to rounding: same structure
 // and labels, no number moved by more than rounding (support/numeric-diff.ts).
 import { describe, expect, test } from "bun:test";

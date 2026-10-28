@@ -22,7 +22,7 @@
 // against tests/reference/backtest-pre-refactor.ts). Spec: analytics
 // requirements section 5 (docs/technical/analytics-requirements.md).
 //
-// Accuracy (proposed decision D78): equity compounds as an unrounded
+// Accuracy (decision D78): equity compounds as an unrounded
 // double-double (each factor 1 + r formed exactly), each day's portfolio return
 // and the turnover are compensated sums, the daily cash rate is
 // expm1(log1p(rate) / 365), CAGR is expm1(log(ratio) / years), and periodStats

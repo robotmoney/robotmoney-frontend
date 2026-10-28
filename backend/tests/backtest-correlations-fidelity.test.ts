@@ -248,7 +248,7 @@ test("backtest+correlations TRACKING: metrics track the committed snapshot withi
 // the SDK's report-parity test uses: the shared correlations/backtest artifact
 // and the daily portfolio values. And the established backtest behaviours
 // AN-5/6/9/10/14 must equal their named original values through the shim.
-// Since proposed decision D78 (compensated arithmetic) the originals are
+// Since decision D78 (compensated arithmetic) the originals are
 // matched up to rounding: identical structure, labels, nulls and integers, no
 // number moved by more than rounding.
 describe("issue 1421: backend backtest and correlations against the original bytes", () => {

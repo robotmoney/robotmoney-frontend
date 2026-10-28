@@ -1,4 +1,4 @@
-// Payloads published before D78 replay up to rounding — proposed decision D78,
+// Payloads published before D78 replay up to rounding — decision D78,
 // issue 1498.
 //
 // D78 computes every published reduction in error-free arithmetic, so a report

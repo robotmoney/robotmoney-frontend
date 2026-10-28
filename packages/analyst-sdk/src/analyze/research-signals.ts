@@ -31,7 +31,7 @@ export const TOP7 = ["NVDA", "MSFT", "AAPL", "GOOGL", "AMZN", "META", "AVGO"];
 
 // OLS beta of y on x over a trailing window of n obs → a SERIES (one beta per
 // day). beta = cov(x,y)/var(x); NaN-tolerant, needs ≥ n/2 paired finite obs.
-// Proposed decision D78: the moments are the compensated centered sums of each
+// Decision D78: the moments are the compensated centered sums of each
 // window, not the one-pass sxx/c - mx² form (which cancels catastrophically);
 // a window whose x is constant (variance exactly 0) still has no beta.
 // (math.ts::rollingBeta returns only the final scalar; the research signal needs

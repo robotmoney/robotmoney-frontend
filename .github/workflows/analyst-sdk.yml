@@ -101,7 +101,7 @@ jobs:
           tests/prepare.test.ts:3
           tests/input-rule.test.ts:10
           tests/extract.test.ts:9
-      # Proposed decision D78: the exact-arithmetic suite ran (results against BigInt
+      # Decision D78: the exact-arithmetic suite ran (results against BigInt
       # rationals on real data, the pearson scale cases, the constant-return Sharpe).
       - name: Exact numerics suite ran (D78)
         run: >-

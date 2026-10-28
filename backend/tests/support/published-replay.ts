@@ -7,7 +7,7 @@
 // and run through the SDK's runRegime (the one calculation the backend also
 // runs) with factor figures on. No tolerance: every field is compared exactly,
 // in a fixed order, and the first field that differs is the run's result.
-// Proposed decision D78 (compensated arithmetic) moves numbers in their last
+// Decision D78 (compensated arithmetic) moves numbers in their last
 // bits, so a run published before it differs from its replay in those bits;
 // `beyondRounding` names the fields that differ by more than that
 // (packages/analyst-sdk/tests/support/numeric-diff.ts).

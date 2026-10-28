@@ -39,7 +39,7 @@
 //     §7 and docs/technical/research-signals.md §2.
 // ─────────────────────────────────────────────────────────────────────────
 //
-// Accuracy (proposed decision D78): every reduction in this file (mean, std,
+// Accuracy (decision D78): every reduction in this file (mean, std,
 // stddev, pearson, rollingBeta, sma, rollingSum, the weight sums) is compensated
 // through ./exact.ts, so on finite data it returns the correctly rounded value
 // of the exact result for the binary64 inputs, not the plain loop's last bits.

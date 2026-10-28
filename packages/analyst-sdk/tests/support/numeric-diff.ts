@@ -1,4 +1,4 @@
-// Proposed decision D78: compensated arithmetic moves published numbers in their
+// Decision D78: compensated arithmetic moves published numbers in their
 // last bits, so a report computed now is compared with an earlier one value by
 // value instead of byte by byte. This walks two JSON texts in parallel and
 // sorts every difference into one of three kinds:

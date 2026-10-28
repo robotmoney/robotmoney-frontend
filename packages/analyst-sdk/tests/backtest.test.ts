@@ -6,7 +6,7 @@
 //   shared       computeBacktest (what backend and SDK run)
 //   generalized  simulatePortfolio + periodStats called directly
 // including the per-day values (`_daily`), every statistic, nulls and field order.
-// shared and generalized agree byte for byte. Since proposed decision D78
+// shared and generalized agree byte for byte. Since decision D78
 // (compensated arithmetic) the frozen original keeps the old plain-loop
 // arithmetic, so it agrees with them up to rounding: same structure, labels,
 // nulls and integers, no number moved by more than rounding.

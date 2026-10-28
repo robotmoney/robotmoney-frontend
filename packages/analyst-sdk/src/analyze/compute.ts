@@ -14,7 +14,7 @@
 //   6. Bucket composite by 3y rolling percentile → risk-off / neutral / risk-on,
 //      with 5-day confirmation OR 2σ fast-track smoothing.
 //
-// Accuracy (proposed decision D78): the panel weighted mean, the composite
+// Accuracy (decision D78): the panel weighted mean, the composite
 // mean and the fast-track σ are compensated (transform/exact.ts).
 import { ddDiv, ddDivD, ddValue, dotDD, meanAndSampleSd, sumDD } from "../transform/exact.ts";
 import {

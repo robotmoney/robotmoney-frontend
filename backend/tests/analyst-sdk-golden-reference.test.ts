@@ -183,7 +183,7 @@ describe("analyst-sdk golden equals the original JS reference", () => {
 // fixtures equals the pre-change golden bytes, with globalThis.fetch throwing,
 // whether the input names each stream by its input id or by its storage key.
 // The golden's sha256 is pinned, so a regenerated golden fails here. It was
-// regenerated once on purpose, by proposed decision D78 (compensated
+// regenerated once on purpose, by decision D78 (compensated
 // arithmetic; was 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce).
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
   const GOLDEN_SHA256 = "08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba";

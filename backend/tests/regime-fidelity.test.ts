@@ -338,7 +338,7 @@ test("regime fidelity (TRACKING): full history tracks the frozen regime-history.
 // correlations and backtest, serialised as the shared artifact, must equal the
 // SAME original bytes the SDK's report-parity test uses. The variants cover the
 // production data, missing composite labels (AN-9) and zero volatility
-// (Sharpe 0). Proposed decision D78 (compensated arithmetic) moves numbers in
+// (Sharpe 0). Decision D78 (compensated arithmetic) moves numbers in
 // their last bits, so the originals are matched value by value: identical
 // structure, field order, labels, nulls and integers, no number moved by more
 // than rounding (packages/analyst-sdk/tests/support/numeric-diff.ts).

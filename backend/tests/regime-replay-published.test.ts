@@ -116,7 +116,7 @@ describe("regime replay of every published run from 2026-09-21", () => {
 // CI has no copy, so it runs this sample. Each run's rebuilt input must hash to
 // the input `bun run inputs` writes for it, its replayed as-of label must equal
 // the published label, and every other field must give the outcome recorded
-// from the full record. The record was made before proposed decision D78
+// from the full record. The record was made before decision D78
 // (compensated arithmetic), which moves numbers in their last bits, so the
 // recorded outcome is matched up to rounding: the same fields differ beyond
 // rounding as recorded, the recorded first difference reproduces up to

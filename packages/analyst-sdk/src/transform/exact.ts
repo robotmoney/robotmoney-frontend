@@ -1,4 +1,4 @@
-// Error-free arithmetic for the SDK's reductions (proposed decision D78 in docs/decisions.md).
+// Error-free arithmetic for the SDK's reductions (decision D78 in docs/decisions.md).
 //
 // Every sum, mean, variance, dot product and compounding product that feeds a
 // published number is computed as if in twice the working precision and rounded

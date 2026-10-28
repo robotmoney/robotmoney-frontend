@@ -6,7 +6,7 @@
 //   - the daily portfolio values of every portfolio and strategy;
 //   - each CLI envelope (default, and --full --factor) against its own golden,
 //     both in process and through the real CLI on a file.
-// Proposed decision D78 (compensated arithmetic) moves numbers in their last
+// Decision D78 (compensated arithmetic) moves numbers in their last
 // bits, so the originals are now matched value by value (support/numeric-diff.ts):
 // identical structure, field order, labels, nulls and integers, and no number
 // moved by more than rounding. The in-process and CLI outputs still agree byte
