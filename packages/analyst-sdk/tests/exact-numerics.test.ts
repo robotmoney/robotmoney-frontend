@@ -14,7 +14,7 @@ import { mean, pearson, rollingBeta, rollingSum, sma, std, stddev } from "../src
 import { pearson as rankPearson, ranks } from "../src/analyze/correlations.ts";
 import { rollingBetaSeries } from "../src/analyze/research-signals.ts";
 import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
-import { twoProd, twoSum } from "../src/transform/exact.ts";
+import { meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
 import type { Point } from "../src/types.ts";
 import {
   exactBeta,
@@ -323,6 +323,9 @@ describe("backtest: compounding, Sharpe and the constant-return regression", () 
     expect(r.length).toBe(3000);
     expect(new Set(r).size).toBe(1);
     expect(r[0]).toBeGreaterThan(0);
+    // The exact sample variance is 0, and so is the compensated sample sd periodStats takes.
+    expect(exactStd(r, 1)).toBe(0);
+    expect(meanAndSampleSd(r).sd).toEqual([0, 0]);
     expect(exactSharpe(r)).toBe(0);
     const st = periodStats(c.values, c.startDate, c.endDate, { returns: c.returns });
     expect(st.sharpe).toBe(0);
