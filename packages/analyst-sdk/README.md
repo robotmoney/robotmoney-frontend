@@ -261,6 +261,66 @@ therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
 
+## Supplementary series: data the platform does not carry
+
+The SDK works with two kinds of source data (decision D79 in `docs/decisions.md`;
+analyst SDK requirements section 4):
+
+- **Supported series** are the ones the platform collects. The public API and the
+  csv-backups repo serve them cleaned and versioned, and they reach you through the
+  local copy (the quickstart above). Use them as they come.
+- **Supplementary series** are everything else: an asset the platform does not
+  collect, or an earlier start than it holds. You fetch them yourself and keep them
+  in a **supplementary directory**, one file per series, in a format the SDK reads.
+
+Keep the supplementary directory apart from the local copy: not the same folder, not
+inside it, not around it. The SDK refuses one that is.
+
+**Fetch.** The SDK ships fetchers for Yahoo and FRED, so you do not need to write
+your own:
+
+```sh
+bun run fetch --into my-series yahoo:GC=F yahoo:SOL-USD fred:DTB3
+bun run fetch --into my-series --start 2010-01-01 --end 2024-12-31 --replace yahoo:SPY
+```
+
+`--start` defaults to 2016-01-01 and `--end` to today. Each series lands at
+`<dir>/<provider>/<symbol>.csv` with the symbol percent-encoded (`yahoo:GC=F` is
+`yahoo/GC%3DF.csv`). An existing series is kept unless you pass `--replace`. A series
+that fails is reported, and the rest are still fetched.
+
+**Format.** Each file is a source input file (`date,series,value`, one source id,
+dates strictly ascending), so the input loaders read it as they read any source input. Beside it,
+`<symbol>.manifest.json` records what the values are (`field`: Yahoo's adjusted close,
+FRED's value), the row count, the date range, the file's SHA-256, and when and how it
+was fetched:
+
+```json
+{
+  "format": 1,
+  "series": "yahoo:GC=F",
+  "field": "adjusted close (the close where Yahoo gives no adjusted close)",
+  "row_count": 2717,
+  "first_date": "2016-01-04",
+  "last_date": "2026-10-27",
+  "sha256": "…",
+  "fetched_at": "2026-10-28T12:00:00.000Z",
+  "fetched_by": "analyst-sdk 0.3.1 fetch, https://query2.finance.yahoo.com/v8/finance/chart/GC%3DF?…"
+}
+```
+
+**Read.** `readSupplementary(dir, "yahoo:GC=F")` (`bin/supplementary-dir.ts`) returns
+the points and the manifest, after checking the file against it. `listSupplementary(dir)`
+lists the source ids. A series from another provider goes in with
+`writeSupplementary(dir, id, points, { field, fetched_at, fetched_by })`. The format
+itself is `src/input/supplementary.ts`, and `fetchSupplementary(id, { start, end })`
+(`src/extract/supplementary.ts`) is the fetch without the write.
+
+The SDK never merges the two directories. If a supported series and a supplementary
+series share a source id, your code picks the directory it reads. A result computed
+from a supplementary series is your own analysis: it has no vintage and is not a
+published report, and its manifest is its provenance.
+
 ## Backtest your own portfolio
 
 The backtest the report carries is one shared calculation, exposed for any assets and
@@ -447,13 +507,15 @@ the data. Check each provider's terms before you republish what you download.
 ```
 src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
-src/input/       the input loaders, the manifest and the provenance envelope
+src/input/       the input loaders, the manifest, the provenance envelope and the supplementary series format
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
 src/run.ts       source data in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
 bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
+bin/fetch.ts     the `bun run fetch` entry (Yahoo and FRED series into a supplementary directory)
+bin/supplementary-dir.ts  reading, listing and writing the supplementary directory
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)

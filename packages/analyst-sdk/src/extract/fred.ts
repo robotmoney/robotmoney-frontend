@@ -16,8 +16,8 @@ import { fetchText } from "./http.ts";
 const BASE = "https://fred.stlouisfed.org/graph/fredgraph.csv";
 const COSD = "2010-01-01";
 
-export const fredUrl = (seriesId: string) =>
-  `${BASE}?id=${encodeURIComponent(seriesId)}&cosd=${COSD}`;
+export const fredUrl = (seriesId: string, start = COSD) =>
+  `${BASE}?id=${encodeURIComponent(seriesId)}&cosd=${start}`;
 
 // Parse FRED's two-column CSV (DATE,VALUE). "." (missing) rows are dropped.
 // FRED answers its maintenance page as HTTP 200 HTML (issue #1413), so a body
@@ -43,7 +43,9 @@ export function parseFredCsv(text: string, seriesId: string): Point[] {
   return out;
 }
 
-export async function fetchFred(seriesId: string, timeoutMs = 15000): Promise<Point[]> {
-  const text = await fetchText(fredUrl(seriesId), timeoutMs);
+// `start` moves `cosd` for a caller that wants another window (the supplementary
+// fetch); the collectors keep the 2010-01-01 default.
+export async function fetchFred(seriesId: string, timeoutMs = 15000, start = COSD): Promise<Point[]> {
+  const text = await fetchText(fredUrl(seriesId, start), timeoutMs);
   return parseFredCsv(text, seriesId);
 }
