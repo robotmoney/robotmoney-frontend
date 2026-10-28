@@ -30,8 +30,13 @@ export function twoSum(a: number, b: number): [number, number] {
   return [s, a - (s - bb) + (b - bb)];
 }
 
-/** Veltkamp split of a double into two non-overlapping 26-bit halves. */
+/** Veltkamp split of a double into two non-overlapping 26-bit halves. Above 2^995, (2^27 + 1) a would overflow, so
+ *  the split is taken of a / 2^28 and both halves are scaled back: each step is exact. */
 function split(a: number): [number, number] {
+  if (Math.abs(a) > 2 ** 995) {
+    const [h, l] = split(a * 2 ** -28);
+    return [h * 2 ** 28, l * 2 ** 28];
+  }
   const c = 134217729 * a; // 2^27 + 1
   const hi = c - (c - a);
   return [hi, a - hi];
