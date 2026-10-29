@@ -267,11 +267,14 @@ function headOrThrow(head: CommittedSourceValue | undefined, v: SourceValueEvide
  * caller's (`sql`) in every production path; a test passes a wrapper to count
  * the statements the transaction issues (issue 1514).
  */
+// `db` may be a transaction the caller already holds (TransactionSql), so a
+// write to another table and its ledger rows commit together (the floor seed,
+// AN-16); otherwise the acquisition is one transaction of its own.
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
-  db: Pick<typeof sql, "begin"> = sql,
+  db: Pick<typeof sql, "begin"> | TransactionSql<{}> = sql,
 ): Promise<SaveSourceAcquisitionResult> {
-  return db.begin(async (tx) => {
+  const write = async (tx: TransactionSql<{}>): Promise<SaveSourceAcquisitionResult> => {
     // The producer-generated acquisition UUID is the idempotency key. A replay
     // is a read-only success; a partially persisted acquisition is impossible
     // because every first submission is one transaction.
@@ -443,5 +446,6 @@ export async function saveSourceAcquisition(
     }
 
     return { acquisitionId: evidence.id, replayed: false, committed };
-  });
+  };
+  return "savepoint" in db ? write(db) : db.begin(write);
 }

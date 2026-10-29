@@ -470,6 +470,7 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
         const rf = rfOn(d);
         const mu = muVector(`${where} ${d}`, o.mu(d, history.map((r) => [...r]), [...historyDates]), assets);
         const S = cov(history.map((r) => [...r]));
+        if (o.cov) covMatrix(`${where} ${d}`, S, assets.length);
         const raw = solve([...mu], S, rf);
         cur = weightsOf(`${where} ${d}`, assets, raw, tol);
         rebalances.push({ date: d, rf, mu, nObs: history.length, weights: { ...cur } });
@@ -479,6 +480,15 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
     prev = d;
   }
   return { schedule, rebalances };
+}
+
+/** A custom cov callback's result must be an n by n matrix of finite numbers (SDK-11). */
+function covMatrix(where: string, S: unknown, n: number): void {
+  if (!Array.isArray(S) || S.length !== n) throw new RangeError(`${where}: the cov callback returned ${Array.isArray(S) ? `${S.length} rows` : JSON.stringify(S)} for ${n} assets`);
+  S.forEach((row: unknown, i) => {
+    if (!Array.isArray(row) || row.length !== n) throw new RangeError(`${where}: cov row ${i} has ${Array.isArray(row) ? row.length : "no"} entries for ${n} assets`);
+    row.forEach((v: unknown, j) => finite(where, `cov entry [${i}][${j}]`, v));
+  });
 }
 
 /** Solver output to weights: canonical zero, nonnegative and finite, cash = 1 - sum w (compensated) not below 0. */

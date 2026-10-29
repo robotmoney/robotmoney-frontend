@@ -246,6 +246,10 @@ Rules, for every contract:
 stored values are calculations, not source data. The source contract rejects a row for
 one of them, by its id or its storage key (`CalculatedRowError`). The replay contract
 carries them as kind `calculated`, exactly as stored; their legs are never invented.
+A source input carries both legs instead (for example `yahoo:HG=F` and `yahoo:GC=F`),
+and the run calculates the ratio with `mergeRatioSeries`. One leg alone, with no stored
+ratio, throws `MissingRatioLegError` naming the ratio and the missing leg. A stored ratio,
+when present, is used unchanged.
 
 A real example lives in `tests/fixtures/raw-indicator-history.csv` (and `.json`).
 
@@ -444,7 +448,9 @@ universe check and the statistics; `--full` adds the daily values, returns and t
 ## Size and optimise a portfolio
 
 The backtest takes weights; these functions choose them. Every solver returns a certified
-optimum or throws `UnsupportedError`: there is no approximate fallback (D78).
+optimum or throws `UnsupportedError`: there is no approximate fallback (D78). A NaN or
+Infinity in the covariance, the excess returns or the risk aversion throws, and a
+`markowitzSchedule` `cov` callback that returns one, or the wrong shape, throws `RangeError`.
 
 ```ts
 import { markowitzSizing, markowitzBacktest, ercCertified, simulateDrift } from "./src/index.ts";

@@ -319,7 +319,9 @@ test(
     // Regime and backtest-extras handoffs: the outputs are exactly the pure
     // calculation over the committed observations, and differ from the same
     // calculation over what was collected.
-    const prepared = prepareRegimeInputs(committed.registry, { start: "2018-01-01", asof: COMMITTED_ASOF });
+    // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series (D74 amendment).
+    const growth = Object.fromEntries(Object.entries(STORED_UNDER).map(([id, stored]) => [id, committed.registry[stored]!]));
+    const prepared = prepareRegimeInputs({ ...committed.registry, ...growth }, { start: "2018-01-01", asof: COMMITTED_ASOF });
     const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, prepared.ages);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     const analysis = (extras: typeof committed.extras) =>

@@ -14,6 +14,7 @@ import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type {
   AnalyticsPersistence,
+  CommittedInputs,
   FloorSeedResult,
   BeginRunResult,
   FreezeVintageResult,
@@ -164,6 +165,9 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     },
     async saveSourceAcquisition(acquisition) {
       return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
+    },
+    async loadCommittedInputs(marketTimeCutoff: string) {
+      return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}`);
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);

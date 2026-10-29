@@ -19,7 +19,10 @@
 //
 // RATIOS. A ratio indicator (COPPER_GOLD and the other Yahoo pairs) stores a
 // calculated value, not source data, so its storage key maps to the
-// indicator id with kind "calculated"; its legs are listed for reference.
+// indicator id with kind "calculated". A source-only input carries the two
+// legs instead, and the run calculates the ratio from them with
+// mergeRatioSeries (transform/ratios.ts; analytics requirements 4.3, SDK-10).
+// A stored ratio, when present, is used unchanged.
 //
 // SDK INPUT NAMES. The computation reads its inputs under the ids it reads
 // today (registry ids, and SPX, ETH, TBILL3M for the correlations and the
@@ -61,6 +64,13 @@ export class AmbiguousInputSeriesError extends Error {
   override readonly name = "AmbiguousInputSeriesError";
   constructor(readonly consumer: string, readonly names: readonly [string, string]) {
     super(`ambiguous input: ${consumer} reads one stream, and the input names it twice, as ${names[0]} and ${names[1]}; keep one name, or name each stream by its storage key`);
+  }
+}
+
+export class MissingRatioLegError extends Error {
+  override readonly name = "MissingRatioLegError";
+  constructor(readonly ratio: string, readonly missingLeg: string, readonly presentLeg: string) {
+    super(`ratio ${ratio}: the input carries ${presentLeg} and not ${missingLeg}, and no stored ${ratio}; supply both legs, or the stored ratio (--replay)`);
   }
 }
 
@@ -159,7 +169,9 @@ export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSe
 // (yahoo:SPY is research:SPY, yahoo:BTC-USD is research:BTC-USD, yahoo:ETH-USD
 // is backtest:ETH-USD); every other leg is stored under its own source id.
 // Production still reads the stored ratio, so these entries are not in
-// SERIES_MAPPING: they say where each leg's stream is stored, per ratio.
+// SERIES_MAPPING: they say where each leg's stream is stored, per ratio, and
+// which names a leg is read under (its source id or its storage key) when the
+// input stores no ratio (transform/ratios.ts).
 const LEG_KEYS_HELD_ELSEWHERE: Readonly<Record<string, string>> = {
   "yahoo:SPY": "research:SPY",
   "yahoo:BTC-USD": "research:BTC-USD",
@@ -269,7 +281,8 @@ export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapp
  * A source id alone feeds every consumer that reads it. One consumer's stream
  * named twice is rejected with both names. Names no consumer reads pass
  * through unchanged. An input that already uses the input ids comes back with
- * the same keys and the same arrays.
+ * the same keys and the same arrays. A ratio's legs pass through under their
+ * own names: transform/ratios.ts ratiosFromLegs calculates the ratio.
  */
 export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonly SeriesMapping[] = SERIES_MAPPING): RawIndicatorHistory {
   const resolved = new Map<string, string>(); // inputId -> the input name it is read from

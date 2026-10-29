@@ -237,3 +237,38 @@ describe("shrunk covariance", () => {
     expect(O.sharpeResidual(S3, ex, O.tangencyExact(S3, ex))).toBeLessThan(1e-15);
   });
 });
+
+// SDK-11 (D78 amendment: a certified optimum or a throw): a NaN makes every
+// comparison false, so a KKT check written `x < bound` passed on NaN and
+// meanVarExact(S, [0.1, NaN], 4) returned [0.625, 0]. Every solver now throws
+// on a non-finite S, ex or lam.
+describe("non-finite input throws UnsupportedError (SDK-11)", () => {
+  const S = [[0.04, 0.01], [0.01, 0.09]];
+  const bad = [NaN, Infinity, -Infinity];
+  const withS = (v: number) => [[0.04, v], [v, 0.09]];
+  test("meanVarExact(S, [0.1, NaN], 4) throws instead of returning [0.625, 0]", () => {
+    expect(() => O.meanVarExact(S, [0.1, NaN], 4)).toThrow(UnsupportedError);
+    for (const v of bad) {
+      expect(() => O.meanVarExact(S, [0.1, v], 4)).toThrow(UnsupportedError);
+      expect(() => O.meanVarExact(withS(v), [0.1, 0.2], 4)).toThrow(UnsupportedError);
+      expect(() => O.meanVarExact(S, [0.1, 0.2], v)).toThrow(UnsupportedError);
+    }
+  });
+  test("minVarExact, tangencyExact, ercExact and ercCertified throw on a non-finite S or ex", () => {
+    for (const v of bad) {
+      expect(() => O.minVarExact(withS(v))).toThrow(UnsupportedError);
+      expect(() => O.tangencyExact(withS(v), [0.1, 0.2])).toThrow(UnsupportedError);
+      expect(() => O.tangencyExact(S, [0.1, v])).toThrow(UnsupportedError);
+      expect(() => O.tangencyExact(S, [-0.1, v])).toThrow(UnsupportedError);
+      expect(() => O.ercExact(withS(v))).toThrow(UnsupportedError);
+      expect(() => O.ercCertified(withS(v))).toThrow(UnsupportedError);
+    }
+    // A diagonal NaN too, and a ragged S.
+    expect(() => O.minVarExact([[NaN, 0.01], [0.01, 0.09]])).toThrow(/covariance entry \[0\]\[0\]/);
+    expect(() => O.ercCertified([[0.04, 0.01], [0.01]])).toThrow(UnsupportedError);
+  });
+  test("finite input still gives the certified answer", () => {
+    expect(O.meanVarResidual(S, [0.1, 0.2], 4, O.meanVarExact(S, [0.1, 0.2], 4))).toBeLessThan(1e-12);
+    expect(O.minVarResidual(S, O.minVarExact(S))).toBeLessThan(1e-12);
+  });
+});

@@ -602,7 +602,8 @@ async function vintageMembers(url: URL, tx: Tx, vintageId: string, limit: number
   };
 }
 
-const OVERWRITE_TABLES = ["raw_indicator_history", "regime_snapshots", "research_signals"];
+// asset_prices since migration 0128 (API-6): a revised price is a recorded revision too.
+const OVERWRITE_TABLES = ["raw_indicator_history", "regime_snapshots", "research_signals", "asset_prices"];
 
 async function overwriteEvents(url: URL, tx: Tx) {
   const limit = limitParam(url);
