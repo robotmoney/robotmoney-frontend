@@ -252,7 +252,7 @@ jobs:
           tests/regime-replay-published.test.ts:8
           tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8
-          tests/analytics-compute-from-vintage.test.ts:4
+          tests/analytics-compute-from-vintage.test.ts:7
       # Issue 1477: format 1 has one writer. csvb and the archive store write the
       # same day-cut backups byte for byte, the planted junction cases of the
       # archive routes ran, and the api-recorded fixture is reproduced unchanged.

@@ -461,7 +461,12 @@ export const ROUTES = {
     //   POST runEvents        — append one ordered lifecycle event
     //   POST vintages         — freeze one data vintage for (runId, toolId)
     //                           (idempotent; a differing resubmission for the
-    //                           same pair is rejected, 409)
+    //                           same pair is rejected, 409). Optional
+    //                           vintage.regimeVersionIds (issue 1534): the
+    //                           exact committed-inputs versionIds the run
+    //                           computed from, frozen as its regime-key
+    //                           members; absent, every key is selected by
+    //                           the knowledge-time cutoff
     //   GET  vintage?runId=&toolId=   — read back the exact frozen manifest
     runs: "/api/analytics/runs",
     runEvents: "/api/analytics/runs/events",
@@ -469,7 +474,8 @@ export const ROUTES = {
     vintage: "/api/analytics/vintages/lookup",
     // GET ?asof=YYYY-MM-DD — AN-16: the database clock and, at it, the ledger
     // heads of every storage key the regime reads, dated on or before asof.
-    // The run computes from these and freezes its vintage at the same cutoff.
+    // The run computes from these, records the same cutoff on its vintage and
+    // sends their versionIds as POST vintages' regimeVersionIds.
     committedInputs: "/api/analytics/committed-inputs",
     // Issue #978: freeze analytics outputs and report snapshots — the next
     // layer above the run header. One terminal package per runId (idempotent,
