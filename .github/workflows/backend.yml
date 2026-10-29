@@ -201,11 +201,12 @@ jobs:
               || { echo "::error::$f did not run in the backend suite: an issue 1378 boot or stop proof is excluded"; exit 1; }
           done
       # Issue 1422: the public archive, report and load-protection proofs run
-      # against the seeded ephemeral Postgres. Absent or excluded is a red job.
+      # against the seeded ephemeral Postgres, with the members chain step's
+      # bound at 2,000,000 members (issue 1514). Absent or excluded is a red job.
       - name: Public analytics archive proofs ran (issue 1422)
         shell: bash
         run: |
-          for f in tests/api/public-analytics-archives.test.ts tests/api/public-analytics-limits.test.ts tests/api/public-analytics.test.ts tests/api/client-ip.test.ts tests/api/analytics-run-ledger.test.ts; do
+          for f in tests/api/public-analytics-archives.test.ts tests/api/public-archive-members-scale.test.ts tests/api/public-analytics-limits.test.ts tests/api/public-analytics.test.ts tests/api/client-ip.test.ts tests/api/analytics-run-ledger.test.ts; do
             test -f "backend/$f" || { echo "::error::backend/$f is missing: an issue 1422 proof would stop running"; exit 1; }
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: an issue 1422 proof is excluded"; exit 1; }

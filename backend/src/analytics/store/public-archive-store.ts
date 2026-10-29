@@ -42,12 +42,18 @@
 // HOW IT STAYS BOUNDED. A backup record needs each file's SHA-256, so it is
 // built once, in the background, one backup at a time, page by page, every
 // page a public read (the gate and the 5 s timeout of public-analytics-limits),
-// and kept in memory. An archive body is regenerated from its id range when
-// requested, streamed through gzip as the pages arrive, and its SHA-256 is
-// compared with the record at the end; a mismatch aborts the response rather
-// than finish a body that differs from what its record names. Nothing here
-// reads a provider or recomputes an analytics value: every byte comes from the
-// committed rows.
+// and kept in memory. Every chain step is one statement whose reads stay inside
+// the rows the backup adds, not the rows written after it: the members step
+// reads only the members of the vintages above the previous backup's vintages
+// watermark and at most this one's (issue 1514). That relies on the settle
+// hour: a vintage's members are written in its freeze transaction, so a
+// vintage at or below a sealed watermark never gains a member later. The
+// first-day probe (vintages watermark 0) reads an empty range. An archive body
+// is regenerated from its id range when requested, streamed through gzip as the
+// pages arrive, and its SHA-256 is compared with the record at the end; a
+// mismatch aborts the response rather than finish a body that differs from what
+// its record names. Nothing here reads a provider or recomputes an analytics
+// value: every byte comes from the committed rows.
 import { createHash } from "node:crypto";
 import type { Transform } from "node:stream";
 import { createGzip } from "node:zlib";
@@ -118,8 +124,11 @@ interface ArchiveTable {
   columns: readonly string[];
   /** Rows per page: a few MB per statement, well inside the 5 s timeout. */
   pageRows: number;
-  /** `vintages`: the vintages watermark at this boundary (only the members table reads it). */
-  step(tx: Tx, after: string, boundary: string, vintages: string): Promise<ChainStep[]>;
+  /**
+   * `vintages`: the vintages watermark at this boundary; `prevVintages`: the
+   * previous backup's (only the members table reads them).
+   */
+  step(tx: Tx, after: string, boundary: string, vintages: string, prevVintages: string): Promise<ChainStep[]>;
   page(tx: Tx, after: string, through: string, limit: number): Promise<Row[]>;
 }
 
@@ -276,13 +285,29 @@ const vinPage = registerQuery({
 // vintage it holds (the largest member id whose vintage is at or below the
 // vintages watermark), so two freezes interleaving across midnight never split
 // one vintage's members between backups.
-const MEM_STEP = `WITH w AS (
-    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > $1::bigint AND m.vintage_id <= $2::bigint) AS wm,
+//
+// The watermark reads only the members of the vintages this backup adds:
+// vintage_id above the previous backup's vintages watermark and at most this
+// one, through analytics_vintage_members_vintage_idx (issue 1514). Bounded by
+// `vintage_id <= watermark` alone, Postgres walked the primary key backward
+// from the newest member until it met an old vintage: for an early backup that
+// is almost every member, past the 5 s timeout on production. The OFFSET 0
+// keeps the planner from turning max() into that walk again, and MATERIALIZED
+// reads the watermark once rather than once per column that names it.
+// It is the same watermark: the members of a vintage are written in the
+// vintage's own freeze transaction, so once the vintages watermark of a sealed
+// backup names a vintage, every member of it is committed and at or below that
+// backup's members watermark; the members after it belong to later vintages.
+// The two forms differ only if a freeze commits more than the settle hour after
+// its vintage's created_at, which already moves every table's watermark.
+const MEM_STEP = `WITH w AS MATERIALIZED (
+    SELECT (SELECT max(b.id) FROM (SELECT m.id FROM analytics_vintage_members m
+        WHERE m.id > $1::bigint AND m.vintage_id > $2::bigint AND m.vintage_id <= $3::bigint OFFSET 0) b) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
   )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_vintage_members WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_vintage_members WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const memStep = registerQuery({
   role: "rm_app",
@@ -291,7 +316,7 @@ const memStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0, 0] },
 });
 const memStepVintages = registerQuery({
   role: "rm_app",
@@ -300,7 +325,7 @@ const memStepVintages = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step.vintages",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0, 0] },
 });
 const MEM_PAGE = `SELECT m.id::text AS id, v.created_at::text AS t, m.id::text AS c_id, m.vintage_id::text AS vintage_id,
     m.source_value_version_id::text AS source_value_version_id, m.source_key,
@@ -562,8 +587,9 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
     time: { lookup: { column: "vintage_id", table: "analytics_data_vintages", key: "id", timeColumn: "created_at" } },
     columns: ["id", "vintage_id", "source_value_version_id", "source_key", "last_source_value_version_id"],
     pageRows: 50_000,
-    step: (tx, a, _b, vin) => on(tx, memStep, memStepVintages)<ChainStep>`WITH w AS (
-    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > ${a}::bigint AND m.vintage_id <= ${vin}::bigint) AS wm,
+    step: (tx, a, _b, vin, prevVin) => on(tx, memStep, memStepVintages)<ChainStep>`WITH w AS MATERIALIZED (
+    SELECT (SELECT max(b.id) FROM (SELECT m.id FROM analytics_vintage_members m
+        WHERE m.id > ${a}::bigint AND m.vintage_id > ${prevVin}::bigint AND m.vintage_id <= ${vin}::bigint OFFSET 0) b) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
   )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
@@ -675,7 +701,7 @@ async function loadFirstDay(): Promise<number | null> {
   let earliest: bigint | null = null;
   await publicRead(async (tx) => {
     for (const t of ARCHIVE_TABLES) {
-      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z", "0");
+      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z", "0", "0");
       if (r?.first_time) {
         const us = parseDbTime(r.first_time);
         if (earliest === null || us < earliest) earliest = us;
@@ -719,7 +745,13 @@ async function ensureChain(id: string): Promise<void> {
         await publicRead(async (tx) => {
           for (const t of ARCHIVE_TABLES) {
             const p = before?.get(t.name) ?? { wm: null, rows: 0n, sum: 0n };
-            const [r] = await t.step(tx, p.wm ?? "0", new Date(d).toISOString(), marks.get("analytics_data_vintages")?.wm ?? "0");
+            const [r] = await t.step(
+              tx,
+              p.wm ?? "0",
+              new Date(d).toISOString(),
+              marks.get("analytics_data_vintages")?.wm ?? "0",
+              before?.get("analytics_data_vintages")?.wm ?? "0",
+            );
             const wm = r?.wm ?? p.wm;
             marks.set(t.name, { wm, rows: p.rows + BigInt(r?.n ?? "0"), sum: p.sum + BigInt(r?.s ?? "0") });
           }
