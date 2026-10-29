@@ -634,3 +634,103 @@ test("issue 1398: one failed model portfolio series is reported by id and drops 
   expect(eth.rows).toBe(0);
   expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(MP_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
 });
+
+// ── Issue 1514: the committed heads come from the rows written and the priors read ──
+// A first submission used to read every value's head a second time after its
+// inserts (committedHeads), one more lateral lookup per value while the
+// transaction held its batch connection and its source-key lock. The heads now
+// come from the rows the insert returned and the priors the tolerance decision
+// already read. They must equal what the ledger holds, for every kind of value.
+
+/** Each value's head as the ledger holds it, read independently of the store. */
+async function ledgerHeads(values: { sourceKey: string; marketDate: string | null; marketInstant: string | null }[]): Promise<{ versionId: string; value: number }[]> {
+  const out: { versionId: string; value: number }[] = [];
+  for (const v of values) {
+    const [row] = v.marketDate !== null
+      ? await sql`SELECT id::text AS id, value FROM source_value_versions WHERE source_key = ${v.sourceKey} AND market_date = ${v.marketDate}::date AND market_instant IS NULL ORDER BY knowledge_time DESC, id DESC LIMIT 1`
+      : await sql`SELECT id::text AS id, value FROM source_value_versions WHERE source_key = ${v.sourceKey} AND market_instant = ${v.marketInstant}::timestamptz AND market_date IS NULL ORDER BY knowledge_time DESC, id DESC LIMIT 1`;
+    out.push({ versionId: String(row!.id), value: Number(row!.value) });
+  }
+  return out;
+}
+
+/** `sql`, with every prior lookup (the store's LEFT JOIN LATERAL reads) inside its transactions counted. */
+function countingPool(): { db: Pick<typeof sql, "begin">; lookups: () => number } {
+  let lookups = 0;
+  const isTemplate = (a: unknown): a is TemplateStringsArray => Array.isArray(a) && "raw" in (a as object);
+  const db = {
+    begin: (fn: (tx: unknown) => Promise<unknown>) => sql.begin((tx) => fn(new Proxy(tx, {
+      apply(target, thisArg, args) {
+        if (isTemplate(args[0]) && args[0].join("?").includes("LEFT JOIN LATERAL")) lookups++;
+        return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+      },
+    }))),
+  } as unknown as Pick<typeof sql, "begin">;
+  return { db, lookups: () => lookups };
+}
+
+function evidence(values: { sourceKey: string; marketDate?: string; marketInstant?: string; value: number }[]): Parameters<typeof saveSourceAcquisition>[0] {
+  return {
+    id: randomUUID(), provider: "fixture", parserVersion: "fixture:1", cacheIdentity: `heads-${randomUUID()}`, requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }], fetches: [],
+    values: values.map((v) => ({ sourceKey: v.sourceKey, marketDate: v.marketDate ?? null, marketInstant: v.marketInstant ?? null, value: v.value, provenance: "live" })),
+  };
+}
+
+test("issue 1514: the committed heads equal the ledger's for every kind of value, and a submission reads each prior once", async () => {
+  // The ledger before: one dated head, one timestamped head, one Yahoo head.
+  await saveSourceAcquisition(evidence([
+    { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 10 },
+    { sourceKey: "heads:exact", marketDate: "2024-01-02", value: 20 },
+    { sourceKey: "heads:instant", marketInstant: "2024-01-01T12:00:00.000Z", value: 5 },
+    { sourceKey: "research:RSP", marketDate: "2024-01-01", value: 18.719999313354492 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 1 },
+  ]));
+  const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n as number;
+
+  const { db, lookups } = countingPool();
+  const ev = evidence([
+    { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 10 }, // unchanged: the head is the prior
+    { sourceKey: "heads:exact", marketDate: "2024-01-02", value: 21 }, // revision: the head is the new row
+    { sourceKey: "heads:exact", marketDate: "2024-01-03", value: 30 }, // initial: the head is the new row
+    { sourceKey: "heads:instant", marketInstant: "2024-01-01T12:00:00.000Z", value: 6 }, // a timestamped revision
+    { sourceKey: "heads:instant", marketInstant: "2024-01-02T12:00:00.000Z", value: 7 }, // a timestamped initial
+    { sourceKey: "research:RSP", marketDate: "2024-01-01", value: 18.72 }, // within D56 tolerance: the head keeps its stored value
+  ]);
+  const saved = await saveSourceAcquisition(ev, db);
+  expect(saved.replayed).toBe(false);
+  expect(saved.committed).toEqual(await ledgerHeads(ev.values));
+  expect(saved.committed!.map((c) => c.value)).toEqual([10, 21, 30, 6, 7, 18.719999313354492]);
+  expect((await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n).toBe(before + 4);
+  // One prior lookup per representation present (dated, timestamped), not two.
+  expect(lookups()).toBe(2);
+
+  // A dated-only acquisition reads its priors in one lookup.
+  const datedOnly = countingPool();
+  const dated = evidence([{ sourceKey: "heads:exact", marketDate: "2024-01-04", value: 40 }, { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 11 }]);
+  const datedSaved = await saveSourceAcquisition(dated, datedOnly.db);
+  expect(datedSaved.committed).toEqual(await ledgerHeads(dated.values));
+  expect(datedOnly.lookups()).toBe(1);
+
+  // A replay reads the heads it never wrote, once, and answers the same heads.
+  const replay = countingPool();
+  const replayed = await saveSourceAcquisition(ev, replay.db);
+  expect(replayed.replayed).toBe(true);
+  expect(replayed.committed).toEqual(await ledgerHeads(ev.values));
+  expect(replay.lookups()).toBe(2);
+
+  // Within-batch duplicates (the per-value path): the first revises the head, the
+  // second re-observes it, and both answer the row the first wrote.
+  const dup = countingPool();
+  const dupEv = evidence([
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 2 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 2 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-02", value: 3 },
+  ]);
+  const dupSaved = await saveSourceAcquisition(dupEv, dup.db);
+  const heads = await ledgerHeads(dupEv.values);
+  expect(dupSaved.committed).toEqual(heads);
+  expect(dupSaved.committed!.map((c) => c.value)).toEqual([2, 2, 3]);
+  // One prior lookup per value on this path, as before; never a second pass.
+  expect(dup.lookups()).toBe(3);
+});

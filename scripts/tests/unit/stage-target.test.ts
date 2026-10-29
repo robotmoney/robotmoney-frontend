@@ -9,6 +9,9 @@ import { parseEnvFile } from "../../lib/env-role.ts";
 import {
   bindDatabase,
   composeStageHomeEnv,
+  connectionLimitArgs,
+  parseConnectionLimitsFlag,
+  parseProductionLimits,
   doadminPasswordSql,
   envKeyNames,
   fingerprintDiff,
@@ -292,5 +295,32 @@ describe("the capture checkout is the release runner's, never the stage target's
     expect(removalRefusal("/home/stage-server", keep)).toBe("refusing to remove /home/stage-server: not a stage-target path");
     // The keep rule itself: a stage-target folder that held the capture checkout would refuse.
     expect(removalRefusal(STAGE_TARGET.home, [`${STAGE_TARGET.home}/rm-capture`])).toContain("it holds");
+  });
+});
+
+// ── issue 1514: the stage Postgres carries production's connection limits, so the stage api derives production's budget ──
+describe("the stage Postgres's connection limits", () => {
+  const health = (budget: unknown) => JSON.stringify({ ok: true, db_pool: { request: {}, batch: {}, budget } });
+
+  test("are read from production's /health db_pool.budget", () => {
+    expect(parseProductionLimits(health({ maxConnections: 25, superuserReserved: 3, reserved: 0, headroom: 10, available: 12, guard: 1, request: 6, batch: 5 })))
+      .toEqual({ maxConnections: 25, superuserReserved: 3, reserved: 0 });
+    // red: no answer, no budget, a budget that cannot be a server's.
+    expect(parseProductionLimits(null)).toEqual({ error: "no /health answer" });
+    expect(parseProductionLimits("<html>")).toEqual({ error: "/health is not JSON" });
+    expect(parseProductionLimits(JSON.stringify({ ok: true, db_pool: null }))).toEqual({ error: "/health carries no db_pool.budget" });
+    expect(parseProductionLimits(health({ maxConnections: 3, superuserReserved: 3, reserved: 0 }))).toHaveProperty("error");
+    expect(parseProductionLimits(health({ maxConnections: "x", superuserReserved: 3, reserved: 0 }))).toHaveProperty("error");
+  });
+
+  test("or set by hand, as <max>/<superuser_reserved>/<reserved>", () => {
+    expect(parseConnectionLimitsFlag("25/3/0")).toEqual({ maxConnections: 25, superuserReserved: 3, reserved: 0 });
+    expect(parseConnectionLimitsFlag("25")).toHaveProperty("error");
+    expect(parseConnectionLimitsFlag("3/3/0")).toHaveProperty("error");
+  });
+
+  test("become the Postgres server's settings", () => {
+    expect(connectionLimitArgs({ maxConnections: 25, superuserReserved: 3, reserved: 2 }))
+      .toEqual(["-c", "max_connections=25", "-c", "superuser_reserved_connections=3", "-c", "reserved_connections=2"]);
   });
 });

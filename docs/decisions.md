@@ -6021,6 +6021,42 @@ Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
 pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
 connection pooler.
 
+### Amendment (issue 1514, 2026-10-29) — the batch pool holds every cap that draws on it
+
+**Status:** proposed
+
+**Why.** From the v0.7.0 cutover on, production's batch pool ran out at every
+3-hourly analytics run. Queue claims answered 503 `db_saturated`, and
+source-acquisitions and vintages requests took up to 9.5 s. The batch share was
+3, or a quarter of the free connections on a small server. Two callers draw on
+it: the analytics routes, capped at `ANALYTICS_CONCURRENCY` (2), and the pipeline
+routes, capped at `PIPELINE_TOKEN_CONCURRENCY` (2). Their caps add up to 4.
+
+**What changes.**
+
+1. The batch share is `ANALYTICS_CONCURRENCY + PIPELINE_TOKEN_CONCURRENCY + 1`,
+   so 5 by default, on every server. The extra connection is for statements no
+   cap bounds: the pipeline route's token lookup, which runs before the token's
+   gate, and the analytics readiness probe, which the analytics limiter exempts.
+2. A small server gives up request connections, never batch ones. The request
+   share is at most 10 and takes what the batch share leaves.
+3. The api refuses to boot when the batch share is below that sum, derived or
+   set by `PG_BATCH_POOL_MAX`. The refusal names the batch share and each cap.
+4. Decision 5's admission rule is unchanged: a request over the token's cap
+   still waits `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated`.
+5. The analytics producer's api client keeps at most `ANALYTICS_CONCURRENCY`
+   requests in flight, so its bursts wait in the producer, not on the api's
+   request path.
+6. The slow-request line splits a request's time into `limiter_wait_ms`,
+   `pool_wait_ms` and `handler_ms`. A `db_saturated` error log names the gate
+   that refused.
+7. The stage target's Postgres carries production's connection limits, so the
+   stage api derives production's shares.
+
+**Cost.** A server with fewer than 15 free connections gives the request pool
+fewer than 10. A server too small for the batch share and one request
+connection refuses the boot instead of starting with a pool that saturates.
+
 ---
 
 <a id="d76"></a>
