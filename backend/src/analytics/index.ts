@@ -22,7 +22,7 @@
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { INDICATORS, PANELS } from "./analyze/indicators.ts";
-import { STORED_UNDER, storedIndicatorId } from "./extras.ts";
+import { LEDGER_EXTRA_KEYS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import {
@@ -253,6 +253,8 @@ export async function runAnalytics(
   // tests/analytics-source-tolerance.test.ts.
   let registry: Record<string, { date: string; value: number }[]> | null = null;
   let extras: BacktestExtras | null = null;
+  // What the registry fetch collected, before the D56 tolerance decision.
+  let collectedRegistry: Record<string, { date: string; value: number }[]> | null = null;
   let researchFloor: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
   let inputs: ResearchInputs | null = null;
   if (want("regime")) {
@@ -319,6 +321,7 @@ export async function runAnalytics(
     // reported in the input evidence below.
     t0 = new Date();
     await persistence.saveRawHistory(merged, sourceLabel);
+    collectedRegistry = merged;
     const committedFloor = await persistence.loadRawHistory();
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
@@ -376,6 +379,29 @@ export async function runAnalytics(
       await persistence.saveRawHistory({ MNA: refresh.newRows }, sourceLabel);
       collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, s0);
     }
+  }
+  // ── AN-16 (owner decision): compute from the values the vintage pins ─────
+  // The regime computes from the ledger heads, read at one database-clock
+  // cutoff after every acquisition of this run, and the vintage is frozen at
+  // that same cutoff, so its members are exactly the values computed from.
+  // The raw floor written above is no longer an input: within the D56
+  // tolerance it can hold a different value for a date than the ledger head
+  // (a seed wrote S, the first provider observation F was within tolerance).
+  // A source that records no acquisition (the hermetic and fixture sources)
+  // has no ledger input, and the regime computes from the committed raw floor.
+  let knowledgeTimeCutoff: string | null = null;
+  if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && inputEvidence.acquiredKeys > 0) {
+    const t0 = new Date();
+    const committed = await persistence.loadCommittedInputs(asof);
+    knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
+    const fromLedger = inputHistoryFromStorage(committed.values);
+    registry = {};
+    for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
+    const X = LEDGER_EXTRA_KEYS;
+    extras = { spx: fromLedger[X.spx.inputId] ?? [], eth: fromLedger[X.eth.inputId] ?? [], tbill3m: fromLedger[X.tbill3m.inputId] ?? [] };
+    inputEvidence.registry = registryEvidence(collectedRegistry, registry);
+    mergedRaw = registry;
+    collector.stage("store", "ok", `read ${committed.values.length} ledger head(s) at ${knowledgeTimeCutoff}, the cutoff the vintage freezes`, t0);
   }
   if (inputEvidence.registry || inputEvidence.acquiredKeys > 0) {
     reportInputEvidence(inputEvidence, collector, logger);
@@ -552,14 +578,16 @@ export async function runAnalytics(
 
   // ── ISSUE #977: freeze the data vintage ─────────────────────────────────
   // Everything this run acquired (and everything already in the ledger) is
-  // frozen as of NOW (knowledge-time cutoff) and `asof` (market-time cutoff)
+  // frozen as of the knowledge-time cutoff and `asof` (market-time cutoff)
   // — the complete, reproducible input universe this run's outputs above
-  // were computed against. A freeze failure fails the WHOLE run: it is part
-  // of the mandatory ledger, not best-effort telemetry.
+  // were computed against. The cutoff is the database clock the regime read
+  // its inputs at (AN-16); a run that read none uses NOW. A freeze failure
+  // fails the WHOLE run: it is part of the mandatory ledger, not best-effort
+  // telemetry.
   vintage = await persistence.freezeVintage({
     runId,
     toolId: runToolId,
-    knowledgeTimeCutoff: new Date().toISOString(),
+    knowledgeTimeCutoff: knowledgeTimeCutoff ?? new Date().toISOString(),
     marketTimeCutoff: asof,
     methodologyVersionId,
     buildIdentity,

@@ -384,7 +384,9 @@ describe("issue 1421: downstream consumes the committed value and version, never
   test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
     const base = await baseObservations();
     const composite = new Set(INDICATORS.filter((i) => i.panel === "macro" || i.panel === "onchain").map((i) => i.id));
-    const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !composite.has(id))) };
+    // No extras either: the regime computes from the ledger heads (AN-16), so
+    // extras this run recorded would be read by the missing-extras run below.
+    const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !composite.has(id))), extras: { spx: [], eth: [], tbill3m: [] } };
     const missingRequired = poisonedSource(noMacro, 2);
     let err: unknown;
     try {

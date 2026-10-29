@@ -39,6 +39,8 @@ import {
   appendRunEvent,
   freezeVintage,
   findVintageByRunAndTool,
+  loadCommittedInputs,
+  REGIME_STORAGE_KEYS,
   loadFrozenVintage,
   VintageConflictError,
 } from "../../analytics/store/run-ledger-store.ts";
@@ -607,7 +609,7 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
 export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
   A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
   A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
-  A.vintages, A.vintage, A.runPackage, A.reportSnapshot, A.paritySweep,
+  A.vintages, A.vintage, A.committedInputs, A.runPackage, A.reportSnapshot, A.paritySweep,
 ]);
 
 // ANALYTICS_CONCURRENCY and createLimiter live in a leaf module since issue
@@ -795,6 +797,14 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
     if (!found) return { status: 404, body: { error: "no vintage frozen for this (runId, toolId)" } };
     const vintage = await loadFrozenVintage(found.vintageId);
     return { status: 200, body: { vintage } };
+  }
+
+  // AN-16: the database clock and the ledger heads the regime computes from;
+  // the run passes the same cutoff to POST vintages.
+  if (m === "GET" && p === A.committedInputs) {
+    const asof = url.searchParams.get("asof");
+    if (!asof || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };
+    return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof) };
   }
 
 // ── issue #978: the immutable analytics output/report snapshot layer ─────

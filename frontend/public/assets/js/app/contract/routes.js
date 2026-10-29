@@ -467,6 +467,10 @@ export const ROUTES = {
     runEvents: "/api/analytics/runs/events",
     vintages: "/api/analytics/vintages",
     vintage: "/api/analytics/vintages/lookup",
+    // GET ?asof=YYYY-MM-DD — AN-16: the database clock and, at it, the ledger
+    // heads of every storage key the regime reads, dated on or before asof.
+    // The run computes from these and freezes its vintage at the same cutoff.
+    committedInputs: "/api/analytics/committed-inputs",
     // Issue #978: freeze analytics outputs and report snapshots — the next
     // layer above the run header. One terminal package per runId (idempotent,
     // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot
