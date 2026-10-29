@@ -1,9 +1,9 @@
 {
   "$comment": "Production target for bun run release:run (D61). It names where production lives and nothing of what runs there: no release commit (the go file's line names it, and SP.8 refuses a commit the stage run did not pass at), no previous commit, no running stack (the host's smoke state names it; the rolling boot replaces it one service at a time, website-server kept). Fill confirmTarget with host:port/database from rm-frontend-prod-1's /root/.env before the run. The run refuses the placeholder, and P02-host-identity refuses a value that differs from what the host resolves.",
-  "release": "v0.7.0",
+  "release": "v0.7.1",
   "rmEnv": "prod",
   "host": "rm-frontend-prod-1",
-  "checkout": "/root/rm-070",
+  "checkout": "/root/rm-071",
   "home": "/root",
   "instance": "rm_prod",
   "publicOrigin": "https://robotmoney.network",
