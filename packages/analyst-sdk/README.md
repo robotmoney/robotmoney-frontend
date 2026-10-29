@@ -68,10 +68,11 @@ SDK reads local files: preparation, the regime run, the backtest and the report 
 no HTTP request, and a missing input is an error, never a download.
 
 **1. Get a local copy (acquisition).** A local copy is a directory of format 1 backups
-(`csv/<backup id>/backup.json` plus the gzipped archives it lists), the layout of
-robotmoney/csv-backups and of the public archive routes (see "Archives (format 1)").
-The archive tool, csvb, will own these fills (`csvb backup --source api`; its download
-client is follow-up issue 1436). Until then the API-only fill is these shell commands
+(`csv/<backup id>/backup.json` plus the gzipped archives it lists), the layout csvb
+writes into robotmoney/csv-backups and the public archive routes serve (see "Archives
+(format 1)"). The archive tool, csvb, lives beside this package in `packages/csvb` and
+will own these fills (`csvb backup --source api`; its download client is follow-up issue
+1436). Until then the API-only fill is these shell commands
 (`curl`, `jq`, `gunzip`, `sha256sum`): list the sealed backups, and for each backup not yet in
 the copy fetch every archive its record lists, check each one's `sha256_raw` (the hash of its uncompressed bytes, so any gzip encoder's output verifies), and write
 the record last, so an interrupted backup is fetched again and never half-kept. `curl
@@ -114,9 +115,11 @@ cp -R tests/fixtures/archive/api-recorded/csv/2001-01-02T000000Z repo-copy/csv/
 fill repo-copy
 ```
 
-The public routes and the csv-backups repo each number their own backups, so the
-increment continues a copy filled from the same place; joining the two is csvb's work
-(issue 1436). Both fills give the same local copy for the same backup id.
+The repo and the public routes cut the same backups through one format module (D80): one
+backup per UTC day. The repo's older backups are named by their snapshot time and end at
+the legacy junction backup `2026-10-19T202421Z`, which the routes serve too, so an
+increment fetched from the API continues a clone of the repo from there. Both fills give
+the same local copy for the same backup id.
 `tests/fixtures/archive/api-recorded/` is a recording of what the real archive routes
 serve for two synthetic regime runs (`backend/tests/analyst-sdk-public-archive-recording.test.ts`
 keeps it equal to the routes), and the package's tests replay it as a local API, so
@@ -638,11 +641,14 @@ of `analytics_output_snapshots`). Artifacts named `regime_snapshots` are empty f
 
 ### Archives (format 1)
 
-The archive routes serve the robotmoney/csv-backups layout. A backup is one UTC day:
-`<day>T000000Z` holds every row of the append-only tables (source data versions, the run
-ledger, vintages and their members, published outputs and reports, recorded revisions)
+The archive routes serve format 1, the layout csvb writes into robotmoney/csv-backups,
+through the same module (`src/archive/format1.ts`; one writer, D80). A backup is one UTC
+day: `<day>T000000Z` holds every row of the append-only tables (source data versions, the
+run ledger, vintages and their members, published outputs and reports, recorded revisions)
 stamped before that midnight and after the previous backup. A day is listed once it is an
-hour past. Its record, `backup.json`, lists each archive with its row count, id range,
+hour past. The one exception is the legacy junction, `2026-10-19T202421Z`: the newest
+backup csvb wrote before the day cut, served between the day cuts around it so the repo's
+chain and the API's chain meet there. Its record, `backup.json`, lists each archive with its row count, id range,
 watermarks and SHA-256s; an archive is `<table>.<start>_<end>.csv.gz`, at most 64 MB
 uncompressed, the rows as Postgres COPY CSV text. A sealed backup never changes. List the
 backups, fetch each record past your watermark, then each archive it lists, and check

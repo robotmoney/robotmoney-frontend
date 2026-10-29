@@ -5885,7 +5885,7 @@ for sessions published earlier.
 
 **Decision.**
 
-1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+1. **One format.** Format 1 is the layout csvb writes: one directory per backup, named by its backup id, holding `backup.json` and gzipped COPY CSV archives. _Amended by [D80](#d80) (2026-10-29): csvb lives in `packages/csvb`, and a backup id is a UTC day boundary or one of the legacy snapshot times; the text named the robotmoney/csv-backups repo and the snapshot time._ The analytics module, the public API and every fill use it. No second format exists.
 2. **Write-once.** An archive never changes after it is written. Its identity is the SHA-256 of its uncompressed canonical bytes (`sha256_raw` in `backup.json`), and that hash names it. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, so no gzip encoder, Bun version or container image is part of an archive's identity, the ETag and the manifest hash are the content hash, and a client decompresses before it verifies. A backup only adds archives.
 3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
 4. **Same content.** The API and the database replica write archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
@@ -6143,3 +6143,22 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 **Why.** An analyst should get the platform's data with no work, and should not have to write a Yahoo client to study an asset the platform does not carry. Keeping the two kinds of data in separate directories keeps the record clean: a supported series is exactly what csvb wrote, with its vintages, and a supplementary series carries only its own manifest. Mixing them would let a hand-fetched value pass as platform data. The research repo `rosemarys-baby` kept hand-fetched Yahoo closes next to its resolved platform tables; this decision is the general form of separating them.
 
 **Left alone.** The local copy, the fills, csvb and the input file contract are unchanged. The source clients' existing callers keep their behaviour: `fetchFred` gains an optional start, defaulting to the 2010-01-01 it used before.
+
+---
+
+<a id="d80"></a>
+## D80 — csvb lives in robotmoney-frontend, and format 1 has one writer and one cut rule (owner direction, 2026-10-26)
+
+**Status:** proposed. Items 1 and 2 are the owner's direction (2026-10-26). The cut rule in item 3 is a default the agent took with issue 1477, and the owner may override it. Built by issue 1477 in `packages/csvb`, `packages/analyst-sdk/src/archive/format1.ts`, `packages/analyst-sdk/src/archive/format1-legacy.ts` and `backend/src/analytics/store/public-archive-store.ts`. Specified in `docs/technical/analytics-requirements.md` sections 4.5 and 4.7, `docs/technical/analyst-sdk-requirements.md` sections 2, 3 and 8, and `docs/definitions.md`.
+
+**Decision.**
+
+1. **Data only in the data repo.** robotmoney/csv-backups holds backups and nothing else. All tooling lives in robotmoney-frontend. csvb is `packages/csvb`, with every command it had. It works on a data checkout named with `--repo`. It refuses to write backups inside a robotmoney-frontend checkout.
+2. **One writer and one reader.** One module, `packages/analyst-sdk/src/archive/format1.ts`, defines format 1: the `backup.json` record, file naming, COPY CSV text, part splitting, the table catalog and the backup cut rule. csvb, the public archive routes and the SDK's reader all use it. The SDK never imports csvb; csvb imports the SDK. `scripts/tests/unit/archive-identity-guard.test.ts` fails on a second definition in `backend/src` or `packages/csvb/src`.
+3. **One cut rule (default taken).** Both writers cut a backup at each UTC day boundary once it is one settle hour in the past, named `YYYY-MM-DDT000000Z`. Per table, the watermark is the largest id below the first row stamped at or after the boundary. Vintage members are cut by their vintage. A csvb run that finds several sealed boundaries writes one backup per boundary from one snapshot. A revised table's state goes in the newest of those backups.
+4. **The legacy junction.** Snapshot-time backups already written stay valid history, byte for byte. Their ids are a closed list in `format1-legacy.ts`. The newest, `2026-10-19T202421Z`, is the junction: one extra cut point with its own id and baked per-table watermarks. It is not a chain restart. The API keeps serving every earlier day-cut backup unchanged. Once its chain reaches past the junction, it also serves the junction backup, which continues from the preceding day cut and ends at the baked watermarks. Both writers then cut the next day from the junction. A repo clone and an API increment therefore join at the junction id. A database whose ids all lie below the junction watermarks is cut by day alone.
+5. **Same bytes.** For the same committed state and backup id, csvb and the API write byte-identical uncompressed data archives (D72 (4)). `backend/tests/csvb-api-archive-parity.test.ts` checks this.
+
+**Why.** Before this, format 1 had two independent writers. csvb named a backup by its replica snapshot time. The archive store re-implemented csvb's encoding and naming and cut one backup per UTC day. The two chains never met, so the default fill (clone the repo, then fetch the increment from the API) could not join. One module, one cut rule and one junction make the two fills produce the same local copy.
+
+**Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo is a data-repo change made after this ships. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).
