@@ -5097,6 +5097,32 @@ new early dates: an existing date within tolerance writes no row.
 fetched by hand and committed as frozen files, with no acquisition evidence, no
 revision history and no backup.
 
+### Amendment (issue 1514, 2026-10-29) — the Yahoo ratio legs are recorded
+
+**Status:** proposed
+
+**What changes.** Each run records both legs of every Yahoo ratio as source
+data, from the fetch the stored ratio is calculated from (analytics
+requirements 4.3, D74 point 3). A leg another collector already records keeps
+that key: `yahoo:SPY` is `research:SPY`, `yahoo:BTC-USD` is `research:BTC-USD`,
+`yahoo:ETH-USD` is `backtest:ETH-USD`, and `yahoo:HG=F` and `yahoo:GC=F` are
+the research-series keys above. The nine others are new keys under their own
+source id, each a single Yahoo symbol:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:IWM` | yahoo | relative 1e-6 |
+| `yahoo:SPHB` | yahoo | relative 1e-6 |
+| `yahoo:SPLV` | yahoo | relative 1e-6 |
+| `yahoo:MTUM` | yahoo | relative 1e-6 |
+| `yahoo:IWF` | yahoo | relative 1e-6 |
+| `yahoo:IWD` | yahoo | relative 1e-6 |
+| `yahoo:XLU` | yahoo | relative 1e-6 |
+| `yahoo:XLP` | yahoo | relative 1e-6 |
+| `yahoo:XLY` | yahoo | relative 1e-6 |
+
+Production still reads the stored ratio, so no published output changes.
+
 ### Amendment (issue 1514, 2026-10-29) — DefiLlama restatements stay exact
 
 **Status:** proposed

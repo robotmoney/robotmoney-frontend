@@ -387,3 +387,24 @@ test("issue 1514: a failing symbol leaves every key it feeds empty and fills the
   expect(extras.spx.length).toBeGreaterThan(0);
   expect(research.btc.length).toBeGreaterThan(0);
 });
+
+test("issue 1514: one live run records a version for each leg of the eight Yahoo ratios under its mapped key", async () => {
+  const { RATIO_LEG_MAPPING } = await import("../../packages/analyst-sdk/src/series-ids.ts");
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  globalThis.fetch = countingProviders(new Map());
+  const saved: SourceAcquisitionEvidence[] = [];
+  const { registry } = await liveRun(liveDataSource.forRun!({ regime: true, research: true }), memorySink(saved));
+  const keys = byKey(saved);
+  const ratios = [...new Set(RATIO_LEG_MAPPING.map((m) => m.consumer))];
+  expect(ratios).toHaveLength(8);
+  for (const m of RATIO_LEG_MAPPING) {
+    expect({ ratio: m.consumer, leg: m.series, key: m.storageKey, recorded: (keys.get(m.storageKey)?.values.size ?? 0) > 0 })
+      .toEqual({ ratio: m.consumer, leg: m.series, key: m.storageKey, recorded: true });
+  }
+  // The stored ratio is the legs' ratio on every shared date.
+  const leg = (id: string) => keys.get(RATIO_LEG_MAPPING.find((m) => m.series === id)!.storageKey)!.values;
+  const iwm = leg("yahoo:IWM"), spy = leg("yahoo:SPY");
+  const shared = registry.IWM_SPY!.filter((p) => spy.has(p.date));
+  expect(shared.length).toBeGreaterThan(0);
+  for (const p of shared) expect(p.value).toBe(iwm.get(p.date)! / spy.get(p.date)!);
+});

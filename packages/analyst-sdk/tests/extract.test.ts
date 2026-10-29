@@ -7,7 +7,9 @@ import { configureHttp, fetchJson, fetchText, type FetchRecord } from "../src/ex
 import { fetchFred, parseFredCsv } from "../src/extract/fred.ts";
 import { fetchYahoo } from "../src/extract/yahoo.ts";
 import { fetchEdgarMonthCount } from "../src/extract/edgar.ts";
-import { createFetchMemo, fetchAll, fetchOne, mergeYahooPlans, registryYahooPlan } from "../src/extract/sources.ts";
+import { createFetchMemo, fetchAll, fetchOne, mergeRatioSeries, mergeYahooPlans, registryRecordedLegs, registryYahooPlan, type AcquisitionMeta } from "../src/extract/sources.ts";
+import { RATIO_LEG_MAPPING, ratioLegStorageKey } from "../src/series-ids.ts";
+import { CalculatedRowError, parseInput } from "../src/input/load.ts";
 import { INDICATORS } from "../src/analyze/indicators.ts";
 
 afterEach(() => { configureHttp({}); });
@@ -192,4 +194,50 @@ test("issue 1514: fetchAll with a memo requests each Yahoo symbol and DefiLlama 
   const eth = new Map(out.ETH_TREND!.map((p) => [p.date, p.value]));
   for (const p of out.BTC_ETH!) expect(eth.has(p.date)).toBe(true);
   expect(mergeYahooPlans({ A: 5, B: 0 }, { A: 2, C: 7 })).toEqual({ A: 2, B: 0, C: 7 });
+});
+
+// ── Issue 1514: the ratio legs ──────────────────────────────────────────────
+test("issue 1514: one live fetch records both legs of every Yahoo ratio, and each stored ratio is mergeRatioSeries of those legs byte for byte", async () => {
+  const counts = new Map<string, number>();
+  configureHttp({ fetch: countingYahoo(counts) });
+  const ratios = INDICATORS.filter((i) => i.source === "yahoo" && Array.isArray(i.series));
+  expect(ratios.map((i) => i.id).sort()).toEqual(["BTC_ETH", "COPPER_GOLD", "IWF_IWD", "IWM_SPY", "MTUM_SPY", "SPHB_SPLV", "XLP_XLY", "XLU_SPY"]);
+  const memo = createFetchMemo(registryYahooPlan(ratios));
+  const recorded = new Map<string, { meta: AcquisitionMeta; points: { date: string; value: number }[] }>();
+  const out = await fetchAll({
+    indicators: ratios, logger: {}, memo, requestedByRunId: 9,
+    acquire: async (meta, op) => { const points = await op(); recorded.set(meta.sourceKey, { meta, points }); return points; },
+  });
+  const own = registryRecordedLegs(ratios);
+  for (const ind of ratios) {
+    const [n, d] = (ind.series as [string, string]).map((sym) => `yahoo:${sym}`) as [string, string];
+    // Each leg is recorded under its mapped key: by this fetch for its own-id
+    // legs; the others (research:SPY, backtest:ETH-USD, ...) by their own
+    // collector from the same request, which the memo serves without a new one.
+    const legPoints = async (id: string) => {
+      const key = ratioLegStorageKey(id);
+      if (own.has(id)) {
+        expect(recorded.get(key)!.meta).toMatchObject({ provider: "yahoo", sourceKey: key, parserVersion: "yahoo:1", requestedByRunId: 9 });
+        return recorded.get(key)!.points;
+      }
+      expect(recorded.has(key)).toBe(false);
+      return memo.yahoo(id.slice(6), 0);
+    };
+    const ratio = JSON.stringify(mergeRatioSeries(await legPoints(n), await legPoints(d)));
+    expect({ id: ind.id, ratio: JSON.stringify(recorded.get(`raw_indicator_history:${ind.id}`)!.points) }).toEqual({ id: ind.id, ratio });
+    expect(JSON.stringify(out[ind.id])).toBe(ratio);
+  }
+  expect([...own].sort()).toEqual(["yahoo:IWD", "yahoo:IWF", "yahoo:IWM", "yahoo:MTUM", "yahoo:SPHB", "yahoo:SPLV", "yahoo:XLP", "yahoo:XLU", "yahoo:XLY"]);
+  for (const [sym, n] of counts) expect({ sym, n }).toEqual({ sym, n: 1 });
+  // Every leg has one storage key, the same for every ratio that reads it.
+  expect(RATIO_LEG_MAPPING.filter((m) => m.series === "yahoo:SPY").map((m) => m.storageKey)).toEqual(["research:SPY", "research:SPY", "research:SPY"]);
+  expect(ratioLegStorageKey("yahoo:HG=F")).toBe("yahoo:HG=F");
+  expect(ratioLegStorageKey("yahoo:ETH-USD")).toBe("backtest:ETH-USD");
+});
+
+test("issue 1514: a source input naming the legs yahoo:HG=F and yahoo:GC=F loads, and a source row keyed COPPER_GOLD is still a calculated row", () => {
+  const parsed = parseInput("date,series,value\n2024-01-02,yahoo:HG=F,3.9\n2024-01-02,yahoo:GC=F,2050.5\n");
+  expect(parsed.history["yahoo:HG=F"]).toEqual([{ date: "2024-01-02", value: 3.9 }]);
+  expect(parsed.history["yahoo:GC=F"]).toEqual([{ date: "2024-01-02", value: 2050.5 }]);
+  expect(() => parseInput("date,series,value\n2024-01-02,COPPER_GOLD,0.0019\n")).toThrow(CalculatedRowError);
 });

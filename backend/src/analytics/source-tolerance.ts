@@ -132,6 +132,19 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "yahoo:AAVE-USD": YAHOO_FLOAT32,
   "yahoo:HYPE32196-USD": YAHOO_FLOAT32,
   "yahoo:VIRTUAL-USD": YAHOO_FLOAT32,
+
+  // extract/sources.ts — the Yahoo ratio legs the registry fetch records under
+  // their own source id (issue 1514, analytics requirements 4.3). Single
+  // symbols, so Yahoo's float32 noise. The other legs keep their keys above.
+  "yahoo:IWM": YAHOO_FLOAT32,
+  "yahoo:SPHB": YAHOO_FLOAT32,
+  "yahoo:SPLV": YAHOO_FLOAT32,
+  "yahoo:MTUM": YAHOO_FLOAT32,
+  "yahoo:IWF": YAHOO_FLOAT32,
+  "yahoo:IWD": YAHOO_FLOAT32,
+  "yahoo:XLU": YAHOO_FLOAT32,
+  "yahoo:XLP": YAHOO_FLOAT32,
+  "yahoo:XLY": YAHOO_FLOAT32,
 };
 
 export function toleranceFor(sourceKey: string): SourceTolerance {

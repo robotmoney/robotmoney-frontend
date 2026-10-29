@@ -28,6 +28,8 @@
 import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
+import { ratioLegStorageKey } from "../series-ids.ts";
+import { inventoryCollection } from "../inventory.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchYahoo } from "./yahoo.ts";
 import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
@@ -140,18 +142,41 @@ export function mergeRatioSeries(a: Point[], b: Point[]): Point[] {
 
 // Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
 // caller decides whether to fall back to persisted history.
+// Both legs of a Yahoo ratio, full history, and the ratio on their shared dates.
+async function fetchYahooRatio(series: readonly [string, string], memo?: FetchMemo): Promise<{ legs: [Point[], Point[]]; ratio: Point[] }> {
+  const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
+  const [a, b] = await Promise.all([yahoo(series[0]), yahoo(series[1])]);
+  if (a.length === 0) throw new Error(`Yahoo numerator ${series[0]} empty`);
+  if (b.length === 0) throw new Error(`Yahoo denominator ${series[1]} empty`);
+  return { legs: [a, b], ratio: mergeRatioSeries(a, b) };
+}
+
+/**
+ * The ratio legs the registry fetch records itself (issue 1514): a leg stored
+ * under its own source id that no shipped inventory collects. The other legs
+ * (yahoo:SPY, yahoo:BTC-USD, yahoo:ETH-USD, yahoo:HG=F, yahoo:GC=F) are
+ * recorded by the collector that holds their key, from the run's same request.
+ */
+export function registryRecordedLegs(indicators: readonly Indicator[] = INDICATORS): Set<string> {
+  const held = new Set(inventoryCollection().map((s) => s.storageKey));
+  const out = new Set<string>();
+  for (const ind of indicators) {
+    if (ind.source !== "yahoo" || !Array.isArray(ind.series)) continue;
+    for (const sym of ind.series) {
+      const id = `yahoo:${sym}`;
+      if (ratioLegStorageKey(id) === id && !held.has(id)) out.add(id);
+    }
+  }
+  return out;
+}
+
 export async function fetchOne(ind: Indicator, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   switch (ind.source) {
     case "fred":
       return fetchFred(ind.series as string);
     case "yahoo": {
-      if (Array.isArray(ind.series)) {
-        const [a, b] = await Promise.all([yahoo(ind.series[0]), yahoo(ind.series[1])]);
-        if (a.length === 0) throw new Error(`Yahoo numerator ${ind.series[0]} empty`);
-        if (b.length === 0) throw new Error(`Yahoo denominator ${ind.series[1]} empty`);
-        return mergeRatioSeries(a, b);
-      }
+      if (Array.isArray(ind.series)) return (await fetchYahooRatio(ind.series as [string, string], memo)).ratio;
       return yahoo(ind.series as string);
     }
     case "defillama_tvl":
@@ -198,10 +223,45 @@ export async function fetchAll(
 ): Promise<Record<string, Point[]>> {
   const logger = opts.logger ?? console;
   const inds = opts.indicators ?? INDICATORS;
+  const legsToRecord = registryRecordedLegs(inds);
+  const recordedLegs = new Set<string>();
+  // Issue 1514: a Yahoo ratio's legs are recorded as source data from the
+  // same fetch the ratio is calculated from. The ratio is still calculated
+  // from the fetched legs and stored as before, so no published output
+  // changes. A leg that fails to record is logged and does not fail the ratio.
+  const recordLegs = async (ind: Indicator, legs: [Point[], Point[]]) => {
+    const acquire = opts.acquire!;
+    const series = ind.series as [string, string];
+    for (let i = 0; i < 2; i++) {
+      const legKey = `yahoo:${series[i]}`;
+      if (!legsToRecord.has(legKey) || recordedLegs.has(legKey)) continue;
+      recordedLegs.add(legKey);
+      const points = legs[i]!;
+      try {
+        await acquire({
+          provider: "yahoo",
+          sourceKey: legKey,
+          parserVersion: "yahoo:1",
+          cacheIdentity: `${series[i]}:ratio-leg:${ind.id}`,
+          requestedByRunId: opts.requestedByRunId,
+          provenance: opts.provenance,
+        }, async () => points);
+      } catch (e: any) {
+        logger.error?.(`[extract] record ${ind.id} leg ${legKey} FAILED: ${e?.message ?? e}`);
+      }
+    }
+  };
   const results = await Promise.all(
     inds.map(async (ind): Promise<[string, Point[]]> => {
       try {
-        const operation = () => fetchOne(ind, logger, opts.extensions, opts.memo);
+        const ratioLegs = ind.source === "yahoo" && Array.isArray(ind.series) && opts.acquire ? (ind.series as [string, string]) : null;
+        const operation = ratioLegs
+          ? async () => {
+              const { legs, ratio } = await fetchYahooRatio(ratioLegs, opts.memo);
+              await recordLegs(ind, legs);
+              return ratio;
+            }
+          : () => fetchOne(ind, logger, opts.extensions, opts.memo);
         const points = opts.acquire
           ? await opts.acquire({
               provider: ind.source,

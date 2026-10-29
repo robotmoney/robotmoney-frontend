@@ -142,6 +142,30 @@ export function validateSeriesMapping<T extends readonly SeriesMapping[]>(mappin
 /** The one shared mapping, validated when this module loads. */
 export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(buildMapping()));
 
+// RATIO LEGS (issue 1514, analytics requirements 4.3). Each run records both
+// legs of every Yahoo ratio as source data, from the fetch that produces the
+// stored ratio. A leg another collector already records keeps that key
+// (yahoo:SPY is research:SPY, yahoo:BTC-USD is research:BTC-USD, yahoo:ETH-USD
+// is backtest:ETH-USD); every other leg is stored under its own source id.
+// Production still reads the stored ratio, so these entries are not in
+// SERIES_MAPPING: they say where each leg's stream is stored, per ratio.
+const LEG_KEYS_HELD_ELSEWHERE: Readonly<Record<string, string>> = {
+  "yahoo:SPY": "research:SPY",
+  "yahoo:BTC-USD": "research:BTC-USD",
+  [extraSourceId(LEDGER_EXTRA_KEYS.eth)]: LEDGER_EXTRA_KEYS.eth.ledgerKey,
+};
+
+/** The storage key a ratio leg (a source id) is recorded under. */
+export function ratioLegStorageKey(sourceId: string): string {
+  return LEG_KEYS_HELD_ELSEWHERE[sourceId] ?? sourceId;
+}
+
+/** Each ratio's two legs as source streams, under their storage keys, validated when this module loads. */
+export const RATIO_LEG_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(
+  SERIES_MAPPING.filter((m) => m.kind === "calculated" && m.legs).flatMap((m) =>
+    m.legs!.map((leg): SeriesMapping => ({ consumer: m.consumer, storageKey: ratioLegStorageKey(leg), series: leg, kind: "source", inputId: leg }))),
+));
+
 /** Every consumer's storage keys, sorted: what each consumer reads. */
 export function consumerStorageKeys(mapping: readonly SeriesMapping[] = SERIES_MAPPING): Record<string, string[]> {
   const out: Record<string, string[]> = {};

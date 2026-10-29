@@ -141,3 +141,26 @@ describe("the D74 storage mapping", () => {
     expect(h.SPX).toEqual([{ date: "2026-10-01", value: 5699.875 }, { date: "2026-10-02", value: 5712.125 }]);
   });
 });
+
+// Issue 1514: the Yahoo ratio legs are stored as source series (analytics requirements 4.3).
+describe("the ratio leg mapping", () => {
+  test("validateSeriesMapping accepts it, alone and with the consumer mapping, and no consumer reads one leg from two keys", async () => {
+    const { RATIO_LEG_MAPPING, validateSeriesMapping, ratioLegStorageKey } = await import("../../packages/analyst-sdk/src/series-ids.ts");
+    expect(validateSeriesMapping(RATIO_LEG_MAPPING)).toBe(RATIO_LEG_MAPPING);
+    expect(() => validateSeriesMapping([...SERIES_MAPPING, ...RATIO_LEG_MAPPING])).not.toThrow();
+    expect(RATIO_LEG_MAPPING).toHaveLength(16);
+    const keyOf = new Map<string, string>();
+    for (const m of RATIO_LEG_MAPPING) {
+      const prior = keyOf.get(m.series);
+      if (prior !== undefined) expect({ leg: m.series, key: m.storageKey }).toEqual({ leg: m.series, key: prior });
+      keyOf.set(m.series, m.storageKey);
+      expect(m.storageKey).toBe(ratioLegStorageKey(m.series));
+    }
+    expect(keyOf.get("yahoo:SPY")).toBe("research:SPY");
+    expect(keyOf.get("yahoo:ETH-USD")).toBe(LEDGER_EXTRA_KEYS.eth.ledgerKey);
+    expect(keyOf.get("yahoo:IWM")).toBe("yahoo:IWM");
+    // A consumer reading one leg from two keys is refused.
+    const bad = [...RATIO_LEG_MAPPING, { ...RATIO_LEG_MAPPING.find((m) => m.series === "yahoo:SPY")!, storageKey: "yahoo:SPY" }];
+    expect(() => validateSeriesMapping(bad)).toThrow(/would read yahoo:SPY from two storage keys/);
+  });
+});
