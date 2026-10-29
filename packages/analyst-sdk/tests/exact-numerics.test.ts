@@ -16,6 +16,8 @@ import { rollingBetaSeries } from "../src/analyze/research-signals.ts";
 import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
 import { correlation, mean2, meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
 import type { Point } from "../src/types.ts";
+import { median, quantile } from "../src/transform/exact.ts";
+import { exactQuantile } from "./support/exact-reference.ts";
 import {
   exactBeta,
   exactCompound,
@@ -364,5 +366,99 @@ describe("backtest: compounding, Sharpe and the constant-return regression", () 
     expect((m * 365) / (Math.sqrt(v) * Math.sqrt(365))).toBeGreaterThan(1e12);
     // And the equity is the exact compounded product.
     expect(c.values.at(-1)!.value).toBe(exactCompound(r));
+  });
+});
+
+// Quantile and median (issue 1513): linear interpolation at the exact position
+// q (n - 1), judged against the BigInt-rational exactQuantile.
+describe("quantile and median", () => {
+  // mulberry32: a small seeded generator, so the series are fixed.
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const QS = [0, 0.1, 0.25, 0.5, 0.9, 1, 1 / 3];
+  const series = (seed: number, n: number, scale: () => number): number[] => {
+    const r = rng(seed);
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const v = (r() < 0.5 ? -1 : 1) * r() * scale();
+      out.push(v);
+      if (r() < 0.2) out.push(v); // duplicates
+    }
+    return out;
+  };
+  const r0 = rng(7);
+  const SERIES: [string, number[]][] = [
+    ["unit mixed signs", series(1, 101, () => 1)],
+    ["wide magnitudes", series(2, 64, () => 10 ** (r0() * 40 - 20))],
+    ["near 1e300", series(3, 50, () => 1.7e300 * (0.5 + r0()))],
+    ["near 1e-300", series(4, 50, () => 1e-300 * (0.5 + r0()))],
+    ["mixed 1e300 and 1e-300", [...series(5, 20, () => 1e300), ...series(6, 20, () => 1e-300)]],
+    ["even length", series(8, 12, () => 3)],
+    ["SPX returns", SPX],
+    ["ETH returns", ETH],
+  ];
+
+  test("seeded and real series: quantile equals exactQuantile bit for bit for every q", () => {
+    let interpolated = 0;
+    for (const [name, xs] of SERIES) {
+      for (const q of QS) {
+        const got = quantile(xs, q);
+        expect({ name, q, got }).toEqual({ name, q, got: exactQuantile(xs, q) });
+        const pos = q * (xs.length - 1);
+        if (!Number.isInteger(pos)) interpolated++;
+      }
+    }
+    expect(interpolated).toBeGreaterThan(20);
+  });
+
+  test("q 0 is the minimum, q 1 the maximum, and a single element is every quantile", () => {
+    for (const [, xs] of SERIES) {
+      expect(quantile(xs, 0)).toBe(Math.min(...xs));
+      expect(quantile(xs, 1)).toBe(Math.max(...xs));
+    }
+    for (const x of [0, -3.5, 1e300, -1e-300, 0.1]) {
+      for (const q of QS) expect(quantile([x], q)).toBe(x);
+    }
+  });
+
+  test("an unsorted array gives the quantile of its sorted copy and is left unchanged", () => {
+    for (const [, xs] of SERIES) {
+      const before = [...xs];
+      const sorted = [...xs].sort((a, b) => a - b);
+      for (const q of QS) expect(quantile(xs, q)).toBe(quantile(sorted, q));
+      expect(xs).toEqual(before);
+    }
+  });
+
+  test("median is quantile 0.5 for odd and even lengths", () => {
+    expect(median([1, 2, 3, 4])).toBe(2.5);
+    expect(median([3, 1, 2])).toBe(2);
+    for (const [, xs] of SERIES) {
+      expect(median(xs)).toBe(quantile(xs, 0.5));
+      expect(median(xs.slice(1))).toBe(quantile(xs.slice(1), 0.5));
+    }
+  });
+
+  test("empty, non-finite and out-of-range input throw RangeError", () => {
+    expect(() => quantile([], 0.5)).toThrow(RangeError);
+    expect(() => quantile([1, NaN], 0.5)).toThrow(RangeError);
+    expect(() => quantile([1, Infinity], 0.5)).toThrow(RangeError);
+    expect(() => quantile([1, 2], -0.1)).toThrow(RangeError);
+    expect(() => quantile([1, 2], 1.1)).toThrow(RangeError);
+    expect(() => quantile([1, 2], NaN)).toThrow(RangeError);
+    expect(() => median([])).toThrow(RangeError);
+  });
+
+  test("overflow guard: values near the double maximum interpolate to a finite exact value", () => {
+    const got = quantile([1e308, 1.7e308], 0.5);
+    expect(Number.isFinite(got)).toBe(true);
+    expect(got).toBe(exactQuantile([1e308, 1.7e308], 0.5));
+    // Here the plain form lo + (hi - lo) f overflows: hi - lo is 3.4e308.
+    expect(-1.7e308 + (1.7e308 - -1.7e308) / 3).toBe(Infinity);
+    expect(quantile([-1.7e308, 1.7e308], 1 / 3)).toBe(exactQuantile([-1.7e308, 1.7e308], 1 / 3));
   });
 });
