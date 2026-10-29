@@ -398,3 +398,50 @@ export function meanAndSampleSd(xs: readonly number[]): { mean: DD; sd: DD } {
   if (xs.length < 2) return { mean, sd: [xs.length === 1 ? 0 : NaN, 0] };
   return { mean, sd: stdDD(xs, 1) };
 }
+
+/**
+ * The q quantile of finite values by linear interpolation between order
+ * statistics at the exact position q (n - 1). The input need not be sorted and
+ * is not modified. The position is formed exactly as ph + pl (TwoProd); with
+ * integer part k and exact fraction f, the result is sorted[k] when f is 0, and
+ * otherwise lo + (hi - lo) f as one compensated dot product over lo and hi
+ * divided by the power of two scaleOf([lo, hi]) (exact, so the error-free
+ * products cannot overflow near 1e300), rounded once and scaled back. Empty or
+ * non-finite input, and q outside [0, 1] (NaN included), throw RangeError.
+ * Ported from rosemarys-baby src/lib/stats.ts.
+ */
+export function quantile(xs: readonly number[], q: number): number {
+  if (xs.length === 0) throw new RangeError("quantile: empty input");
+  if (typeof q !== "number" || !(q >= 0 && q <= 1)) throw new RangeError(`quantile: q must be in [0, 1], got ${q}`);
+  for (let i = 0; i < xs.length; i++) {
+    if (typeof xs[i] !== "number" || !Number.isFinite(xs[i])) throw new RangeError(`quantile: non-finite input at index ${i} (${xs[i]})`);
+  }
+  const sorted = [...xs].sort((a, b) => a - b);
+  // The position q (n - 1) exactly, as ph + pl. Its integer part k and its
+  // fraction fh + pl are both exact; fh is 1 when ph is an integer and pl < 0.
+  const [ph, pl] = twoProd(q, sorted.length - 1);
+  const k = Math.floor(ph) - (Number.isInteger(ph) && pl < 0 ? 1 : 0);
+  const fh = ph - k;
+  if (fh === 0 && pl === 0) return sorted[k]!;
+  // lo + (hi - lo)(fh + pl) = lo + hi fh + hi pl - lo fh - lo pl, so hi - lo is
+  // never formed (it is inexact in general and can overflow).
+  const s = scaleOf([sorted[k]!, sorted[k + 1]!]);
+  const lo = sorted[k]! / s;
+  const hi = sorted[k + 1]! / s;
+  return ddValue(dotDD([lo, hi, hi, -lo, -lo], [1, fh, pl, fh, pl])) * s;
+}
+
+/** The median of finite values: quantile(xs, 0.5). */
+export function median(xs: readonly number[]): number {
+  return quantile(xs, 0.5);
+}
+
+/** Compensated dot product (Dot2), rounded once. */
+export const dot2 = (a: readonly number[], b: readonly number[]): number => ddValue(dotDD(a, b));
+
+/**
+ * rhs - a . x, compensated and rounded once: the residual of one row of a
+ * linear system (the refined solve in transform/linalg.ts).
+ */
+export const residual2 = (rhs: number, a: readonly number[], x: readonly number[]): number =>
+  ddValue(ddAdd([rhs, 0], ddMulD(dotDD(a, x), -1)));

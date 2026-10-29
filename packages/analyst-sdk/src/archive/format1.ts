@@ -188,6 +188,7 @@ export function selectBackups(recordTexts: Record<string, string>, asOf?: string
     if (rec.backup !== id) throw new ArchiveError(`csv/${id}/backup.json: record says backup ${rec.backup}`);
     if (rec.source !== undefined && rec.source !== "api" && rec.source !== "db") throw new ArchiveError(`csv/${id}/backup.json: source must be "api" or "db"`);
     if (!rec.append_only || typeof rec.append_only !== "object") throw new ArchiveError(`csv/${id}/backup.json: no append_only section`);
+    checkRevisionKeys(rec, id);
     for (const f of listedFiles([rec])) {
       checkFilePath(f.path, id);
       if (typeof f.sha256_raw !== "string") throw new ArchiveError(`csv/${id}/backup.json: ${f.path} has no string sha256_raw`);
@@ -205,6 +206,23 @@ export function selectBackups(recordTexts: Record<string, string>, asOf?: string
     }
   }
   return out;
+}
+
+// Every revised table a record lists must name the columns that identify a row:
+// a non-empty array of non-empty strings. A revision with no usable key cannot be
+// replayed (an upsert or delete would match nothing, or everything), so the
+// record is refused when it is read, not when the table is replayed.
+function checkRevisionKeys(rec: BackupRecord, backup: string): void {
+  const revisions: unknown = rec.revisions;
+  if (revisions === undefined) return;
+  if (revisions === null || typeof revisions !== "object" || Array.isArray(revisions)) throw new ArchiveError(`csv/${backup}/backup.json: revisions must be an object`);
+  for (const [table, r] of Object.entries(revisions as Record<string, unknown>)) {
+    const key = (r as { key?: unknown } | null)?.key;
+    if (!Array.isArray(key) || key.length === 0) throw new ArchiveError(`csv/${backup}/backup.json: the ${table} revision names no key (got ${JSON.stringify(key ?? null)})`);
+    for (const c of key) {
+      if (typeof c !== "string" || c === "") throw new ArchiveError(`csv/${backup}/backup.json: the ${table} revision key has a column that is not a non-empty string (got ${JSON.stringify(c)})`);
+    }
+  }
 }
 
 // A listed path must stay inside its own backup directory: relative, under

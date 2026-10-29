@@ -164,6 +164,43 @@ bun run regime tests/fixtures/raw-indicator-history.csv --provenance
 
 A relative path resolves from the folder you ran the command in, also under `bun run`.
 
+## Read a local copy in code
+
+`bun run inputs` is one use of the archive reader, which the package exports
+(`src/archive/local-copy.ts`). `openArchive(files, asOf?)` opens a local copy as of a
+backup id (or its newest backup) and returns a `LocalCopy`, after the same checks the
+command makes: backup selection, the watermark chain, the bounded inflate, the SHA-256 of
+every listed file and the row count of every file it reads. It is pure: `files` is an
+`ArchiveFiles`, `{ root, backupDirs(): string[] | null, read(path): Uint8Array | null }`,
+over paths relative to the copy with `/` separators (`root` only names the copy in
+messages). On disk, `openLocalCopy(dir, asOf?)` in `bin/local-copy.ts` wraps it with the
+node:fs reader `diskArchiveFiles(dir)`.
+
+```ts
+import { openLocalCopy } from "./bin/local-copy.ts";
+import { collectRunInputs } from "./src/index.ts";
+
+const copy = openLocalCopy("api-copy");
+const run = collectRunInputs(copy, "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2"); // one run's frozen vintage
+const { header, rows } = copy.revisedTable("raw_indicator_history");
+const prices = copy.latestValues(["backtest:^GSPC", "backtest:ETH-USD", "backtest:DTB3"]);
+```
+
+- `copy.revisedTable(table)` is a revised table (`regime_snapshots`,
+  `raw_indicator_history`, `asset_prices`) as of the copy's as-of backup: every selected
+  backup's `revisions/<table>.csv.gz` applied in backup order (an upsert or a delete by
+  the key columns its record names), without the `_backup` and `_op` columns, rows sorted
+  by key column by column. A NULL stays `null`. A backup record whose revision names no
+  key, an empty key or a key column that is not a non-empty string is refused when the
+  copy opens.
+- `copy.latestValues(sourceKeys)` is the newest `source_value_versions` value per storage
+  key and market date (the highest id, compared as a BigInt), each tagged with the input
+  id it is read under (`SPX`, `ETH`, `TBILL3M` for the three above), sorted by market date
+  then storage key. A key no input id is read under is refused. These are the newest
+  values, not a run's vintage: a published run's inputs come from `collectRunInputs`.
+- `copy.tables`, `copy.versions()`, `copy.files(table)` and `copy.readRows(file)` are the
+  run-ledger tables, the `source_value_versions` rows and any listed data file.
+
 ## Input files
 
 Three contracts. Each has a CSV form and an equivalent JSON form (an array of objects
@@ -261,6 +298,70 @@ therefore hold a row dated after today (for example `2026-10-31` on 2026-10-05).
 Without a cut, the date axis would end there. Use `--asof` (or `runRegime`'s `asof`)
 to cut it at the day you mean.
 
+## Supplementary series: data the platform does not carry
+
+The SDK works with two kinds of source data (decision D79 in `docs/decisions.md`;
+analyst SDK requirements section 4):
+
+- **Supported series** are the ones the platform collects. The public API and the
+  csv-backups repo serve them cleaned and versioned, and they reach you through the
+  local copy (the quickstart above). Use them as they come.
+- **Supplementary series** are everything else: an asset the platform does not
+  collect, or an earlier start than it holds. You fetch them yourself and keep them
+  in a **supplementary directory**, one file per series, in a format the SDK reads.
+
+Keep the supplementary directory apart from the local copy: not the same folder, not
+inside it, not around it. The SDK refuses one that is.
+
+**Fetch.** The SDK ships fetchers for Yahoo and FRED, so you do not need to write
+your own:
+
+```sh
+bun run fetch --into my-series yahoo:GC=F yahoo:SOL-USD fred:DTB3
+bun run fetch --into my-series --start 2010-01-01 --end 2024-12-31 --replace yahoo:SPY
+```
+
+`--start` defaults to 2016-01-01 and `--end` to today. Each series lands at
+`<dir>/<provider>/<symbol>.csv` with the symbol percent-encoded (`yahoo:GC=F` is
+`yahoo/GC%3DF.csv`). An existing series is kept unless you pass `--replace`. A series
+that fails is reported, and the rest are still fetched.
+
+**Format.** Each file is a source input file (`date,series,value`, one source id,
+dates strictly ascending), so the input loaders read it as they read any source input. Beside it,
+`<symbol>.manifest.json` records what the values are (`field`: Yahoo's adjusted close,
+FRED's value), the row count, the date range, the file's SHA-256, and when and how it
+was fetched:
+
+```json
+{
+  "format": 1,
+  "series": "yahoo:GC=F",
+  "field": "adjusted close (the close where Yahoo gives no adjusted close)",
+  "row_count": 2717,
+  "first_date": "2016-01-04",
+  "last_date": "2026-10-27",
+  "sha256": "…",
+  "fetched_at": "2026-10-28T12:00:00.000Z",
+  "fetched_by": "analyst-sdk 0.3.1 fetch, https://query2.finance.yahoo.com/v8/finance/chart/GC%3DF?…"
+}
+```
+
+**Read.** `openSupplementary(files).read("yahoo:GC=F")` (`src/input/supplementary.ts`)
+returns the points and the manifest, after checking the file against its manifest's
+series, SHA-256, row count and date range; `.list()` lists the source ids. It is pure:
+`files` is a `SupplementaryFiles`, `{ read(path): Uint8Array | null, list(): string[] }`
+over paths relative to the directory, the same `read` shape as the archive reader's
+`ArchiveFiles`. On disk, `readSupplementary(dir, id)` and `listSupplementary(dir)`
+(`bin/supplementary-dir.ts`) wrap it with the node:fs reader `supplementaryFiles(dir)`. A series from another provider goes in with
+`writeSupplementary(dir, id, points, { field, fetched_at, fetched_by })`. The format
+itself is `src/input/supplementary.ts`, and `fetchSupplementary(id, { start, end })`
+(`src/extract/supplementary.ts`) is the fetch without the write.
+
+The SDK never merges the two directories. If a supported series and a supplementary
+series share a source id, your code picks the directory it reads. A result computed
+from a supplementary series is your own analysis: it has no vintage and is not a
+published report, and its manifest is its provenance.
+
 ## Backtest your own portfolio
 
 The backtest the report carries is one shared calculation, exposed for any assets and
@@ -295,6 +396,32 @@ zero volatility, which since D78 includes any run of bit-identical returns), the
 different window or `splitDate` never changes the full-range figures.
 `computeBacktest` is exactly these three functions over the reference portfolios.
 
+### Drift-aware simulation
+
+`simulatePortfolio` resets the book to the target every day. `simulateDrift` takes the
+same four inputs and lets holdings drift between rebalances:
+
+```ts
+import { simulateDrift, periodStats } from "./src/index.ts";
+
+const drift = simulateDrift(dateAxis, schedule, prices, tbillPercent, { costBps: 10, freq: "monthly", band: 0.05 });
+const stats = periodStats(drift.values, drift.startDate, drift.endDate, { returns: drift.returns, trades: drift.trades });
+```
+
+Inputs are checked exactly as for `simulatePortfolio`, and the run starts on the same date
+with the holdings at the target and no cost. Each later date earns the drifted weights'
+return, then each weight becomes `w (1 + r_k) / (1 + r_p)`, rounded once (D78). The book
+rebalances to the day's target when the target changed since the last rebalance, when the
+calendar rule fires against the previous axis date, or when any weight is more than `band`
+from its target. `freq` is `"daily"` (the default), `"weekly"` (the first date of a new
+Monday-to-Sunday week), `"monthly"` (a new month), `"quarterly"` (a new January, April,
+July or October) or `"never"`; `band` defaults to none and `costBps` to 10. A rebalance
+whose one-sided turnover exceeds 1e-9 costs turnover times `costBps / 10000` and is
+recorded in `trades`. An unknown option key, a negative or non-finite `costBps` or `band`,
+an unknown `freq`, or a day whose portfolio factor `1 + r_p` is not positive throws a
+`RangeError` naming the field or the date. With `costBps: 0` and `freq: "daily"` the values
+and returns equal `simulatePortfolio`'s bit for bit.
+
 From the command line, one fixed-target portfolio (weights in percent of NAV, summing to
 100; `cash` earns the input's `TBILL3M`, `fred:DTB3`):
 
@@ -310,6 +437,94 @@ is priced from the input series named by the holding itself (`"yahoo:WIDGET": 5`
 yield series (`defillama-yields:`) is not a price and is refused. Missing price coverage
 exits 1 and names the series; the command never fetches. It prints the portfolio, the
 universe check and the statistics; `--full` adds the daily values, returns and trades.
+
+## Size and optimise a portfolio
+
+The backtest takes weights; these functions choose them. Every solver returns a certified
+optimum or throws `UnsupportedError`: there is no approximate fallback (D78).
+
+```ts
+import { markowitzSizing, markowitzBacktest, ercCertified, simulateDrift } from "./src/index.ts";
+
+// Today's sizing from closes (Point[] per asset id): the dates every asset in `mu` is
+// priced, from `from` to `end`, simple returns, a 20% shrunk annual covariance.
+const today = markowitzSizing({
+  closes: { SPX: spx, ETH: eth, GLD: gld },
+  mu: { SPX: 0.075, ETH: 0.25, GLD: 0.055 }, // annual fractions, per asset
+  rf: 0.04,
+  lambdas: [2, 4, 8, 16],
+  from: "2018-05-15",
+});
+today.tangency;        // { weights, cash, expReturn, vol, sharpe }, fully invested
+today.byLambda[1].book; // mean-variance at lambda 4, the rest in cash
+
+// A monthly re-optimised backtest: weights from the history strictly before each date.
+const bt = markowitzBacktest({
+  dateAxis, returns, assets: ["SPX", "ETH", "GLD"], cashRate: tbillPercent, prices,
+  mu: (date, history) => myPointInTimePriors(date, history),
+});
+bt.schedule; bt.rebalances; bt.simulation; bt.stats;
+```
+
+**Solvers** (`src/allocate/optimize.ts`, on a covariance `S` and excess returns `ex`):
+
+| Function | Problem |
+|---|---|
+| `ercCertified(S, budgets?)`, `ercExact` | budgeted equal risk contribution (damped Newton on `1/2 w'Sw - sum b ln w`); weights sum to 1; certified to a relative budget violation of at most `ERC_TOL` (4e-15) |
+| `minVarExact(S)` | long-only minimum variance, fully invested |
+| `meanVarExact(S, ex, lambda)` | `argmax ex'w - lambda/2 w'Sw`, `w >= 0`, `sum w <= 1`, the rest cash; all cash when no excess return is positive |
+| `tangencyExact(S, ex)` | long-only maximum Sharpe, fully invested; the best single asset by `ex_i / sigma_i` when no excess return is positive |
+
+The last three enumerate every support (`supports(n)`, `2^n - 1` of them) and check the KKT
+conditions off it; ties go to the higher objective, then fewer assets, then the lower index.
+`ercResidual`, `minVarResidual`, `meanVarResidual` and `sharpeResidual` grade any weights on
+the same scale and add the point's infeasibility, so only a feasible optimum scores at rounding
+size. Budgets are normalised to sum 1; a zero, negative or non-finite budget throws, naming its
+index. Each support is solved by `solveRefined` (`src/transform/linalg.ts`): rows and columns
+balanced by powers of two, LU with partial pivoting, refinement with compensated residuals
+(`residual2`) to below half an ulp. It throws when the matrix is singular, when the balanced
+condition number times eps is at least 1, or when refinement stalls above one rounding.
+
+**Covariance** (`src/allocate/covariance.ts`): `annualCov(rows, periodsPerYear = 252)` is
+`covarianceMatrix` of the columns (each entry the correctly rounded exact sample covariance)
+times `periodsPerYear`; `shrinkToDiagonal(S, s = SHRINK)` multiplies each off-diagonal entry
+by `1 - s` and keeps the diagonal bit for bit; `shrunkCov(rows, s, periodsPerYear)` is the two.
+`SHRINK` is 0.2. `correlationMatrix` gives the sample correlations.
+
+**Sizing** (`src/allocate/markowitz.ts`): `markowitzBooks({ returns, assets, rf, mu, lambdas })`
+takes daily return rows (days x assets, so blended bucket returns work) and returns the
+tangency book and one mean-variance book per lambda. A weight within `zeroTol` (1e-12) is
+reported as 0; cash is `1 - sum w`, compensated; `expReturn` dots weights and cash with `mu`
+and `rf`; `vol` is `sqrt(w'Sw)`; `sharpe` is `(expReturn - rf) / vol` as one compensated dot,
+or null at zero volatility. `markowitzSizing` builds the rows from closes and adds `asof`,
+`from`, `nObs` and `corr`. A missing asset, a non-finite `rf` or `mu`, a lambda that is not
+positive and fewer than two common dates throw `RangeError`.
+
+**Schedule and backtest.** `markowitzSchedule(options)` returns `{ schedule, rebalances }`;
+`markowitzBacktest(options)` adds `simulation` and `stats` (periodStats over the
+simulation's own start and end dates). On each re-optimisation date the history is the
+return rows dated on or after `from` and strictly before the date; with fewer than `minObs`
+rows the weights stay null. rf is the last `cashRate` value on or before the date divided by
+100. The weights hold until the next re-optimisation.
+
+Every step can be tuned. Options are one object; an unknown key throws `RangeError` naming it.
+
+| Option | Default | |
+|---|---|---|
+| `mu(date, history, dates)` | required | expected annual returns per asset (a record or an array), your point-in-time priors |
+| `rule` | `"meanVar"` | `"meanVar"` (`meanVarExact` at `lambda`, the rest cash) or `"tangency"` |
+| `solve(mu, S, rf)` | the rule | any solver: `(mu, S) => ercCertified(S)`, risk budgets, `minVarExact`, inverse volatility, naive |
+| `cov(history)` | `shrunkCov(history, shrink, periodsPerYear)` | any covariance estimate |
+| `lookback` | expanding window | a rolling window of the last `lookback` rows |
+| `reoptimise` | `"monthly"` | `"weekly"` (a new Monday-to-Sunday week), `"monthly"`, `"quarterly"` (a new calendar quarter), or `(date, prevDate) => boolean` (`prevDate` is null on the first axis date) |
+| `expand(weights, date)` | identity | maps optimizer weights (`cash` plus one key per asset) onto the day's priced holdings; null leaves the day unset |
+| `simulate` | `simulatePortfolio` | `{ drift: { freq, band, costBps } }` for `simulateDrift`, or any `(dateAxis, schedule, prices, cashRate) => SimulationResult` |
+| `minObs`, `from`, `shrink`, `periodsPerYear`, `costBps`, `lambda`, `zeroTol`, `splitDate` | 252, every return, 0.2, 252, 10, 4, 1e-12, `BACKTEST_IN_SAMPLE_END` | |
+
+`expand` output must pass the simulator's weight checks (nonnegative, summing to 1). A
+solver that returns a negative or over-budget weight throws `RangeError`. `markowitzBooks`,
+`markowitzSchedule`, `simulateDrift`, `periodStats` and every solver return plain data, so
+you can also compose them yourself.
 
 ## What changes after publication, and why
 
@@ -447,16 +662,25 @@ the data. Check each provider's terms before you republish what you download.
 ```
 src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
-src/input/       the input loaders, the manifest and the provenance envelope
+src/input/       the input loaders, the manifest, the provenance envelope and the supplementary series format
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
+                 (format1.ts), and the reader over injected files (local-copy.ts: openArchive,
+                 revised tables, latest values)
 src/run.ts       source data in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
+bin/local-copy.ts  the node:fs side of the archive reader: openLocalCopy(dir, asOf)
 bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
+bin/fetch.ts     the `bun run fetch` entry (Yahoo and FRED series into a supplementary directory)
+bin/supplementary-dir.ts  the node:fs side of the supplementary directory: its reader, and writing
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)
+src/allocate/optimize.ts  the certified solvers: ERC and risk budgets, minimum variance, mean-variance, maximum Sharpe
+src/allocate/covariance.ts  annualCov, shrinkToDiagonal, shrunkCov
+src/allocate/markowitz.ts  Markowitz sizing, the point-in-time schedule and the Markowitz backtest
+src/transform/linalg.ts   covarianceMatrix, correlationMatrix, solveRefined (dependency-free LU)
 bin/check-rule.ts the `bun run rules:check` entry
 universe/        base-universe.json (the shipped universe), groups.csv and series.csv (its export inputs)
 rules/           the shipped rule files, all inside the universe

@@ -35,7 +35,7 @@ import type { RegimeComputeResult } from "./compute.ts";
 import type { Point } from "../types.ts";
 import { toDateMap } from "./correlations.ts";
 import { PANELS } from "./indicators.ts";
-import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
+import { annualizedGrowth, Compounder, ddDiv, ddMulD, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 
 export const BACKTEST_COST_PER_REBALANCE = 0.001;
 export const BACKTEST_IN_SAMPLE_END = "2024-01-31";
@@ -184,6 +184,24 @@ export function simulatePortfolio(
     throw new RangeError(`costBps must be a finite nonnegative number, got ${JSON.stringify(costBps)}`);
   }
   const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
+  const { assetSeries, tbillDaily, firstIdx } = prepareSimulation(dateAxis, schedule, prices, cashRate);
+  return simulate(dateAxis, schedule, assetSeries, tbillDaily, firstIdx, costRate);
+}
+
+interface PreparedSimulation {
+  assetSeries: Record<string, number[]>;
+  tbillDaily: number[];
+  firstIdx: number;
+}
+
+// The input checks, forward fill, cash-rate series and first index shared by
+// simulatePortfolio and simulateDrift.
+function prepareSimulation(
+  dateAxis: readonly string[],
+  schedule: Schedule,
+  prices: Record<string, Point[]>,
+  cashRate: Point[],
+): PreparedSimulation {
   if (dateAxis.length === 0) throw new RangeError("dateAxis is empty");
   for (let i = 0; i < dateAxis.length; i++) {
     if (!ISO_DAY.test(dateAxis[i]!) || (i > 0 && dateAxis[i]! <= dateAxis[i - 1]!)) throw new RangeError(`dateAxis must be ascending YYYY-MM-DD dates (index ${i})`);
@@ -209,7 +227,7 @@ export function simulatePortfolio(
   if (firstIdx < 0) {
     throw new RangeError(`missing price coverage: no date in ${dateAxis[0]}..${dateAxis[dateAxis.length - 1]} has prices for every asset (${Object.keys(prices).join(", ")})`);
   }
-  return simulate(dateAxis, schedule, assetSeries, tbillDaily, firstIdx, costRate);
+  return { assetSeries, tbillDaily, firstIdx };
 }
 
 function simulate(
@@ -237,17 +255,7 @@ function simulate(
       const dailyTbill = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
       // portRet = cash weight x daily cash rate + sum of weight x asset return,
       // as one compensated dot product.
-      const ws: number[] = [lastWeights.cash || 0];
-      const rs: number[] = [dailyTbill];
-      for (const [asset, wa] of Object.entries(lastWeights)) {
-        if (asset === "cash" || wa === 0) continue;
-        const p0 = assetSeries[asset]?.[i - 1];
-        const p1 = assetSeries[asset]?.[i];
-        if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) {
-          ws.push(wa);
-          rs.push(p1! / p0! - 1);
-        }
-      }
+      const { ws, rs } = dayTerms(lastWeights, assetSeries, i, dailyTbill);
       const portRet = ddValue(dotDD(ws, rs));
       equity.grow(portRet);
       returns.push({ date: dateAxis[i]!, value: portRet });
@@ -261,6 +269,165 @@ function simulate(
     }
     lastWeights = w;
     values.push({ date: dateAxis[i]!, value: equity.value });
+  }
+
+  return {
+    values,
+    returns,
+    trades,
+    startDate: dateAxis[firstActiveIdx >= 0 ? firstActiveIdx : firstIdx]!,
+    endDate: dateAxis[dateAxis.length - 1]!,
+  };
+}
+
+// One day's return terms for weights held from the previous close: the cash
+// weight and the daily cash rate first, then each nonzero asset weight and that
+// asset's price change, in key order. An asset whose previous or current price
+// is not finite, or whose previous price is not positive, contributes no term
+// (a zero return).
+function dayTerms(weights: Weights, assetSeries: Record<string, number[]>, i: number, dailyCash: number): { ws: number[]; rs: number[] } {
+  const ws: number[] = [weights.cash || 0];
+  const rs: number[] = [dailyCash];
+  for (const [asset, wa] of Object.entries(weights)) {
+    if (asset === "cash" || wa === 0) continue;
+    const p0 = assetSeries[asset]?.[i - 1];
+    const p1 = assetSeries[asset]?.[i];
+    if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) {
+      ws.push(wa);
+      rs.push(p1! / p0! - 1);
+    }
+  }
+  return { ws, rs };
+}
+
+/** When a drifting book rebalances on the calendar, judged against the previous axis date. */
+export type RebalanceFrequency = "daily" | "weekly" | "monthly" | "quarterly" | "never";
+
+const REBALANCE_FREQUENCIES: readonly RebalanceFrequency[] = ["daily", "weekly", "monthly", "quarterly", "never"];
+
+export interface DriftOptions {
+  // Cost per unit of one-sided turnover, in basis points. Default 10, as simulatePortfolio.
+  costBps?: number;
+  // Calendar rebalance rule. Default "daily".
+  freq?: RebalanceFrequency;
+  // Rebalance when any weight is more than `band` (absolute) from its target. Default: no band.
+  band?: number;
+}
+
+/** UTC weekday of a YYYY-MM-DD date, Monday 0 through Sunday 6. */
+const weekdayOf = (iso: string): number => (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7;
+
+function calendarDue(freq: RebalanceFrequency, prev: string, cur: string): boolean {
+  switch (freq) {
+    case "daily":
+      return true;
+    case "weekly":
+      return weekdayOf(cur) < weekdayOf(prev);
+    case "monthly":
+      return cur.slice(0, 7) !== prev.slice(0, 7);
+    case "quarterly":
+      return cur.slice(0, 7) !== prev.slice(0, 7) && ["01", "04", "07", "10"].includes(cur.slice(5, 7));
+    case "never":
+      return false;
+  }
+}
+
+/**
+ * A holding's weight after one day, w (1 + r) / (1 + rp), for its own return r
+ * and the portfolio return rp. Both factors come from twoSum, the numerator from
+ * ddMulD (TwoProd keeps the rounding error of w times the high word), and the
+ * quotient is rounded once (D78).
+ */
+export function driftedWeight(w: number, r: number, rp: number): number {
+  return ddValue(ddDiv(ddMulD(twoSum(1, r), w), twoSum(1, rp)));
+}
+
+// The drift-aware simulation (analytics requirements 5.3). Inputs, forward
+// fill, first index and cash rate are simulatePortfolio's. Holdings start at the
+// first date's target at no cost; on each later date with weights they earn
+// that day's return and drift to w (1 + r_k) / (1 + r_p). The book rebalances
+// to the day's target when the target changed since the last rebalance, when
+// the calendar rule fires, or when a weight is more than `band` from target; a
+// rebalance with turnover above 1e-9 costs turnover times costBps / 10000.
+// With costBps 0 and freq "daily" the values and returns equal
+// simulatePortfolio's bit for bit. Pure: no file, no HTTP.
+export function simulateDrift(
+  dateAxis: readonly string[],
+  schedule: Schedule,
+  prices: Record<string, Point[]>,
+  cashRate: Point[],
+  options: DriftOptions = {},
+): SimulationResult {
+  for (const k of Object.keys(options)) {
+    if (k !== "costBps" && k !== "freq" && k !== "band") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band`);
+  }
+  const { costBps, freq = "daily", band } = options;
+  if (costBps !== undefined && (typeof costBps !== "number" || !Number.isFinite(costBps) || costBps < 0)) {
+    throw new RangeError(`costBps must be a finite nonnegative number, got ${JSON.stringify(costBps)}`);
+  }
+  if (!REBALANCE_FREQUENCIES.includes(freq)) {
+    throw new RangeError(`freq must be one of ${REBALANCE_FREQUENCIES.join(", ")}, got ${JSON.stringify(freq)}`);
+  }
+  if (band !== undefined && (typeof band !== "number" || !Number.isFinite(band) || band < 0)) {
+    throw new RangeError(`band must be a finite nonnegative number, got ${JSON.stringify(band)}`);
+  }
+  const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
+  const { assetSeries, tbillDaily, firstIdx } = prepareSimulation(dateAxis, schedule, prices, cashRate);
+
+  const equity = new Compounder(1);
+  // The drifted weights of the book; holdings are held x equity.
+  let held: Weights | null = null;
+  let lastTarget: Weights | null = null;
+  const values: Point[] = [];
+  const returns: Point[] = [];
+  const trades: TradeEvidence[] = [];
+  let firstActiveIdx = -1;
+
+  for (let i = firstIdx; i < dateAxis.length; i++) {
+    const w = schedule[i];
+    if (!w) continue;
+    const date = dateAxis[i]!;
+    if (firstActiveIdx < 0) firstActiveIdx = i;
+    if (held == null || lastTarget == null) {
+      held = { ...w };
+      lastTarget = w;
+      values.push({ date, value: equity.value });
+      continue;
+    }
+
+    const dailyCash = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
+    const { ws, rs } = dayTerms(held, assetSeries, i, dailyCash);
+    const portRet = ddValue(dotDD(ws, rs));
+    // fl(1 + r_p) is 0 only when 1 + r_p is exactly 0, so its sign is the exact sign.
+    if (!(1 + portRet > 0)) throw new RangeError(`simulateDrift: 1 + portfolio return is not positive on ${date} (${portRet})`);
+    equity.grow(portRet);
+    returns.push({ date, value: portRet });
+
+    const next: Weights = {};
+    for (const [k, wk] of Object.entries(held)) {
+      let r = 0;
+      if (k === "cash") r = dailyCash;
+      else {
+        const p0 = assetSeries[k]?.[i - 1];
+        const p1 = assetSeries[k]?.[i];
+        if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) r = p1! / p0! - 1;
+      }
+      next[k] = driftedWeight(wk, r, portRet);
+    }
+    held = next;
+
+    const drifted =
+      band !== undefined && [...new Set([...Object.keys(held), ...Object.keys(w)])].some((k) => Math.abs((held![k] || 0) - (w[k] || 0)) > band);
+    if (!sameWeights(lastTarget, w) || calendarDue(freq, dateAxis[i - 1]!, date) || drifted) {
+      const turnover = turnoverBetween(held, w);
+      if (turnover > 1e-9) {
+        equity.shrinkByProduct(turnover, costRate);
+        trades.push({ date, turnover, cost: turnover * costRate });
+      }
+      held = { ...w };
+      lastTarget = w;
+    }
+    values.push({ date, value: equity.value });
   }
 
   return {
