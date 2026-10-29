@@ -183,6 +183,9 @@ export async function runAnalytics(
   const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
   const results: Record<string, unknown> = {};
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
+  // Issue 1514: one provider request per symbol for the whole run. The live
+  // source shares one fetch memo across the collectors this run calls.
+  const runSource = source.forRun?.({ regime: want("regime"), research: want("channel-divergence") || want("late-cycle-signals") }) ?? source;
   // Issue 1421: every acquisition's collected values are compared with the
   // committed values the ledger hands back, and the run's input evidence
   // records the difference and the consumed versions.
@@ -268,7 +271,7 @@ export async function runAnalytics(
     }
     let t0 = new Date();
     const floor = await getPersisted();
-    const fetched = await source.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
+    const fetched = await runSource.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
     collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
     t0 = new Date();
@@ -326,14 +329,14 @@ export async function runAnalytics(
     // path; regime-sdk-equivalence pins it. With an acquisition sink these are
     // the ledger's committed values (captureSourceAcquisition, issue 1421).
     t0 = new Date();
-    const fetchedExtras = await source.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
+    const fetchedExtras = await runSource.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
     extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
     collector.stage("access", "ok", `fetched backtest extras from the ${sourceLabel} source`, t0);
     // Issue 1398: the model portfolio inputs are collected into the source
     // ledger in extract, on the same run. The regime reads none of them, so
     // the outcome is only logged and no number downstream changes.
-    if (source.collectModelPortfolioInputs) {
-      const collected = await source.collectModelPortfolioInputs(logger, acquisitionSink, jobId ?? null);
+    if (runSource.collectModelPortfolioInputs) {
+      const collected = await runSource.collectModelPortfolioInputs(logger, acquisitionSink, jobId ?? null);
       logger.log?.(`[analytics] model portfolio inputs: ${collected.map((c) => `${c.id}=${c.error ? "FAILED" : c.rows}`).join(" ")}`);
     }
   }
@@ -350,7 +353,7 @@ export async function runAnalytics(
     const t0 = new Date();
     researchFloor = await getPersisted();
     const edgarTier = selectEdgarRefreshTier(asof);
-    inputs = await source.fetchResearchInputs(asof, logger, {
+    inputs = await runSource.fetchResearchInputs(asof, logger, {
       persistedMna: researchFloor.MNA ?? [],
       deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
     }, acquisitionSink, jobId ?? null);

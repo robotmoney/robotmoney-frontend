@@ -7,7 +7,7 @@ import { configureHttp, fetchJson, fetchText, type FetchRecord } from "../src/ex
 import { fetchFred, parseFredCsv } from "../src/extract/fred.ts";
 import { fetchYahoo } from "../src/extract/yahoo.ts";
 import { fetchEdgarMonthCount } from "../src/extract/edgar.ts";
-import { fetchAll, fetchOne } from "../src/extract/sources.ts";
+import { createFetchMemo, fetchAll, fetchOne, mergeYahooPlans, registryYahooPlan } from "../src/extract/sources.ts";
 import { INDICATORS } from "../src/analyze/indicators.ts";
 
 afterEach(() => { configureHttp({}); });
@@ -118,4 +118,78 @@ test("fetchAll calls the acquire hook once per indicator with the ledger metadat
   });
   expect(seen).toEqual([`fred|raw_indicator_history:${ind.id}|9`]);
   expect(out[ind.id]!.length).toBe(2);
+});
+
+// ── Issue 1514: one request per (provider, symbol) per run ──────────────────
+const day = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+/** A Yahoo chart over a few fixed days, from max(period1, the first day); each answer differs by its request count. */
+function countingYahoo(counts: Map<string, number>) {
+  const DAYS = ["2009-12-30", "2009-12-31", "2010-01-04", "2015-12-31", "2016-01-04", "2024-01-02"];
+  return (async (input: string) => {
+    const url = String(input);
+    if (url.includes("api.llama.fi")) { counts.set("tvl", (counts.get("tvl") ?? 0) + 1); return Response.json([{ date: day("2024-01-02"), tvl: 3 + counts.get("tvl")! }]); }
+    if (url.includes("stablecoins.llama.fi")) { counts.set("stables", (counts.get("stables") ?? 0) + 1); return Response.json([{ date: day("2024-01-02"), totalCirculatingUSD: { peggedUSD: 4 } }]); }
+    const sym = decodeURIComponent(url.match(/\/chart\/([^?]+)\?/)![1]!);
+    const n = (counts.get(sym) ?? 0) + 1;
+    counts.set(sym, n);
+    const p1 = Number(url.match(/period1=(\d+)/)![1]);
+    const ts = DAYS.map(day).filter((t) => t >= p1);
+    return Response.json({ chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: ts.map((t, i) => 100 + i + n / 1000) }] } }] } });
+  }) as unknown as typeof fetch;
+}
+
+test("issue 1514: a fetch memo requests each Yahoo symbol once from the plan's widest start and cuts each consumer at its own start", async () => {
+  const counts = new Map<string, number>();
+  const urls: string[] = [];
+  const fake = countingYahoo(counts);
+  configureHttp({ fetch: (async (u: string) => { urls.push(String(u)); return fake(u); }) as unknown as typeof fetch });
+  const memo = createFetchMemo({ "ETH-USD": 0, SPY: day("2010-01-01") });
+  const later = await memo.yahoo("ETH-USD", day("2016-01-01"));
+  const mid = await memo.yahoo("ETH-USD", day("2010-01-01"));
+  const all = await memo.yahoo("ETH-USD", 0);
+  expect(counts.get("ETH-USD")).toBe(1);
+  expect(urls[0]).toContain("period1=0&");
+  expect(all.map((p) => p.date)).toEqual(["2009-12-30", "2009-12-31", "2010-01-04", "2015-12-31", "2016-01-04", "2024-01-02"]);
+  expect(mid).toEqual(all.slice(2));
+  expect(later).toEqual(all.slice(4));
+  // The same request's values on every shared date.
+  expect(later[0]!.value).toBe(all[4]!.value);
+  // A consumer's result is its own array: changing it changes no other.
+  later.pop();
+  expect((await memo.yahoo("ETH-USD", day("2016-01-01"))).length).toBe(2);
+  // Without a plan entry a symbol is fetched from the first start asked for.
+  await memo.yahoo("SPY", day("2016-01-01"));
+  expect(urls.at(-1)).toContain(`period1=${day("2010-01-01")}&`);
+  expect(counts.get("SPY")).toBe(1);
+});
+
+test("issue 1514: DefiLlama endpoints are requested once per memo, and a failed request fails every consumer", async () => {
+  const counts = new Map<string, number>();
+  configureHttp({ fetch: countingYahoo(counts) });
+  const memo = createFetchMemo();
+  const tvl = INDICATORS.filter((i) => i.source === "defillama_tvl");
+  expect(tvl.length).toBeGreaterThan(0);
+  const [a, b] = await Promise.all([memo.defillamaTvl(), memo.defillamaTvl(), memo.defillamaStables(), memo.defillamaStables()]);
+  expect(a).toEqual(b!);
+  expect(counts.get("tvl")).toBe(1);
+  expect(counts.get("stables")).toBe(1);
+
+  configureHttp({ fetch: (async () => new Response("down", { status: 503 })) as unknown as typeof fetch });
+  const failing = createFetchMemo();
+  await expect(failing.yahoo("ETH-USD", 0)).rejects.toThrow();
+  await expect(failing.yahoo("ETH-USD", day("2010-01-01"))).rejects.toThrow();
+});
+
+test("issue 1514: fetchAll with a memo requests each Yahoo symbol and DefiLlama endpoint once", async () => {
+  const counts = new Map<string, number>();
+  const fake = countingYahoo(counts);
+  configureHttp({ fetch: (async (u: string) => (String(u).includes("finance.yahoo") || String(u).includes("llama.fi") ? fake(u) : fred())) as unknown as typeof fetch });
+  const inds = INDICATORS.filter((i) => i.source === "yahoo" || i.source.startsWith("defillama"));
+  const out = await fetchAll({ indicators: inds, logger: {}, memo: createFetchMemo(registryYahooPlan(inds)) });
+  for (const [k, n] of counts) expect({ k, n }).toEqual({ k, n: 1 });
+  expect(counts.has("SPY") && counts.has("ETH-USD") && counts.has("tvl")).toBe(true);
+  // ETH_TREND and the ETH-USD leg of BTC_ETH read the same values.
+  const eth = new Map(out.ETH_TREND!.map((p) => [p.date, p.value]));
+  for (const p of out.BTC_ETH!) expect(eth.has(p.date)).toBe(true);
+  expect(mergeYahooPlans({ A: 5, B: 0 }, { A: 2, C: 7 })).toEqual({ A: 2, B: 0, C: 7 });
 });

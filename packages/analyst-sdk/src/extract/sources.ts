@@ -27,6 +27,7 @@
 // against raw-indicator-history.
 import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
+import { isoDay } from "../transform/math.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchYahoo } from "./yahoo.ts";
 import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
@@ -60,6 +61,70 @@ type Logger = {
   error?: (m: string) => void;
 };
 
+// ── One request per (provider, symbol) per run (issue 1514) ────────────────
+// Several consumers read the same provider series: ETH-USD feeds ETH_TREND,
+// BTC_ETH and backtest:ETH-USD; SPY feeds three ratios and research:SPY;
+// DefiLlama's TVL feeds DEFI_TVL and DEFI_GROWTH. Fetched separately, at
+// different moments and from different starts, one run's regime and backtest
+// read different prices for the same day (2026-10-28: ETH_TREND 2334.76,
+// backtest:ETH-USD 2334.65). A FetchMemo is made once per run. It requests each
+// Yahoo symbol once, from the widest start any consumer of the run needs (the
+// run's `plan`), and each DefiLlama endpoint once. Every consumer gets the same
+// values on every shared date, cut at its own requested start, so each key's
+// first date is what its own request returned before. A failed request fails
+// every consumer of it, which falls back to persisted history as before.
+// Without a memo every call fetches on its own, as before.
+export interface FetchMemo {
+  /** fetchYahoo(symbol, startUnix), served from the run's one request for `symbol`. */
+  yahoo(symbol: string, startUnix?: number): Promise<Point[]>;
+  defillamaTvl(): Promise<Point[]>;
+  defillamaStables(): Promise<Point[]>;
+}
+
+/** Yahoo symbol -> the earliest start (unix seconds, 0 = full history) any consumer of the run requests. */
+export type YahooPlan = Readonly<Record<string, number>>;
+
+/** The Yahoo plan of the registry fetch: every symbol it reads, from full history (period1=0). */
+export function registryYahooPlan(indicators: readonly Indicator[] = INDICATORS): Record<string, number> {
+  const plan: Record<string, number> = {};
+  for (const ind of indicators) {
+    if (ind.source !== "yahoo") continue;
+    for (const sym of Array.isArray(ind.series) ? ind.series : [ind.series as string]) plan[sym] = 0;
+  }
+  return plan;
+}
+
+/** The widest start per symbol across several plans. */
+export function mergeYahooPlans(...plans: YahooPlan[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const plan of plans) for (const [sym, start] of Object.entries(plan)) out[sym] = Math.min(out[sym] ?? start, start);
+  return out;
+}
+
+export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
+  const yahoo = new Map<string, { start: number; points: Promise<Point[]> }>();
+  let tvl: Promise<Point[]> | null = null;
+  let stables: Promise<Point[]> | null = null;
+  return {
+    async yahoo(symbol, startUnix = 0) {
+      let hit = yahoo.get(symbol);
+      // A start the plan did not foresee is fetched again rather than cut
+      // short: a wrong plan costs a request, never a missing row.
+      if (!hit || hit.start > startUnix) {
+        const start = Math.min(plan[symbol] ?? startUnix, startUnix);
+        hit = { start, points: fetchYahoo(symbol, start) };
+        yahoo.set(symbol, hit);
+      }
+      const points = await hit.points;
+      if (startUnix <= hit.start) return points.slice();
+      const from = isoDay(startUnix * 1000);
+      return points.filter((p) => p.date >= from);
+    },
+    defillamaTvl: () => (tvl ??= fetchDefillamaTvl()).then((p) => p.slice()),
+    defillamaStables: () => (stables ??= fetchDefillamaStables()).then((p) => p.slice()),
+  };
+}
+
 // Ratio of two gappy series on the intersection of dates (a/b), skipping any
 // date where the denominator is 0 or non-finite. Matches the original's
 // mergeRatioSeries in lib/fetch_all.js.
@@ -75,23 +140,24 @@ export function mergeRatioSeries(a: Point[], b: Point[]): Point[] {
 
 // Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
 // caller decides whether to fall back to persisted history.
-export async function fetchOne(ind: Indicator, logger: Logger = console, ext: SourceExtensions = {}): Promise<Point[]> {
+export async function fetchOne(ind: Indicator, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
+  const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   switch (ind.source) {
     case "fred":
       return fetchFred(ind.series as string);
     case "yahoo": {
       if (Array.isArray(ind.series)) {
-        const [a, b] = await Promise.all([fetchYahoo(ind.series[0]), fetchYahoo(ind.series[1])]);
+        const [a, b] = await Promise.all([yahoo(ind.series[0]), yahoo(ind.series[1])]);
         if (a.length === 0) throw new Error(`Yahoo numerator ${ind.series[0]} empty`);
         if (b.length === 0) throw new Error(`Yahoo denominator ${ind.series[1]} empty`);
         return mergeRatioSeries(a, b);
       }
-      return fetchYahoo(ind.series as string);
+      return yahoo(ind.series as string);
     }
     case "defillama_tvl":
-      return fetchDefillamaTvl();
+      return memo ? memo.defillamaTvl() : fetchDefillamaTvl();
     case "defillama_stables":
-      return fetchDefillamaStables();
+      return memo ? memo.defillamaStables() : fetchDefillamaStables();
     case "blockchain_com":
       return fetchBlockchainComChart(ind.series as string);
     case "coinmetrics": {
@@ -126,6 +192,8 @@ export async function fetchAll(
     extensions?: SourceExtensions;
     requestedByRunId?: number | null;
     provenance?: string;
+    /** The run's fetch memo (issue 1514): each symbol requested once per run. */
+    memo?: FetchMemo;
   } = {},
 ): Promise<Record<string, Point[]>> {
   const logger = opts.logger ?? console;
@@ -133,7 +201,7 @@ export async function fetchAll(
   const results = await Promise.all(
     inds.map(async (ind): Promise<[string, Point[]]> => {
       try {
-        const operation = () => fetchOne(ind, logger, opts.extensions);
+        const operation = () => fetchOne(ind, logger, opts.extensions, opts.memo);
         const points = opts.acquire
           ? await opts.acquire({
               provider: ind.source,
