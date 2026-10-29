@@ -117,7 +117,7 @@ fill repo-copy
 
 The repo and the public routes cut the same backups through one format module (D80): one
 backup per UTC day. The repo's older backups are named by their snapshot time and end at
-the legacy junction backup `2026-10-19T202421Z`, which the routes serve too, so an
+the legacy junction backup `2026-10-28T180400Z`, which the routes serve too, so an
 increment fetched from the API continues a clone of the repo from there. Both fills give
 the same local copy for the same backup id.
 `tests/fixtures/archive/api-recorded/` is a recording of what the real archive routes
@@ -646,7 +646,7 @@ through the same module (`src/archive/format1.ts`; one writer, D80). A backup is
 day: `<day>T000000Z` holds every row of the append-only tables (source data versions, the
 run ledger, vintages and their members, published outputs and reports, recorded revisions)
 stamped before that midnight and after the previous backup. A day is listed once it is an
-hour past. The one exception is the legacy junction, `2026-10-19T202421Z`: the newest
+hour past. The one exception is the legacy junction, `2026-10-28T180400Z`: the newest
 backup csvb wrote before the day cut, served between the day cuts around it so the repo's
 chain and the API's chain meet there. Its record, `backup.json`, lists each archive with its row count, id range,
 watermarks and SHA-256s; an archive is `<table>.<start>_<end>.csv.gz`, at most 64 MB

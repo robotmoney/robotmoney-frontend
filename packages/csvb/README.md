@@ -44,7 +44,7 @@ states are not in the database.
 
 Before the day cut, csvb named a backup by its replica snapshot time. Those backups stay in robotmoney/csv-backups byte
 for byte, and `csvb verify` keeps verifying them. Their ids are a closed list in
-`packages/analyst-sdk/src/archive/format1-legacy.ts`. The newest, `2026-10-19T202421Z`, is the **junction**. The API
+`packages/analyst-sdk/src/archive/format1-legacy.ts`. The newest, `2026-10-28T180400Z`, is the **junction**. The API
 serves it too, with the same watermarks, between its day cuts. Both writers cut the next day from it, so a clone of
 the repo plus an API increment join there. csvb continues only from the junction or from a day-cut backup.
 

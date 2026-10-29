@@ -204,7 +204,7 @@ describe("the table catalog and the legacy junction", () => {
   });
 
   test("the junction is the newest legacy id, every legacy id is a snapshot time, and it names a watermark for every append-only table", () => {
-    expect(LEGACY_BACKUP_IDS.length).toBe(7);
+    expect(LEGACY_BACKUP_IDS.length).toBe(9);
     expect([...LEGACY_BACKUP_IDS].sort()).toEqual([...LEGACY_BACKUP_IDS]);
     for (const id of LEGACY_BACKUP_IDS) {
       expect(BACKUP_ID_RE.test(id)).toBe(true);
