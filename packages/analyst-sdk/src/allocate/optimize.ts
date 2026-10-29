@@ -29,6 +29,34 @@ export { UnsupportedError, type Mat, type Vec };
 
 const matVec = (S: Mat, w: Vec): number[] => S.map((row) => dot2(row, w));
 
+// NON-FINITE INPUT AND OUTPUT (SDK-11, D78 amendment: a certified optimum or a
+// throw). A NaN makes every comparison false, so a KKT check written as
+// `x < bound` passes on NaN. Every solver therefore checks its inputs here, and
+// its result below, and every off-support check is written `!(x >= bound)`.
+function assertFiniteInputs(what: string, S: Mat, ex?: Vec, lam?: number): void {
+  const n = S.length;
+  S.forEach((row, i) => {
+    if (row.length !== n) unsupported(what, `covariance row ${i} has ${row.length} entries for ${n} assets`);
+    row.forEach((v, j) => {
+      if (!Number.isFinite(v)) unsupported(what, `covariance entry [${i}][${j}] is ${v}; every entry must be finite`);
+    });
+  });
+  if (ex !== undefined) {
+    if (ex.length !== n) unsupported(what, `${ex.length} excess returns for ${n} assets`);
+    ex.forEach((e, i) => {
+      if (!Number.isFinite(e)) unsupported(what, `excess return ${i} is ${e}; every excess return must be finite`);
+    });
+  }
+  if (lam !== undefined && !Number.isFinite(lam)) unsupported(what, `risk aversion is ${lam}; it must be finite`);
+}
+
+function finiteResult(what: string, w: number[]): number[] {
+  w.forEach((x, i) => {
+    if (!Number.isFinite(x)) unsupported(what, `weight ${i} is ${x}; the solver produced a non-finite weight`);
+  });
+  return w;
+}
+
 /** Distance of `w` from the feasible set: max(-min w, 0), and with `fullyInvested` also |sum w - 1| (compensated). */
 function infeasibility(w: Vec, fullyInvested: boolean): number {
   const neg = Math.max(-Math.min(...w), 0);
@@ -107,6 +135,7 @@ export interface ErcResult {
  * positive and finite, or UnsupportedError names the budget index.
  */
 export function ercExact(S: Mat, budgets?: Vec): ErcResult {
+  assertFiniteInputs("ercExact", S);
   const n = S.length;
   const tot = budgets ? sum2(budgets) : 1;
   const b = budgets ? budgets.map((x) => x / tot) : new Array<number>(n).fill(1 / n);
@@ -150,7 +179,7 @@ export function ercExact(S: Mat, budgets?: Vec): ErcResult {
     iterations = it + 1;
   }
   const total = sum2(w);
-  const wn = w.map((x) => x / total);
+  const wn = finiteResult("ercExact", w.map((x) => x / total));
   return { w: wn, residual: ercResidual(S, wn, b), iterations };
 }
 
@@ -198,6 +227,7 @@ export function minVarResidual(S: Mat, w: Vec, tol = 0): number {
  * covariance cannot happen.
  */
 export function minVarExact(S: Mat): number[] {
+  assertFiniteInputs("minVarExact", S);
   const n = S.length;
   const ones = new Array<number>(n).fill(1);
   let best: { w: number[]; v: number; size: number } | null = null;
@@ -209,11 +239,11 @@ export function minVarExact(S: Mat): number[] {
     const w = scatter(n, idx, z.map((x) => x / t));
     const lam = 1 / t; // the common gradient/2 on the support: w'Sw
     const Sw = matVec(S, w);
-    if (Sw.some((x, j) => !idx.includes(j) && x < lam * (1 - 1e-12))) continue; // off-support gradient must not be lower
+    if (Sw.some((x, j) => !idx.includes(j) && !(x >= lam * (1 - 1e-12)))) continue; // off-support gradient must not be lower
     const v = dot2(w, Sw);
     if (best === null || v < best.v * (1 - 1e-14)) best = { w, v, size: idx.length };
   }
-  return best ? best.w : unsupported("minVarExact", "no support satisfies KKT (covariance not positive definite)");
+  return best ? finiteResult("minVarExact", best.w) : unsupported("minVarExact", "no support satisfies KKT (covariance not positive definite)");
 }
 
 // ------------------------------------------------------------------ long-only mean-variance, budget at most 1
@@ -254,6 +284,7 @@ export function meanVarResidual(S: Mat, ex: Vec, lam: number, w: Vec): number {
  * passes KKT (covariance not positive definite).
  */
 export function meanVarExact(S: Mat, ex: Vec, lam: number): number[] {
+  assertFiniteInputs("meanVarExact", S, ex, lam);
   const n = S.length;
   const tol = (j: number): number => 1e-14 * (Math.abs(ex[j]!) + 1);
   const rhs = ex.map((x) => x / lam);
@@ -262,7 +293,7 @@ export function meanVarExact(S: Mat, ex: Vec, lam: number): number[] {
     if (z.some((x) => !(x > 0))) return;
     const w = scatter(n, idx, z);
     const Sw = matVec(S, w);
-    if (ex.some((e, j) => !idx.includes(j) && e - lam * Sw[j]! - nu > tol(j))) return; // off-support gradient must not be positive
+    if (ex.some((e, j) => !idx.includes(j) && !(e - lam * Sw[j]! - nu <= tol(j)))) return; // off-support gradient must not be positive
     const u = dot2(ex, w) - 0.5 * lam * dot2(w, Sw);
     if (best === null || u > best.u + 1e-14 * Math.abs(best.u) + 1e-300) best = { w, u };
   };
@@ -279,7 +310,7 @@ export function meanVarExact(S: Mat, ex: Vec, lam: number): number[] {
       // singular bordered system on this support: no candidate
     }
   }
-  return best ? best.w : unsupported("meanVarExact", "no support satisfies KKT (covariance not positive definite)");
+  return best ? finiteResult("meanVarExact", best.w) : unsupported("meanVarExact", "no support satisfies KKT (covariance not positive definite)");
 }
 
 // ------------------------------------------------------------------ long-only maximum Sharpe
@@ -316,6 +347,7 @@ export function sharpeResidual(S: Mat, ex: Vec, w: Vec): number {
  * Throws when nothing passes (covariance singular on every positive-Sharpe support).
  */
 export function tangencyExact(S: Mat, ex: Vec): number[] {
+  assertFiniteInputs("tangencyExact", S, ex);
   const n = S.length;
   if (ex.every((e) => e <= 0)) {
     let k = 0;
@@ -335,9 +367,9 @@ export function tangencyExact(S: Mat, ex: Vec): number[] {
     const m = dot2(ex, w);
     if (!(m > 0)) continue;
     const k = m / dot2(w, Sw);
-    if (ex.some((e, j) => !idx.includes(j) && e - k * Sw[j]! > 1e-12 * (Math.abs(e) + Math.abs(k * Sw[j]!)))) continue; // off-support gradient positive: not the maximiser
+    if (ex.some((e, j) => !idx.includes(j) && !(e - k * Sw[j]! <= 1e-12 * (Math.abs(e) + Math.abs(k * Sw[j]!))))) continue; // off-support gradient positive: not the maximiser
     const sh = sharpeRatio(S, ex, w);
     if (best === null || sh > best.sh * (1 + 1e-14)) best = { w, sh };
   }
-  return best ? best.w : unsupported("tangencyExact", "no support satisfies KKT (covariance singular)");
+  return best ? finiteResult("tangencyExact", best.w) : unsupported("tangencyExact", "no support satisfies KKT (covariance singular)");
 }

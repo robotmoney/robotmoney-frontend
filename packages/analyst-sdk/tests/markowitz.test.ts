@@ -309,3 +309,28 @@ describe("markowitzBacktest", () => {
     expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), simulate: { kind: "drift" } as never })).toThrow(/simulate/);
   });
 });
+
+// SDK-11: a custom cov callback's result is checked before the solve. A NaN or
+// Infinity entry, or a wrong shape, throws RangeError naming the date.
+describe("markowitzSchedule checks a custom cov result (SDK-11)", () => {
+  const firstDue = (): string => markowitzSchedule(base()).rebalances[0]!.date;
+  test("a NaN entry, an Infinity entry or a wrong shape throws RangeError naming the date", () => {
+    const d = firstDue();
+    const ok = (h: number[][]) => shrunkCov(h, 0.2, 252);
+    const cases: Array<(h: number[][]) => number[][]> = [
+      (h) => ok(h).map((r, i) => (i === 1 ? r.map((v, j) => (j === 0 ? NaN : v)) : r)),
+      (h) => ok(h).map((r, i) => (i === 0 ? r.map((v, j) => (j === 0 ? Infinity : v)) : r)),
+      (h) => ok(h).slice(0, 2),
+      (h) => ok(h).map((r) => r.slice(0, 2)),
+    ];
+    for (const cov of cases) {
+      expect(() => markowitzSchedule({ ...base(), cov })).toThrow(RangeError);
+      expect(() => markowitzSchedule({ ...base(), cov })).toThrow(new RegExp(d));
+    }
+  });
+  test("the default cov path is unchanged by the check", () => {
+    const a = markowitzSchedule(base());
+    const b = markowitzSchedule({ ...base(), cov: (h) => shrunkCov(h, 0.2, 252) });
+    expect(JSON.stringify(b.schedule)).toBe(JSON.stringify(a.schedule));
+  });
+});

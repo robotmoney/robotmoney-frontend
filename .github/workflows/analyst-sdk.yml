@@ -155,8 +155,8 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/linalg.test.ts:10
-          tests/optimizers.test.ts:18
-          tests/markowitz.test.ts:19
+          tests/optimizers.test.ts:21
+          tests/markowitz.test.ts:21
           tests/exports.test.ts:3
       # Issue 1404: the backtest, CLI and producer-to-SDK suites ran with at
       # least their number of cases and none skipped (JUnit, not console text).

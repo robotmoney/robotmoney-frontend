@@ -445,7 +445,9 @@ universe check and the statistics; `--full` adds the daily values, returns and t
 ## Size and optimise a portfolio
 
 The backtest takes weights; these functions choose them. Every solver returns a certified
-optimum or throws `UnsupportedError`: there is no approximate fallback (D78).
+optimum or throws `UnsupportedError`: there is no approximate fallback (D78). A NaN or
+Infinity in the covariance, the excess returns or the risk aversion throws, and a
+`markowitzSchedule` `cov` callback that returns one, or the wrong shape, throws `RangeError`.
 
 ```ts
 import { markowitzSizing, markowitzBacktest, ercCertified, simulateDrift } from "./src/index.ts";
