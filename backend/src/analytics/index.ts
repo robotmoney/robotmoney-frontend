@@ -255,6 +255,8 @@ export async function runAnalytics(
   let extras: BacktestExtras | null = null;
   // What the registry fetch collected, before the D56 tolerance decision.
   let collectedRegistry: Record<string, { date: string; value: number }[]> | null = null;
+  // Whether the registry fetch recorded its values in the source ledger (AN-16).
+  let registryInLedger = false;
   let researchFloor: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
   let inputs: ResearchInputs | null = null;
   if (want("regime")) {
@@ -276,7 +278,9 @@ export async function runAnalytics(
     }
     let t0 = new Date();
     const floor = await getPersisted();
+    const acquiredBefore = inputEvidence.acquiredKeys;
     const fetched = await runSource.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
+    registryInLedger = inputEvidence.acquiredKeys > acquiredBefore;
     collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
     t0 = new Date();
@@ -387,10 +391,11 @@ export async function runAnalytics(
   // The raw floor written above is no longer an input: within the D56
   // tolerance it can hold a different value for a date than the ledger head
   // (a seed wrote S, the first provider observation F was within tolerance).
-  // A source that records no acquisition (the hermetic and fixture sources)
-  // has no ledger input, and the regime computes from the committed raw floor.
+  // A source whose registry fetch records no acquisition (the hermetic and
+  // fixture sources) has no ledger input, and the regime computes from the
+  // committed raw floor.
   let knowledgeTimeCutoff: string | null = null;
-  if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && inputEvidence.acquiredKeys > 0) {
+  if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && registryInLedger) {
     const t0 = new Date();
     const committed = await persistence.loadCommittedInputs(asof);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;

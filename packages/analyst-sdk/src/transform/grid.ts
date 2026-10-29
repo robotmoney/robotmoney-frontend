@@ -7,7 +7,7 @@ import { dateBefore } from "./math.ts";
 
 // Daily real series can have gaps (weekends/holidays) and may stop "today", while
 // the tools expect a dense array of `lookbackDays` consecutive calendar days
-// ending at `asof` (exactly what seededProvider returns). Forward-fill the raw,
+// ending at `asof` (the shape the synthetic provider returns). Forward-fill the raw,
 // gappy series onto that dense grid. Returns null when there is no usable data
 // at/-before `asof`, signalling the caller to fall back to seeded.
 export function shapeDaily(raw: Point[], asof: string, lookbackDays: number): Point[] | null {
