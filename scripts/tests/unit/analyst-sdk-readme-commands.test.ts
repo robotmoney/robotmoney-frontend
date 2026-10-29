@@ -12,7 +12,7 @@
 // Then the generated inputs and reports are checked, the two fills compared,
 // and the explicit errors for missing or wrong inputs.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exportPackage, sh } from "./support/analyst-sdk-export.ts";
 
@@ -105,6 +105,106 @@ describe("README quickstart, executed", () => {
     const fetchedData = served.filter((p) => p.includes("/data/"));
     expect(fetchedData.filter((p) => p.includes("2001-01-02T000000Z")).length).toBe(recorded.filter((f) => f.startsWith("csv/2001-01-02T000000Z/data/")).length);
     for (const f of recorded) expect(readFileSync(join(DIR, "api-copy", f)).equals(readFileSync(join(RECORDING, f)))).toBe(true);
+  });
+
+  test("acquisition refuses an archive that inflates past its record's bytes_raw", async () => {
+    // Plant a record whose archive is the real one but whose bytes_raw is one byte short.
+    const rec = readdirSync(join(RECORDING, "csv")).sort()[0]!;
+    const recPath = `csv/${rec}/backup.json`;
+    const record = JSON.parse(readFileSync(join(RECORDING, recPath), "utf8"));
+    const f = Object.values(record.append_only as Record<string, { files: { path: string; bytes_raw: number }[] }>).flatMap((t) => t.files)[0]!;
+    f.bytes_raw -= 1;
+    const bad = join(DIR, "bad-recording");
+    mkdirSync(join(bad, "csv", rec), { recursive: true });
+    writeFileSync(join(bad, recPath), JSON.stringify(record));
+    mkdirSync(join(bad, f.path, ".."), { recursive: true });
+    writeFileSync(join(bad, f.path), readFileSync(join(RECORDING, f.path)));
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const rel = new URL(req.url).pathname.slice("/api/public/analytics/archive/".length);
+        const file = rel === "backups" ? undefined : join(bad, rel);
+        if (rel === "backups") return Response.json({ backups: [{ record: recPath }] });
+        return file && existsSync(file) ? new Response(readFileSync(file)) : new Response("not found", { status: 404 });
+      },
+    });
+    try {
+      const fill = acquire[0]!.replace(/^fill api-copy$/m, "fill bad-copy");
+      const r = await sh(["bash", "-euo", "pipefail", "-c", fill], DIR, { API: `http://127.0.0.1:${srv.port}/api/public/analytics` });
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain(`corrupt: ${f.path}`);
+      expect(existsSync(join(DIR, "bad-copy", recPath))).toBe(false);
+    } finally {
+      srv.stop(true);
+    }
+  });
+
+  // A hostile record host: serves `record` as the only backup, and a gzip for every other path.
+  async function hostileFill(record: unknown, name: string, rec = "csv/2001-01-01T000000Z/backup.json") {
+    const requests: string[] = [];
+    const gz = Bun.gzipSync(Buffer.from("id\n1\n"));
+    const srv = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const rel = new URL(req.url).pathname.slice("/api/public/analytics/archive/".length);
+        requests.push(rel);
+        if (rel === "backups") return Response.json({ backups: [{ record: rec }] });
+        if (rel.endsWith("backup.json")) return Response.json(record);
+        return new Response(gz);
+      },
+    });
+    try {
+      const fill = acquire[0]!.replace(/^fill api-copy$/m, `fill ${name}`);
+      const r = await sh(["bash", "-euo", "pipefail", "-c", fill], DIR, { API: `http://127.0.0.1:${srv.port}/api/public/analytics` });
+      return { ...r, requests };
+    } finally {
+      srv.stop(true);
+    }
+  }
+  const hostileRecord = (file: Record<string, unknown>) => ({
+    format: 1,
+    backup: "2001-01-01T000000Z",
+    append_only: { t: { watermark_before: null, watermark_after: "1", files: [{ rows: 1, sha256_raw: "0".repeat(64), ...file }] } },
+    revisions: {},
+  });
+
+  test("acquisition never evaluates a bytes_raw from the record", async () => {
+    const marker = join(DIR, "x");
+    const r = await hostileFill(hostileRecord({ path: "csv/2001-01-01T000000Z/data/t.csv.gz", bytes_raw: "a[$(touch${IFS}x)]" }), "inj-copy");
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("bad bytes_raw");
+    expect(existsSync(marker)).toBe(false);
+    const big = await hostileFill(hostileRecord({ path: "csv/2001-01-01T000000Z/data/t.csv.gz", bytes_raw: 67108865 }), "big-copy");
+    expect(big.code).not.toBe(0);
+    expect(big.stderr).toContain("bytes_raw over 64 MiB");
+  });
+
+  test("acquisition refuses a path that leaves the copy", async () => {
+    const r = await hostileFill(hostileRecord({ path: "../escaped.gz", bytes_raw: 10 }), "esc-copy");
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("bad path");
+    expect(existsSync(join(DIR, "escaped.gz"))).toBe(false);
+    expect(existsSync(join(DIR, "esc-copy", "csv/2001-01-01T000000Z/backup.json"))).toBe(false);
+  });
+
+  test("acquisition refuses a backup record name that leaves the copy or is not a plain file name", async () => {
+    for (const [i, rec] of ["../escaped/backup.json", "csv/bad name$x/backup.json", "", ".", "a/"].entries()) {
+      const r = await hostileFill(hostileRecord({ path: "csv/2001-01-01T000000Z/data/t.csv.gz", bytes_raw: 10 }), `rec-copy-${i}`, rec);
+      expect(r.code, JSON.stringify(rec)).not.toBe(0);
+      expect(r.stderr, JSON.stringify(rec)).toContain("bad path");
+      expect(r.requests, JSON.stringify(rec)).toEqual(["backups"]);
+      expect(existsSync(join(DIR, "escaped/backup.json"))).toBe(false);
+      expect(existsSync(join(DIR, "escaped/backup.json.part"))).toBe(false);
+    }
+  });
+
+  test("acquisition refuses an empty, dot or trailing-slash archive path without fetching it", async () => {
+    for (const [i, path] of ["", ".", "a/"].entries()) {
+      const r = await hostileFill(hostileRecord({ path, bytes_raw: 10 }), `dir-copy-${i}`);
+      expect(r.code, JSON.stringify(path)).not.toBe(0);
+      expect(r.stderr, JSON.stringify(path)).toContain("bad path");
+      expect(r.requests.filter((q) => q !== "backups" && !q.endsWith("backup.json")), JSON.stringify(path)).toEqual([]);
+    }
   });
 
   test("every later command runs as written and exits 0, with no HTTP request", async () => {

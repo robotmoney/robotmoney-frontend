@@ -8,13 +8,16 @@ import { join } from "node:path";
 import {
   AmbiguousInputSeriesError,
   AmbiguousSeriesMappingError,
+  MissingRatioLegError,
   SERIES_MAPPING,
+  STORED_UNDER,
   consumerStorageKeys,
   resolveInputHistory,
   validateSeriesMapping,
   type SeriesMapping,
 } from "../src/series-ids.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
+import { ratiosFromLegs } from "../src/transform/ratios.ts";
 
 const rows = [
   { date: "2024-01-05", indicator: "A", value: 5, source: "s" },
@@ -91,6 +94,10 @@ function equivalentPairs(): Array<[from: string, to: string]> {
   const streamsOf = new Map<string, Set<string>>();
   for (const m of SERIES_MAPPING) (streamsOf.get(m.series) ?? streamsOf.set(m.series, new Set()).get(m.series)!).add(m.storageKey);
   for (const m of SERIES_MAPPING) {
+    // DEFI_GROWTH and STABLES_GROWTH are named only by their own id; their
+    // storage key and source id name DEFI_TVL's and STABLES's stream (D74
+    // amendment, issue 1514).
+    if (m.inputId in STORED_UNDER) continue;
     pairs.set(`${m.inputId}\u0001${m.storageKey}`, m.inputId);
     if (m.kind === "source" && streamsOf.get(m.series)!.size === 1) pairs.set(`${m.inputId}\u0001${m.series}`, m.inputId);
   }
@@ -105,8 +112,8 @@ test("every accepted equivalent name pair resolves to the same observations and 
   const legacy = resolveInputHistory(fixtureHistory);
   expect(report(fixtureHistory)).toBe(goldenText);
   const pairs = equivalentPairs();
-  // Non-vacuity: 29 streams by storage key, plus the single-stream source ids.
-  expect(pairs.length).toBeGreaterThanOrEqual(29 + 13);
+  // Non-vacuity: 27 streams by storage key, plus the single-stream source ids.
+  expect(pairs.length).toBeGreaterThanOrEqual(27 + 11);
   for (const [from, to] of pairs) {
     expect(fixtureHistory[from], `fixture carries ${from}`).toBeDefined();
     const resolved = resolveInputHistory(renamed(fixtureHistory, from, to));
@@ -161,8 +168,10 @@ const REGISTRY_IDS = [
   "ETH_ACTIVE", "BTC_MVRV", "BTC_ETH", "ETH_TREND", "NEW_TOKENS", "DEFI_GROWTH", "STABLES_GROWTH", "SPHB_SPLV", "MTUM_SPY", "IWF_IWD",
   "XLU_SPY", "XLP_XLY", "SHILLER_CAPE",
 ];
+// The D74 amendment of 2026-10-28 (issue 1514) moves exactly two consumers.
+const AMENDED: Record<string, string> = { DEFI_GROWTH: "DEFI_TVL", STABLES_GROWTH: "STABLES" };
 const PINNED_CONSUMER_KEYS: Record<string, string[]> = {
-  ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${id}`]])),
+  ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`]])),
   correlations: ["backtest:ETH-USD", "backtest:^GSPC"],
   backtest: ["backtest:DTB3", "backtest:ETH-USD", "backtest:^GSPC"],
 };
@@ -289,9 +298,50 @@ describe("date axis, usable series and optional sections", () => {
     const r = buildReport(runRegime(parseInput(csv(axisRows(40, "yahoo:^VIX"))).history, { start: "2024-01-01" }));
     expect(r.correlations).toBeNull();
     expect(r.backtest).toBeNull();
-    // SPX and ETH without TBILL3M: correlations only.
-    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD")])).history, { start: "2024-01-01" }));
+    // SPX and ETH without TBILL3M: correlations only. yahoo:ETH-USD is also a
+    // BTC_ETH leg, so the input carries the other leg too (analytics 4.3: one
+    // leg alone is a missing input, MissingRatioLegError).
+    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD"), ...axisRows(40, "yahoo:BTC-USD")])).history, { start: "2024-01-01" }));
     expect(r2.correlations).not.toBeNull();
     expect(r2.backtest).toBeNull();
   });
+});
+
+// Issue 1514 (D74 amendment): an input without DEFI_GROWTH and STABLES_GROWTH
+// feeds them from DEFI_TVL and STABLES, the series they are stored under, to
+// the same golden bytes; an input that names them keeps its own rows.
+test("an input without the *_GROWTH ids reads them from DEFI_TVL and STABLES, to the golden bytes", () => {
+  const without: RawIndicatorHistory = {};
+  for (const [k, v] of Object.entries(fixtureHistory)) if (!(k in STORED_UNDER)) without[k] = v;
+  const resolved = resolveInputHistory(without);
+  expect(resolved.DEFI_GROWTH).toBe(without.DEFI_TVL!);
+  expect(resolved.STABLES_GROWTH).toBe(without.STABLES!);
+  expect(report(without)).toBe(goldenText);
+  const own = [{ date: "2024-01-01", value: 1 }];
+  expect(resolveInputHistory({ ...without, DEFI_GROWTH: own }).DEFI_GROWTH).toBe(own);
+});
+
+// Analytics requirements 4.3 (SDK-10): one leg of a ratio without the other
+// and without a stored ratio is a missing input, named; never a silent drop.
+// No leg and no stored ratio keeps the 4.2 rule (the indicator is missing).
+test("one ratio leg without the other or a stored ratio throws MissingRatioLegError; ratio rows stay rejected", () => {
+  const leg = [{ date: "2024-01-01", value: 4 }];
+  const resolve = (h: RawIndicatorHistory) => ratiosFromLegs(h, resolveInputHistory(h));
+  let err: unknown;
+  try {
+    resolve({ "yahoo:HG=F": leg });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(MissingRatioLegError);
+  expect((err as MissingRatioLegError).ratio).toBe("COPPER_GOLD");
+  expect((err as MissingRatioLegError).missingLeg).toBe("yahoo:GC=F");
+  expect((err as Error).message).toMatch(/COPPER_GOLD.*yahoo:GC=F/);
+  // The denominator alone, named by its storage key, names the numerator.
+  expect(() => resolve({ "research:SPY": leg, "yahoo:IWM": leg, "yahoo:MTUM": leg, "yahoo:XLU": leg, "yahoo:BTC-USD": leg })).toThrow(/BTC_ETH.*yahoo:ETH-USD/);
+  // A stored ratio with one leg is used as stored; no leg at all leaves it missing.
+  expect(resolve({ "yahoo:HG=F": leg, COPPER_GOLD: leg }).COPPER_GOLD).toBe(leg);
+  expect("COPPER_GOLD" in resolve({ VIX: leg })).toBe(false);
+  // A source input still may not carry a ratio row.
+  expect(() => parseSourceCsv("date,series,value\n2024-01-01,COPPER_GOLD,1.5")).toThrow(CalculatedRowError);
 });

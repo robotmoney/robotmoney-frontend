@@ -1,11 +1,15 @@
 // The public backtest API (issue 1404; analytics requirements section 5):
 // simulatePortfolio, periodStats and scheduleFromLabels expose the one shared
 // calculation, and computeBacktest is those three over the reference
-// portfolios. Three paths must agree byte for byte on identical inputs:
+// portfolios. Three paths must agree on identical inputs:
 //   original     tests/reference/backtest-pre-refactor.ts (frozen pre-refactor code)
 //   shared       computeBacktest (what backend and SDK run)
 //   generalized  simulatePortfolio + periodStats called directly
 // including the per-day values (`_daily`), every statistic, nulls and field order.
+// shared and generalized agree byte for byte. Since decision D78
+// (compensated arithmetic) the frozen original keeps the old plain-loop
+// arithmetic, so it agrees with them up to rounding: same structure, labels,
+// nulls and integers, no number moved by more than rounding.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +31,8 @@ import { computeBacktest as originalBacktest } from "./reference/backtest-pre-re
 import type { RegimeComputeResult } from "../src/analyze/compute.ts";
 import { buildReport, parseRawHistory, runRegime, toHistory } from "../src/index.ts";
 import type { Point } from "../src/types.ts";
+import { expectSameUpToRounding } from "./support/numeric-diff.ts";
+import { exactCompound, exactDot, exactProduct, exactSharpe, onePlus, Q } from "./support/exact-reference.ts";
 
 setDefaultTimeout(120_000);
 const DIR = import.meta.dir;
@@ -71,10 +77,12 @@ function generalized(dateAxis: string[], result: RegimeComputeResult, extras: Ba
 function threeWay(dateAxis: string[], result: RegimeComputeResult, extras: BacktestExtras) {
   const original = JSON.stringify(originalBacktest(dateAxis, result, extras));
   const shared = JSON.stringify(computeBacktest(dateAxis, result, extras));
-  expect(shared).toBe(original);
-  const { ref, out } = generalized(dateAxis, result, extras);
+  expectSameUpToRounding(shared, original, "shared vs frozen original");
+  // The generalized path runs the same arithmetic as the shared one: byte for byte.
+  const { out } = generalized(dateAxis, result, extras);
+  const sharedObj = JSON.parse(shared) as Record<string, Record<string, unknown>>;
   for (const [p, strategies] of Object.entries(out)) {
-    for (const [s, m] of Object.entries(strategies)) expect(JSON.stringify(m)).toBe(JSON.stringify(ref[p]![s]));
+    for (const [s, m] of Object.entries(strategies)) expect(JSON.stringify(m)).toBe(JSON.stringify(sharedObj[p]![s]));
   }
   return JSON.parse(shared) as ReturnType<typeof computeBacktest>;
 }
@@ -92,9 +100,12 @@ describe("simulatePortfolio: hand-calculated values", () => {
     const sim = simulatePortfolio(axis, axis.map(() => w), { A, B }, []);
     // day 1: 0.5*(110/100-1) + 0.25*(50/50-1) + 0.25*0 = 0.05
     // day 2: 0.5*(99/110-1) + 0.25*(55/50-1) = -0.05 + 0.025
-    const r = [0.5 * (110 / 100 - 1) + 0.25 * (50 / 50 - 1), 0.5 * (99 / 110 - 1) + 0.25 * (55 / 50 - 1), 0.5 * (99 / 99 - 1) + 0.25 * (55 / 55 - 1), 0.5 * (108.9 / 99 - 1) + 0.25 * (55 / 55 - 1)];
-    let v = 1;
-    const values = [1, ...r.map((x) => (v *= 1 + x))];
+    // D78: each day's return is the exact weighted sum rounded once, and each
+    // value the exact product of the (1 + return) factors rounded once.
+    const legs = (a0: number, a1: number, b0: number, b1: number) => exactDot([0.5, 0.25, 0.25], [a1 / a0 - 1, b1 / b0 - 1, 0]);
+    const r = [legs(100, 110, 50, 50), legs(110, 99, 50, 55), legs(99, 99, 55, 55), legs(99, 108.9, 55, 55)];
+    expect(r[1]).toBe(0.5 * (99 / 110 - 1) + 0.25 * (55 / 50 - 1));
+    const values = [1, ...r.map((_, k) => exactCompound(r.slice(0, k + 1)))];
     expect(sim.values.map((p) => p.value)).toEqual(values);
     expect(sim.returns).toEqual(r.map((value, i) => ({ date: axis[i + 1]!, value })));
     expect(sim.trades).toEqual([]);
@@ -105,11 +116,13 @@ describe("simulatePortfolio: hand-calculated values", () => {
   test("cash accrues the previous date's annual percent yield over 365 days; missing earlier yields earn zero", () => {
     const rate = pts(axis, [undefined, 3.65, undefined, 5, undefined]);
     const sim = simulatePortfolio(axis, axis.map(() => ({ cash: 1 })), {}, rate);
-    const d = (y: number) => Math.pow(1 + y / 100, 1 / 365) - 1;
+    // D78: (1 + y)^(1/365) - 1 as expm1(log1p(y) / 365), which keeps the leading
+    // digits the pow form loses to the final "- 1".
+    const d = (y: number) => Math.expm1(Math.log1p(y / 100) / 365);
+    for (const y of [3.65, 5]) expect(Math.abs(d(y) - (Math.pow(1 + y / 100, 1 / 365) - 1))).toBeLessThan(1e-16);
     // day 1 uses day 0's yield (none yet: 0); day 2 uses 3.65; day 3 uses 3.65 (forward-filled); day 4 uses 5.
     const r = [d(0), d(3.65), d(3.65), d(5)];
-    let v = 1;
-    expect(sim.values.map((p) => p.value)).toEqual([1, ...r.map((x) => (v *= 1 + x))]);
+    expect(sim.values.map((p) => p.value)).toEqual([1, ...r.map((_, k) => exactCompound(r.slice(0, k + 1)))]);
     expect(sim.returns.map((p) => p.value)).toEqual(r);
   });
 
@@ -123,12 +136,14 @@ describe("simulatePortfolio: hand-calculated values", () => {
       { date: axis[4]!, turnover: 0.5, cost: 0.5 * 0.001 },
     ]);
     expect(custom.trades.map((t) => t.cost)).toEqual([0.5 * 0.0025, 0.5 * 0.0025]);
-    let v = 1;
+    // D78: the exact product of every growth and cost factor so far, rounded once.
+    const cost = new Q(1n).sub(Q.of(0.5).mul(Q.of(0.001)));
+    const f: Q[] = [];
     const exp = [1];
-    v *= 1 + (110 / 100 - 1); exp.push(v);
-    v *= 1 + (99 / 110 - 1); v *= 1 - 0.5 * 0.001; exp.push(v);
-    v *= 1 + 0.5 * (99 / 99 - 1); exp.push(v);
-    v *= 1 + 0.5 * (108.9 / 99 - 1); v *= 1 - 0.5 * 0.001; exp.push(v);
+    f.push(onePlus(110 / 100 - 1)); exp.push(exactProduct(f));
+    f.push(onePlus(99 / 110 - 1), cost); exp.push(exactProduct(f));
+    f.push(onePlus(0.5 * (99 / 99 - 1))); exp.push(exactProduct(f));
+    f.push(onePlus(0.5 * (108.9 / 99 - 1)), cost); exp.push(exactProduct(f));
     expect(def.values.map((p) => p.value)).toEqual(exp);
     // Costs never touch the pre-cost return observations.
     expect(custom.returns).toEqual(def.returns);
@@ -184,7 +199,11 @@ describe("timing: close-of-day targets", () => {
       { date: axis[4]!, turnover: 0.5, cost: 0.5 * 0.001 },
       { date: axis[5]!, turnover: 0.5, cost: 0.5 * 0.001 },
     ]);
-    expect(b.values[4]!.value).toBe(a.values[4]!.value * (1 - 0.5 * 0.001));
+    // D78: the cost multiplies the unrounded equity, so the value is the exact
+    // product of every growth factor and the cost factor, rounded once.
+    const growth = a.returns.slice(0, 4).map((r) => onePlus(r.value));
+    expect(b.values[4]!.value).toBe(exactProduct([...growth, new Q(1n).sub(Q.of(0.5).mul(Q.of(0.001)))]));
+    expect(a.values[4]!.value).toBe(exactProduct(growth));
     // The new weights apply to the next return.
     expect(b.returns[4]!.value).toBe(1 * (108 / 104 - 1));
   });
@@ -223,7 +242,9 @@ describe("parity: original, shared and generalized paths", () => {
     const run = runRegime(raw);
     const out = threeWay(run.dateAxis, run.result, extras);
     // Pinned bytes of the pre-refactor output, daily values included (main 408cd875, computed from the unmodified main checkout).
-    expect(sha(JSON.stringify(out))).toBe("ee9a3019dbfb8ff98a58af2db337e361273415db127fa314ba8b0e8b5df8d2cf");
+    // The frozen reference still produces them; the shared output matches it up to rounding (D78).
+    expect(sha(JSON.stringify(originalBacktest(run.dateAxis, run.result, extras)))).toBe("ee9a3019dbfb8ff98a58af2db337e361273415db127fa314ba8b0e8b5df8d2cf");
+    expect(out.eth!.eth_hodl!.n_days).toBeGreaterThan(1000);
     expect(Object.keys(out.mixed!)).toContain("blend_hodl");
   });
 
@@ -292,11 +313,8 @@ describe("parity: original, shared and generalized paths", () => {
     expect(out.eth!.composite!.transitions).toBeGreaterThan(5);
     const sim = simulatePortfolio(axis, scheduleFromLabels(res.regime, PORTFOLIO_SPECS.eth!.weights), { eth }, []);
     const pre = sim.returns.map((r) => r.value);
-    const sharpeOf = (xs: number[]) => {
-      const m = xs.reduce((s, v) => s + v, 0) / xs.length;
-      const sd = Math.sqrt(xs.reduce((s, v) => s + (v - m) ** 2, 0) / (xs.length - 1));
-      return (m * 365) / (sd * Math.sqrt(365));
-    };
+    // D78: the reported Sharpe is the exact Sharpe of the pre-cost returns, rounded once.
+    const sharpeOf = (xs: number[]) => exactSharpe(xs, 365);
     expect(out.eth!.composite!.sharpe).toBe(sharpeOf(pre));
     const net = sim.values.slice(1).map((p, i) => p.value / sim.values[i]!.value - 1);
     expect(sharpeOf(net)).not.toBe(out.eth!.composite!.sharpe);

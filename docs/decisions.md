@@ -5059,6 +5059,124 @@ on a production-sized fixture;
 `scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
 every producer run, projects job and buyback refresh by 15 minutes.
 
+### Amendment (issue 1514, 2026-10-29) — the research series and the 2016 collection floor
+
+**Status:** proposed
+
+**What changes.** The inventory step now also collects
+`packages/analyst-sdk/inventory/research-series.json`, the series the analyst
+SDK's clients read. Thirteen keys are new. Each is one Yahoo symbol, so each
+gets Yahoo's float32 tolerance, like every other single-symbol Yahoo key:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:GC=F` | yahoo | relative 1e-6 |
+| `yahoo:CL=F` | yahoo | relative 1e-6 |
+| `yahoo:HG=F` | yahoo | relative 1e-6 |
+| `yahoo:SI=F` | yahoo | relative 1e-6 |
+| `yahoo:TLT` | yahoo | relative 1e-6 |
+| `yahoo:VNQ` | yahoo | relative 1e-6 |
+| `yahoo:DBC` | yahoo | relative 1e-6 |
+| `yahoo:MSTR` | yahoo | relative 1e-6 |
+| `yahoo:SOL-USD` | yahoo | relative 1e-6 |
+| `yahoo:BNB-USD` | yahoo | relative 1e-6 |
+| `yahoo:AAVE-USD` | yahoo | relative 1e-6 |
+| `yahoo:HYPE32196-USD` | yahoo | relative 1e-6 |
+| `yahoo:VIRTUAL-USD` | yahoo | relative 1e-6 |
+
+The research inventory also lists BTC-USD, QQQ and GLD under the keys they are
+already recorded in (`research:BTC-USD`, `research:QQQ`, `yahoo:GLD`). The step
+fetches each storage key once per run, so GLD is not fetched twice.
+
+Every background source fetch now starts at 2016-01-01 (`COLLECTION_START`,
+analytics requirements section 4) unless it already started earlier. The
+existing keys keep their tolerance. A longer fetch adds versions only for the
+new early dates: an existing date within tolerance writes no row.
+
+**Why.** The SDK's research clients read these closes. Without them they were
+fetched by hand and committed as frozen files, with no acquisition evidence, no
+revision history and no backup.
+
+### Amendment (issue 1514, 2026-10-29) — the Yahoo ratio legs are recorded
+
+**Status:** proposed
+
+**What changes.** Each run records both legs of every Yahoo ratio as source
+data, from the fetch the stored ratio is calculated from (analytics
+requirements 4.3, D74 point 3). A leg another collector already records keeps
+that key: `yahoo:SPY` is `research:SPY`, `yahoo:BTC-USD` is `research:BTC-USD`,
+`yahoo:ETH-USD` is `backtest:ETH-USD`, and `yahoo:HG=F` and `yahoo:GC=F` are
+the research-series keys above. The nine others are new keys under their own
+source id, each a single Yahoo symbol:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:IWM` | yahoo | relative 1e-6 |
+| `yahoo:SPHB` | yahoo | relative 1e-6 |
+| `yahoo:SPLV` | yahoo | relative 1e-6 |
+| `yahoo:MTUM` | yahoo | relative 1e-6 |
+| `yahoo:IWF` | yahoo | relative 1e-6 |
+| `yahoo:IWD` | yahoo | relative 1e-6 |
+| `yahoo:XLU` | yahoo | relative 1e-6 |
+| `yahoo:XLP` | yahoo | relative 1e-6 |
+| `yahoo:XLY` | yahoo | relative 1e-6 |
+
+Production still reads the stored ratio, so no published output changes.
+
+### Amendment (issue 1514, 2026-10-29) — DefiLlama restatements stay exact
+
+**Status:** proposed
+
+**Why it was measured.** Backup `2026-10-28T180400Z` of csv-backups holds
+81,650 `revision` rows for `raw_indicator_history:DEFI_TVL`, with a median
+relative change of about 2.5e-6, and 3,987 for `raw_indicator_history:STABLES`.
+Both keys are exact. The question was whether DefiLlama's restatements are a
+noise band that a tolerance should absorb, as Yahoo's float32 jitter is.
+
+**The rule (pinned in issue 1514, the one used for the Yahoo ratios).** Each
+revision's change is `|next − prior| / max(|next|, |prior|)` against the
+version before it for the same `(source_key, market_date)`. The changes go in
+half-decade log bins from 1e-9 to 1e-1. The noise band is the run of bins
+starting at the lowest bin. The tolerance is the upper edge of the first bin
+above the band that is empty or holds under 0.1 percent of that key's
+revisions, rounded down to one significant digit. The two keys share the
+larger value. The value must be at most 1e-4, else the rule fails.
+
+**The counts.** `backend/scripts/analytics/measure-tolerance.ts` read the
+`source_value_versions` data files of that backup and of every backup before
+it (the backups are incremental), streamed over SSH from stage-2. Only the
+counts are committed, in `backend/tests/fixtures/defillama-revision-distribution.json`.
+
+| relative change | DEFI_TVL | STABLES |
+|---|---|---|
+| under 3.16e-9 | 7,273 | 29 |
+| 3.16e-9 to 1e-8 | 531 | 27 |
+| 1e-8 to 3.16e-8 | 1,253 | 45 |
+| 3.16e-8 to 1e-7 | 2,313 | 14 |
+| 1e-7 to 3.16e-7 | 12,151 | 27 |
+| 3.16e-7 to 1e-6 | 10,648 | 42 |
+| 1e-6 to 3.16e-6 | 10,227 | 395 |
+| 3.16e-6 to 1e-5 | 10,129 | 577 |
+| 1e-5 to 3.16e-5 | 4,444 | 196 |
+| 3.16e-5 to 1e-4 | 4,751 | 406 |
+| 1e-4 to 3.16e-4 | 10,533 | 241 |
+| 3.16e-4 to 1e-3 | 5,486 | 237 |
+| 1e-3 to 3.16e-3 | 1,510 | 940 |
+| 3.16e-3 to 1e-2 | 181 | 715 |
+| 1e-2 to 3.16e-2 | 220 | 96 |
+| 3.16e-2 to 1e-1 | 0 | 0 |
+| 1e-1 and up | 0 | 0 |
+
+**Outcome.** There is no noise band below 1e-4. Every bin from under 1e-9 to
+3.16e-2 holds more than 0.1 percent of each key's revisions, so the first gap's
+edge is 1e-1 and the rule fails. Most revisions touch dates more than 30 days
+old, and those spread just as widely, with a second peak near 1e-4 for
+DEFI_TVL. These are DefiLlama's restatements of history at every size, not a
+thin float layer. So both keys stay exact under this decision's rule that a
+tolerance is widened only on measured evidence. The owner may pick another
+rule later. `backend/tests/analytics-source-tolerance.test.ts` runs the rule on
+the committed counts and holds `SOURCE_TOLERANCES` to what it allows.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
@@ -5111,6 +5229,13 @@ installs `backend/` on its own. Publishing the package to npm: out of scope,
 analysts clone it (shallow, see its README). Copying the files instead of moving
 them: two copies of the classifier is the drift D56's fidelity tests exist to
 prevent.
+
+**Amendment note ([D78](#d78), 2026-10-28).** The shared compute still has
+one source of truth, so backend and SDK give byte-identical payloads. D78 changed
+its arithmetic: a payload published before D78 replays up to rounding, not byte for
+byte. The fidelity and parity tests against reports from before D78 compare value by
+value (`packages/analyst-sdk/tests/support/numeric-diff.ts`), with every label, null,
+integer and field still exact.
 
 ---
 
@@ -5786,6 +5911,10 @@ without forbidding the squash. Tagging at the cutover keeps production from
 ever running a commit no version names, and makes every pre-cutover check the
 place a release can still stop.
 
+**Owner clarification (2026-10-26).** The owner said: "releases 0.7.x is branched from main, NOT
+0.6.x". A new release branch `releases-A.B.x` is branched from main, not from the previous release
+line, and its scope reaches it from `main` by route (a).
+
 ---
 
 <a id="d71"></a>
@@ -5874,7 +6003,7 @@ for sessions published earlier.
 
 **Decision.**
 
-1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+1. **One format.** Format 1 is the layout csvb writes: one directory per backup, named by its backup id, holding `backup.json` and gzipped COPY CSV archives. _Amended by [D80](#d80) (2026-10-29): csvb lives in `packages/csvb`, and a backup id is a UTC day boundary or one of the legacy snapshot times; the text named the robotmoney/csv-backups repo and the snapshot time._ The analytics module, the public API and every fill use it. No second format exists.
 2. **Write-once.** An archive never changes after it is written. Its identity is the SHA-256 of its uncompressed canonical bytes (`sha256_raw` in `backup.json`), and that hash names it. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, so no gzip encoder, Bun version or container image is part of an archive's identity, the ETag and the manifest hash are the content hash, and a client decompresses before it verifies. A backup only adds archives.
 3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
 4. **Same content.** The API and the database replica write archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
@@ -5921,6 +6050,8 @@ A run records methodology and code revision as provenance. Public simulation and
 
 Acceptance comparisons cover complete serialized reports, daily portfolio values, statistics and input mapping across representative pinned runs. Any report difference blocks cutover. Source-update jitter filtering belongs to ingestion (D56); after committing, extract supplies the exact stored values and versions to both backend and SDK, without a downstream tolerance. Extraction, mapping and preparation preserve the observations each calculation receives. New provenance and simulation evidence accompany reports separately from their original payloads. All stages after extract run without HTTP.
 
+**Amendment note ([D78](#d78), 2026-10-28).** D78 is a change of numerical methodology, made deliberately and separately from this refactor. It keeps one shared calculation and changes no label, null, field or displayed value on any fixture. A payload published before D78 replays up to rounding, not byte for byte. Acceptance comparisons against those reports are value by value, and any structural or discrete difference still blocks cutover. Stored reports keep their bytes.
+
 ### No retroactive change (owner clarification, 2026-10-22)
 
 No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
@@ -5932,6 +6063,30 @@ This settles three points.
 1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
 2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, a grant migration under the normal migration rules enables it.
 3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
+
+### Amendment (issue 1514, owner 2026-10-28) — one key per DefiLlama source
+
+**Status:** proposed
+
+The owner amended point 1 of the 2026-10-22 clarification for two consumers.
+`indicator:DEFI_GROWTH` reads `raw_indicator_history:DEFI_TVL`, and
+`indicator:STABLES_GROWTH` reads `raw_indicator_history:STABLES`. Every other
+consumer keeps the key it reads.
+
+- **Why.** Both growth indicators store the raw DefiLlama level and apply
+  their change90 transform downstream, exactly as DEFI_TVL and STABLES store
+  it. Backup `2026-10-28T180400Z` holds equal values under both keys on every
+  date (3,319 dates for DEFI_TVL, 3,256 for STABLES). Two keys for one series
+  doubled the writes and the revisions.
+- **What changes.** No new row is written under `raw_indicator_history:DEFI_GROWTH`
+  or `raw_indicator_history:STABLES_GROWTH`, in `source_value_versions` or in
+  `raw_indicator_history`. The run reads both growth series from the DEFI_TVL
+  and STABLES stored series. An SDK input that carries DEFI_TVL or STABLES
+  and not the growth id feeds the growth indicator from it.
+- **What stays.** The stored history under the two old keys is kept as it is.
+  No consumer reads it. A vintage that holds it replays to its published
+  report byte for byte, because the values were equal. The archive's run input
+  keeps those rows under their storage key, an unread series.
 
 ---
 
@@ -6008,6 +6163,42 @@ Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
 pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
 connection pooler.
 
+### Amendment (issue 1514, 2026-10-29) — the batch pool holds every cap that draws on it
+
+**Status:** proposed
+
+**Why.** From the v0.7.0 cutover on, production's batch pool ran out at every
+3-hourly analytics run. Queue claims answered 503 `db_saturated`, and
+source-acquisitions and vintages requests took up to 9.5 s. The batch share was
+3, or a quarter of the free connections on a small server. Two callers draw on
+it: the analytics routes, capped at `ANALYTICS_CONCURRENCY` (2), and the pipeline
+routes, capped at `PIPELINE_TOKEN_CONCURRENCY` (2). Their caps add up to 4.
+
+**What changes.**
+
+1. The batch share is `ANALYTICS_CONCURRENCY + PIPELINE_TOKEN_CONCURRENCY + 1`,
+   so 5 by default, on every server. The extra connection is for statements no
+   cap bounds: the pipeline route's token lookup, which runs before the token's
+   gate, and the analytics readiness probe, which the analytics limiter exempts.
+2. A small server gives up request connections, never batch ones. The request
+   share is at most 10 and takes what the batch share leaves.
+3. The api refuses to boot when the batch share is below that sum, derived or
+   set by `PG_BATCH_POOL_MAX`. The refusal names the batch share and each cap.
+4. Decision 5's admission rule is unchanged: a request over the token's cap
+   still waits `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated`.
+5. The analytics producer's api client keeps at most `ANALYTICS_CONCURRENCY`
+   requests in flight, so its bursts wait in the producer, not on the api's
+   request path.
+6. The slow-request line splits a request's time into `limiter_wait_ms`,
+   `pool_wait_ms` and `handler_ms`. A `db_saturated` error log names the gate
+   that refused.
+7. The stage target's Postgres carries production's connection limits, so the
+   stage api derives production's shares.
+
+**Cost.** A server with fewer than 15 free connections gives the request pool
+fewer than 10. A server too small for the batch share and one request
+connection refuses the boot instead of starting with a pool that saturates.
+
 ---
 
 <a id="d76"></a>
@@ -6057,15 +6248,95 @@ scheduled activation that misses its release fails CI until it is rescheduled.
 <a id="d77"></a>
 ## D77 — The analyst SDK ships on its own release line: `analyst-sdk/releases-A.B.x` and `analyst-sdk-vA.B.C` tags (owner, 2026-10-25)
 
-**Status:** Accepted 2026-10-25. Specified in `docs/technical/release-runbooks.md` section 11. Built by issue 1449: the tag guard (`.github/workflows/analyst-sdk-tag-guard.yml`, logic in `scripts/check-analyst-sdk-tag.ts`) and the workflow triggers.
+**Status:** Accepted 2026-10-25. Items 3, 4 and 7 amended by the owner 2026-10-28. Specified in `docs/technical/release-runbooks.md` section 11. Built by issue 1449: the tag guard (`.github/workflows/analyst-sdk-tag-guard.yml`, logic in `scripts/check-analyst-sdk-tag.ts`) and the workflow triggers.
 
 **Decision.**
 
 1. **Branch.** The SDK (`packages/analyst-sdk/`) ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own semver. The branch must not match `releases-*`: platform CI triggers on that glob, and `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform release line. Changes reach it from `main` only, by merge or cherry-pick, like D70 route (a). Feature PRs never target it. There is no QA branch, no stage run and no rc tag: the SDK runs on an analyst's machine and nothing deploys.
 2. **Tag.** A release is the tag `analyst-sdk-vA.B.C`, only on a commit of `analyst-sdk/releases-A.B.x`, never on `main`. Its version equals `version` in `packages/analyst-sdk/package.json`. This follows the `contract-v*` precedent: `contract/` has its own version and tag namespace, independent of the platform's `v*` tags (`.github/workflows/contract-publish.yml`).
-3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays published report payloads byte for byte, and name the platform tag whose analytics code it matches. When it carries `main` code no platform release has shipped, the notes say "ahead of production". The SDK and the backend share code (D57).
-4. **Gate.** Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches.
+3. **Release notes.** Each tag gets a GitHub release. Its notes name the archive format it reads (format 1, D72), state that it replays report payloads computed with its own arithmetic byte for byte and that payloads published before [D78](#d78) replay up to rounding, and name the platform tag whose analytics code it matches when one exists. The SDK and the backend share code (D57). _Amended by D78 (2026-10-28): the release note said every published payload replays byte for byte. Amended by the owner (2026-10-28): the note always named a matching platform tag._
+4. **Gate.** Before tagging, the `analyst-sdk` workflow and the backend analyst SDK parity tests in `.github/workflows/backend.yml` are green at the commit. `.github/workflows/analyst-sdk-tag-guard.yml` refuses a tag whose version differs from `package.json` or whose commit is not on an `analyst-sdk/releases-*` branch. Both workflows have `analyst-sdk/releases-*` in their push branches. _Amended by the owner (2026-10-28): the gate also required the matching platform version tag `vA.B.C` to exist._
 5. **First tag.** The first tag is `analyst-sdk-v0.2.0`. Every untagged build so far reported `0.1.0` in its `User-Agent`, so a fresh number separates tagged releases from them.
 6. **Install by tag.** An analyst gets a released version by a sparse clone of the tag.
+7. **Cadence.** The SDK releases at any cadence, independent of the platform. An SDK tag needs no matching platform release. _Amended by the owner (2026-10-28): this item said the platform release is cut first, then the SDK tag. That order was a one-off instruction for v0.7.0 and applied to that release only._
 
 **Why.** An analyst needs a fixed, named version to cite and rerun. The platform's release line rehearses on stage and cuts over production. None of that applies to a package that runs on an analyst's machine. A separate branch and tag namespace keeps platform tooling from treating an SDK release as a platform release.
+
+---
+
+<a id="d78"></a>
+## D78 — The analytics reductions are computed in error-free arithmetic and rounded once; earlier published payloads replay up to rounding, not byte for byte (owner, 2026-10-28)
+
+**Status:** Proposed 2026-10-27. Accepted by the owner 2026-10-28. Built by issue 1498 in `packages/analyst-sdk/src/transform/exact.ts` and its callers. It amends D57's byte-identical replay promise, the "Analytics report compatibility" clarification under D74 ("Changes to numerical methodology are outside this refactor"; this is such a change, made deliberately and separately) and D77 (3)'s release-note sentence.
+
+**Decision.**
+
+1. **Compensated reductions.** Every sum, mean, variance, standard deviation, dot product, correlation and compounding product in the compute core that feeds a published number is computed with error-free transformations (TwoSum, Dekker TwoProd, Sum2 and Dot2 of Ogita, Rump and Oishi) and finished in double-double, so it is rounded once. That covers `math.ts` (`mean`, `std`, `stddev`, `pearson`, `rollingBeta`, `sma`, `rollingSum`, the inverse-correlation weight sums and `capWeights`), `compute.ts` (panel weighted mean, composite mean, fast-track sigma), `correlations.ts` (`pearson` behind the Spearman ranks), `backtest.ts`, `research-signals.ts` (`rollingBetaSeries`, the equal-weight index, the channel composite) and the backtests in `weighting-comparison.ts` and `regime-eq-comparison.ts`.
+2. **Backtests.** Equity compounds as an unrounded double-double: each factor `1 + r` is formed exactly (`twoSum(1, r)`), a cost factor `1 - turnover x cost` keeps its product exact, and each published daily value is the correctly rounded current level. A day's portfolio return and the turnover are compensated sums. The daily cash rate is `expm1(log1p(rate / 100) / 365)` and CAGR is `expm1(log(ratio) / years)`, instead of the `pow(...) - 1` forms, which lose the leading digits of a small result to the final subtraction.
+3. **Scale.** `pearson`, `std` and `stddev` rescale each series by a power of two before the products (exact, so the value does not change), and the correlation's denominator is `sqrt(vx) x sqrt(vy)` in double-double. Self-correlation of `[1,2,3,4] x 1e150` is 1, not 0 (`dx * dy` overflowed), and of `x 1e-150` is 1, not Infinity.
+4. **Contracts unchanged.** Empty input, `n < 2`, non-finite handling, pairwise dropping of non-finite points and the zero-variance results (0 in `math.ts`, NaN in `correlations.ts`, Sharpe 0) are as before. There is no variance epsilon: a variance is 0 exactly when the exact variance of the doubles is 0.
+5. **The test oracle is exact arithmetic.** `packages/analyst-sdk/tests/exact-numerics.test.ts` checks the results against BigInt rational arithmetic over the same doubles (`tests/support/exact-reference.ts`), on the committed SPX and ETH closes and indicator levels, and checks that the plain loops miss on the same data.
+
+**Defect fixed.** Constant returns gave a nonzero Sharpe. A real `simulatePortfolio` run with 30% cash at a 5% yield and 70% in a flat asset produces 3,000 bit-identical daily returns. The plain mean was not exactly that return, so the centered differences were not zero: `periodStats` reported sample variance 3.68e-36 and Sharpe 3.99e14. The exact variance is 0, so the Sharpe is now 0 under the existing zero-volatility rule. The test above runs this case through the real simulator.
+
+**Measured magnitudes.** Against exact rationals, before this change: on 2,250 common-date Yahoo returns (the rosemarys-baby numerics review, 2026-10-27) the relative errors were 1.8e-15 (mean), 1.5e-15 (population std), 1.6e-15 (sample std) and 4.3e-15 (Pearson); a 200-day BTC rolling sum was off by up to 1.1e-15; SPY buy-and-hold final equity was 2.9686250659744187 against the exact 2.968625065974424. After it, every one of these equals the correctly rounded exact value on the SDK's own fixtures. Old code against new on the committed fixtures:
+
+| output | numbers | changed | max abs change | max rel change |
+| --- | ---: | ---: | ---: | ---: |
+| `tests/golden/regime-report.json` | 1,615 | 1,407 | 6.3e-12 | 9.1e-12 |
+| daily regime result, production fixture (labels, percentiles, ranks, weights, indices) | 97,033 | 5,315 | 7.2e-16 | 6.9e-15 |
+| daily regime result, 8-year fixture | 184,199 | 10,296 | 5.6e-16 | 4.0e-15 |
+| daily portfolio values, production fixture | 38,308 | 37,129 | 1.9e-14 | 1.2e-14 |
+| weighting comparison | 1,623 | 1,506 | 1.6e-14 | 7.2e-13 |
+| regime-eq comparison | 1,445 | 1,253 | 3.9e-14 | 1.2e-12 |
+| v0.7.0 release check golden (`scripts/release/version-checks/v0.7.0/reference/backtest.golden.json`, regenerated) | 15 | 9 | 8.6e-13 | 3.8e-13 |
+
+The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3437433689646): its returns are the nearly constant cash rate, which the `expm1(log1p)` form now gets right to the last digits, and a near-constant series amplifies that in the ratio. The largest relative change is a CAGR near zero (-8.04e-5), where `pow(...) - 1` cancelled.
+
+**Discrete outputs.** None changed. Across the three original-report variants (production, missing-label, zero-volatility; default and `--full --factor` envelopes, the shared analysis artifact and the daily portfolio values), the production and 8-year fixtures with and without the factor panel, and both research generators, every regime label, percentile rank, sign, integer, null and key is identical, and no number moved by more than 1e-9 of its size. No value rounded for display (`toFixed`) changed.
+
+**Replay consequence.** A payload published before this change does not replay byte for byte: re-running its inputs gives numbers that differ in the last one to four significant bits (up to 9e-12 relative where a result is near zero or a ratio is ill-conditioned), with the same structure, labels and nulls. Stored rows, published reports and archives keep their bytes (the "No retroactive change" clarification under D74). The parity tests against the frozen originals (`tests/fixtures/originals/`, never regenerated) now compare value by value (`tests/support/numeric-diff.ts`): any structural or discrete difference still fails them. On the committed sample of published production runs (`backend/tests/fixtures/published-replay/`), run `c65a5db6` (as of 2026-10-19) replayed byte for byte before; it now keeps its label and differs in `composite`, `macroIndex`, `onchainIndex` and `factorIndex` by rounding only (composite 0.47705666099868727 published, 0.4770566609986872 replayed). The two pre-1421 runs keep exactly their recorded beyond-rounding differences; their recorded replay hashes pinned the old arithmetic and are no longer asserted (a sample re-recorded by `backend/scripts/published-replay-sample.ts` would pin the new ones). New runs replay byte for byte against reports produced by this code. The published blog data `frontend/public/data/weighting-comparison.json` and `regime-eq-comparison.json` are not regenerated; regenerating them would move numbers by up to 1.2e-12 relative with no discrete change. The SDK release notes (D77 (3)) say which methodology a tag computes, and a tag with this change states that earlier payloads replay up to rounding.
+
+**Why.** The published numbers should be the exact result of the published inputs, not of a particular summation order. The plain loops were accurate to a few ulps on these data, so no report moved materially, but they made a zero variance nonzero, which turned a constant return into a Sharpe of 4e14, and they made the backtest depend on the order of additions. Error-free arithmetic fixes both without a tolerance, at no runtime cost on the regime pipeline (a full run takes about 0.65 s, against 1.1 s before, because the fused correlation pass replaced per-pair array building).
+
+**Left alone.** `rollingPercentileRank` and `percentileInWindow` only compare and count. `pctChange`, `pctChangeLag`, `ratio` and the ratio transforms are one rounded operation each. The 1e-9 weight-sum checks in `backtest.ts` and `allocate/` validate input and publish nothing. The allocation engine (`allocate/engine.ts`, `allocate/signals.ts`) sums a handful of percent weights and percentiles; it is outside the compute core and keeps plain sums. Max drawdown is one division per day. A label change can still come from a genuine tie at a bucket edge on other data; none occurs on the fixtures.
+
+**Amendment note (issue 1513, 2026-10-29).** The portfolio optimizers that moved into the SDK follow this arithmetic and fail closed. `src/transform/linalg.ts` (`covarianceMatrix`, `correlationMatrix`, `solveRefined`), `src/allocate/covariance.ts` (`annualCov`, `shrinkToDiagonal`, `shrunkCov`), `src/allocate/optimize.ts` (budgeted ERC, minimum variance, mean-variance, maximum Sharpe and their residuals) and `src/allocate/markowitz.ts` form every sum, dot product and quadratic form compensated and rounded once (`sum2`, `dot2`, `residual2`). Each covariance entry is the correctly rounded exact sample covariance of the doubles. The LU factor of the refined solve is only a preconditioner: each residual is formed on the original system in compensated arithmetic, and the solution is refined to below half an ulp. Every solver returns a certified optimum or throws `UnsupportedError`: a singular matrix, a balanced condition number at or beyond 1/eps, a refinement that stalls above one rounding, a nonpositive risk budget and an ERC budget violation above `ERC_TOL` (4e-15) are refused, never approximated. `tests/linalg.test.ts` and `tests/optimizers.test.ts` check them against exact rationals and grid searches.
+
+---
+
+<a id="d79"></a>
+## D79 — The analyst SDK separates supported series from supplementary series, each in its own directory (owner, 2026-10-28)
+
+**Status:** Accepted (owner, 2026-10-28). Items 1 to 3 are the owner's direction. The format and command details in items 4 and 5 are accepted as written, with their implementation in `packages/analyst-sdk/src/input/supplementary.ts`, `src/extract/supplementary.ts`, `bin/supplementary-dir.ts` and `bin/fetch.ts`; the pure reader `openSupplementary(files)` takes an injected `SupplementaryFiles`, and the node:fs side stays in `bin/supplementary-dir.ts`. Specified in `docs/technical/analyst-sdk-requirements.md` sections 1, 2 and 4 and `docs/definitions.md`.
+
+**Decision.**
+
+1. **Supported series are turnkey.** The platform's public API and the csv-backups repo serve many source series cleaned, versioned and formatted for immediate use. They reach the analyst through the local copy (section 3 of the analyst SDK requirements).
+2. **Supplementary series fill the gaps.** The platform cannot cover the full history of every asset an analyst may want. The SDK therefore (a) defines a format in which an analyst stores series they fetch elsewhere, so those series work with the SDK's calculations, and (b) ships fetchers for common providers (Yahoo and FRED), so an analyst does not have to write their own.
+3. **Two directories.** Supplementary series live in a supplementary directory. It is separate from the directory that holds supported series (the local copy, whether filled from the csv-backups repo or from the API). Neither is inside the other. The SDK refuses a supplementary directory that is, contains or lies inside a local copy. No code merges the two: reading code names the directory for each series.
+4. **Format.** One series per file, `<dir>/<provider>/<percent-encoded symbol>.csv`, in the source input contract (`date,series,value`, one source id, dates strictly ascending), with a `<symbol>.manifest.json` sidecar: source id, field, row count, first and last date, SHA-256 of the file, `fetched_at` and `fetched_by`. A reader checks the file against its manifest.
+5. **Fetch command.** `bun run fetch --into <dir> [--start] [--end] [--replace] <source id>...` fetches Yahoo and FRED series through `src/extract/http.ts`. `--start` defaults to 2016-01-01, the collection floor proposed for the platform in frontend issue 1514. An existing series is kept unless `--replace` is given.
+
+**Why.** An analyst should get the platform's data with no work, and should not have to write a Yahoo client to study an asset the platform does not carry. Keeping the two kinds of data in separate directories keeps the record clean: a supported series is exactly what csvb wrote, with its vintages, and a supplementary series carries only its own manifest. Mixing them would let a hand-fetched value pass as platform data. The research repo `rosemarys-baby` kept hand-fetched Yahoo closes next to its resolved platform tables; this decision is the general form of separating them.
+
+**Left alone.** The local copy, the fills, csvb and the input file contract are unchanged. The source clients' existing callers keep their behaviour: `fetchFred` gains an optional start, defaulting to the 2010-01-01 it used before.
+
+---
+
+<a id="d80"></a>
+## D80 — csvb lives in robotmoney-frontend, and format 1 has one writer and one cut rule (owner direction, 2026-10-26)
+
+**Status:** proposed. Items 1 and 2 are the owner's direction (2026-10-26). The cut rule in item 3 is a default the agent took with issue 1477, and the owner may override it. Built by issue 1477 in `packages/csvb`, `packages/analyst-sdk/src/archive/format1.ts`, `packages/analyst-sdk/src/archive/format1-legacy.ts` and `backend/src/analytics/store/public-archive-store.ts`. Specified in `docs/technical/analytics-requirements.md` sections 4.5 and 4.7, `docs/technical/analyst-sdk-requirements.md` sections 2, 3 and 8, and `docs/definitions.md`.
+
+**Decision.**
+
+1. **Data only in the data repo.** robotmoney/csv-backups holds backups and nothing else. All tooling lives in robotmoney-frontend. csvb is `packages/csvb`, with every command it had. It works on a data checkout named with `--repo`. It refuses to write backups inside a robotmoney-frontend checkout.
+2. **One writer and one reader.** One module, `packages/analyst-sdk/src/archive/format1.ts`, defines format 1: the `backup.json` record, file naming, COPY CSV text, part splitting, the table catalog and the backup cut rule. csvb, the public archive routes and the SDK's reader all use it. The SDK never imports csvb; csvb imports the SDK. `scripts/tests/unit/archive-identity-guard.test.ts` fails on a second definition in `backend/src` or `packages/csvb/src`.
+3. **One cut rule (default taken).** Both writers cut a backup at each UTC day boundary once it is one settle hour in the past, named `YYYY-MM-DDT000000Z`. Per table, the watermark is the largest id below the first row stamped at or after the boundary. Vintage members are cut by their vintage. A csvb run that finds several sealed boundaries writes one backup per boundary from one snapshot. A revised table's state goes in the newest of those backups.
+4. **The legacy junction.** Snapshot-time backups already written stay valid history, byte for byte. Their ids are a closed list in `format1-legacy.ts`. The newest, `2026-10-28T180400Z`, is the junction: one extra cut point with its own id and baked per-table watermarks. It is not a chain restart. The API keeps serving every earlier day-cut backup unchanged. Once its chain reaches past the junction, it also serves the junction backup, which continues from the preceding day cut and ends at the baked watermarks. Both writers then cut the next day from the junction. A repo clone and an API increment therefore join at the junction id. A database whose ids all lie below the junction watermarks is cut by day alone.
+5. **Same bytes.** For the same committed state and backup id, csvb and the API write byte-identical uncompressed data archives (D72 (4)). `backend/tests/csvb-api-archive-parity.test.ts` checks this.
+
+**Why.** Before this, format 1 had two independent writers. csvb named a backup by its replica snapshot time. The archive store re-implemented csvb's encoding and naming and cut one backup per UTC day. The two chains never met, so the default fill (clone the repo, then fetch the increment from the API) could not join. One module, one cut rule and one junction make the two fills produce the same local copy.
+
+**Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo is a data-repo change made after this ships. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).

@@ -17,7 +17,7 @@ import { allocationFramework } from "../../lib/allocation-framework.js";
 import { isJudge } from "../../lib/judgements.js";
 import { sessionSummary } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
-import { memberLogo } from "../../lib/member-logos.js";
+import { memberAvatarSrc } from "../../lib/member-logos.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
 import { fmtDate, vaultForBucket } from "../../lib/vault-data.js";
 import { loadLatestRecommendation } from "../../lib/vault-source.js";
@@ -184,11 +184,11 @@ export function registerHomeView(Alpine) {
         .map((s) => s[0].toUpperCase())
         .join("") || "SW";
     },
-    // Same precedence as /swarm: curated logo, then avatar.path, then the
+    // Same precedence as /swarm: an admin upload, curated logo, then avatar.path, then the
     // derived mark. x-html is safe: memberAvatarMarkup never interpolates
     // the seed, and initials() is already stripped to letters and digits.
     memberMark(seed, name, size = 64, avatarPath, handle) {
-      const src = memberLogo({ handle }) || avatarPath || null;
+      const src = memberAvatarSrc(handle, avatarPath);
       return memberAvatarMarkup(src, seed, name, size, (n) => this.initials(n));
     },
     seatsLabel() {

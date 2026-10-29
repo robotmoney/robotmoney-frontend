@@ -7,10 +7,16 @@
 // and run through the SDK's runRegime (the one calculation the backend also
 // runs) with factor figures on. No tolerance: every field is compared exactly,
 // in a fixed order, and the first field that differs is the run's result.
+// Decision D78 (compensated arithmetic) moves numbers in their last
+// bits, so a run published before it differs from its replay in those bits;
+// `beyondRounding` names the fields that differ by more than that
+// (packages/analyst-sdk/tests/support/numeric-diff.ts).
 import { INDICATORS } from "../../src/analytics/analyze/indicators.ts";
 import { canonicalStringify } from "../../src/analytics/run-ledger.ts";
 import { parseInput } from "../../../packages/analyst-sdk/src/input/load.ts";
 import { runRegime } from "../../../packages/analyst-sdk/src/run.ts";
+import type { RawIndicatorHistory } from "../../src/analytics/types.ts";
+import { numericDiff } from "../../../packages/analyst-sdk/tests/support/numeric-diff.ts";
 
 // The as-of row of a published regime_snapshots artifact (backend
 // buildSnapshotRows), the fields a replay recomputes.
@@ -62,9 +68,15 @@ export interface ReplayOutcome {
   replayLabel: string | null;
   // Every differing field, for the report.
   differing: string[];
+  // The differing fields whose difference is more than rounding (D78): a
+  // changed label, null, key or integer, or a number moved by more than 1e-9
+  // of its size. A field missing here but in `differing` moved only by rounding.
+  beyondRounding: string[];
   // SHA-256 of the canonical JSON of every compared replay field: pins the
   // whole replayed row, so a recorded outcome can be asserted exactly.
   replaySha256: string;
+  // Each compared field of the replayed row, as canonical JSON.
+  fields: Record<string, string>;
 }
 
 const nn = (v: number | undefined): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -77,7 +89,11 @@ export function publishedAsofRow(payloadText: string, asof: string): PublishedAs
 
 /** Replay a run's input file (replay contract text) as of `asof` and compare with its published as-of row. */
 export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null): ReplayOutcome {
-  const { history } = parseInput(inputText, { replay: true });
+  return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published);
+}
+
+/** The same replay from an input history already in memory (the backend's vintage read through the D74 mapping). */
+export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null): ReplayOutcome {
   const run = runRegime(history, { asof, factor: true });
   const last = run.dateAxis.length - 1;
   if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
@@ -106,10 +122,12 @@ export function replayPublishedRun(inputText: string, asof: string, published: P
     backtest: run.backtest ?? null,
   };
   const differing: string[] = [];
+  const beyondRounding: string[] = [];
   let firstDiff: ReplayOutcome["firstDiff"] = null;
   if (published === null) {
     // A published run always has a row for its as-of day; a missing one is a mismatch, never a pass.
     differing.push("as-of row");
+    beyondRounding.push("as-of row");
     firstDiff = { field: "as-of row", published: "absent", replay: canonicalStringify(replay.regime) };
   } else {
     for (const f of COMPARED_FIELDS) {
@@ -117,6 +135,7 @@ export function replayPublishedRun(inputText: string, asof: string, published: P
       const b = canonicalStringify(replay[f]);
       if (a === b) continue;
       differing.push(f);
+      if (numericDiff(a, b).differences.length > 0) beyondRounding.push(f);
       firstDiff ??= { field: f, published: a, replay: b };
     }
   }
@@ -127,6 +146,8 @@ export function replayPublishedRun(inputText: string, asof: string, published: P
     publishedLabel: published?.regime ?? null,
     replayLabel: replay.regime as string | null,
     differing,
+    beyondRounding,
     replaySha256: new Bun.CryptoHasher("sha256").update(canonicalStringify(replay)).digest("hex"),
+    fields: Object.fromEntries(COMPARED_FIELDS.map((f) => [f, canonicalStringify(replay[f])])),
   };
 }

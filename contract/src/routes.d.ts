@@ -155,6 +155,7 @@ export const ROUTES: {
     runEvents: string;
     vintages: string;
     vintage: string;
+    committedInputs: string;
     runPackage: string;
     reportSnapshot: string;
     paritySweep: string;

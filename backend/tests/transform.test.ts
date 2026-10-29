@@ -1,6 +1,6 @@
 // Transform stage (pure): the dense-grid reshaping the live provider relies on.
 import { test, expect } from "bun:test";
-import { shapeDaily, ratioByDate } from "../src/analytics/transform/grid.ts";
+import { shapeDaily, mergeRatioSeries } from "../src/analytics/transform/grid.ts";
 
 test("shapeDaily: forward-fills onto a dense grid of length lookbackDays", () => {
   const raw = [
@@ -24,7 +24,7 @@ test("shapeDaily: null when there is no data at/-before asof", () => {
   expect(shapeDaily([], "2024-01-13", 5)).toBeNull();
 });
 
-test("ratioByDate: aligns on shared dates only (a/b)", () => {
+test("mergeRatioSeries: aligns on shared dates only (a/b)", () => {
   const a = [
     { date: "2024-01-01", value: 100 },
     { date: "2024-01-02", value: 200 },
@@ -34,7 +34,7 @@ test("ratioByDate: aligns on shared dates only (a/b)", () => {
     { date: "2024-01-01", value: 50 },
     { date: "2024-01-03", value: 150 },
   ];
-  expect(ratioByDate(a, b)).toEqual([
+  expect(mergeRatioSeries(a, b)).toEqual([
     { date: "2024-01-01", value: 2 },
     { date: "2024-01-03", value: 2 },
   ]);
