@@ -12,8 +12,8 @@ notes: |
   Identity. From v0.7.0 (instance rm_prod, tag v0.7.0 at 8c2690ba, the squash of
   qa/0.7.x-2026-10-27 on releases-0.7.x) to v0.7.1 at the commit the rc tag names, in a new
   checkout. The target files' `release` reads v0.7.1 and prod's `checkout` names the new folder
-  (/root/rm-071) before the run. Tracking: no release:v0.7.1 issue is filed yet; section 6 needs
-  one before the production go. The QA branch is qa/0.7.x-2026-10-29, cut from releases-0.7.x at
+  (/root/rm-071) before the run. Tracking: the v0.7.1 release issue (1538).
+  The QA branch is qa/0.7.x-2026-10-29, cut from releases-0.7.x at
   06c64a42 (main merged into releases-0.7.x twice: 500b7345, then 06c64a42).
 
   Scope is regenerated at the QA commit. The `scope:` below is `git log v0.7.0..06c64a42` (13 PRs,
