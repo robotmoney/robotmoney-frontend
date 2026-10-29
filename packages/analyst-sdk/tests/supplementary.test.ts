@@ -6,13 +6,15 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { assertSupplementaryDir, listSupplementary, readSupplementary, writeSupplementary } from "../bin/supplementary-dir.ts";
+import { assertSupplementaryDir, listSupplementary, readSupplementary, supplementaryFiles, writeSupplementary } from "../bin/supplementary-dir.ts";
 import { configureHttp } from "../src/extract/http.ts";
+import { fredUrl } from "../src/extract/fred.ts";
 import { NoObservationsError } from "../src/extract/model-portfolio.ts";
 import { fetchSupplementary } from "../src/extract/supplementary.ts";
 import { InputRowError } from "../src/input/load.ts";
 import {
   formatSupplementaryCsv,
+  openSupplementary,
   parseSupplementaryCsv,
   sourceIdOfPath,
   supplementaryPaths,
@@ -91,6 +93,54 @@ describe("the directory", () => {
     }
     expect(() => writeSupplementary(join(copy, "extra"), "yahoo:GC=F", pts, meta)).toThrow("local copy");
     expect(() => assertSupplementaryDir(join(TMP, "beside-the-copy"))).not.toThrow();
+  });
+});
+
+describe("openSupplementary over injected files (no filesystem)", () => {
+  const FIXTURE = join(import.meta.dir, "fixtures/supplementary");
+  const enc = new TextEncoder();
+  // A Map of path to bytes, built from the committed fixture; nothing below touches the disk.
+  const memory = () => {
+    const m = new Map<string, Uint8Array>();
+    for (const p of ["yahoo/GC%3DF.csv", "yahoo/GC%3DF.manifest.json"]) m.set(p, new Uint8Array(readFileSync(join(FIXTURE, p))));
+    return m;
+  };
+  const filesOf = (m: Map<string, Uint8Array>) => ({ read: (p: string) => m.get(p) ?? null, list: () => [...m.keys()], label: "mem" });
+
+  test("lists ids sorted and reads a series whose manifest validates", () => {
+    const m = memory();
+    const fred = formatSupplementaryCsv("fred:DTB3", [{ date: "2024-01-02", value: 5.2 }]);
+    m.set("fred/DTB3.csv", enc.encode(fred));
+    m.set("fred/notes.txt", enc.encode("ignored"));
+    const r = openSupplementary(filesOf(m));
+    expect(r.list()).toEqual(["fred:DTB3", "yahoo:GC=F"]);
+    const got = r.read("yahoo:GC=F");
+    expect(got.points).toHaveLength(4);
+    expect(got.manifest).toMatchObject({ series: "yahoo:GC=F", row_count: 4, first_date: "2024-01-02", last_date: "2024-01-05" });
+  });
+  test("refuses a tampered byte, a wrong row count and a missing manifest; a missing series names bun run fetch", () => {
+    const tampered = memory();
+    const csv = new TextDecoder().decode(tampered.get("yahoo/GC%3DF.csv")!);
+    tampered.set("yahoo/GC%3DF.csv", enc.encode(csv.replace("2042.300048828125", "2042.300048828126")));
+    expect(() => openSupplementary(filesOf(tampered)).read("yahoo:GC=F")).toThrow(/sha256 .* does not match/);
+    const rows = memory();
+    const man = JSON.parse(new TextDecoder().decode(rows.get("yahoo/GC%3DF.manifest.json")!));
+    rows.set("yahoo/GC%3DF.manifest.json", enc.encode(JSON.stringify({ ...man, row_count: 5 })));
+    expect(() => openSupplementary(filesOf(rows)).read("yahoo:GC=F")).toThrow(/row_count 5 does not match/);
+    const noManifest = memory();
+    noManifest.delete("yahoo/GC%3DF.manifest.json");
+    expect(() => openSupplementary(filesOf(noManifest)).read("yahoo:GC=F")).toThrow("has no yahoo/GC%3DF.manifest.json");
+    expect(() => openSupplementary(filesOf(memory())).read("yahoo:SI=F")).toThrow("bun run fetch --into mem yahoo:SI=F");
+  });
+  test("readSupplementary(dir, id) returns what openSupplementary returns over the same files", () => {
+    const fromDisk = readSupplementary(FIXTURE, "yahoo:GC=F");
+    expect(fromDisk).toEqual(openSupplementary(filesOf(memory())).read("yahoo:GC=F"));
+    expect(fromDisk).toEqual(openSupplementary(supplementaryFiles(FIXTURE)).read("yahoo:GC=F"));
+    expect(listSupplementary(FIXTURE)).toEqual(openSupplementary(filesOf(memory())).list());
+  });
+  test("fredUrl starts at 2010-01-01 by default and at the given start otherwise", () => {
+    expect(fredUrl("DTB3").endsWith("cosd=2010-01-01")).toBe(true);
+    expect(fredUrl("DTB3", "2016-01-01").endsWith("cosd=2016-01-01")).toBe(true);
   });
 });
 

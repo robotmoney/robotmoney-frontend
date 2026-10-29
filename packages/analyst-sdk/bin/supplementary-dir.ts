@@ -1,6 +1,7 @@
 // Reading and writing the supplementary directory: the file side of
 // src/input/supplementary.ts (analyst SDK requirements section 4; D79). That
-// module is pure; this edge module finds, hashes, reads and writes the files.
+// module is pure and reads through an injected SupplementaryFiles; this edge
+// module supplies the node:fs one, and hashes and writes the files.
 //
 // The supplementary directory is never the local copy and never inside it or
 // around it: the local copy holds supported series exactly as csvb wrote them,
@@ -12,14 +13,17 @@ import { BACKUP_ID_RE } from "../src/archive/format1.ts";
 import type { Point } from "../src/types.ts";
 import {
   formatSupplementaryCsv,
-  parseSupplementaryCsv,
+  openSupplementary,
   serializeSupplementaryManifest,
-  sourceIdOfPath,
   supplementaryPaths,
   SupplementaryError,
   validateSupplementaryManifest,
+  type SupplementaryFiles,
   type SupplementaryManifest,
+  type SupplementarySeries,
 } from "../src/input/supplementary.ts";
+
+export type { SupplementarySeries };
 
 const sha256 = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
@@ -44,37 +48,34 @@ export function assertSupplementaryDir(dir: string): void {
   }
 }
 
-export interface SupplementarySeries {
-  id: string;
-  points: Point[];
-  manifest: SupplementaryManifest;
+/** The node:fs SupplementaryFiles over `dir`: the edge side of openSupplementary. */
+export function supplementaryFiles(dir: string): SupplementaryFiles {
+  return {
+    label: dir,
+    read: (path) => {
+      const f = join(dir, path);
+      return existsSync(f) ? new Uint8Array(readFileSync(f)) : null;
+    },
+    list: () => {
+      if (!existsSync(dir)) return [];
+      const out: string[] = [];
+      for (const provider of readdirSync(dir, { withFileTypes: true })) {
+        if (!provider.isDirectory()) continue;
+        for (const name of readdirSync(join(dir, provider.name))) out.push(`${provider.name}/${name}`);
+      }
+      return out;
+    },
+  };
 }
 
 /** Read one series and check it against its manifest. A missing series names the command that fetches it. */
 export function readSupplementary(dir: string, id: string): SupplementarySeries {
-  const paths = supplementaryPaths(id);
-  const file = join(dir, paths.file);
-  const manifestFile = join(dir, paths.manifest);
-  if (!existsSync(file)) throw new SupplementaryError(`${id}: not in ${dir} (no ${paths.file}); fetch it with \`bun run fetch --into ${dir} ${id}\``);
-  if (!existsSync(manifestFile)) throw new SupplementaryError(`${id}: ${paths.file} has no ${paths.manifest}`);
-  const bytes = readFileSync(file);
-  const points = parseSupplementaryCsv(id, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  const manifest = validateSupplementaryManifest(readFileSync(manifestFile, "utf8"), { series: id, sha256: sha256(bytes), points });
-  return { id, points, manifest };
+  return openSupplementary(supplementaryFiles(dir)).read(id);
 }
 
 /** Every source id with a series file in the directory, sorted. */
 export function listSupplementary(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const ids: string[] = [];
-  for (const provider of readdirSync(dir, { withFileTypes: true })) {
-    if (!provider.isDirectory()) continue;
-    for (const name of readdirSync(join(dir, provider.name))) {
-      const id = sourceIdOfPath(`${provider.name}/${name}`);
-      if (id !== null) ids.push(id);
-    }
-  }
-  return ids.sort();
+  return openSupplementary(supplementaryFiles(dir)).list();
 }
 
 /** Write one series and its manifest. Refuses to replace an existing series unless `replace` is set; each file is

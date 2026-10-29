@@ -6128,7 +6128,7 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 <a id="d79"></a>
 ## D79 — The analyst SDK separates supported series from supplementary series, each in its own directory (owner, 2026-10-28)
 
-**Status:** Proposed 2026-10-28. Items 1 to 3 are the owner's direction. The format and command details in items 4 and 5 are proposed with their implementation in `packages/analyst-sdk/src/input/supplementary.ts`, `src/extract/supplementary.ts`, `bin/supplementary-dir.ts` and `bin/fetch.ts`. Specified in `docs/technical/analyst-sdk-requirements.md` sections 1, 2 and 4 and `docs/definitions.md`.
+**Status:** Accepted (owner, 2026-10-28). Items 1 to 3 are the owner's direction. The format and command details in items 4 and 5 are accepted as written, with their implementation in `packages/analyst-sdk/src/input/supplementary.ts`, `src/extract/supplementary.ts`, `bin/supplementary-dir.ts` and `bin/fetch.ts`; the pure reader `openSupplementary(files)` takes an injected `SupplementaryFiles`, and the node:fs side stays in `bin/supplementary-dir.ts`. Specified in `docs/technical/analyst-sdk-requirements.md` sections 1, 2 and 4 and `docs/definitions.md`.
 
 **Decision.**
 

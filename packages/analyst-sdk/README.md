@@ -309,9 +309,13 @@ was fetched:
 }
 ```
 
-**Read.** `readSupplementary(dir, "yahoo:GC=F")` (`bin/supplementary-dir.ts`) returns
-the points and the manifest, after checking the file against it. `listSupplementary(dir)`
-lists the source ids. A series from another provider goes in with
+**Read.** `openSupplementary(files).read("yahoo:GC=F")` (`src/input/supplementary.ts`)
+returns the points and the manifest, after checking the file against its manifest's
+series, SHA-256, row count and date range; `.list()` lists the source ids. It is pure:
+`files` is a `SupplementaryFiles`, `{ read(path): Uint8Array | null, list(): string[] }`
+over paths relative to the directory, the same `read` shape as the archive reader's
+`ArchiveFiles`. On disk, `readSupplementary(dir, id)` and `listSupplementary(dir)`
+(`bin/supplementary-dir.ts`) wrap it with the node:fs reader `supplementaryFiles(dir)`. A series from another provider goes in with
 `writeSupplementary(dir, id, points, { field, fetched_at, fetched_by })`. The format
 itself is `src/input/supplementary.ts`, and `fetchSupplementary(id, { start, end })`
 (`src/extract/supplementary.ts`) is the fetch without the write.
@@ -515,7 +519,7 @@ bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
 bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
 bin/fetch.ts     the `bun run fetch` entry (Yahoo and FRED series into a supplementary directory)
-bin/supplementary-dir.ts  reading, listing and writing the supplementary directory
+bin/supplementary-dir.ts  the node:fs side of the supplementary directory: its reader, and writing
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)

@@ -157,3 +157,53 @@ export function validateSupplementaryManifest(
   if (m.first_date !== first || m.last_date !== last) bad(`dates ${m.first_date}..${m.last_date} do not match the file's ${first}..${last}`);
   return m as unknown as SupplementaryManifest;
 }
+
+/** Read access to a supplementary directory, relative paths with `/` separators. `read` has the shape of
+ *  ArchiveFiles.read: the file's bytes, or null when it is absent. `list` names every file under the directory. */
+export interface SupplementaryFiles {
+  read(path: string): Uint8Array | null;
+  list(): string[];
+  /** How a message names the directory, e.g. its path; `<dir>` when absent. */
+  readonly label?: string;
+}
+
+export interface SupplementarySeries {
+  id: string;
+  points: Point[];
+  manifest: SupplementaryManifest;
+}
+
+export interface SupplementaryReader {
+  /** Every source id with a series file in the directory, sorted. */
+  list(): string[];
+  /** One series, checked against its manifest. A missing series names the command that fetches it. */
+  read(id: string): SupplementarySeries;
+}
+
+const sha256Hex = (b: Uint8Array): string => new Bun.CryptoHasher("sha256").update(b).digest("hex");
+
+/** The pure reader of a supplementary directory: no filesystem, the files come through `files`. */
+export function openSupplementary(files: SupplementaryFiles): SupplementaryReader {
+  const dir = files.label ?? "<dir>";
+  return {
+    list: () => {
+      const ids: string[] = [];
+      for (const path of files.list()) {
+        const id = sourceIdOfPath(path);
+        if (id !== null) ids.push(id);
+      }
+      return ids.sort();
+    },
+    read: (id) => {
+      const paths = supplementaryPaths(id);
+      const bytes = files.read(paths.file);
+      if (bytes === null) throw new SupplementaryError(`${id}: not in ${dir} (no ${paths.file}); fetch it with \`bun run fetch --into ${dir} ${id}\``);
+      const manifestBytes = files.read(paths.manifest);
+      if (manifestBytes === null) throw new SupplementaryError(`${id}: ${paths.file} has no ${paths.manifest}`);
+      const points = parseSupplementaryCsv(id, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
+      const manifest = validateSupplementaryManifest(text, { series: id, sha256: sha256Hex(bytes), points });
+      return { id, points, manifest };
+    },
+  };
+}

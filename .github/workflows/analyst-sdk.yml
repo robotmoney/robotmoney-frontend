@@ -109,6 +109,12 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/exact-numerics.test.ts:34
           tests/numeric-diff-negative-control.test.ts:11
+      # Decision D79 (issue 1513): the supplementary series suite ran (format, the pure
+      # reader over injected files, the directory rules, the fetch seam, the command's refusals).
+      - name: Supplementary series suite ran (D79)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/supplementary.test.ts:17
       # Issue 1399: the as-of label suite ran, the 419-run hindsight case included.
       - name: As-of label suite ran (issue 1399)
         run: >-
