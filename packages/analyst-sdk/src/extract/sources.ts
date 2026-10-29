@@ -28,6 +28,7 @@
 import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
+import { mergeRatioSeries } from "../transform/grid.ts";
 import { ratioLegStorageKey, STORED_UNDER } from "../series-ids.ts";
 import { inventoryCollection } from "../inventory.ts";
 import { fetchFred } from "./fred.ts";
@@ -127,18 +128,8 @@ export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
   };
 }
 
-// Ratio of two gappy series on the intersection of dates (a/b), skipping any
-// date where the denominator is 0 or non-finite. Matches the original's
-// mergeRatioSeries in lib/fetch_all.js.
-export function mergeRatioSeries(a: Point[], b: Point[]): Point[] {
-  const bm = new Map(b.map((p) => [p.date, p.value]));
-  const out: Point[] = [];
-  for (const p of a) {
-    const d = bm.get(p.date);
-    if (Number.isFinite(d as number) && d !== 0 && d !== undefined) out.push({ date: p.date, value: p.value / d });
-  }
-  return out;
-}
+// The one ratio function lives in the transform stage (SDK-10).
+export { mergeRatioSeries };
 
 // Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
 // caller decides whether to fall back to persisted history.

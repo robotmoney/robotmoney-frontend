@@ -243,6 +243,10 @@ Rules, for every contract:
 stored values are calculations, not source data. The source contract rejects a row for
 one of them, by its id or its storage key (`CalculatedRowError`). The replay contract
 carries them as kind `calculated`, exactly as stored; their legs are never invented.
+A source input carries both legs instead (for example `yahoo:HG=F` and `yahoo:GC=F`),
+and the run calculates the ratio with `mergeRatioSeries`. One leg alone, with no stored
+ratio, throws `MissingRatioLegError` naming the ratio and the missing leg. A stored ratio,
+when present, is used unchanged.
 
 A real example lives in `tests/fixtures/raw-indicator-history.csv` (and `.json`).
 

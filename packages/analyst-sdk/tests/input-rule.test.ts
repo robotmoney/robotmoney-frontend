@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   AmbiguousInputSeriesError,
   AmbiguousSeriesMappingError,
+  MissingRatioLegError,
   SERIES_MAPPING,
   STORED_UNDER,
   consumerStorageKeys,
@@ -296,8 +297,10 @@ describe("date axis, usable series and optional sections", () => {
     const r = buildReport(runRegime(parseInput(csv(axisRows(40, "yahoo:^VIX"))).history, { start: "2024-01-01" }));
     expect(r.correlations).toBeNull();
     expect(r.backtest).toBeNull();
-    // SPX and ETH without TBILL3M: correlations only.
-    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD")])).history, { start: "2024-01-01" }));
+    // SPX and ETH without TBILL3M: correlations only. yahoo:ETH-USD is also a
+    // BTC_ETH leg, so the input carries the other leg too (analytics 4.3: one
+    // leg alone is a missing input, MissingRatioLegError).
+    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD"), ...axisRows(40, "yahoo:BTC-USD")])).history, { start: "2024-01-01" }));
     expect(r2.correlations).not.toBeNull();
     expect(r2.backtest).toBeNull();
   });
@@ -315,4 +318,28 @@ test("an input without the *_GROWTH ids reads them from DEFI_TVL and STABLES, to
   expect(report(without)).toBe(goldenText);
   const own = [{ date: "2024-01-01", value: 1 }];
   expect(resolveInputHistory({ ...without, DEFI_GROWTH: own }).DEFI_GROWTH).toBe(own);
+});
+
+// Analytics requirements 4.3 (SDK-10): one leg of a ratio without the other
+// and without a stored ratio is a missing input, named; never a silent drop.
+// No leg and no stored ratio keeps the 4.2 rule (the indicator is missing).
+test("one ratio leg without the other or a stored ratio throws MissingRatioLegError; ratio rows stay rejected", () => {
+  const leg = [{ date: "2024-01-01", value: 4 }];
+  let err: unknown;
+  try {
+    resolveInputHistory({ "yahoo:HG=F": leg });
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(MissingRatioLegError);
+  expect((err as MissingRatioLegError).ratio).toBe("COPPER_GOLD");
+  expect((err as MissingRatioLegError).missingLeg).toBe("yahoo:GC=F");
+  expect((err as Error).message).toMatch(/COPPER_GOLD.*yahoo:GC=F/);
+  // The denominator alone, named by its storage key, names the numerator.
+  expect(() => resolveInputHistory({ "research:SPY": leg, "yahoo:IWM": leg, "yahoo:MTUM": leg, "yahoo:XLU": leg, "yahoo:BTC-USD": leg })).toThrow(/BTC_ETH.*yahoo:ETH-USD/);
+  // A stored ratio with one leg is used as stored; no leg at all leaves it missing.
+  expect(resolveInputHistory({ "yahoo:HG=F": leg, COPPER_GOLD: leg }).COPPER_GOLD).toBe(leg);
+  expect("COPPER_GOLD" in resolveInputHistory({ VIX: leg })).toBe(false);
+  // A source input still may not carry a ratio row.
+  expect(() => parseSourceCsv("date,series,value\n2024-01-01,COPPER_GOLD,1.5")).toThrow(CalculatedRowError);
 });
