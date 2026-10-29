@@ -1,6 +1,6 @@
 # Plan: the four vaults on /allocation, /vault/:slug and the vault subject
 
-**Branch:** `david/vault-pages` (frontend only). **Written:** 2026-09-17, revised 2026-09-19. **Since 2026-10-27:** three vaults. rmAGENT closed with the Small Cap Tokens sleeve (core ADR-0017, RM-190); `/vault/rmagent` goes to `/allocation#vaults`, and the fixtures below describe three vaults.
+**Branch:** `david/vault-pages` (frontend only). **Written:** 2026-09-17, revised 2026-09-19. **Since 2026-10-29:** four sleeves, three vaults. rmAGENT closed with the Small Cap Tokens sleeve (core ADR-0017, RM-190), and Hard Assets (gold) took its place; its gold vault is a new contract with no address yet, so it has no page or row. `/vault/rmagent` goes to `/allocation#vaults`, and the fixtures below describe three vaults.
 
 ## Decisions
 

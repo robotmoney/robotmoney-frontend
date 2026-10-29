@@ -35,31 +35,34 @@ const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish
 const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 
 // The bucket order the allocation framework publishes in. Weights are printed
-// in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
-// four sleeves every time.
-export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
+// in this order rather than the object's, so "50 / 7 / 29 / 14" names the same
+// four sleeves every time. Hard Assets is last: it joined when Agent Tokens
+// closed, under a key of its own, so a weight filed for agent tokens never
+// reads as gold.
+export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets", "hard_assets"];
 
 // Sleeves the framework has closed. Each keeps its place in BUCKET_ORDER, and
 // so its hue and its name, because the sessions and receipts filed while it
 // was open still carry it. A view of the portfolio NOW leaves one out only
 // while it holds nothing (retiredAndEmpty): an old session's 5% still prints.
-// Agent Tokens closed on 2026-10-22 (RM-190): the model portfolio is three
-// sleeves.
+// Agent Tokens closed with RM-190, and Hard Assets took its place.
 export const RETIRED_BUCKETS = ["agent_tokens"];
 
-// Named, not humanised from the key. The names are RM-97's (2026-09-15):
-// the API and the archive still send the framework's first names, which match
-// through LEGACY_LABELS and never print.
+// Named, not humanised from the key. Small Cap Tokens is RM-97's name
+// (2026-09-15); RM-190 gave Conservative DeFi Yield its own name back, because
+// "Fixed Income" read as bonds. Older names still match through LEGACY_LABELS
+// and never print.
 /** @type {Record<string, string>} */
 const BUCKET_LABELS = {
-  conservative_defi_yield: "Fixed Income",
+  conservative_defi_yield: "Conservative DeFi Yield",
   agent_tokens: "Small Cap Tokens",
   protocol_tokens: "Protocol Tokens",
   real_world_assets: "Real World Assets",
+  hard_assets: "Hard Assets",
 };
 /** @type {Record<string, string>} */
 const LEGACY_LABELS = {
-  conservative_defi_yield: "Conservative DeFi Yield",
+  conservative_defi_yield: "Fixed Income",
   agent_tokens: "Agent Tokens",
 };
 
@@ -135,7 +138,7 @@ export function bucketLabel(idOrName) {
 // vault page's lede.
 // A sleeve's short name, for a narrow column on a phone.
 /** @type {Record<string, string>} */
-const BUCKET_SHORT = { conservative_defi_yield: "Fixed income", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA", hard_assets: "Hard assets" };
 /** @param {unknown} idOrName */
 export function bucketShort(idOrName) {
   const i = bucketIndex(idOrName);

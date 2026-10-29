@@ -17,7 +17,7 @@ import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { memberStatusLine } from "../lib/member-status.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER, RETIRED_BUCKETS } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
@@ -1926,8 +1926,14 @@ export function registerStaticViews(Alpine) {
     // ── the record's figures (RM-121) ───────────────────────────────────────
     // The four sleeves in published order, as table columns.
     // `short` heads a column on a phone, where four full names do not fit.
+    // A column per sleeve a listed session weighs, in the published order, so
+    // Small Cap Tokens keeps its column while the sessions that voted on it
+    // are shown, and Hard Assets gets one with the first session that weighs
+    // it. With no weights to read, the sleeves the framework runs.
     sleeveColumns() {
-      return BUCKET_ORDER.map((key, i) => ({ key, label: bucketLabel(key), short: this.bucketShort(key) || bucketLabel(key), hue: bucketHue(key, i) }));
+      const carried = new Set(this.sessions.flatMap((r) => (this.sessionWeights(r) || []).map((w) => w.key)));
+      const keys = carried.size ? BUCKET_ORDER.filter((k) => carried.has(k)) : BUCKET_ORDER.filter((k) => !RETIRED_BUCKETS.includes(k));
+      return keys.map((key) => ({ key, label: bucketLabel(key), short: this.bucketShort(key) || bucketLabel(key), hue: bucketHue(key) }));
     },
     // A subject whose sessions recommend sleeve weights reads as a weights
     // history; any other reads as a verdict history.
@@ -1938,7 +1944,13 @@ export function registerStaticViews(Alpine) {
     // The history's one row when it has none: before the first session, or a
     // search that matched nothing.
     historyEmptyLabel() { return this.historyQuery ? "No session matches" : "No session published yet"; },
-    // A row's recommended weights in column order, percent, null where absent.
+    // A row's cells, one per column: its weight in percent, null where absent.
+    rowCells(row) {
+      const w = this.rowWeights(row);
+      return this.sleeveColumns().map((c) => ({ key: c.key, v: w[BUCKET_ORDER.indexOf(c.key)] }));
+    },
+    // A row's recommended weights in the published order, percent, null where
+    // absent.
     rowWeights(row) {
       const rows = this.sessionWeights(row) || [];
       return BUCKET_ORDER.map((key) => {
@@ -1956,9 +1968,8 @@ export function registerStaticViews(Alpine) {
     // The move in one sleeve's cell, beside its weight, or null when it did not
     // move: the history table carries each change in its own column rather
     // than in a last column that named every sleeve again.
-    /** @param {any} row @param {number} i */
-    moveAt(row, i) {
-      const key = this.sleeveColumns()[i]?.key;
+    /** @param {any} row @param {string} key */
+    moveAt(row, key) {
       return (this.rowMoves(row) || []).find((m) => m.key === key) || null;
     },
     // A weights row's state when its cells cannot say it: nothing loaded,
@@ -2017,9 +2028,12 @@ export function registerStaticViews(Alpine) {
       const row = this.latest();
       const w = this.rowWeights(row);
       const ref = this.latestReference();
-      return this.sleeveColumns().map((c, i) => {
-        const was = ref ? ref[c.key] : null;
-        return { ...c, pct: w[i], was: was == null ? null : was, d: ref ? weightChange.weightDelta(w[i], was == null ? null : was) : null };
+      return BUCKET_ORDER.map((key, i) => {
+        const was = ref ? ref[key] : null;
+        return {
+          key, label: bucketLabel(key), short: this.bucketShort(key) || bucketLabel(key), hue: bucketHue(key),
+          pct: w[i], was: was == null ? null : was, d: ref ? weightChange.weightDelta(w[i], was == null ? null : was) : null,
+        };
       }).filter((r) => r.pct != null);
     },
     // The explorer for the latest review: the recommended mix on a weights

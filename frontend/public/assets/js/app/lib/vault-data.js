@@ -4,8 +4,9 @@
 // The stack is a PortfolioRouter plus three leg vaults, one per sleeve. The
 // router routes new deposits by its applied weights and holds nothing itself.
 // Production runs rmUSDC alone on Base; the other two exist on the staging
-// devnet only, until the mainnet decision. rmAGENT, the fourth, closed with
-// its sleeve (RETIRED_VAULTS).
+// devnet only, until the mainnet decision. rmAGENT closed with its sleeve
+// (RETIRED_VAULTS). Hard Assets, the fourth sleeve, has no vault yet: its gold
+// vault is a new contract, and gets a row here when it has an address.
 //
 // PURE: no fetching, no DOM, no page state. lib/vault-source.js does the I/O
 // and picks the data source; /allocation, /vault/:slug and the vault swarm
@@ -82,9 +83,9 @@ export const VAULTS = [
   {
     slug: "rmusdc",
     symbol: "rmUSDC",
-    name: "Fixed Income",
-    // The framework's first name for the sleeve, still what the API sends.
-    legacyName: "Conservative DeFi Yield",
+    name: "Conservative DeFi Yield",
+    // RM-97's name for the sleeve, until RM-190 gave the first one back.
+    legacyName: "Fixed Income",
     bucket: "conservative_defi_yield",
     key: "defi-yield",
     color: CATEGORICAL[0],
@@ -297,7 +298,11 @@ function identityForBucket(list, idKeyOrName) {
 /** @param {unknown} key */
 export function sleeveNote(key) {
   const v = vaultForBucket(key, { withRetired: true });
-  return v ? SLEEVE_NOTE[v.key] ?? "" : "";
+  if (v) return SLEEVE_NOTE[v.key] ?? "";
+  // A sleeve with no vault yet (Hard Assets) is still described.
+  const n = normKey(key);
+  const id = n ? Object.keys(BUCKET_NOTES).find((b) => normKey(b) === n) : undefined;
+  return id ? BUCKET_NOTES[id] : "";
 }
 
 // Where the mock-data switch and the archive fallbacks are allowed to act.
