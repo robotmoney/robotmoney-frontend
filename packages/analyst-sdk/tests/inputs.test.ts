@@ -152,7 +152,8 @@ describe("generation from both local copies", () => {
     let calculated = 0;
     for (const l of lines.slice(1)) {
       const [date, series, value, kind] = l.split(",");
-      const key = extra[series!] ?? `raw_indicator_history:${series}`;
+      // The old *_GROWTH keys come through under the storage key itself (D74 amendment, issue 1514).
+      const key = extra[series!] ?? (series!.startsWith("raw_indicator_history:") ? series! : `raw_indicator_history:${series}`);
       if (!(series === "VIX" && date === FACTS.revised.date)) expect(value).toBe(stored.get(`${key}|${date}`)!);
       if (kind === "calculated") calculated++;
     }

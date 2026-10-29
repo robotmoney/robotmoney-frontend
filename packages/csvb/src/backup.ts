@@ -259,7 +259,7 @@ async function rowsFollow(tx: Tx, tables: readonly AppendOnlyTable[], j: Junctio
  * timed through a lookup takes every row whose lookup key is at or below that table's watermark at the cut. No row
  * found: the watermark stays `after`.
  */
-async function cutWatermark(tx: Tx, t: AppendOnlyTable, after: bigint | null, cut: Cut, lookupMark: (table: string) => Promise<bigint | null>): Promise<bigint | null> {
+async function cutWatermark(tx: Tx, t: AppendOnlyTable, after: bigint | null, cut: Cut, lookupMark: (table: string) => Promise<bigint | null>, lookupBefore: (table: string) => bigint | null = () => null): Promise<bigint | null> {
   if (cut.kind === "junction") {
     const wm = cut.watermarks[t.name];
     if (wm === undefined) throw new Error(`the junction ${cut.id} names no watermark for ${t.name}`);
@@ -280,7 +280,11 @@ async function cutWatermark(tx: Tx, t: AppendOnlyTable, after: bigint | null, cu
     if (l.key !== "id") throw new Error(`${t.name}: a lookup time must point at the id of ${l.table}`);
     const lw = await lookupMark(l.table);
     if (lw === null) return after;
-    rows = (await tx.unsafe(`SELECT max(x.id)::text AS wm FROM ${t.name} x WHERE ${above} AND x.${qi(l.column)} <= ${lw}`)) as unknown as { wm: string | null }[];
+    // Only the rows of the lookup rows this cut adds: above the previous cut's lookup watermark, at most this one's
+    // (the same bound the archive store uses; a row's lookup row is committed with it, issue 1514).
+    const lb = lookupBefore(l.table);
+    const from = lb === null ? "" : ` AND x.${qi(l.column)} > ${lb}`;
+    rows = (await tx.unsafe(`SELECT max(x.id)::text AS wm FROM ${t.name} x WHERE ${above}${from} AND x.${qi(l.column)} <= ${lw}`)) as unknown as { wm: string | null }[];
   }
   const wm = rows[0]?.wm ?? null;
   return wm === null ? after : BigInt(wm);
@@ -348,7 +352,7 @@ async function runBackupInner(o: BackupOptions, staging: string): Promise<Backup
         if (marks.has(table)) return marks.get(table)!;
         const lt = o.appendOnly.find((x) => x.name === table) ?? APPEND_ONLY.find((x) => x.name === table);
         if (!lt) throw new Error(`no table ${table} to cut`);
-        const wm = await cutWatermark(tx, lt, repoWatermark(records, table), cut, lookupMark);
+        const wm = await cutWatermark(tx, lt, repoWatermark(records, table), cut, lookupMark, (lookup) => repoWatermark(records, lookup));
         marks.set(table, wm);
         return wm;
       };

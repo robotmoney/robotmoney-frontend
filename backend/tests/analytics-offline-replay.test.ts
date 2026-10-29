@@ -18,7 +18,7 @@ import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { beginRun, freezeVintage, loadFrozenVintage, loadHistoricalSourceValues } from "../src/analytics/store/run-ledger-store.ts";
 import { buildVintageManifest, sortedMembers } from "../src/analytics/run-ledger.ts";
-import { SERIES_MAPPING, inputHistoryFromStorage, selectConsumerObservations } from "../src/analytics/extras.ts";
+import { SERIES_MAPPING, STORED_UNDER, inputHistoryFromStorage, selectConsumerObservations } from "../src/analytics/extras.ts";
 import { parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
 import { buildReport, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { createHash } from "node:crypto";
@@ -172,7 +172,10 @@ test(
     const fixture = toHistory(parseRawHistory(readFileSync(join(SDK_TESTS, "fixtures", "raw-indicator-history.csv"), "utf8")));
     const keyOf = new Map(SERIES_MAPPING.map((m) => [m.inputId, m.storageKey]));
     const sink = { saveSourceAcquisition };
-    for (const id of Object.keys(fixture).sort()) {
+    // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES keys (D74
+    // amendment, issue 1514): their fixture series equal those, so they are
+    // stored once, under that key.
+    for (const id of Object.keys(fixture).sort().filter((id) => !Object.hasOwn(STORED_UNDER, id))) {
       const sourceKey = keyOf.get(id);
       expect(sourceKey, `fixture series ${id} has a storage key`).toBeDefined();
       await captureSourceAcquisition({ provider: "fixture", sourceKey: sourceKey!, parserVersion: "d74-replay-fixture:1", cacheIdentity: sourceKey! }, sink, async () => fixture[id]!);
@@ -187,7 +190,7 @@ test(
     const frozen = await freezeVintage({ runId: run.runId, toolId: "regime", knowledgeTimeCutoff, marketTimeCutoff: ASOF, methodologyVersionId: run.methodologyVersionId, buildIdentity: "d74-replay" });
     const original = sortedMembers(await loadHistoricalSourceValues(knowledgeTimeCutoff, ASOF));
     expect(original.length).toBe(frozen.memberCount);
-    expect(original.filter((m) => mapped.has(m.sourceKey)).length).toBe(Object.values(fixture).reduce((n, pts) => n + pts.length, 0));
+    expect(original.filter((m) => mapped.has(m.sourceKey)).length).toBe(Object.entries(fixture).filter(([id]) => !Object.hasOwn(STORED_UNDER, id)).reduce((n, [, pts]) => n + pts.length, 0));
 
     globalThis.fetch = (async () => { throw new Error("OFFLINE REPLAY MUST NEVER CALL fetch"); }) as unknown as typeof fetch;
     poisonEveryDataSourceMethod();
@@ -212,6 +215,41 @@ test(
     expect(seen.size).toBe(members.filter((m) => mapped.has(m.sourceKey)).length);
 
     // The history the run reads equals the committed fixture, and the report its bytes.
+    const history = inputHistoryFromStorage(members);
+    expect(history).toEqual(fixture);
+    expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);
+  },
+  { timeout: 120_000 },
+);
+
+// Issue 1514 (D74 amendment): a vintage frozen BEFORE the change holds the
+// DEFI_GROWTH and STABLES_GROWTH versions under their own keys. Replayed now,
+// those rows reach no consumer, the growth indicators read DEFI_TVL and
+// STABLES, and the published report comes back byte for byte (the two series
+// were equal on every date, as they are in production).
+test(
+  "a vintage frozen before the D74 amendment, whose members include *_GROWTH versions, replays to its published report byte for byte",
+  async () => {
+    const goldenText = readFileSync(join(SDK_TESTS, "golden", "regime-report.json"), "utf8");
+    const fixture = toHistory(parseRawHistory(readFileSync(join(SDK_TESTS, "fixtures", "raw-indicator-history.csv"), "utf8")));
+    for (const [id, stored] of Object.entries(STORED_UNDER)) expect(fixture[id]).toEqual(fixture[stored]!);
+    const sink = { saveSourceAcquisition };
+    // The pre-change shape: every registry id under raw_indicator_history:<id>.
+    const legacy = (id: string) => `raw_indicator_history:${id}`;
+    for (const id of Object.keys(fixture).sort()) {
+      const key = SERIES_MAPPING.some((m) => m.inputId === id && m.consumer.startsWith("indicator:")) ? legacy(id) : SERIES_MAPPING.find((m) => m.inputId === id)!.storageKey;
+      await captureSourceAcquisition({ provider: "fixture", sourceKey: key, parserVersion: "pre-d74-amendment:1", cacheIdentity: key }, sink, async () => fixture[id]!);
+    }
+    const ASOF = Object.values(fixture).reduce((d, pts) => (pts[pts.length - 1]!.date > d ? pts[pts.length - 1]!.date : d), "");
+    const methodology = { toolId: "regime", versionLabel: "pre-d74-amendment", config: { issue: 1514 } };
+    const run = await beginRun({ runKey: crypto.randomUUID(), asof: ASOF, toolId: "regime", sourceLabel: "fixture", methodology, buildIdentity: "pre-d74-amendment" });
+    const frozen = await freezeVintage({ runId: run.runId, toolId: "regime", knowledgeTimeCutoff: new Date().toISOString(), marketTimeCutoff: ASOF, methodologyVersionId: run.methodologyVersionId, buildIdentity: "pre-d74-amendment" });
+
+    globalThis.fetch = (async () => { throw new Error("OFFLINE REPLAY MUST NEVER CALL fetch"); }) as unknown as typeof fetch;
+    poisonEveryDataSourceMethod();
+    const reloaded = await loadFrozenVintage(frozen.vintageId);
+    const members = sortedMembers(reloaded!.members);
+    for (const id of Object.keys(STORED_UNDER)) expect(members.some((m) => m.sourceKey === legacy(id))).toBe(true);
     const history = inputHistoryFromStorage(members);
     expect(history).toEqual(fixture);
     expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);

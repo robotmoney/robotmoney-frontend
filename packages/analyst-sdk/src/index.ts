@@ -30,7 +30,7 @@ export * from "./allocate/universe.ts";
 export * from "./allocate/types.ts";
 export * from "./allocate/rules.ts";
 export {
-  loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, CALENDAR_SLACK_DAYS, INVENTORY_FIELDS,
+  loadInventory, loadResearchSeriesInventory, inventoryCollection, COLLECTION_START, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, CALENDAR_SLACK_DAYS, INVENTORY_FIELDS,
   type Inventory, type InventorySeries, type InventoryProxy, type CoverageGap,
 } from "./inventory.ts";
 export * from "./allocate/labels.ts";

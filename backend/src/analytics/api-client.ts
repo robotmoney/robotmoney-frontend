@@ -24,6 +24,7 @@ import type { TerminalRunPackageInput } from "./output-snapshots.ts";
 import type { SaveSourceAcquisitionResult } from "./source-ledger.ts";
 import { readFileSync } from "node:fs";
 import { ALL_PARITY_DOMAINS, type ParityDomain } from "./cutover/parity-domains.ts";
+import { ANALYTICS_CONCURRENCY, createLimiter } from "../lib/analytics-concurrency.ts";
 
 export interface AnalyticsApiConfig {
   baseUrl: string; // e.g. http://api:8787 (compose) / http://localhost:8787
@@ -75,7 +76,29 @@ export class AnalyticsApiUnreachableError extends Error {
 // AnalyticsPersistence port) AND triggerParitySweep() (the worker's #979-fix
 // call to POST A.paritySweep) both go through this — one fetch/header/error
 // implementation, not two.
+//
+// AT MOST ANALYTICS_CONCURRENCY IN FLIGHT (issue 1514). The api runs that many
+// analytics requests at once and queues the rest on the request path, where the
+// wait counts against the request's deadline. This process holds the same cap,
+// so a burst of concurrent fetches waits here, before a request is sent. One
+// limiter for the process: every client and caller in it shares the cap.
+const inFlight = createLimiter(ANALYTICS_CONCURRENCY);
+
 async function analyticsApiCall<T>(
+  cfg: AnalyticsApiConfig,
+  method: "GET" | "POST",
+  route: string,
+  body?: unknown,
+): Promise<T> {
+  const release = await inFlight.acquire();
+  try {
+    return await analyticsApiRequest<T>(cfg, method, route, body);
+  } finally {
+    release();
+  }
+}
+
+async function analyticsApiRequest<T>(
   cfg: AnalyticsApiConfig,
   method: "GET" | "POST",
   route: string,

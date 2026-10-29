@@ -22,7 +22,7 @@ import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { loadRawIndicatorHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
+import { inventoryCollection, loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -35,12 +35,15 @@ afterAll(() => {
 });
 
 const MP_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/model-portfolio/", import.meta.url);
-const gz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, MP_FIX)).arrayBuffer())));
-const collected = loadInventory().series.filter(collectedByInventory);
+// Issue 1514: the research-series inventory is collected in the same step.
+const RS_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/research-series/", import.meta.url);
+const gz = async (dir: URL, name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, dir)).arrayBuffer())));
+const modelPortfolioIds = new Set(loadInventory().series.filter(collectedByInventory).map((s) => s.id));
+const collected = inventoryCollection();
 const bodies: [string, string][] = [];
 for (const s of collected) {
   const fragment = s.provider === "yahoo" ? `/v8/finance/chart/${encodeURIComponent(s.symbol)}?` : `yields.llama.fi/chart/${s.symbol}`;
-  bodies.push([fragment, await gz(`${s.id.replace(":", "-")}.json.gz`)]);
+  bodies.push([fragment, await gz(modelPortfolioIds.has(s.id) ? MP_FIX : RS_FIX, `${s.id.replace(":", "-")}.json.gz`)]);
 }
 
 let callsAfterExtract = 0;

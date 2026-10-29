@@ -5,7 +5,8 @@
 //
 // Recorded responses (tests/fixtures/extract/model-portfolio/), captured once
 // on 2026-10-22 from the live endpoints, bodies unedited (gzipped):
-//   yahoo-<SYMBOL>.json.gz                v8 chart for GLD and USDC-USD, period1=2018-01-01
+//   yahoo-<SYMBOL>.json.gz                v8 chart for GLD and USDC-USD, period1=2018-01-01 (the
+//                                         start requested before issue 1514 moved it to 2016-01-01)
 //   defillama-yields-<pool>.json.gz       yields.llama.fi/chart/<pool> for every pool the
 //                                         inventory collects (Aave v3 USDC on Base and
 //                                         Ethereum, and the Base universe pools; USDC-USD
@@ -19,7 +20,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { configureHttp } from "../src/extract/http.ts";
-import { loadInventory, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, INVENTORY_FIELDS } from "../src/inventory.ts";
+import { loadInventory, loadResearchSeriesInventory, inventoryCollection, COLLECTION_START, requireCoverage, collectedByInventory, InventoryError, InventoryCoverageError, INVENTORY_FIELDS } from "../src/inventory.ts";
 import { extractInventorySeries, describeCoverage, NoObservationsError, SeriesExtractError } from "../src/extract/model-portfolio.ts";
 import { parseLlamaYieldChart } from "../src/extract/defillama-yields.ts";
 import { LEDGER_EXTRA_KEYS } from "../src/extras.ts";
@@ -27,6 +28,7 @@ import { loadUniverse } from "../src/allocate/universe.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
 import { buildReport, runRegime, parseRawHistory, toHistory, type RawRow } from "../src/index.ts";
 import shippedJson from "../inventory/model-portfolio.json";
+import researchJson from "../inventory/research-series.json";
 
 afterEach(() => { configureHttp({}); });
 
@@ -91,7 +93,7 @@ describe("the model portfolio inventory", () => {
       }
     }
     for (const s of inventory.series) {
-      expect(s.requestedStart).toBe("2018-01-01");
+      expect(s.requestedStart).toBe(COLLECTION_START);
       expect(s.id).toBe(`${s.provider}:${s.symbol}`);
       // A late inception is explained, never silent.
       if (s.inception > s.requestedStart) expect(s.limitation ?? s.proxy).not.toBeNull();
@@ -138,7 +140,82 @@ describe("the model portfolio inventory", () => {
     d = base(); (d.series[4]!.proxy as Record<string, unknown>).id = "yahoo:NOPE";
     expect(() => loadInventory(d)).toThrow(/proxy yahoo:NOPE is not in the inventory/);
     d = base(); d.series[5]!.limitation = null;
-    expect(() => loadInventory(d)).toThrow(/inception 2023-02-06 is after requestedStart 2018-01-01; record the limitation or a proxy/);
+    expect(() => loadInventory(d)).toThrow(/inception 2023-02-06 is after requestedStart 2016-01-01; record the limitation or a proxy/);
+  });
+});
+
+// Issue 1514: the 2016 collection floor and the research-series inventory.
+// Recorded responses (tests/fixtures/extract/research-series/), captured once
+// on 2026-10-29 from the live Yahoo v8 chart endpoint with period1=2016-01-01
+// and period2=2026-10-28, bodies unedited (gzipped): yahoo-<SYMBOL>.json.gz
+// for each of the thirteen new series. expected-points.json.gz is computed
+// independently of the parser (a python script over the raw bodies: adjclose
+// else close, finite only, UTC day).
+describe("the collection floor and the research-series inventory", () => {
+  const research = loadResearchSeriesInventory();
+  const RS_FIX = join(import.meta.dir, "fixtures/extract/research-series");
+  const rsGz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(join(RS_FIX, name)).arrayBuffer())));
+  const NEW = [
+    "yahoo:GC=F", "yahoo:CL=F", "yahoo:HG=F", "yahoo:SI=F", "yahoo:TLT", "yahoo:VNQ", "yahoo:DBC",
+    "yahoo:MSTR", "yahoo:SOL-USD", "yahoo:BNB-USD", "yahoo:AAVE-USD", "yahoo:HYPE32196-USD", "yahoo:VIRTUAL-USD",
+  ];
+
+  test("COLLECTION_START is 2016-01-01, and every entry of both shipped inventories requests from it", () => {
+    expect(COLLECTION_START).toBe("2016-01-01");
+    expect(research.workflow).toBe("research-series");
+    for (const inv of [inventory, research]) {
+      for (const s of inv.series) expect({ id: s.id, start: s.requestedStart }).toEqual({ id: s.id, start: COLLECTION_START });
+    }
+  });
+
+  test("an entry whose requestedStart is not COLLECTION_START is refused by name, in either inventory", () => {
+    for (const json of [shippedJson, researchJson]) {
+      const d = structuredClone(json) as { series: Record<string, unknown>[] };
+      d.series[1]!.requestedStart = "2018-01-01";
+      expect(() => loadInventory(d)).toThrow(new InventoryError(`inventory series 2 (${d.series[1]!.id}): requestedStart must be COLLECTION_START (2016-01-01), not 2018-01-01`));
+    }
+  });
+
+  test("an entry whose inception is after COLLECTION_START carries a limitation or a proxy, in both inventories", () => {
+    const late = [...inventory.series, ...research.series].filter((s) => s.inception > COLLECTION_START);
+    expect(late.map((s) => s.id)).toContain("yahoo:ETH-USD");
+    expect(late.map((s) => s.id)).toContain("yahoo:SOL-USD");
+    for (const s of late) expect({ id: s.id, explained: s.limitation !== null || s.proxy !== null }).toEqual({ id: s.id, explained: true });
+  });
+
+  test("the research inventory lists the thirteen new series under their own id, and BTC-USD, QQQ and GLD under their existing keys", () => {
+    const byKey = new Map(research.series.map((s) => [s.id, s.storageKey]));
+    expect(research.series.filter(collectedByInventory).map((s) => s.id).filter((id) => id !== "yahoo:GLD").sort()).toEqual([...NEW].sort());
+    expect(byKey.get("yahoo:BTC-USD")).toBe("research:BTC-USD");
+    expect(byKey.get("yahoo:QQQ")).toBe("research:QQQ");
+    expect(byKey.get("yahoo:GLD")).toBe("yahoo:GLD");
+    for (const s of research.series) {
+      const crypto = s.symbol.endsWith("-USD"), futures = s.symbol.endsWith("=F");
+      expect({ id: s.id, units: s.units.includes(crypto || futures ? "daily close" : "daily adjusted close") }).toEqual({ id: s.id, units: true });
+    }
+  });
+
+  test("the collection is one entry per storage key: GLD, listed in both inventories, is collected once", () => {
+    const keys = inventoryCollection().map((s) => s.storageKey);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.filter((k) => k === "yahoo:GLD")).toHaveLength(1);
+    expect(keys).not.toContain("research:BTC-USD");
+    expect(keys).not.toContain("research:QQQ");
+    for (const id of NEW) expect(keys).toContain(id);
+  });
+
+  test("each new series extracts from its recorded response to the independently computed points, requested from 2016-01-01", async () => {
+    const expectedRs = JSON.parse(await rsGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+    const byIdRs = new Map(research.series.map((s) => [s.id, s]));
+    const routes: [string, string][] = [];
+    for (const id of NEW) routes.push([`/chart/${encodeURIComponent(byIdRs.get(id)!.symbol)}?`, await rsGz(`${id.replace(":", "-")}.json.gz`)]);
+    const urls = serve(routes);
+    for (const id of NEW) {
+      const out = await extractInventorySeries(byIdRs.get(id)!);
+      expect(out.points).toEqual(expectedRs[id]!);
+    }
+    expect(urls).toHaveLength(NEW.length);
+    for (const u of urls) expect(u).toContain(`period1=${Date.parse("2016-01-01T00:00:00Z") / 1000}&`);
   });
 });
 
@@ -153,7 +230,7 @@ describe("recorded-response extract for each new series", () => {
     }
     expect(urls).toHaveLength(NEW_IDS.length);
     const gld = urls.find((u) => u.includes("/chart/GLD?"))!;
-    expect(gld).toBe(`https://query2.finance.yahoo.com/v8/finance/chart/GLD?period1=${Date.parse("2018-01-01T00:00:00Z") / 1000}&period2=${gld.match(/period2=(\d+)/)![1]}&interval=1d&events=history`);
+    expect(gld).toBe(`https://query2.finance.yahoo.com/v8/finance/chart/GLD?period1=${Date.parse("2016-01-01T00:00:00Z") / 1000}&period2=${gld.match(/period2=(\d+)/)![1]}&interval=1d&events=history`);
     expect(urls).toContain("https://yields.llama.fi/chart/7e0661bf-8cf3-45e6-9424-31916d4c7b84");
   });
 
@@ -162,11 +239,12 @@ describe("recorded-response extract for each new series", () => {
     const s = byId.get("defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84")!;
     const out = await extractInventorySeries(s);
     expect(out.coverage.firstDate).toBe("2024-03-10");
-    expect(out.coverage.limitations).toEqual([`${s.id} starts 2024-03-10, after the requested start 2018-01-01 (recorded: ${s.limitation})`]);
+    expect(out.coverage.limitations).toEqual([`${s.id} starts 2024-03-10, after the requested start 2016-01-01 (recorded: ${s.limitation})`]);
     expect(out.points.every((p) => p.date >= s.inception)).toBe(true);
-    // GLD covers its requested start: no limitation.
+    // A response that covers its requested start has no limitation: GLD's
+    // body was recorded from 2018-01-01, the start it was requested with then.
     serve([["/chart/GLD?", recorded["yahoo:GLD"]!]]);
-    expect((await extractInventorySeries(byId.get("yahoo:GLD")!)).coverage.limitations).toEqual([]);
+    expect((await extractInventorySeries({ ...byId.get("yahoo:GLD")!, requestedStart: "2018-01-01" })).coverage.limitations).toEqual([]);
   });
 
   test("the DefiLlama value is apyBase, never apy: a row without apyBase is dropped, not filled with rewards", () => {
@@ -187,7 +265,7 @@ describe("recorded-response extract for each new series", () => {
     const s = byId.get("defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501")!;
     const err = await extractInventorySeries(s).catch((e) => e);
     expect(err).toBeInstanceOf(NoObservationsError);
-    expect(err.message).toBe(`${s.id}: the provider returned no observations from 2018-01-01`);
+    expect(err.message).toBe(`${s.id}: the provider returned no observations from 2016-01-01`);
   });
 
   test("a malformed response is SeriesExtractError naming the series", async () => {

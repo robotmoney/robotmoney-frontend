@@ -92,6 +92,17 @@ export function indicatorSourceIds(ind: Indicator): string | readonly [string, s
   return `${ind.source}:${sym}`;
 }
 
+// ONE KEY PER SOURCE (D74 amendment, owner, 2026-10-28; issue 1514).
+// DEFI_GROWTH and STABLES_GROWTH store the raw DefiLlama level, exactly as
+// DEFI_TVL and STABLES do, and apply their change90 transform downstream. They
+// read the DEFI_TVL and STABLES stored series, and nothing is written under
+// their own keys any more. Their stored history stays as it is; it reaches no
+// consumer. Every other indicator reads the key named after it.
+export const STORED_UNDER: Readonly<Record<string, string>> = Object.freeze({ DEFI_GROWTH: "DEFI_TVL", STABLES_GROWTH: "STABLES" });
+
+/** The registry id whose raw_indicator_history series an indicator reads. */
+export const storedIndicatorId = (id: string): string => STORED_UNDER[id] ?? id;
+
 /** `<provider>:<symbol>` for one backtest extra. */
 export const extraSourceId = (x: { provider: string; symbol: string }): string => `${x.provider}:${x.symbol}`;
 
@@ -99,7 +110,7 @@ function buildMapping(): SeriesMapping[] {
   const out: SeriesMapping[] = [];
   for (const ind of INDICATORS) {
     const ids = indicatorSourceIds(ind);
-    const base = { consumer: indicatorConsumer(ind.id), storageKey: `raw_indicator_history:${ind.id}`, inputId: ind.id };
+    const base = { consumer: indicatorConsumer(ind.id), storageKey: `raw_indicator_history:${storedIndicatorId(ind.id)}`, inputId: ind.id };
     out.push(typeof ids === "string" ? { ...base, series: ids, kind: "source" } : { ...base, series: ind.id, kind: "calculated", legs: ids });
   }
   const X = LEDGER_EXTRA_KEYS;
@@ -141,6 +152,30 @@ export function validateSeriesMapping<T extends readonly SeriesMapping[]>(mappin
 
 /** The one shared mapping, validated when this module loads. */
 export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(buildMapping()));
+
+// RATIO LEGS (issue 1514, analytics requirements 4.3). Each run records both
+// legs of every Yahoo ratio as source data, from the fetch that produces the
+// stored ratio. A leg another collector already records keeps that key
+// (yahoo:SPY is research:SPY, yahoo:BTC-USD is research:BTC-USD, yahoo:ETH-USD
+// is backtest:ETH-USD); every other leg is stored under its own source id.
+// Production still reads the stored ratio, so these entries are not in
+// SERIES_MAPPING: they say where each leg's stream is stored, per ratio.
+const LEG_KEYS_HELD_ELSEWHERE: Readonly<Record<string, string>> = {
+  "yahoo:SPY": "research:SPY",
+  "yahoo:BTC-USD": "research:BTC-USD",
+  [extraSourceId(LEDGER_EXTRA_KEYS.eth)]: LEDGER_EXTRA_KEYS.eth.ledgerKey,
+};
+
+/** The storage key a ratio leg (a source id) is recorded under. */
+export function ratioLegStorageKey(sourceId: string): string {
+  return LEG_KEYS_HELD_ELSEWHERE[sourceId] ?? sourceId;
+}
+
+/** Each ratio's two legs as source streams, under their storage keys, validated when this module loads. */
+export const RATIO_LEG_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(
+  SERIES_MAPPING.filter((m) => m.kind === "calculated" && m.legs).flatMap((m) =>
+    m.legs!.map((leg): SeriesMapping => ({ consumer: m.consumer, storageKey: ratioLegStorageKey(leg), series: leg, kind: "source", inputId: leg }))),
+));
 
 /** Every consumer's storage keys, sorted: what each consumer reads. */
 export function consumerStorageKeys(mapping: readonly SeriesMapping[] = SERIES_MAPPING): Record<string, string[]> {
@@ -201,14 +236,23 @@ export function selectConsumerObservations(rows: readonly StoredObservation[], c
  * date; a repeated (key, date) keeps the last row, the loader's rule.
  */
 export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapping: readonly SeriesMapping[] = SERIES_MAPPING): RawIndicatorHistory {
-  const inputOf = new Map(mapping.map((m) => [m.storageKey, m.inputId]));
+  // One storage key may feed several input ids (raw_indicator_history:DEFI_TVL
+  // feeds DEFI_TVL and DEFI_GROWTH, D74 amendment).
+  const inputsOf = new Map<string, string[]>();
+  for (const m of mapping) {
+    const ids = inputsOf.get(m.storageKey) ?? [];
+    if (!ids.includes(m.inputId)) ids.push(m.inputId);
+    inputsOf.set(m.storageKey, ids);
+  }
   const byId = new Map<string, Map<string, number>>();
   for (const r of rows) {
-    const id = inputOf.get(r.sourceKey);
-    if (id === undefined || r.marketDate === null) continue;
-    let m = byId.get(id);
-    if (!m) byId.set(id, (m = new Map()));
-    m.set(r.marketDate, r.value);
+    const ids = inputsOf.get(r.sourceKey);
+    if (ids === undefined || r.marketDate === null) continue;
+    for (const id of ids) {
+      let m = byId.get(id);
+      if (!m) byId.set(id, (m = new Map()));
+      m.set(r.marketDate, r.value);
+    }
   }
   const out: RawIndicatorHistory = {};
   for (const [id, m] of byId) {
@@ -231,7 +275,11 @@ export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonl
   const resolved = new Map<string, string>(); // inputId -> the input name it is read from
   const consumed = new Set<string>();
   for (const m of mapping) {
-    const names = [m.inputId, m.storageKey, ...(m.kind === "source" ? [m.series] : [])].filter((n, i, a) => a.indexOf(n) === i && Object.hasOwn(input, n));
+    // A growth indicator stored under another's key (D74 amendment) is named
+    // only by its own id: its storage key and source id name the base
+    // indicator's stream, which feeds it below when the input omits it.
+    const aliased = Object.hasOwn(STORED_UNDER, m.inputId);
+    const names = (aliased ? [m.inputId] : [m.inputId, m.storageKey, ...(m.kind === "source" ? [m.series] : [])]).filter((n, i, a) => a.indexOf(n) === i && Object.hasOwn(input, n));
     if (names.length > 1) throw new AmbiguousInputSeriesError(m.consumer, [names[0]!, names[1]!]);
     if (names.length === 0) continue;
     const name = names[0]!;
@@ -245,6 +293,12 @@ export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonl
   const out: RawIndicatorHistory = {};
   for (const name of Object.keys(input)) if (!consumed.has(name)) out[name] = input[name]!;
   for (const [inputId, name] of resolved) out[inputId] = input[name]!;
+  // D74 amendment: an input that carries DEFI_TVL (or STABLES) and not
+  // DEFI_GROWTH (or STABLES_GROWTH) feeds the growth indicator from it, the
+  // series it is stored under. An input that names the growth id keeps it.
+  for (const [id, stored] of Object.entries(STORED_UNDER)) {
+    if (!Object.hasOwn(out, id) && Object.hasOwn(out, stored)) out[id] = out[stored]!;
+  }
   return out;
 }
 
