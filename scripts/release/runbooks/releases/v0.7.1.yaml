@@ -1,0 +1,1298 @@
+# scripts/release/runbooks/releases/v0.7.1.yaml — the v0.7.1 release runbook
+# (D70, owner 2026-10-16). A full copy of the kitchen-sink template's steps: Q for stage, P and C
+# for production, each production step with a stage twin. A release only ADDS:
+# every template step stays, unchanged and in order, and each step this
+# release adds carries `added: v0.7.1` (scripts/release/runbook.ts checks it).
+# Q34a-analytics-load (since: v0.7.1) and the SDK checks Q35 to Q37 and C23 to C25 (since: v0.7.0)
+# are template steps, so they carry no added.
+# The policy is docs/technical/release-runbooks.md.
+release: v0.7.1
+template: kitchen-sink
+notes: |
+  Identity. From v0.7.0 (instance rm_prod, tag v0.7.0 at 8c2690ba, the squash of
+  qa/0.7.x-2026-10-27 on releases-0.7.x) to v0.7.1 at the commit the rc tag names, in a new
+  checkout. The target files' `release` reads v0.7.1 and prod's `checkout` names the new folder
+  (/root/rm-071) before the run. Tracking: no release:v0.7.1 issue is filed yet; section 6 needs
+  one before the production go. The QA branch is qa/0.7.x-2026-10-29, cut from releases-0.7.x at
+  06c64a42 (main merged into releases-0.7.x twice: 500b7345, then 06c64a42).
+
+  Scope is regenerated at the QA commit. The `scope:` below is `git log v0.7.0..06c64a42` (13 PRs,
+  every commit subject that names one). Q05-scope refuses the QA commit if the range then carries
+  a PR the list lacks.
+
+  Migrations (D75):
+  - 0128_asset_prices_overwrite_events: compat additive (PR 1533, review finding API-6). The
+    analytics_overwrite_events table_name check admits 'asset_prices', rm_capture_analytics_overwrite()
+    keys an asset_prices row, and two triggers (asset_prices_capture_overwrite AFTER UPDATE,
+    asset_prices_capture_delete AFTER DELETE, both ENABLE ALWAYS) record each overwrite. v0.7.0's
+    upsert keeps its meaning between C05-migrate and C10-rolling-boot; the capture runs through the
+    owner's SECURITY DEFINER function. Nothing is removed, reshaped or revoked.
+  No migration is compat: breaking, so this runbook declares no `breaking:`: the runner runs
+  Q18-migrate/C05-migrate and the rolling boot, and records the breakingOnly steps skipped.
+
+  Release order: the api before analytics-producer (PR 1533). The new producer's regime run reads
+  GET /api/analytics/committed-inputs, which an api before 1533 answers 404, so a new producer on an
+  old api fails its regime run. The rolling boot (Q22-rolling-boot/C10-rolling-boot,
+  bun smoke --static-port) guarantees the order. It replaces api, worker-analytics and
+  system-scheduler one at a time in ROLLING_ORDER (scripts/stack/stack.ts:226), each
+  `up -d --no-deps --wait` healthy before the next, and stops at the first that fails.
+  analytics-producer is the boot's one deferred service (scripts/lib/smoke-main.ts:1662): the old
+  producer is stopped before the seed one-shot, and the new one starts only after it, so after the
+  new api is healthy (scripts/tests/unit/stack-rolling.test.ts pins the order). No step is added
+  for it. The other mix, an old producer on the new api, is safe: it never
+  calls the route and sends no regimeVersionIds, which the api treats as before (issue 1534). A
+  website-only or partial boot that replaced analytics-producer alone would break this; no step of
+  this runbook does that.
+
+  Owner waiver carried from PR 1524 (issue 1514): the stage load check at production volume was
+  moved to this rehearsal, and the production go is withheld until it passes. Q34a-analytics-load
+  (template, since v0.7.1, stage only, no production twin) proves it: it waits for the next
+  scheduled analytics run on the stage target, which runs production's dump with production's
+  connection budget (Q03-stage-up reads max_connections and the reservations from production's
+  /health), and fails on any api request of 5 s or more or any db_saturated answer. A stage run
+  whose Q34a did not pass is not a pass, and gives no go.
+
+  Added checks. Q34b-archive-records/C22a-archive-records and Q38 to Q40/C26 to C28 are this
+  release's version checks (SV.7), all read-only against the target, so each has a production twin:
+  - Q34b-archive-records (1524 archive records, issue 1508; 1526, D80) runs after Q34a and before
+    Q35-archive-routes, so the database has just carried an analytics run, and the records Q35
+    and C23 read are built before they ask. v0.7.0's C23 failed on production (every record 503,
+    issue 1508) after stage's Q35 passed on an idle database.
+  - Q38-committed-inputs (1533, 1536): the route answers 401 to a request with no credential (an
+    api without it answers 404), and the newest regime vintage carries this release's commit. On
+    production C26 waits up to 200 minutes for a regime run (every 3 h at :30 UTC); on stage Q34a
+    has already waited one out.
+  - Q39-migration-ledger (0128): nothing pending, the ledger ends at 0128, the two triggers and the
+    validated check are in place.
+  - Q40-research-series (1524 collection floor and new series): every research-series inventory key
+    is in source_value_versions from 2016-01-01 or its inception. It runs after Q38, which has seen
+    a regime run of this release, and the regime run is the one that collects them.
+  The 1524 batch pool is Q34a's (above). The SDK PRs (1499, 1510, 1525) are Q37-sdk-tests' (the SDK
+  package tests at the release commit). Q36-sdk-quickstart replays the newest archived run: this
+  release carries D78, so a run this release makes replays its whole row byte for byte, but the
+  archive seals a UTC day at a time, so at the stage and cutover soaks the newest archived run is
+  still a v0.7.0 run (no D78: its numbers differ in the last bits, the 2026-10-29 local archive
+  replay recorded on issue 1513), and Q36/C24 assert only its labels. The full-row replay of a
+  v0.7.1 run is the post-seal report, run on its own and not a cutover step:
+  `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod`.
+
+  Known gaps, carried and not fixed here:
+  - Host tools (issue 1528). No step checks a host's Bun before Q08-install/P03-install. The
+    lockfile is lockfileVersion 2, which needs Bun 1.4; the images build on oven/bun:1.4.4.
+    rm-frontend-stage-2 runs Bun 1.4.4 for stage-server (read 2026-10-29); rm-frontend-prod-1 runs
+    Bun 1.4.4 for root since 2026-10-28. Confirm both before the stage run and the preflight.
+    The cutover command also needs `--stage-journal <passed stage run dir>` (issue 1528 part 2).
+  - The junction check (backend/src/analytics/store/public-archive-store.ts
+    loadRowsFollowJunction, lines 716-729). PR 1526 added it (PR 1524 did not touch it, and PR 1533
+    does not change the file): the first archive request after an api restart that lists the
+    backups runs one 4 s bounded read over every served table's rows past the D80 junction
+    (2026-10-28T180400Z), and memoizes the answer only when it succeeds. If that read runs past its
+    bound the request fails and the next one runs it again. Q34b times that first listing on its
+    own and fails on anything but a 200 under 5 s, and it builds the records before Q35/C23 ask, so
+    the SDK steps get the warm path. It is not fixed in this release.
+  - Millisecond cutoff rounding (issue 1534 notes). postgres.js binds a timestamptz parameter
+    through a JS Date, so loadHistoricalSourceValues(cutoff) and the analytics_data_vintages
+    knowledge_time_cutoff insert use the committed read's cutoff truncated to the millisecond: a
+    non-regime row inserted in the last millisecond before the read is left out of the vintage, and
+    the stored cutoff can be up to 1 ms before the read's clock. The regime members are exact
+    (1536 binds the cutoff as text). No issue filed; no check here depends on it.
+  - packages/csvb/bun.lock (PR 1526) is not in scripts/release/lockfile.ts LOCKFILE_DIRS, so
+    Q01-lockfile does not check it. csvb is an operator tool on the csv-backups host and no step
+    installs it on a target.
+recovery: |
+  0128 is compat: additive and takes no grant from a runtime role. No migration is breaking.
+  - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
+    and cut v0.7.1-rc.(N+1).
+  - A failed C05-migrate: resume at C05-migrate; v0.7.0 keeps serving, and the website stays up.
+  - After C05-migrate: v0.7.0 runs correctly on the 0128 schema (its asset_prices upsert also records
+    each overwrite). Fix forward on v0.7.2, or restore the C01-backup dump with the write loss it implies.
+    v0.7.1 is tagged at C06-version-tag either way (D70).
+  - A rolling boot that stops after the api and before the new analytics-producer starts leaves the old producer,
+    or none once the seed step stopped it, beside the new api; both are safe (an old producer never calls committed-inputs). Resume at C10-rolling-boot.
+scope:
+  - {pr: 1499, what: "SDK exact arithmetic for every published reduction (D78) and an integer-safe vault TVL", check: "Q37-sdk-tests"}
+  - {pr: 1506, what: "chore(analyst-sdk): version 0.3.0, the first release with the D78 arithmetic", none: "SDK version label only; the SDK ships on its own line (D77)"}
+  - {pr: 1510, what: "SDK exact rescaling, length checks, typed revision key, exact tilt steepness, exported YEAR_MS", check: "Q37-sdk-tests"}
+  - {pr: 1511, what: "chore(analyst-sdk): version 0.3.1", none: "SDK version label only; the SDK ships on its own line (D77)"}
+  - {pr: 1524, what: "analytics pipeline: unsaturated batch pool, archive records that build, a 2016 collection floor with new series, clean source storage (issue 1514)", check: "Q34a-analytics-load"}
+  - {pr: 1525, what: "SDK 0.4.0: supplementary series, an exported archive reader, exact quantile and median, drift-aware simulation, certified optimizers, Markowitz sizing", check: "Q37-sdk-tests"}
+  - {pr: 1526, what: "csvb in packages/csvb; format 1 with one writer and one reader, the D80 legacy junction", check: "Q34b-archive-records"}
+  - {pr: 1527, what: "chore(analyst-sdk): version 0.4.0", none: "SDK version label only; the SDK ships on its own line (D77)"}
+  - {pr: 1530, what: "docs(analytics): the analytics and analyst SDK requirements match the canon docs and the implementation", none: "docs only"}
+  - {pr: 1531, what: "docs(analytics): code review of the analytics and analyst SDK refactor", none: "docs only"}
+  - {pr: 1533, what: "review fixes: GET /api/analytics/committed-inputs (AN-16), migration 0128 asset_prices overwrite capture (API-6), SDK-10, SDK-11, AN-4, TEST-4", check: "Q38-committed-inputs"}
+  - {pr: 1536, what: "the regime vintage frozen from the exact versionIds the run read (issue 1534)", check: "Q38-committed-inputs"}
+  - {pr: 1537, what: "chore(release): backport the five v0.7.0 QA-branch runbook and gate fixes to main", none: "release tooling and gate classifications: the run itself exercises them (Q32-soak-gate, Q35-archive-routes to Q37-sdk-tests)"}
+steps:
+# every template step stays, unchanged and in order (scripts/release/runbook.ts
+# refuses a deletion, an edit or a reorder).
+#
+# Fields are scripts/release/steps.ts StepTemplate's. Commands are argv
+# templates; the target file fills {instance}, {confirmTarget}, ... . The
+# step-list hash SP.8 compares is taken over the resolved list.
+#
+# Three phases (owner, 2026-10-16), each step on one target, its id's letter naming the phase:
+#   Q  QA, stage only: preparation (Q01 to Q05), then the upgrade as production will run it, then
+#      the soak. A release's version checks follow.
+#   P  preflight, production only: read-only gates that assume the QA passed.
+#   C  cutover, production only: the release as it happens, then the soak, then the version checks.
+# Every P and C step has a Q twin of the same name and commands (runbook.ts twinProblems), so
+# production runs only what stage ran. The version tag (C06) has none: stage tags nothing.
+# `standing` names the standing runbook rows each step satisfies
+# (docs/technical/release-runbooks.md §9).
+steps:
+  # ── QA: stage only, as often as needed. Every step here runs on the stage target and
+  # on no other: stage's preparation (Q01 to Q05), then the whole upgrade (checkout, install,
+  # baseline, backup and restore proof, migrate, rolling boot, site), then the soak, then the
+  # release's version checks. A stage run that passes is the rehearsal production runs after.
+  - id: "Q01-lockfile"
+    standing: ["SP.9"]
+    host: "control"
+    phase: "qa"
+    description: "Fresh lockfile: every committed bun.lock equals a fresh resolve at the QA commit, so the rc carries one (owner, 2026-10-14); hosts then install it frozen"
+    cmds:
+      - ["bun", "scripts/release/lockfile.ts", "check", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q02-dump"
+    standing: ["SR.0"]
+    host: "control"
+    phase: "qa"
+    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "dump"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "Q03-stage-up"
+    standing: ["SR.0"]
+    host: "control"
+    phase: "qa"
+    description: "Stage target: replace it with a production-shaped copy restored from that dump, running the version production runs (the running tag, its ledger, its grants); the release checkout is made by Q06-checkout"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 60
+  - id: "Q04-role-passwords"
+    standing: ["SR.1"]
+    host: "control"
+    phase: "qa"
+    description: "Stage's role passwords: the stage database sets its own doadmin password and role-passwords writes the roles' passwords to the stage host's ~/.env, so the rest of the list reads stage exactly as it reads production (doadmin stays in no file)"
+    cmds:
+      - ["bash", "-c", "set -o pipefail && bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target {target} --doadmin-stdin"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 10
+  - id: "Q05-scope"
+    standing: ["SR.2"]
+    host: "control"
+    phase: "qa"
+    description: "Scope: every PR between the version the target runs (on stage, production's tag, which Q03-stage-up booted) and the QA commit is in the release runbook's scope, each with the step that checks it or a reason none does; and nothing the scope lists is missing from the range"
+    cmds:
+      - ["bun", "scripts/release/scope.ts", "--release", "{release}", "--commit", "{commit}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q06-checkout"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "Q07-host-identity"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its identity is absent or matches RM_ENV, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no production step reads doadmin. The ledger reconciliation is Q12-state-baseline's"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q08-install"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree Q07-host-identity proved clean)"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q09-capture-checkout"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "qa"
+    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "Q10-capture-identity"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "qa"
+    description: "Capture identity: HEAD is the commit and the tree is clean"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q11-capture-install"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "qa"
+    description: "Capture install: bun install --frozen-lockfile, root and backend"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q12-state-baseline"
+    standing: ["SP.3", "SP.6"]
+    host: "target"
+    phase: "qa"
+    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size"
+    cmds:
+      - ["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "baseline*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q13-log-baseline"
+    standing: ["SP.5"]
+    host: "target"
+    phase: "qa"
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-baseline.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    triage: true
+  - id: "Q14-backup"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "qa"
+    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)"
+    cmds:
+      - ["bun", "run", "smoke:capture", "--out", "{captureHome}/rm-backup-{target}-{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "Q15-backup-sums"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "qa"
+    description: "Record the sha256 of the encrypted dump files beside the manifest"
+    cmds:
+      - ["sh", "-c", "cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "SHA256SUMS", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q16-restore-proof"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "qa"
+    description: "Restore proof: restore the Q14-backup dump into a throwaway local Postgres container, record the restore time, drop the container"
+    cmds:
+      - ["bun", "scripts/release/restore-proof.ts", "--dump", "{captureHome}/rm-backup-{target}-{runTs}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "restore-proof.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 20
+  - id: "Q17-probe-start"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "qa"
+    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until Q25-probe-grade grades it"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "start", "--origin", "{publicOrigin}", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q18-migrate"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    description: "Migrate every pending file while the previous release serves (Q12-state-baseline refused any pending file that is not compat: additive). The cutover's first irreversible step"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "stage"
+  - id: "Q18a-maintenance-on"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover (spec 8.5, issue 1484): the maintenance page on (maintenance.json, state active, in the instance's web directory). The declared window the probe grade allows opens at the start of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "on", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q18b-smoke-down"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 10
+  - id: "Q18c-migrate-breaking"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: migrate every pending file, the breaking ones included, against the stopped stack. The upgrade's first irreversible step for a release that declares breaking: (the rolling migrate does not run); rollback is closed after it (spec 8.4)"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "stage"
+  - id: "Q19-env-rewrite"
+    standing: ["SV.6"]
+    host: "target"
+    phase: "qa"
+    description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only"
+    cmds:
+      - ["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "env-rewrite.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q20-set-identity"
+    standing: []
+    host: "target"
+    phase: "qa"
+    description: "Report the deployment identity the migrate wrote (prod-init set-identity)"
+    cmds:
+      - ["bun", "scripts/prod-init.ts", "set-identity", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "set-identity-*.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q21-tokens"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    description: "Service tokens (prod-init provision-tokens): keep every holder whose file still holds its current token, provision only a missing or stale one, so the running holders keep authenticating"
+    cmds:
+      - ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "provision-tokens-*.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q22-rolling-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    description: "The rolling boot: bun smoke --static-port replaces api, worker-analytics, system-scheduler and analytics-producer one at a time, each healthy before the next; website-server is never recreated (the boot refuses if it would be)"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "Q22a-full-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the full bun smoke --static-port boot of every service on this release, in place of the rolling boot. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    expectExit: 0
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "Q23-ready"
+    standing: ["SV.2"]
+    host: "target"
+    phase: "qa"
+    description: "Status after the rolling boot: preflight and readiness green. Its end is READY, the soak's start"
+    cmds:
+      - ["bun", "run", "smoke:status", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q24-site"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    cmds:
+      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q24a-maintenance-off"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "qa"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the maintenance page off (maintenance.json removed) once the site is switched. The declared window the probe grade allows closes at the end of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "off", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q25-probe-grade"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "qa"
+    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from Q17-probe-start to now, or the release fails"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "grade", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q26-verify-version"
+    standing: ["SV.1"]
+    host: "target"
+    phase: "qa"
+    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+    cmds:
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q27-verify-product"
+    standing: ["SV.3"]
+    host: "target"
+    phase: "qa"
+    description: "Product verification, readonly tier"
+    cmds:
+      - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q28-log-verdict"
+    standing: ["SV.4"]
+    host: "target"
+    phase: "qa"
+    description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q29-soak-record"
+    standing: ["SW.2"]
+    host: "target"
+    phase: "qa"
+    description: "Standing soak checks at READY: record the baseline the soak's end (Q33-soak-checks) compares with"
+    cmds:
+      - ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-record.*", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "soak-baseline.json", "required": false}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q30-compare-baseline"
+    standing: ["SV.5"]
+    host: "target"
+    phase: "qa"
+    description: "Compare with the Q12-state-baseline baseline: row counts only grow, database size within the bound"
+    cmds:
+      - ["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "compare-baseline.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q31-host-guards"
+    standing: ["SV.6"]
+    host: "target"
+    phase: "qa"
+    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password"
+    cmds:
+      - ["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-guards.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q32-soak-gate"
+    standing: ["SW.1"]
+    host: "target"
+    phase: "qa"
+    description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q33-soak-checks"
+    standing: ["SW.2"]
+    host: "target"
+    phase: "qa"
+    description: "Standing soak checks over the soak window, against the READY baseline Q29-soak-record recorded"
+    cmds:
+      - ["bun", "run", "soak:checks", "--instance", "{instance}", "--since", "{readyIso}", "--full", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-full.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q34-collect-logs"
+    standing: ["SW.4"]
+    host: "target"
+    phase: "qa"
+    description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
+    cmds:
+      - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "collect-logs.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  # ── The analytics load check (issue 1514), from release v0.7.1 (since): stage only, with no
+  # production twin. It watches one scheduled analytics run on stage, which carries production's
+  # dump and connection budget, and fails on any api request of 5 s or more or any db_saturated.
+  - id: "Q34a-analytics-load"
+    standing: []
+    host: "target"
+    phase: "qa"
+    since: "v0.7.1"
+    stageOnly: true
+    description: "Analytics load: wait for the next scheduled analytics run (the next 3-hour boundary, UTC) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
+    cmds:
+      - ["bun", "scripts/release/analytics-load-check.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "analytics-load-check.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 320
+  # ── v0.7.1 (added): the archive records, after the load check and before the SDK's archive routes.
+  - id: "Q34b-archive-records"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.1"
+    description: "Archive records within budget (1524, issue 1508; 1526, D80): the first backups listing after the boot (it runs the junction check) and every archive request answer under 5 s; the records of the first backup, the legacy junction 2026-10-28T180400Z and the newest backup build and answer 200 with format 1 and X-Content-SHA256 equal to their bytes' hash. Runs before archive-routes, so its records are built when that step asks"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "archive-records", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-archive-records.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 75
+  # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
+  # control machine, read-only against the target, after the soak like the rest of the checks.
+  - id: "Q35-archive-routes"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "qa"
+    since: "v0.7.0"
+    description: "The public archive routes answer 200 with format 1 (the backups listing and the first backup's record), not 404"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "archive-routes", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q36-sdk-quickstart"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "qa"
+    since: "v0.7.0"
+    description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 90
+  - id: "Q37-sdk-tests"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "qa"
+    since: "v0.7.0"
+    description: "The SDK package's tests pass at the release commit, run from a sparse clone of it"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "package-tests", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 30
+  # ── The v0.7.1 version checks (added): what this release changes, after the SDK checks above.
+  - id: "Q38-committed-inputs"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.1"
+    description: "Committed inputs (1533 AN-16, 1536): GET /api/analytics/committed-inputs with no credential answers 401, not the 404 of an api without the route; and the newest regime vintage carries the commit /api/version reports, so a regime run of this release read the route and froze the versions it returned (waits up to 200 minutes for one)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "committed-inputs", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-committed-inputs.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 210
+  - id: "Q39-migration-ledger"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.1"
+    description: "Migration 0128 (1533, API-6): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "migration-ledger", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-migration-ledger.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q40-research-series"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.1"
+    description: "Collection floor and new series (1524, issue 1514): every series of packages/analyst-sdk/inventory/research-series.json has dated versions under its storage key, the earliest within 14 days of 2016-01-01 or its later inception (research:BTC-USD and research:QQQ started at 2018-01-01 before this release)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "research-series", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-research-series.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
+  # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
+  - id: "P01-checkout"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "P02-host-identity"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its identity is absent or matches RM_ENV, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no production step reads doadmin. The ledger reconciliation is P07-state-baseline's"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P03-install"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree P02-host-identity proved clean)"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P04-capture-checkout"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "preflight"
+    description: "Capture checkout (runner-owned, never a release checkout): clone it when missing, fetch the tags, then detach at the go's ref"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "P05-capture-identity"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "preflight"
+    description: "Capture identity: HEAD is the commit and the tree is clean"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P06-capture-install"
+    standing: ["SP.1"]
+    host: "capture"
+    phase: "preflight"
+    description: "Capture install: bun install --frozen-lockfile, root and backend"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P07-state-baseline"
+    standing: ["SP.3", "SP.6"]
+    host: "target"
+    phase: "preflight"
+    description: "Baseline through rm_readonly: ledger, identity, roles, migration 0101's would-clear list, the ledger reconciliation (the pending set, every applied file's bytes against the version the running stack reports), R2.4 counts and size"
+    cmds:
+      - ["bun", "scripts/release/baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "baseline*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P08-log-baseline"
+    standing: ["SP.5"]
+    host: "target"
+    phase: "preflight"
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-baseline.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    triage: true
+  # ── Cutover: production only. Backup and restore proof, then the rolling upgrade (the
+  # website never goes down), then the soak and the version checks, as stage ran them.
+  - id: "C01-backup"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)"
+    cmds:
+      - ["bun", "run", "smoke:capture", "--out", "{captureHome}/rm-backup-{target}-{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 30
+  - id: "C02-backup-sums"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Record the sha256 of the encrypted dump files beside the manifest"
+    cmds:
+      - ["sh", "-c", "cd {captureHome}/rm-backup-{target}-{runTs} && sha256sum -- *.gpg > SHA256SUMS"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "SHA256SUMS", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C03-restore-proof"
+    standing: ["SP.2"]
+    host: "capture"
+    phase: "cutover"
+    description: "Restore proof: restore the C01-backup dump into a throwaway local Postgres container, record the restore time, drop the container"
+    cmds:
+      - ["bun", "scripts/release/restore-proof.ts", "--dump", "{captureHome}/rm-backup-{target}-{runTs}", "--receipt-dir", "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{captureHome}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "restore-proof.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 20
+  - id: "C04-probe-start"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "cutover"
+    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until C13-probe-grade grades it"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "start", "--origin", "{publicOrigin}", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C05-migrate"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    description: "Migrate every pending file while the previous release serves (P07-state-baseline refused any pending file that is not compat: additive). The cutover's first irreversible step"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "prod"
+  - id: "C05a-maintenance-on"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover (spec 8.5, issue 1484): the maintenance page on (maintenance.json, state active, in the instance's web directory). The declared window the probe grade allows opens at the start of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "on", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C05b-smoke-down"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 10
+  - id: "C05c-migrate-breaking"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: migrate every pending file, the breaking ones included, against the stopped stack. The upgrade's first irreversible step for a release that declares breaking: (the rolling migrate does not run); rollback is closed after it (spec 8.4)"
+    cmds:
+      - ["bun", "run", "migrate", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-receipt-*.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "migrate-journal-*.json", "required": false}
+    irreversible: true
+    onlyFor: "prod"
+  - id: "C06-version-tag"
+    standing: ["SW.3"]
+    host: "control"
+    phase: "cutover"
+    description: "The cutover has started: tag the rc's commit with the version tag and push it (prod only, D70). A later failed check or a rollback never withholds or moves it"
+    cmds:
+      - ["bun", "scripts/release/tag.ts", "final", "--release", "{release}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C07-env-rewrite"
+    standing: ["SV.6"]
+    host: "target"
+    phase: "cutover"
+    description: "Rewrite ~/.env to the D61 allowlist (rm_owner, never doadmin); every other key, a stray doadmin line included, moves to ~/.env.retired-<ts> (mode 0600); refuses without rm_owner or RM_CREDENTIALS; key names only"
+    cmds:
+      - ["bun", "scripts/release/env-rewrite.ts", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "env-rewrite.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C08-set-identity"
+    standing: []
+    host: "target"
+    phase: "cutover"
+    description: "Report the deployment identity the migrate wrote (prod-init set-identity)"
+    cmds:
+      - ["bun", "scripts/prod-init.ts", "set-identity", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "set-identity-*.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C09-tokens"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    description: "Service tokens (prod-init provision-tokens): keep every holder whose file still holds its current token, provision only a missing or stale one, so the running holders keep authenticating"
+    cmds:
+      - ["bun", "scripts/prod-init.ts", "provision-tokens", "--instance", "{instance}", "--confirm-target", "{confirmTarget}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/prod-init", "pattern": "provision-tokens-*.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C10-rolling-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    description: "The rolling boot: bun smoke --static-port replaces api, worker-analytics, system-scheduler and analytics-producer one at a time, each healthy before the next; website-server is never recreated (the boot refuses if it would be)"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 30
+  - id: "C10a-full-boot"
+    standing: ["SP.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the full bun smoke --static-port boot of every service on this release, in place of the rolling boot. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "run", "smoke", "--static-port", "--instance", "{instance}"]
+    expectExit: 0
+    env: {"PROJECTS_SOURCE": "live"}
+    bootEnv: true
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 30
+  - id: "C11-ready"
+    standing: ["SV.2"]
+    host: "target"
+    phase: "cutover"
+    description: "Status after the rolling boot: preflight and readiness green. Its end is READY, the soak's start"
+    cmds:
+      - ["bun", "run", "smoke:status", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C12-site"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    cmds:
+      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C12a-maintenance-off"
+    standing: ["SC.4", "SC.5"]
+    host: "target"
+    phase: "cutover"
+    since: "v0.7.0"
+    breakingOnly: true
+    description: "Breaking cutover: the maintenance page off (maintenance.json removed) once the site is switched. The declared window the probe grade allows closes at the end of this step. Runs only for a release that declares breaking:"
+    cmds:
+      - ["bun", "scripts/release/maintenance.ts", "off", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C13-probe-grade"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "cutover"
+    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from C04-probe-start to now, or the release fails"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "grade", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C14-verify-version"
+    standing: ["SV.1"]
+    host: "target"
+    phase: "cutover"
+    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+    cmds:
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C15-verify-product"
+    standing: ["SV.3"]
+    host: "target"
+    phase: "cutover"
+    description: "Product verification, readonly tier"
+    cmds:
+      - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C16-log-verdict"
+    standing: ["SV.4"]
+    host: "target"
+    phase: "cutover"
+    description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C17-soak-record"
+    standing: ["SW.2"]
+    host: "target"
+    phase: "cutover"
+    description: "Standing soak checks at READY: record the baseline the soak's end (C21-soak-checks) compares with"
+    cmds:
+      - ["bun", "run", "soak:checks", "--instance", "{instance}", "--record", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-record.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-record.*", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}", "pattern": "soak-baseline.json", "required": false}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C18-compare-baseline"
+    standing: ["SV.5"]
+    host: "target"
+    phase: "cutover"
+    description: "Compare with the P07-state-baseline baseline: row counts only grow, database size within the bound"
+    cmds:
+      - ["bun", "scripts/release/compare-baseline.ts", "--instance", "{instance}", "--run", "{runTs}", "--max-size-ratio", "1.5"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-smoke/{instance}/release/{runTs}", "pattern": "compare-baseline.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C19-host-guards"
+    standing: ["SV.6"]
+    host: "target"
+    phase: "cutover"
+    description: "Host guards: no container mounts docker.sock, ~/.env keys within the allowlist, token files 0600, no world-readable file under home holds a postgres URL with a password"
+    cmds:
+      - ["bun", "scripts/release/host-guards.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-guards.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C20-soak-gate"
+    standing: ["SW.1"]
+    host: "target"
+    phase: "cutover"
+    description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C21-soak-checks"
+    standing: ["SW.2"]
+    host: "target"
+    phase: "cutover"
+    description: "Standing soak checks over the soak window, against the READY baseline C17-soak-record recorded"
+    cmds:
+      - ["bun", "run", "soak:checks", "--instance", "{instance}", "--since", "{readyIso}", "--full", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/soak-full.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "soak-full.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C22-collect-logs"
+    standing: ["SW.4"]
+    host: "target"
+    phase: "cutover"
+    description: "Collect every container's logs since READY and its docker inspect into the journal (participants included); a container it cannot read fails the step"
+    cmds:
+      - ["bun", "scripts/release/collect-logs.ts", "--instance", "{instance}", "--since", "{readyIso}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "collect-logs.json", "required": true}
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "logs-*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  # ── v0.7.1 (added): the archive records, before the SDK's archive routes.
+  - id: "C22a-archive-records"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.1"
+    description: "Archive records within budget (1524, issue 1508; 1526, D80): the first backups listing after the boot (it runs the junction check) and every archive request answer under 5 s; the records of the first backup, the legacy junction 2026-10-28T180400Z and the newest backup build and answer 200 with format 1 and X-Content-SHA256 equal to their bytes' hash. Runs before archive-routes, so its records are built when that step asks"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "archive-records", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-archive-records.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 75
+  # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
+  # control machine, read-only against the target, after the soak like the rest of the checks.
+  - id: "C23-archive-routes"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "cutover"
+    since: "v0.7.0"
+    description: "The public archive routes answer 200 with format 1 (the backups listing and the first backup's record), not 404"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "archive-routes", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C24-sdk-quickstart"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "cutover"
+    since: "v0.7.0"
+    description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 90
+  - id: "C25-sdk-tests"
+    standing: ["SV.8"]
+    host: "control"
+    phase: "cutover"
+    since: "v0.7.0"
+    description: "The SDK package's tests pass at the release commit, run from a sparse clone of it"
+    cmds:
+      - ["bun", "scripts/release/sdk-check.ts", "--check", "package-tests", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 30
+  # ── The v0.7.1 version checks (added), as stage ran them.
+  - id: "C26-committed-inputs"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.1"
+    description: "Committed inputs (1533 AN-16, 1536): GET /api/analytics/committed-inputs with no credential answers 401, not the 404 of an api without the route; and the newest regime vintage carries the commit /api/version reports, so a regime run of this release read the route and froze the versions it returned (waits up to 200 minutes for one)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "committed-inputs", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-committed-inputs.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 210
+  - id: "C27-migration-ledger"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.1"
+    description: "Migration 0128 (1533, API-6): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "migration-ledger", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-migration-ledger.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C28-research-series"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.1"
+    description: "Collection floor and new series (1524, issue 1514): every series of packages/analyst-sdk/inventory/research-series.json has dated versions under its storage key, the earliest within 14 days of 2016-01-01 or its later inception (research:BTC-USD and research:QQQ started at 2018-01-01 before this release)"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "research-series", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-research-series.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
