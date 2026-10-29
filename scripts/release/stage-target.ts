@@ -250,10 +250,13 @@ async function readRunningVersion(): Promise<RunningVersion> {
   return v;
 }
 
+/** The stage user's Bun (~/.bun/bin) comes first: a non-login ssh PATH finds /usr/local/bin's older Bun, which cannot read a v2 bun.lock. */
+const HOST_PATH = "/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 async function bunInstall(dir: string, cwds: string[]): Promise<void> {
   for (const cwd of cwds) {
     log(`bun install in ${join(dir, cwd)}`);
-    await stream(["bun", "install", "--frozen-lockfile"], `bun install (${cwd})`, { cwd: join(dir, cwd) });
+    await stream(["bun", "install", "--frozen-lockfile"], `bun install (${cwd})`, { cwd: join(dir, cwd), env: { PATH: HOST_PATH } });
   }
 }
 
@@ -489,7 +492,7 @@ async function startStack(): Promise<void> {
   const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
   mkdirSync(receipts, { recursive: true });
   const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
-  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
+  const env = ["env", "-i", `HOME=${T.home}`, `PATH=${HOST_PATH}`, "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
   const steps: [string, string[]][] = [
     ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
     ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
