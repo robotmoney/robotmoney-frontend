@@ -255,3 +255,39 @@ describe("Q46-sdk-universe-check/C34-sdk-universe-check (SDK 0.2.0)", () => {
     expect(red.problems.join()).toContain("universe:check exited 2");
   });
 });
+
+describe("a CDN that compresses on the fly weakens the ETag; the origin's tag is what the checks read", () => {
+  const res = (headers: Record<string, string>) => ({ headers: new Headers(headers) });
+  test("W/ is dropped only from an encoded response", async () => {
+    const { originEtag } = await import("../../release/public-analytics-read.ts");
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    expect(originEtag(res({ etag: '"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    // RED CONTROLS: an unencoded or identity response keeps a weak tag, so an origin that sends one still fails; no tag is no tag.
+    expect(originEtag(res({ etag: 'W/"abc"' }))).toBe('W/"abc"');
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "identity" }))).toBe('W/"abc"');
+    expect(originEtag(res({}))).toBeNull();
+  });
+});
+
+describe("Q47: the probes are not answered by the web server's cache", () => {
+  test("a front cache answers a repeated URL 304 forever; only a probe URL of its own reaches the limiter", async () => {
+    const { rateLimit } = await import("../../release/version-checks/v0.7.0/rate-limit.ts");
+    const RUN = "81936943-7868-42f2-9364-e38639b67042";
+    const seen = new Set<string>();
+    let reachedApi = 0;
+    const fetchFake = async (url: string): Promise<Response> => {
+      const u = new URL(url);
+      if (u.pathname.endsWith("/reports") && !u.searchParams.has("run")) {
+        return Response.json({ reports: [{ report_id: 1, run_key: RUN, asof: "2026-10-27", checksum: "c", byte_length: 1 }], nextCursor: null });
+      }
+      const cached = seen.has(u.pathname + u.search);
+      seen.add(u.pathname + u.search);
+      if (cached) return new Response(null, { status: 304 });
+      reachedApi++;
+      return reachedApi > 10 ? new Response('{"error":"rate limit exceeded"}', { status: 429, headers: { "Retry-After": "5" } }) : new Response(null, { status: 304, headers: { etag: '"x"' } });
+    };
+    const net = { origin: "http://x", sleep: async () => {}, fetch: fetchFake as never };
+    const r = await rateLimit(net);
+    expect(r.problems).toEqual([]);
+  });
+});

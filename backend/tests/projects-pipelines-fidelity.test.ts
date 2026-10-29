@@ -33,7 +33,9 @@ import {
   TRAILING_ASOF,
   TRAILING_ROWS,
   TRAILING_SUM_GROUND_TRUTH,
+  VAULT_RAW_ABOVE_2_53,
   VAULT_TVL_18DEC,
+  VAULT_TVL_ONE_ULP,
   VAULT_TVL_GROUND_TRUTH,
   VIRTUALS_REVENUE_GROUND_TRUTH,
   X402_ROWS_GROUND_TRUTH,
@@ -49,6 +51,7 @@ import {
   syncRevenue,
 } from "../src/worker/handlers/projects.ts";
 import { uniqueSlugSource } from "./support/projects-fixture-source.ts";
+import { ratioToNumber } from "../../packages/analyst-sdk/tests/support/exact-reference.ts";
 
 const GAME = "0xgame00000000000000000000000000000000coin";
 const VAULT_A = "0xvault0000000000000000000000000000000aaa";
@@ -85,6 +88,30 @@ test("revenue: sumTrailing30d windows on/after asof-30d", () => {
 test("vault: vaultTvlErc4626 scales totalAssets by decimals × price", () => {
   expect(vaultTvlErc4626(VAULT_READS[VAULT_A])).toBe(VAULT_TVL_GROUND_TRUTH[VAULT_A]);
   expect(vaultTvlErc4626(VAULT_TVL_18DEC.input)).toBe(VAULT_TVL_18DEC.expected);
+});
+
+// Issue 1498: the raw amount stays a BigInt until one correctly rounded
+// conversion, judged against BigInt rational arithmetic, never another double.
+test("vault: vaultTvlErc4626 rounds 1000000000000000065 at 18 decimals to exactly 1", () => {
+  expect(vaultTvlErc4626(VAULT_TVL_ONE_ULP.input)).toBe(VAULT_TVL_ONE_ULP.expected);
+});
+
+test("vault: raw amounts above 2^53 give the correctly rounded raw / 10^decimals units", () => {
+  for (const { totalAssetsRaw, decimals } of VAULT_RAW_ABOVE_2_53) {
+    expect(BigInt(totalAssetsRaw) > 2n ** 53n).toBe(true);
+    const exact = ratioToNumber(BigInt(totalAssetsRaw), 10n ** BigInt(decimals));
+    expect(vaultTvlErc4626({ totalAssetsRaw, decimals, assetPriceUsd: 1 })).toBe(exact);
+  }
+});
+
+test("vault: the old Number-first scaling misses the rational value on the same data (teeth)", () => {
+  const numberFirst = (raw: string, decimals: number) => Number(BigInt(raw)) / 10 ** decimals;
+  const { totalAssetsRaw, decimals } = VAULT_TVL_ONE_ULP.input;
+  expect(numberFirst(totalAssetsRaw, decimals)).not.toBe(VAULT_TVL_ONE_ULP.expected);
+  const misses = VAULT_RAW_ABOVE_2_53.filter(
+    (c) => numberFirst(c.totalAssetsRaw, c.decimals) !== ratioToNumber(BigInt(c.totalAssetsRaw), 10n ** BigInt(c.decimals)),
+  );
+  expect(misses.length).toBeGreaterThan(0);
 });
 
 test("coverage: computeCoverage reproduces compute_project_coverage() exactly", () => {

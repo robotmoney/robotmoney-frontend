@@ -7,7 +7,7 @@ import { dateBefore } from "./math.ts";
 
 // Daily real series can have gaps (weekends/holidays) and may stop "today", while
 // the tools expect a dense array of `lookbackDays` consecutive calendar days
-// ending at `asof` (exactly what seededProvider returns). Forward-fill the raw,
+// ending at `asof` (the shape the synthetic provider returns). Forward-fill the raw,
 // gappy series onto that dense grid. Returns null when there is no usable data
 // at/-before `asof`, signalling the caller to fall back to seeded.
 export function shapeDaily(raw: Point[], asof: string, lookbackDays: number): Point[] | null {
@@ -26,13 +26,18 @@ export function shapeDaily(raw: Point[], asof: string, lookbackDays: number): Po
   return out;
 }
 
-// Element-wise ratio of two gappy series, aligned on shared dates (a/b).
-export function ratioByDate(a: Point[], b: Point[]): Point[] {
-  const bd = new Map(b.map((p) => [p.date, p.value]));
+// THE ratio function (analytics requirements 4.3, SDK-10): a/b on the dates
+// both series share, in a's order, skipping any date where the denominator is
+// 0, non-finite or missing. Matches the original's mergeRatioSeries in
+// lib/fetch_all.js. The live fetch (extract/sources.ts) and the ratio step of
+// a source-only run (series-ids.ts resolveInputHistory) both call it, so a
+// ratio computed from stored legs equals the stored ratio byte for byte.
+export function mergeRatioSeries(a: Point[], b: Point[]): Point[] {
+  const bm = new Map(b.map((p) => [p.date, p.value]));
   const out: Point[] = [];
   for (const p of a) {
-    const d = bd.get(p.date);
-    if (d) out.push({ date: p.date, value: p.value / d });
+    const d = bm.get(p.date);
+    if (Number.isFinite(d as number) && d !== 0 && d !== undefined) out.push({ date: p.date, value: p.value / d });
   }
   return out;
 }

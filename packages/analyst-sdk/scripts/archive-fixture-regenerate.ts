@@ -192,6 +192,160 @@ writeCopy(join(OUT, "repo-plus-increment"), [
   { id: B1, source: "db", tables: tablesFor("b1") },
   { id: B2, source: "api", tables: tablesFor("b2") },
 ]);
+
+// ── revised/: the revised-tables copy (issue 1513) ───────────────────────────
+// Three backups, each with its source_value_versions increment and revision
+// files for the three revised tables csv-backups writes (a revision row carries
+// _backup and _op, then the table's columns; a delete names only its key).
+//   R1  first state of every table.
+//   R2  an upsert replacing an R1 row in each table, a delete of an R1 row in
+//       raw_indicator_history and asset_prices, new rows; a revised
+//       backtest:^GSPC version for an R1 date (a higher id).
+//   R3  a delete in regime_snapshots, a NULL field, new rows; asset_prices has
+//       no changes (its record keeps the key with no file).
+// The expected CSVs under revised/expected/ are rosemarys-baby resolveRevised and
+// extractBacktestPrices output on this copy, captured once and committed; this
+// script never writes them.
+const R1 = "2026-09-01T000000Z";
+const R2 = "2026-09-08T000000Z";
+const R3 = "2026-09-15T000000Z";
+type Rev = { table: string; key: string[]; header: string[]; changes: Record<string, (string | null)[][]> };
+const del = (header: string[], key: string[], vals: Record<string, string>) => header.map((h) => (key.includes(h) ? vals[h]! : null));
+const RIH_H = ["date", "indicator", "value", "source"];
+const RIH_K = ["indicator", "date"];
+const SNAP_H = ["date", "composite", "regime", "percentiles", "version", "source"];
+const SNAP_K = ["date"];
+const AP_H = ["price_date", "symbol", "time_basis", "price_usd", "currency", "source"];
+const AP_K = ["price_date", "symbol", "time_basis"];
+const REVISED_TABLES: Rev[] = [
+  {
+    table: "regime_snapshots",
+    key: SNAP_K,
+    header: SNAP_H,
+    changes: {
+      [R1]: [
+        ["2026-08-31", "0.41", "neutral", '{"VIX": 0.5, "DXY": 0.25}', "v3", "live"],
+        ["2026-08-28", "0.38", "risk_off", '{"VIX": 0.75, "DXY": 0.5}', "v3", "live"],
+      ],
+      [R2]: [
+        ["2026-08-31", "0.52", "risk_on", '{"VIX": 0.25, "DXY": 0.25}', "v3", "live"],
+        ["2026-09-04", "0.55", "risk_on", '{"VIX": 0.2, "DXY": 0.3}', "v3", "live"],
+      ],
+      [R3]: [del(SNAP_H, SNAP_K, { date: "2026-08-28" }), ["2026-09-11", null, "neutral", "{}", "v3", "live"]],
+    },
+  },
+  {
+    table: "raw_indicator_history",
+    key: RIH_K,
+    header: RIH_H,
+    changes: {
+      [R1]: [
+        ["2026-08-31", "VIX", "15.2", "live"],
+        ["2026-08-28", "VIX", "15", "live"],
+        ["2026-08-31", "DXY", "101.3", "live"],
+        ["2026-08-28", "DXY", "101.1", "live"],
+      ],
+      [R2]: [
+        ["2026-08-31", "VIX", "15.45", "live"],
+        del(RIH_H, RIH_K, { indicator: "DXY", date: "2026-08-28" }),
+        ["2026-09-04", "VIX", "16", "live"],
+      ],
+      [R3]: [["2026-09-11", "DXY", "100.9", "live"]],
+    },
+  },
+  {
+    table: "asset_prices",
+    key: AP_K,
+    header: AP_H,
+    changes: {
+      [R1]: [
+        ["2026-08-31", "ETH", "utc-daily-close", "2510.75", "USD", "geckoterminal"],
+        ["2026-08-31", "BNKR", "utc-daily-close", "0.000307653898611427", "USD", "geckoterminal"],
+      ],
+      [R2]: [
+        ["2026-08-31", "ETH", "utc-daily-close", "2511", "USD", "geckoterminal"],
+        del(AP_H, AP_K, { price_date: "2026-08-31", symbol: "BNKR", time_basis: "utc-daily-close" }),
+        ["2026-09-04", "BNKR", "utc-daily-close", "0.00031", "USD", "geckoterminal"],
+      ],
+      [R3]: [],
+    },
+  },
+];
+// source_value_versions per backup: [id, key, date, value, prior].
+const REVISED_SVV: Record<string, [number, string, string, string, number | null][]> = {
+  [R1]: [
+    [1, "backtest:^GSPC", "2026-08-28", "5600.25", null],
+    [2, "backtest:^GSPC", "2026-08-31", "5610.5", null],
+    [3, "backtest:ETH-USD", "2026-08-30", "2500.1", null],
+    [4, "backtest:ETH-USD", "2026-08-31", "2510.75", null],
+    [5, "backtest:DTB3", "2026-08-28", "4.12", null],
+    [6, "backtest:DTB3", "2026-08-31", "4.1", null],
+    [7, "raw_indicator_history:VIX", "2026-08-31", "15.2", null],
+  ],
+  [R2]: [
+    [8, "backtest:^GSPC", "2026-08-31", "5611", 2],
+    [9, "backtest:^GSPC", "2026-09-04", "5650", null],
+    [10, "backtest:ETH-USD", "2026-09-04", "2600.5", null],
+    [11, "backtest:DTB3", "2026-09-04", "4.08", null],
+  ],
+  [R3]: [
+    [12, "backtest:ETH-USD", "2026-09-11", "2650", null],
+    [13, "backtest:^GSPC", "2026-09-11", "5700.25", null],
+  ],
+};
+const REVISED_KT: Record<string, string> = { [R1]: "2026-08-31 23:00:00+00", [R2]: "2026-09-07 23:00:00+00", [R3]: "2026-09-14 23:00:00+00" };
+function writeRevisedCopy(dir: string) {
+  let watermark: string | null = null;
+  const inState = new Map<string, Set<string>>();
+  for (const b of [R1, R2, R3]) {
+    const rows = REVISED_SVV[b]!.map(([id, key, date, value, prior]) =>
+      svvRow({ id, key, date, value, kt: REVISED_KT[b]!, prior, kind: prior === null ? "initial" : "revision" }),
+    );
+    const svvTable = table("source_value_versions", SVV_H, rows, 8);
+    const name = `source_value_versions.${stamp(svvTable.tmin)}_${stamp(svvTable.tmax)}.csv.gz`;
+    const path = `csv/${b}/data/${name}`;
+    const raw = copyCsv(SVV_H, rows);
+    files.set(join(dir, path), stableGzip(join(dir, path), raw));
+    const after = String(REVISED_SVV[b]!.reduce((m, r) => Math.max(m, r[0]), 0));
+    const append_only = {
+      source_value_versions: {
+        watermark_before: watermark,
+        watermark_after: after,
+        rows_added: rows.length,
+        files: [{ path, rows: rows.length, bytes_raw: Buffer.byteLength(raw), sha256_raw: sha(raw) }],
+      },
+    };
+    watermark = after;
+    const revisions: Record<string, unknown> = {};
+    for (const t of REVISED_TABLES) {
+      const changes = t.changes[b]!;
+      const state = inState.get(t.table) ?? new Set<string>();
+      inState.set(t.table, state);
+      let deletes = 0;
+      const out = changes.map((r) => {
+        const k = JSON.stringify(t.key.map((c) => r[t.header.indexOf(c)]));
+        const isDelete = r.some((v, i) => v === null && !t.key.includes(t.header[i]!)) && t.header.every((h, i) => t.key.includes(h) || r[i] === null);
+        if (isDelete) {
+          deletes++;
+          state.delete(k);
+        } else state.add(k);
+        return [b, isDelete ? "delete" : "upsert", ...r];
+      });
+      let file: unknown = null;
+      if (out.length > 0) {
+        const rpath = `csv/${b}/revisions/${t.table}.csv.gz`;
+        const rraw = copyCsv(["_backup", "_op", ...t.header], out);
+        files.set(join(dir, rpath), stableGzip(join(dir, rpath), rraw));
+        file = { path: rpath, rows: out.length, bytes_raw: Buffer.byteLength(rraw), sha256_raw: sha(rraw) };
+      }
+      revisions[t.table] = { key: t.key, file, upserts: out.length - deletes, deletes, rows_in_state: state.size };
+    }
+    const record = { format: 1, backup: b, source: b === R1 ? "db" : "api", tool: { name: "archive-fixture-regenerate", commit: null }, append_only, revisions };
+    files.set(join(dir, `csv/${b}/backup.json`), JSON.stringify(record, null, 2) + "\n");
+  }
+}
+writeRevisedCopy(join(OUT, "revised"));
+
 const facts = {
   backup: B2,
   runs: { [RUN1_KEY]: { asof: RUN1_ASOF, members: run1Ids.length }, [RUN2_KEY]: { asof: RUN2_ASOF, members: run2Ids.length } },
@@ -211,7 +365,10 @@ if (process.argv.includes("--check")) {
   }
   process.exit(stale ? 1 : 0);
 }
-rmSync(OUT, { recursive: true, force: true });
+// Only the copies this script owns: api-recorded/ is a recording of the real
+// routes (backend/tests/analyst-sdk-public-archive-recording.test.ts) and
+// revised/expected/ is captured from rosemarys-baby, so neither is touched.
+for (const d of ["api-only", "repo-plus-increment", "revised/csv"]) rmSync(join(OUT, d), { recursive: true, force: true });
 for (const [p, b] of files) {
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, b);

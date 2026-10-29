@@ -1,14 +1,14 @@
-// Format 1 archives served by the public API (issue 1422; the
-// robotmoney/csv-backups layout, which docs PR 1412 names "format 1").
+// Format 1 archives served by the public API (issue 1422; decision D72).
 //
-// WHAT A BACKUP IS HERE. The csvb tool takes a backup at the moment it runs
-// and records it in a git repo. The API cannot store anything (the issue adds
-// no table, column or grant), so its backups are DERIVED, deterministically,
-// from the append-only tables themselves:
+// WHAT A BACKUP IS HERE. Backups are cut by format 1's cut rule
+// (packages/analyst-sdk/src/archive/format1.ts, planCuts; issue 1477, D80),
+// which csvb (packages/csvb) follows too. The API cannot store anything (issue
+// 1422 adds no table, column or grant), so its backups are DERIVED,
+// deterministically, from the append-only tables themselves:
 //
 //   - One backup per UTC day boundary t, named `YYYY-MM-DDT000000Z`. A backup
-//     is listed and served only once it is SEALED: t is at least
-//     ARCHIVE_SETTLE_MS (1 hour) in the past.
+//     is listed and served only once it is SEALED: t is at least the settle
+//     hour in the past.
 //   - Per table, its watermark is the largest existing id, after the previous
 //     backup's watermark, below the first row whose time column is at or after
 //     t (or below nothing, when no such row exists yet). It always names a row
@@ -19,15 +19,21 @@
 //     inserted after t is stamped after t and gets a higher id: a sealed
 //     backup's watermarks, rows, file names and bytes never change. The settle
 //     hour covers a transaction that took its id before t and committed after.
-//   - The files are what csvb writes for the same id ranges: per table, the
-//     rows with ids above the previous watermark up to this one, in id order,
-//     as Postgres COPY CSV text (each column through its type's output
-//     function, timestamps in UTC), split into parts of at most
-//     ARCHIVE_PART_BYTES uncompressed (a row is never cut), each named
-//     `<table>.<start>_<end>.csv.gz` by the earliest and latest row time in it,
-//     gzipped at level 9 with node:zlib. A file's identity is the SHA-256 of
-//     its uncompressed bytes: the gzip is only a transport encoding, and any
-//     runtime may produce any valid gzip of the same bytes.
+//   - The legacy junction (format1-legacy.ts): the newest snapshot-time backup
+//     csvb wrote before the day cut. Once the chain reaches past its id and rows
+//     follow it, it is served as one extra backup between the day cuts around
+//     it, with its baked watermarks as watermark_after. The next day-cut backup
+//     chains from it, so a repo clone plus an API increment join there. A
+//     database whose rows all predate it is cut by day alone.
+//   - The files are what csvb writes for the same id ranges, through the same
+//     format 1 functions: per table, the rows with ids above the previous
+//     watermark up to this one, in id order, as Postgres COPY CSV text (each
+//     column through its type's output function, timestamps in UTC), split into
+//     parts of at most ARCHIVE_PART_BYTES uncompressed (a row is never cut),
+//     each named `<table>.<start>_<end>.csv.gz` by the earliest and latest row
+//     time in it, gzipped at level 9 with node:zlib. A file's identity is the
+//     SHA-256 of its uncompressed bytes: the gzip is only a transport encoding,
+//     and any runtime may produce any valid gzip of the same bytes.
 //
 // WHAT IT SERVES. The append-only tables a run's inputs and its published
 // output are read from: the source data versions, the run ledger, the
@@ -42,24 +48,53 @@
 // HOW IT STAYS BOUNDED. A backup record needs each file's SHA-256, so it is
 // built once, in the background, one backup at a time, page by page, every
 // page a public read (the gate and the 5 s timeout of public-analytics-limits),
-// and kept in memory. An archive body is regenerated from its id range when
-// requested, streamed through gzip as the pages arrive, and its SHA-256 is
-// compared with the record at the end; a mismatch aborts the response rather
-// than finish a body that differs from what its record names. Nothing here
-// reads a provider or recomputes an analytics value: every byte comes from the
-// committed rows.
+// and kept in memory. Every chain step is one statement whose reads stay inside
+// the rows the backup adds, not the rows written after it: the members step
+// reads only the members of the vintages above the previous backup's vintages
+// watermark and at most this one's (issue 1514). That relies on the settle
+// hour: a vintage's members are written in its freeze transaction, so a
+// vintage at or below a sealed watermark never gains a member later. The
+// first-day probe (vintages watermark 0) reads an empty range. An archive body
+// is regenerated from its id range when requested, streamed through gzip as the
+// pages arrive, and its SHA-256 is compared with the record at the end; a
+// mismatch aborts the response rather than finish a body that differs from what
+// its record names. Nothing here reads a provider or recomputes an analytics
+// value: every byte comes from the committed rows.
 import { createHash } from "node:crypto";
 import type { Transform } from "node:stream";
 import { createGzip } from "node:zlib";
-import { ARCHIVE_FORMAT, ARCHIVE_PART_BYTES, ARCHIVE_SETTLE_MS } from "@robotmoney/contract";
+import { ARCHIVE_FORMAT, ARCHIVE_PART_BYTES } from "@robotmoney/contract";
 import type { TransactionSql } from "postgres";
 import { on, registerQuery } from "../../db/registry.ts";
 import { publicRead } from "../../api/public-analytics-limits.ts";
+import {
+  APPEND_ONLY_TABLES,
+  BACKUP_ID_RE,
+  backupInstantMs,
+  DataFileNamer,
+  dataPath,
+  dbTimeText,
+  encodeCsvRow,
+  firstBoundaryMs,
+  junctionApplies,
+  parseDbTime,
+  planCuts,
+  startsNewPart,
+  type Cut,
+  type Junction,
+  type TimeSpec,
+} from "../../../../packages/analyst-sdk/src/archive/format1.ts";
+import { LEGACY_JUNCTION } from "../../../../packages/analyst-sdk/src/archive/format1-legacy.ts";
 
 const ROUTE = "src/api/routes/public-analytics";
-const DAY_MS = 86_400_000;
 
-export type TimeSpec = { column: string } | { lookup: { column: string; table: string; key: string; timeColumn: string } };
+export type { TimeSpec };
+/** A served table's time, from format 1's table catalog. */
+const timeOf = (name: string): TimeSpec => {
+  const t = APPEND_ONLY_TABLES.find((c) => c.name === name && c.served);
+  if (!t) throw new Error(`${name} is not a served table of the format 1 catalog`);
+  return t.time;
+};
 
 export interface ArchiveFileRecord {
   path: string;
@@ -118,8 +153,11 @@ interface ArchiveTable {
   columns: readonly string[];
   /** Rows per page: a few MB per statement, well inside the 5 s timeout. */
   pageRows: number;
-  /** `vintages`: the vintages watermark at this boundary (only the members table reads it). */
-  step(tx: Tx, after: string, boundary: string, vintages: string): Promise<ChainStep[]>;
+  /**
+   * `vintages`: the vintages watermark at this boundary; `prevVintages`: the
+   * previous backup's (only the members table reads them).
+   */
+  step(tx: Tx, after: string, boundary: string, vintages: string, prevVintages: string): Promise<ChainStep[]>;
   page(tx: Tx, after: string, through: string, limit: number): Promise<Row[]>;
 }
 
@@ -276,13 +314,29 @@ const vinPage = registerQuery({
 // vintage it holds (the largest member id whose vintage is at or below the
 // vintages watermark), so two freezes interleaving across midnight never split
 // one vintage's members between backups.
-const MEM_STEP = `WITH w AS (
-    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > $1::bigint AND m.vintage_id <= $2::bigint) AS wm,
+//
+// The watermark reads only the members of the vintages this backup adds:
+// vintage_id above the previous backup's vintages watermark and at most this
+// one, through analytics_vintage_members_vintage_idx (issue 1514). Bounded by
+// `vintage_id <= watermark` alone, Postgres walked the primary key backward
+// from the newest member until it met an old vintage: for an early backup that
+// is almost every member, past the 5 s timeout on production. The OFFSET 0
+// keeps the planner from turning max() into that walk again, and MATERIALIZED
+// reads the watermark once rather than once per column that names it.
+// It is the same watermark: the members of a vintage are written in the
+// vintage's own freeze transaction, so once the vintages watermark of a sealed
+// backup names a vintage, every member of it is committed and at or below that
+// backup's members watermark; the members after it belong to later vintages.
+// The two forms differ only if a freeze commits more than the settle hour after
+// its vintage's created_at, which already moves every table's watermark.
+const MEM_STEP = `WITH w AS MATERIALIZED (
+    SELECT (SELECT max(b.id) FROM (SELECT m.id FROM analytics_vintage_members m
+        WHERE m.id > $1::bigint AND m.vintage_id > $2::bigint AND m.vintage_id <= $3::bigint OFFSET 0) b) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
   )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
-    (SELECT count(*) FROM analytics_vintage_members WHERE id > $3::bigint AND id <= w.wm)::text AS n,
-    (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > $4::bigint AND id <= w.wm)::text AS s
+    (SELECT count(*) FROM analytics_vintage_members WHERE id > $4::bigint AND id <= w.wm)::text AS n,
+    (SELECT coalesce(sum(id), 0) FROM analytics_vintage_members WHERE id > $5::bigint AND id <= w.wm)::text AS s
   FROM w`;
 const memStep = registerQuery({
   role: "rm_app",
@@ -291,7 +345,7 @@ const memStep = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0, 0] },
 });
 const memStepVintages = registerQuery({
   role: "rm_app",
@@ -300,7 +354,7 @@ const memStepVintages = registerQuery({
   site: "src/analytics/store/public-archive-store:analytics_vintage_members.step.vintages",
   purpose: "Find a format 1 archive backup's watermark in this table, with the count and id sum the backup adds (issue 1422).",
   callers: [ROUTE],
-  probe: { statement: MEM_STEP, params: [0, 0, 0, 0] },
+  probe: { statement: MEM_STEP, params: [0, 0, 0, 0, 0] },
 });
 const MEM_PAGE = `SELECT m.id::text AS id, v.created_at::text AS t, m.id::text AS c_id, m.vintage_id::text AS vintage_id,
     m.source_value_version_id::text AS source_value_version_id, m.source_key,
@@ -434,7 +488,7 @@ const repPage = registerQuery({
 export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   {
     name: "analytics_output_snapshots",
-    time: { column: "created_at" },
+    time: timeOf("analytics_output_snapshots"),
     columns: ["id", "run_id", "artifact_kind", "checksum", "byte_length", "created_at", "payload_json", "payload_sha256"],
     pageRows: 2,
     step: (tx, a, b) => on(tx, outStep)<ChainStep>`WITH b AS (
@@ -455,7 +509,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_report_snapshots",
-    time: { column: "created_at" },
+    time: timeOf("analytics_report_snapshots"),
     columns: ["id", "run_id", "asof", "checksum", "byte_length", "created_at", "report_json", "report_sha256"],
     pageRows: 10,
     step: (tx, a, b) => on(tx, repStep)<ChainStep>`WITH b AS (
@@ -476,7 +530,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "source_value_versions",
-    time: { column: "knowledge_time" },
+    time: timeOf("source_value_versions"),
     columns: ["id", "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind", "knowledge_time", "provenance"],
     pageRows: 20_000,
     step: (tx, a, b) => on(tx, svvStep)<ChainStep>`WITH b AS (
@@ -497,7 +551,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_ledger_runs",
-    time: { column: "created_at" },
+    time: timeOf("analytics_ledger_runs"),
     columns: ["id", "run_key", "asof", "tool_id", "source_label", "methodology_version_id", "build_identity", "job_id", "created_at"],
     pageRows: 5000,
     step: (tx, a, b) => on(tx, runsStep)<ChainStep>`WITH b AS (
@@ -517,7 +571,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_ledger_methodology_versions",
-    time: { column: "created_at" },
+    time: timeOf("analytics_ledger_methodology_versions"),
     columns: ["id", "tool_id", "version_label", "config", "config_digest", "created_at"],
     pageRows: 5000,
     step: (tx, a, b) => on(tx, methStep)<ChainStep>`WITH b AS (
@@ -537,7 +591,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_data_vintages",
-    time: { column: "created_at" },
+    time: timeOf("analytics_data_vintages"),
     columns: ["id", "run_id", "tool_id", "knowledge_time_cutoff", "market_time_cutoff", "methodology_version_id", "build_identity", "manifest", "manifest_digest", "member_count", "created_at"],
     pageRows: 500,
     step: (tx, a, b) => on(tx, vinStep)<ChainStep>`WITH b AS (
@@ -559,11 +613,12 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_vintage_members",
-    time: { lookup: { column: "vintage_id", table: "analytics_data_vintages", key: "id", timeColumn: "created_at" } },
+    time: timeOf("analytics_vintage_members"),
     columns: ["id", "vintage_id", "source_value_version_id", "source_key", "last_source_value_version_id"],
     pageRows: 50_000,
-    step: (tx, a, _b, vin) => on(tx, memStep, memStepVintages)<ChainStep>`WITH w AS (
-    SELECT (SELECT max(m.id) FROM analytics_vintage_members m WHERE m.id > ${a}::bigint AND m.vintage_id <= ${vin}::bigint) AS wm,
+    step: (tx, a, _b, vin, prevVin) => on(tx, memStep, memStepVintages)<ChainStep>`WITH w AS MATERIALIZED (
+    SELECT (SELECT max(b.id) FROM (SELECT m.id FROM analytics_vintage_members m
+        WHERE m.id > ${a}::bigint AND m.vintage_id > ${prevVin}::bigint AND m.vintage_id <= ${vin}::bigint OFFSET 0) b) AS wm,
       (SELECT v.created_at FROM analytics_vintage_members m JOIN analytics_data_vintages v ON v.id = m.vintage_id ORDER BY m.id LIMIT 1) AS first_time
   )
   SELECT w.wm::text AS wm, w.first_time::text AS first_time,
@@ -578,7 +633,7 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
   },
   {
     name: "analytics_overwrite_events",
-    time: { column: "recorded_at" },
+    time: timeOf("analytics_overwrite_events"),
     columns: ["id", "table_name", "operation", "natural_key", "previous_row", "replacement_row", "recorded_at"],
     pageRows: 20,
     step: (tx, a, b) => on(tx, ovwStep)<ChainStep>`WITH b AS (
@@ -600,50 +655,16 @@ export const ARCHIVE_TABLES: readonly ArchiveTable[] = [
 
 const tableByName = new Map(ARCHIVE_TABLES.map((t) => [t.name, t]));
 
-// ── Names and text, exactly as csvb writes them ─────────────────────────────
+// Names, CSV text, part splitting and the cut rule are format 1's own, defined
+// once in packages/analyst-sdk/src/archive/format1.ts and shared with csvb
+// (issue 1477). The route reads the id shape from here.
+export { BACKUP_ID_RE };
 
-export const BACKUP_ID_RE = /^(\d{4}-\d{2}-\d{2})T000000Z$/;
-
-/** One row in Postgres COPY's CSV dialect (csvb src/format/row.ts encodeCsvRow). */
-export function encodeCsvRow(values: readonly (string | null)[]): string {
-  return (
-    values
-      .map((v) => {
-        if (v === null) return "";
-        if (v === "" || /[",\r\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
-        return v;
-      })
-      .join(",") + "\n"
-  );
-}
-
-/** `2026-09-21 01:59:32.748478+00` (the database's UTC text) as microseconds since the epoch. */
-export function parseDbTime(text: string): bigint {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\+00(?::00)?|Z)$/.exec(text.trim());
-  if (!m) throw new Error(`${JSON.stringify(text)} is not a UTC timestamp`);
-  const secs = BigInt(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!)) / 1000n;
-  return secs * 1_000_000n + BigInt((m[7] ?? "").padEnd(6, "0") || "0");
-}
-
-/** The UTC time as `YYYY-MM-DDTHHMMSSZ`, to the second (rounded down). */
-export function stamp(micros: bigint): string {
-  const d = new Date(Number(micros / 1000n));
-  const p = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
-}
-
-function dataFileName(table: string, tMin: string, tMax: string, dup: number): string {
-  return `${table}.${stamp(parseDbTime(tMin))}_${stamp(parseDbTime(tMax))}${dup > 1 ? `-${dup}` : ""}.csv.gz`;
-}
-
-const backupIdOf = (dayMs: number): string => `${new Date(dayMs).toISOString().slice(0, 10)}T000000Z`;
-const dayMsOf = (id: string): number => Date.parse(`${BACKUP_ID_RE.exec(id)![1]}T00:00:00Z`);
-const boundaryText = (dayMs: number): string => `${new Date(dayMs).toISOString().slice(0, 10)} 00:00:00+00`;
-
-// ── The clock, and the chain of watermarks ──────────────────────────────────
+// ── The clock, the junction, and the chain of watermarks ─────────────────────
 
 let clock: () => number = () => Date.now();
 let partBytes = ARCHIVE_PART_BYTES;
+let junction: Junction = LEGACY_JUNCTION;
 /** Replace the part size (tests split a small backup into several parts). */
 export function _setArchivePartBytesForTests(bytes: number | null): void {
   partBytes = bytes ?? ARCHIVE_PART_BYTES;
@@ -652,10 +673,13 @@ export function _setArchivePartBytesForTests(bytes: number | null): void {
 export function _setArchiveClockForTests(fn: (() => number) | null): void {
   clock = fn ?? (() => Date.now());
 }
-
-/** The newest sealed boundary: the latest UTC midnight at least ARCHIVE_SETTLE_MS ago. */
-function lastSealedDayMs(): number {
-  return Math.floor((clock() - ARCHIVE_SETTLE_MS) / DAY_MS) * DAY_MS;
+/**
+ * Plant a synthetic legacy junction (tests only: never production watermarks).
+ * Null restores the baked one. Forgets every built record and watermark.
+ */
+export function _setArchiveJunctionForTests(j: Junction | null): void {
+  junction = j ?? LEGACY_JUNCTION;
+  _resetArchiveForTests();
 }
 
 interface TableMark {
@@ -664,9 +688,10 @@ interface TableMark {
   sum: bigint;
 }
 
-/** Watermarks per sealed backup, oldest first. Sealed boundaries never change, so this only grows. */
-const chain = new Map<string, Map<string, TableMark>>();
+/** Watermarks per sealed backup, with the backup before it. Sealed cuts never change, so this only grows. */
+const chain = new Map<string, { prev: string | null; marks: Map<string, TableMark> }>();
 let firstDayMs: number | null = null;
+let rowsFollowJunction: boolean | null = null;
 let chainBusy: Promise<void> | null = null;
 
 /** The first backup boundary: the UTC midnight after the earliest first row of any served table. */
@@ -675,7 +700,7 @@ async function loadFirstDay(): Promise<number | null> {
   let earliest: bigint | null = null;
   await publicRead(async (tx) => {
     for (const t of ARCHIVE_TABLES) {
-      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z", "0");
+      const [r] = await t.step(tx, "0", "0001-01-01T00:00:00Z", "0", "0");
       if (r?.first_time) {
         const us = parseDbTime(r.first_time);
         if (earliest === null || us < earliest) earliest = us;
@@ -683,20 +708,83 @@ async function loadFirstDay(): Promise<number | null> {
     }
   }, 4000);
   if (earliest === null) return null;
-  firstDayMs = Math.floor(Number((earliest as bigint) / 1000n) / DAY_MS) * DAY_MS + DAY_MS;
+  firstDayMs = firstBoundaryMs(earliest);
   return firstDayMs;
+}
+
+/** Does any served table hold an id above its junction watermark? Asked once, when the chain reaches past the junction. */
+async function loadRowsFollowJunction(): Promise<boolean> {
+  if (rowsFollowJunction !== null) return rowsFollowJunction;
+  let follow = false;
+  await publicRead(async (tx) => {
+    for (const t of ARCHIVE_TABLES) {
+      const wm = junction.watermarks[t.name];
+      if (wm === undefined) throw new Error(`the archive junction ${junction.id} names no watermark for ${t.name}`);
+      // A boundary no row reaches: the step's watermark is the newest id above wm, or none.
+      // Members above the junction belong to vintages above the junction's vintages watermark.
+      const [r] = await t.step(tx, wm, "9999-12-31T00:00:00Z", "9223372036854775807", junction.watermarks.analytics_data_vintages ?? "0");
+      if (r?.wm) follow = true;
+    }
+  }, 4000);
+  rowsFollowJunction = follow;
+  return follow;
+}
+
+/** The sealed cut points, oldest first (format 1's cut rule, with the junction when it applies). */
+async function sealedCuts(): Promise<Cut[]> {
+  const first = await loadFirstDay();
+  const now = clock();
+  const follow = first !== null && junctionApplies(junction, now, true) ? await loadRowsFollowJunction() : false;
+  return planCuts({ firstDayMs: first, nowMs: now, junction, rowsFollowJunction: follow });
 }
 
 /** Every sealed backup id, oldest first. */
 export async function listBackupIds(): Promise<string[]> {
-  const first = await loadFirstDay();
-  if (first === null) return [];
-  const out: string[] = [];
-  for (let d = first; d <= lastSealedDayMs(); d += DAY_MS) out.push(backupIdOf(d));
-  return out;
+  return (await sealedCuts()).map((c) => c.id);
 }
 
-/** Fill the chain through `id`, one boundary at a time, each step a bounded public read. */
+/** One day cut: each table's step, one bounded public read. */
+async function dayMarks(before: Map<string, TableMark> | null, boundaryMs: number): Promise<Map<string, TableMark>> {
+  const marks = new Map<string, TableMark>();
+  await publicRead(async (tx) => {
+    for (const t of ARCHIVE_TABLES) {
+      const p = before?.get(t.name) ?? { wm: null, rows: 0n, sum: 0n };
+      const [r] = await t.step(
+        tx,
+        p.wm ?? "0",
+        new Date(boundaryMs).toISOString(),
+        marks.get("analytics_data_vintages")?.wm ?? "0",
+        before?.get("analytics_data_vintages")?.wm ?? "0",
+      );
+      const wm = r?.wm ?? p.wm;
+      marks.set(t.name, { wm, rows: p.rows + BigInt(r?.n ?? "0"), sum: p.sum + BigInt(r?.s ?? "0") });
+    }
+  }, 4000);
+  return marks;
+}
+
+/** The junction cut: its baked watermarks, with the rows it adds counted page by page. */
+async function junctionMarks(before: Map<string, TableMark> | null, watermarks: Readonly<Record<string, string>>): Promise<Map<string, TableMark>> {
+  const marks = new Map<string, TableMark>();
+  for (const t of ARCHIVE_TABLES) {
+    const p = before?.get(t.name) ?? { wm: null, rows: 0n, sum: 0n };
+    const wm = watermarks[t.name];
+    if (wm === undefined) throw new Error(`the archive junction names no watermark for ${t.name}`);
+    if (p.wm !== null && BigInt(wm) < BigInt(p.wm)) throw new Error(`${t.name}: the junction watermark ${wm} is below the preceding backup's ${p.wm}`);
+    let rows = p.rows;
+    let sum = p.sum;
+    if (wm !== p.wm) {
+      for await (const r of rowsOf(t, p.wm ?? "0", wm)) {
+        rows += 1n;
+        sum += BigInt(r.id);
+      }
+    }
+    marks.set(t.name, { wm, rows, sum });
+  }
+  return marks;
+}
+
+/** Fill the chain through `id`, one cut at a time, each step a bounded public read. */
 async function ensureChain(id: string): Promise<void> {
   while (!chain.has(id)) {
     if (chainBusy) {
@@ -704,27 +792,19 @@ async function ensureChain(id: string): Promise<void> {
       continue;
     }
     chainBusy = (async () => {
-      const first = (await loadFirstDay())!;
-      const target = dayMsOf(id);
+      const cuts = await sealedCuts();
+      const target = cuts.findIndex((c) => c.id === id);
+      if (target < 0) throw new Error(`${id} is not a sealed backup`);
       let prev: Map<string, TableMark> | null = null;
-      for (let d = first; d <= target; d += DAY_MS) {
-        const bid = backupIdOf(d);
-        const have = chain.get(bid);
+      for (let i = 0; i <= target; i++) {
+        const c = cuts[i]!;
+        const have = chain.get(c.id);
         if (have) {
-          prev = have;
+          prev = have.marks;
           continue;
         }
-        const marks = new Map<string, TableMark>();
-        const before = prev;
-        await publicRead(async (tx) => {
-          for (const t of ARCHIVE_TABLES) {
-            const p = before?.get(t.name) ?? { wm: null, rows: 0n, sum: 0n };
-            const [r] = await t.step(tx, p.wm ?? "0", new Date(d).toISOString(), marks.get("analytics_data_vintages")?.wm ?? "0");
-            const wm = r?.wm ?? p.wm;
-            marks.set(t.name, { wm, rows: p.rows + BigInt(r?.n ?? "0"), sum: p.sum + BigInt(r?.s ?? "0") });
-          }
-        }, 4000);
-        chain.set(bid, marks);
+        const marks: Map<string, TableMark> = c.kind === "day" ? await dayMarks(prev, c.boundaryMs) : await junctionMarks(prev, c.watermarks);
+        chain.set(c.id, { prev: i > 0 ? cuts[i - 1]!.id : null, marks });
         prev = marks;
       }
     })().finally(() => {
@@ -790,12 +870,12 @@ class GzSink {
   }
 }
 
-/** Write rows into ≤ ARCHIVE_PART_BYTES parts as csvb's RangeWriter does, recording each part. */
+/** Write rows into ≤ ARCHIVE_PART_BYTES parts by format 1's part rule, recording each part. */
 async function buildTableFiles(backup: string, t: ArchiveTable, after: string, through: string): Promise<ArchiveFileRecord[]> {
   const files: ArchiveFileRecord[] = [];
   const header = encodeCsvRow(t.columns);
   const headerBytes = Buffer.byteLength(header);
-  const used = new Set<string>();
+  const namer = new DataFileNamer(t.name);
   let sink: GzSink | null = null;
   let bytes = 0;
   let rows = 0;
@@ -807,12 +887,8 @@ async function buildTableFiles(backup: string, t: ArchiveTable, after: string, t
   const flush = async (): Promise<void> => {
     if (!sink) return;
     const w = await sink.close();
-    let dup = 1;
-    let name = dataFileName(t.name, tMin!.text, tMax!.text, dup);
-    while (used.has(name)) name = dataFileName(t.name, tMin!.text, tMax!.text, ++dup);
-    used.add(name);
     files.push({
-      path: `csv/${backup}/data/${name}`,
+      path: dataPath(backup, namer.next(tMin!.text, tMax!.text)),
       rows,
       ...w,
       id_min: idMin,
@@ -829,7 +905,7 @@ async function buildTableFiles(backup: string, t: ArchiveTable, after: string, t
   };
   for await (const r of rowsOf(t, after, through)) {
     const n = Buffer.byteLength(r.line);
-    if (rows > 0 && bytes + n > partBytes) await flush();
+    if (startsNewPart(rows, bytes, n, partBytes)) await flush();
     if (!sink) {
       sink = new GzSink();
       await sink.write(header);
@@ -855,9 +931,8 @@ let buildQueue: Promise<unknown> = Promise.resolve();
 
 async function buildRecord(id: string): Promise<BuiltRecord> {
   await ensureChain(id);
-  const marks = chain.get(id)!;
-  const prevId = backupIdOf(dayMsOf(id) - DAY_MS);
-  const prev = chain.get(prevId) ?? null;
+  const { prev: prevId, marks } = chain.get(id)!;
+  const prev = prevId === null ? null : chain.get(prevId)!.marks;
   const append_only: Record<string, ArchiveAppendOnlyRecord> = {};
   for (const t of ARCHIVE_TABLES) {
     const before = prev?.get(t.name)?.wm ?? null;
@@ -878,7 +953,7 @@ async function buildRecord(id: string): Promise<BuiltRecord> {
     backup: id,
     source: "api",
     consistency: "paged",
-    snapshot: { exported_at_db: boundaryText(dayMsOf(id)), replica_replay_ts: null, db_user: "api", was_replica: false },
+    snapshot: { exported_at_db: dbTimeText(backupInstantMs(id)), replica_replay_ts: null, db_user: "api", was_replica: false },
     tool: { name: "robotmoney-api", commit: null },
     append_only,
     revisions: {},
@@ -890,10 +965,7 @@ async function buildRecord(id: string): Promise<BuiltRecord> {
 /** Is `id` a sealed backup this API serves? */
 export async function isServedBackup(id: string): Promise<boolean> {
   if (!BACKUP_ID_RE.test(id)) return false;
-  const d = dayMsOf(id);
-  if (Number.isNaN(d) || backupIdOf(d) !== id) return false;
-  const first = await loadFirstDay();
-  return first !== null && d >= first && d <= lastSealedDayMs();
+  return (await listBackupIds()).includes(id);
 }
 
 /** The record already built, or null. Reads nothing: what a conditional request needs. */
@@ -983,6 +1055,7 @@ export function _resetArchiveForTests(): void {
   records.clear();
   building.clear();
   firstDayMs = null;
+  rowsFollowJunction = null;
   chainBusy = null;
   buildQueue = Promise.resolve();
 }

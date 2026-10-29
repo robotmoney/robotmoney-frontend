@@ -15,6 +15,7 @@ import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
+import { ratiosFromLegs } from "./transform/ratios.ts";
 import { assertRequiredCoverage } from "./coverage.ts";
 
 export const BACKFILL_START = "2018-01-01";
@@ -68,8 +69,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
   }
-  // Input names (input id, storage key or source id, D74) -> the ids read below.
-  const rawIn = resolveInputHistory(input);
+  // Input names (input id, storage key or source id, D74) -> the ids read
+  // below, and each ratio the input does not store from its legs (4.3).
+  const rawIn = ratiosFromLegs(input, resolveInputHistory(input));
   const start = opts.start ?? BACKFILL_START;
   const asof = opts.asof;
   assertIsoDate("start", start);

@@ -10,10 +10,11 @@
 // call site uses the wrong smoke-twin — the risk is prospective, for the next
 // person autocompleting an import.
 //
-//   mean (:~20, 0 for empty, `reduce`)      vs  meanArr (:~86, NaN for empty)
-//     meanArr is the v0-faithful port (lib/utils.js `mean`), private to this
-//     file, consumed by stddev/pearson below. `mean` is a lighter helper for
-//     the research/seed-provider code (rollingBeta, etc.) with no v0 analogue.
+//   mean (0 for empty)                      vs  exact.ts mean2 (NaN for empty)
+//     The v0-faithful port (lib/utils.js `mean`) was the private meanArr;
+//     stddev/pearson now use the compensated mean2 from exact.ts, which keeps
+//     its NaN-for-empty contract. `mean` is a lighter helper for the
+//     research/seed-provider code (rollingBeta, etc.) with no v0 analogue.
 //   std (:~24, POPULATION σ)                vs  stddev (:~94, SAMPLE σ, n-1)
 //     stddev is the v0-faithful port (lib/utils.js `stddev`); the regime
 //     core's smoothRegimes 2σ fast-track depends on the SAMPLE form. `std` has
@@ -37,6 +38,26 @@
 //     analyze/regime.ts (`regimeTool`); see docs/technical/regime-engine.md
 //     §7 and docs/technical/research-signals.md §2.
 // ─────────────────────────────────────────────────────────────────────────
+//
+// Accuracy (decision D78): every reduction in this file (mean, std,
+// stddev, pearson, rollingBeta, sma, rollingSum, the weight sums) is compensated
+// through ./exact.ts, so on finite data it returns the correctly rounded value
+// of the exact result for the binary64 inputs, not the plain loop's last bits.
+// Edge-case contracts (empty input, n < 2, non-finite handling, zero variance)
+// are unchanged.
+import {
+  centeredCrossDD,
+  correlation,
+  ddAdd,
+  ddDiv,
+  ddDivD,
+  ddMulD,
+  ddValue,
+  mean2,
+  stdDD,
+  sum2,
+  sumDD,
+} from "./exact.ts";
 
 export function lcg(seed: number): () => number {
   let s = (seed >>> 0) || 1;
@@ -54,14 +75,16 @@ export function hashStr(s: string): number {
 
 export const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
+// 0 for empty input. A non-finite value gives the plain sum's NaN or ±Infinity.
 export function mean(xs: number[]): number {
-  return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+  return xs.length ? mean2(xs) : 0;
 }
 
+// Population σ. 0 for fewer than two values; NaN when any value is non-finite.
 export function std(xs: number[]): number {
   if (xs.length < 2) return 0;
-  const m = mean(xs);
-  return Math.sqrt(mean(xs.map((x) => (x - m) ** 2)));
+  if (!xs.every(Number.isFinite)) return NaN;
+  return ddValue(stdDD(xs, 0));
 }
 
 // Fraction of `window` values <= value (0..1).
@@ -87,16 +110,17 @@ export function ratio(a: number[], b: number[]): number[] {
 }
 
 // OLS slope of y on x over the last `window` paired points (rolling beta).
+// 0 when x has zero variance (or no points); NaN when a value is non-finite.
 export function rollingBeta(y: number[], x: number[], window: number): number {
   const n = Math.min(y.length, x.length);
   const ys = y.slice(n - window), xs = x.slice(n - window);
-  const mx = mean(xs), my = mean(ys);
-  let cov = 0, varx = 0;
-  for (let i = 0; i < xs.length; i++) {
-    cov += (xs[i] - mx) * (ys[i] - my);
-    varx += (xs[i] - mx) ** 2;
-  }
-  return varx ? cov / varx : 0;
+  if (xs.length === 0) return 0;
+  if (!xs.every(Number.isFinite)) return NaN;
+  const mx = mean2(xs);
+  const varx = centeredCrossDD(xs, xs, mx, mx);
+  if (varx[0] === 0) return 0;
+  if (ys.length !== xs.length || !ys.every(Number.isFinite)) return NaN;
+  return ddValue(ddDiv(centeredCrossDD(xs, ys, mx, mean2(ys)), varx));
 }
 
 // Date string `daysAgo` before an ISO YYYY-MM-DD (no Date.now()).
@@ -118,42 +142,30 @@ export const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 // the existing length-shortening `pctChange`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function meanArr(xs: number[]): number {
-  if (!xs.length) return NaN;
-  let s = 0;
-  for (const x of xs) s += x;
-  return s / xs.length;
-}
-
-// Sample standard deviation (n-1). NaN for <2 values.
+// Sample standard deviation (n-1). NaN for <2 values or any non-finite value.
 export function stddev(xs: number[]): number {
   if (xs.length < 2) return NaN;
-  const m = meanArr(xs);
-  let s = 0;
-  for (const x of xs) s += (x - m) ** 2;
-  return Math.sqrt(s / (xs.length - 1));
+  if (!xs.every(Number.isFinite)) return NaN;
+  return ddValue(stdDD(xs, 1));
 }
 
 // NaN-tolerant simple moving average. Output[i] = mean of valid values in
 // xs[i-n+1..i]. Returns NaN if fewer than floor(n/2) valid observations.
+// Each window is summed afresh (compensated), so there is no running
+// add/subtract drift; the valid-count bookkeeping is a running integer.
 export function sma(xs: number[], n: number): number[] {
   const out = new Array(xs.length).fill(NaN);
   const minValid = Math.max(1, Math.floor(n / 2));
-  let s = 0;
   let c = 0;
+  const win: number[] = [];
   for (let i = 0; i < xs.length; i++) {
-    if (Number.isFinite(xs[i])) {
-      s += xs[i];
-      c++;
+    if (Number.isFinite(xs[i])) c++;
+    if (i >= n && Number.isFinite(xs[i - n])) c--;
+    if (i >= n - 1 && c >= minValid) {
+      win.length = 0;
+      for (let j = Math.max(0, i - n + 1); j <= i; j++) if (Number.isFinite(xs[j])) win.push(xs[j]);
+      out[i] = ddValue(ddDivD(sumDD(win), c));
     }
-    if (i >= n) {
-      const drop = xs[i - n];
-      if (Number.isFinite(drop)) {
-        s -= drop;
-        c--;
-      }
-    }
-    if (i >= n - 1 && c >= minValid) out[i] = s / c;
   }
   return out;
 }
@@ -169,43 +181,34 @@ export function pctChangeLag(xs: number[], lag: number): number[] {
 }
 
 // Strict rolling sum: output[i] = NaN if any value in xs[i-n+1..i] is NaN.
+// Each window is summed afresh (compensated): no running add/subtract drift.
 export function rollingSum(xs: number[], n: number): number[] {
   const out = new Array(xs.length).fill(NaN);
-  let s = 0;
   let nan = 0;
   for (let i = 0; i < xs.length; i++) {
-    if (Number.isFinite(xs[i])) s += xs[i];
-    else nan++;
-    if (i >= n) {
-      const drop = xs[i - n];
-      if (Number.isFinite(drop)) s -= drop;
-      else nan--;
-    }
-    if (i >= n - 1 && nan === 0) out[i] = s;
+    if (!Number.isFinite(xs[i])) nan++;
+    if (i >= n && !Number.isFinite(xs[i - n])) nan--;
+    if (i >= n - 1 && nan === 0) out[i] = sum2(xs.slice(Math.max(0, i - n + 1), i + 1));
   }
   return out;
 }
 
 // Pearson correlation over pairwise-finite points. <3 pairs → 0; zero variance → 0.
+// Compensated and scale-safe (exact.ts correlation): each series is rescaled by
+// a power of two first, so the products neither overflow nor underflow.
 export function pearson(xs: number[], ys: number[]): number {
   const n = Math.min(xs.length, ys.length);
-  const pairs: [number, number][] = [];
+  const a: number[] = [];
+  const b: number[] = [];
   for (let i = 0; i < n; i++) {
-    if (Number.isFinite(xs[i]) && Number.isFinite(ys[i])) pairs.push([xs[i], ys[i]]);
+    if (Number.isFinite(xs[i]) && Number.isFinite(ys[i])) {
+      a.push(xs[i]);
+      b.push(ys[i]);
+    }
   }
-  if (pairs.length < 3) return 0;
-  const mx = meanArr(pairs.map((p) => p[0]));
-  const my = meanArr(pairs.map((p) => p[1]));
-  let num = 0,
-    dx = 0,
-    dy = 0;
-  for (const [x, y] of pairs) {
-    num += (x - mx) * (y - my);
-    dx += (x - mx) ** 2;
-    dy += (y - my) ** 2;
-  }
-  if (dx === 0 || dy === 0) return 0;
-  return num / Math.sqrt(dx * dy);
+  if (a.length < 3) return 0;
+  const r = correlation(a, b);
+  return Number.isNaN(r) ? 0 : r;
 }
 
 // For each i, rank of xs[i] within xs[max(0,i-window+1)..i]. Value in [0,1].
@@ -264,23 +267,20 @@ export function inverseCorrelationWeights(
   }
   const avgAbs: Record<string, number> = {};
   for (const a of validIds) {
-    let s = 0;
-    let n = 0;
+    const abs: number[] = [];
     for (const b of validIds) {
       if (a === b) continue;
-      s += Math.abs(corr[a][b]);
-      n++;
+      abs.push(Math.abs(corr[a][b]));
     }
-    avgAbs[a] = n > 0 ? s / n : 0;
+    avgAbs[a] = abs.length > 0 ? ddValue(ddDivD(sumDD(abs), abs.length)) : 0;
   }
   const raw: Record<string, number> = {};
-  let total = 0;
   for (const id of validIds) {
     const denom = Math.max(0.05, avgAbs[id]);
     raw[id] = 1 / denom;
-    total += raw[id];
   }
-  for (const id of validIds) out[id] = raw[id] / total;
+  const total = sumDD(validIds.map((id) => raw[id]));
+  for (const id of validIds) out[id] = ddValue(ddDiv([raw[id], 0], total));
   return capWeights(out, cap);
 }
 
@@ -296,11 +296,17 @@ export function capWeights(
     if (overCap.length === 0) break;
     const underCap = ids.filter((id) => !overCap.includes(id) && result[id] > 0);
     if (underCap.length === 0) break; // cap infeasible; leave as-is
-    const excess = overCap.reduce((s, id) => s + (result[id] - cap), 0);
-    const underSum = underCap.reduce((s, id) => s + result[id], 0);
+    // excess = sum(w - cap) over the capped ids, kept exact pair by pair.
+    const excess = sumDD(overCap.flatMap((id) => [result[id], -cap]));
+    const underSum = sumDD(underCap.map((id) => result[id]));
     const next: Record<string, number> = { ...result };
     for (const id of overCap) next[id] = cap;
-    for (const id of underCap) next[id] = result[id] * (1 + excess / underSum);
+    // w * (1 + excess / underSum), with the scale factor formed in double-double.
+    const q = ddDiv(excess, underSum);
+    for (const id of underCap) {
+      const w = result[id];
+      next[id] = ddValue(ddAdd([w, 0], ddMulD(q, w)));
+    }
     result = next;
   }
   return result;

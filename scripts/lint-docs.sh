@@ -24,6 +24,8 @@
 #   7. docs/decisions.md records D66 (production data changes only through a
 #      migration, owner 2026-10-09), and no current doc says a subject's
 #      scheduling columns change "only through the admin API" (issue 1312).
+#   8. docs/technical/analyst-sdk-requirements.md section 2 states the tuning
+#      principle: clients can tune every analysis (issue 1513).
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -138,6 +140,20 @@ while IFS= read -r f; do
     err "$f says scheduling columns change only through the admin API; on a deployed stack they change by migration (D66, issue 1312)"
   fi
 done <<<"$(git ls-files -- 'docs/*.md' 'docs/**/*.md' ':!docs/archive' ':!docs/post-mortems' 2>/dev/null || true)"
+
+# 8. The analyst SDK requirements state the tuning principle (issue 1513,
+#    owner 2026-10-29): clients can tune every analysis, constants are options
+#    with defaults, strategy steps are callbacks, building blocks are exported.
+#    Each of the four phrases must appear in section 2 (Principles).
+sdk_req="docs/technical/analyst-sdk-requirements.md"
+if [ -f "$sdk_req" ]; then
+  principles="$(awk '/^## 2\. Principles/{on=1; next} /^## /{on=0} on' "$sdk_req" | tr '\n' ' ')"
+  for phrase in "Clients can tune every analysis" "Constants are options with defaults" "Strategy steps are callbacks" "Building blocks are exported"; do
+    if ! grep -qF "$phrase" <<<"$principles"; then
+      err "$sdk_req section 2 lacks the tuning principle phrase \"$phrase\" (issue 1513)"
+    fi
+  done
+fi
 
 if [ "$fail" -ne 0 ]; then
   exit 1

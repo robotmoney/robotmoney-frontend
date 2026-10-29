@@ -509,6 +509,24 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  # ── The analytics load check (issue 1514), from release v0.7.1 (since): stage only, with no
+  # production twin. It watches one scheduled analytics run on stage, which carries production's
+  # dump and connection budget, and fails on any api request of 5 s or more or any db_saturated.
+  - id: "Q34a-analytics-load"
+    standing: []
+    host: "target"
+    phase: "qa"
+    since: "v0.7.1"
+    stageOnly: true
+    description: "Analytics load: wait for the next scheduled analytics run (the next 3-hour boundary, UTC) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
+    cmds:
+      - ["bun", "scripts/release/analytics-load-check.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "analytics-load-check.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 320
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
   # control machine, read-only against the target, after the soak like the rest of the checks.
   - id: "Q35-archive-routes"
