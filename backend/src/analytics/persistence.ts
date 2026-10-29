@@ -86,6 +86,9 @@ export interface AnalyticsPersistence {
     marketTimeCutoff: string;
     methodologyVersionId: string;
     buildIdentity: string;
+    // Issue 1534: the versionIds of the committed read the regime computed
+    // from; absent when the run read none.
+    regimeVersionIds?: readonly string[];
   }): Promise<FreezeVintageResult>;
   // Issue #978: submit one terminal run package (see output-snapshots.ts's
   // header) bound to this run's id — the complete, immutable output/report

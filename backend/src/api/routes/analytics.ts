@@ -43,6 +43,7 @@ import {
   REGIME_STORAGE_KEYS,
   loadFrozenVintage,
   VintageConflictError,
+  VintageMembersInvalidError,
 } from "../../analytics/store/run-ledger-store.ts";
 import type { MethodologyIdentity, RunLifecycleEvent } from "../../analytics/run-ledger.ts";
 import {
@@ -502,7 +503,14 @@ interface FreezeVintageDto {
   marketTimeCutoff: string;
   methodologyVersionId: string;
   buildIdentity: string;
+  regimeVersionIds?: string[];
 }
+
+// Issue 1534: about 100k ids in production (regime keys times days since
+// 2018); the cap bounds the body, not a business rule.
+const MAX_REGIME_VERSION_IDS = 1_000_000;
+// At most 18 digits, so every accepted id casts to a PostgreSQL bigint.
+const isVersionId = (v: unknown): v is string => typeof v === "string" && /^[1-9][0-9]{0,17}$/.test(v);
 
 function parseFreezeVintage(body: unknown): FreezeVintageDto | Invalid {
   const v = isPlainObject(body) ? body.vintage : null;
@@ -513,9 +521,16 @@ function parseFreezeVintage(body: unknown): FreezeVintageDto | Invalid {
   if (!isIsoDate(v.marketTimeCutoff)) return invalid("vintage.marketTimeCutoff must be a valid YYYY-MM-DD date");
   if (!isBigIntString(String(v.methodologyVersionId ?? ""))) return invalid("vintage.methodologyVersionId must be a positive integer id");
   if (typeof v.buildIdentity !== "string" || !v.buildIdentity || v.buildIdentity.length > 256) return invalid("vintage.buildIdentity is invalid");
+  const ids = v.regimeVersionIds;
+  if (ids !== undefined) {
+    if (!Array.isArray(ids) || ids.length > MAX_REGIME_VERSION_IDS) return invalid(`vintage.regimeVersionIds must be an array of at most ${MAX_REGIME_VERSION_IDS} ids`);
+    if (!ids.every(isVersionId)) return invalid("vintage.regimeVersionIds must hold positive decimal id strings");
+    if (new Set(ids).size !== ids.length) return invalid("vintage.regimeVersionIds must not repeat an id");
+  }
   return {
     runId: String(v.runId), toolId: v.toolId, knowledgeTimeCutoff: v.knowledgeTimeCutoff,
     marketTimeCutoff: v.marketTimeCutoff, methodologyVersionId: String(v.methodologyVersionId), buildIdentity: v.buildIdentity,
+    ...(ids === undefined ? {} : { regimeVersionIds: ids as string[] }),
   };
 }
 
@@ -785,6 +800,7 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
       if (err instanceof VintageConflictError) {
         return { status: 409, body: { error: err.message, existing: err.existing } };
       }
+      if (err instanceof VintageMembersInvalidError) return { status: 400, body: { error: err.message } };
       throw err;
     }
   }
@@ -800,7 +816,7 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
   }
 
   // AN-16: the database clock and the ledger heads the regime computes from;
-  // the run passes the same cutoff to POST vintages.
+  // the run passes the same cutoff and the returned versionIds to POST vintages (issue 1534).
   if (m === "GET" && p === A.committedInputs) {
     const asof = url.searchParams.get("asof");
     if (!asof || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };

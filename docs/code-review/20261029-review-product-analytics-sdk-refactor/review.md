@@ -114,7 +114,7 @@ Fixed since 2026-10-21, with evidence: AN-1, AN-2, AN-3 (`backtest.ts:161,171,45
 
 ## 9. Unresolved decisions
 
-- **Which state a run computes from (AN-16, AN-17).** Decided: the regime run computes from the ledger heads it freezes, at one database-clock cutoff (issue 1532; analytics requirements section 2, Committed inputs). The transaction scope (AN-17) stays open.
+- **Which state a run computes from (AN-16, AN-17).** Decided: the regime run computes from the ledger heads it freezes, at one database-clock cutoff (issue 1532; analytics requirements section 2, Committed inputs). The vintage freezes the exact versions that read returned as its regime-key members, so a row inserted before the cutoff and committed after the read is not pinned (issue 1534, the regime-key part of AN-17). The transaction scope (AN-17) stays open.
 - **Pre-D78 replay rule (TEST-5).** Whether the archive replay accepts rounding by platform version or by creation date, and from which release it requires exact equality. Owner: decision.
 - **API revisions (ARC-1).** The owner decision on issue 1422 to serve no revisions is not in a canonical doc, and sdk 3 promises equal fills. Owner: decision, then a doc change in a file PR 1526 edits.
 
