@@ -8,11 +8,11 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
-  acquireBlocks, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, packageTestsCheck, quickstartCheck,
+  acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, isFixedProducer, newestArchivedReport, packageTestsCheck, postSealCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
 import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { exportPackage } from "./support/analyst-sdk-export.ts";
 import { COMMIT, fakeNet, fakeServer, RECORDING, RUN_KEY } from "./support/fake-public-api.ts";
 
@@ -87,7 +87,7 @@ const localDeps = (net: SdkDeps["net"], run: SdkDeps["run"] = spawnRunner): SdkD
  * `regime_snapshots` artifact (analytics_output_snapshots), holding `row` as the
  * as-of row. The backup record lists the file with its hash, as csvb writes it.
  */
-function recordingWithArtifact(row: Record<string, unknown>): string {
+function recordingWithArtifact(row: Record<string, unknown>, legacyBuild = false): string {
   const dir = homeScratch("sdk-recording-");
   cleanup.push(dir);
   cpSync(RECORDING, dir, { recursive: true });
@@ -102,6 +102,16 @@ function recordingWithArtifact(row: Record<string, unknown>): string {
     files: [{ path: rel, rows: 1, bytes_raw: Buffer.byteLength(csv), sha256_raw: sha256Hex(csv), id_min: "1", id_max: "1", sum_id: "1", time_min: "2001-01-02 05:30:00+00", time_max: "2001-01-02 05:30:00+00" }],
     db_rows_through_watermark: "1", db_sum_id_through_watermark: "1",
   };
+  if (legacyBuild) {
+    // The run was made by the old producer: its build identity is a package label, not an image commit.
+    const ledger = rec.append_only.analytics_ledger_runs.files[0];
+    const lp = join(dir, ledger.path);
+    const old = gunzipSync(readFileSync(lp)).toString("utf8");
+    const edited = old.replace(/,4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f,/g, ",pkg:0.1.0+bun:1.4.4,");
+    writeFileSync(lp, gzipSync(edited));
+    ledger.bytes_raw = Buffer.byteLength(edited);
+    ledger.sha256_raw = sha256Hex(edited);
+  }
   writeFileSync(recPath, JSON.stringify(rec, null, 2));
   return dir;
 }
@@ -136,6 +146,51 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
       expect(r.problems).toEqual([]);
       expect(r.found.sdkRowSha256).toBe(r.found.publishedRowSha256);
       expect(String(r.found.sdkRowSha256)).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
+  test("tier 1, a run of the old producer: the labels are asserted, the rest is info, and the deferral is printed", async () => {
+    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }, true), true, async (net) => {
+      const r = await quickstartCheck(localDeps(net), COMMIT);
+      expect(r.problems).toEqual([]);
+      expect(r.found.tier).toBe("label");
+      expect(r.found.differingFields).toContain("composite");
+      expect(r.notes?.join()).toContain("FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT");
+    });
+  });
+
+  test("RED CONTROL: a label that differs fails in either tier", async () => {
+    for (const legacy of [true, false]) {
+      await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-regime" }, legacy), true, async (net) => {
+        const r = await quickstartCheck(localDeps(net), COMMIT);
+        expect(r.problems.join()).toContain("differs from the published one in regime");
+      });
+    }
+  });
+
+  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
+    const api = fakeServer({ recording: recordingWithArtifact(replayed), reports: [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }] });
+    try {
+      const r = await quickstartCheck(localDeps({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) }), COMMIT);
+      expect(r.problems.join()).toContain("no sealed backup holds a published run yet");
+    } finally {
+      api.server.stop(true);
+    }
+  });
+
+  test("post-seal: a run of the old producer fails naming the sealed days; a fixed run's whole row must match", async () => {
+    await withApi(recordingWithArtifact(replayed, true), true, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("old producer");
+      expect(r.problems.join()).toContain("sealed backups run through");
+    });
+    await withApi(recordingWithArtifact(replayed), true, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems).toEqual([]);
+    });
+    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.found.tier).toBe("full");
+      expect(r.problems.join()).toContain("differs from the published one in composite");
     });
   });
 
@@ -209,6 +264,10 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
     cpSync(src, join(repo, "packages", "analyst-sdk"), { recursive: true });
     mkdirSync(join(repo, "backend"), { recursive: true });
     writeFileSync(join(repo, "backend", "only.txt"), "not the SDK\n");
+    mkdirSync(join(repo, "backend", "src", "other"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "other", "x.ts"), "not the SDK\n");
+    mkdirSync(join(repo, "backend", "src", "analytics"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "analytics", "source-tolerance.ts"), "export const SOURCE_TOLERANCES = {};\n");
     const git = async (...a: string[]) => {
       const r = await spawnRunner(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", ...a], {});
       expect(r.code, r.stderr).toBe(0);
@@ -227,9 +286,43 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
       expect(existsSync(join(ok.sdkDir, "package.json"))).toBe(true);
       expect(existsSync(join(scratch, "clone", "backend"))).toBe(false);
     }
+    // the package-tests check also takes the repository folders the package's tests read (Q37/C25).
+    const scratch2 = homeScratch("sdk-clone-test-");
+    cleanup.push(scratch2);
+    const withRepo = await prepare(head, scratch2, true);
+    expect("sdkDir" in withRepo, JSON.stringify(withRepo)).toBe(true);
+    expect(existsSync(join(scratch2, "clone", "backend", "src", "analytics", "source-tolerance.ts"))).toBe(true);
+    expect(existsSync(join(scratch2, "clone", "backend", "src", "other", "x.ts"))).toBe(false);
     // red: not a sha, and a sha the repository does not have.
     expect("problem" in (await prepare("not-a-sha", homeScratch("sdk-clone-test-")))).toBe(true);
     expect(JSON.stringify(await prepare("0".repeat(40), homeScratch("sdk-clone-test-")))).toContain("problem");
+  });
+});
+
+describe("the quickstart replays the newest published run the archive holds", () => {
+  test("a run published after the newest sealed backup is skipped; the build identity splits the producers", () => {
+    const dir = homeScratch("sdk-ledger-test-");
+    cleanup.push(dir);
+    const data = join(dir, "csv", "2026-01-02T000000Z", "data");
+    mkdirSync(data, { recursive: true });
+    const [k1, k2, k3, k4] = ["1", "2", "3", "4"].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`);
+    const sha = "4b4414c0759305df046a2de511bb446070ee7057";
+    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync([
+      "id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at",
+      `1,${k1},2026-10-20,regime,live,1,pkg:0.1.0+bun:1.4.4,,2026-10-20 21:30:00.5+00`,
+      `2,${k2},2026-10-24,regime,live,1,${sha},,2026-10-24 21:30:00.5+00`,
+      `3,${k3},2026-10-26,regime,live,1,pkg:0.1.0+bun:1.4.4,,2026-10-26 21:30:00.5+00`,
+    ].join("\n") + "\n"));
+    const runs = archivedRuns(dir);
+    expect([...runs.keys()].sort()).toEqual([k1, k2, k3]);
+    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-10-2" + id, checksum: "c", byte_length: 1 });
+    // k4 is published but not archived; k3 is the newest archived.
+    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3), row(4, k4)], runs)?.run_key).toBe(k3);
+    expect(newestArchivedReport([row(4, k4)], runs)).toBeUndefined();
+    expect(isFixedProducer(runs.get(k1)!.buildIdentity)).toBe(false);
+    expect(isFixedProducer(runs.get(k2)!.buildIdentity)).toBe(true);
+    expect(isFixedProducer("")).toBe(false);
+    expect(archivedRuns(join(dir, "missing")).size).toBe(0);
   });
 });
 
