@@ -88,9 +88,9 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
-  // The changelog is under Docs; the nav's button is Deposit (RM-124).
+  // The changelog is under Docs; the nav's button is Early access (RM-190).
   await expect(frame.locator('.nav__panel a[href="/changelog"]')).toHaveText("Changelog");
-  await expect(frame.locator(".nav__cta")).toHaveText("Deposit");
+  await expect(frame.locator(".nav__cta")).toHaveText("Early access");
 
   const title = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
@@ -408,7 +408,7 @@ test("the hero is full-bleed, and a phone swaps every diagram", async ({ page })
 test("the home CTA and the FAQ no longer advertise a roadmap", async ({ page }) => {
   await page.goto(`${baseUrl}/`);
   const home = page.frameLocator("#frame");
-  await expect(home.locator(".hm-hero .hm-hero__cta .btn-primary")).toContainText("Deposit USDC", { timeout: 15_000 });
+  await expect(home.locator(".hm-hero .hm-hero__cta .btn-primary")).toContainText("Request early access", { timeout: 15_000 });
   await expect(home.locator(".hm")).not.toContainText(/roadmap/i);
 
   await page.evaluate(() => {

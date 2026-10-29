@@ -305,7 +305,7 @@ describe("structured data details", () => {
   });
 
   test("a route outside research gets no route JSON-LD and stays a website", () => {
-    for (const route of ["/", "/allocation", "/docs/skill", "/swarm", "/not/a/page"]) {
+    for (const route of ["/", "/allocation", "/docs/investment-swarm", "/swarm", "/not/a/page"]) {
       expect(routeStructuredData(route), route).toBeNull();
       const out = renderMeta(shell, route);
       expect(out.includes("data-route-ld"), route).toBe(false);

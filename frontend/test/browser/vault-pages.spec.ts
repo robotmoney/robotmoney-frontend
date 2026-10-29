@@ -379,8 +379,8 @@ async function expectRmusdcOnBase(page: Page, economics: any) {
   await expect(mech).not.toContainText("Venues");
 
   const cta = page.locator("#deposit .rr-cta");
-  await expect(cta).toHaveAttribute("href", "/deposit");
-  await expect(cta).toHaveText(/^Deposit skill\s*→$/);
+  await expect(cta).toHaveAttribute("href", "/early-access");
+  await expect(cta).toHaveText(/^Request early access\s*→$/);
 
   await expect(page.locator("#view")).not.toContainText("Devnet test data");
   await expect(page.locator("#view")).not.toContainText("$72,000");
