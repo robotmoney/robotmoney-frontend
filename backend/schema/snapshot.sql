@@ -230,6 +230,8 @@ BEGIN
     key := jsonb_build_object('date', OLD.date);
   ELSIF TG_TABLE_NAME = 'research_signals' THEN
     key := jsonb_build_object('signal_key', OLD.signal_key, 'date', OLD.date);
+  ELSIF TG_TABLE_NAME = 'asset_prices' THEN
+    key := jsonb_build_object('price_date', OLD.price_date, 'symbol', OLD.symbol, 'time_basis', OLD.time_basis);
   ELSE
     RAISE EXCEPTION 'unsupported analytics overwrite source table: %', TG_TABLE_NAME;
   END IF;
@@ -969,7 +971,7 @@ CREATE TABLE public.analytics_overwrite_events (
     recorded_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     CONSTRAINT analytics_overwrite_events_operation_check CHECK ((operation = ANY (ARRAY['update'::text, 'delete'::text]))),
     CONSTRAINT analytics_overwrite_events_replacement_check CHECK ((((operation = 'update'::text) AND (replacement_row IS NOT NULL)) OR ((operation = 'delete'::text) AND (replacement_row IS NULL)))),
-    CONSTRAINT analytics_overwrite_events_table_name_check CHECK ((table_name = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text])))
+    CONSTRAINT analytics_overwrite_events_table_name_check CHECK ((table_name = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text, 'asset_prices'::text])))
 );
 
 
@@ -5704,6 +5706,24 @@ ALTER TABLE public.analytics_vintage_members ENABLE ALWAYS TRIGGER analytics_vin
 CREATE TRIGGER analytics_vintage_members_immutable_row BEFORE DELETE OR UPDATE ON public.analytics_vintage_members FOR EACH ROW EXECUTE FUNCTION public.rm_analytics_run_ledger_immutable();
 
 ALTER TABLE public.analytics_vintage_members ENABLE ALWAYS TRIGGER analytics_vintage_members_immutable_row;
+
+
+--
+-- Name: asset_prices asset_prices_capture_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER asset_prices_capture_delete AFTER DELETE ON public.asset_prices FOR EACH ROW EXECUTE FUNCTION public.rm_capture_analytics_overwrite();
+
+ALTER TABLE public.asset_prices ENABLE ALWAYS TRIGGER asset_prices_capture_delete;
+
+
+--
+-- Name: asset_prices asset_prices_capture_overwrite; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER asset_prices_capture_overwrite AFTER UPDATE ON public.asset_prices FOR EACH ROW WHEN (((to_jsonb(old.*) - 'fetched_at'::text) IS DISTINCT FROM (to_jsonb(new.*) - 'fetched_at'::text))) EXECUTE FUNCTION public.rm_capture_analytics_overwrite();
+
+ALTER TABLE public.asset_prices ENABLE ALWAYS TRIGGER asset_prices_capture_overwrite;
 
 
 --

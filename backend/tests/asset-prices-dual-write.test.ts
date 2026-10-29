@@ -14,6 +14,8 @@ import { resolveTrackedAssets } from "../src/config.ts";
 import { sampleWalletBalances } from "../src/worker/handlers/wallet.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { writeAssetPrice } from "../src/ops/asset-prices.ts";
+import { handlePublicAnalytics } from "../src/api/routes/public-analytics.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -186,4 +188,30 @@ test("the live sampler dual-writes asset_prices under today's date (issue #927) 
     SELECT count(*)::int AS n FROM wallet_balance_samples WHERE sample_date = ${today} AND price_usd IS NOT NULL
   `;
   expect(priceUsdNull!.n).toBe(0);
+});
+
+// API-6 (issue 1532, migration 0128): a disagreeing price overwrites the row
+// and the replaced value is a recorded revision, served on the public route.
+test("writeAssetPrice with a disagreeing price records an overwrite event, served by overwrite-events?table_name=asset_prices", async () => {
+  const write = (priceUsd: number, fetchedAt: string) =>
+    writeAssetPrice(sql, {
+      priceDate: D1, symbol: "API6-WETH", priceUsd, source: "geckoterminal", poolKey: null, tokenAddress: null,
+      observedAt: new Date(`${D1}T23:59:59Z`), fetchedAt: new Date(fetchedAt), configIdentity: "fixture-api-6",
+    });
+  expect(await write(999, "2019-07-06T00:00:00Z")).toBeNull();
+  // The same price fetched again: no disagreement and no revision.
+  expect(await write(999, "2019-07-06T01:00:00Z")).toBeNull();
+  const disagreement = await write(2, "2019-07-06T02:00:00Z");
+  expect(disagreement).toMatchObject({ previousPriceUsd: 999, freshPriceUsd: 2 });
+
+  const url = new URL("http://api.test/api/public/analytics/overwrite-events?table_name=asset_prices&limit=1000");
+  const res = await handlePublicAnalytics(new Request(url), url, "198.51.100.7");
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { events: { table_name: string; operation: string; natural_key: Record<string, unknown>; previous_row: Record<string, unknown>; replacement_row: Record<string, unknown> | null }[] };
+  const mine = body.events.filter((e) => e.natural_key.price_date === D1 && e.natural_key.symbol === "API6-WETH");
+  expect(mine).toHaveLength(1);
+  expect(mine[0]!.table_name).toBe("asset_prices");
+  expect(mine[0]!.operation).toBe("update");
+  expect(Number(mine[0]!.previous_row.price_usd)).toBe(999);
+  expect(Number(mine[0]!.replacement_row!.price_usd)).toBe(2);
 });
