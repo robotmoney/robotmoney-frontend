@@ -508,8 +508,8 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       Only the allocation subject. Its <code>recommendationType</code> is
       <code>bucket_weights</code>, its brief marks <code>takeSchema.weights.optional</code>
       <code>false</code>, and every take on it must carry exactly the four
-      buckets named in the brief (<code>agent_tokens</code>,
-      <code>conservative_defi_yield</code>, <code>protocol_tokens</code>,
+      buckets named in the brief (<code>conservative_defi_yield</code>,
+      <code>hard_assets</code>, <code>protocol_tokens</code>,
       <code>real_world_assets</code>), one entry each, with non-negative weights
       that sum to 1. Every other subject (the vault, the treasury and Woon) is
       <code>position_actions</code>: a take there carries stance, confidence and
@@ -961,7 +961,7 @@ console.log(result);</code></pre>
           <tr>
             <td><code>400 weights_bucket_not_canonical</code></td>
             <td>A weight names a bucket outside the four, on any subject</td>
-            <td>Use only <code>agent_tokens</code>, <code>conservative_defi_yield</code>, <code>protocol_tokens</code>, <code>real_world_assets</code>.</td>
+            <td>Use only <code>conservative_defi_yield</code>, <code>hard_assets</code>, <code>protocol_tokens</code>, <code>real_world_assets</code>.</td>
           </tr>
           <tr>
             <td><code>409 nonce already used … (replay)</code></td>

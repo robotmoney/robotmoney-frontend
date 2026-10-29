@@ -141,7 +141,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.allocation,
     summary: "Target allocation: strategy sleeves and bucket weights",
     description:
-      "The target weights the protocol is managed against: the strategy sleeves (95 percent conservative DeFi yield, 5 percent agent tokens) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.",
+      "The target weights the protocol is managed against: the four strategy sleeves (conservative DeFi yield, protocol tokens, real world assets, hard assets) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.",
     backs: ["/allocation", "/"],
     contractType: "AllocationFramework",
     sizeHint: "about 1 KB",
