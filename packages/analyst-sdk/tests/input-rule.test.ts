@@ -17,6 +17,7 @@ import {
   type SeriesMapping,
 } from "../src/series-ids.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
+import { ratiosFromLegs } from "../src/transform/ratios.ts";
 
 const rows = [
   { date: "2024-01-05", indicator: "A", value: 5, source: "s" },
@@ -325,9 +326,10 @@ test("an input without the *_GROWTH ids reads them from DEFI_TVL and STABLES, to
 // No leg and no stored ratio keeps the 4.2 rule (the indicator is missing).
 test("one ratio leg without the other or a stored ratio throws MissingRatioLegError; ratio rows stay rejected", () => {
   const leg = [{ date: "2024-01-01", value: 4 }];
+  const resolve = (h: RawIndicatorHistory) => ratiosFromLegs(h, resolveInputHistory(h));
   let err: unknown;
   try {
-    resolveInputHistory({ "yahoo:HG=F": leg });
+    resolve({ "yahoo:HG=F": leg });
   } catch (e) {
     err = e;
   }
@@ -336,10 +338,10 @@ test("one ratio leg without the other or a stored ratio throws MissingRatioLegEr
   expect((err as MissingRatioLegError).missingLeg).toBe("yahoo:GC=F");
   expect((err as Error).message).toMatch(/COPPER_GOLD.*yahoo:GC=F/);
   // The denominator alone, named by its storage key, names the numerator.
-  expect(() => resolveInputHistory({ "research:SPY": leg, "yahoo:IWM": leg, "yahoo:MTUM": leg, "yahoo:XLU": leg, "yahoo:BTC-USD": leg })).toThrow(/BTC_ETH.*yahoo:ETH-USD/);
+  expect(() => resolve({ "research:SPY": leg, "yahoo:IWM": leg, "yahoo:MTUM": leg, "yahoo:XLU": leg, "yahoo:BTC-USD": leg })).toThrow(/BTC_ETH.*yahoo:ETH-USD/);
   // A stored ratio with one leg is used as stored; no leg at all leaves it missing.
-  expect(resolveInputHistory({ "yahoo:HG=F": leg, COPPER_GOLD: leg }).COPPER_GOLD).toBe(leg);
-  expect("COPPER_GOLD" in resolveInputHistory({ VIX: leg })).toBe(false);
+  expect(resolve({ "yahoo:HG=F": leg, COPPER_GOLD: leg }).COPPER_GOLD).toBe(leg);
+  expect("COPPER_GOLD" in resolve({ VIX: leg })).toBe(false);
   // A source input still may not carry a ratio row.
   expect(() => parseSourceCsv("date,series,value\n2024-01-01,COPPER_GOLD,1.5")).toThrow(CalculatedRowError);
 });

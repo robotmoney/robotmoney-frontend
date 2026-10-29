@@ -65,6 +65,7 @@ import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { mergeRatioSeries as fetchRatio } from "../src/extract/sources.ts";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
 import { RATIO_LEG_MAPPING, resolveInputHistory } from "../src/series-ids.ts";
+import { ratiosFromLegs } from "../src/transform/ratios.ts";
 import { buildReport, runRegime } from "../src/run.ts";
 import type { Point, RawIndicatorHistory } from "../src/types.ts";
 
@@ -114,7 +115,7 @@ describe("ratios from legs (SDK-10)", () => {
 
   test("each of the eight ratios is mergeRatioSeries(legs) byte for byte, and the report equals the stored-ratio report", () => {
     expect(RATIOS.length).toBe(8);
-    const resolved = resolveInputHistory(sourceOnly);
+    const resolved = ratiosFromLegs(sourceOnly, resolveInputHistory(sourceOnly));
     for (const ratio of RATIOS) {
       const [num, den] = legsOf(ratio);
       expect(JSON.stringify(resolved[ratio]), ratio).toBe(JSON.stringify(mergeRatioSeries(legs[num]!, legs[den]!)));
@@ -128,7 +129,7 @@ describe("ratios from legs (SDK-10)", () => {
     // Legs that would give a different ratio: the stored one must win.
     const other: Point[] = legs["yahoo:GC=F"]!.map((p) => ({ date: p.date, value: p.value * 2 }));
     const replay: RawIndicatorHistory = { ...stored, "yahoo:HG=F": legs["yahoo:HG=F"]!, "yahoo:GC=F": other };
-    expect(resolveInputHistory(replay).COPPER_GOLD).toBe(stored.COPPER_GOLD!);
+    expect(ratiosFromLegs(replay, resolveInputHistory(replay)).COPPER_GOLD).toBe(stored.COPPER_GOLD!);
     const canon = (h: RawIndicatorHistory) => JSON.stringify(buildReport(runRegime(h)));
     expect(canon(replay)).toBe(canon(stored));
   }, 120_000);

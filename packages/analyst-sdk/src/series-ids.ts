@@ -20,9 +20,9 @@
 // RATIOS. A ratio indicator (COPPER_GOLD and the other Yahoo pairs) stores a
 // calculated value, not source data, so its storage key maps to the
 // indicator id with kind "calculated". A source-only input carries the two
-// legs instead, and resolveInputHistory computes the ratio from them with
-// mergeRatioSeries (analytics requirements 4.3, SDK-10). A stored ratio, when
-// present, is used unchanged.
+// legs instead, and the run calculates the ratio from them with
+// mergeRatioSeries (transform/ratios.ts; analytics requirements 4.3, SDK-10).
+// A stored ratio, when present, is used unchanged.
 //
 // SDK INPUT NAMES. The computation reads its inputs under the ids it reads
 // today (registry ids, and SPX, ETH, TBILL3M for the correlations and the
@@ -36,7 +36,6 @@
 import type { Point, RawIndicatorHistory } from "./types.ts";
 import { INDICATORS, type Indicator } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
-import { mergeRatioSeries } from "./transform/grid.ts";
 
 export type SeriesKind = "source" | "calculated";
 
@@ -171,8 +170,8 @@ export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSe
 // is backtest:ETH-USD); every other leg is stored under its own source id.
 // Production still reads the stored ratio, so these entries are not in
 // SERIES_MAPPING: they say where each leg's stream is stored, per ratio, and
-// which names resolveInputHistory reads a leg under (its source id or its
-// storage key) when the input stores no ratio.
+// which names a leg is read under (its source id or its storage key) when the
+// input stores no ratio (transform/ratios.ts).
 const LEG_KEYS_HELD_ELSEWHERE: Readonly<Record<string, string>> = {
   "yahoo:SPY": "research:SPY",
   "yahoo:BTC-USD": "research:BTC-USD",
@@ -189,16 +188,6 @@ export const RATIO_LEG_MAPPING: readonly SeriesMapping[] = Object.freeze(validat
   SERIES_MAPPING.filter((m) => m.kind === "calculated" && m.legs).flatMap((m) =>
     m.legs!.map((leg): SeriesMapping => ({ consumer: m.consumer, storageKey: ratioLegStorageKey(leg), series: leg, kind: "source", inputId: leg }))),
 ));
-
-// Each ratio id to its two legs (numerator first), from RATIO_LEG_MAPPING.
-const RATIO_LEGS: ReadonlyMap<string, readonly SeriesMapping[]> = (() => {
-  const m = new Map<string, SeriesMapping[]>();
-  for (const leg of RATIO_LEG_MAPPING) {
-    const ratio = leg.consumer.slice("indicator:".length);
-    (m.get(ratio) ?? m.set(ratio, []).get(ratio)!).push(leg);
-  }
-  return m;
-})();
 
 /** Every consumer's storage keys, sorted: what each consumer reads. */
 export function consumerStorageKeys(mapping: readonly SeriesMapping[] = SERIES_MAPPING): Record<string, string[]> {
@@ -292,9 +281,8 @@ export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapp
  * A source id alone feeds every consumer that reads it. One consumer's stream
  * named twice is rejected with both names. Names no consumer reads pass
  * through unchanged. An input that already uses the input ids comes back with
- * the same keys and the same arrays. A ratio the input does not store is
- * calculated from its two legs (mergeRatioSeries); one leg alone throws
- * MissingRatioLegError.
+ * the same keys and the same arrays. A ratio's legs pass through under their
+ * own names: transform/ratios.ts ratiosFromLegs calculates the ratio.
  */
 export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonly SeriesMapping[] = SERIES_MAPPING): RawIndicatorHistory {
   const resolved = new Map<string, string>(); // inputId -> the input name it is read from
@@ -318,21 +306,6 @@ export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonl
   const out: RawIndicatorHistory = {};
   for (const name of Object.keys(input)) if (!consumed.has(name)) out[name] = input[name]!;
   for (const [inputId, name] of resolved) out[inputId] = input[name]!;
-  // Analytics requirements 4.3 (SDK-10): a ratio the input does not store is
-  // calculated from its two legs, with mergeRatioSeries and nothing else. A
-  // stored ratio is used unchanged. One leg alone is an explicit error; no leg
-  // and no stored ratio leaves the ratio missing (the 4.2 rule).
-  for (const [ratio, legs] of RATIO_LEGS) {
-    if (Object.hasOwn(out, ratio)) continue;
-    const found = legs.map((leg) => {
-      const names = [leg.series, leg.storageKey].filter((n, i, a) => a.indexOf(n) === i && Object.hasOwn(input, n));
-      if (names.length > 1) throw new AmbiguousInputSeriesError(leg.consumer, [names[0]!, names[1]!]);
-      return names.length === 0 ? undefined : input[names[0]!]!;
-    });
-    const [num, den] = found;
-    if (num && den) out[ratio] = mergeRatioSeries(num, den);
-    else if (num || den) throw new MissingRatioLegError(ratio, legs[num ? 1 : 0]!.series, legs[num ? 0 : 1]!.series);
-  }
   // D74 amendment: an input that carries DEFI_TVL (or STABLES) and not
   // DEFI_GROWTH (or STABLES_GROWTH) feeds the growth indicator from it, the
   // series it is stored under. An input that names the growth id keeps it.
