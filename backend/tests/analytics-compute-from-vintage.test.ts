@@ -14,7 +14,15 @@ import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
-import { loadFrozenVintage } from "../src/analytics/store/run-ledger-store.ts";
+import {
+  REGIME_STORAGE_KEYS,
+  beginRun,
+  freezeVintage,
+  loadCommittedInputs,
+  loadFrozenVintage,
+  loadHistoricalSourceValues,
+} from "../src/analytics/store/run-ledger-store.ts";
+import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
@@ -171,4 +179,150 @@ describe("AN-16: the regime computes from the ledger heads its vintage pins", ()
     expect(body.values.every((v) => v.marketDate <= ASOF)).toBe(true);
     expect(new Set(body.values.map((v) => v.sourceKey)).has("backtest:^GSPC")).toBe(true);
   }, 300_000);
+});
+
+// Issue 1534 (review-data-integrity-001, the regime part of AN-17): a ledger
+// writer that INSERTs a row before the committed read and COMMITs after it.
+// knowledge_time is the INSERT clock, so the row sits below the read's cutoff
+// yet the read could not see it. A freeze that re-selects by the cutoff pins
+// it; a freeze from the read's versionIds does not.
+const VIX_KEY = "raw_indicator_history:VIX";
+const REGIME_KEYS = new Set(REGIME_STORAGE_KEYS);
+
+function racingEvidence(sourceKey: string, marketDate: string, value: number) {
+  return {
+    id: crypto.randomUUID(), provider: "fixture", parserVersion: "fixture:1", cacheIdentity: "race-1534",
+    requestedByRunId: null, events: [], fetches: [],
+    values: [{ sourceKey, marketDate, marketInstant: null, value, provenance: "seed" }],
+  };
+}
+
+/** Record `evidence` on a second connection, run `read` while it is uncommitted, then COMMIT. */
+async function readDuringUncommittedInsert<T>(
+  evidence: ReturnType<typeof racingEvidence>,
+  read: () => Promise<T>,
+): Promise<{ result: T; racingId: string }> {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let inserted!: (id: string) => void;
+  const ready = new Promise<string>((r) => (inserted = r));
+  const racer = sql.begin(async (tx) => {
+    const saved = await saveSourceAcquisition(evidence, tx);
+    inserted(saved.committed![0]!.versionId);
+    await gate;
+  });
+  // A racer that fails before inserting rejects here instead of hanging the test.
+  const racingId = await Promise.race([ready, racer.then(() => ready)]);
+  // postgres.js binds a timestamptz parameter through a JS Date (millisecond
+  // precision), so cutoff selection compares at the millisecond: keep the
+  // racing row's knowledge_time a clear millisecond below the read's clock.
+  await Bun.sleep(5);
+  try {
+    return { result: await read(), racingId };
+  } finally {
+    release();
+    await racer;
+  }
+}
+
+async function racingRun(sendIds: boolean) {
+  const base = await baseObservations();
+  const vix = base.registry.VIX!.filter((p) => p.date <= ASOF).at(-1)!;
+  const seen = { committed: [] as CommittedInputs[], freezeIds: [] as (readonly string[] | undefined)[], racingId: "" };
+  const d = directAnalyticsPersistence;
+  const persistence: AnalyticsPersistence = {
+    ...d,
+    async loadCommittedInputs(asof) {
+      const { result, racingId } = await readDuringUncommittedInsert(racingEvidence(VIX_KEY, vix.date, vix.value * 2), () => d.loadCommittedInputs!(asof));
+      seen.committed.push(result);
+      seen.racingId = racingId;
+      return result;
+    },
+    async freezeVintage(input) {
+      seen.freezeIds.push(input.regimeVersionIds);
+      if (sendIds) return d.freezeVintage(input);
+      const { regimeVersionIds: _dropped, ...withoutIds } = input;
+      return d.freezeVintage(withoutIds);
+    },
+  };
+  const source = poisonedSource(base, 2);
+  try {
+    const results = await runAnalytics(ASOF, "regime", source, persistence, noopTelemetrySink);
+    const vintageId = (results as { __runLedger?: { vintage: { vintageId: string } | null } }).__runLedger!.vintage!.vintageId;
+    const vintage = (await loadFrozenVintage(vintageId))!;
+    const [{ racing_known }] = await sql<{ racing_known: boolean }[]>`
+      SELECT v.knowledge_time <= d.knowledge_time_cutoff AS racing_known
+      FROM source_value_versions v, analytics_data_vintages d
+      WHERE v.id = ${seen.racingId}::bigint AND d.id = ${vintageId}::bigint`;
+    return { seen, vintage, racingKnown: racing_known, coordinate: vix };
+  } finally {
+    source.restore();
+  }
+}
+
+describe("issue 1534: the vintage freezes the exact versions the regime read", () => {
+  test("a head inserted before the cutoff and committed after the read is not a member; the regime-key members are the read's versionIds", async () => {
+    const { seen, vintage, racingKnown } = await racingRun(true);
+    expect(seen.committed).toHaveLength(1);
+    const readIds = seen.committed[0]!.values.map((v) => v.versionId);
+    expect(seen.freezeIds).toEqual([readIds]);
+    // The race was hit: the racing row is dated below the vintage's cutoff, and the read did not see it.
+    expect(racingKnown).toBe(true);
+    expect(readIds).not.toContain(seen.racingId);
+    const regimeMembers = vintage.members.filter((m) => REGIME_KEYS.has(m.sourceKey)).map((m) => m.versionId);
+    expect(new Set(regimeMembers)).toEqual(new Set(readIds));
+    expect(regimeMembers).toHaveLength(readIds.length);
+    expect(vintage.members.map((m) => m.versionId)).not.toContain(seen.racingId);
+  }, 300_000);
+
+  test("red control: the same interleaving frozen by cutoff selection (no regimeVersionIds) pins the racing row", async () => {
+    const { seen, vintage, racingKnown } = await racingRun(false);
+    expect(racingKnown).toBe(true);
+    expect(seen.committed[0]!.values.map((v) => v.versionId)).not.toContain(seen.racingId);
+    expect(vintage.members.map((m) => m.versionId)).toContain(seen.racingId);
+  }, 300_000);
+
+  test("store level: freezeVintage with the read's cutoff and versionIds pins those ids under regime keys and the cutoff selection elsewhere, and replays its digest", async () => {
+    const asof = "2024-01-10";
+    const series = (key: string, scale: number) =>
+      saveSourceAcquisition({
+        ...racingEvidence(key, "2024-01-01", 0),
+        values: Array.from({ length: 5 }, (_, i) => ({
+          sourceKey: key, marketDate: `2024-01-0${i + 1}`, marketInstant: null, value: (i + 1) * scale, provenance: "seed",
+        })),
+      });
+    await series(VIX_KEY, 10);
+    await series("research:QQQ", 3);
+    expect(REGIME_KEYS.has("research:QQQ")).toBe(false);
+
+    const { result: committed, racingId } = await readDuringUncommittedInsert(
+      racingEvidence(VIX_KEY, "2024-01-05", 999),
+      () => loadCommittedInputs(REGIME_STORAGE_KEYS, asof),
+    );
+    const readIds = committed.values.map((v) => v.versionId);
+    expect(readIds).toHaveLength(5);
+    expect(readIds).not.toContain(racingId);
+
+    const { runId, methodologyVersionId } = await beginRun({
+      runKey: crypto.randomUUID(), asof, toolId: "race-1534", sourceLabel: "fixture",
+      methodology: { toolId: "race-1534", versionLabel: "v-test", config: { test: "1534" } },
+      buildIdentity: "race-1534-build",
+    });
+    const frozen = await freezeVintage({
+      runId, toolId: "race-1534", knowledgeTimeCutoff: committed.knowledgeTimeCutoff, marketTimeCutoff: asof,
+      methodologyVersionId, buildIdentity: "race-1534-build", regimeVersionIds: readIds,
+    });
+    const vintage = (await loadFrozenVintage(frozen.vintageId))!;
+    expect(vintage.manifestDigest).toBe(frozen.manifest.manifestDigest);
+    const regime = vintage.members.filter((m) => REGIME_KEYS.has(m.sourceKey)).map((m) => m.versionId);
+    expect(new Set(regime)).toEqual(new Set(readIds));
+    expect(regime).not.toContain(racingId);
+    const byCutoff = await loadHistoricalSourceValues(committed.knowledgeTimeCutoff, asof);
+    // The racing row is under the cutoff: a re-selection would have pinned it.
+    expect(byCutoff.map((m) => m.versionId)).toContain(racingId);
+    const others = vintage.members.filter((m) => !REGIME_KEYS.has(m.sourceKey)).map((m) => m.versionId).sort();
+    expect(others).toEqual(byCutoff.filter((m) => !REGIME_KEYS.has(m.sourceKey)).map((m) => m.versionId).sort());
+    expect(others).toHaveLength(5);
+    expect(vintage.memberCount).toBe(10);
+  });
 });

@@ -386,8 +386,9 @@ export async function runAnalytics(
   }
   // ── AN-16 (owner decision): compute from the values the vintage pins ─────
   // The regime computes from the ledger heads, read at one database-clock
-  // cutoff after every acquisition of this run, and the vintage is frozen at
-  // that same cutoff, so its members are exactly the values computed from.
+  // cutoff after every acquisition of this run. The vintage records that
+  // cutoff and freezes the exact versionIds of this read as its regime-key
+  // members (issue 1534), so its members are exactly the values computed from.
   // The raw floor written above is no longer an input: within the D56
   // tolerance it can hold a different value for a date than the ledger head
   // (a seed wrote S, the first provider observation F was within tolerance).
@@ -395,10 +396,12 @@ export async function runAnalytics(
   // fixture sources) has no ledger input, and the regime computes from the
   // committed raw floor.
   let knowledgeTimeCutoff: string | null = null;
+  let regimeVersionIds: string[] | undefined;
   if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && registryInLedger) {
     const t0 = new Date();
     const committed = await persistence.loadCommittedInputs(asof);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
+    regimeVersionIds = committed.values.map((v) => v.versionId);
     const fromLedger = inputHistoryFromStorage(committed.values);
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
@@ -586,7 +589,9 @@ export async function runAnalytics(
   // frozen as of the knowledge-time cutoff and `asof` (market-time cutoff)
   // — the complete, reproducible input universe this run's outputs above
   // were computed against. The cutoff is the database clock the regime read
-  // its inputs at (AN-16); a run that read none uses NOW. A freeze failure
+  // its inputs at (AN-16); a run that read none uses NOW. The regime-key
+  // members are the exact versions that read returned, never re-selected by
+  // the cutoff (issue 1534); a run that read none sends no list. A freeze failure
   // fails the WHOLE run: it is part of the mandatory ledger, not best-effort
   // telemetry.
   vintage = await persistence.freezeVintage({
@@ -596,6 +601,7 @@ export async function runAnalytics(
     marketTimeCutoff: asof,
     methodologyVersionId,
     buildIdentity,
+    ...(regimeVersionIds ? { regimeVersionIds } : {}),
   });
   } catch (e) {
     runFailed = e;
