@@ -1,0 +1,71 @@
+{
+  "format": 1,
+  "backup": "2026-09-01T000000Z",
+  "source": "db",
+  "tool": {
+    "name": "archive-fixture-regenerate",
+    "commit": null
+  },
+  "append_only": {
+    "source_value_versions": {
+      "watermark_before": null,
+      "watermark_after": "7",
+      "rows_added": 7,
+      "files": [
+        {
+          "path": "csv/2026-09-01T000000Z/data/source_value_versions.2026-08-31T230000Z_2026-08-31T230000Z.csv.gz",
+          "rows": 7,
+          "bytes_raw": 897,
+          "sha256_raw": "c3c77dbb3afb74c244c73144309e7d313be150ee470d20d7e58737b99271bfe7"
+        }
+      ]
+    }
+  },
+  "revisions": {
+    "regime_snapshots": {
+      "key": [
+        "date"
+      ],
+      "file": {
+        "path": "csv/2026-09-01T000000Z/revisions/regime_snapshots.csv.gz",
+        "rows": 2,
+        "bytes_raw": 242,
+        "sha256_raw": "4bdfcfe2165a94878dc7426f5603ddde4f79f9f2ca833cfe3b990b37b8a92d78"
+      },
+      "upserts": 2,
+      "deletes": 0,
+      "rows_in_state": 2
+    },
+    "raw_indicator_history": {
+      "key": [
+        "indicator",
+        "date"
+      ],
+      "file": {
+        "path": "csv/2026-09-01T000000Z/revisions/raw_indicator_history.csv.gz",
+        "rows": 4,
+        "bytes_raw": 244,
+        "sha256_raw": "4da4ac9693d008beac88e0d725a9b4ae78e8a7eb1796cece1264928d3bcc76fb"
+      },
+      "upserts": 4,
+      "deletes": 0,
+      "rows_in_state": 4
+    },
+    "asset_prices": {
+      "key": [
+        "price_date",
+        "symbol",
+        "time_basis"
+      ],
+      "file": {
+        "path": "csv/2026-09-01T000000Z/revisions/asset_prices.csv.gz",
+        "rows": 2,
+        "bytes_raw": 247,
+        "sha256_raw": "e32360abd33da80089c5a34cf81cb8a73538e93162f3446a0ddddc8f4a445d99"
+      },
+      "upserts": 2,
+      "deletes": 0,
+      "rows_in_state": 2
+    }
+  }
+}

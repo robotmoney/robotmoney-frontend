@@ -1,0 +1,3 @@
+price_date,symbol,time_basis,price_usd,currency,source
+2026-08-31,BNKR,utc-daily-close,0.000307653898611427,USD,geckoterminal
+2026-08-31,ETH,utc-daily-close,2510.75,USD,geckoterminal
