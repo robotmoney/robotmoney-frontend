@@ -29,7 +29,7 @@ Non-goals:
 - **Files only at the edge.** The command line is the only place that reads or writes a file.
 - **Install alone.** The package installs from a sparse clone of its own directory.
 - **No archive import.** The SDK never imports the archive tool. The archive tool may import the SDK.
-- **The archive tool fetches supported series.** csvb owns the local copy, every fill and the download client. The SDK's `fetch` command owns the supplementary directory: it fetches with the source clients in `src/extract/` and writes nowhere else. Provider collection, archive downloads and supplementary fetches are extract-stage acquisition, completed before downstream execution. The SDK run reads supplied local inputs.
+- **The archive tool fetches supported series.** csvb (`packages/csvb`) owns the local copy, every fill and the download client. The SDK's `fetch` command owns the supplementary directory: it fetches with the source clients in `src/extract/` and writes nowhere else. Provider collection, archive downloads and supplementary fetches are extract-stage acquisition, completed before downstream execution. The SDK run reads supplied local inputs.
 - **Two directories.** Supported series live in the local copy. Supplementary series live in the supplementary directory. The two are separate directories, and neither is inside the other. Nothing writes a supplementary series into the local copy, and a fill never writes into the supplementary directory.
 - **No HTTP after extract.** Preparation, transforms, regime and research calculations, allocation, backtesting and reporting, including callbacks and dependencies, make no HTTP requests. A run never downloads a missing series or invokes csvb or a source client. Missing required inputs fail explicitly; optional missing inputs produce the documented missing result.
 - **Clients can tune every analysis.** Constants are options with defaults: each is an optional field of one options object whose default is today's value, and an unknown option key throws `RangeError` naming the key. Strategy steps are callbacks: expected returns, covariance, solver, the mapping onto holdings, the re-optimisation dates and the simulator are functions a client passes. Building blocks are exported: the solvers, the covariance, the schedule, the simulators and the statistics are exported from the package entry and return plain data, so a client composes its own analysis from them or extends the SDK's types.
@@ -40,10 +40,10 @@ The local copy is a set of backups on the analyst's machine, in the archive form
 
 **Default fill, for holders of repo access.** The recommended path has two steps:
 
-1. Download the backups from the robotmoney/csv-backups repo. A clone brings every backup up to the newest one.
+1. Download the backups from the robotmoney/csv-backups repo. It holds data only; csvb lives in `packages/csvb` of this repo. A clone brings every backup up to the newest one.
 2. Resume from the checkpoint with `csvb backup --source api`. The tool reads the newest backup's watermarks and fetches only what is newer, as archives from the public API.
 
-The default exists so an analyst gets up and running faster. The repo gives the bulk in one transfer, with no long run of paced API requests. The API gives the increment, so a second run costs only what changed. A past state is pinned by naming a backup id.
+The two steps join: the repo's snapshot-time chain and the API's day-cut chain meet at the legacy junction backup, and both writers cut the same day-cut backups after it (D80). The default exists so an analyst gets up and running faster. The repo gives the bulk in one transfer, with no long run of paced API requests. The API gives the increment, so a second run costs only what changed. A past state is pinned by naming a backup id.
 
 **Other fills:**
 
@@ -120,7 +120,7 @@ The download client is a polite, resumable reader. It fetches archives under the
 
 ## 8. Success criteria and tests
 
-Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative to the robotmoney/csv-backups repo.
+Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative to `packages/csvb/`.
 
 | Criterion | Test |
 | --------- | ---- |

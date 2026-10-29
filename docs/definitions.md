@@ -59,7 +59,7 @@ These terms support the four above.
 | Term | Meaning |
 | ---- | ------- |
 | Backup | A directory of archives written at one moment, named by that moment (the backup id). Its `backup.json` describes it. |
-| Format 1 | The layout of a backup, as robotmoney/csv-backups writes it. |
+| Format 1 | The layout of a backup, as csvb (`packages/csvb`) and the public archive routes write it through one module (D72, D80). A backup is cut at each UTC day boundary; earlier snapshot-time backups stay valid. |
 | Version | One collected value of source data, with the time we observed it. A revision by the external party adds a version. It never edits one. |
 | Published report | The report one analytics run created. It is kept byte for byte and never changes. |
 | Vintage | The record of one run: the source data versions it read and the report it published. A later run adds a vintage. The sequence of vintages is the revision history of the reports. |
@@ -72,7 +72,7 @@ These terms support the four above.
 | Supplementary series | A source series an analyst collects outside the platform, for an asset or a date range the platform does not carry. It is source data under the same rules, stored in the supplementary directory with a manifest. The SDK's `fetch` command fetches the common providers (Yahoo, FRED). |
 | Supplementary directory | The directory on an analyst's machine that holds supplementary series, one file per source id. It is never the local copy and never inside or around it. |
 | Local copy | The backups on an analyst's machine. It holds supported series only. |
-| Fill | A way to bring the local copy up to date: from the csv-backups repo, from the API or from the database. A fill never writes supplementary series. |
+| Fill | A way to bring the local copy up to date: from the csv-backups repo (data only), from the API or from the database with csvb. A repo clone and an API increment join at the legacy junction backup (D80). A fill never writes supplementary series. |
 | Watermark | The last id or time the local copy holds for one table. A fill fetches only what is past it. |
 | Input file | A report of source data for one run, written from the local copy. The analyst SDK computes from it. |
 | Manifest | The sidecar of an input file. It names the backup, the run, the as-of date, the fill, the row count, the input file's checksum, the methodology id and exact code revision. |

@@ -108,15 +108,15 @@ The API never recomputes a calculated indicator. Calculated indicators reach the
 
 ### 4.5 Archive format
 
-There is one archive format: format 1, the layout robotmoney/csv-backups writes (decision D72). The module adds no second format.
+There is one archive format: format 1, the layout csvb writes (decisions D72 and D80). The module adds no second format. One module, `packages/analyst-sdk/src/archive/format1.ts`, defines it; csvb (`packages/csvb`), the public archive routes and the SDK's reader all use it.
 
-- **Backups.** One directory per backup, named by the snapshot time (`csv/<backup id>/`). Each holds `backup.json` and archives.
+- **Backups.** One directory per backup, named by its backup id (`csv/<backup id>/`). Each holds `backup.json` and archives. Both writers cut a backup at each UTC day boundary, one settle hour after it (`YYYY-MM-DDT000000Z`). Snapshot-time backups written before the day cut stay valid history; the newest of them is the junction where a repo clone and the API chain meet (D80).
 - **Write-once.** A backup only adds archives. Nothing is overwritten.
 - **Two kinds of archive.** Data archives only gain rows. They hold every observed version of source data (`source_value_versions`), the run ledger, the vintages and the published reports (`analytics_output_snapshots`). Revision archives hold the rows that are new or changed since the last backup, with `_backup` and `_op` columns. They cover `raw_indicator_history`, `asset_prices` and `regime_snapshots`. The state at any backup is the replay of the revision archives up to it.
 - **Pinning.** A backup id names an exact state. `csvb resolve --as-of <id>` returns a report as of that backup.
 - **Identity.** An archive is identified by the SHA-256 of its uncompressed canonical bytes, recorded in `backup.json` as `sha256_raw` beside `bytes_raw`. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, and no gzip encoder, Bun version or container image is part of an archive's identity. A client decompresses an archive, then verifies the hash. `backup.json` records no hash or size of the gzip bytes.
 - **Provenance.** `backup.json` records `source` (`db` or `api`) and `consistency` (`snapshot` or `paged`).
-- **Location.** Backups live outside this repo. The tool refuses a backup directory inside a checkout of this repo.
+- **Location.** Backups live in robotmoney/csv-backups, outside this repo. The tool lives in this repo (`packages/csvb`) and refuses a backup directory inside a checkout of it.
 - **Access.** The csv-backups repo is private and holds production data.
 
 ### 4.6 The API serves archives
@@ -135,7 +135,7 @@ Model portfolio inputs (asset prices, lending yields and the T-bill rate) are so
 
 Archives are the unit of transfer. A chunk is one archive.
 
-- **Size.** An archive is at most 90 MB, as the csv-backups tool writes it (`--part-mb`, default 64), because GitHub rejects files over 100 MB.
+- **Size.** An archive is at most 90 MB, as csvb (`packages/csvb`) writes it (`--part-mb`, default 64), because GitHub rejects files over 100 MB.
 - **Naming.** A data archive is named by the earliest and latest row time it holds. A client picks archives by name, without opening them.
 - **Write-once.** A served archive never changes. Its content hash (`sha256_raw`) is its identity, never its gzip bytes.
 - **Watermarks.** A client holds, per table, the last id or time it has. It asks only for archives past that point, so a second run costs only what changed.

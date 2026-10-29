@@ -121,6 +121,14 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/local-copy.test.ts:17
+      # Issue 1477: format 1's writer half ran (COPY CSV rows, part splitting,
+      # names, the day-cut rule and the legacy junction), and the inputs suite
+      # read the legacy snapshot-time fixture beside the day-cut copies.
+      - name: Format 1 writer suite ran (issue 1477)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/format1-writer.test.ts:12
+          tests/inputs.test.ts:25
       # Issue 1513: the drift-aware simulation suite ran (never, daily, band and
       # target-change fixtures, the calendar rules, the BigInt-rational weight
       # update, parity with simulatePortfolio, the option checks).

@@ -24,7 +24,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { Transform } from "node:stream";
 import { createGzip, gunzipSync, gzipSync } from "node:zlib";
 import { ARCHIVE_BACKUP_RECORD_SCHEMA, ARCHIVE_PART_BYTES, PUBLIC_ANALYTICS_SCHEMAS, ROUTES } from "@robotmoney/contract";
@@ -35,6 +35,7 @@ import {
   _resetArchiveForTests,
   _setArchiveClockForTests,
   _setArchiveGzipForTests,
+  _setArchiveJunctionForTests,
   _setArchivePartBytesForTests,
   ARCHIVE_TABLES,
 } from "../../src/analytics/store/public-archive-store.ts";
@@ -172,6 +173,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(() => {
+  _setArchiveJunctionForTests(null);
   _setArchiveGzipForTests(null);
   _setArchiveClockForTests(null);
   _setArchivePartBytesForTests(null);
@@ -817,9 +819,16 @@ describe("committed persistence only", () => {
     const reached = [
       ...importGraph(join(src, "api", "routes", "public-analytics.ts")),
       ...importGraph(join(src, "analytics", "store", "public-archive-store.ts")),
-    ].map((f) => f.slice(src.length + 1));
-    expect(reached).toContain("analytics/store/public-archive-store.ts");
-    const forbidden = reached.filter((f) => /^analytics\/(analyze|extract|transform|access)\/|^analytics\/(prepare|index)\.ts$|analyst-sdk/.test(f));
+    ].map((f) => relative(join(src, "..", ".."), f));
+    expect(reached).toContain("backend/src/analytics/store/public-archive-store.ts");
+    // The store writes format 1 through the SDK's format module (issue 1477), which reaches only the series ids and
+    // the indicator catalog: no SDK calculation, no source client.
+    expect(reached).toContain("packages/analyst-sdk/src/archive/format1.ts");
+    const forbidden = reached.filter(
+      (f) =>
+        /^backend\/src\/analytics\/(analyze|extract|transform|access)\/|^backend\/src\/analytics\/(prepare|index)\.ts$/.test(f) ||
+        /^packages\/analyst-sdk\/src\/(transform|allocate|extract|access)\/|^packages\/analyst-sdk\/src\/analyze\/(?!indicators\.ts$)|^packages\/analyst-sdk\/src\/(run|prepare|index|coverage)\.ts$|^packages\/analyst-sdk\/src\/archive\/local-copy\.ts$/.test(f),
+    );
     expect(forbidden).toEqual([]);
   });
 
@@ -851,4 +860,104 @@ describe("committed persistence only", () => {
       globalThis.fetch = realFetch;
     }
   });
+});
+
+// Issue 1477: the legacy junction, planted synthetically (never production watermarks). Format 1's cut rule makes
+// the newest snapshot-time csvb backup one extra cut point between the day cuts around it, so a repo clone and an API
+// increment join at its id.
+describe("archive: the legacy junction", () => {
+  const JUNCTION = "2001-01-02T130000Z";
+  const AT = "2001-01-02 13:00:00+00";
+
+  /** Each served table's watermark at AT, by the day-cut rule's own definition. */
+  async function watermarksAt(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const t of ARCHIVE_TABLES) {
+      let rows: { wm: string | null }[];
+      if ("column" in t.time) {
+        rows = await fixtureDb.unsafe(
+          `SELECT (SELECT max(x.id) FROM ${t.name} x WHERE x.id < COALESCE((SELECT id FROM ${t.name} WHERE ${t.time.column} >= $1::timestamptz ORDER BY id LIMIT 1), (SELECT max(id) FROM ${t.name}) + 1))::text AS wm`,
+          [AT],
+        );
+      } else {
+        const l = t.time.lookup;
+        rows = await fixtureDb.unsafe(`SELECT max(id)::text AS wm FROM ${t.name} WHERE ${l.column} <= $1::bigint`, [out[l.table]!]);
+      }
+      out[t.name] = rows[0]!.wm!;
+    }
+    return out;
+  }
+  async function maxIds(): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const t of ARCHIVE_TABLES) out[t.name] = (await fixtureDb.unsafe(`SELECT max(id)::text AS wm FROM ${t.name}`))[0]!.wm;
+    return out;
+  }
+  async function served(): Promise<{ ids: string[]; records: Map<string, { body: any; bytes: Uint8Array }> }> {
+    const ids = ((await (await get(P.archiveBackups)).json()) as any).backups.map((b: any) => b.backup) as string[];
+    const records = new Map<string, { body: any; bytes: Uint8Array }>();
+    for (const id of ids) records.set(id, await record(id));
+    return { ids, records };
+  }
+
+  test("pre-junction day cuts are unchanged, the junction is served between them, and the next day chains from it", async () => {
+    _setArchiveJunctionForTests(null);
+    const base = await served();
+    expect(base.ids).not.toContain(JUNCTION);
+
+    const planted = await watermarksAt();
+    for (const [t, wm] of Object.entries(planted)) expect(wm, `${t} has a row before the junction`).toBeTruthy();
+    _setArchiveJunctionForTests({ id: JUNCTION, watermarks: planted });
+    try {
+      const got = await served();
+      // The list: the day cuts, with the junction in its place.
+      expect(got.ids).toEqual([...base.ids, JUNCTION].sort());
+      const at = got.ids.indexOf(JUNCTION);
+      const before = got.ids[at - 1]!;
+      const after = got.ids[at + 1]!;
+      expect([before, after]).toEqual(["2001-01-02T000000Z", "2001-01-03T000000Z"]);
+      // (a) every pre-junction day cut, byte for byte.
+      for (const id of got.ids.slice(0, at)) expect(Buffer.from(got.records.get(id)!.bytes).equals(Buffer.from(base.records.get(id)!.bytes)), id).toBe(true);
+      // (b) the junction backup continues from the preceding day cut and ends at the planted watermarks.
+      const j = got.records.get(JUNCTION)!.body;
+      expect(validateJsonSchema(schema(P.archiveFiles), j)).toEqual([]);
+      expect(j.snapshot.exported_at_db).toBe("2001-01-02 13:00:00+00");
+      for (const t of ARCHIVE_TABLES) {
+        expect(j.append_only[t.name].watermark_before, t.name).toBe(got.records.get(before)!.body.append_only[t.name].watermark_after);
+        expect(j.append_only[t.name].watermark_after, t.name).toBe(planted[t.name]);
+      }
+      // (c) the next day cut chains from the junction, and ends where it did without it.
+      const next = got.records.get(after)!.body;
+      for (const t of ARCHIVE_TABLES) {
+        expect(next.append_only[t.name].watermark_before, t.name).toBe(planted[t.name]);
+        expect(next.append_only[t.name].watermark_after, t.name).toBe(base.records.get(after)!.body.append_only[t.name].watermark_after);
+      }
+      // Later day cuts are byte for byte what they were: the junction only splits one day.
+      for (const id of got.ids.slice(at + 2)) expect(Buffer.from(got.records.get(id)!.bytes).equals(Buffer.from(base.records.get(id)!.bytes)), id).toBe(true);
+      // The junction's archives are served, and hash to its record.
+      for (const t of Object.values(j.append_only) as any[]) {
+        for (const f of t.files) {
+          const res = await get(`${P.archiveFiles}${f.path}`);
+          expect(res.status, f.path).toBe(200);
+          expect(sha256(gunzipSync(await bytesOf(res)))).toBe(f.sha256_raw);
+        }
+      }
+      expect((j.append_only.analytics_overwrite_events.files as any[]).length).toBe(1); // the 12:00 revision row
+    } finally {
+      _setArchiveJunctionForTests(null);
+    }
+  }, 180_000);
+
+  test("a junction no row follows is no cut: the list and every record are unchanged", async () => {
+    _setArchiveJunctionForTests(null);
+    const base = await served();
+    _setArchiveJunctionForTests({ id: JUNCTION, watermarks: await maxIds() });
+    try {
+      const got = await served();
+      expect(got.ids).toEqual(base.ids);
+      expect((await get(`${P.archiveFiles}csv/${JUNCTION}/backup.json`)).status).toBe(404);
+      for (const id of got.ids) expect(Buffer.from(got.records.get(id)!.bytes).equals(Buffer.from(base.records.get(id)!.bytes)), id).toBe(true);
+    } finally {
+      _setArchiveJunctionForTests(null);
+    }
+  }, 180_000);
 });

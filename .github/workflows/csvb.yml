@@ -1,0 +1,84 @@
+# csvb tier (issue 1477): the archive tool's own tests (`bun test` inside
+# packages/csvb) against a real Postgres in Docker, and a typecheck. csvb writes
+# and reads format 1 through the analyst SDK's format module
+# (packages/analyst-sdk/src/archive), so a change there runs this suite too.
+# The byte parity between csvb and the public archive routes runs in backend.yml
+# (backend/tests/csvb-api-archive-parity.test.ts), against the backend schema.
+#
+# CI taxonomy class: system-correctness (the suite starts Postgres containers).
+# Per the taxonomy gating matrix it is DEFERRED until a PR is ready for review:
+# it skips on draft PRs and runs once the PR is marked ready, plus on push to
+# the default branch and release branches.
+#
+# Path-gated like analyst-sdk.yml: a job-level `if:` skip driven by
+# dorny/paths-filter, never workflow-level `on.paths`, so a skipped run reports
+# a real `skipped` conclusion. `push` to main is never path-filtered.
+name: csvb
+env:
+  CI_CLASS: system-correctness
+on:
+  push:
+    branches: [main, "releases-*", "qa/**"]
+  # NIGHTLY MIRROR of the merge-to-main set (issue #373); see unit.yml.
+  schedule:
+    - cron: "49 4 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  changes:
+    # Plumbing, not an assurance job: it runs in every context, drafts included,
+    # so the main job has a filter output to gate on.
+    env:
+      CI_CLASS: ignore
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      csvb: ${{ steps.filter.outputs.csvb }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d
+        id: filter
+        with:
+          filters: |
+            csvb:
+              - 'packages/csvb/**'
+              - 'packages/analyst-sdk/src/archive/**'
+              - '.github/workflows/csvb.yml'
+              # The suite guard the job runs (issue 1421).
+              - 'scripts/checks/assert-junit-suites.ts'
+
+  csvb:
+    needs: [changes]
+    # Deferred until ready-for-review: run on push (non-PR) and on non-draft PRs.
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.draft == false && needs.changes.outputs.csvb == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+          no-cache: true
+      - name: Install
+        working-directory: packages/csvb
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        working-directory: packages/csvb
+        run: bunx tsc --noEmit
+      # tests/pg.ts starts one named Postgres container per suite and removes
+      # exactly that container. A missing Docker fails the run loudly.
+      - name: csvb tests (Postgres in Docker)
+        working-directory: packages/csvb
+        run: bun test --timeout=120000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/csvb.junit.xml"
+      # Issue 1477: the ported backup and audit suites ran with at least their
+      # case counts in robotmoney/csv-backups (26 and 9), the legacy-layout
+      # verify and the import boundary ran, and none was skipped.
+      - name: csvb suites ran (issue 1477)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/csvb.junit.xml"
+          tests/backup.test.ts:28
+          tests/audit.test.ts:9
+          tests/verify-legacy.test.ts:3
+          tests/boundary.test.ts:2

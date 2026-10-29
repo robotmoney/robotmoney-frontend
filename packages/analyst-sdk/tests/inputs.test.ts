@@ -92,6 +92,37 @@ describe("generation from both local copies", () => {
     }
   });
 
+  // Issue 1477: the legacy snapshot-time layout, as csvb wrote it before the day cut (a synthetic chain of the same
+  // rows, tests/fixtures/archive/legacy-snapshot). Its ids are not day cuts; the shared BACKUP_ID_RE reads both.
+  test("the legacy snapshot-time copy and the day-cut copies write the same inputs, and only the manifest's backup id differs", async () => {
+    const all = await results;
+    const legacy = join(ARCHIVE, "legacy-snapshot");
+    const ids = readdirSync(join(legacy, "csv")).sort();
+    expect(ids.length).toBe(2);
+    for (const id of ids) expect(id).not.toMatch(/T000000Z$/);
+    for (const run of [RUN1, RUN2]) {
+      for (const json of [false, true]) {
+        const g = await generate(legacy, run, json);
+        expect(g.code, g.stderr).toBe(0);
+        const name = json ? "inputs.json" : "inputs.csv";
+        const day = all.find((x) => x.c === "api-only" && x.r === run && x.json === json)!;
+        expect(readFileSync(join(g.dir, name), "utf8")).toBe(readFileSync(join(day.g.dir, name), "utf8"));
+        const m = JSON.parse(readFileSync(join(g.dir, "inputs.manifest.json"), "utf8"));
+        const d = JSON.parse(readFileSync(join(day.g.dir, "inputs.manifest.json"), "utf8"));
+        expect(m.backup_id).toBe(ids[ids.length - 1]);
+        expect(m.source).toBe("db");
+        expect({ ...m, backup_id: d.backup_id, source: d.source }).toEqual(d);
+      }
+    }
+    // As of the first legacy backup, run 2 does not exist yet; run 1 does.
+    const early = await generate(legacy, RUN2);
+    expect(early.code).toBe(0);
+    const p = Bun.spawn(["bun", join(PKG, "bin/inputs.ts"), "--archive", legacy, "--run", RUN2, "--as-of", ids[0]!, "--out", mkdtempSync(join(TMP, "out-"))], { cwd: PKG, stdout: "pipe", stderr: "pipe" });
+    const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+    expect(code).toBe(1);
+    expect(stderr).toContain(`run ${RUN2} is not in the local copy's run ledger`);
+  });
+
   test("the input is exactly the run's frozen vintage, not the newest values", async () => {
     const all = await results;
     const csvOf = (run: string) => readFileSync(join(all.find((x) => x.r === run && !x.json && x.c === "api-only")!.g.dir, "inputs.csv"), "utf8");
