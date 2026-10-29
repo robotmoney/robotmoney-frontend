@@ -6064,6 +6064,30 @@ This settles three points.
 2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, a grant migration under the normal migration rules enables it.
 3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
 
+### Amendment (issue 1514, owner 2026-10-28) — one key per DefiLlama source
+
+**Status:** proposed
+
+The owner amended point 1 of the 2026-10-22 clarification for two consumers.
+`indicator:DEFI_GROWTH` reads `raw_indicator_history:DEFI_TVL`, and
+`indicator:STABLES_GROWTH` reads `raw_indicator_history:STABLES`. Every other
+consumer keeps the key it reads.
+
+- **Why.** Both growth indicators store the raw DefiLlama level and apply
+  their change90 transform downstream, exactly as DEFI_TVL and STABLES store
+  it. Backup `2026-10-28T180400Z` holds equal values under both keys on every
+  date (3,319 dates for DEFI_TVL, 3,256 for STABLES). Two keys for one series
+  doubled the writes and the revisions.
+- **What changes.** No new row is written under `raw_indicator_history:DEFI_GROWTH`
+  or `raw_indicator_history:STABLES_GROWTH`, in `source_value_versions` or in
+  `raw_indicator_history`. The run reads both growth series from the DEFI_TVL
+  and STABLES stored series. An SDK input that carries DEFI_TVL or STABLES
+  and not the growth id feeds the growth indicator from it.
+- **What stays.** The stored history under the two old keys is kept as it is.
+  No consumer reads it. A vintage that holds it replays to its published
+  report byte for byte, because the values were equal. The archive's run input
+  keeps those rows under their storage key, an unread series.
+
 ---
 
 <a id="d75"></a>

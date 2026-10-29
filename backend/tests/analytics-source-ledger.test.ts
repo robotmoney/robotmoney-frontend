@@ -7,6 +7,7 @@ import { sql } from "../src/db/client.ts";
 import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
 import { registryRecordedLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
+import { STORED_UNDER } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { fetchFred } from "../src/analytics/extract/fred.ts";
 import { fetchJson } from "../src/analytics/extract/http.ts";
 import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckoterminal.ts";
@@ -72,7 +73,10 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
       })),
   ];
   const output = await fetchAll({ indicators, acquisitionSink: sink, requestedByRunId: 42 });
-  expect(Object.keys(output)).toHaveLength(indicators.length);
+  // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series and are not fetched (D74 amendment, issue 1514).
+  const fetchedIndicators = indicators.filter((i) => !(i.id in STORED_UNDER));
+  expect(fetchedIndicators.length).toBe(indicators.length - 2);
+  expect(Object.keys(output)).toHaveLength(fetchedIndicators.length);
 
   const all = await sql`SELECT id, provider, requested_by_run_id, cache_identity FROM source_acquisitions`;
   // Issue 1514: the ratio legs the registry records are acquisitions of their
@@ -80,7 +84,7 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   const legs = all.filter((r) => String(r.cache_identity).includes(":ratio-leg:"));
   expect(legs).toHaveLength(registryRecordedLegs(indicators).size);
   const acquisitions = all.filter((r) => !legs.includes(r));
-  expect(acquisitions).toHaveLength(indicators.length);
+  expect(acquisitions).toHaveLength(fetchedIndicators.length);
   // ENUMERATED, not listed by hand. AC1 is "every source variant enumerated by
   // sources.ts", so the expectation is read out of that switch: adding a
   // provider there and no evidence for it has to fail here, which a literal

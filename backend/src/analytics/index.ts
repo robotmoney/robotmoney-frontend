@@ -22,6 +22,7 @@
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { INDICATORS, PANELS } from "./analyze/indicators.ts";
+import { STORED_UNDER, storedIndicatorId } from "./extras.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import {
@@ -262,7 +263,9 @@ export async function runAnalytics(
     // idempotent, no-op once warm) so getPersisted() below sees it. Off by
     // default → CI/hermetic runs never touch it.
     if (process.env.ANALYTICS_FLOOR_SEED === "1") {
-      const res = await persistence.seedRawHistory(await loadRawFloorSeed());
+      // The vendored floor still carries the *_GROWTH ids; they are no longer written (D74 amendment).
+      const seed = Object.fromEntries(Object.entries(await loadRawFloorSeed()).filter(([id]) => !Object.hasOwn(STORED_UNDER, id)));
+      const res = await persistence.seedRawHistory(seed);
       if (res.seededPoints > 0) {
         logger.log?.(`[analytics] floor seed: wrote ${res.seededPoints} real rows across ${res.indicators} indicator(s) (cold-DB gap fill); ${res.existingPoints} already present`);
       } else {
@@ -279,6 +282,9 @@ export async function runAnalytics(
     let emptyFetches = 0;
     let excluded = 0;
     for (const ind of INDICATORS) {
+      // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH are read
+      // from the DEFI_TVL and STABLES series below; nothing is written for them.
+      if (Object.hasOwn(STORED_UNDER, ind.id)) continue;
       const prior = floor[ind.id] ?? [];
       const f = fetched[ind.id] ?? [];
       const m = mergeSeries(prior, f);
@@ -315,7 +321,7 @@ export async function runAnalytics(
     await persistence.saveRawHistory(merged, sourceLabel);
     const committedFloor = await persistence.loadRawHistory();
     registry = {};
-    for (const ind of INDICATORS) registry[ind.id] = committedFloor[ind.id] ?? [];
+    for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
     inputEvidence.registry = registryEvidence(merged, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);

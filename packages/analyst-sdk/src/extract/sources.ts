@@ -28,7 +28,7 @@
 import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
-import { ratioLegStorageKey } from "../series-ids.ts";
+import { ratioLegStorageKey, STORED_UNDER } from "../series-ids.ts";
 import { inventoryCollection } from "../inventory.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchYahoo } from "./yahoo.ts";
@@ -222,7 +222,9 @@ export async function fetchAll(
   } = {},
 ): Promise<Record<string, Point[]>> {
   const logger = opts.logger ?? console;
-  const inds = opts.indicators ?? INDICATORS;
+  // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH read the
+  // DEFI_TVL and STABLES series, so nothing is fetched or written for them.
+  const inds = (opts.indicators ?? INDICATORS).filter((ind) => !Object.hasOwn(STORED_UNDER, ind.id));
   const legsToRecord = registryRecordedLegs(inds);
   const recordedLegs = new Set<string>();
   // Issue 1514: a Yahoo ratio's legs are recorded as source data from the

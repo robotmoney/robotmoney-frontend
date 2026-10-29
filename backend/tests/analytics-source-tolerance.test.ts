@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { SOURCE_TOLERANCES, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
-import { EXTRA_WRITE_KEYS } from "../src/analytics/extras.ts";
+import { EXTRA_WRITE_KEYS, STORED_UNDER } from "../src/analytics/extras.ts";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { CoverageError } from "../src/analytics/coverage.ts";
@@ -57,7 +57,8 @@ function resolve(expression: string, file: string): string[] {
   const e = expression.trim();
   const literal = /^"([^"]+)"$/.exec(e);
   if (literal) return [literal[1]!];
-  if (e === "`raw_indicator_history:${ind.id}`") return INDICATORS.map((i) => `raw_indicator_history:${i.id}`);
+  // fetchAll skips the indicators stored under another's key (D74 amendment, issue 1514).
+  if (e === "`raw_indicator_history:${ind.id}`") return INDICATORS.filter((i) => !(i.id in STORED_UNDER)).map((i) => `raw_indicator_history:${i.id}`);
   if (e === "`research:${sym}`") return TOP7.map((sym) => `research:${sym}`);
   // data-source.ts writes the backtest extras through the D74 reverse mapping (issue 1423).
   const write = /^W\.(spx|eth|tbill3m)$/.exec(e);
@@ -438,3 +439,43 @@ async function reportRows(runId: string) {
     reports: reports.map((r) => ({ ...r, report_bytes: Buffer.from(r.report_bytes as Uint8Array).toString("base64") })),
   };
 }
+
+// ── Issue 1514: the D74 amendment, through real persistence ─────────────────
+// A live regime run, its providers faked at fetch, writes the DEFI_TVL and
+// STABLES series and nothing under the two *_GROWTH keys.
+describe("issue 1514: a live run writes no row under raw_indicator_history:DEFI_GROWTH or STABLES_GROWTH", () => {
+  useCleanDatabasePerTest(import.meta.file);
+  const realFetch = globalThis.fetch;
+  const realTtl = process.env.HTTP_FETCH_CACHE_TTL_MS;
+
+  test("source_value_versions and raw_indicator_history gain DEFI_TVL and STABLES rows and no *_GROWTH row", async () => {
+    const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+    const days = Array.from({ length: 30 }, (_, i) => Date.parse("2024-01-01T00:00:00Z") / 1000 + i * 86_400);
+    process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+    globalThis.fetch = ((input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.includes("historicalChainTvl")) return Promise.resolve(Response.json(days.map((d, i) => ({ date: d, tvl: 9e10 + i }))));
+      if (url.includes("stablecoincharts")) return Promise.resolve(Response.json(days.map((d, i) => ({ date: d, totalCirculatingUSD: { peggedUSD: 1.5e11 + i } }))));
+      if (url.includes("query2.finance.yahoo.com")) return Promise.resolve(Response.json({ chart: { result: [{ timestamp: days, indicators: { adjclose: [{ adjclose: days.map((_, i) => 100 + i) }] } }] } }));
+      if (url.includes("yields.llama.fi")) return Promise.resolve(Response.json({ status: "success", data: [{ timestamp: "2024-01-02T23:01:00.000Z", apyBase: 4 }] }));
+      if (url.includes("fredgraph.csv")) return Promise.resolve(new Response("DATE,VALUE\n2024-01-02,1.25\n"));
+      return Promise.reject(new Error(`no fake for ${url}`));
+    }) as typeof fetch;
+    try {
+      await runAnalytics("2024-01-30", "regime", liveDataSource, directAnalyticsPersistence, noopTelemetrySink).catch(() => null);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (realTtl === undefined) delete process.env.HTTP_FETCH_CACHE_TTL_MS;
+      else process.env.HTTP_FETCH_CACHE_TTL_MS = realTtl;
+    }
+    const versions = async (key: string) => (await sql`SELECT count(*)::int AS n FROM source_value_versions WHERE source_key = ${key}`)[0]!.n as number;
+    const floor = async (id: string) => (await sql`SELECT count(*)::int AS n FROM raw_indicator_history WHERE indicator = ${id}`)[0]!.n as number;
+    expect(await versions("raw_indicator_history:DEFI_TVL")).toBe(30);
+    expect(await versions("raw_indicator_history:STABLES")).toBe(30);
+    expect(await floor("DEFI_TVL")).toBe(30);
+    expect(await floor("STABLES")).toBe(30);
+    for (const id of ["DEFI_GROWTH", "STABLES_GROWTH"]) {
+      expect({ id, versions: await versions(`raw_indicator_history:${id}`), floor: await floor(id) }).toEqual({ id, versions: 0, floor: 0 });
+    }
+  }, 120_000);
+});
