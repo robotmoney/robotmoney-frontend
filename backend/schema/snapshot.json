@@ -128,7 +128,8 @@
     "0124_deactivate_bankr_token_vaults.sql",
     "0125_job_schedules_latest_only_catchup.sql",
     "0126_pipeline_worker_token_and_receipts.sql",
-    "0127_rm_worker_retired.sql"
+    "0127_rm_worker_retired.sql",
+    "0128_asset_prices_overwrite_events.sql"
   ],
   "exclusions": {
     "roles": [
@@ -140,7 +141,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "853cc5cc292d6e79614872961b48fb08873a744e3273b2df2d2c5aca12a1c243",
+  "contentHash": "b37b995b3994c2ddc53548d3f222cb15c28936090ac114bc8a282e83bfbd8f04",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4077,7 +4078,7 @@
       "definition": "CHECK ((((operation = 'update'::text) AND (replacement_row IS NOT NULL)) OR ((operation = 'delete'::text) AND (replacement_row IS NULL))))"
     },
     "constraint public.analytics_overwrite_events.analytics_overwrite_events_table_name_check": {
-      "definition": "CHECK ((table_name = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text])))"
+      "definition": "CHECK ((table_name = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text, 'asset_prices'::text])))"
     },
     "constraint public.analytics_parity_observations.analytics_parity_observations_domain_check": {
       "definition": "CHECK ((domain = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text, 'swarm_briefs'::text])))"
@@ -5021,7 +5022,7 @@
     },
     "function public.rm_capture_analytics_overwrite()": {
       "owner": "rm_owner",
-      "definition": "CREATE OR REPLACE FUNCTION public.rm_capture_analytics_overwrite()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  key jsonb;\nBEGIN\n  IF TG_TABLE_NAME = 'raw_indicator_history' THEN\n    key := jsonb_build_object('date', OLD.date, 'indicator', OLD.indicator);\n  ELSIF TG_TABLE_NAME = 'regime_snapshots' THEN\n    key := jsonb_build_object('date', OLD.date);\n  ELSIF TG_TABLE_NAME = 'research_signals' THEN\n    key := jsonb_build_object('signal_key', OLD.signal_key, 'date', OLD.date);\n  ELSE\n    RAISE EXCEPTION 'unsupported analytics overwrite source table: %', TG_TABLE_NAME;\n  END IF;\n\n  INSERT INTO public.analytics_overwrite_events\n    (table_name, operation, natural_key, previous_row, replacement_row)\n  VALUES\n    (TG_TABLE_NAME,\n     CASE TG_OP WHEN 'UPDATE' THEN 'update' ELSE 'delete' END,\n     key,\n     to_jsonb(OLD),\n     CASE TG_OP WHEN 'UPDATE' THEN to_jsonb(NEW) ELSE NULL END);\n\n  RETURN CASE TG_OP WHEN 'UPDATE' THEN NEW ELSE OLD END;\nEND;\n$function$\n"
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_capture_analytics_overwrite()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  key jsonb;\nBEGIN\n  IF TG_TABLE_NAME = 'raw_indicator_history' THEN\n    key := jsonb_build_object('date', OLD.date, 'indicator', OLD.indicator);\n  ELSIF TG_TABLE_NAME = 'regime_snapshots' THEN\n    key := jsonb_build_object('date', OLD.date);\n  ELSIF TG_TABLE_NAME = 'research_signals' THEN\n    key := jsonb_build_object('signal_key', OLD.signal_key, 'date', OLD.date);\n  ELSIF TG_TABLE_NAME = 'asset_prices' THEN\n    key := jsonb_build_object('price_date', OLD.price_date, 'symbol', OLD.symbol, 'time_basis', OLD.time_basis);\n  ELSE\n    RAISE EXCEPTION 'unsupported analytics overwrite source table: %', TG_TABLE_NAME;\n  END IF;\n\n  INSERT INTO public.analytics_overwrite_events\n    (table_name, operation, natural_key, previous_row, replacement_row)\n  VALUES\n    (TG_TABLE_NAME,\n     CASE TG_OP WHEN 'UPDATE' THEN 'update' ELSE 'delete' END,\n     key,\n     to_jsonb(OLD),\n     CASE TG_OP WHEN 'UPDATE' THEN to_jsonb(NEW) ELSE NULL END);\n\n  RETURN CASE TG_OP WHEN 'UPDATE' THEN NEW ELSE OLD END;\nEND;\n$function$\n"
     },
     "function public.rm_consensus_receipt_immutable()": {
       "owner": "rm_owner",
@@ -6550,6 +6551,14 @@
     },
     "trigger public.analytics_vintage_members.analytics_vintage_members_immutable_row": {
       "definition": "CREATE TRIGGER analytics_vintage_members_immutable_row BEFORE DELETE OR UPDATE ON public.analytics_vintage_members FOR EACH ROW EXECUTE FUNCTION public.rm_analytics_run_ledger_immutable()",
+      "fires": "always"
+    },
+    "trigger public.asset_prices.asset_prices_capture_delete": {
+      "definition": "CREATE TRIGGER asset_prices_capture_delete AFTER DELETE ON public.asset_prices FOR EACH ROW EXECUTE FUNCTION public.rm_capture_analytics_overwrite()",
+      "fires": "always"
+    },
+    "trigger public.asset_prices.asset_prices_capture_overwrite": {
+      "definition": "CREATE TRIGGER asset_prices_capture_overwrite AFTER UPDATE ON public.asset_prices FOR EACH ROW WHEN (((to_jsonb(old.*) - 'fetched_at'::text) IS DISTINCT FROM (to_jsonb(new.*) - 'fetched_at'::text))) EXECUTE FUNCTION public.rm_capture_analytics_overwrite()",
       "fires": "always"
     },
     "trigger public.audit_log.audit_log_append_only": {

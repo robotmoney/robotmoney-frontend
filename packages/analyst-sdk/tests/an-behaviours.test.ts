@@ -3,11 +3,14 @@
 // a NAMED original value captured from the pre-refactor computeBacktest
 // (fixtures/originals/an-behaviours.json.gz), plus the property that makes
 // each one what it is. backend/tests/backtest-correlations-fidelity.test.ts
-// asserts the same pins through the backend shim.
+// asserts the same pins through the backend shim. Since decision D78
+// (compensated arithmetic) the originals match up to rounding: same structure
+// and labels, no number moved by more than rounding (support/numeric-diff.ts).
 import { describe, expect, test } from "bun:test";
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { AN_SCENARIO_DAYS, AN_SKIPPED_DAY, anPins, anScenario } from "./support/an-scenario.ts";
-import { bytesEqual, originalFile, readOriginal } from "./support/originals.ts";
+import { originalFile, readOriginal } from "./support/originals.ts";
+import { expectSameUpToRounding } from "./support/numeric-diff.ts";
 
 const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: unknown };
 const s = anScenario();
@@ -15,14 +18,14 @@ const bt = computeBacktest(s.dateAxis, s.result, s.extras);
 const pins = anPins(bt);
 
 describe("AN behaviours against the named original values", () => {
-  test("the whole unstripped backtest of the scenario equals the original bytes", () => {
-    expect(bytesEqual(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2))).toBe(true);
+  test("the whole unstripped backtest of the scenario equals the original up to rounding", () => {
+    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2), "AN scenario backtest");
   });
 
   for (const name of Object.keys(pins) as (keyof typeof pins)[]) {
-    test(`${name} equals its original value`, () => {
+    test(`${name} equals its original value up to rounding`, () => {
       expect(name in original.pins).toBe(true);
-      expect(bytesEqual(JSON.stringify(pins[name]), JSON.stringify(original.pins[name]))).toBe(true);
+      expectSameUpToRounding(JSON.stringify(pins[name]), JSON.stringify(original.pins[name]), name);
     });
   }
 
@@ -53,7 +56,15 @@ describe("AN behaviours against the named original values", () => {
     const m = bt.eth!.composite!;
     const after = m._daily!.filter((p) => p.date > "2024-01-31");
     const years = (+new Date(m.end_date) - +new Date("2024-01-31")) / (365.25 * 86400 * 1000);
-    expect(m.cagr_out_sample).toBe(Math.pow(after[after.length - 1]!.value / after[0]!.value, 1 / years) - 1);
+    // D78: expm1(log(ratio) / years), the same quantity as ratio^(1/years) - 1
+    // without the cancellation in the final "- 1".
+    const ratio = after[after.length - 1]!.value / after[0]!.value;
+    // The SDK keeps the ratio unrounded (double-double); rounding it first moves
+    // the result by up to (1 + cagr) * (eps / 2) / years, plus a few ulps.
+    const formula = Math.expm1(Math.log(ratio) / years);
+    const bound = (1 + Math.abs(formula)) * (Number.EPSILON / 2 / years) + 4 * Number.EPSILON * Math.abs(formula);
+    expect(Math.abs(m.cagr_out_sample! - formula)).toBeLessThanOrEqual(bound);
+    expect(Math.abs(m.cagr_out_sample! - (Math.pow(ratio, 1 / years) - 1))).toBeLessThanOrEqual(2 * bound);
   });
 
   test("AN-14: Sharpe uses pre-cost daily returns while the net value carries the rebalance cost", () => {

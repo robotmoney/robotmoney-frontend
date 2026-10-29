@@ -1,6 +1,6 @@
 {
   "name": "@robotmoney/analyst-sdk",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Pure regime analytics for Robot Money: raw indicator history in, regime, indicator, correlation and backtest output out. No network, no database, no environment.",
   "private": true,
   "type": "module",
@@ -10,6 +10,7 @@
   "scripts": {
     "regime": "bun bin/regime.ts",
     "inputs": "bun bin/inputs.ts",
+    "fetch": "bun bin/fetch.ts",
     "backtest": "bun bin/backtest.ts",
     "golden:regenerate": "bun run scripts/golden-regenerate.ts",
     "universe:check": "bun run bin/check-universe.ts",

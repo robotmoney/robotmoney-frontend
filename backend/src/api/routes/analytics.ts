@@ -23,6 +23,8 @@
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../db/client.ts";
 import { bearer, hasAnalyticsProviderRole } from "../auth.ts";
+import { requestWaits } from "../../lib/request-waits.ts";
+import { ANALYTICS_CONCURRENCY, createLimiter } from "../../lib/analytics-concurrency.ts";
 import type { RawIndicatorHistory } from "../../analytics/types.ts";
 import type { RegimeSnapshotRow, JsonValue } from "../../analytics/report/regime-projection.ts";
 import type { ResearchPayload } from "../../analytics/analyze/research.ts";
@@ -37,6 +39,8 @@ import {
   appendRunEvent,
   freezeVintage,
   findVintageByRunAndTool,
+  loadCommittedInputs,
+  REGIME_STORAGE_KEYS,
   loadFrozenVintage,
   VintageConflictError,
 } from "../../analytics/store/run-ledger-store.ts";
@@ -605,48 +609,25 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
 export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
   A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
   A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
-  A.vintages, A.vintage, A.runPackage, A.reportSnapshot, A.paritySweep,
+  A.vintages, A.vintage, A.committedInputs, A.runPackage, A.reportSnapshot, A.paritySweep,
 ]);
 
-/**
- * How many analytics-provider requests the api runs at once.
- *
- * WHY A CAP. Every route here is the analytics producer's, and on 2026-09-25..28
- * a regime run sent many ledger writes at once. Each became a slow query on the
- * bloated ledger (issue 1035), together they held every connection of the api's
- * pool (PG_POOL_MAX, 10), and every public request waited past Bun's ~10 s idle
- * timeout: minutes of 502s on each run. With this cap the producer can hold at
- * most this many connections; the rest always serve the site. Excess producer
- * requests wait here, in line, instead of in the pool. The readiness probe is
- * exempt: it touches no data.
- */
-export const ANALYTICS_CONCURRENCY = 2;
-
-/** A counting semaphore: `acquire()` resolves to a release function, in FIFO order. */
-export function createLimiter(limit: number): { acquire: () => Promise<() => void>; inFlight: () => number; waiting: () => number } {
-  let active = 0;
-  const queue: (() => void)[] = [];
-  const release = () => {
-    active--;
-    const next = queue.shift();
-    if (next) { active++; next(); }
-  };
-  return {
-    acquire: () => new Promise<() => void>((resolve) => {
-      const grant = () => { let done = false; resolve(() => { if (!done) { done = true; release(); } }); };
-      if (active < limit) { active++; grant(); } else queue.push(grant);
-    }),
-    inFlight: () => active,
-    waiting: () => queue.length,
-  };
-}
+// ANALYTICS_CONCURRENCY and createLimiter live in a leaf module since issue
+// 1514, so the producer's api client bounds its own requests with the same cap
+// without importing this route (and the database with it).
+export { ANALYTICS_CONCURRENCY, createLimiter };
 
 const analyticsSlots = createLimiter(ANALYTICS_CONCURRENCY);
 
 // Returns { status, body } or null if the path isn't an analytics route.
 export async function handleAnalytics(req: Request, url: URL): Promise<{ status: number; body: unknown } | null> {
   if (!ANALYTICS_PATHS.has(url.pathname) || url.pathname === A.readiness) return handleAnalyticsUnbounded(req, url);
+  const waits = requestWaits();
+  const queued = performance.now();
   const release = await analyticsSlots.acquire();
+  // The slow-request line names this wait (issue 1514): a request that queued
+  // here is not a slow statement.
+  if (waits) waits.limiterMs += performance.now() - queued;
   try {
     return await handleAnalyticsUnbounded(req, url);
   } finally {
@@ -816,6 +797,14 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
     if (!found) return { status: 404, body: { error: "no vintage frozen for this (runId, toolId)" } };
     const vintage = await loadFrozenVintage(found.vintageId);
     return { status: 200, body: { vintage } };
+  }
+
+  // AN-16: the database clock and the ledger heads the regime computes from;
+  // the run passes the same cutoff to POST vintages.
+  if (m === "GET" && p === A.committedInputs) {
+    const asof = url.searchParams.get("asof");
+    if (!asof || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };
+    return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof) };
   }
 
 // ── issue #978: the immutable analytics output/report snapshot layer ─────

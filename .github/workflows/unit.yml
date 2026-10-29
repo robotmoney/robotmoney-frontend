@@ -78,6 +78,12 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
+      # backend/tests/csvb-api-archive-parity.test.ts imports packages/csvb, so
+      # the backend typecheck (backend-tests-typechecked.test.ts) needs csvb's
+      # own dependencies resolvable too (issue 1477).
+      - name: Install csvb deps
+        working-directory: packages/csvb
+        run: bun install --frozen-lockfile
       # Typecheck only. `bun run test` (the run-everything alias, `bun test
       # scripts/tests`) used to be chained on here — issue #819: it recurses
       # into scripts/tests/integration/, the Docker-backed class this workflow's
@@ -139,6 +145,12 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/analyst-sdk-purity.test.ts:55
           scripts/tests/unit/assert-junit-suites.test.ts:9
+      # Issue 1498: each byte-for-byte replay sentence says that payloads
+      # published before D78 replay up to rounding.
+      - name: D78 replay wording test ran (issue 1498)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/d78-replay-wording.test.ts:7
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

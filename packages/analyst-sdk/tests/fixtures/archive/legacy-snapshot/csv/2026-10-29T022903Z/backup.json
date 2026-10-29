@@ -1,0 +1,192 @@
+{
+  "format": 1,
+  "backup": "2026-10-29T022903Z",
+  "snapshot": {
+    "exported_at_db": "2026-10-29 02:29:03.83198+00",
+    "replica_replay_ts": null,
+    "db_user": "postgres",
+    "was_replica": false
+  },
+  "tool": {
+    "name": "csv-backups",
+    "commit": "d60f710"
+  },
+  "append_only": {
+    "analytics_output_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "1",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/analytics_output_snapshots.2026-08-01T233100Z_2026-08-01T233100Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 300,
+          "bytes_gz": 234,
+          "sha256_raw": "63e2a6679fdfdf22ff5416e398768317c0400c4086215bf6249e5d3aaef72de5",
+          "sha256_gz": "4fa0e951e289d78eec3304b68dd7f17a8f2edd030cc38ac4cb3b16d988774e4e",
+          "id_min": "1",
+          "id_max": "1",
+          "sum_id": "1",
+          "time_min": "2026-08-01 23:31:00+00",
+          "time_max": "2026-08-01 23:31:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "1"
+    },
+    "source_value_versions": {
+      "time": {
+        "column": "knowledge_time"
+      },
+      "watermark_before": null,
+      "watermark_after": "1968",
+      "rows_added": 1968,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/source_value_versions.2026-08-01T230000Z_2026-08-01T230000Z.csv.gz",
+          "rows": 1968,
+          "bytes_raw": 263280,
+          "bytes_gz": 30521,
+          "sha256_raw": "7760b79416e36045751e26783f85f37080b7022b51277c9c8e37b138bc85ed9f",
+          "sha256_gz": "31b37b1515c3061393f0ac030bd89def9d4e1f1350bd72fbb38f959f4ca8c276",
+          "id_min": "1",
+          "id_max": "1968",
+          "sum_id": "1937496",
+          "time_min": "2026-08-01 23:00:00+00",
+          "time_max": "2026-08-01 23:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1968",
+      "db_sum_id_through_watermark": "1937496"
+    },
+    "analytics_ledger_runs": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "101",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/analytics_ledger_runs.2026-08-01T233000Z_2026-08-01T233000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 224,
+          "bytes_gz": 182,
+          "sha256_raw": "f4d293109f4c40707db106140d0314d6bc2c57a8ff2b699b615f3c58ebb9c8f9",
+          "sha256_gz": "5b63761f7c884f0979aa56cd0096f6e42a98e55f431191ed3083136129f4dbb8",
+          "id_min": "101",
+          "id_max": "101",
+          "sum_id": "101",
+          "time_min": "2026-08-01 23:30:00+00",
+          "time_max": "2026-08-01 23:30:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "101"
+    },
+    "analytics_ledger_methodology_versions": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "3",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/analytics_ledger_methodology_versions.2026-09-01T000000Z_2026-09-01T000000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 205,
+          "bytes_gz": 175,
+          "sha256_raw": "707721cb0ebc46c470690ece0c1510bf14902f3451e53a72e4c05d9bb31ce507",
+          "sha256_gz": "7325399b220987bf1801961fcd9381e62ea04b4f0be17064d0ea04c3dbdbb628",
+          "id_min": "3",
+          "id_max": "3",
+          "sum_id": "3",
+          "time_min": "2026-09-01 00:00:00+00",
+          "time_max": "2026-09-01 00:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "3"
+    },
+    "analytics_data_vintages": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "201",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/analytics_data_vintages.2026-08-01T233000Z_2026-08-01T233000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 370,
+          "bytes_gz": 257,
+          "sha256_raw": "700675a1668e21778a0bdad07ce35be3350f1b21cf0336d8805b8425177df067",
+          "sha256_gz": "7ab8a1abf223dd2f570397c5a41fbada054fd7bc7bf9f2d8e61f49bf29615426",
+          "id_min": "201",
+          "id_max": "201",
+          "sum_id": "201",
+          "time_min": "2026-08-01 23:30:00+00",
+          "time_max": "2026-08-01 23:30:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "201"
+    },
+    "analytics_vintage_members": {
+      "time": {
+        "lookup": {
+          "column": "vintage_id",
+          "table": "analytics_data_vintages",
+          "key": "id",
+          "timeColumn": "created_at"
+        }
+      },
+      "watermark_before": null,
+      "watermark_after": "29",
+      "rows_added": 29,
+      "files": [
+        {
+          "path": "csv/2026-10-29T022903Z/data/analytics_vintage_members.2026-08-01T233000Z_2026-08-01T233000Z.csv.gz",
+          "rows": 29,
+          "bytes_raw": 1379,
+          "bytes_gz": 524,
+          "sha256_raw": "912e0d6685c57374e4e85dbf7ab6d341353735a9469795e6df1b58fb40b6e3b2",
+          "sha256_gz": "442a15b58e0aa10673c3fc18f4e07ec3ea4a67004cac949f955849f44290d03c",
+          "id_min": "1",
+          "id_max": "29",
+          "sum_id": "435",
+          "time_min": "2026-08-01 23:30:00+00",
+          "time_max": "2026-08-01 23:30:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "29",
+      "db_sum_id_through_watermark": "435"
+    }
+  },
+  "revisions": {
+    "raw_indicator_history": {
+      "key": [
+        "indicator",
+        "date"
+      ],
+      "file": {
+        "path": "csv/2026-10-29T022903Z/revisions/raw_indicator_history.csv.gz",
+        "rows": 4,
+        "bytes_raw": 232,
+        "bytes_gz": 132,
+        "sha256_raw": "939e27eaa4c88b3174e5565ba8d1a3c10d2d57cccff96d40acb75fc3c9dd01e6",
+        "sha256_gz": "1a2304490ce644534ea90df5194c7a18ef107867ecf97cedf769b0ac710a54d0"
+      },
+      "upserts": 4,
+      "deletes": 0,
+      "rows_in_state": 4,
+      "state_sha256": "0a7dfc6fea399efdaa2c8c087f180d79cf8b75871eabd3bcba7a7d06eb2b8b55"
+    }
+  },
+  "anomalies": []
+}

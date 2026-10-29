@@ -157,9 +157,27 @@ export function sumTrailing30d(
 // ── Vault data ───────────────────────────────────────────────────────────────
 // fetch-vault-data/index.ts. ERC-4626 TVL = totalAssets() scaled by the
 // underlying's decimals × its USD price (stables fast-path to $1 upstream).
+// Issue 1498: the raw amount stays a BigInt until one correctly rounded
+// conversion of raw / 10^decimals, so 1000000000000000065 at 18 decimals is
+// exactly 1 unit. The result is still a binary64 USD figure, not a share price.
 export function vaultTvlErc4626(input: { totalAssetsRaw: string; decimals: number; assetPriceUsd: number }): number {
-  const totalUnits = Number(BigInt(input.totalAssetsRaw)) / 10 ** input.decimals;
+  const totalUnits = rawToUnits(BigInt(input.totalAssetsRaw), input.decimals);
   return totalUnits * input.assetPriceUsd;
+}
+
+// Correctly rounded (nearest, ties to even) double of raw / 10^decimals. The
+// quotient is taken to 66 or 67 bits with a sticky bit for a nonzero
+// remainder, so Number() rounds it once; the power-of-two rescale is exact
+// because a uint8 decimals keeps the result in the normal range.
+function rawToUnits(raw: bigint, decimals: number): number {
+  if (raw === 0n) return 0;
+  const n = raw < 0n ? -raw : raw;
+  const d = 10n ** BigInt(decimals);
+  const shift = 66 - (n.toString(2).length - d.toString(2).length);
+  const [num, den] = shift >= 0 ? [n << BigInt(shift), d] : [n, d << BigInt(-shift)];
+  const q = ((num / den) << 1n) | (num % den === 0n ? 0n : 1n);
+  const units = Number(q) * 2 ** -(shift + 1);
+  return raw < 0n ? -units : units;
 }
 
 // Legacy DexScreener-LP fallback: sum liquidity across the vault token's pairs on

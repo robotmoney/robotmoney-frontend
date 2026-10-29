@@ -5,7 +5,7 @@
 // the assertion is the documented rejected result (NaN, a dropped row, null).
 import { describe, expect, test } from "bun:test";
 import { applyRatio } from "../src/transform/transforms.ts";
-import { ratioByDate, shapeDaily } from "../src/transform/grid.ts";
+import { mergeRatioSeries, shapeDaily } from "../src/transform/grid.ts";
 import { combineAggressiveN, combineConservativeN } from "../src/analyze/backtest.ts";
 
 describe("applyRatio", () => {
@@ -22,18 +22,19 @@ describe("applyRatio", () => {
   });
 });
 
-describe("ratioByDate", () => {
+// ratioByDate is gone (SDK-10): mergeRatioSeries is the one ratio function.
+describe("mergeRatioSeries", () => {
   const a = [{ date: "2024-01-01", value: 10 }, { date: "2024-01-02", value: 12 }, { date: "2024-01-03", value: 9 }];
   test("happy: a/b on the dates both series share, in a's order", () => {
     const b = [{ date: "2024-01-03", value: 3 }, { date: "2024-01-01", value: 5 }];
-    expect(ratioByDate(a, b)).toEqual([{ date: "2024-01-01", value: 2 }, { date: "2024-01-03", value: 3 }]);
+    expect(mergeRatioSeries(a, b)).toEqual([{ date: "2024-01-01", value: 2 }, { date: "2024-01-03", value: 3 }]);
   });
   test("error: a zero denominator drops the row instead of producing Infinity", () => {
-    expect(ratioByDate(a, [{ date: "2024-01-02", value: 0 }])).toEqual([]);
+    expect(mergeRatioSeries(a, [{ date: "2024-01-02", value: 0 }])).toEqual([]);
   });
   test("edge: no shared date, or an empty series, gives an empty result", () => {
-    expect(ratioByDate(a, [{ date: "2023-12-31", value: 1 }])).toEqual([]);
-    expect(ratioByDate([], a)).toEqual([]);
+    expect(mergeRatioSeries(a, [{ date: "2023-12-31", value: 1 }])).toEqual([]);
+    expect(mergeRatioSeries([], a)).toEqual([]);
   });
 });
 

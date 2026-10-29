@@ -80,12 +80,19 @@ export interface EngineOutput {
 const EPS = 1e-9;
 
 /**
+ * The band a tilt moves inside and how steep it is: an engine sleeve gives `scale` (z = (p - 0.5) / scale); a caller
+ * that states a steepness gives `steepness` (z = steepness * (2p - 1), the same tilt with scale = 1 / (2 steepness),
+ * computed without rounding 1 / (2 steepness) when it has no exact binary value, as for steepness 3).
+ */
+export type TiltBand = Pick<EngineSleeve, "min" | "max"> & ({ scale: number; steepness?: never } | { steepness: number; scale?: never });
+
+/**
  * A sleeve's tilted weight for one signal value. The value is clamped to 0..1
  * (signals are not clamped upstream); null, NaN or Infinity is neutral.
  */
-export function tiltWeight(sleeve: EngineSleeve, neutral: number, value: number | null): { weight: number; z: number; tilt: number } {
+export function tiltWeight(sleeve: TiltBand, neutral: number, value: number | null): { weight: number; z: number; tilt: number } {
   const p = Math.min(1, Math.max(0, signalOrNeutral(value)));
-  const z = (p - 0.5) / sleeve.scale;
+  const z = sleeve.steepness !== undefined ? sleeve.steepness * (2 * p - 1) : (p - 0.5) / sleeve.scale;
   const tilt = Math.tanh(z);
   const band = tilt >= 0 ? sleeve.max - neutral : neutral - sleeve.min;
   const weight = Math.min(sleeve.max, Math.max(sleeve.min, neutral + band * tilt));

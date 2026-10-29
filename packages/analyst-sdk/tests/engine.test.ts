@@ -87,6 +87,17 @@ describe("tilts", () => {
     for (const v of [NaN, Infinity, -Infinity]) expect(tiltWeight(s, 5, v)).toEqual({ weight: 5, z: 0, tilt: 0 });
   });
 
+  test("a steepness gives z = steepness (2p - 1) exactly, the scale form's tilt without rounding 1 / (2 steepness)", () => {
+    const band = { min: 0, max: 1 } as const;
+    for (const p of [0, 0.1, 0.2, 0.33, 0.5, 0.67, 0.73, 0.9, 1]) {
+      const { weight, z } = tiltWeight({ ...band, steepness: 3 }, 0.5, p);
+      expect(z).toBe(3 * (2 * p - 1));
+      expect(weight).toBe(0.5 + 0.5 * Math.tanh(3 * (2 * p - 1)));
+      expect(Math.abs(weight - tiltWeight({ ...band, scale: 1 / 6 }, 0.5, p).weight)).toBeLessThanOrEqual(2 ** -52);
+    }
+    expect(tiltWeight({ ...band, steepness: 2 }, 0.5, 0.8)).toEqual(tiltWeight({ ...band, scale: 0.25 }, 0.5, 0.8));
+  });
+
   test("a signal outside 0..1 is clamped before the tilt, the raw value kept in the trace", () => {
     const out = engineWeights(E1, at(1.7), flatYields(), UNIVERSE);
     expect(out.sleeves[0]!.value).toBe(1.7);
