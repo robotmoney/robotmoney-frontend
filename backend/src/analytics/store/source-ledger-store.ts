@@ -99,13 +99,15 @@ const sourceKeyLock = registerStatement({
 const insertValues = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
-  privileges: ["INSERT"],
+  // SELECT for RETURNING: the new rows' ids are the committed heads (issue 1514).
+  privileges: ["INSERT", "SELECT"],
   site: "src/analytics/store/source-ledger-store:saveSourceAcquisition.insertValues",
-  purpose: "Append source value revisions, one row or a batch, never updating a prior one.",
+  purpose: "Append source value revisions, one row or a batch, never updating a prior one; return each new row's id.",
   callers: [ANALYTICS_ROUTE],
   probe: {
     statement: `INSERT INTO source_value_versions (acquisition_id, source_key, market_date, market_instant, value, prior_version_id, revision_kind, provenance)
-          SELECT $1::uuid, $2, $3::date, $4::timestamptz, $5::float8, $6::bigint, $7, $8 WHERE false`,
+          SELECT $1::uuid, $2, $3::date, $4::timestamptz, $5::float8, $6::bigint, $7, $8 WHERE false
+          RETURNING id, source_key, value`,
     params: ["00000000-0000-0000-0000-000000000000", "probe", null, null, 1, null, "initial", null],
   },
 });
@@ -212,10 +214,16 @@ const priorInstants = registerQuery({
 });
 
 // Issue 1421 (review finding AN-15): the ledger head of every submitted value,
-// read inside the same transaction after the tolerance decision, so the caller
-// computes from what the ledger holds rather than from what the provider just
-// served. A value within tolerance of its head wrote no row, so its head is the
-// stored version. One indexed round trip per representation (resolvePriors).
+// so the caller computes from what the ledger holds rather than from what the
+// provider just served. A value within tolerance of its head wrote no row, so
+// its head is the stored version.
+//
+// A first submission no longer reads the heads back (issue 1514): the head of a
+// value is the row it just wrote, or the prior it already read and kept. That
+// second lookup was one more lateral read per value while the transaction held
+// its batch connection and its source-key lock. Only a replay, which read no
+// prior, looks the heads up here. One indexed round trip per representation
+// (resolvePriors).
 async function committedHeads(
   tx: TransactionSql<{}>,
   values: SourceAcquisitionEvidence["values"],
@@ -229,10 +237,44 @@ async function committedHeads(
   });
 }
 
+type InsertedHead = { id: number | string; source_key: string; value: number | string };
+
+/**
+ * The committed head of each written row, in the order the rows were sent.
+ * postgres.js sends a batch as one multi-row VALUES list, and Postgres returns
+ * the RETURNING rows of such an INSERT in that order. The source key and value
+ * of each returned row are checked against the row sent, so a reordering would
+ * fail the acquisition rather than pair a value with another value's version.
+ */
+function insertedHeads(sent: readonly { source_key: string; value: number }[], returned: readonly InsertedHead[]): CommittedSourceValue[] {
+  if (returned.length !== sent.length) throw new Error(`source value insert returned ${returned.length} rows for ${sent.length} sent`);
+  return sent.map((row, i) => {
+    const r = returned[i]!;
+    if (r.source_key !== row.source_key || Number(r.value) !== row.value) {
+      throw new Error(`source value insert returned ${r.source_key}=${r.value} where ${row.source_key}=${row.value} was sent`);
+    }
+    return { versionId: String(r.id), value: Number(r.value) };
+  });
+}
+
+function headOrThrow(head: CommittedSourceValue | undefined, v: SourceValueEvidence): CommittedSourceValue {
+  if (!head) throw new Error(`${v.sourceKey} ${v.marketDate ?? v.marketInstant}: no ledger head after the acquisition was saved`);
+  return head;
+}
+
+/**
+ * Persist one acquisition in one transaction. `db` is the pool it runs on: the
+ * caller's (`sql`) in every production path; a test passes a wrapper to count
+ * the statements the transaction issues (issue 1514).
+ */
+// `db` may be a transaction the caller already holds (TransactionSql), so a
+// write to another table and its ledger rows commit together (the floor seed,
+// AN-16); otherwise the acquisition is one transaction of its own.
 export async function saveSourceAcquisition(
   evidence: SourceAcquisitionEvidence,
+  db: Pick<typeof sql, "begin"> | TransactionSql<{}> = sql,
 ): Promise<SaveSourceAcquisitionResult> {
-  return sql.begin(async (tx) => {
+  const write = async (tx: TransactionSql<{}>): Promise<SaveSourceAcquisitionResult> => {
     // The producer-generated acquisition UUID is the idempotency key. A replay
     // is a read-only success; a partially persisted acquisition is impossible
     // because every first submission is one transaction.
@@ -307,6 +349,7 @@ export async function saveSourceAcquisition(
       `${v.sourceKey}|${v.marketDate ?? ""}|${v.marketInstant ?? ""}`;
 
     const hasWithinBatchDuplicate = new Set(evidence.values.map(coordKey)).size !== evidence.values.length;
+    let committed: CommittedSourceValue[] = [];
 
     if (hasWithinBatchDuplicate) {
       // Rare (a single fetch response naming the same coordinate twice):
@@ -318,19 +361,31 @@ export async function saveSourceAcquisition(
       // Each value's prior is read through the same indexable lookups as the
       // bulk path below, one value at a time, never an `IS NOT DISTINCT FROM`
       // (see the note there, issue 1034).
+      //
+      // A coordinate's head is the last row written for it or, when nothing
+      // was written, the prior read for it; the loop sees them in order, so
+      // the last one it records is the head the transaction commits.
+      const headByCoord = new Map<string, CommittedSourceValue>();
       for (const value of evidence.values) {
         const prior = (await resolvePriors(tx, [{ idx: 1, v: value }])).get(1);
         const revisionKind = classify(prior, value);
-        if (revisionKind === null) continue;
-        await on(tx, insertValues)`
+        if (revisionKind === null) {
+          if (prior) headByCoord.set(coordKey(value), { versionId: String(prior.id), value: prior.value });
+          continue;
+        }
+        const row = { source_key: value.sourceKey, value: value.value };
+        const returned = await on(tx, insertValues)<InsertedHead>`
           INSERT INTO source_value_versions
             (acquisition_id, source_key, market_date, market_instant, value,
              prior_version_id, revision_kind, provenance)
           VALUES
             (${evidence.id}::uuid, ${value.sourceKey}, ${value.marketDate ?? null}::date,
              ${value.marketInstant ?? null}::timestamptz, ${value.value}, ${prior?.id ?? null},
-             ${revisionKind}, ${value.provenance ?? null})`;
+             ${revisionKind}, ${value.provenance ?? null})
+          RETURNING id, source_key, value`;
+        headByCoord.set(coordKey(value), insertedHeads([row], returned)[0]!);
       }
+      committed = evidence.values.map((v) => headOrThrow(headByCoord.get(coordKey(v)), v));
     } else if (evidence.values.length > 0) {
       // Common case (a full historical fetch can carry thousands of distinct
       // dates for one source_key): resolve every value's prior revision in ONE
@@ -355,10 +410,16 @@ export async function saveSourceAcquisition(
         evidence.values.map((v, i) => ({ idx: i + 1, v })),
       );
 
+      // Each value's committed head: the prior it keeps, or the row it writes
+      // (filled in from the insert's RETURNING below).
+      const heads: (CommittedSourceValue | undefined)[] = [];
+      const writtenAt: number[] = [];
       const rows = evidence.values.flatMap((value, i) => {
         const prior = priorByIdx.get(i + 1); // WITH ORDINALITY is 1-based
         const revisionKind = classify(prior, value);
+        heads.push(prior ? { versionId: String(prior.id), value: prior.value } : undefined);
         if (revisionKind === null) return [];
+        writtenAt.push(i);
         return [{
           acquisition_id: evidence.id,
           source_key: value.sourceKey,
@@ -375,11 +436,16 @@ export async function saveSourceAcquisition(
       // a historical acquisition can contain more than 8,000 values.
       const VALUE_INSERT_BATCH_SIZE = 5_000;
       for (let start = 0; start < rows.length; start += VALUE_INSERT_BATCH_SIZE) {
-        await on(tx, insertValues)`
-          INSERT INTO source_value_versions ${tx(rows.slice(start, start + VALUE_INSERT_BATCH_SIZE), "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind", "provenance")}`;
+        const batch = rows.slice(start, start + VALUE_INSERT_BATCH_SIZE);
+        const returned = await on(tx, insertValues)<InsertedHead>`
+          INSERT INTO source_value_versions ${tx(batch, "acquisition_id", "source_key", "market_date", "market_instant", "value", "prior_version_id", "revision_kind", "provenance")}
+          RETURNING id, source_key, value`;
+        insertedHeads(batch, returned).forEach((head, j) => { heads[writtenAt[start + j]!] = head; });
       }
+      committed = evidence.values.map((v, i) => headOrThrow(heads[i], v));
     }
 
-    return { acquisitionId: evidence.id, replayed: false, committed: await committedHeads(tx, evidence.values) };
-  });
+    return { acquisitionId: evidence.id, replayed: false, committed };
+  };
+  return "savepoint" in db ? write(db) : db.begin(write);
 }

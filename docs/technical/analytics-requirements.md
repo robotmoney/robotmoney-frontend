@@ -19,7 +19,7 @@ Non-goals:
 
 - **Pure.** The computation calls no network, reads no database and reads no environment.
 - **HTTP only during extract.** Extract is the acquisition stage: it collects provider data or downloads archived data before computation starts. After extract, input preparation, alignment, transforms, ratio calculation, regime calculation, research signals, allocation policies, backtesting, statistics and report generation make no outbound HTTP requests. This applies to their callbacks, adapters and transitive dependencies, including when inputs are missing. SDK provider requests go only through `src/extract/http.ts`; csvb archive requests belong to the acquisition stage. A local input run does not start or invoke acquisition.
-- **Committed inputs.** Source-update jitter handling belongs to ingestion. After the update commits, extract supplies the exact committed values and versions to every downstream consumer. Fresh provider values discarded as jitter never enter calculation. Backend, archives and SDK use the same committed observations for a run.
+- **Committed inputs.** Source-update jitter handling belongs to ingestion. After the update commits, extract supplies the exact committed values and versions to every downstream consumer. Fresh provider values discarded as jitter never enter calculation. Backend, archives and SDK use the same committed observations for a run. The regime run computes from exactly the values its vintage pins: it reads the source ledger heads at one database-clock cutoff after every acquisition, builds the registry and the backtest series from them, and freezes its vintage at that same cutoff (owner decision, issue 1532, review finding AN-16). The raw indicator table is not a regime compute input. The floor seed and the raw-history seed route record ledger rows in the same transaction as their raw rows.
 - **JSON in, JSON out.** Every function takes plain data and returns plain data.
 - **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, and a payload published before D78 replays up to rounding: the same structure, field order, labels and nulls, with numbers that differ only in their last bits.
 - **One source of truth.** The backend runs the package's source files.
@@ -47,6 +47,14 @@ Non-goals:
 Every source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC`, `fred:DTB3` or `yahoo:HG=F`. Computation, SDK input reports and new public API contracts use that id. No id names the code that reads it. Existing database keys and historical archive keys may remain unchanged. One shared mapping at the storage boundary translates them to canonical source ids; existing writes use the reverse mapping where needed. The mapping preserves values, dates, ordering, provenance and vintage membership. The mapping is per consumer: each consumer keeps reading the storage keys it reads today. Two storage keys may hold different streams for one source id, for example `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` for `yahoo:^GSPC`. They are never merged, and the storage key travels with each observation as provenance. A mapping is ambiguous, and rejected, when one consumer would read two storage keys for one source id. Historical references and immutable archives are never rewritten merely to rename a series.
 
 The indicator registry names the source ids each indicator reads. The correlations and the backtest name the source ids they read: `yahoo:^GSPC` and `yahoo:ETH-USD` (price levels) and `fred:DTB3` (a rate).
+
+### 4.1.1 Collection floor
+
+Every source series the background collection requests starts at 2016-01-01 (`COLLECTION_START` in `packages/analyst-sdk/src/inventory.ts`), or at the provider's first observation when that is later. A series a collector already requests from earlier keeps its earlier start (the 2010-01-01 starts of SPY, RSP, the top seven, `^GSPC` and `ETH-USD`). Every entry of a shipped inventory (`model-portfolio.json`, `research-series.json`) requests from `COLLECTION_START`, and a late inception is named in the entry's limitation.
+
+Collection start and computation start are separate. The collection start sets how much history is stored. The computation start sets where a computation's date axis begins: the regime backfill and the research-signals axis start at 2018-01-01 and do not move. A computation reads only its axis dates, so a longer stored history changes no published output. Research needs history before the 2018 axis for trailing windows, such as a covariance window of up to two years, so a new consumer never needs a one-off backfill.
+
+The inventory step collects each storage key once per run, even when two inventories list it, and never fetches a key another collector holds. Prices are Yahoo's adjusted close, recorded per key in the inventory's `units`.
 
 ### 4.2 Input report
 
@@ -100,15 +108,15 @@ The API never recomputes a calculated indicator. Calculated indicators reach the
 
 ### 4.5 Archive format
 
-There is one archive format: format 1, the layout robotmoney/csv-backups writes (decision D72). The module adds no second format.
+There is one archive format: format 1, the layout csvb writes (decisions D72 and D80). The module adds no second format. One module, `packages/analyst-sdk/src/archive/format1.ts`, defines it; csvb (`packages/csvb`), the public archive routes and the SDK's reader all use it.
 
-- **Backups.** One directory per backup, named by the snapshot time (`csv/<backup id>/`). Each holds `backup.json` and archives.
+- **Backups.** One directory per backup, named by its backup id (`csv/<backup id>/`). Each holds `backup.json` and archives. Both writers cut a backup at each UTC day boundary, one settle hour after it (`YYYY-MM-DDT000000Z`). Snapshot-time backups written before the day cut stay valid history; the newest of them is the junction where a repo clone and the API chain meet (D80).
 - **Write-once.** A backup only adds archives. Nothing is overwritten.
 - **Two kinds of archive.** Data archives only gain rows. They hold every observed version of source data (`source_value_versions`), the run ledger, the vintages and the published reports (`analytics_output_snapshots`). Revision archives hold the rows that are new or changed since the last backup, with `_backup` and `_op` columns. They cover `raw_indicator_history`, `asset_prices` and `regime_snapshots`. The state at any backup is the replay of the revision archives up to it.
 - **Pinning.** A backup id names an exact state. `csvb resolve --as-of <id>` returns a report as of that backup.
 - **Identity.** An archive is identified by the SHA-256 of its uncompressed canonical bytes, recorded in `backup.json` as `sha256_raw` beside `bytes_raw`. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, and no gzip encoder, Bun version or container image is part of an archive's identity. A client decompresses an archive, then verifies the hash. `backup.json` records no hash or size of the gzip bytes.
 - **Provenance.** `backup.json` records `source` (`db` or `api`) and `consistency` (`snapshot` or `paged`).
-- **Location.** Backups live outside this repo. The tool refuses a backup directory inside a checkout of this repo.
+- **Location.** Backups live in robotmoney/csv-backups, outside this repo. The tool lives in this repo (`packages/csvb`) and refuses a backup directory inside a checkout of it.
 - **Access.** The csv-backups repo is private and holds production data.
 
 ### 4.6 The API serves archives
@@ -127,7 +135,7 @@ Model portfolio inputs (asset prices, lending yields and the T-bill rate) are so
 
 Archives are the unit of transfer. A chunk is one archive.
 
-- **Size.** An archive is at most 90 MB, as the csv-backups tool writes it (`--part-mb`, default 64), because GitHub rejects files over 100 MB.
+- **Size.** An archive is at most 90 MB, as csvb (`packages/csvb`) writes it (`--part-mb`, default 64), because GitHub rejects files over 100 MB.
 - **Naming.** A data archive is named by the earliest and latest row time it holds. A client picks archives by name, without opening them.
 - **Write-once.** A served archive never changes. Its content hash (`sha256_raw`) is its identity, never its gzip bytes.
 - **Watermarks.** A client holds, per table, the last id or time it has. It asks only for archives past that point, so a second run costs only what changed.

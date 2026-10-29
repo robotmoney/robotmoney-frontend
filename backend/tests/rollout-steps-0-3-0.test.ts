@@ -105,8 +105,11 @@ describe("v0.3.0 THIS_RELEASE_MIGRATIONS is the single source", () => {
   // named the landed file as undeclared, and the fix was to DECLARE it
   // (never to raise the numeric floor).
   test("the release inventory includes the earliest-valid-block floor migration", () => {
-    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(22);
-    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0061_rm_worker_wallet_backfill_grant.sql");
+    // 0061 and 0128 are later files declared here because they depend on
+    // tables this release creates (see the array's own comments).
+    expect(THIS_RELEASE_MIGRATIONS).toHaveLength(23);
+    expect(THIS_RELEASE_MIGRATIONS.at(-2)).toBe("0061_rm_worker_wallet_backfill_grant.sql");
+    expect(THIS_RELEASE_MIGRATIONS.at(-1)).toBe("0128_asset_prices_overwrite_events.sql");
     expect(NEW_TABLES).toContain("wallet_balance_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_sleeve_sample_evidence");
     expect(NEW_TABLES).toContain("wallet_aum_snapshot_runs");

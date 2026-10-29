@@ -5059,6 +5059,124 @@ on a production-sized fixture;
 `scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
 every producer run, projects job and buyback refresh by 15 minutes.
 
+### Amendment (issue 1514, 2026-10-29) — the research series and the 2016 collection floor
+
+**Status:** proposed
+
+**What changes.** The inventory step now also collects
+`packages/analyst-sdk/inventory/research-series.json`, the series the analyst
+SDK's clients read. Thirteen keys are new. Each is one Yahoo symbol, so each
+gets Yahoo's float32 tolerance, like every other single-symbol Yahoo key:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:GC=F` | yahoo | relative 1e-6 |
+| `yahoo:CL=F` | yahoo | relative 1e-6 |
+| `yahoo:HG=F` | yahoo | relative 1e-6 |
+| `yahoo:SI=F` | yahoo | relative 1e-6 |
+| `yahoo:TLT` | yahoo | relative 1e-6 |
+| `yahoo:VNQ` | yahoo | relative 1e-6 |
+| `yahoo:DBC` | yahoo | relative 1e-6 |
+| `yahoo:MSTR` | yahoo | relative 1e-6 |
+| `yahoo:SOL-USD` | yahoo | relative 1e-6 |
+| `yahoo:BNB-USD` | yahoo | relative 1e-6 |
+| `yahoo:AAVE-USD` | yahoo | relative 1e-6 |
+| `yahoo:HYPE32196-USD` | yahoo | relative 1e-6 |
+| `yahoo:VIRTUAL-USD` | yahoo | relative 1e-6 |
+
+The research inventory also lists BTC-USD, QQQ and GLD under the keys they are
+already recorded in (`research:BTC-USD`, `research:QQQ`, `yahoo:GLD`). The step
+fetches each storage key once per run, so GLD is not fetched twice.
+
+Every background source fetch now starts at 2016-01-01 (`COLLECTION_START`,
+analytics requirements section 4) unless it already started earlier. The
+existing keys keep their tolerance. A longer fetch adds versions only for the
+new early dates: an existing date within tolerance writes no row.
+
+**Why.** The SDK's research clients read these closes. Without them they were
+fetched by hand and committed as frozen files, with no acquisition evidence, no
+revision history and no backup.
+
+### Amendment (issue 1514, 2026-10-29) — the Yahoo ratio legs are recorded
+
+**Status:** proposed
+
+**What changes.** Each run records both legs of every Yahoo ratio as source
+data, from the fetch the stored ratio is calculated from (analytics
+requirements 4.3, D74 point 3). A leg another collector already records keeps
+that key: `yahoo:SPY` is `research:SPY`, `yahoo:BTC-USD` is `research:BTC-USD`,
+`yahoo:ETH-USD` is `backtest:ETH-USD`, and `yahoo:HG=F` and `yahoo:GC=F` are
+the research-series keys above. The nine others are new keys under their own
+source id, each a single Yahoo symbol:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:IWM` | yahoo | relative 1e-6 |
+| `yahoo:SPHB` | yahoo | relative 1e-6 |
+| `yahoo:SPLV` | yahoo | relative 1e-6 |
+| `yahoo:MTUM` | yahoo | relative 1e-6 |
+| `yahoo:IWF` | yahoo | relative 1e-6 |
+| `yahoo:IWD` | yahoo | relative 1e-6 |
+| `yahoo:XLU` | yahoo | relative 1e-6 |
+| `yahoo:XLP` | yahoo | relative 1e-6 |
+| `yahoo:XLY` | yahoo | relative 1e-6 |
+
+Production still reads the stored ratio, so no published output changes.
+
+### Amendment (issue 1514, 2026-10-29) — DefiLlama restatements stay exact
+
+**Status:** proposed
+
+**Why it was measured.** Backup `2026-10-28T180400Z` of csv-backups holds
+81,650 `revision` rows for `raw_indicator_history:DEFI_TVL`, with a median
+relative change of about 2.5e-6, and 3,987 for `raw_indicator_history:STABLES`.
+Both keys are exact. The question was whether DefiLlama's restatements are a
+noise band that a tolerance should absorb, as Yahoo's float32 jitter is.
+
+**The rule (pinned in issue 1514, the one used for the Yahoo ratios).** Each
+revision's change is `|next − prior| / max(|next|, |prior|)` against the
+version before it for the same `(source_key, market_date)`. The changes go in
+half-decade log bins from 1e-9 to 1e-1. The noise band is the run of bins
+starting at the lowest bin. The tolerance is the upper edge of the first bin
+above the band that is empty or holds under 0.1 percent of that key's
+revisions, rounded down to one significant digit. The two keys share the
+larger value. The value must be at most 1e-4, else the rule fails.
+
+**The counts.** `backend/scripts/analytics/measure-tolerance.ts` read the
+`source_value_versions` data files of that backup and of every backup before
+it (the backups are incremental), streamed over SSH from stage-2. Only the
+counts are committed, in `backend/tests/fixtures/defillama-revision-distribution.json`.
+
+| relative change | DEFI_TVL | STABLES |
+|---|---|---|
+| under 3.16e-9 | 7,273 | 29 |
+| 3.16e-9 to 1e-8 | 531 | 27 |
+| 1e-8 to 3.16e-8 | 1,253 | 45 |
+| 3.16e-8 to 1e-7 | 2,313 | 14 |
+| 1e-7 to 3.16e-7 | 12,151 | 27 |
+| 3.16e-7 to 1e-6 | 10,648 | 42 |
+| 1e-6 to 3.16e-6 | 10,227 | 395 |
+| 3.16e-6 to 1e-5 | 10,129 | 577 |
+| 1e-5 to 3.16e-5 | 4,444 | 196 |
+| 3.16e-5 to 1e-4 | 4,751 | 406 |
+| 1e-4 to 3.16e-4 | 10,533 | 241 |
+| 3.16e-4 to 1e-3 | 5,486 | 237 |
+| 1e-3 to 3.16e-3 | 1,510 | 940 |
+| 3.16e-3 to 1e-2 | 181 | 715 |
+| 1e-2 to 3.16e-2 | 220 | 96 |
+| 3.16e-2 to 1e-1 | 0 | 0 |
+| 1e-1 and up | 0 | 0 |
+
+**Outcome.** There is no noise band below 1e-4. Every bin from under 1e-9 to
+3.16e-2 holds more than 0.1 percent of each key's revisions, so the first gap's
+edge is 1e-1 and the rule fails. Most revisions touch dates more than 30 days
+old, and those spread just as widely, with a second peak near 1e-4 for
+DEFI_TVL. These are DefiLlama's restatements of history at every size, not a
+thin float layer. So both keys stay exact under this decision's rule that a
+tolerance is widened only on measured evidence. The owner may pick another
+rule later. `backend/tests/analytics-source-tolerance.test.ts` runs the rule on
+the committed counts and holds `SOURCE_TOLERANCES` to what it allows.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)
@@ -5885,7 +6003,7 @@ for sessions published earlier.
 
 **Decision.**
 
-1. **One format.** Format 1 is the layout robotmoney/csv-backups writes: one directory per backup, named by its snapshot time, holding `backup.json` and gzipped COPY CSV archives. The analytics module, the public API and every fill use it. No second format exists.
+1. **One format.** Format 1 is the layout csvb writes: one directory per backup, named by its backup id, holding `backup.json` and gzipped COPY CSV archives. _Amended by [D80](#d80) (2026-10-29): csvb lives in `packages/csvb`, and a backup id is a UTC day boundary or one of the legacy snapshot times; the text named the robotmoney/csv-backups repo and the snapshot time._ The analytics module, the public API and every fill use it. No second format exists.
 2. **Write-once.** An archive never changes after it is written. Its identity is the SHA-256 of its uncompressed canonical bytes (`sha256_raw` in `backup.json`), and that hash names it. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, so no gzip encoder, Bun version or container image is part of an archive's identity, the ETag and the manifest hash are the content hash, and a client decompresses before it verifies. A backup only adds archives.
 3. **Two kinds.** Data archives only gain rows. They hold every collected version of source data, the run ledger, the vintages and the published reports. Revision archives hold the rows new or changed since the last backup, with `_backup` and `_op` columns.
 4. **Same content.** The API and the database replica write archives with byte-identical uncompressed content for the same state. Their gzip bytes may differ.
@@ -5945,6 +6063,30 @@ This settles three points.
 1. **The storage mapping is per consumer.** The D74 mapping translates a storage key to a canonical source id in code. Each consumer keeps reading the storage keys it reads today, so its observations do not change. Two storage keys may hold different streams for one source id, as `raw_indicator_history:SPX_TREND` and `backtest:^GSPC` do for `yahoo:^GSPC`. They stay separate rows and are never merged. A mapping is ambiguous, and rejected, only when one consumer would read two storage keys for one source id. Where two streams share a source id, the storage key travels with the observation as provenance.
 2. **Model portfolio inputs are source data.** Asset prices, lending yields and the T-bill rate follow the source data rules of analytics requirements sections 4.1 and 4.2. Their versions are recorded in the existing `source_value_versions` table under their source ids. Where the existing grants do not allow that write, a grant migration under the normal migration rules enables it.
 3. **Existing archives are served as written.** An archive is never re-chunked to fit the byte budget. An archive request is admitted when the client has any byte budget left. The full archive is charged, and the budget may go negative. Later requests answer 429 with `Retry-After` until the budget recovers.
+
+### Amendment (issue 1514, owner 2026-10-28) — one key per DefiLlama source
+
+**Status:** proposed
+
+The owner amended point 1 of the 2026-10-22 clarification for two consumers.
+`indicator:DEFI_GROWTH` reads `raw_indicator_history:DEFI_TVL`, and
+`indicator:STABLES_GROWTH` reads `raw_indicator_history:STABLES`. Every other
+consumer keeps the key it reads.
+
+- **Why.** Both growth indicators store the raw DefiLlama level and apply
+  their change90 transform downstream, exactly as DEFI_TVL and STABLES store
+  it. Backup `2026-10-28T180400Z` holds equal values under both keys on every
+  date (3,319 dates for DEFI_TVL, 3,256 for STABLES). Two keys for one series
+  doubled the writes and the revisions.
+- **What changes.** No new row is written under `raw_indicator_history:DEFI_GROWTH`
+  or `raw_indicator_history:STABLES_GROWTH`, in `source_value_versions` or in
+  `raw_indicator_history`. The run reads both growth series from the DEFI_TVL
+  and STABLES stored series. An SDK input that carries DEFI_TVL or STABLES
+  and not the growth id feeds the growth indicator from it.
+- **What stays.** The stored history under the two old keys is kept as it is.
+  No consumer reads it. A vintage that holds it replays to its published
+  report byte for byte, because the values were equal. The archive's run input
+  keeps those rows under their storage key, an unread series.
 
 ---
 
@@ -6020,6 +6162,42 @@ Out of scope: dropping the `rm_worker` role or setting it `NOLOGIN` (it needs
 `CREATEROLE`, which `rm_owner` does not hold; a later receipted operator step),
 pruning ingestion receipts (an `rm_owner` step, D55 (12)), and an external
 connection pooler.
+
+### Amendment (issue 1514, 2026-10-29) — the batch pool holds every cap that draws on it
+
+**Status:** proposed
+
+**Why.** From the v0.7.0 cutover on, production's batch pool ran out at every
+3-hourly analytics run. Queue claims answered 503 `db_saturated`, and
+source-acquisitions and vintages requests took up to 9.5 s. The batch share was
+3, or a quarter of the free connections on a small server. Two callers draw on
+it: the analytics routes, capped at `ANALYTICS_CONCURRENCY` (2), and the pipeline
+routes, capped at `PIPELINE_TOKEN_CONCURRENCY` (2). Their caps add up to 4.
+
+**What changes.**
+
+1. The batch share is `ANALYTICS_CONCURRENCY + PIPELINE_TOKEN_CONCURRENCY + 1`,
+   so 5 by default, on every server. The extra connection is for statements no
+   cap bounds: the pipeline route's token lookup, which runs before the token's
+   gate, and the analytics readiness probe, which the analytics limiter exempts.
+2. A small server gives up request connections, never batch ones. The request
+   share is at most 10 and takes what the batch share leaves.
+3. The api refuses to boot when the batch share is below that sum, derived or
+   set by `PG_BATCH_POOL_MAX`. The refusal names the batch share and each cap.
+4. Decision 5's admission rule is unchanged: a request over the token's cap
+   still waits `PG_ADMISSION_WAIT_MS` and answers 503 `db_saturated`.
+5. The analytics producer's api client keeps at most `ANALYTICS_CONCURRENCY`
+   requests in flight, so its bursts wait in the producer, not on the api's
+   request path.
+6. The slow-request line splits a request's time into `limiter_wait_ms`,
+   `pool_wait_ms` and `handler_ms`. A `db_saturated` error log names the gate
+   that refused.
+7. The stage target's Postgres carries production's connection limits, so the
+   stage api derives production's shares.
+
+**Cost.** A server with fewer than 15 free connections gives the request pool
+fewer than 10. A server too small for the batch share and one request
+connection refuses the boot instead of starting with a pool that saturates.
 
 ---
 
@@ -6143,3 +6321,22 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 **Why.** An analyst should get the platform's data with no work, and should not have to write a Yahoo client to study an asset the platform does not carry. Keeping the two kinds of data in separate directories keeps the record clean: a supported series is exactly what csvb wrote, with its vintages, and a supplementary series carries only its own manifest. Mixing them would let a hand-fetched value pass as platform data. The research repo `rosemarys-baby` kept hand-fetched Yahoo closes next to its resolved platform tables; this decision is the general form of separating them.
 
 **Left alone.** The local copy, the fills, csvb and the input file contract are unchanged. The source clients' existing callers keep their behaviour: `fetchFred` gains an optional start, defaulting to the 2010-01-01 it used before.
+
+---
+
+<a id="d80"></a>
+## D80 — csvb lives in robotmoney-frontend, and format 1 has one writer and one cut rule (owner direction, 2026-10-26)
+
+**Status:** proposed. Items 1 and 2 are the owner's direction (2026-10-26). The cut rule in item 3 is a default the agent took with issue 1477, and the owner may override it. Built by issue 1477 in `packages/csvb`, `packages/analyst-sdk/src/archive/format1.ts`, `packages/analyst-sdk/src/archive/format1-legacy.ts` and `backend/src/analytics/store/public-archive-store.ts`. Specified in `docs/technical/analytics-requirements.md` sections 4.5 and 4.7, `docs/technical/analyst-sdk-requirements.md` sections 2, 3 and 8, and `docs/definitions.md`.
+
+**Decision.**
+
+1. **Data only in the data repo.** robotmoney/csv-backups holds backups and nothing else. All tooling lives in robotmoney-frontend. csvb is `packages/csvb`, with every command it had. It works on a data checkout named with `--repo`. It refuses to write backups inside a robotmoney-frontend checkout.
+2. **One writer and one reader.** One module, `packages/analyst-sdk/src/archive/format1.ts`, defines format 1: the `backup.json` record, file naming, COPY CSV text, part splitting, the table catalog and the backup cut rule. csvb, the public archive routes and the SDK's reader all use it. The SDK never imports csvb; csvb imports the SDK. `scripts/tests/unit/archive-identity-guard.test.ts` fails on a second definition in `backend/src` or `packages/csvb/src`.
+3. **One cut rule (default taken).** Both writers cut a backup at each UTC day boundary once it is one settle hour in the past, named `YYYY-MM-DDT000000Z`. Per table, the watermark is the largest id below the first row stamped at or after the boundary. Vintage members are cut by their vintage. A csvb run that finds several sealed boundaries writes one backup per boundary from one snapshot. A revised table's state goes in the newest of those backups.
+4. **The legacy junction.** Snapshot-time backups already written stay valid history, byte for byte. Their ids are a closed list in `format1-legacy.ts`. The newest, `2026-10-28T180400Z`, is the junction: one extra cut point with its own id and baked per-table watermarks. It is not a chain restart. The API keeps serving every earlier day-cut backup unchanged. Once its chain reaches past the junction, it also serves the junction backup, which continues from the preceding day cut and ends at the baked watermarks. Both writers then cut the next day from the junction. A repo clone and an API increment therefore join at the junction id. A database whose ids all lie below the junction watermarks is cut by day alone.
+5. **Same bytes.** For the same committed state and backup id, csvb and the API write byte-identical uncompressed data archives (D72 (4)). `backend/tests/csvb-api-archive-parity.test.ts` checks this.
+
+**Why.** Before this, format 1 had two independent writers. csvb named a backup by its replica snapshot time. The archive store re-implemented csvb's encoding and naming and cut one backup per UTC day. The two chains never met, so the default fill (clone the repo, then fetch the increment from the API) could not join. One module, one cut rule and one junction make the two fills produce the same local copy.
+
+**Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo is a data-repo change made after this ships. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).

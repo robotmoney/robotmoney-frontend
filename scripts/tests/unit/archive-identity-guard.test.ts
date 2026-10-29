@@ -10,12 +10,21 @@
 //      container image version string is part of an archive's identity in the
 //      archive store, the archive routes, or the SDK's archive reader.
 //
+//   3. Format 1 has one writer (issue 1477, D80): the row encoding, file naming,
+//      stamp, part splitting and the backup cut rule are defined once, in
+//      packages/analyst-sdk/src/archive, and nowhere in backend/src or
+//      packages/csvb/src, which import them. The settle hour and the part size
+//      the SDK declares (it installs alone, so it cannot import the contract)
+//      equal the contract's ARCHIVE_SETTLE_MS and ARCHIVE_PART_BYTES.
+//
 // A guard that only ever passes is theatre, so the scanner is also run over a
 // planted violation and must report it.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { ARCHIVE_PART_BYTES, ARCHIVE_SETTLE_MS } from "@robotmoney/contract";
+import { MAX_PART_BYTES, SETTLE_MS } from "../../../packages/analyst-sdk/src/archive/format1.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
@@ -79,6 +88,62 @@ describe("archive identity is content, not the encoder", () => {
       writeFileSync(join(tmp, "backend", "x.ts"), "export const ARCHIVE_GZIP_FIXTURE_SHA256 = 'x'; // oven/bun:1.4.4\n");
       expect(scan(tmp, ["backend"], pinHits)).toEqual(["backend/x.ts: ARCHIVE_GZIP_FIXTURE_SHA256"]);
       expect(scan(tmp, ["backend"], identityHits)).toEqual(["backend/x.ts: oven/bun"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── 3. one definition of format 1's writer functions ─────────────────────────
+
+const SHARED = [
+  "encodeCsvRow",
+  "parseCsvRow",
+  "splitCsv",
+  "startsNewPart",
+  "parseDbTime",
+  "stamp",
+  "dataFileName",
+  "DataFileNamer",
+  "backupIdOfDay",
+  "lastSealedDayMs",
+  "firstBoundaryMs",
+  "junctionApplies",
+  "planCuts",
+];
+const DEFINITION_ROOTS = ["packages/analyst-sdk/src", "backend/src", "packages/csvb/src"];
+const HOME = "packages/analyst-sdk/src/archive/";
+// A module-level definition (exported or not): a function, a class, or a const/let/var. A local variable that
+// happens to share a name (a block's `const stamp = ...` in backend/src/chain) is not a second writer.
+const definitionHits = (text: string): string[] =>
+  SHARED.filter((n) => new RegExp(`^(?:export\\s+)?(?:async\\s+)?(?:function\\*?\\s+${n}\\s*[<(]|class\\s+${n}\\b|(?:const|let|var)\\s+${n}\\s*[:=])`, "m").test(text)).map((n) => `defines ${n}`);
+
+describe("format 1 has one writer", () => {
+  test("every shared function is defined exactly once, in packages/analyst-sdk/src/archive", () => {
+    const hits = scan(repoRoot, DEFINITION_ROOTS, definitionHits);
+    expect(hits.filter((h) => !h.startsWith(HOME))).toEqual([]);
+    for (const n of SHARED) expect(hits.filter((h) => h.endsWith(`defines ${n}`)), n).toEqual([`${HOME}format1.ts: defines ${n}`]);
+  });
+
+  test("the SDK's settle hour and part size equal the contract's", () => {
+    expect(SETTLE_MS).toBe(ARCHIVE_SETTLE_MS);
+    expect(MAX_PART_BYTES).toBe(ARCHIVE_PART_BYTES);
+  });
+
+  test("red control: a second definition in backend/src or packages/csvb/src is reported; an import is not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "archive-one-writer-guard-"));
+    try {
+      mkdirSync(join(tmp, "backend", "src"), { recursive: true });
+      mkdirSync(join(tmp, "packages", "csvb", "src"), { recursive: true });
+      writeFileSync(join(tmp, "backend", "src", "x.ts"), "export function stamp(micros: bigint): string {\n  return String(micros);\n}\nconst backupIdOfDay = (d: number) => String(d);\n");
+      writeFileSync(join(tmp, "packages", "csvb", "src", "y.ts"), "export const encodeCsvRow = (v: string[]) => v.join();\nclass DataFileNamer {}\n");
+      writeFileSync(join(tmp, "packages", "csvb", "src", "z.ts"), 'import { encodeCsvRow, stamp } from "@robotmoney/analyst-sdk/src/archive/format1.ts";\nexport { encodeCsvRow, stamp };\nfunction f() {\n  const stamp = 1;\n  return stamp;\n}\n');
+      expect(scan(tmp, ["backend/src", "packages/csvb/src"], definitionHits).sort()).toEqual([
+        "backend/src/x.ts: defines backupIdOfDay",
+        "backend/src/x.ts: defines stamp",
+        "packages/csvb/src/y.ts: defines DataFileNamer",
+        "packages/csvb/src/y.ts: defines encodeCsvRow",
+      ]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

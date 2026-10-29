@@ -1,12 +1,11 @@
-// Reading a format 1 local copy (the robotmoney/csv-backups layout, D72 in docs
-// PR 1412) to generate one run's input file. Pure: the command line
-// (bin/inputs.ts) lists the files, reads, hashes and gunzips them, and hands
-// the text here. This module decides what is complete, what a run's frozen
-// vintage holds, and what the input file says. It never fetches: acquisition
-// (a repo clone, `csvb backup --source api`) is finished before it runs, and
-// the SDK has no download client (analyst SDK requirements section 2).
+// Format 1 (D72): the one module that defines the layout, for both its writers
+// and its reader (issue 1477, D80). csvb (packages/csvb) and the public archive
+// routes (backend/src/analytics/store/public-archive-store.ts) write with the
+// writer half; the SDK's local-copy reader reads with the reader half. Pure: no
+// file, database or network access here. Each caller does its own I/O and hands
+// text or bytes in.
 //
-// Layout, as csvb writes it:
+// Layout:
 //   csv/<backup id>/backup.json                      the record (BackupRecord)
 //   csv/<backup id>/data/<table>.<start>_<end>.csv.gz rows this backup added
 //   csv/<backup id>/revisions/<table>.csv.gz          revised-table changes
@@ -14,12 +13,19 @@
 // uncompressed bytes (gzip is only a transport encoding). Append-only tables chain: each backup's watermark_before is
 // the previous backup's watermark_after. Values are Postgres COPY CSV text.
 //
-// A run's inputs are exactly its vintage: analytics_data_vintages names the
-// run's vintage, analytics_vintage_members lists its source_value_versions ids
-// as ranges, and those versions are the committed observations the run used.
-// Their stored value text is copied unchanged.
+// Backup ids: one per UTC day boundary (`YYYY-MM-DDT000000Z`, the cut rule
+// below), plus the legacy snapshot-time ids csvb wrote before the day cut
+// (format1-legacy.ts). BACKUP_ID_RE accepts both shapes.
+//
+// Reader half: a run's inputs are exactly its vintage. analytics_data_vintages
+// names the run's vintage, analytics_vintage_members lists its
+// source_value_versions ids as ranges, and those versions are the committed
+// observations the run used. Their stored value text is copied unchanged. The
+// reader never fetches: acquisition (a repo clone, `csvb backup --source api`)
+// is finished before it runs, and the SDK has no download client (analyst SDK
+// requirements section 2).
 import { gunzipSync } from "node:zlib";
-import { SERIES_MAPPING } from "../series-ids.ts";
+import { SERIES_MAPPING, STORED_UNDER } from "../series-ids.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
@@ -163,6 +169,367 @@ export function toObjects(csv: { header: string[]; rows: (string | null)[][] }):
   });
 }
 
+// ── Writer half: the rules csvb and the archive routes share (issue 1477) ────
+
+// The settle time before a day boundary is cut: a transaction that took its id
+// before the boundary and committed after it is in by then (requirements 4.5).
+// The contract's ARCHIVE_SETTLE_MS and ARCHIVE_PART_BYTES carry the same values
+// for the API (scripts/tests/unit/archive-identity-guard.test.ts holds them equal).
+export const SETTLE_MS = 3_600_000;
+export const DAY_MS = 86_400_000;
+
+// Where a row's time comes from, for naming files by the period they cover and
+// for the day cut: a column of the row itself, or (for a table whose rows carry
+// no time) the time of the row it points to.
+export type TimeSpec = { column: string } | { lookup: { column: string; table: string; key: string; timeColumn: string } };
+
+export interface CatalogAppendOnly {
+  name: string;
+  time: TimeSpec;
+  // Served by the public archive routes. The run events and the parity
+  // observations are backed up by csvb only (issue 1422 owner decisions).
+  served: boolean;
+}
+
+export interface CatalogRevised {
+  name: string;
+  // The columns that identify a row.
+  key: string[];
+}
+
+// The table catalog, in record order. Append-only tables only gain rows; each
+// backup adds the rows above the previous watermark. Revised tables are
+// rewritten in place; each backup adds a revision file of the rows new or
+// changed since the previous backup.
+export const APPEND_ONLY_TABLES: readonly CatalogAppendOnly[] = [
+  { name: "analytics_output_snapshots", time: { column: "created_at" }, served: true },
+  { name: "analytics_report_snapshots", time: { column: "created_at" }, served: true },
+  { name: "source_value_versions", time: { column: "knowledge_time" }, served: true },
+  { name: "analytics_ledger_runs", time: { column: "created_at" }, served: true },
+  { name: "analytics_ledger_run_events", time: { column: "knowledge_time" }, served: false },
+  { name: "analytics_ledger_methodology_versions", time: { column: "created_at" }, served: true },
+  { name: "analytics_data_vintages", time: { column: "created_at" }, served: true },
+  { name: "analytics_vintage_members", time: { lookup: { column: "vintage_id", table: "analytics_data_vintages", key: "id", timeColumn: "created_at" } }, served: true },
+  { name: "analytics_overwrite_events", time: { column: "recorded_at" }, served: true },
+  { name: "analytics_parity_observations", time: { column: "observed_at" }, served: false },
+];
+
+export const REVISED_TABLES: readonly CatalogRevised[] = [
+  { name: "regime_snapshots", key: ["date"] },
+  { name: "raw_indicator_history", key: ["indicator", "date"] },
+  { name: "asset_prices", key: ["price_date", "symbol", "time_basis"] },
+  { name: "analytics_read_mode", key: ["id"] },
+];
+
+/**
+ * One row in the CSV dialect Postgres COPY writes: a field is quoted when it is
+ * empty (so it differs from NULL), or holds a comma, a double quote, CR or LF,
+ * with embedded quotes doubled; NULL is an unquoted empty field. Ends with a newline.
+ */
+export function encodeCsvRow(values: readonly (string | null)[]): string {
+  return (
+    values
+      .map((v) => {
+        if (v === null) return "";
+        if (v === "" || /[",\r\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+        return v;
+      })
+      .join(",") + "\n"
+  );
+}
+
+/**
+ * Parse ONE complete CSV row, as COPY writes it, back into fields. NULL is an
+ * UNQUOTED empty field, so an empty string (`""`) parses to "", not null. The
+ * row's newline may be absent on a last row.
+ */
+export function parseCsvRow(row: Uint8Array): (string | null)[] {
+  let text = new TextDecoder("utf-8", { fatal: true }).decode(row);
+  if (text.endsWith("\n")) text = text.slice(0, -1);
+  const out: (string | null)[] = [];
+  let i = 0;
+  const n = text.length;
+  for (;;) {
+    if (i < n && text[i] === '"') {
+      let v = "";
+      i += 1;
+      for (;;) {
+        if (i >= n) throw new Error("unterminated quoted field");
+        const c = text[i]!;
+        if (c === '"') {
+          if (text[i + 1] === '"') {
+            v += '"';
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        v += c;
+        i += 1;
+      }
+      out.push(v);
+    } else {
+      const start = i;
+      while (i < n && text[i] !== ",") {
+        if (text[i] === '"') throw new Error("a quote inside an unquoted field");
+        i += 1;
+      }
+      const raw = text.slice(start, i);
+      out.push(raw === "" ? null : raw);
+    }
+    if (i >= n) return out;
+    if (text[i] !== ",") throw new Error(`expected a comma at ${i}`);
+    i += 1;
+    if (i >= n) {
+      out.push(null); // a trailing comma ends with an empty (NULL) field
+      return out;
+    }
+  }
+}
+
+// ── Part splitting ───────────────────────────────────────────────────────────
+// An append-only table's new rows are written in id order into parts of at most
+// maxPartBytes uncompressed (the header included). A row is never cut: a part
+// holds at least one data row, so one row larger than the bound is a part of its
+// own and exceeds it.
+
+/** Does a row of `rowBytes` start a new part, given the open part's data rows and bytes? */
+export function startsNewPart(partRows: number, partBytes: number, rowBytes: number, maxPartBytes: number): boolean {
+  return partRows > 0 && partBytes + rowBytes > maxPartBytes;
+}
+
+export interface PartSink {
+  write(bytes: Uint8Array): void | Promise<void>;
+  /** Called once when the part is complete, with its DATA rows (header excluded); the return value is passed through. */
+  close(info: { dataRows: number }): Promise<unknown>;
+}
+
+export interface SplitOptions {
+  maxPartBytes: number;
+  /** Open part number `n` (1-based). Called lazily, so a header-only stream opens exactly one part. */
+  openPart: (n: number) => PartSink;
+  /** Called once with the header row (including its newline). */
+  onHeader?: (row: Uint8Array) => void;
+  /** Called for every data row, in order, as soon as it is complete. */
+  onRow?: (row: Uint8Array) => void;
+}
+
+export interface SplitResult {
+  /** Return values of each sink's close(), in part order. */
+  parts: unknown[];
+  /** Data rows seen (header excluded). */
+  rows: number;
+  /** Parts that exceed maxPartBytes because one row alone is larger than it. */
+  oversize: number;
+}
+
+const QUOTE = 0x22;
+const NEWLINE = 0x0a;
+
+function concatBytes(pieces: Uint8Array[], total: number): Uint8Array {
+  if (pieces.length === 1) return pieces[0]!;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of pieces) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+/**
+ * Split one CSV byte stream (a header row, then rows) into parts on row
+ * boundaries, by the part rule above; every part begins with the header. Only a
+ * newline outside quotes ends a row: toggling "inside quotes" on every `"` byte
+ * gives the right state at every newline (a doubled quote toggles twice).
+ */
+export async function splitCsv(source: AsyncIterable<Uint8Array>, opts: SplitOptions): Promise<SplitResult> {
+  if (!(opts.maxPartBytes > 0)) throw new RangeError("maxPartBytes must be positive");
+  const results: unknown[] = [];
+  let header: Uint8Array | null = null;
+  let sink: PartSink | null = null;
+  let partNo = 0;
+  let partBytes = 0;
+  let partDataRows = 0;
+  let rows = 0;
+  let oversize = 0;
+  let inQuote = false;
+  let pending: Uint8Array[] = [];
+  let pendingLen = 0;
+
+  const closeSink = async (): Promise<void> => {
+    if (!sink) return;
+    results.push(await sink.close({ dataRows: partDataRows }));
+    sink = null;
+  };
+  const openSink = async (): Promise<PartSink> => {
+    partNo += 1;
+    sink = opts.openPart(partNo);
+    await sink.write(header!);
+    partBytes = header!.length;
+    partDataRows = 0;
+    return sink;
+  };
+
+  const onRow = async (row: Uint8Array): Promise<void> => {
+    if (header === null) {
+      header = row;
+      opts.onHeader?.(row);
+      return;
+    }
+    rows += 1;
+    opts.onRow?.(row);
+    if (sink && startsNewPart(partDataRows, partBytes, row.length, opts.maxPartBytes)) await closeSink();
+    const s = sink ?? (await openSink());
+    await s.write(row);
+    partBytes += row.length;
+    partDataRows += 1;
+    if (partDataRows === 1 && partBytes > opts.maxPartBytes) oversize += 1;
+  };
+
+  for await (const chunk of source) {
+    let start = 0;
+    for (let i = 0; i < chunk.length; i++) {
+      const b = chunk[i]!;
+      if (b === QUOTE) inQuote = !inQuote;
+      else if (b === NEWLINE && !inQuote) {
+        const tail = chunk.subarray(start, i + 1);
+        pending.push(tail);
+        pendingLen += tail.length;
+        const row = concatBytes(pending, pendingLen);
+        pending = [];
+        pendingLen = 0;
+        start = i + 1;
+        await onRow(row);
+      }
+    }
+    if (start < chunk.length) {
+      const rest = chunk.subarray(start);
+      pending.push(rest);
+      pendingLen += rest.length;
+    }
+  }
+  if (pendingLen > 0) await onRow(concatBytes(pending, pendingLen)); // a last row with no newline is still a row
+  if (header === null) throw new Error("csv stream was empty: no header row");
+  if (!sink && partNo === 0) await openSink(); // a table with no data rows still gets one part holding the header
+  await closeSink();
+  return { parts: results, rows, oversize };
+}
+
+// ── Names ────────────────────────────────────────────────────────────────────
+
+export const CSV_DIR = "csv";
+export const backupDir = (id: string): string => `${CSV_DIR}/${id}`;
+export const recordPath = (id: string): string => `${backupDir(id)}/backup.json`;
+export const dataPath = (id: string, name: string): string => `${backupDir(id)}/data/${name}`;
+export const revisionFile = (id: string, table: string): string => `${backupDir(id)}/revisions/${table}.csv.gz`;
+
+/** `2026-09-21 01:59:32.748478+00` (the database's UTC text) as microseconds since the epoch. */
+export function parseDbTime(text: string): bigint {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:\+00(?::00)?|Z)$/.exec(text.trim());
+  if (!m) throw new Error(`${JSON.stringify(text)} is not a UTC timestamp (expected e.g. 2026-09-21 01:59:32.748478+00)`);
+  const secs = BigInt(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!)) / 1000n;
+  return secs * 1_000_000n + BigInt((m[7] ?? "").padEnd(6, "0") || "0");
+}
+
+/** The UTC time as `YYYY-MM-DDTHHMMSSZ`, to the second (rounded down). */
+export function stamp(micros: bigint): string {
+  const d = new Date(Number(micros / 1000n));
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getUTCFullYear(), 4)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}T${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
+}
+
+/**
+ * A data file's name: `<table>.<start>_<end>.csv.gz` by the earliest and latest
+ * row time in it (UTC, to the second), `late.` before the span for rows that
+ * committed late (csvb only). `dup` is 1 for the first file with this name in
+ * its backup, 2 for the next (`-2` before `.csv.gz`), and so on.
+ */
+export function dataFileName(table: string, late: boolean, tMin: string, tMax: string, dup = 1): string {
+  const span = `${stamp(parseDbTime(tMin))}_${stamp(parseDbTime(tMax))}`;
+  return `${table}.${late ? "late." : ""}${span}${dup > 1 ? `-${dup}` : ""}.csv.gz`;
+}
+
+/** Names a backup's data files, giving a repeated name the next `-N`. One per table per backup. */
+export class DataFileNamer {
+  private used = new Set<string>();
+  constructor(private table: string, private late = false) {}
+  next(tMin: string, tMax: string): string {
+    let dup = 1;
+    let name = dataFileName(this.table, this.late, tMin, tMax, dup);
+    while (this.used.has(name)) name = dataFileName(this.table, this.late, tMin, tMax, ++dup);
+    this.used.add(name);
+    return name;
+  }
+}
+
+// ── The backup cut rule ──────────────────────────────────────────────────────
+// Both writers cut a backup at every UTC day boundary t once t is SETTLE_MS in
+// the past (sealed), named `YYYY-MM-DDT000000Z`. The first boundary is the UTC
+// midnight after the earliest first row (by id) of the tables the writer holds.
+// Per append-only table, the watermark at t is the largest existing id, after the
+// previous backup's watermark, below the first row whose time is at or after t
+// (or the newest id, when no such row exists yet). A table timed through a
+// lookup (vintage members) is cut by the row it points to instead: every row
+// whose lookup key is at or below that table's watermark at t, so one vintage's
+// members are never split between backups.
+//
+// The legacy junction (format1-legacy.ts) is one extra cut point between the
+// day boundaries around it, with its own id and baked watermarks. It applies
+// once a sealed day boundary lies past it and some table holds an id above its
+// junction watermark; a database whose rows all predate it is cut by day alone.
+
+export const DAY_CUT_ID_RE = /^(\d{4}-\d{2}-\d{2})T000000Z$/;
+
+export interface Junction {
+  id: string;
+  watermarks: Readonly<Record<string, string>>;
+}
+
+export type Cut = { id: string; kind: "day"; boundaryMs: number } | { id: string; kind: "junction"; watermarks: Readonly<Record<string, string>> };
+
+/** The day-cut id of the UTC midnight at `dayMs`. */
+export const backupIdOfDay = (dayMs: number): string => `${new Date(dayMs).toISOString().slice(0, 10)}T000000Z`;
+
+/** The instant a backup id names (either shape), in ms since the epoch. */
+export function backupInstantMs(id: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(id);
+  if (!m) throw new Error(`${JSON.stringify(id)} is not a backup id (YYYY-MM-DDTHHMMSSZ)`);
+  return Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!);
+}
+
+/** The instant as the database prints a UTC time: `2026-10-19 20:24:21+00`. */
+export const dbTimeText = (ms: number): string => `${new Date(ms).toISOString().slice(0, 19).replace("T", " ")}+00`;
+
+/** The newest sealed boundary: the latest UTC midnight at least SETTLE_MS before `nowMs`. */
+export const lastSealedDayMs = (nowMs: number): number => Math.floor((nowMs - SETTLE_MS) / DAY_MS) * DAY_MS;
+
+/** The first boundary: the UTC midnight after the earliest first row's time (microseconds). */
+export const firstBoundaryMs = (earliestMicros: bigint): number => Math.floor(Number(earliestMicros / 1000n) / DAY_MS) * DAY_MS + DAY_MS;
+
+/** Does the junction apply: a sealed day boundary lies past it, and rows follow it? */
+export function junctionApplies(junction: Junction | null, nowMs: number, rowsFollowJunction: boolean): junction is Junction {
+  return junction !== null && rowsFollowJunction && backupIdOfDay(lastSealedDayMs(nowMs)) > junction.id;
+}
+
+/**
+ * The cut points, oldest first: every sealed day boundary from the first, with
+ * the junction in its place when it applies, and only those after `after` (the
+ * newest backup a writer already holds). No first boundary (no rows yet) gives none.
+ */
+export function planCuts(o: { firstDayMs: number | null; nowMs: number; junction: Junction | null; rowsFollowJunction: boolean; after?: string | null }): Cut[] {
+  if (o.firstDayMs === null) return [];
+  const cuts: Cut[] = [];
+  for (let d = o.firstDayMs; d <= lastSealedDayMs(o.nowMs); d += DAY_MS) cuts.push({ id: backupIdOfDay(d), kind: "day", boundaryMs: d });
+  if (junctionApplies(o.junction, o.nowMs, o.rowsFollowJunction) && !cuts.some((c) => c.id === o.junction!.id)) {
+    const at = cuts.findIndex((c) => c.id > o.junction!.id);
+    cuts.splice(at < 0 ? cuts.length : at, 0, { id: o.junction.id, kind: "junction", watermarks: o.junction.watermarks });
+  }
+  const after = o.after ?? null;
+  return after === null ? cuts : cuts.filter((c) => c.id > after);
+}
+
 // ── Records: which backups, and are they complete ────────────────────────────
 
 // Parse and check backup records (the backup.json texts, keyed by directory
@@ -262,7 +629,16 @@ export function verifyFile(f: FileRecord, got: { sha256_raw: string | null; rows
 // Storage key -> the id the run reads it under, through the one D74 storage
 // mapping (src/series-ids.ts). A key no regime consumer reads (another
 // consumer's input) maps to null and is counted, never silently dropped.
-const INPUT_ID_OF_KEY = new Map(SERIES_MAPPING.map((m) => [m.storageKey, m.inputId]));
+// A key read by several consumers (raw_indicator_history:DEFI_TVL also feeds
+// DEFI_GROWTH, D74 amendment) is written once, under the input id of the
+// indicator it is named after; the run reads the growth indicator from it.
+// The keys DEFI_GROWTH and STABLES_GROWTH were stored under before that
+// amendment hold history no consumer reads now. Their rows are kept in the
+// generated input under the storage key itself, an unread series, so a
+// vintage's every member still reaches the input and none is relabelled.
+const INPUT_ID_OF_KEY = new Map<string, string>();
+for (const m of SERIES_MAPPING) if (!INPUT_ID_OF_KEY.has(m.storageKey)) INPUT_ID_OF_KEY.set(m.storageKey, m.inputId);
+for (const id of Object.keys(STORED_UNDER)) INPUT_ID_OF_KEY.set(`raw_indicator_history:${id}`, `raw_indicator_history:${id}`);
 export function seriesForStorageKey(key: string): string | null {
   return INPUT_ID_OF_KEY.get(key) ?? null;
 }
