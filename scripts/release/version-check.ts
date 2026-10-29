@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-// scripts/release/version-check.ts — a release's version checks (phase
-// `version`, ids V01…), run ON THE TARGET HOST after the soak.
+// scripts/release/version-check.ts — a release's version checks (the steps it
+// adds after the soak: Q for stage, C for production, one pair per check), run ON THE TARGET HOST.
 //
-//   bun scripts/release/version-check.ts --release vA.B.C --check <name> --instance <name> --origin <url> --run <run-ts> --receipt-dir <dir>
+//   bun scripts/release/version-check.ts --release vA.B.C --check <name> --instance <name> --origin <url> --run <run-ts> --receipt-dir <dir> [--commit <sha>]
 //
 // A version check proves one change a release ships: a feature landed, a bug is
 // fixed, a feature retired (owner, 2026-10-15). The general checks every
@@ -15,7 +15,7 @@
 // the public origin over HTTP, and `docker` on this host. A check that must
 // write (a refused take, say) is a stage-only step (`onlyFor: stage`).
 //
-// It writes `version-check-<name>.json` into --receipt-dir and exits 0 only when
+// It writes `version-check-<name>.json` into --receipt-dir (`-`: a control-machine step, which prints it instead) and exits 0 only when
 // the check found no problem.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -28,6 +28,8 @@ export interface VersionCheckContext {
   /** The public origin, no trailing slash. */
   readonly origin: string;
   readonly runTs: string;
+  /** The release commit (`--commit`), for a check that runs the SDK or reads the checkout at it; absent when the step passes none. */
+  readonly commit?: string;
   /** Opens the proven read-only session once, on first use. */
   db(): Promise<ReadOnlySession>;
   /** `GET <origin><path>`: the status and body, never a throw for a non-2xx. */
@@ -57,7 +59,7 @@ export function validCheckName(name: string): boolean {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name);
 }
 
-export function makeContext(opts: { release: string; instance: string; origin: string; runTs: string }): VersionCheckContext & { close(): Promise<void> } {
+export function makeContext(opts: { release: string; instance: string; origin: string; runTs: string; commit?: string }): VersionCheckContext & { close(): Promise<void> } {
   let session: Promise<ReadOnlySession> | undefined;
   let project: string | undefined;
   const docker = (args: readonly string[]) => {
@@ -101,7 +103,8 @@ async function main(): Promise<number> {
     return 2;
   }
   const mod = (await import(`./version-checks/${release}/${name}.ts`)) as { default: VersionCheck };
-  const ctx = makeContext({ release, instance, origin, runTs });
+  const commit = flag("--commit");
+  const ctx = makeContext({ release, instance, origin, runTs, ...(commit ? { commit } : {}) });
   let result: VersionCheckResult;
   try {
     result = await mod.default(ctx);
@@ -110,10 +113,18 @@ async function main(): Promise<number> {
   } finally {
     await ctx.close();
   }
-  mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
-  const file = join(receiptDir, `version-check-${name}.json`);
-  writeFileSync(file, `${JSON.stringify({ release, check: name, at: new Date().toISOString(), ...result }, null, 2)}\n`, { mode: 0o600 });
-  console.log(`[version-check] ${release} ${name}: ${result.problems.length === 0 ? "ok" : `${result.problems.length} problem(s)`}; receipt ${file}`);
+  const receipt = `${JSON.stringify({ release, check: name, at: new Date().toISOString(), ...result }, null, 2)}\n`;
+  let where: string;
+  if (receiptDir === "-") {
+    // A control-machine step (the SDK checks) has no host run directory: its receipt is its output, which the journal keeps.
+    where = "printed below";
+    console.log(receipt);
+  } else {
+    mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
+    where = join(receiptDir, `version-check-${name}.json`);
+    writeFileSync(where, receipt, { mode: 0o600 });
+  }
+  console.log(`[version-check] ${release} ${name}: ${result.problems.length === 0 ? "ok" : `${result.problems.length} problem(s)`}; receipt ${where}`);
   for (const p of result.problems) console.error(`[version-check] REFUSE: ${p}`);
   return result.problems.length === 0 ? 0 : 1;
 }

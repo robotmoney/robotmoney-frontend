@@ -952,6 +952,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     postmasterStart: "SELECT pg_postmaster_start_time() AS boot_at",
     advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+    publicReadSession: "SELECT set_config('statement_timeout', '5000', true), set_config('TimeZone', 'UTC', true)",
   };
 
   test("the shape list equals the pinned list exactly", () => {

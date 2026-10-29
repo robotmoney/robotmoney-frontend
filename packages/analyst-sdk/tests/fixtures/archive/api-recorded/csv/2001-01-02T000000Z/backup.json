@@ -1,0 +1,172 @@
+{
+  "format": 1,
+  "backup": "2001-01-02T000000Z",
+  "source": "api",
+  "consistency": "paged",
+  "snapshot": {
+    "exported_at_db": "2001-01-02 00:00:00+00",
+    "replica_replay_ts": null,
+    "db_user": "api",
+    "was_replica": false
+  },
+  "tool": {
+    "name": "robotmoney-api",
+    "commit": null
+  },
+  "append_only": {
+    "analytics_output_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    },
+    "analytics_report_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    },
+    "source_value_versions": {
+      "time": {
+        "column": "knowledge_time"
+      },
+      "watermark_before": null,
+      "watermark_after": "1968",
+      "rows_added": 1968,
+      "files": [
+        {
+          "path": "csv/2001-01-02T000000Z/data/source_value_versions.2001-01-01T020000Z_2001-01-01T020000Z.csv.gz",
+          "rows": 1968,
+          "bytes_raw": 200304,
+          "sha256_raw": "a2acf46b2c619c48d5a98e105224c5e825223a5579485cf369e3cbc7eec6d482",
+          "id_min": "1",
+          "id_max": "1968",
+          "sum_id": "1937496",
+          "time_min": "2001-01-01 02:00:00+00",
+          "time_max": "2001-01-01 02:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1968",
+      "db_sum_id_through_watermark": "1937496"
+    },
+    "analytics_ledger_runs": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "1",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2001-01-02T000000Z/data/analytics_ledger_runs.2001-01-01T050000Z_2001-01-01T050000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 222,
+          "sha256_raw": "be4e6f68ca88b21ac476bc3f3cb7b174247e40f6a47452ee56f2d8dacc742cc8",
+          "id_min": "1",
+          "id_max": "1",
+          "sum_id": "1",
+          "time_min": "2001-01-01 05:00:00+00",
+          "time_max": "2001-01-01 05:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "1"
+    },
+    "analytics_ledger_methodology_versions": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "1",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2001-01-02T000000Z/data/analytics_ledger_methodology_versions.2001-01-01T003000Z_2001-01-01T003000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 205,
+          "sha256_raw": "be9487dc29f178b5b6d43b8dbca5163267341cc8099e94b684f97c43f87287d4",
+          "id_min": "1",
+          "id_max": "1",
+          "sum_id": "1",
+          "time_min": "2001-01-01 00:30:00+00",
+          "time_max": "2001-01-01 00:30:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "1"
+    },
+    "analytics_data_vintages": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "1",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2001-01-02T000000Z/data/analytics_data_vintages.2001-01-01T060000Z_2001-01-01T060000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 348,
+          "sha256_raw": "30d8013e7adde20fec08ab99d14886b236bc29ccf8c3bd0165b17af4b8ae8664",
+          "id_min": "1",
+          "id_max": "1",
+          "sum_id": "1",
+          "time_min": "2001-01-01 06:00:00+00",
+          "time_max": "2001-01-01 06:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "1"
+    },
+    "analytics_vintage_members": {
+      "time": {
+        "lookup": {
+          "column": "vintage_id",
+          "table": "analytics_data_vintages",
+          "key": "id",
+          "timeColumn": "created_at"
+        }
+      },
+      "watermark_before": null,
+      "watermark_after": "395",
+      "rows_added": 395,
+      "files": [
+        {
+          "path": "csv/2001-01-02T000000Z/data/analytics_vintage_members.2001-01-01T060000Z_2001-01-01T060000Z.csv.gz",
+          "rows": 395,
+          "bytes_raw": 15201,
+          "sha256_raw": "b4e572f92d1fca11f7982391889a6e41f0a27c0b192bdfb645108a9a083bccad",
+          "id_min": "1",
+          "id_max": "395",
+          "sum_id": "78210",
+          "time_min": "2001-01-01 06:00:00+00",
+          "time_max": "2001-01-01 06:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "395",
+      "db_sum_id_through_watermark": "78210"
+    },
+    "analytics_overwrite_events": {
+      "time": {
+        "column": "recorded_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    }
+  },
+  "revisions": {}
+}

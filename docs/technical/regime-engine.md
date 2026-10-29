@@ -28,16 +28,22 @@ convention.
 
 ## 1. The one-sentence answer
 
-**`backend/src/analytics/analyze/compute.ts`'s `computeRegime`, invoked by
-`analytics/index.ts::runAnalytics`, is the file that computes the published
+**`packages/analyst-sdk/src/analyze/compute.ts`'s `computeRegime`, invoked by
+`backend/src/analytics/index.ts::runAnalytics`, is the file that computes the published
 macro/on-chain regime index.** `contract/src/regime.js` is the shared
 0.33/0.67 bucketing *rule* (not the composite math), and
 `backend/src/analytics/analyze/regime.ts` is a dead, unused second
 implementation — see §7.
 
+The compute code lives in `packages/analyst-sdk/src/` (D57). The backend's
+`backend/src/analytics/analyze/*.ts` and `backend/src/analytics/transform/*.ts`
+files are one-line re-exports of it, apart from the dead `analyze/regime.ts`.
+In this document a path that starts `analyze/` or `transform/` names the package
+file, and `analytics/index.ts` names `backend/src/analytics/index.ts`.
+
 ## 2. Indicator universe
 
-26 registry entries in `backend/src/analytics/analyze/indicators.ts` (`INDICATORS`),
+26 registry entries in `packages/analyst-sdk/src/analyze/indicators.ts` (`INDICATORS`),
 split across three panels:
 
 | Panel | Count | Members | In the published composite? |
@@ -63,7 +69,7 @@ is not duplicated here.
 
 Every indicator declares a `transform` field, applied to its aligned daily
 series **before** percentile ranking (`applyTransform`,
-`backend/src/analytics/transform/transforms.ts:14`). Three transforms are in
+`packages/analyst-sdk/src/transform/transforms.ts:14`). Three transforms are in
 production use:
 
 | Transform | Used by | What it does |
@@ -82,7 +88,7 @@ a gap.
 ## 4. Percentile, sign alignment, and weights
 
 1. **Rolling percentile rank** (`rollingPercentileRank`,
-   `backend/src/analytics/transform/math.ts:176`) — for each indicator, each
+   `packages/analyst-sdk/src/transform/math.ts:216`) — for each indicator, each
    day's transformed value is ranked against the trailing
    **1095-day (365×3, `ROLLING_WINDOW_DAYS`, `indicators.ts:466`) window of
    itself**: `(below + 0.5·equal) / n`, mid-rank tie handling, `NaN` until at
@@ -91,15 +97,15 @@ a gap.
    a DeFi TVL figure in tens of billions of dollars become directly
    comparable 0..1 quantities without any manual unit reconciliation.
 2. **Sign alignment** — `sign >= 0 ? rank : 1 - rank` (inline in
-   `computeRegime`, `analyze/compute.ts:83`), driven by the indicator's `sign`
+   `computeRegime`, `analyze/compute.ts:87`), driven by the indicator's `sign`
    field. After this step, `1.0` always means "most risk-on this indicator has
    been in three years," regardless of whether the raw series moves with or
    against risk appetite.
 3. **Point-in-time inverse-correlation weights**
-   (`inverseCorrelationWeights`, `transform/math.ts:201`, plus `capWeights`,
-   `transform/math.ts:250`) — computed **per panel, per day**, over the same
+   (`inverseCorrelationWeights`, `transform/math.ts:241`, plus `capWeights`,
+   `transform/math.ts:287`) — computed **per panel, per day**, over the same
    trailing 1095-day window of *sign-aligned* percentiles, but only recomputed
-   every **21 days** (`WEIGHT_REFRESH_DAYS`, `analyze/compute.ts:86`) plus
+   every **21 days** (`WEIGHT_REFRESH_DAYS`, `analyze/compute.ts:90`) plus
    always on the final day. An indicator's weight is inversely proportional to
    its average absolute correlation with the rest of its panel (a lower
    `avgAbs`, floored at 0.05, gives more weight — an indicator that moves
@@ -111,10 +117,10 @@ a gap.
 ## 5. Panel → composite → bucketing → smoothing
 
 - **Panel index** — the weighted mean of that panel's sign-aligned percentiles
-  on each day (`weightedMeanOnDay`, `analyze/compute.ts:249`), using the
+  on each day (`weightedMeanOnDay`, `analyze/compute.ts:247`), using the
   weights from step 3 above.
 - **Composite** — the arithmetic mean of whichever panel indices are finite
-  that day (`computeRegime`, `analyze/compute.ts:113-125`). `/regime` runs
+  that day (`computeRegime`, `analyze/compute.ts:117-124`). `/regime` runs
   this over `PANELS = ["macro", "onchain"]` (so composite = 0.5×macro +
   0.5×onchain when both resolve); `/regime_eq` runs the same function again
   with `["macro", "onchain", "factor"]` for the extended 3-panel view
@@ -122,7 +128,7 @@ a gap.
   `r2`/`r3` in `runAnalytics`).
 - **Bucketing** — the composite is itself percentile-ranked against its own
   trailing 1095-day window (same `rollingPercentileRank`), then bucketed by
-  `bucketFn` (`analyze/compute.ts:267`): `< 0.33 → risk_off`,
+  `bucketFn` (`analyze/compute.ts:266`): `< 0.33 → risk_off`,
   `> 0.67 → risk_on` (strict, exclusive upper), else `neutral`. `NaN → null`.
   **This is the production classifier function** — see §7 for why
   `contract/src/regime.js`'s `classifyRegime` is a *different, secondary*
@@ -185,8 +191,8 @@ percentile would carry little or no signal:
 **Why daily forward-fill across mismatched publication calendars, rather
 than ranking each indicator only on the days its own source actually
 publishes ("native cadence")?** Every registry indicator is aligned onto one
-shared daily `dateAxis` (`buildDateAxis`, `transform/math.ts:342`) via
-`alignDailyForwardFill` (`transform/math.ts:278`) — regardless of whether the
+shared daily `dateAxis` (`buildDateAxis`, `transform/math.ts:385`) via
+`alignDailyForwardFill` (`transform/math.ts:321`) — regardless of whether the
 underlying source is weekly (`ICSA`), business-daily (most FRED/yahoo
 series), 24/7 (on-chain/crypto), or monthly (`SHILLER_CAPE`). This is a
 **publication-cadence step function**: between real prints, an indicator's
@@ -257,7 +263,7 @@ classification. Neither is the production path:
   `regimeTool`), but a reason not to treat it as a drop-in replacement for
   `bucketFn` either.
 
-**The one production classifier is `bucketFn` in `analyze/compute.ts:267`,**
+**The one production classifier is `bucketFn` in `analyze/compute.ts:266`,**
 fed by `computeRegime`, invoked from `analytics/index.ts::runAnalytics`. If
 you're reconciling a published regime label against the methodology, this is
 the function to read.
@@ -340,14 +346,46 @@ last axis day, so the as-of day is revised by construction when D moves forward 
 day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
 section 6 and is not restated here.
 
-**Persistence tolerance (D56).** The persisted raw floor is the compute input only
-up to the per-source tolerance of D56 (`docs/decisions.md`): a point within tolerance
-is not rewritten (Yahoo ratios relative 5e-6, Yahoo float32 relative 1e-6). A run
-computes from the freshly fetched in-memory values, so a replay from the stored floor
-or ledger can differ slightly. The audit saw `factor_index` differ by up to 1.4e-4
-on 786 of 3,066 days (an inference from the stored data, not confirmed, because the
-fetched values are not recorded anywhere). Replaying a run from the ledger is described in
-[`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#reproducing-a-published-run).
+**Persistence tolerance (D56) and the committed dataset.** A point within its
+source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative
+5e-6, Yahoo float32 relative 1e-6). Since issue 1421 a run computes only from what
+ingestion committed: `runAnalytics` runs every source call first, reads the raw
+floor back after writing it, and takes each backtest extra and research input from
+the ledger head `saveSourceAcquisition` returns for it. A within-tolerance re-fetch
+therefore reaches the computation as the stored value under the stored version, and
+a material revision as its new version, so a replay from the run's frozen vintage
+reproduces its published figures (`backend/tests/regime-replay-published.test.ts`).
+The run's telemetry carries a `committed-input-evidence` artifact counting the
+collected values that differed from the committed ones. Before issue 1421 a run
+computed from the freshly fetched in-memory values, so a replay of an earlier run
+from the stored floor or ledger can differ slightly: the audit saw `factor_index`
+differ by up to 1.4e-4 on 786 of 3,066 days (an inference from the stored data,
+because those fetched values are recorded nowhere). Replaying a run from the ledger
+is described in
+[`packages/analyst-sdk/README.md`](../../packages/analyst-sdk/README.md#quickstart-rerun-a-published-run).
+
+**Replay against the production record (issue 1431).** The format 1 backups (D72) hold
+every run's vintage and published output. `backend/tests/regime-replay-archive.test.ts`
+replays every regime run since 2026-09-21 from a local copy (`RM_FORMAT1_ARCHIVE`), and
+skips with its reason printed when none is given. Against the backup of 2026-10-19
+(372 regime runs, 279 published, 93 failed or without an output package) every
+published as-of label reproduces. 6 runs reproduce every compared field. 273 runs, all
+from before issue 1421, differ in a number: 267 first in `factor_index` (the Yahoo
+factor ratios), 3 first in correlations, and 3 in the composite itself (runs 73, 111
+and 133, by 0.002 to 0.036, still with the published label). Required CI replays a
+committed sample of three of these runs (`tests/fixtures/published-replay/`, public
+data only, written by `backend/scripts/published-replay-sample.ts`) in
+`regime-replay-published.test.ts`: labels must match, and every other field must give
+exactly its recorded outcome.
+
+**Downstream never acquires.** After extract, every stage runs from the committed
+dataset and never calls the data source or an HTTP client. When neither composite
+panel (macro, on-chain) has an observation on or before the as-of day, the run stops
+with the named `CoverageError` (`packages/analyst-sdk/src/coverage.ts`, also raised
+by the SDK's `runRegime`). A missing optional input gives its documented missing
+result instead: no factor figures, no correlations or backtest pairs without SPX and
+ETH, no cash yield without TBILL3M. `scripts/tests/unit/analyst-sdk-purity.test.ts`
+rejects any import path from a downstream module to an acquisition client.
 
 **`regime_snapshots` is a current view; the ledger is the record.** Every run
 recomputes the full history and rewrites the table. What an earlier run showed
@@ -363,6 +401,85 @@ transforms and forward-fill ages are built. Its callers are
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
+
+### 8.1.1 Replay gaps against the published record (issue 1450)
+
+The replay of issue 1431 (section 8.1) found 273 runs whose replay differs from
+what they published. Every one is from before issue 1421. Each class below was
+diagnosed from the format 1 backup of 2026-10-19 (`backup 2026-10-19T202421Z`), read
+only, by replaying the run's frozen vintage and putting the observation the run
+computed from (the `raw_date` and `raw_value` of the indicator cards in its published
+as-of row) in place of the replayed one, one series at a time. No stored row, report
+or vintage is changed, and none is changed retroactively.
+
+| Class (first differing field) | Runs in the latest backup | Cause | What accounts for it |
+| --- | --- | --- | --- |
+| `composite` | 3 (runs 73, 111, 133) | `pre-1421-handoff` | Input data. Replaying with the computed observations gives the published composite exactly (residual 0), so the compute code accounts for none of the gap. Run 73 (-0.00163): `VIX` replayed 16.26, computed 15.98. Run 111 (+0.01654) and run 133 (-0.03562): `BTC_ACTIVE`, one day later in the vintage than the run used. Detail per series in `backend/tests/fixtures/composite-drift-diagnosis.json`. |
+| `factorIndex` | 267 | `pre-1421-handoff` | The factor panel is `SPX_TREND`, six Yahoo ratios and `SHILLER_CAPE`. In 265 runs the as-of observations of all of them equal the vintage (7 of these are re-runs of an earlier day, whose cards show later rows), and the gap (at most 8e-6) comes from history values the run fetched fresh and the ledger stored only to the D56 tolerance. In 2 runs (57 and 59) an as-of observation differs. Run 57 (`SPX_TREND`, -1.4e-4, the largest gap) drops to -3e-7 once its computed observation is put in. After that every run is within 8e-6, the size that moving a factor series inside its tolerance gives (up to 4e-6 in the trial). The composite is exact in all of them. |
+| `correlations` | 3 (runs 292, 360, 424) | `pre-1421-handoff` | Only correlations and backtest differ (rho by at most 9e-5). The label, composite, indices and percentiles are exact, so the macro and on-chain inputs are the same. The inputs left are the Yahoo `^GSPC` and `ETH-USD` price series, stored only to the D56 tolerance. The fresh values the run used were never stored, so this class is shown by elimination and by magnitude, not by an exact substitution. |
+
+All 273 runs predate the fix of issue 1421 (the latest backup holds no run after it), so
+the backup cannot show that a run after it replays exactly. The test for that is in
+`regime-replay-archive.test.ts` and runs when such a backup exists. No class has
+cause `other`, so no row links a fix issue.
+
+For the three composite runs the handoff is visible in the ledger. A run starts, reads
+the value stored at that moment, and computes. Its own ingest then commits newer values
+(`source_value_versions.knowledge_time` after the run's `created_at`), and the vintage
+is frozen after that commit. The replayed value is the one committed during the run.
+The computed value is the one committed before it, for example `VIX` 15.98 (committed
+15:20:55) against 16.26 (committed 15:34:48) for the run that started at 15:30:00. The
+compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
+today apart from comments.
+
+### 8.2 Source ids and the storage mapping (D74, issue 1423)
+
+A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or
+`fred:DTB3`. Stored rows keep their existing keys. No row, vintage, report or
+archive is renamed or rewritten, and there is no migration. The one mapping
+between the two lives in `packages/analyst-sdk/src/series-ids.ts`
+(`SERIES_MAPPING`, re-exported by `backend/src/analytics/extras.ts`).
+
+- **Per consumer.** A consumer is one computation that reads source data: each
+  registry indicator (`indicator:<ID>`), the correlations and the backtest. Each
+  consumer reads the storage keys it read before: `raw_indicator_history:<ID>`
+  for an indicator, `backtest:^GSPC`, `backtest:ETH-USD` and `backtest:DTB3` for
+  the correlations and the backtest. Two indicators are the exception (D74
+  amendment, issue 1514): `indicator:DEFI_GROWTH` reads
+  `raw_indicator_history:DEFI_TVL` and `indicator:STABLES_GROWTH` reads
+  `raw_indicator_history:STABLES` (`STORED_UNDER` in `series-ids.ts`). Both store
+  the same DefiLlama level and apply `change90` downstream, so no new row is
+  written under the two growth keys. Tests pin this list per consumer.
+- **Two streams, one id.** `raw_indicator_history:SPX_TREND` and `backtest:^GSPC`
+  both map to `yahoo:^GSPC`. So do `raw_indicator_history:ETH_TREND` and
+  `backtest:ETH-USD` for `yahoo:ETH-USD`. Their same-date values can differ. They
+  stay separate streams: `selectConsumerObservations` gives each consumer only
+  its own keys, and every observation keeps its storage key as provenance.
+- **Ambiguity.** The mapping is rejected when it loads if one consumer would read
+  two storage keys for one source id. The error names both keys. One source id
+  read by two consumers through two keys is allowed.
+- **Ratios.** A ratio indicator stores a calculated value, so its key maps to the
+  indicator id with kind `calculated`, and its two legs are listed.
+- **Source ids without a provider symbol.** The provider is the registry's
+  `source`, the name the ledger already records. Providers with no series use a
+  fixed symbol: `defillama_tvl:total`, `defillama_stables:total`,
+  `geckoterminal_newpools:new_pools`, `shiller_cape:CAPE`. Coin Metrics uses
+  `<asset>.<metric>`, for example `coinmetrics:eth.AdrActCnt`.
+- **SDK input names.** The computation still reads its inputs under the ids it
+  read before: registry ids, plus `SPX`, `ETH` and `TBILL3M`. So identical
+  observations give byte-identical reports. `runRegime` accepts a stream under
+  that id, under its storage key, or under its source id when only one stream
+  holds that id. A source id alone feeds every consumer that reads it. An input
+  that names one consumer's stream twice is rejected with both names, for
+  example `SPX_TREND` and `yahoo:^GSPC`. With two streams for one source id, name
+  each by its storage key.
+- **Writes** use the reverse mapping. `storageKeyForSourceId(consumer, id)` gives
+  the key, and `EXTRA_WRITE_KEYS` gives the keys `fetchBacktestExtras` writes.
+- **Storage to inputs.** `inputHistoryFromStorage` turns stored rows, for example
+  a reloaded vintage's members, into the history `runRegime` reads.
+  `backend/tests/analytics-offline-replay.test.ts` freezes the SDK fixture into a
+  vintage and reloads it offline. The test rebuilds the committed golden report
+  byte for byte.
 
 ## 9. Deliberate v0 divergences
 
@@ -389,7 +506,7 @@ three places:
    currently zero real-data exposure**). v0 carries a stale forward-filled
    value forward with full panel weight forever. v1's `ages` mechanism
    (`forwardFillAge`, consumed by `computeRegime`'s optional `ages` parameter,
-   `analyze/compute.ts:56-70`) nulls out a day's value **before** percentile
+   `analyze/compute.ts:59-75`) nulls out a day's value **before** percentile
    ranking once its last real observation is more than
    `MAX_FORWARD_FILL_DAYS = 120` days old — so a long-dead indicator's weight
    decays to 0 (via `inverseCorrelationWeights`' `minValidObs` floor) rather
@@ -421,7 +538,7 @@ never at write time. This is the deliberate divergence from v0's own storage
 shape (v0's `writeRawHistoryCsv` persists the dense aligned series — see A1's
 `writeLongHistoryCsv` row) and it is *why* v1 can compute an honest
 `forward_fill_age_days` per indicator per day (`forwardFillAge`,
-`transform/math.ts:309`, surfaced on every indicator in the regime snapshot
+`transform/math.ts:352`, surfaced on every indicator in the regime snapshot
 by `buildRichIndicators`, `analytics/index.ts:529-549`): `0` on a day with a
 real print, the day count since the last real observation otherwise, `NaN`
 before any observation has ever been seen, reset to `0` immediately on the

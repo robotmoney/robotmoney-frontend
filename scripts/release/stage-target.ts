@@ -3,7 +3,7 @@
 // rehearsals (D61 rule 2, docs/runbooks/stage-target.md).
 //
 //   bun scripts/release/stage-target.ts dump      (Q02-dump: reuse the newest dump at most 24 h old, else capture one)
-//   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace]
+//   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace] [--connection-limits <max>/<su>/<reserved>]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down
 //   bun scripts/release/stage-target.ts doadmin   (stage only: a fresh doadmin password on stdout, for a pipe)
@@ -19,7 +19,9 @@
 //   1. the running checkout, at the tag production reports (else its commit);
 //   2. `$HOME` for the target, with a self-signed TLS certificate;
 //   3. a long-lived Postgres 18 container over TLS on a fixed port, its data in
-//      a named volume;
+//      a named volume, with production's max_connections and reserved
+//      connections (from production's /health, issue 1514), so the stage api
+//      derives production's connection budget;
 //   4. DigitalOcean's role shape from the dump's own globals, with generated
 //      passwords (rm_owner with a password nobody keeps, doadmin CREATEROLE
 //      with a password held in memory for the checks, then dropped);
@@ -61,6 +63,10 @@ import {
   ACL_FINGERPRINT_SQL,
   bindDatabase,
   composeStageHomeEnv,
+  connectionLimitArgs,
+  parseConnectionLimitsFlag,
+  parseProductionLimits,
+  type ConnectionLimits,
   DOADMIN_ADMIN_QUERY,
   doadminPasswordSql,
   dumpAgeHours,
@@ -266,8 +272,31 @@ function readDumpPreflight(dumpDir: string) {
   return backup;
 }
 
-function startPostgres(): void {
+/**
+ * The connection limits the stage Postgres starts with: `--connection-limits`
+ * when given, else production's, from its public /health (issue 1514).
+ */
+async function readConnectionLimits(args: string[]): Promise<ConnectionLimits> {
+  const at = args.indexOf("--connection-limits");
+  if (at >= 0) {
+    const flagged = parseConnectionLimitsFlag(args[at + 1] ?? "");
+    if ("error" in flagged) throw new Refusal(flagged.error);
+    return flagged;
+  }
+  const url = `${T.productionOrigin}/health`;
+  let text: string | null = null;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(10_000), headers: { "cache-control": "no-cache" } });
+    text = await res.text();
+  } catch { text = null; }
+  const limits = parseProductionLimits(text);
+  if ("error" in limits) throw new Refusal(`${url}: ${limits.error}; pass --connection-limits <max_connections>/<superuser_reserved_connections>/<reserved_connections>`);
+  return limits;
+}
+
+function startPostgres(limits: ConnectionLimits): void {
   log(`creating volume ${T.pgVolume} and container ${T.pgContainer} (${POSTGRES_IMAGE}) on ${T.pgBindHost}:${T.pgPort}`);
+  log(`connection limits (production's unless --connection-limits): max_connections ${limits.maxConnections}, superuser_reserved_connections ${limits.superuserReserved}, reserved_connections ${limits.reserved}`);
   must(["docker", "volume", "create", "--label", T.label, T.pgVolume], "docker volume create");
   // The superuser password only satisfies the image's entrypoint. pg_hba
   // refuses that role over the network, so the value is never needed again.
@@ -278,7 +307,7 @@ function startPostgres(): void {
       "docker", "run", "-d", "--name", T.pgContainer, "--restart", "unless-stopped",
       "--env-file", envFile, "--label", T.label,
       "-p", `${T.pgBindHost}:${T.pgPort}:5432`, ...SHM_FLAGS,
-      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE,
+      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE, ...connectionLimitArgs(limits),
     ], "docker run");
   } finally {
     rmSync(envFile, { force: true });
@@ -409,8 +438,8 @@ function checkDatabase(passwords: Record<GeneratedPasswordRole, string>, replaye
  * every file that ledger names), the plan, the reference replay and its
  * owners and grants copied onto the restored copy.
  */
-async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, running: RunningVersion): Promise<{ passwords: Record<GeneratedPasswordRole, string>; plan: UpPlan }> {
-  startPostgres();
+async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, running: RunningVersion, limits: ConnectionLimits): Promise<{ passwords: Record<GeneratedPasswordRole, string>; plan: UpPlan }> {
+  startPostgres(limits);
   await waitForPostgres();
   enableTls();
   const passwords = Object.fromEntries(GENERATED_PASSWORD_ROLES.map((r) => [r, generatePassword()])) as Record<GeneratedPasswordRole, string>;
@@ -541,6 +570,7 @@ async function remoteUp(args: string[]): Promise<number> {
   const replace = args.includes("--replace");
   const backup = readDumpPreflight(dumpDir);
   const running = await readRunningVersion();
+  const limits = await readConnectionLimits(args);
 
   const existing = existingPieces();
   if (existing.length) {
@@ -560,7 +590,7 @@ async function remoteUp(args: string[]): Promise<number> {
   if (head !== running.commit) throw new Error(`the running checkout is at ${head}, but production's ${running.tag ?? "commit"} is ${running.commit}`);
   await bunInstall(T.runningCheckout, [".", "backend"]);
 
-  const { passwords, plan } = await buildDatabase(backup, running);
+  const { passwords, plan } = await buildDatabase(backup, running, limits);
   const problems = checkDatabase(passwords, plan.replay);
   if (problems.length) {
     for (const p of problems) log(`  PROBLEM: ${p}`);
@@ -575,6 +605,7 @@ async function remoteUp(args: string[]): Promise<number> {
     running: { commit: running.commit, tag: running.tag, ref: plan.ref },
     ledger: plan.replay.length,
     pg: `${T.pgContainer} ${POSTGRES_IMAGE} ${T.pgBindHost}:${T.pgPort}/${T.database}`,
+    connectionLimits: limits,
   }, null, 2)}\n`, { mode: 0o600 });
 
   await startStack();
@@ -735,7 +766,7 @@ async function control(command: string, args: string[]): Promise<number> {
   return await p.exited;
 }
 
-const USAGE = `usage: bun scripts/release/stage-target.ts dump | up --dump <dir on ${T.host} | newest> [--replace] | status | down | doadmin`;
+const USAGE = `usage: bun scripts/release/stage-target.ts dump | up --dump <dir on ${T.host} | newest> [--replace] [--connection-limits <max>/<su>/<reserved>] | status | down | doadmin`;
 
 async function main(argv: string[]): Promise<number> {
   const [first, ...rest] = argv;

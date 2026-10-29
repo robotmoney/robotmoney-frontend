@@ -14,6 +14,7 @@
 import type { RegimeComputeResult } from "./compute.ts";
 import type { Point } from "../types.ts";
 import { PANELS } from "./indicators.ts";
+import { correlation } from "../transform/exact.ts";
 
 export const CORR_HORIZONS_DAYS = [30, 90, 180] as const;
 export const CORR_ASSETS = ["spx", "eth"] as const;
@@ -138,27 +139,14 @@ export function ranks(arr: number[]): number[] {
   return out;
 }
 
+// n < 2 → NaN; zero variance → NaN. Compensated and scale-safe (proposed
+// decision D78, transform/exact.ts correlation); a non-finite value gives NaN.
 export function pearson(a: number[], b: number[]): number {
+  if (a.length !== b.length) throw new RangeError(`pearson: series of length ${a.length} and ${b.length}`);
   const n = a.length;
   if (n < 2) return NaN;
-  let sa = 0;
-  let sb = 0;
-  for (let i = 0; i < n; i++) {
-    sa += a[i];
-    sb += b[i];
-  }
-  const ma = sa / n;
-  const mb = sb / n;
-  let num = 0;
-  let da2 = 0;
-  let db2 = 0;
-  for (let i = 0; i < n; i++) {
-    const da = a[i] - ma;
-    const db = b[i] - mb;
-    num += da * db;
-    da2 += da * da;
-    db2 += db * db;
-  }
-  const denom = Math.sqrt(da2 * db2);
-  return denom > 0 ? num / denom : NaN;
+  const xs = a;
+  const ys = b;
+  for (let i = 0; i < n; i++) if (!Number.isFinite(xs[i]) || !Number.isFinite(ys[i])) return NaN;
+  return correlation(xs, ys);
 }

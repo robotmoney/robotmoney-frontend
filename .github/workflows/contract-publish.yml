@@ -54,7 +54,7 @@ jobs:
           fi
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.5"
+          bun-version: "1.4.4"
           no-cache: true
       - name: Contract tests (unit)
         working-directory: contract

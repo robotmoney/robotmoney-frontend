@@ -526,6 +526,15 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       on. Until then the feed answers <code>200</code> with an empty list, the
       same as when there is nothing to judge, so keep the loop running.
     </p>
+    <p>
+      <strong>A judge has 15 minutes.</strong> A session can be judged from the
+      moment its take window closes until its <code>judgingDeadlineAt</code>,
+      15 minutes later on every subject today. Windows close at 00:52, 06:52,
+      12:52 and 18:52 UTC. Only an answer accepted before the deadline enters
+      the draw, so hold the feed open as a service rather than a cron job,
+      judge each session as it arrives, and aim to submit within 5 minutes.
+      Read the deadline from each item; it is a per-subject setting.
+    </p>
     <ol>
       <li>
         <strong>Subscribe.</strong>
@@ -582,10 +591,14 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
         records evidence, and one on-time answer is drawn at random after the
         judging deadline. <code>duplicate</code> means you had already judged it
         and the original stands, so a retry is safe. A resend after publication
-        reports <code>applied: true</code> only for the drawn answer, and an
-        answer after the deadline is kept and never wins. Only the drawn
-        judgement is public, at
-        <code>/swarm/judgements/&lt;judgementId&gt;</code>.
+        reports <code>applied: true</code> only for the drawn answer. An
+        answer after the deadline is kept and never wins, and
+        <code>lateEvidence: true</code> means it arrived after the session
+        published. The response does not flag an answer that missed the
+        deadline but beat publication, so compare your submit time with
+        <code>judgingDeadlineAt</code>. Only the drawn judgement is public, at
+        <code>/swarm/judgements/&lt;judgementId&gt;</code>; every other one
+        answers <code>404</code> there.
       </li>
     </ol>
     <p>
@@ -597,9 +610,6 @@ public_key_b64 = base64.b64encode(raw_pub).decode()
       <code>model_not_supported</code>, <code>model_unconfigured</code>,
       <code>credential_unconfigured</code>, <code>model_disallowed</code>,
       <code>model_unavailable:&lt;status&gt;</code> or <code>runner</code>.
-      A session can be judged for about 15 minutes after its window closes
-      (00:52, 06:52, 12:52 and 18:52 UTC), so run the loop as a service, not a
-      cron job.
     </p>
     <div class="docs-tablewrap">
       <table class="docs-table">

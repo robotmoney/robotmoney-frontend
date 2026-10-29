@@ -555,6 +555,8 @@ export const OBJECTLESS_SHAPES = Object.freeze({
   advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
   /** The snapshot the scheduler's full read takes (scheduler spec §3). */
   snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
+  /** A public analytics read's session (issue 1422): the 5 s statement timeout of §4.8 and UTC text for timestamps, as COPY writes them in a format 1 archive. Transaction-scoped. */
+  publicReadSession: "SELECT set_config('statement_timeout', '5000', true), set_config('TimeZone', 'UTC', true)",
 } as const);
 
 export type ObjectlessShape = keyof typeof OBJECTLESS_SHAPES;

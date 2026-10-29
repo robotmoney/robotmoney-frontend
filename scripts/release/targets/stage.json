@@ -1,6 +1,6 @@
 {
   "$comment": "Stage target for bun run release:run (D61 rule 2): the same steps as prod.json, against the stage target that scripts/release/stage-target.ts up builds before the run from a production dump, at the tag and commit production's /api/version reports. It names where the target lives and nothing of what runs there: no release commit (the go file's line names it), no previous commit, no running stack (the instance's smoke state under HOME names it; the rolling boot replaces it one service at a time, website-server kept). HOME is a dedicated directory whose .env names the stage database. watchMinAttendance is 0.4 on stage: the four external members file against production, never against the stage database, so a stage session holds at most the three in-house takes of seven active members (3/7 = 0.43). Production keeps the gate's default 0.5 (owner-visible, 2026-10-08). The soak is the default on every target: 30 minutes after READY with sessions deferred, then every container's logs are collected (owner, 2026-10-14). Sessions are graded afterwards as a report.",
-  "release": "v0.6.1",
+  "release": "v0.7.0",
   "rmEnv": "stage",
   "host": "rm-frontend-stage-2",
   "checkout": "/home/stage-server/rm-stage-target",

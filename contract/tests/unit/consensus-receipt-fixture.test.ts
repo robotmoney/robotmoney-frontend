@@ -357,7 +357,13 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     try { throughPackage("@robotmoney/contract/fixtures/swarm-application.json"); }
     catch (error) { refusal = error; }
     expect(refusal).toBeDefined();
-    expect(String(refusal.message)).toContain("swarm-application.json");
+    // The message wording is the runtime's, not ours: bun 1.3.x names the
+    // subpath ("Cannot find module '@robotmoney/contract/fixtures/...'"), bun
+    // 1.4.x names only the package ("Cannot find package '@robotmoney/contract'
+    // imported from ..."). Both name the package, and the positive cases above
+    // already prove the package itself resolves, so the code below is the
+    // assertion that the subpath is the thing refused.
+    expect(String(refusal.message)).toContain("@robotmoney/contract");
     // node reports ERR_PACKAGE_PATH_NOT_EXPORTED, bun ERR_MODULE_NOT_FOUND;
     // both mean "the package does not publish this subpath".
     expect(["ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_MODULE_NOT_FOUND"]).toContain(refusal.code);

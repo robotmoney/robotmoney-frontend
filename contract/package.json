@@ -1,6 +1,6 @@
 {
   "name": "@robotmoney/contract",
-  "version": "0.5.5",
+  "version": "0.5.9",
   "description": "HTTP API contract shared by the robotmoney frontend and backend. Types + route paths only, zero runtime deps.",
   "type": "module",
   "main": "src/index.js",
@@ -17,6 +17,11 @@
       "import": "./src/public-analytics.js"
     },
     "./schemas/*": "./src/schemas/*",
+    "./referrals": {
+      "types": "./src/referrals.d.ts",
+      "import": "./src/referrals.js"
+    },
+    "./fixtures/referral-codes.json": "./src/__fixtures__/referral-codes.json",
     "./consensus-receipt": {
       "types": "./src/consensus-receipt.d.ts",
       "import": "./src/consensus-receipt.js"

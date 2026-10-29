@@ -378,6 +378,15 @@ export const ROUTES = {
     assetPrices: "/api/public/analytics/asset-prices", // GET ?symbol=&from=&to=&limit=&cursor= → asset_prices rows
     vintages: "/api/public/analytics/vintages", // GET ?run_key=&tool_id=&include=members&limit=&cursor= → frozen data vintages
     overwriteEvents: "/api/public/analytics/overwrite-events", // GET ?table_name=&limit=&cursor= → recorded revisions
+    // Issue 1422: every collected version of source data, and each run's published report byte for byte.
+    sourceVersions: "/api/public/analytics/source-versions", // GET ?series=&from=&to=&asof=&limit=&cursor= → source_value_versions rows
+    reports: "/api/public/analytics/reports", // GET ?limit=&cursor= → report list; ?run=<run_key> or ?vintage=<id> → the exact report bytes
+    // Issue 1422: format 1 archives (the robotmoney/csv-backups layout). The
+    // listing names each sealed backup; a backup's `backup.json` and every file
+    // it lists are served at archiveFiles + the record's own `path`
+    // (csv/<backup id>/backup.json, csv/<backup id>/data/<table>.<start>_<end>.csv.gz).
+    archiveBackups: "/api/public/analytics/archive/backups", // GET ?limit=&cursor= → sealed backup ids
+    archiveFiles: "/api/public/analytics/archive/", // GET <prefix>csv/<backup id>/backup.json | <prefix>csv/<backup id>/data/<file>.csv.gz
   },
 
   // The pipeline worker's only way to the database (issue 1034, decision D75).
@@ -399,6 +408,14 @@ export const ROUTES = {
     whoami: "/api/pipeline/whoami",
     read: "/api/pipeline/read/:op",
     ingest: "/api/pipeline/ingest/:op",
+  },
+
+  // Issue 1371 (docs/technical/referrals-spec.md §6): the public referral-code
+  // lookup. Unauthenticated, GET only, one code per request: an active code
+  // answers 200 ReferralCodeCheck, every other code the identical 404. No list,
+  // prefix or wildcard route exists. Cacheable 60 s, 100 requests/min per ip.
+  referrals: {
+    code: "/api/referrals/codes/:code", // GET → ReferralCodeCheck
   },
 
   // Analytics-provider ingestion boundary (issue #106). Every route requires an
@@ -444,12 +461,22 @@ export const ROUTES = {
     //   POST runEvents        — append one ordered lifecycle event
     //   POST vintages         — freeze one data vintage for (runId, toolId)
     //                           (idempotent; a differing resubmission for the
-    //                           same pair is rejected, 409)
+    //                           same pair is rejected, 409). Optional
+    //                           vintage.regimeVersionIds (issue 1534): the
+    //                           exact committed-inputs versionIds the run
+    //                           computed from, frozen as its regime-key
+    //                           members; absent, every key is selected by
+    //                           the knowledge-time cutoff
     //   GET  vintage?runId=&toolId=   — read back the exact frozen manifest
     runs: "/api/analytics/runs",
     runEvents: "/api/analytics/runs/events",
     vintages: "/api/analytics/vintages",
     vintage: "/api/analytics/vintages/lookup",
+    // GET ?asof=YYYY-MM-DD — AN-16: the database clock and, at it, the ledger
+    // heads of every storage key the regime reads, dated on or before asof.
+    // The run computes from these, records the same cutoff on its vintage and
+    // sends their versionIds as POST vintages' regimeVersionIds.
+    committedInputs: "/api/analytics/committed-inputs",
     // Issue #978: freeze analytics outputs and report snapshots — the next
     // layer above the run header. One terminal package per runId (idempotent,
     // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot
@@ -515,6 +542,10 @@ export const ROUTES = {
     researchRawSeries: "/api/admin/research/raw-series/:indicator", // GET ?from=&to=&limit= — allowlisted raw_indicator_history read
     researchSignal: "/api/admin/research/signals/:key", // GET ?from=&to=&limit= — allowlisted research_signals read
     researchRerun: "/api/admin/research/rerun", // POST — retired; 409 because the independent producer owns execution
+    // Issue 1371 (docs/technical/referrals-spec.md §4): the referral correction
+    // log, read-only. Corrections are recorded by a reviewed config change, never
+    // by an admin-route write (D66); the panel verifies and shows them.
+    referralCorrections: "/api/admin/referrals/corrections", // GET → AdminReferralCorrectionsResponse
   },
 
   // Swarm operations surface (issue #159 UI over issue #152/PR #169's

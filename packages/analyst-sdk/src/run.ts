@@ -14,6 +14,9 @@ import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from ".
 import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
+import { resolveInputHistory } from "./series-ids.ts";
+import { ratiosFromLegs } from "./transform/ratios.ts";
+import { assertRequiredCoverage } from "./coverage.ts";
 
 export const BACKFILL_START = "2018-01-01";
 // Indicator ids in the input that carry price levels for correlations/backtest.
@@ -22,6 +25,7 @@ export const EXTRA_IDS = {
   eth: LEDGER_EXTRA_KEYS.eth.inputId,
   tbill3m: LEDGER_EXTRA_KEYS.tbill3m.inputId,
 } as const;
+const READ_IDS: ReadonlySet<string> = new Set([...INDICATORS.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
 
 export interface RunResult {
   dateAxis: string[];
@@ -37,7 +41,7 @@ export interface RunResult {
 export interface RunOptions {
   start?: string;
   // Last day of the date axis (YYYY-MM-DD). Input rows dated after it are
-  // ignored. Default: the newest date in the input.
+  // ignored. Default: the newest date of any input series the run reads.
   asof?: string;
   // Also run production's second computeRegime call (macro, onchain, factor)
   // and return its factor_* figures. The composite and labels stay the
@@ -53,7 +57,7 @@ function assertIsoDate(name: string, v: string): void {
 
 const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor"];
 
-export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
+export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
   // An option this version does not know is an error, never silently ignored
   // (a caller passing the former `panels` would otherwise get no factor output).
   for (const k of Object.keys(opts)) {
@@ -65,6 +69,9 @@ export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
   }
+  // Input names (input id, storage key or source id, D74) -> the ids read
+  // below, and each ratio the input does not store from its legs (4.3).
+  const rawIn = ratiosFromLegs(input, resolveInputHistory(input));
   const start = opts.start ?? BACKFILL_START;
   const asof = opts.asof;
   assertIsoDate("start", start);
@@ -73,6 +80,7 @@ export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): Ru
     if (asof < start) throw new RangeError(`asof ${asof} is before start ${start}`);
     let anyOnOrBefore = false;
     for (const id in rawIn) {
+      if (!READ_IDS.has(id)) continue;
       for (const r of rawIn[id]!) {
         if (r.date <= asof) anyOnOrBefore = true;
       }
@@ -82,11 +90,28 @@ export function runRegime(rawIn: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // Never mutate the caller's input: with asof, build a filtered copy.
   const raw: RawIndicatorHistory = {};
   for (const id in rawIn) raw[id] = asof === undefined ? rawIn[id]! : cutAtAsof(rawIn[id]!, asof);
+  // Only series the run reads set the date axis (analytics requirements 4.2),
+  // so an input that also carries other source data (the model portfolio
+  // inputs, issue 1398) gives the same regime numbers.
   let maxDate = start;
   for (const id in raw) {
+    if (!READ_IDS.has(id)) continue;
     const rows = raw[id]!;
     if (rows.length && rows[rows.length - 1]!.date > maxDate) maxDate = rows[rows.length - 1]!.date;
   }
+  // An input with nothing the run reads, or a start after every row it reads,
+  // is an error rather than an all-null report (issue 1404, SDK-8).
+  let newestRead: string | null = null;
+  for (const id in raw) {
+    if (!READ_IDS.has(id)) continue;
+    const rows = raw[id]!;
+    if (rows.length && (newestRead === null || rows[rows.length - 1]!.date > newestRead)) newestRead = rows[rows.length - 1]!.date;
+  }
+  if (newestRead === null) throw new RangeError("the input has no series the run reads (registry indicator ids, or SPX, ETH, TBILL3M)");
+  if (newestRead < start) throw new RangeError(`start ${start} is after every input row the run reads (newest ${newestRead})`);
+  // Required data is supplied or the run stops with a named error; a
+  // downstream run never fetches (issue 1421, src/coverage.ts).
+  assertRequiredCoverage(raw, asof ?? maxDate);
   const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof: asof ?? maxDate });
   const result = computeRegime(transformed, dateAxis, PANELS, ages);
   const out: RunResult = { dateAxis, result };

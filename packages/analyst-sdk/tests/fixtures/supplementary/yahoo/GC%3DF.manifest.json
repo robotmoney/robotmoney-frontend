@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "series": "yahoo:GC=F",
+  "field": "adjusted close (test fixture)",
+  "row_count": 4,
+  "first_date": "2024-01-02",
+  "last_date": "2024-01-05",
+  "sha256": "fe639b599fec2f6968508f4875e28a1158cddeba749895cc6e38fdaa410dcc89",
+  "fetched_at": "2026-10-29T00:00:00.000Z",
+  "fetched_by": "analyst-sdk test fixture (hand-written values)"
+}

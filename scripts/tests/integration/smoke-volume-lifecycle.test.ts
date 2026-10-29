@@ -156,7 +156,7 @@ function configJson(extraFiles: string[], env: Record<string, string>): Cfg {
 // ~5.2 s of cold start plus ~0.13 s for the second render, about 5.3 s. 120 s
 // is ~23x that, and ~480x the warm figure.
 //
-// The argument must stay explicit: on the pinned bun 1.3.5 a `beforeAll` with
+// The argument must stay explicit: on bun 1.3.5 a `beforeAll` with
 // no timeout expires at 5000.16 ms, which would put this prewarm right back
 // under the default the four cases were just lifted out of.
 //

@@ -83,6 +83,10 @@ export const THIS_RELEASE_MIGRATIONS = [
   // baseline" is everything NOT in this array, and an undeclared later
   // migration that depends on a table 0033 creates gets replayed before it.
   "0061_rm_worker_wallet_backfill_grant.sql",
+  // 0128 (issue 1532, API-6): installs the overwrite-capture triggers on
+  // asset_prices, created by 0046 above. Declared here for the same reason as
+  // 0061: the v0.2.2 baseline would otherwise replay it before 0046.
+  "0128_asset_prices_overwrite_events.sql",
 ] as const;
 
 /**

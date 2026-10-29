@@ -62,7 +62,7 @@ jobs:
           fi
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.5"
+          bun-version: "1.4.4"
           no-cache: true
       # scripts/tests/integration/admin-live-guard.test.ts spawns `bun run test:browser --
       # --list`, which shells out to Playwright's CLI/transform — that runs on
@@ -77,6 +77,12 @@ jobs:
       # that need backend's own node_modules resolvable.
       - name: Install deps
         working-directory: backend
+        run: bun install --frozen-lockfile
+      # backend/tests/csvb-api-archive-parity.test.ts imports packages/csvb, so
+      # the backend typecheck (backend-tests-typechecked.test.ts) needs csvb's
+      # own dependencies resolvable too (issue 1477).
+      - name: Install csvb deps
+        working-directory: packages/csvb
         run: bun install --frozen-lockfile
       # Typecheck only. `bun run test` (the run-everything alias, `bun test
       # scripts/tests`) used to be chained on here — issue #819: it recurses
@@ -132,6 +138,19 @@ jobs:
       # Pins fail-red-on-empty-selection: the two selectors above are just
       # directory paths, so a future rename must break CI rather than silently
       # collect zero files in both classes.
+      # Issue 1421: the SDK purity/import-graph test and the JUnit guard's own
+      # test ran with their full case counts, nothing skipped.
+      - name: Purity and suite-guard tests ran (issue 1421)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/analyst-sdk-purity.test.ts:55
+          scripts/tests/unit/assert-junit-suites.test.ts:9
+      # Issue 1498: each byte-for-byte replay sentence says that payloads
+      # published before D78 replay up to rounding.
+      - name: D78 replay wording test ran (issue 1498)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/d78-replay-wording.test.ts:7
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

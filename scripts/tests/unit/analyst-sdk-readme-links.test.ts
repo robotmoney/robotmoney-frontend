@@ -13,21 +13,27 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { PUBLIC_ANALYTICS_SCHEMAS } from "../../../contract/src/public-analytics.js";
+import { ARCHIVE_BACKUP_RECORD_SCHEMA, PUBLIC_ANALYTICS_SCHEMAS } from "../../../contract/src/public-analytics.js";
 import { ROUTES } from "../../../contract/src/routes.js";
 
 const root = join(import.meta.dir, "../../..");
 const README = readFileSync(join(root, "packages/analyst-sdk/README.md"), "utf8");
 const contractRoutes: string[] = Object.values(ROUTES.publicAnalytics);
 
-/** Every distinct /api/public/analytics/<segment> path in the text. */
-function listedRoutes(text: string): string[] {
-  return [...new Set([...text.matchAll(/\/api\/public\/analytics\/[a-z][a-z-]*/g)].map((m) => m[0]))].sort();
+/**
+ * Every distinct /api/public/analytics/ route the text names: the path, or for
+ * a path under a prefix route (one ending in `/`, such as `archive/`) that
+ * prefix. Issue 1422 added nested routes (`archive/backups`, `archive/csv/...`).
+ */
+function listedRoutes(text: string, routes: readonly string[] = contractRoutes): string[] {
+  const prefixes = routes.filter((r) => r.endsWith("/"));
+  const named = [...text.matchAll(/\/api\/public\/analytics\/[a-z][a-z0-9/<>._-]*/g)].map((m) => m[0].replace(/[._-]+$/, ""));
+  return [...new Set(named.map((p) => (routes.includes(p) ? p : (prefixes.find((x) => p.startsWith(x)) ?? p))))].sort();
 }
 
 /** Problems with a README against a route list: unknown routes, unlisted routes, routes with no curl line. */
 function linkProblems(text: string, routes: readonly string[]): string[] {
-  const listed = listedRoutes(text);
+  const listed = listedRoutes(text, routes);
   const problems: string[] = [];
   for (const r of listed) if (!routes.includes(r)) problems.push(`README names ${r}, which contract/ does not have`);
   for (const r of routes) {
@@ -39,12 +45,13 @@ function linkProblems(text: string, routes: readonly string[]): string[] {
 
 describe("packages/analyst-sdk/README.md", () => {
   test("lists exactly the contract's public analytics routes, each with a curl example", () => {
-    expect(contractRoutes.length).toBe(4);
+    expect(contractRoutes.length).toBe(8);
     expect(linkProblems(README, contractRoutes)).toEqual([]);
   });
 
   test("every listed route has a schema file in contract/, requiring schemaVersion", () => {
     for (const route of listedRoutes(README)) {
+      if (route === ROUTES.publicAnalytics.archiveFiles) continue; // a backup's files: its record schema is checked below
       const rel = (PUBLIC_ANALYTICS_SCHEMAS as Record<string, string>)[route];
       expect(rel, `no schema registered for ${route}`).toBeTruthy();
       const file = join(root, "contract/src", rel!);
@@ -53,7 +60,9 @@ describe("packages/analyst-sdk/README.md", () => {
       expect(schema.required).toContain("schemaVersion");
       expect(schema.properties.schemaVersion).toEqual({ const: 1 });
     }
-    expect(Object.keys(PUBLIC_ANALYTICS_SCHEMAS).sort()).toEqual([...contractRoutes].sort());
+    expect(Object.keys(PUBLIC_ANALYTICS_SCHEMAS).sort()).toEqual(contractRoutes.filter((r) => r !== ROUTES.publicAnalytics.archiveFiles).sort());
+    const record = JSON.parse(readFileSync(join(root, "contract/src", ARCHIVE_BACKUP_RECORD_SCHEMA), "utf8"));
+    expect(record.properties.format).toEqual({ const: 1 });
   });
 
   test("carries the CSV header, the shallow-clone command, the regime pointer and the Yahoo sign-off", () => {

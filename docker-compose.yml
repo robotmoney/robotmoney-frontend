@@ -118,7 +118,7 @@ x-logging: &default-logging
 # deadlocked loop stops writing and goes red; an IDLE lane keeps writing (a claim
 # query that finds nothing is still a completed cycle) and stays green.
 #
-# `bun` rather than curl: the image is oven/bun:1.3.5, Debian-based, no curl —
+# `bun` rather than curl: the image is oven/bun:1.4.4, Debian-based, no curl —
 # same constraint the api's check works around.
 x-worker-healthcheck: &worker-healthcheck
   test: ["CMD", "bun", "run", "src/ops/healthcheck.ts"]
@@ -401,7 +401,16 @@ services:
       # the pinned 48787 the cloudflared tunnel routes to. Compose merges
       # `ports` by APPENDING, so the overlay must override rather than add —
       # otherwise --stage would publish 48787 AND a second ephemeral port.
-      - "8787"
+      #
+      # LOOPBACK ONLY (issue 1422). Only website-server may reach the api from
+      # outside this host: it sets X-Client-IP, the identity the api's public
+      # analytics limits key on, and replaces any a caller sent. A publish on
+      # every interface let any network client reach the api directly and pick
+      # its own identity. Host tools (`bun smoke`'s readiness, `docker compose
+      # port api 8787`) still reach it on 127.0.0.1, and the compose services
+      # (the worker, the scheduler, the analytics producer) over the compose
+      # network as before. The scheduler's health port is pinned the same way.
+      - "127.0.0.1::8787"
     depends_on:
       postgres:
         condition: service_healthy
@@ -604,7 +613,7 @@ services:
     # here has to know the semantics.
     #
     # `bun -e` rather than curl or wget, for the same reason the api service
-    # uses it: the image is oven/bun:1.3.5 and carries neither.
+    # uses it: the image is oven/bun:1.4.4 and carries neither.
     healthcheck:
       test: ["CMD", "bun", "-e", "process.exit((await fetch('http://127.0.0.1:8090/health')).ok ? 0 : 1)"]
       interval: 15s

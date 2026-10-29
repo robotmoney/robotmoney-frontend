@@ -1,8 +1,12 @@
 # Data model
 
-> **Proposed extension:** [Referral specification](../technical/referrals-spec.md)
-> covers referral attribution; whether admin corrections need a new table is still open.
-> It is not accepted or shipped; the existing boundaries below remain authoritative.
+> **Referrals:** [Referral specification](../technical/referrals-spec.md) (accepted
+> 2026-10-19, implemented by issue 1371) adds **no schema**: no table, column,
+> grant or migration. Codes, the correction log, the coverage manifest and their
+> accepted history are reviewed files under `backend/src/referrals/config/`
+> ([D76](../decisions.md#d76)). Member identity stays in `swarm_members`, read by
+> primary key. Report checkpoints and exports are local files of the operator's
+> CLI run, not a chain-event store. The schema below is unchanged.
 
 Part of the [architecture](README.md). Split out of the former single `docs/architecture.md` on 2026-09-23; section numbering inside is unchanged so old citations still resolve.
 

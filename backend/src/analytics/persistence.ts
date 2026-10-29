@@ -14,7 +14,7 @@
 import type { RawIndicatorHistory } from "./types.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
-import type { SourceAcquisitionEvidence } from "./source-ledger.ts";
+import type { SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
 import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
@@ -22,6 +22,14 @@ export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
   existingPoints: number; // rows already present (skipped — DB floor wins)
   indicators: number; // distinct indicators touched by the seed
+}
+
+// AN-16: the database clock and, at it, the ledger heads of every storage key
+// the regime reads (store/run-ledger-store.ts loadCommittedInputs).
+export interface CommittedInputs {
+  /** The database clock the heads were read at, ISO 8601 with microseconds. */
+  knowledgeTimeCutoff: string;
+  values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
 export interface BeginRunResult {
@@ -78,6 +86,9 @@ export interface AnalyticsPersistence {
     marketTimeCutoff: string;
     methodologyVersionId: string;
     buildIdentity: string;
+    // Issue 1534: the versionIds of the committed read the regime computed
+    // from; absent when the run read none.
+    regimeVersionIds?: readonly string[];
   }): Promise<FreezeVintageResult>;
   // Issue #978: submit one terminal run package (see output-snapshots.ts's
   // header) bound to this run's id — the complete, immutable output/report
@@ -87,11 +98,23 @@ export interface AnalyticsPersistence {
   // durably frozen must not read as quiet success.
   submitTerminalRunPackage(input: TerminalRunPackageInput): Promise<TerminalRunPackageResult>;
   // Append one complete provider acquisition atomically. The producer-generated
-  // UUID is the replay key; prior evidence is never mutated on replay.
-  saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<{ acquisitionId: string; replayed: boolean }>;
+  // UUID is the replay key; prior evidence is never mutated on replay. The
+  // result's `committed` is the ledger head of every submitted value after the
+  // D56 tolerance decision (issue 1421): what downstream must compute from.
+  saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<SaveSourceAcquisitionResult>;
+  // AN-16 (owner decision): a regime run computes from exactly the values its
+  // vintage pins. This reads the database clock and, at it, the ledger heads
+  // of every storage key the regime reads, dated on or before
+  // `marketTimeCutoff`; the run computes from them and passes the returned
+  // cutoff to freezeVintage. Optional like saveSourceAcquisition: a
+  // persistence without a source ledger has nothing to read.
+  loadCommittedInputs?(marketTimeCutoff: string): Promise<CommittedInputs>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
-  // Upsert merged raw history on (date, indicator); fetched wins on overlap.
+  // Upsert merged raw history on (date, indicator); fetched wins on overlap
+  // unless it is within the D56 tolerance of the stored value. The orchestrator
+  // reads the committed floor back with loadRawHistory before computing
+  // (issue 1421), so a skipped jitter rewrite never reaches downstream.
   // `source` (issue #397) tags the whole batch's provenance ('live' |
   // 'hermetic' | 'fixture'); omitted defaults to 'live' at the store.
   saveRawHistory(byIndicator: RawIndicatorHistory, source?: string): Promise<void>;

@@ -1,0 +1,182 @@
+{
+  "workflow": "model-portfolio",
+  "description": "Every source series the model portfolio workflow reads (issue 1398, version one): the regime-adjacent series plus every Base universe asset with a series (universe/base-universe.json). Each id is <provider>:<symbol> (D74). storageKey is the source_value_versions key the series is recorded under: an existing key where another collector already holds that stream, else the id itself. A gap or late inception is served as it is and named in limitation; a proxy is never spliced in by extract.",
+  "series": [
+    {
+      "id": "yahoo:BTC-USD",
+      "provider": "yahoo",
+      "symbol": "BTC-USD",
+      "kind": "price",
+      "units": "USD, daily close",
+      "requestedStart": "2016-01-01",
+      "inception": "2014-09-17",
+      "proxy": null,
+      "limitation": null,
+      "storageKey": "research:BTC-USD"
+    },
+    {
+      "id": "yahoo:ETH-USD",
+      "provider": "yahoo",
+      "symbol": "ETH-USD",
+      "kind": "price",
+      "units": "USD, daily close",
+      "requestedStart": "2016-01-01",
+      "inception": "2017-11-09",
+      "proxy": null,
+      "limitation": "Yahoo's first ETH-USD observation is 2017-11-09; nothing before it is served.",
+      "storageKey": "backtest:ETH-USD"
+    },
+    {
+      "id": "yahoo:GLD",
+      "provider": "yahoo",
+      "symbol": "GLD",
+      "kind": "price",
+      "units": "USD, daily adjusted close",
+      "requestedStart": "2016-01-01",
+      "inception": "2004-11-18",
+      "proxy": null,
+      "limitation": "Gold is the SPDR Gold Shares ETF price, not the spot gold price. NYSE trading days only: no weekend or holiday rows.",
+      "storageKey": "yahoo:GLD"
+    },
+    {
+      "id": "yahoo:^GSPC",
+      "provider": "yahoo",
+      "symbol": "^GSPC",
+      "kind": "price",
+      "units": "USD, daily index close (price return, no dividends)",
+      "requestedStart": "2016-01-01",
+      "inception": "1927-12-30",
+      "proxy": null,
+      "limitation": "NYSE trading days only: no weekend or holiday rows.",
+      "storageKey": "backtest:^GSPC"
+    },
+    {
+      "id": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "provider": "defillama-yields",
+      "symbol": "7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2024-03-10",
+      "proxy": {
+        "id": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501",
+        "from": "2023-02-06",
+        "to": "2024-03-09",
+        "provenance": "Aave v3 USDC on Ethereum, the same protocol's predecessor market. The rule is the prototype's (PR 1397, scripts/allocate-data.py): Aave v3 Base from 2024-03-10, Aave v3 Ethereum from 2023-02-06. Extract serves both series as they are; the consumer applies the splice."
+      },
+      "limitation": "Aave v3 USDC on Base. DefiLlama's first observation is 2024-03-10, so nothing before it is served under this id. With the proxy, coverage starts 2023-02-06; there is no lending yield before that.",
+      "storageKey": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84"
+    },
+    {
+      "id": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501",
+      "provider": "defillama-yields",
+      "symbol": "aa70268e-4b52-42bf-a116-608b370f9501",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2023-02-06",
+      "proxy": null,
+      "limitation": "Aave v3 USDC on Ethereum. DefiLlama's first observation is 2023-02-06; nothing before it is served.",
+      "storageKey": "defillama-yields:aa70268e-4b52-42bf-a116-608b370f9501"
+    },
+    {
+      "id": "yahoo:USDC-USD",
+      "provider": "yahoo",
+      "symbol": "USDC-USD",
+      "kind": "price",
+      "units": "USD, daily close",
+      "requestedStart": "2016-01-01",
+      "inception": "2018-10-08",
+      "proxy": null,
+      "limitation": "Base universe asset USDC. Yahoo's first USDC-USD observation is 2018-10-08; nothing before it is served. The prototype (PR 1397) treats prints before 2022-01-01 as noise and marks USDC at par before then; extract serves them as published.",
+      "storageKey": "yahoo:USDC-USD"
+    },
+    {
+      "id": "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72",
+      "provider": "defillama-yields",
+      "symbol": "d8c4eff5-c8a9-46fc-a888-057c4c668e72",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2025-02-21",
+      "proxy": null,
+      "limitation": "Base universe asset SUSDS (Sky savings USDS). DefiLlama's first observation is 2025-02-21; nothing before it is served. The prototype's predecessors (sDAI from 2022-12-04, then the Aave chain) are not in this inventory, so no proxy is recorded.",
+      "storageKey": "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72"
+    },
+    {
+      "id": "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c",
+      "provider": "defillama-yields",
+      "symbol": "a5fab52f-73fa-4f44-9c09-9af1eb20996c",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2025-01-15",
+      "proxy": {
+        "id": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+        "from": "2024-03-10",
+        "to": "2025-01-14",
+        "provenance": "Aave v3 USDC on Base, as in the prototype's rule (PR 1397, scripts/allocate-data.py): Morpho vaults from their DefiLlama start date, the Aave chain before. Before 2024-03-10 the Aave Base entry's own proxy applies. Extract serves each series as it is; the consumer applies the splice."
+      },
+      "limitation": "Base universe asset SPARK (Spark USDC vault, Morpho). DefiLlama's first observation is 2025-01-15; nothing before it is served.",
+      "storageKey": "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c"
+    },
+    {
+      "id": "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469",
+      "provider": "defillama-yields",
+      "symbol": "e0672197-9f3e-4414-bca5-e6b4c90aa469",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2024-06-18",
+      "proxy": {
+        "id": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+        "from": "2024-03-10",
+        "to": "2024-06-17",
+        "provenance": "Aave v3 USDC on Base, as in the prototype's rule (PR 1397, scripts/allocate-data.py): Morpho vaults from their DefiLlama start date, the Aave chain before. Before 2024-03-10 the Aave Base entry's own proxy applies. Extract serves each series as it is; the consumer applies the splice."
+      },
+      "limitation": "Base universe asset GT (Gauntlet USDC vault, Morpho). DefiLlama's first observation is 2024-06-18; nothing before it is served.",
+      "storageKey": "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469"
+    },
+    {
+      "id": "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c",
+      "provider": "defillama-yields",
+      "symbol": "ba68527f-8ec2-4c55-827a-8f4673ae047c",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2025-12-02",
+      "proxy": {
+        "id": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+        "from": "2024-03-10",
+        "to": "2025-12-01",
+        "provenance": "Aave v3 USDC on Base, as in the prototype's rule (PR 1397, scripts/allocate-data.py): Morpho vaults from their DefiLlama start date, the Aave chain before. Before 2024-03-10 the Aave Base entry's own proxy applies. Extract serves each series as it is; the consumer applies the splice."
+      },
+      "limitation": "Base universe asset STEAK (Steakhouse USDC vault, Morpho V2). DefiLlama's first observation is 2025-12-02; nothing before it is served.",
+      "storageKey": "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c"
+    },
+    {
+      "id": "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19",
+      "provider": "defillama-yields",
+      "symbol": "0c8567f8-ba5b-41ad-80de-00a71895eb19",
+      "kind": "lending_yield",
+      "units": "percent per year, supply APY without rewards (DefiLlama apyBase)",
+      "requestedStart": "2016-01-01",
+      "inception": "2024-03-27",
+      "proxy": null,
+      "limitation": "Base universe asset COMP (Compound v3 USDC on Base). DefiLlama's first observation is 2024-03-27; nothing before it is served. The prototype's predecessors (Compound v3 and v2 on Ethereum) are not in this inventory, so no proxy is recorded.",
+      "storageKey": "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19"
+    },
+    {
+      "id": "fred:DTB3",
+      "provider": "fred",
+      "symbol": "DTB3",
+      "kind": "rate",
+      "units": "percent per year, 3-month Treasury bill secondary market rate",
+      "requestedStart": "2016-01-01",
+      "inception": "1954-01-04",
+      "proxy": null,
+      "limitation": "US business days only; FRED publishes holidays as missing.",
+      "storageKey": "backtest:DTB3"
+    }
+  ]
+}

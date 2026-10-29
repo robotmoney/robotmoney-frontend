@@ -49,7 +49,8 @@ function importGraph(entry: string): string[] {
     let m: RegExpExecArray | null;
     while ((m = re.exec(src))) {
       let spec = m[1];
-      if (!spec.endsWith(".ts")) spec += ".ts";
+      // A JSON data import (the SDK inventory, issue 1398) is walked as itself.
+      if (!spec.endsWith(".ts") && !spec.endsWith(".json")) spec += ".ts";
       stack.push(resolve(dirname(file), spec));
     }
   }

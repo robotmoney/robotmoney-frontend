@@ -121,6 +121,10 @@ export const ROUTES: {
     assetPrices: string;
     vintages: string;
     overwriteEvents: string;
+    sourceVersions: string;
+    reports: string;
+    archiveBackups: string;
+    archiveFiles: string;
   };
   pipeline: {
     claim: string;
@@ -135,6 +139,9 @@ export const ROUTES: {
     read: string;
     ingest: string;
   };
+  referrals: {
+    code: string;
+  };
   analytics: {
     readiness: string;
     rawHistory: string;
@@ -148,6 +155,7 @@ export const ROUTES: {
     runEvents: string;
     vintages: string;
     vintage: string;
+    committedInputs: string;
     runPackage: string;
     reportSnapshot: string;
     paritySweep: string;
@@ -173,6 +181,7 @@ export const ROUTES: {
     researchRawSeries: string;
     researchSignal: string;
     researchRerun: string;
+    referralCorrections: string;
   };
 };
 

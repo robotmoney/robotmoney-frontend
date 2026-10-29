@@ -178,3 +178,40 @@ describe("analyst-sdk golden equals the original JS reference", () => {
     expect(clean).toEqual([]);
   });
 });
+
+// Issue 1423 (D74): the SDK's full serialized report for the pinned committed
+// fixtures equals the pre-change golden bytes, with globalThis.fetch throwing,
+// whether the input names each stream by its input id or by its storage key.
+// The golden's sha256 is pinned, so a regenerated golden fails here. It was
+// regenerated once on purpose, by decision D78 (compensated
+// arithmetic; was 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce).
+describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
+  const GOLDEN_SHA256 = "08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba";
+
+  test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
+    const { createHash } = await import("node:crypto");
+    const { parseRawHistory, toHistory } = await import("../../packages/analyst-sdk/src/input/load.ts");
+    const { buildReport, runRegime } = await import("../../packages/analyst-sdk/src/run.ts");
+    const { SERIES_MAPPING } = await import("../src/analytics/extras.ts");
+    const goldenText = readFileSync(join(SDK, "golden", "regime-report.json"), "utf8");
+    expect(createHash("sha256").update(goldenText).digest("hex")).toBe(GOLDEN_SHA256);
+    const csv = readFileSync(join(SDK, "fixtures", "raw-indicator-history.csv"), "utf8");
+    const keyOf = new Map(SERIES_MAPPING.map((m) => [m.inputId, m.storageKey]));
+    const byStorageKey = csv.split("\n").map((line, i) => {
+      if (i === 0 || line === "") return line;
+      const [date, id, ...rest] = line.split(",");
+      return [date, keyOf.get(id!) ?? id, ...rest].join(",");
+    }).join("\n");
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("the report must not use the network"); }) as unknown as typeof fetch;
+    try {
+      await expect(fetch("https://example.com")).rejects.toThrow(/must not use the network/);
+      for (const text of [csv, byStorageKey]) {
+        expect(JSON.stringify(buildReport(runRegime(toHistory(parseRawHistory(text)))), null, 2) + "\n").toBe(goldenText);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    expect(byStorageKey).toContain(",backtest:^GSPC,");
+  }, 120_000);
+});

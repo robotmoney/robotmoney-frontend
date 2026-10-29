@@ -1,0 +1,160 @@
+{
+  "format": 1,
+  "backup": "2001-01-03T000000Z",
+  "source": "api",
+  "consistency": "paged",
+  "snapshot": {
+    "exported_at_db": "2001-01-03 00:00:00+00",
+    "replica_replay_ts": null,
+    "db_user": "api",
+    "was_replica": false
+  },
+  "tool": {
+    "name": "robotmoney-api",
+    "commit": null
+  },
+  "append_only": {
+    "analytics_output_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    },
+    "analytics_report_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    },
+    "source_value_versions": {
+      "time": {
+        "column": "knowledge_time"
+      },
+      "watermark_before": "1968",
+      "watermark_after": "2219",
+      "rows_added": 251,
+      "files": [
+        {
+          "path": "csv/2001-01-03T000000Z/data/source_value_versions.2001-01-02T010000Z_2001-01-02T020000Z.csv.gz",
+          "rows": 251,
+          "bytes_raw": 26202,
+          "sha256_raw": "57f05548eb9eafe721ad8f22f560c11ae268a7b97571a41f6a06fff46176f38e",
+          "id_min": "1969",
+          "id_max": "2219",
+          "sum_id": "525594",
+          "time_min": "2001-01-02 01:00:00+00",
+          "time_max": "2001-01-02 02:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "2219",
+      "db_sum_id_through_watermark": "2463090"
+    },
+    "analytics_ledger_runs": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": "1",
+      "watermark_after": "2",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2001-01-03T000000Z/data/analytics_ledger_runs.2001-01-02T050000Z_2001-01-02T050000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 222,
+          "sha256_raw": "5111c108d6df07f0d345380379b6f7e98b28d649de84be91db0e390714b63d45",
+          "id_min": "2",
+          "id_max": "2",
+          "sum_id": "2",
+          "time_min": "2001-01-02 05:00:00+00",
+          "time_max": "2001-01-02 05:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "2",
+      "db_sum_id_through_watermark": "3"
+    },
+    "analytics_ledger_methodology_versions": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": "1",
+      "watermark_after": "1",
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "1",
+      "db_sum_id_through_watermark": "1"
+    },
+    "analytics_data_vintages": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": "1",
+      "watermark_after": "2",
+      "rows_added": 1,
+      "files": [
+        {
+          "path": "csv/2001-01-03T000000Z/data/analytics_data_vintages.2001-01-02T060000Z_2001-01-02T060000Z.csv.gz",
+          "rows": 1,
+          "bytes_raw": 348,
+          "sha256_raw": "d5f782a43edb702adb3ba0df7b7f8efb876c6f825417a91cc7c24d28488e89cf",
+          "id_min": "2",
+          "id_max": "2",
+          "sum_id": "2",
+          "time_min": "2001-01-02 06:00:00+00",
+          "time_max": "2001-01-02 06:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "2",
+      "db_sum_id_through_watermark": "3"
+    },
+    "analytics_vintage_members": {
+      "time": {
+        "lookup": {
+          "column": "vintage_id",
+          "table": "analytics_data_vintages",
+          "key": "id",
+          "timeColumn": "created_at"
+        }
+      },
+      "watermark_before": "395",
+      "watermark_after": "856",
+      "rows_added": 461,
+      "files": [
+        {
+          "path": "csv/2001-01-03T000000Z/data/analytics_vintage_members.2001-01-02T060000Z_2001-01-02T060000Z.csv.gz",
+          "rows": 461,
+          "bytes_raw": 18322,
+          "sha256_raw": "53dd57205a18d351ffc76fec74d870c1e91e6b5c0b0fc8f8a66821b734fc5bf4",
+          "id_min": "396",
+          "id_max": "856",
+          "sum_id": "288586",
+          "time_min": "2001-01-02 06:00:00+00",
+          "time_max": "2001-01-02 06:00:00+00"
+        }
+      ],
+      "db_rows_through_watermark": "856",
+      "db_sum_id_through_watermark": "366796"
+    },
+    "analytics_overwrite_events": {
+      "time": {
+        "column": "recorded_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    }
+  },
+  "revisions": {}
+}

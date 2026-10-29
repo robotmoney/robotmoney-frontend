@@ -1,0 +1,966 @@
+{
+  "exported": "2026-10-26",
+  "source": "Base Permissionless Asset Universe sheet (https://docs.google.com/spreadsheets/d/1vF2gLzP6Nw8tKinUOCme6hEWuwiNLopJytbYL9xm7Qs), the owner's CSV export of 2026-10-26 (kept as a test fixture), rebuilt by scripts/export-universe.ts with universe/groups.csv (group caps from the sheet's Notes column) and universe/series.csv",
+  "assets": [
+    {
+      "id": "USDC",
+      "name": "USD Coin",
+      "sleeve": "dollar_cash",
+      "chain": "base",
+      "contract": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "liquidityUsd": 275490000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 100,
+      "series": "yahoo:USDC-USD",
+      "unavailable": {}
+    },
+    {
+      "id": "SUSDS",
+      "name": "Savings USDS (Sky Savings Rate)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x5875eee11cf8398102fdad704c9e96607675467a",
+      "liquidityUsd": 0,
+      "yieldPct": 3.6,
+      "tier": "eligible",
+      "maxWeight": 35,
+      "series": "defillama-yields:d8c4eff5-c8a9-46fc-a888-057c4c668e72",
+      "unavailable": {}
+    },
+    {
+      "id": "USDS",
+      "name": "USDS",
+      "sleeve": "dollar_cash",
+      "chain": "base",
+      "contract": "0x820c137fa70c8691f0e44dc420a5e53c168921dc",
+      "liquidityUsd": 44000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "AAVE",
+      "name": "Aave v3 USDC (Base market)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x4e65fe4dba92790696d040ac24aa414708f5c0ab",
+      "liquidityUsd": null,
+      "yieldPct": 3.9,
+      "tier": "eligible",
+      "maxWeight": 35,
+      "series": "defillama-yields:7e0661bf-8cf3-45e6-9424-31916d4c7b84",
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty"
+      }
+    },
+    {
+      "id": "GT",
+      "name": "Morpho Gauntlet USDC Prime",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xee8f4ec5672f09119b96ab6fb59c27e1b7e44b61",
+      "liquidityUsd": null,
+      "yieldPct": 4.5,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469",
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty"
+      }
+    },
+    {
+      "id": "SPARK",
+      "name": "Morpho Spark USDC Vault",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x7bfa7c4f149e7415b73bdedfe609237e29cbf34a",
+      "liquidityUsd": null,
+      "yieldPct": 4,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:a5fab52f-73fa-4f44-9c09-9af1eb20996c",
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty"
+      }
+    },
+    {
+      "id": "STEAK",
+      "name": "Morpho Steakhouse Prime USDC (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xbeef0e0834849acc03f0089f01f4f1eeb06873c9",
+      "liquidityUsd": null,
+      "yieldPct": 4.5,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c",
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty"
+      }
+    },
+    {
+      "id": "MORPHO_GTUSDCP_V2",
+      "name": "Morpho Gauntlet USDC Prime (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x050ce30b927da55177a4914ec73480238bad56f0",
+      "liquidityUsd": null,
+      "yieldPct": 4.5,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO_GROVE_STEAK",
+      "name": "Morpho Grove x Steakhouse USDC (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xbeef0786756810478b88982de00f3cd7fdb8e7c7",
+      "liquidityUsd": null,
+      "yieldPct": 4.5,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO_STEAK_USDC_V1",
+      "name": "Morpho Steakhouse USDC (V1)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xbeef010f9cb27031ad51e3333f9af9c6b1228183",
+      "liquidityUsd": null,
+      "yieldPct": 3.4,
+      "tier": "eligible",
+      "maxWeight": 12,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO_STEAK_HY_EDITION",
+      "name": "Morpho Steakhouse High Yield USDC Edition (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xbeeff2490feffa212fac2f6553682c219e6a8845",
+      "liquidityUsd": null,
+      "yieldPct": 3,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO_CLEARSTAR_CB",
+      "name": "Morpho Clearstar cbAssets Vault (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x91c056b6d4311a743614fbc03ac32d4e6a2d3a3c",
+      "liquidityUsd": null,
+      "yieldPct": 6,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO_ETHENA_STEAK",
+      "name": "Morpho Ethena x Steakhouse USDC (V2)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xbeeff0be997cca5b1c13a7433c2004637975739e",
+      "liquidityUsd": null,
+      "yieldPct": 4.9,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "USDE",
+      "name": "Ethena USDe",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34",
+      "liquidityUsd": 1001000,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "SUSDE",
+      "name": "Ethena staked USDe",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x211cc4dd073734da055fbf44a2b4667d5e5fe5d2",
+      "liquidityUsd": 2000,
+      "yieldPct": 5,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "GHO",
+      "name": "GHO",
+      "sleeve": "dollar_cash",
+      "chain": "base",
+      "contract": "0x6bb7a212910682dcfdbd5bcbb3e28fb4e8da10ee",
+      "liquidityUsd": 75000,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "SYRUPUSDC",
+      "name": "Maple syrupUSDC",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0x660975730059246a68521a3e2fbd4740173100f5",
+      "liquidityUsd": 4000,
+      "yieldPct": 5.1,
+      "tier": "watchlist",
+      "maxWeight": 3,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "EURC",
+      "name": "Euro Coin",
+      "sleeve": "non_usd_cash",
+      "chain": "base",
+      "contract": "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42",
+      "liquidityUsd": 4644000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "BTC",
+      "name": "Coinbase Wrapped BTC",
+      "sleeve": "bitcoin",
+      "chain": "base",
+      "contract": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+      "liquidityUsd": 112887000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": "yahoo:BTC-USD",
+      "unavailable": {}
+    },
+    {
+      "id": "TBTC",
+      "name": "Threshold tBTC",
+      "sleeve": "bitcoin",
+      "chain": "base",
+      "contract": "0x236aa50979d5f3de3bd1eeb40e81137f22ab794b",
+      "liquidityUsd": 2611000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 3,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "LBTC",
+      "name": "Lombard Staked BTC",
+      "sleeve": "bitcoin",
+      "chain": "base",
+      "contract": "0xecac9c5f704e954931349da37f60e39f515c11c1",
+      "liquidityUsd": 4527000,
+      "yieldPct": null,
+      "tier": "eligible",
+      "maxWeight": 3,
+      "series": null,
+      "unavailable": {
+        "yieldPct": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "WBTC",
+      "name": "Wrapped BTC (bridged)",
+      "sleeve": "bitcoin",
+      "chain": "base",
+      "contract": "0x0555e30da8f98308edb960aa94c0db47230d2b9c",
+      "liquidityUsd": 588000,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "WETH",
+      "name": "Wrapped Ether",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x4200000000000000000000000000000000000006",
+      "liquidityUsd": 155961000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "WSTETH",
+      "name": "Lido wstETH (bridged)",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452",
+      "liquidityUsd": 8458000,
+      "yieldPct": 2.2,
+      "tier": "eligible",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "CBETH",
+      "name": "Coinbase Wrapped Staked ETH",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22",
+      "liquidityUsd": 6098000,
+      "yieldPct": 2.3,
+      "tier": "eligible",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "WEETH",
+      "name": "ether.fi weETH",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x04c0599ae5a44757c0af6f9ec3b93da8976c150a",
+      "liquidityUsd": 2913000,
+      "yieldPct": 2.3,
+      "tier": "watchlist",
+      "maxWeight": 3,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "RETH",
+      "name": "Rocket Pool rETH",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xb6fe221fe9eef5aba221c348ba20a1bf5e73624c",
+      "liquidityUsd": 101000,
+      "yieldPct": 2.2,
+      "tier": "watchlist",
+      "maxWeight": 1,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "EZETH",
+      "name": "Renzo ezETH",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x2416092f143378750bb29b79ed961ab195cceea5",
+      "liquidityUsd": 0,
+      "yieldPct": null,
+      "tier": "watchlist",
+      "maxWeight": 0,
+      "series": null,
+      "unavailable": {
+        "yieldPct": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "GOLD",
+      "name": "DGLD (Gold Token SA)",
+      "sleeve": "gold",
+      "chain": "base",
+      "contract": "0xe908475f8beb7a138b0dc6eb5a05cb27068ffb9a",
+      "liquidityUsd": 884000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 6,
+      "series": "yahoo:GLD",
+      "unavailable": {}
+    },
+    {
+      "id": "VNXAU",
+      "name": "VNX Gold",
+      "sleeve": "gold",
+      "chain": "base",
+      "contract": "0xac3fe22294beaed9d1fd752323a6d06d12ff3098",
+      "liquidityUsd": 65000,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 0,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "CBXRP",
+      "name": "Coinbase Wrapped XRP",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xcb585250f852c6c6bf90434ab21a00f02833a4af",
+      "liquidityUsd": 1251000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "CBDOGE",
+      "name": "Coinbase Wrapped DOGE",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xcbd06e5a2b0c65597161de254aa074e489deb510",
+      "liquidityUsd": 106000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "CBADA",
+      "name": "Coinbase Wrapped ADA",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xcbada732173e39521cdbe8bf59a6dc85a9fc7b8c",
+      "liquidityUsd": 343000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "CBLTC",
+      "name": "Coinbase Wrapped LTC",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xcb17c9db87b595717c857a08468793f5bab6445f",
+      "liquidityUsd": 374000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "LINK",
+      "name": "Chainlink (bridged)",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x88fb150bdc53a65fe94dea0c9ba0a6daf8c6e196",
+      "liquidityUsd": 579000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "AAVE_TOKEN",
+      "name": "Aave (bridged)",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x63706e401c06ac8513145b7687a14804d17f814b",
+      "liquidityUsd": 2202000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "AERO",
+      "name": "Aerodrome",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+      "liquidityUsd": 67626000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MORPHO",
+      "name": "Morpho",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0xbaa5cc21fd487b8fcc2f632f3f4e8d37262a0842",
+      "liquidityUsd": 3221000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "VIRTUAL",
+      "name": "Virtuals Protocol",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x0b3e328455c4059eeb9e3f84b5543f74e24e7e1b",
+      "liquidityUsd": 9413000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "ENA",
+      "name": "Ethena (bridged)",
+      "sleeve": "protocol_tokens",
+      "chain": "base",
+      "contract": "0x58538e6a46e07434d7e7375bc268d3cb839c0133",
+      "liquidityUsd": 69000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "AAPLC",
+      "name": "Apple (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb200000000000000000000c2e324d24d7eecd1fb",
+      "liquidityUsd": 1789000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "NVDAC",
+      "name": "NVIDIA (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb20000000000000000000078ee7ce2fe4908108c",
+      "liquidityUsd": 1895000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "METAC",
+      "name": "Meta (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb2000000000000000000008bc8786b856e61707c",
+      "liquidityUsd": 2135000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "GOOGLC",
+      "name": "Alphabet (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb2000000000000000000002d0ba3164cc74f58b7",
+      "liquidityUsd": 2265000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "AMZNC",
+      "name": "Amazon (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb200000000000000000000d9192b6b456483c2e8",
+      "liquidityUsd": 1810000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MSFTC",
+      "name": "Microsoft (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb200000000000000000000ab99cfa739e253872b",
+      "liquidityUsd": 1125000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "TSLAC",
+      "name": "Tesla (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb2000000000000000000001e800a7f5189430cd0",
+      "liquidityUsd": 1109000,
+      "yieldPct": 0,
+      "tier": "eligible",
+      "maxWeight": 2,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "MSTRC",
+      "name": "Strategy (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb2000000000000000000004884b426556b92883d",
+      "liquidityUsd": 1537000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 1,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "SPCXC",
+      "name": "SpaceX (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb2000000000000000000007b9fcbd005511acbd5",
+      "liquidityUsd": 1210000,
+      "yieldPct": 0,
+      "tier": "speculative",
+      "maxWeight": 1,
+      "series": null,
+      "unavailable": {
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "SNDKC",
+      "name": "SanDisk (Coinbase tokenized)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": "0xb200000000000000000000397293cb8cda9a10c5",
+      "liquidityUsd": null,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 1,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "ANCHORED_ASTOCK",
+      "name": "Anchored aStock tokens (109 tickers, incl. aQQQ, aGLD, aTLT)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 0,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "contract": "the sheet gives no single address: \"various (e.g. aGLD 0x3e4a2f26fc4f92d92d7cd1e49ddade32869d00a4)\"",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "ST0X",
+      "name": "ST0x tokenized stocks and ETFs (21 tickers, incl. wtSPYM, wtSGOV, wtIAU)",
+      "sleeve": "us_equity",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": 0,
+      "tier": "watchlist",
+      "maxWeight": 0,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "contract": "the sheet gives no single address: \"various (e.g. wtSPYM 0x31c2c14134e6e3b7ef9478297f199331133fc2d8)\"",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "COMP",
+      "name": "Compound v3 USDC (Base market)",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xb125e6687d4313864e53df431d5425969c15eb2f",
+      "liquidityUsd": null,
+      "yieldPct": 5,
+      "tier": "eligible",
+      "maxWeight": 10,
+      "series": "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19",
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty"
+      }
+    },
+    {
+      "id": "MOONWELL_FLAGSHIP_USDC",
+      "name": "Morpho Moonwell Flagship USDC",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": "0xc1256ae5ff1cf2719d4937adb3bbccab2e00a2ca",
+      "liquidityUsd": null,
+      "yieldPct": 4,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    },
+    {
+      "id": "PENDLE_PT_BASE",
+      "name": "Pendle PT (fixed-rate) markets on Base",
+      "sleeve": "dollar_yield",
+      "chain": "base",
+      "contract": null,
+      "liquidityUsd": null,
+      "yieldPct": null,
+      "tier": "watchlist",
+      "maxWeight": 5,
+      "series": null,
+      "unavailable": {
+        "liquidityUsd": "the sheet cell is empty",
+        "yieldPct": "the sheet cell is empty",
+        "contract": "the sheet gives no single address: \"market-specific\"",
+        "series": "the sheet names no provider symbol and the model portfolio inputs (issue 1398) do not read this asset"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "id": "sky",
+      "name": "Sky",
+      "cap": 35,
+      "members": [
+        "SUSDS",
+        "USDS",
+        "SPARK"
+      ]
+    },
+    {
+      "id": "aave",
+      "name": "Aave",
+      "cap": 35,
+      "members": [
+        "AAVE"
+      ]
+    },
+    {
+      "id": "morpho",
+      "name": "Morpho",
+      "cap": 30,
+      "members": [
+        "GT",
+        "SPARK",
+        "STEAK",
+        "MORPHO_GTUSDCP_V2",
+        "MORPHO_GROVE_STEAK",
+        "MORPHO_STEAK_USDC_V1",
+        "MORPHO_STEAK_HY_EDITION",
+        "MORPHO_CLEARSTAR_CB",
+        "MORPHO_ETHENA_STEAK",
+        "MOONWELL_FLAGSHIP_USDC"
+      ]
+    },
+    {
+      "id": "morpho_v2",
+      "name": "Morpho V2",
+      "cap": 12,
+      "members": [
+        "STEAK",
+        "MORPHO_GTUSDCP_V2",
+        "MORPHO_GROVE_STEAK"
+      ]
+    },
+    {
+      "id": "morpho_gauntlet",
+      "name": "Morpho curator Gauntlet",
+      "cap": 12,
+      "members": [
+        "GT",
+        "MORPHO_GTUSDCP_V2"
+      ]
+    },
+    {
+      "id": "morpho_steakhouse",
+      "name": "Morpho curator Steakhouse",
+      "cap": 12,
+      "members": [
+        "STEAK",
+        "MORPHO_GROVE_STEAK",
+        "MORPHO_STEAK_USDC_V1",
+        "MORPHO_STEAK_HY_EDITION",
+        "MORPHO_ETHENA_STEAK"
+      ]
+    },
+    {
+      "id": "morpho_sparkdao",
+      "name": "Morpho curator SparkDAO",
+      "cap": 12,
+      "members": [
+        "SPARK"
+      ]
+    },
+    {
+      "id": "morpho_moonwell",
+      "name": "Morpho curator Moonwell",
+      "cap": 12,
+      "members": [
+        "MOONWELL_FLAGSHIP_USDC"
+      ]
+    },
+    {
+      "id": "compound",
+      "name": "Compound",
+      "cap": 10,
+      "members": [
+        "COMP"
+      ]
+    },
+    {
+      "id": "bitcoin",
+      "name": "Bitcoin",
+      "cap": 10,
+      "members": [
+        "BTC",
+        "TBTC",
+        "LBTC",
+        "WBTC"
+      ]
+    },
+    {
+      "id": "us_equity",
+      "name": "US equity",
+      "cap": 10,
+      "members": [
+        "AAPLC",
+        "NVDAC",
+        "METAC",
+        "GOOGLC",
+        "AMZNC",
+        "MSFTC",
+        "TSLAC"
+      ]
+    },
+    {
+      "id": "gold",
+      "name": "Gold",
+      "cap": 6,
+      "members": [
+        "GOLD",
+        "VNXAU"
+      ]
+    }
+  ]
+}

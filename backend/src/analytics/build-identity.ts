@@ -1,32 +1,28 @@
-// Issue #977: the build identity a run/vintage is bound to. A real,
-// deterministic-per-process value — never fabricated — so a frozen manifest's
-// fingerprint can later prove WHICH build computed it. Preference order:
+// Issue #977: the build identity a run/vintage is bound to, so a frozen
+// manifest's fingerprint can later prove WHICH build computed it.
 //
-//   1. An explicit operator/CI-supplied identity (RM_BUILD_IDENTITY, or the
-//      GIT_SHA / GITHUB_SHA a deploy pipeline already exports) — the most
-//      precise answer, and the one production should always have set.
-//   2. package.json's version + the Bun/Node runtime version, when none of
-//      the above is set (local/dev runs, most test runs) — still real,
-//      still reproducible from the running process, never a placeholder.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// Issue 1442: it is the image's baked git commit (RM_BUILD_COMMIT), the same
+// value `/version` reports, read through ops/build-identity.ts so the two can
+// never disagree. The earlier fallback, `pkg:<package version>+bun:<runtime>`,
+// was what production actually recorded (no deploy set RM_BUILD_IDENTITY,
+// GIT_SHA or GITHUB_SHA), and it was wrong both ways: the package version never
+// moved across code releases, and a Bun upgrade alone gave the same code and
+// the same data new fingerprints. The runtime version is never part of it.
+//
+// AC-ID-03's rule applies: with no commit baked in, the identity is recorded as
+// unavailable with the reason named, never a package or runtime string. The
+// column is NOT NULL text, so "unavailable" is a string a reader cannot mistake
+// for a commit.
+//
+// Vintages written before this change keep their `pkg:` identity. The ledger is
+// append-only, and their manifest digests were hashed over the stored value.
+import { resolveBuildIdentity as resolveImageBuildIdentity } from "../ops/build-identity.ts";
 
-let cachedPackageVersion: string | null = null;
-
-function packageVersion(): string {
-  if (cachedPackageVersion !== null) return cachedPackageVersion;
-  try {
-    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "package.json"), "utf8")) as { version?: string };
-    cachedPackageVersion = typeof pkg.version === "string" && pkg.version ? pkg.version : "0.0.0";
-  } catch {
-    cachedPackageVersion = "0.0.0";
-  }
-  return cachedPackageVersion;
-}
+export const UNAVAILABLE_BUILD_IDENTITY_PREFIX = "unavailable: ";
 
 export function resolveBuildIdentity(env: Record<string, string | undefined> = process.env): string {
-  const explicit = env.RM_BUILD_IDENTITY || env.GIT_SHA || env.GITHUB_SHA;
-  if (explicit) return explicit.slice(0, 256);
-  const runtime = typeof Bun !== "undefined" ? `bun:${Bun.version}` : `node:${process.version}`;
-  return `pkg:${packageVersion()}+${runtime}`;
+  const { commit } = resolveImageBuildIdentity(env);
+  return commit.status === "available"
+    ? commit.value.slice(0, 256)
+    : `${UNAVAILABLE_BUILD_IDENTITY_PREFIX}${commit.unavailableReason}`;
 }

@@ -1,0 +1,902 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robotmoney.network/contract/schemas/public-analytics-archive-backup-record.schema.json",
+  "title": "GET /api/public/analytics/archive/csv/<backup id>/backup.json (a format 1 backup record)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "backup",
+    "source",
+    "consistency",
+    "snapshot",
+    "tool",
+    "append_only",
+    "revisions"
+  ],
+  "properties": {
+    "format": {
+      "const": 1
+    },
+    "backup": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{6}Z$"
+    },
+    "source": {
+      "const": "api"
+    },
+    "consistency": {
+      "const": "paged"
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exported_at_db",
+        "replica_replay_ts",
+        "db_user",
+        "was_replica"
+      ],
+      "properties": {
+        "exported_at_db": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+        },
+        "replica_replay_ts": {
+          "type": "null"
+        },
+        "db_user": {
+          "const": "api"
+        },
+        "was_replica": {
+          "const": false
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "commit"
+      ],
+      "properties": {
+        "name": {
+          "const": "robotmoney-api"
+        },
+        "commit": {
+          "type": "null"
+        }
+      }
+    },
+    "append_only": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "analytics_output_snapshots",
+        "analytics_report_snapshots",
+        "source_value_versions",
+        "analytics_ledger_runs",
+        "analytics_ledger_methodology_versions",
+        "analytics_data_vintages",
+        "analytics_vintage_members",
+        "analytics_overwrite_events"
+      ],
+      "properties": {
+        "analytics_output_snapshots": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_report_snapshots": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "source_value_versions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_ledger_runs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_ledger_methodology_versions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_data_vintages": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_vintage_members": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        },
+        "analytics_overwrite_events": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "time",
+            "watermark_before",
+            "watermark_after",
+            "rows_added",
+            "files",
+            "db_rows_through_watermark",
+            "db_sum_id_through_watermark"
+          ],
+          "properties": {
+            "time": {
+              "type": "object"
+            },
+            "watermark_before": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "watermark_after": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^\\d+$"
+            },
+            "rows_added": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "rows",
+                  "bytes_raw",
+                  "sha256_raw",
+                  "id_min",
+                  "id_max",
+                  "sum_id",
+                  "time_min",
+                  "time_max"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/data/[a-z_]+\\.\\d{4}-\\d{2}-\\d{2}T\\d{6}Z_\\d{4}-\\d{2}-\\d{2}T\\d{6}Z(-\\d+)?\\.csv\\.gz$"
+                  },
+                  "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "bytes_raw": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 67108864
+                  },
+                  "sha256_raw": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "id_min": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "id_max": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "sum_id": {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  },
+                  "time_min": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  },
+                  "time_max": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+00$"
+                  }
+                }
+              }
+            },
+            "db_rows_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            },
+            "db_sum_id_through_watermark": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        }
+      }
+    },
+    "revisions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    }
+  }
+}

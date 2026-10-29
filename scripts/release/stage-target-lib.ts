@@ -71,6 +71,57 @@ export const STAGE_TARGET = {
   maxDumpAgeHours: 24,
 } as const;
 
+/**
+ * Production's connection limits, which the stage Postgres copies (issue 1514).
+ * The api derives its request and batch shares from these at boot, so a stage
+ * server with another max_connections gives the stage api other shares: before
+ * this, stage's local Postgres (max_connections 100) gave the api its full
+ * default shares while production's batch pool ran out at every analytics run,
+ * and the stage soak saw none of it. `up` reads them from production's public
+ * /health (`db_pool.budget`, issue 1034), as it reads /api/version, and starts
+ * the stage Postgres with them; `--connection-limits` sets them by hand.
+ */
+export interface ConnectionLimits {
+  readonly maxConnections: number;
+  readonly superuserReserved: number;
+  readonly reserved: number;
+}
+
+const limitsProblem = (l: ConnectionLimits): string | null => {
+  for (const [k, v] of Object.entries(l)) if (!Number.isInteger(v) || v < 0) return `${k} is not a non-negative integer`;
+  if (l.maxConnections <= l.superuserReserved + l.reserved) return "max_connections must exceed the reserved connections";
+  return null;
+};
+
+/** PURE. Production's connection limits from its /health body (`db_pool.budget`), or why they are not there. */
+export function parseProductionLimits(text: string | null): ConnectionLimits | { error: string } {
+  if (text === null) return { error: "no /health answer" };
+  let budget: Partial<ConnectionLimits> | undefined;
+  try {
+    budget = (JSON.parse(text) as { db_pool?: { budget?: Partial<ConnectionLimits> } | null }).db_pool?.budget;
+  } catch {
+    return { error: "/health is not JSON" };
+  }
+  if (!budget) return { error: "/health carries no db_pool.budget" };
+  const limits = { maxConnections: Number(budget.maxConnections), superuserReserved: Number(budget.superuserReserved), reserved: Number(budget.reserved) };
+  const problem = limitsProblem(limits);
+  return problem ? { error: `db_pool.budget: ${problem}` } : limits;
+}
+
+/** PURE. `--connection-limits <max_connections>/<superuser_reserved_connections>/<reserved_connections>`. */
+export function parseConnectionLimitsFlag(value: string): ConnectionLimits | { error: string } {
+  const m = /^(\d+)\/(\d+)\/(\d+)$/.exec(value);
+  if (!m) return { error: `--connection-limits ${JSON.stringify(value)} is not <max_connections>/<superuser_reserved_connections>/<reserved_connections>` };
+  const limits = { maxConnections: Number(m[1]), superuserReserved: Number(m[2]), reserved: Number(m[3]) };
+  const problem = limitsProblem(limits);
+  return problem ? { error: `--connection-limits: ${problem}` } : limits;
+}
+
+/** PURE. The server settings that give the stage Postgres these limits, as `postgres` arguments after the image. */
+export function connectionLimitArgs(l: ConnectionLimits): string[] {
+  return ["-c", `max_connections=${l.maxConnections}`, "-c", `superuser_reserved_connections=${l.superuserReserved}`, "-c", `reserved_connections=${l.reserved}`];
+}
+
 /** What production reports about the stack it runs, read by `up` from `/api/version`. */
 export interface RunningVersion {
   readonly commit: string;
