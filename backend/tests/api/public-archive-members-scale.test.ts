@@ -20,8 +20,8 @@
 // are read around one run of the step, with parallel workers off, less what
 // planning the same statement reads (the planner probes an index's ends when a
 // bound falls outside its histogram, which depends on the statistics, not on
-// the rows the step reads). They are equal with a 10,000-member tail and a
-// 2,000,000-member tail, and stay within three passes over the backup's own
+// the rows the step reads). The rows and index entries read are equal with a
+// 10,000-member tail and a 2,000,000-member tail, and stay within three passes over the backup's own
 // members (the watermark, the row count and the id sum each read them once)
 // plus a small constant (the first-row probe). Before the fix the step fetched
 // 50,012 primary-key tuples with the small tail and 6,020,012 with the large
@@ -169,9 +169,14 @@ describe("archive: the members chain step reads only the backup's own members (i
     console.log(`members step, ${LARGE_TAIL_VINTAGES * MEMBERS_PER_VINTAGE}-member tail: ${JSON.stringify(large)}`);
     expect(large.wm).toBe(small.wm);
     expect(large.n).toBe(String(OWN_MEMBERS));
-    expect(large.byRelation).toEqual(small.byRelation);
+    // `returned` counts the index entries and rows the step read. `fetched`
+    // counts heap visits, which an index-only scan skips once the visibility
+    // map marks a page all-visible (autovacuum's timing, not the step's
+    // shape), so it is held to the bound, not to equality.
+    const returnedOf = (r: StepReads) => Object.fromEntries(Object.entries(r.byRelation).map(([k, v]) => [k, v.returned]));
+    expect(returnedOf(large)).toEqual(returnedOf(small));
     expect(large.returned).toBe(small.returned);
-    expect(large.fetched).toBe(small.fetched);
+    expect(large.fetched).toBeLessThanOrEqual(3 * OWN_MEMBERS + 16);
   }, 600_000);
 
   test("the first backup's record builds through recordFor under publicRead's 5 s statement timeout", async () => {
