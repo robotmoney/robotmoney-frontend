@@ -22,7 +22,7 @@ import {
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
-import { loadInventory, collectedByInventory, fetchInventorySeries, describeCoverage } from "../extract/model-portfolio.ts";
+import { COLLECTION_START, inventoryCollection, fetchInventorySeries, describeCoverage } from "../extract/model-portfolio.ts";
 
 export type Logger = {
   log?: (m: string) => void;
@@ -124,7 +124,11 @@ export interface AnalyticsDataSource {
   collectModelPortfolioInputs?(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<ModelPortfolioCollection[]>;
 }
 
-const CHANNEL_START = "2018-01-01";
+// Fetch starts. Every background fetch requests from COLLECTION_START
+// (2016-01-01, issue 1514) unless it already requested from earlier. These are
+// collection starts only: the research-signals axis (CHANNEL_START in the SDK's
+// analyze/research-signals.ts) and the regime's BACKFILL_START stay at
+// 2018-01-01, so the longer history changes no published output.
 const LATECYCLE_START = "2010-01-01";
 const EXTRAS_START = "2010-01-01"; // Yahoo returns inception for younger tickers
 const unix = (iso: string) => Math.floor(new Date(iso + "T00:00:00Z").getTime() / 1000);
@@ -154,8 +158,8 @@ export const liveDataSource: AnalyticsDataSource = {
       captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
     // Channel + late-cycle share Yahoo tickers; fetch the union concurrently.
     const [btc, qqq, spy, rsp, ...top7] = await Promise.all([
-      safe("BTC-USD", () => acquire("yahoo", "research:BTC-USD", `BTC-USD:${CHANNEL_START}`, () => fetchYahoo("BTC-USD", unix(CHANNEL_START))), logger),
-      safe("QQQ", () => acquire("yahoo", "research:QQQ", `QQQ:${CHANNEL_START}`, () => fetchYahoo("QQQ", unix(CHANNEL_START))), logger),
+      safe("BTC-USD", () => acquire("yahoo", "research:BTC-USD", `BTC-USD:${COLLECTION_START}`, () => fetchYahoo("BTC-USD", unix(COLLECTION_START))), logger),
+      safe("QQQ", () => acquire("yahoo", "research:QQQ", `QQQ:${COLLECTION_START}`, () => fetchYahoo("QQQ", unix(COLLECTION_START))), logger),
       safe("SPY", () => acquire("yahoo", "research:SPY", `SPY:${LATECYCLE_START}`, () => fetchYahoo("SPY", unix(LATECYCLE_START))), logger),
       safe("RSP", () => acquire("yahoo", "research:RSP", `RSP:${LATECYCLE_START}`, () => fetchYahoo("RSP", unix(LATECYCLE_START))), logger),
       ...TOP7.map((sym) => safe(sym, () => acquire("yahoo", `research:${sym}`, `${sym}:${LATECYCLE_START}`, () => fetchYahoo(sym, unix(LATECYCLE_START))), logger)),
@@ -222,12 +226,14 @@ export const liveDataSource: AnalyticsDataSource = {
 
   async collectModelPortfolioInputs(logger = console, acquisitionSink, requestedByRunId): Promise<ModelPortfolioCollection[]> {
     if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    // The inventory names each series' storage key. A series another collector
-    // already holds (backtest:^GSPC, research:BTC-USD, ...) is not fetched
-    // twice; the rest are recorded under their own source id (D74). Each is
-    // one acquisition, so one bounded request to the ingestion route, and a
-    // failure drops only that series.
-    const entries = loadInventory().series.filter(collectedByInventory);
+    // Both shipped inventories (model-portfolio and, issue 1514,
+    // research-series) name each series' storage key. A series another
+    // collector already holds (backtest:^GSPC, research:BTC-USD, ...) is not
+    // fetched twice, and a key both inventories list is fetched once; the rest
+    // are recorded under their own source id (D74). Each is one acquisition,
+    // so one bounded request to the ingestion route, and a failure drops only
+    // that series.
+    const entries = inventoryCollection();
     return Promise.all(entries.map(async (entry): Promise<ModelPortfolioCollection> => {
       try {
         const points = await captureSourceAcquisition({ provider: entry.provider, sourceKey: entry.storageKey, parserVersion: `${entry.provider}:1`, cacheIdentity: `${entry.symbol}:${entry.requestedStart}`, requestedByRunId }, acquisitionSink, () => fetchInventorySeries(entry));

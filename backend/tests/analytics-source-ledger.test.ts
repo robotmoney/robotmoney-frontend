@@ -12,7 +12,8 @@ import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckotermin
 import { captureSourceAcquisition, payloadChecksum, type AcquisitionSink } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
+import { loadInventory, collectedByInventory, inventoryCollection, loadResearchSeriesInventory, COLLECTION_START } from "../src/analytics/extract/model-portfolio.ts";
+import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -544,6 +545,16 @@ for (const s of loadInventory().series.filter(collectedByInventory)) {
   mpBodies.push([fragment, await mpGz(`${s.id.replace(":", "-")}.json.gz`)]);
 }
 const mpExpected = JSON.parse(await mpGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+// Issue 1514: the research-series inventory's recorded responses
+// (packages/analyst-sdk/tests/fixtures/extract/research-series/, provenance in
+// packages/analyst-sdk/tests/model-portfolio.test.ts).
+const RS_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/research-series/", import.meta.url);
+const rsGz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, RS_FIX)).arrayBuffer())));
+const RS_NEW = loadResearchSeriesInventory().series.filter(collectedByInventory).filter((s) => !MP_IDS.includes(s.id));
+for (const s of RS_NEW) mpBodies.push([`/v8/finance/chart/${encodeURIComponent(s.symbol)}?`, await rsGz(`${s.id.replace(":", "-")}.json.gz`)]);
+const rsExpected = JSON.parse(await rsGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+/** Every key the inventory step collects, in collection order: both inventories, one per storage key. */
+const COLLECTED_IDS = inventoryCollection().map((s) => s.id);
 
 test("issue 1398: a price, then a changed price for the same date, are both recoverable from source_value_versions under the source id, as rm_app within the existing grants", async () => {
   // The write runs as rm_app (the harness's session role), with the grants it
@@ -579,7 +590,7 @@ test("issue 1398: a price, then a changed price for the same date, are both reco
   expect(update).toBe("permission denied for table source_value_versions");
 });
 
-test("issue 1398: collectModelPortfolioInputs records every new inventory series from recorded responses under its source id, and fetches no series another collector holds", async () => {
+test("issues 1398 and 1514: collectModelPortfolioInputs records every inventory series from recorded responses under its source id, and fetches no series another collector holds", async () => {
   process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
   const urls: string[] = [];
   globalThis.fetch = ((input: URL | RequestInfo) => {
@@ -593,15 +604,21 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
   const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
   const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn: (m) => warnings.push(m), error() {} }, sink, 77);
 
-  const ids = MP_IDS;
+  const ids = COLLECTED_IDS;
   expect(ids).toContain("yahoo:GLD");
   expect(ids).toContain("yahoo:USDC-USD");
-  expect(ids.length).toBe(9);
+  // Nine model portfolio series and thirteen research series (yahoo:GLD is in both).
+  expect(MP_IDS.length).toBe(9);
+  expect(RS_NEW.length).toBe(13);
+  expect(ids.length).toBe(22);
   expect(out.map((c) => c.id)).toEqual(ids);
   expect(out.every((c) => c.error === null && c.storageKey === c.id)).toBe(true);
-  expect(urls).toHaveLength(ids.length); // ^GSPC, ETH-USD, BTC-USD and DTB3 are not fetched again
-  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD)\?|fredgraph/.test(u))).toBe(false);
-  for (const id of ids) {
+  // ^GSPC, ETH-USD, BTC-USD, QQQ and DTB3 are not fetched again, and GLD,
+  // listed in both inventories, is fetched once.
+  expect(urls).toHaveLength(ids.length);
+  expect(urls.filter((u) => u.includes("/chart/GLD?"))).toHaveLength(1);
+  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD|QQQ)\?|fredgraph/.test(u))).toBe(false);
+  for (const id of MP_IDS) {
     const rows = await sql`
       SELECT market_date::text AS date, value FROM source_value_versions
       WHERE source_key = ${id} AND acquisition_id IN (SELECT id FROM source_acquisitions WHERE requested_by_run_id = 77)
@@ -609,9 +626,9 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
     expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(mpExpected[id]!);
   }
   const acq = await sql`SELECT provider, cache_identity, requested_by_run_id FROM source_acquisitions WHERE requested_by_run_id = 77 ORDER BY provider, cache_identity`;
-  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), "yahoo", "yahoo"]);
+  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), ...Array(15).fill("yahoo")]);
   // The late Base inception is reported, not repaired.
-  expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start 2018-01-01`))).toBe(true);
+  expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start ${COLLECTION_START}`))).toBe(true);
 
   // A second collection of the same responses adds no version.
   const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n;
@@ -630,9 +647,77 @@ test("issue 1398: one failed model portfolio series is reported by id and drops 
   const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
   const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 79);
   const eth = out.find((c) => c.id === `defillama-yields:${MP_ETH}`)!;
-  expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from 2018-01-01`);
+  expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from ${COLLECTION_START}`);
   expect(eth.rows).toBe(0);
-  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(MP_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
+  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(COLLECTED_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
+});
+
+// ── Issue 1514: the 2016 collection floor and the research series ───────────
+const NEW_RESEARCH_KEYS = [
+  "yahoo:GC=F", "yahoo:CL=F", "yahoo:HG=F", "yahoo:SI=F", "yahoo:TLT", "yahoo:VNQ", "yahoo:DBC",
+  "yahoo:MSTR", "yahoo:SOL-USD", "yahoo:BNB-USD", "yahoo:AAVE-USD", "yahoo:HYPE32196-USD", "yahoo:VIRTUAL-USD",
+];
+const unixDay = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+/** A tiny one-row chart for a symbol the recorded inventories do not cover. */
+const tinyChart = () => Response.json({ chart: { result: [{ timestamp: [1704067200], indicators: { adjclose: [{ adjclose: [2] }] } }] } });
+
+/** A fetch that serves the recorded inventory bodies, a one-row chart for any other Yahoo symbol, and fails the rest. */
+function recordedFetch(urls: string[]): typeof fetch {
+  return ((input: URL | RequestInfo) => {
+    const url = String(input);
+    urls.push(url);
+    const hit = mpBodies.find(([f]) => url.includes(f));
+    if (hit) return Promise.resolve(new Response(hit[1], { headers: { "content-type": "application/json" } }));
+    if (url.includes("query2.finance.yahoo.com")) return Promise.resolve(tinyChart());
+    if (url.includes("fredgraph.csv")) return Promise.resolve(new Response("DATE,VALUE\n2024-01-01,1.25\n"));
+    return Promise.reject(new Error(`unrecorded URL ${url}`));
+  }) as typeof fetch;
+}
+
+test("issue 1514: one collection writes the thirteen new research series from recorded responses, and a second adds no version", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  globalThis.fetch = recordedFetch([]);
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  expect(RS_NEW.map((s) => s.storageKey).sort()).toEqual([...NEW_RESEARCH_KEYS].sort());
+  const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 1514);
+  expect(out.filter((c) => c.error !== null)).toEqual([]);
+  // Every version under the key, whichever collection in this file wrote it:
+  // the same responses never add a second version.
+  for (const key of NEW_RESEARCH_KEYS) {
+    const rows = await sql`
+      SELECT market_date::text AS date, value FROM source_value_versions
+      WHERE source_key = ${key} ORDER BY market_date, id`;
+    expect(rsExpected[key]!.length).toBeGreaterThan(600);
+    expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(rsExpected[key]!);
+  }
+  const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n;
+  await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 1515);
+  expect((await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n).toBe(before);
+});
+
+test("issue 1514: the live source requests BTC-USD, QQQ and every inventory Yahoo symbol from 2016-01-01, the 2010 starts stay, and each key is fetched once", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  const urls: string[] = [];
+  globalThis.fetch = recordedFetch(urls);
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  const quiet = { log() {}, warn() {}, error() {} };
+  // The EDGAR sweep is out of this test: an already-passed deadline degrades it at once.
+  await liveDataSource.fetchResearchInputs("2026-10-27", quiet, { persistedMna: [], deadlineAt: Date.now() - 1 }, sink, 1516);
+  await liveDataSource.fetchBacktestExtras(quiet, sink, 1516);
+  await liveDataSource.collectModelPortfolioInputs!(quiet, sink, 1516);
+  const yahoo = urls.filter((u) => u.includes("query2.finance.yahoo.com"));
+  const period1 = new Map<string, number[]>();
+  for (const u of yahoo) {
+    const sym = decodeURIComponent(u.match(/\/chart\/([^?]+)\?/)![1]!);
+    const list = period1.get(sym) ?? [];
+    list.push(Number(u.match(/period1=(\d+)/)![1]));
+    period1.set(sym, list);
+  }
+  const inventoryYahoo = inventoryCollection().filter((s) => s.provider === "yahoo").map((s) => s.symbol);
+  for (const sym of ["BTC-USD", "QQQ", ...inventoryYahoo]) expect({ sym, period1: period1.get(sym) }).toEqual({ sym, period1: [unixDay("2016-01-01")] });
+  for (const sym of ["SPY", "RSP", ...TOP7, "^GSPC", "ETH-USD"]) expect({ sym, period1: period1.get(sym) }).toEqual({ sym, period1: [unixDay("2010-01-01")] });
+  // Every symbol is requested once across the three collectors.
+  for (const [sym, starts] of period1) expect({ sym, n: starts.length }).toEqual({ sym, n: 1 });
 });
 
 // ── Issue 1514: the committed heads come from the rows written and the priors read ──

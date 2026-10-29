@@ -116,6 +116,22 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469": EXACT, // Base universe asset GT (Gauntlet USDC vault, Morpho), apyBase
   "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c": EXACT, // Base universe asset STEAK (Steakhouse USDC vault, Morpho V2), apyBase
   "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19": EXACT, // Base universe asset COMP (Compound v3 USDC on Base), apyBase
+
+  // The same step, for packages/analyst-sdk/inventory/research-series.json
+  // (issue 1514): single Yahoo symbols, so Yahoo's float32 noise.
+  "yahoo:GC=F": YAHOO_FLOAT32,
+  "yahoo:CL=F": YAHOO_FLOAT32,
+  "yahoo:HG=F": YAHOO_FLOAT32,
+  "yahoo:SI=F": YAHOO_FLOAT32,
+  "yahoo:TLT": YAHOO_FLOAT32,
+  "yahoo:VNQ": YAHOO_FLOAT32,
+  "yahoo:DBC": YAHOO_FLOAT32,
+  "yahoo:MSTR": YAHOO_FLOAT32,
+  "yahoo:SOL-USD": YAHOO_FLOAT32,
+  "yahoo:BNB-USD": YAHOO_FLOAT32,
+  "yahoo:AAVE-USD": YAHOO_FLOAT32,
+  "yahoo:HYPE32196-USD": YAHOO_FLOAT32,
+  "yahoo:VIRTUAL-USD": YAHOO_FLOAT32,
 };
 
 export function toleranceFor(sourceKey: string): SourceTolerance {

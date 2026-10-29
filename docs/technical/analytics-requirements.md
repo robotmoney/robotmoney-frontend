@@ -48,6 +48,14 @@ Every source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC`
 
 The indicator registry names the source ids each indicator reads. The correlations and the backtest name the source ids they read: `yahoo:^GSPC` and `yahoo:ETH-USD` (price levels) and `fred:DTB3` (a rate).
 
+### 4.1.1 Collection floor
+
+Every source series the background collection requests starts at 2016-01-01 (`COLLECTION_START` in `packages/analyst-sdk/src/inventory.ts`), or at the provider's first observation when that is later. A series a collector already requests from earlier keeps its earlier start (the 2010-01-01 starts of SPY, RSP, the top seven, `^GSPC` and `ETH-USD`). Every entry of a shipped inventory (`model-portfolio.json`, `research-series.json`) requests from `COLLECTION_START`, and a late inception is named in the entry's limitation.
+
+Collection start and computation start are separate. The collection start sets how much history is stored. The computation start sets where a computation's date axis begins: the regime backfill and the research-signals axis start at 2018-01-01 and do not move. A computation reads only its axis dates, so a longer stored history changes no published output. Research needs history before the 2018 axis for trailing windows, such as a covariance window of up to two years, so a new consumer never needs a one-off backfill.
+
+The inventory step collects each storage key once per run, even when two inventories list it, and never fetches a key another collector holds. Prices are Yahoo's adjusted close, recorded per key in the inventory's `units`.
+
 ### 4.2 Input report
 
 The input is a report of source data. It is a CSV with exactly the header `date,series,value`, where `series` is a source id. The same rows as JSON give byte-identical output.

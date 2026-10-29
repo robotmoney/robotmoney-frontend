@@ -5059,6 +5059,44 @@ on a production-sized fixture;
 `scripts/tests/unit/parity-sweep-schedule.test.ts` proves the schedule clears
 every producer run, projects job and buyback refresh by 15 minutes.
 
+### Amendment (issue 1514, 2026-10-29) — the research series and the 2016 collection floor
+
+**Status:** proposed
+
+**What changes.** The inventory step now also collects
+`packages/analyst-sdk/inventory/research-series.json`, the series the analyst
+SDK's clients read. Thirteen keys are new. Each is one Yahoo symbol, so each
+gets Yahoo's float32 tolerance, like every other single-symbol Yahoo key:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:GC=F` | yahoo | relative 1e-6 |
+| `yahoo:CL=F` | yahoo | relative 1e-6 |
+| `yahoo:HG=F` | yahoo | relative 1e-6 |
+| `yahoo:SI=F` | yahoo | relative 1e-6 |
+| `yahoo:TLT` | yahoo | relative 1e-6 |
+| `yahoo:VNQ` | yahoo | relative 1e-6 |
+| `yahoo:DBC` | yahoo | relative 1e-6 |
+| `yahoo:MSTR` | yahoo | relative 1e-6 |
+| `yahoo:SOL-USD` | yahoo | relative 1e-6 |
+| `yahoo:BNB-USD` | yahoo | relative 1e-6 |
+| `yahoo:AAVE-USD` | yahoo | relative 1e-6 |
+| `yahoo:HYPE32196-USD` | yahoo | relative 1e-6 |
+| `yahoo:VIRTUAL-USD` | yahoo | relative 1e-6 |
+
+The research inventory also lists BTC-USD, QQQ and GLD under the keys they are
+already recorded in (`research:BTC-USD`, `research:QQQ`, `yahoo:GLD`). The step
+fetches each storage key once per run, so GLD is not fetched twice.
+
+Every background source fetch now starts at 2016-01-01 (`COLLECTION_START`,
+analytics requirements section 4) unless it already started earlier. The
+existing keys keep their tolerance. A longer fetch adds versions only for the
+new early dates: an existing date within tolerance writes no row.
+
+**Why.** The SDK's research clients read these closes. Without them they were
+fetched by hand and committed as frozen files, with no acquisition evidence, no
+revision history and no backup.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)

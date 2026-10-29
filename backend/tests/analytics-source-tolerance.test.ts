@@ -27,7 +27,7 @@ import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { mergeSeries } from "../src/analytics/transform/math.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
-import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
+import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 
 const srcDir = join(import.meta.dir, "..", "src", "analytics");
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -53,8 +53,8 @@ function resolve(expression: string, file: string): string[] {
   // data-source.ts writes the backtest extras through the D74 reverse mapping (issue 1423).
   const write = /^W\.(spx|eth|tbill3m)$/.exec(e);
   if (write) return [EXTRA_WRITE_KEYS[write[1] as keyof typeof EXTRA_WRITE_KEYS]];
-  // access/data-source.ts collectModelPortfolioInputs (issue 1398).
-  if (e === "entry.storageKey") return loadInventory().series.filter(collectedByInventory).map((s) => s.storageKey);
+  // access/data-source.ts collectModelPortfolioInputs (issue 1398): both shipped inventories (issue 1514).
+  if (e === "entry.storageKey") return inventoryCollection().map((s) => s.storageKey);
   throw new Error(
     `${file}: a capture call site names its source_key as \`${e}\`, which this test cannot resolve. ` +
       "Teach resolve() what it expands to, and give every resulting key an entry in SOURCE_TOLERANCES and D56.",
@@ -106,6 +106,19 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
       expect(line, `D56 must name ${key}`).toBeDefined();
       const stated = tolerance.relative === 0 ? "exact" : tolerance.relative === 5e-6 ? "5e-6" : "1e-6";
       expect({ key, line: line!.includes(stated) }).toEqual({ key, line: true });
+    }
+  });
+
+  test("issue 1514: every research-series key the inventory step collects is a Yahoo symbol at relative 1e-6, named in D56", () => {
+    const keys = loadResearchSeriesInventory().series.filter(collectedByInventory).map((s) => s.storageKey);
+    expect(keys.length).toBe(14); // the thirteen new series, and yahoo:GLD
+    const collected = new Set(inventoryCollection().map((s) => s.storageKey));
+    const decisions = readFileSync(join(repoRoot, "docs", "decisions.md"), "utf8");
+    const d56 = decisions.slice(decisions.indexOf("## D56 "), decisions.indexOf("\n## D", decisions.indexOf("## D56 ") + 1));
+    for (const key of keys) {
+      expect(collected.has(key)).toBe(true);
+      expect({ key, tolerance: SOURCE_TOLERANCES[key] }).toEqual({ key, tolerance: { relative: 1e-6, basis: "yahoo-float32" } });
+      expect({ key, row: d56.split("\n").some((l) => l.includes(`\`${key}\``) && l.includes("1e-6")) }).toEqual({ key, row: true });
     }
   });
 
