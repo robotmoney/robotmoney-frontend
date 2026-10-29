@@ -51,7 +51,7 @@ export const TOKEN_FAQ = [
   {
     id: "vault-returns",
     q: "Does holding $ROBOTMONEY earn the vault's returns?",
-    a: "No. The token has no claim on the vault's returns. To earn the vault's yield, deposit USDC on the deposit page.",
+    a: "No. The token has no claim on the vault's returns. Vault shares do, and deposits open in small groups through early access.",
   },
   {
     id: "governance",

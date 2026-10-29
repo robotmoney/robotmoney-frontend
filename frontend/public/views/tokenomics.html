@@ -243,7 +243,7 @@
         <div class="rr-disc" id="vault-returns" x-data="{ open: location.hash === '#vault-returns' }" @hashchange.window="if (location.hash === '#vault-returns') open = true" :class="open ? 'is-open' : ''">
           <button type="button" class="rr-disc__btn" :aria-expanded="open ? 'true' : 'false'" aria-controls="vault-returns-a" @click="open = !open"><span>Does holding $ROBOTMONEY earn the vault's returns?</span></button>
           <div class="rr-disc__anim" id="vault-returns-a" role="region" aria-label="Does holding $ROBOTMONEY earn the vault&#x27;s returns?" :inert="!open">
-            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The token has no claim on the vault's returns. To earn the vault's yield, deposit USDC on <a href="/deposit">the deposit page</a>.</p></div></div>
+            <div class="rr-disc__clip"><div class="rr-disc__body tok__faq-a"><p>No. The token has no claim on the vault's returns. Vault shares do, and deposits open in small groups through <a href="/early-access">early access</a>.</p></div></div>
           </div>
         </div>
 

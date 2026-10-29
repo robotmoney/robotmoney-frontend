@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://robotmoney.network/</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://robotmoney.network/deposit</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>
   <url><loc>https://robotmoney.network/skills</loc><lastmod>2026-09-24</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://robotmoney.network/tokenomics</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>0.9</priority></url>
   <url><loc>https://robotmoney.network/allocation</loc><lastmod>2026-09-23</lastmod><changefreq>daily</changefreq><priority>0.9</priority></url>
@@ -35,10 +34,6 @@
   <url><loc>https://robotmoney.network/privacy</loc><lastmod>2026-09-22</lastmod><changefreq>yearly</changefreq><priority>0.3</priority></url>
 
   <!-- Documentation -->
-  <url><loc>https://robotmoney.network/docs/skill</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://robotmoney.network/docs/skill/installation</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://robotmoney.network/docs/skill/commands</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://robotmoney.network/docs/skill/agent-basket</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://robotmoney.network/docs/investment-swarm</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://robotmoney.network/docs/investment-swarm/how-it-works</loc><lastmod>2026-09-29</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://robotmoney.network/docs/investment-swarm/participation</loc><lastmod>2026-09-30</lastmod><changefreq>monthly</changefreq><priority>0.7</priority></url>

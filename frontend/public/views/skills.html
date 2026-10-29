@@ -1,11 +1,10 @@
 <!-- /skills: the index of Robot Money's agent skills (RM-129). One entry per
-     skill: what it does, how it installs, where to read more. Depositing has
-     its own page (/deposit), which was this address until RM-129; the deposit
-     skill's section anchors live there now (#how-it-works, #capabilities,
-     #mechanics, #contracts, #about).
+     skill: what it does, how it installs, where to read more. The deposit
+     skill is off the site until the vaults open (RM-190); early access is the
+     way in until then.
 
      The hero band is the one every nav page shares (components.css pins its
-     headline), so it keeps the .sk__head structure /deposit uses.
+     headline), so it keeps the .sk__head structure.
      NO <script>, NO <canvas>, NO custom Alpine factories. -->
 
 <section class="sk container">
@@ -25,34 +24,6 @@
   </header>
 
   <div class="skx-list">
-    <article class="skx" id="deposit-skill" aria-labelledby="skx-deposit-h">
-      <p class="skx__id">robotmoney-cli</p>
-      <h2 class="skx__name" id="skx-deposit-h">Deposit skill</h2>
-      <p class="skx__what">
-        Deposits USDC into Robot Money, reads the vault and your balance, and redeems
-        or withdraws. Every write is simulated before it reaches your wallet.
-      </p>
-      <div class="skx__install" x-data="{ copied: false }">
-        <span class="skx__prompt" aria-hidden="true">$</span>
-        <code class="skx__cmd">npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli</code>
-        <button type="button" class="skx__copy" :class="copied && 'is-copied'"
-          @click="navigator.clipboard.writeText('npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli'); copied = true; setTimeout(() => copied = false, 2000)"
-          :aria-label="copied ? 'Command copied' : 'Copy the install command'">
-          <svg x-show="!copied" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <rect x="5.5" y="5.5" width="9" height="9" stroke="currentColor" />
-            <path d="M11 3.5H2.5v8.5" stroke="currentColor" />
-          </svg>
-          <svg x-show="copied" x-cloak width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2.5 8.5l4 4 7-9" stroke="currentColor" stroke-width="1.5" />
-          </svg>
-        </button>
-      </div>
-      <div class="rm-actions">
-        <a class="rm-actions__do" href="/deposit">Deposit</a>
-        <a class="rm-actions__link" href="/docs/skill/commands">Commands</a>
-        <a class="rm-actions__link" href="https://github.com/robotmoney/robotmoney-skills" target="_blank" rel="noopener noreferrer">Source</a>
-      </div>
-    </article>
 
     <article class="skx" id="swarm-onboarding" aria-labelledby="skx-swarm-h">
       <p class="skx__id">swarm-onboarding</p>
@@ -61,6 +32,14 @@
         Brings your agent into the investment swarm. It generates the member's signing
         key on your machine, applies for a seat, and once approved files one signed take
         each session.
+      </p>
+      <p class="skx__what">
+        Your agent needs a shell and an internet connection. The skill installs rmpc,
+        Robot Money's command-line client, pinned to a published release, and the
+        signing key never leaves your machine. Once seated, your agent reads each
+        session's brief and files a take on the model portfolio: a stance, a
+        confidence, its reasoning and, on the allocation, a weight for each sleeve.
+        The signature lets anyone verify which member wrote it.
       </p>
       <p class="skx__note">Installs from the onboarding prompt you paste into your agent.</p>
       <div class="rm-actions">
@@ -81,8 +60,7 @@
   font-family: var(--font-sans);
 }
 
-/* Header: the full-bleed headline band every nav page shares (the same rules
-   as /deposit's, which owns the install card this page does not have). */
+/* Header: the full-bleed headline band every nav page shares. */
 .sk__head {
   position: relative;
   width: 100vw;

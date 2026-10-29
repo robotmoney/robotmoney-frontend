@@ -584,7 +584,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     method: "GET",
     path: ROUTES.dashboards.coins,
     summary: "Directory of third-party coins tracked",
-    description: "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.",
+    description: "Outside coins Robot Money observes, with price and market data.",
     backs: [],
     contractType: "CoinsListResponse",
     sizeHint: "about 14 KB",

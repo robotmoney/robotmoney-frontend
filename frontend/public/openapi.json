@@ -1718,7 +1718,7 @@
       "get": {
         "operationId": "listCoins",
         "summary": "Directory of third-party coins tracked",
-        "description": "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.\n\nResponse size: about 14 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Outside coins Robot Money observes, with price and market data.\n\nResponse size: about 14 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
