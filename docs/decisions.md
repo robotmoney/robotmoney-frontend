@@ -5097,6 +5097,60 @@ new early dates: an existing date within tolerance writes no row.
 fetched by hand and committed as frozen files, with no acquisition evidence, no
 revision history and no backup.
 
+### Amendment (issue 1514, 2026-10-29) — DefiLlama restatements stay exact
+
+**Status:** proposed
+
+**Why it was measured.** Backup `2026-10-28T180400Z` of csv-backups holds
+81,650 `revision` rows for `raw_indicator_history:DEFI_TVL`, with a median
+relative change of about 2.5e-6, and 3,987 for `raw_indicator_history:STABLES`.
+Both keys are exact. The question was whether DefiLlama's restatements are a
+noise band that a tolerance should absorb, as Yahoo's float32 jitter is.
+
+**The rule (pinned in issue 1514, the one used for the Yahoo ratios).** Each
+revision's change is `|next − prior| / max(|next|, |prior|)` against the
+version before it for the same `(source_key, market_date)`. The changes go in
+half-decade log bins from 1e-9 to 1e-1. The noise band is the run of bins
+starting at the lowest bin. The tolerance is the upper edge of the first bin
+above the band that is empty or holds under 0.1 percent of that key's
+revisions, rounded down to one significant digit. The two keys share the
+larger value. The value must be at most 1e-4, else the rule fails.
+
+**The counts.** `backend/scripts/analytics/measure-tolerance.ts` read the
+`source_value_versions` data files of that backup and of every backup before
+it (the backups are incremental), streamed over SSH from stage-2. Only the
+counts are committed, in `backend/tests/fixtures/defillama-revision-distribution.json`.
+
+| relative change | DEFI_TVL | STABLES |
+|---|---|---|
+| under 3.16e-9 | 7,273 | 29 |
+| 3.16e-9 to 1e-8 | 531 | 27 |
+| 1e-8 to 3.16e-8 | 1,253 | 45 |
+| 3.16e-8 to 1e-7 | 2,313 | 14 |
+| 1e-7 to 3.16e-7 | 12,151 | 27 |
+| 3.16e-7 to 1e-6 | 10,648 | 42 |
+| 1e-6 to 3.16e-6 | 10,227 | 395 |
+| 3.16e-6 to 1e-5 | 10,129 | 577 |
+| 1e-5 to 3.16e-5 | 4,444 | 196 |
+| 3.16e-5 to 1e-4 | 4,751 | 406 |
+| 1e-4 to 3.16e-4 | 10,533 | 241 |
+| 3.16e-4 to 1e-3 | 5,486 | 237 |
+| 1e-3 to 3.16e-3 | 1,510 | 940 |
+| 3.16e-3 to 1e-2 | 181 | 715 |
+| 1e-2 to 3.16e-2 | 220 | 96 |
+| 3.16e-2 to 1e-1 | 0 | 0 |
+| 1e-1 and up | 0 | 0 |
+
+**Outcome.** There is no noise band below 1e-4. Every bin from under 1e-9 to
+3.16e-2 holds more than 0.1 percent of each key's revisions, so the first gap's
+edge is 1e-1 and the rule fails. Most revisions touch dates more than 30 days
+old, and those spread just as widely, with a second peak near 1e-4 for
+DEFI_TVL. These are DefiLlama's restatements of history at every size, not a
+thin float layer. So both keys stay exact under this decision's rule that a
+tolerance is widened only on measured evidence. The owner may pick another
+rule later. `backend/tests/analytics-source-tolerance.test.ts` runs the rule on
+the committed counts and holds `SOURCE_TOLERANCES` to what it allows.
+
 ---
 
 ## D57 — `packages/analyst-sdk` is a second shared seam beside `contract/` (refines D10, D23, D43; issue #1095)

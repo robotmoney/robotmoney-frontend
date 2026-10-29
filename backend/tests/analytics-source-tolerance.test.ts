@@ -28,6 +28,13 @@ import { mergeSeries } from "../src/analytics/transform/math.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
 import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
+import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
+import {
+  BIN_COUNT,
+  DEFILLAMA_KEYS,
+  selectTolerance,
+  type KeyDistribution,
+} from "../scripts/analytics/measure-tolerance.ts";
 
 const srcDir = join(import.meta.dir, "..", "src", "analytics");
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -147,6 +154,75 @@ describe("withinTolerance", () => {
   });
 });
 
+// ── Issue 1514 part 4: DefiLlama restatements, measured ─────────────────────
+// scripts/analytics/measure-tolerance.ts bins every DEFI_TVL and STABLES
+// revision in csv-backups backup 2026-10-28T180400Z; only the counts are
+// committed (fixtures/defillama-revision-distribution.json). D56's amendment of
+// issue 1514 records the outcome: the changes run without a gap from under
+// 1e-9 to 3.16e-2, the pinned rule finds no noise band below 1e-4, and both
+// keys stay exact.
+const fixture = JSON.parse(
+  readFileSync(join(import.meta.dir, "fixtures", "defillama-revision-distribution.json"), "utf8"),
+) as { source: { backup: string; files: string[] }; keys: Record<string, KeyDistribution> };
+
+// A distribution from per-bin counts, bins[0] = [0, 3.16e-9), ..., bins[15] = [3.16e-2, 1e-1).
+function dist(counts: Record<number, number>): KeyDistribution {
+  const bins = new Array(BIN_COUNT).fill(0);
+  for (const [i, n] of Object.entries(counts)) bins[Number(i)] = n;
+  return { revisions: bins.reduce((a, b) => a + b, 0), bins, above: 0 };
+}
+
+describe("issue 1514: the DefiLlama restatement tolerance is what the measured rule allows", () => {
+  test("the fixture is the whole ledger of backup 2026-10-28T180400Z", () => {
+    expect(fixture.source.backup).toBe("2026-10-28T180400Z");
+    expect(fixture.source.files).toHaveLength(4);
+    expect(fixture.keys["raw_indicator_history:DEFI_TVL"]!.revisions).toBe(81_650);
+    for (const key of DEFILLAMA_KEYS) {
+      const d = fixture.keys[key]!;
+      expect(d.bins.reduce((a, b) => a + b, 0) + d.above).toBe(d.revisions);
+    }
+  });
+
+  test("on the committed counts the rule finds no noise band below 1e-4 for either key, so both stay exact", () => {
+    for (const key of DEFILLAMA_KEYS) {
+      const r = selectTolerance(fixture.keys, [key]);
+      expect(r.ok, key).toBe(false);
+      if (!r.ok) expect(r.error).toContain("no empty band below 1e-4");
+      expect(SOURCE_TOLERANCES[key]).toEqual({ relative: 0, basis: "exact" });
+    }
+    expect(selectTolerance(fixture.keys).ok).toBe(false);
+  });
+
+  test("a distribution with no empty band below 1e-4 is a rule failure", () => {
+    // Every bin up to [1e-4, 3.16e-4) well populated; the first empty bin's top edge is 1e-3.
+    const counts = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [i, 100]));
+    const r = selectTolerance({ a: dist(counts), b: dist({ 0: 5 }) }, ["a", "b"]);
+    expect(r).toEqual({ ok: false, error: expect.stringContaining("no empty band below 1e-4") });
+  });
+
+  test("a clear noise band then an empty bin: the empty bin's top edge, rounded down to one digit", () => {
+    // Noise in [0, 1e-6), bin 6 = [1e-6, 3.16e-6) empty: 3.16e-6 rounds down to 3e-6.
+    const odd = selectTolerance({ a: dist({ 0: 10, 1: 20, 2: 30, 3: 40, 4: 50, 5: 60, 9: 500 }) }, ["a"]);
+    expect(odd).toEqual({ ok: true, relative: 3e-6, perKey: { a: { gapBin: 6, relative: 3e-6 } } });
+    // Noise in [0, 3.16e-6), bin 7 = [3.16e-6, 1e-5) empty: an exact power of ten stays as it is.
+    const even = selectTolerance({ a: dist({ 0: 10, 1: 20, 2: 30, 3: 40, 4: 50, 5: 60, 6: 70, 9: 500 }) }, ["a"]);
+    expect(even.ok && even.relative).toBe(1e-5);
+  });
+
+  test("the keys share the larger of their two values", () => {
+    const r = selectTolerance({ a: dist({ 0: 10, 1: 10, 2: 10, 9: 5 }), b: dist({ 0: 10, 1: 10, 2: 10, 3: 10, 4: 10, 5: 10, 9: 5 }) }, ["a", "b"]);
+    expect(r.ok && r.perKey.a!.relative).toBe(1e-7);
+    expect(r.ok && r.perKey.b!.relative).toBe(3e-6);
+    expect(r.ok && r.relative).toBe(3e-6);
+  });
+
+  test("a bin under 0.1 percent of the key's revisions counts as the gap", () => {
+    // 100,000 revisions: bin 6 holds 50 (0.05 percent), so it ends the band, not the empty bin 7.
+    const r = selectTolerance({ a: dist({ 0: 20_000, 1: 20_000, 2: 20_000, 3: 20_000, 4: 10_000, 5: 9_950, 6: 50 }) }, ["a"]);
+    expect(r).toEqual({ ok: true, relative: 3e-6, perKey: { a: { gapBin: 6, relative: 3e-6 } } });
+  });
+});
+
 // ── Issue 1421 (review finding AN-15): the tolerance decision binds downstream ──
 // Through REAL persistence, two whole-suite runs: the first commits the base
 // observations, the second's provider serves within-tolerance jitter (whole
@@ -257,6 +333,36 @@ describe("issue 1421: downstream consumes the committed value and version, never
     expect(await reportRows(firstRunId)).toEqual(reportRowsBefore);
     expect(reportRowsBefore.outputs.length).toBeGreaterThan(0);
   }, 300_000);
+
+  // Issue 1514 part 4: DEFI_TVL and STABLES stay exact (D56 amendment of issue
+  // 1514), so a real DefiLlama restatement is recorded through both writers.
+  test("a DEFI_TVL or STABLES restatement at a relative 1e-3 adds one revision and one raw-history overwrite", async () => {
+    const dates = ["2026-08-12", "2026-08-13", "2026-08-14"];
+    for (const [indicator, level] of [["DEFI_TVL", 95_123_456_789.25], ["STABLES", 287_654_321_098.5]] as const) {
+      const key = `raw_indicator_history:${indicator}`;
+      const first = dates.map((date, i) => ({ date, value: level + i * 1_000_003.5 }));
+      const second = first.map((p, i) => (i === 1 ? { date: p.date, value: p.value * (1 + 1e-3) } : { ...p }));
+      for (const points of [first, first, second]) {
+        await captureSourceAcquisition(
+          { provider: "fixture", sourceKey: key, parserVersion: "issue-1514:1", cacheIdentity: key },
+          { saveSourceAcquisition: directAnalyticsPersistence.saveSourceAcquisition! },
+          async () => points,
+        );
+        await directAnalyticsPersistence.saveRawHistory({ [indicator]: points }, "live");
+      }
+      const versions = await versionsOf(key);
+      expect(versions.filter((v) => v.revision_kind === "initial")).toHaveLength(3);
+      const revised = versions.filter((v) => v.revision_kind === "revision");
+      expect(revised).toHaveLength(1);
+      expect(revised[0]!.market_date).toBe(dates[1]!);
+      expect(revised[0]!.value).toBe(second[1]!.value);
+      const events = await sql<{ date: string }[]>`
+        SELECT natural_key->>'date' AS date FROM analytics_overwrite_events
+        WHERE table_name = 'raw_indicator_history' AND natural_key->>'indicator' = ${indicator}`;
+      expect(events.map((e) => e.date)).toEqual([dates[1]!]);
+      expect((await loadRawIndicatorHistory())[indicator]!.map((p) => p.value)).toEqual(second.map((p) => p.value));
+    }
+  }, 60_000);
 
   test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
     const base = await baseObservations();
