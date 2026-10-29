@@ -107,7 +107,7 @@ jobs:
       - name: Exact numerics suite ran (D78)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
-          tests/exact-numerics.test.ts:43
+          tests/exact-numerics.test.ts:44
           tests/numeric-diff-negative-control.test.ts:11
       # Decision D79 (issue 1513): the supplementary series suite ran (format, the pure
       # reader over injected files, the directory rules, the fetch seam, the command's refusals).
@@ -164,7 +164,7 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/linalg.test.ts:10
           tests/optimizers.test.ts:21
-          tests/markowitz.test.ts:21
+          tests/markowitz.test.ts:31
           tests/exports.test.ts:3
       # Issue 1404: the backtest, CLI and producer-to-SDK suites ran with at
       # least their number of cases and none skipped (JUnit, not console text).

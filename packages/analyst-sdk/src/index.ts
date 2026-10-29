@@ -49,7 +49,7 @@ export { SHRINK, PERIODS_PER_YEAR, annualCov, shrinkToDiagonal, shrunkCov } from
 export {
   markowitzBooks, markowitzSizing, markowitzSchedule, markowitzBacktest, canonZero, ZERO_TOL, MIN_OBS, LAMBDA,
   type Book, type MarkowitzBooksInput, type MarkowitzBooks, type MarkowitzSizingInput, type MarkowitzSizing,
-  type Reoptimise, type MuFn, type CovFn, type SolveFn, type ExpandFn, type MarkowitzScheduleOptions,
+  type Reoptimise, type RebalanceContext, type MuFn, type CovFn, type SolveFn, type ExpandFn, type MarkowitzScheduleOptions,
   type MarkowitzRebalance, type MarkowitzScheduleResult, type Simulator, type MarkowitzBacktestOptions,
   type MarkowitzBacktestResult,
 } from "./allocate/markowitz.ts";

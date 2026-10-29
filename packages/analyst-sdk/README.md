@@ -520,17 +520,17 @@ Every step can be tuned. Options are one object; an unknown key throws `RangeErr
 
 | Option | Default | |
 |---|---|---|
-| `mu(date, history, dates)` | required | expected annual returns per asset (a record or an array), your point-in-time priors |
+| `mu(date, history, dates, rf)` | required | expected annual returns per asset (a record or an array), your point-in-time priors; `rf` is the rate the solver will use |
 | `rule` | `"meanVar"` | `"meanVar"` (`meanVarExact` at `lambda`, the rest cash) or `"tangency"` |
-| `solve(mu, S, rf)` | the rule | any solver: `(mu, S) => ercCertified(S)`, risk budgets, `minVarExact`, inverse volatility, naive |
-| `cov(history)` | `shrunkCov(history, shrink, periodsPerYear)` | any covariance estimate |
+| `solve(mu, S, rf, context)` | the rule | any solver: `(mu, S) => ercCertified(S)`, risk budgets, `minVarExact`, inverse volatility, naive; `context.date` lets a budget follow the date |
+| `cov(history, context)` | `shrunkCov(history, shrink, periodsPerYear)` | any covariance estimate; `context.date`, `context.historyDates` and `context.trailing(n)` (the last `n` return rows before the date with their dates, past `lookback`) |
 | `lookback` | expanding window | a rolling window of the last `lookback` rows |
 | `reoptimise` | `"monthly"` | `"weekly"` (a new Monday-to-Sunday week), `"monthly"`, `"quarterly"` (a new calendar quarter), or `(date, prevDate) => boolean` (`prevDate` is null on the first axis date) |
-| `expand(weights, date)` | identity | maps optimizer weights (`cash` plus one key per asset) onto the day's priced holdings; null leaves the day unset |
+| `expand(weights, date, rebalance)` | identity | maps optimizer weights (`cash` plus one key per asset) onto the day's priced holdings; null leaves the day unset. Called once per axis date in ascending order, so it may keep state. `rebalance` is a copy of the re-optimisation in force (`vol`, `rf`, `mu`, `nObs`, `weights`) |
 | `simulate` | `simulatePortfolio` | `{ drift: { freq, band, costBps } }` for `simulateDrift`, or any `(dateAxis, schedule, prices, cashRate) => SimulationResult` |
 | `minObs`, `from`, `shrink`, `periodsPerYear`, `costBps`, `lambda`, `zeroTol`, `splitDate` | 252, every return, 0.2, 252, 10, 4, 1e-12, `BACKTEST_IN_SAMPLE_END` | |
 
-`expand` output must pass the simulator's weight checks (nonnegative, summing to 1). A
+Each `rebalances` entry records `date`, `rf`, `mu`, `nObs`, `vol` (sqrt(w' S w) of the optimizer weights on the covariance the solver saw, in the units of that covariance) and `weights`. `expand` output must pass the simulator's weight checks (nonnegative, summing to 1). A
 solver that returns a negative or over-budget weight throws `RangeError`. `markowitzBooks`,
 `markowitzSchedule`, `simulateDrift`, `periodStats` and every solver return plain data, so
 you can also compose them yourself.
