@@ -19,7 +19,7 @@
 // as ranges, and those versions are the committed observations the run used.
 // Their stored value text is copied unchanged.
 import { gunzipSync } from "node:zlib";
-import { SERIES_MAPPING } from "../series-ids.ts";
+import { SERIES_MAPPING, STORED_UNDER } from "../series-ids.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
@@ -262,7 +262,16 @@ export function verifyFile(f: FileRecord, got: { sha256_raw: string | null; rows
 // Storage key -> the id the run reads it under, through the one D74 storage
 // mapping (src/series-ids.ts). A key no regime consumer reads (another
 // consumer's input) maps to null and is counted, never silently dropped.
-const INPUT_ID_OF_KEY = new Map(SERIES_MAPPING.map((m) => [m.storageKey, m.inputId]));
+// A key read by several consumers (raw_indicator_history:DEFI_TVL also feeds
+// DEFI_GROWTH, D74 amendment) is written once, under the input id of the
+// indicator it is named after; the run reads the growth indicator from it.
+// The keys DEFI_GROWTH and STABLES_GROWTH were stored under before that
+// amendment hold history no consumer reads now. Their rows are kept in the
+// generated input under the storage key itself, an unread series, so a
+// vintage's every member still reaches the input and none is relabelled.
+const INPUT_ID_OF_KEY = new Map<string, string>();
+for (const m of SERIES_MAPPING) if (!INPUT_ID_OF_KEY.has(m.storageKey)) INPUT_ID_OF_KEY.set(m.storageKey, m.inputId);
+for (const id of Object.keys(STORED_UNDER)) INPUT_ID_OF_KEY.set(`raw_indicator_history:${id}`, `raw_indicator_history:${id}`);
 export function seriesForStorageKey(key: string): string | null {
   return INPUT_ID_OF_KEY.get(key) ?? null;
 }

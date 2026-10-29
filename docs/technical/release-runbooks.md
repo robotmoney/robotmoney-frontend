@@ -212,6 +212,33 @@ final tip. `--run <ts> --from <step>` retries from one failed step while a fix i
 log-baseline finding that is the old release's own defect, fixed by this release, is triaged in a
 file passed with `--triage <file>` (`scripts/release/triage.ts`).
 
+**The analytics load check (issue 1514).** From release v0.7.1, `Q34a-analytics-load` runs after
+`Q34-collect-logs`. It is a stage-only step (`stageOnly: true`): it has no production twin, and the
+runner accepts it without one. It runs `scripts/release/analytics-load-check.ts` on the stage host.
+The check starts no analytics run. It waits for the next scheduled run, the next 3-hour boundary
+in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and watches a 120-minute window. Then it
+reads the api container's log and `/health` `db_pool` for that window. It prints one row per route:
+the request count, p50, p95 and max duration, the limiter wait, the pool wait, the handler time,
+and the 503 `db_saturated` count with the gate that refused. It exits 1 on any request of 5 s or
+more, or any `db_saturated` answer. The api logs only slow requests and refusals, so the rows
+count those. An api built before issue 1514 logs no wait split: the check shows it as unknown and
+still fails. The step can wait up to 3 hours for the run, so it allows 320 minutes.
+
+To grade a window by hand, run it on the stage host:
+`bun scripts/release/analytics-load-check.ts --instance stage_target --receipt-dir <dir>` waits for
+the next run. `--since <iso> --until <iso>` grades a window that has passed, and `--log <file>`
+grades a saved api log.
+
+**Production's connection budget on stage (issue 1514).** The api derives its request and batch
+shares from the server's `max_connections` and reserved connections. Stage's own Postgres allowed
+more connections than production's, so the stage api ran with other shares, and the stage soak saw
+none of production's batch-pool saturation. `stage-target.ts up` (Q03-stage-up) now starts the
+stage Postgres with production's `max_connections`, `superuser_reserved_connections` and
+`reserved_connections`. It reads them from production's public `/health` (`db_pool.budget`), as it
+reads `/api/version`, and records them in the target's `stage-target.json`. `up` refuses when
+`/health` does not carry them. `--connection-limits <max>/<superuser_reserved>/<reserved>` sets
+them by hand.
+
 **Bounded runs.** The runner has no stop-after option. To run part of the QA, run the steps one at a
 time with `--only <step> --run <ts>`. A bounded run is never a pass.
 

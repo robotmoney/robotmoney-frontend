@@ -56,7 +56,9 @@ const YAHOO_RATIO: SourceTolerance = { relative: 5e-6, basis: "yahoo-ratio" };
  * step with D56 in docs/decisions.md: that decision names each key.
  */
 export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
-  // extract/sources.ts — the regime registry (analyze/indicators.ts), one key per indicator.
+  // extract/sources.ts — the regime registry (analyze/indicators.ts), one key per
+  // indicator, except DEFI_GROWTH and STABLES_GROWTH, which read the DEFI_TVL
+  // and STABLES keys and write none (D74 amendment, issue 1514).
   "raw_indicator_history:T10Y2Y": EXACT, // fred
   "raw_indicator_history:DFII10": EXACT, // fred
   "raw_indicator_history:T5YIE": EXACT, // fred
@@ -75,8 +77,6 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "raw_indicator_history:BTC_ETH": YAHOO_RATIO, // yahoo BTC-USD / ETH-USD
   "raw_indicator_history:ETH_TREND": YAHOO_FLOAT32, // yahoo ETH-USD
   "raw_indicator_history:NEW_TOKENS": EXACT, // geckoterminal_newpools
-  "raw_indicator_history:DEFI_GROWTH": EXACT, // defillama_tvl
-  "raw_indicator_history:STABLES_GROWTH": EXACT, // defillama_stables
   "raw_indicator_history:SPHB_SPLV": YAHOO_RATIO, // yahoo SPHB / SPLV
   "raw_indicator_history:MTUM_SPY": YAHOO_RATIO, // yahoo MTUM / SPY
   "raw_indicator_history:IWF_IWD": YAHOO_RATIO, // yahoo IWF / IWD
@@ -116,6 +116,35 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "defillama-yields:e0672197-9f3e-4414-bca5-e6b4c90aa469": EXACT, // Base universe asset GT (Gauntlet USDC vault, Morpho), apyBase
   "defillama-yields:ba68527f-8ec2-4c55-827a-8f4673ae047c": EXACT, // Base universe asset STEAK (Steakhouse USDC vault, Morpho V2), apyBase
   "defillama-yields:0c8567f8-ba5b-41ad-80de-00a71895eb19": EXACT, // Base universe asset COMP (Compound v3 USDC on Base), apyBase
+
+  // The same step, for packages/analyst-sdk/inventory/research-series.json
+  // (issue 1514): single Yahoo symbols, so Yahoo's float32 noise.
+  "yahoo:GC=F": YAHOO_FLOAT32,
+  "yahoo:CL=F": YAHOO_FLOAT32,
+  "yahoo:HG=F": YAHOO_FLOAT32,
+  "yahoo:SI=F": YAHOO_FLOAT32,
+  "yahoo:TLT": YAHOO_FLOAT32,
+  "yahoo:VNQ": YAHOO_FLOAT32,
+  "yahoo:DBC": YAHOO_FLOAT32,
+  "yahoo:MSTR": YAHOO_FLOAT32,
+  "yahoo:SOL-USD": YAHOO_FLOAT32,
+  "yahoo:BNB-USD": YAHOO_FLOAT32,
+  "yahoo:AAVE-USD": YAHOO_FLOAT32,
+  "yahoo:HYPE32196-USD": YAHOO_FLOAT32,
+  "yahoo:VIRTUAL-USD": YAHOO_FLOAT32,
+
+  // extract/sources.ts — the Yahoo ratio legs the registry fetch records under
+  // their own source id (issue 1514, analytics requirements 4.3). Single
+  // symbols, so Yahoo's float32 noise. The other legs keep their keys above.
+  "yahoo:IWM": YAHOO_FLOAT32,
+  "yahoo:SPHB": YAHOO_FLOAT32,
+  "yahoo:SPLV": YAHOO_FLOAT32,
+  "yahoo:MTUM": YAHOO_FLOAT32,
+  "yahoo:IWF": YAHOO_FLOAT32,
+  "yahoo:IWD": YAHOO_FLOAT32,
+  "yahoo:XLU": YAHOO_FLOAT32,
+  "yahoo:XLP": YAHOO_FLOAT32,
+  "yahoo:XLY": YAHOO_FLOAT32,
 };
 
 export function toleranceFor(sourceKey: string): SourceTolerance {

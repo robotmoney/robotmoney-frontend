@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_TEMPLATE, checkAddOnly, loadReleaseRunbook, loadTemplate, parseReleaseRunbook, parseTemplate, releaseRunbookNames,
+  DEFAULT_TEMPLATE, checkAddOnly, loadReleaseRunbook, loadTemplate, parseReleaseRunbook, parseTemplate, releaseBefore, releaseRunbookNames,
   releaseRunbookPath, templatePath, type ReleaseRunbook, type RunbookStep,
   scopeProblems,
 } from "../../release/runbook.ts";
@@ -216,11 +216,13 @@ describe("a template step's since", () => {
   // The breaking-cutover steps (issue 1484) are since v0.7.0 as well, so an earlier release does not carry them.
   const breakingSteps = ["Q18a-maintenance-on", "Q18b-smoke-down", "Q18c-migrate-breaking", "Q22a-full-boot", "Q24a-maintenance-off", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C10a-full-boot", "C12a-maintenance-off"];
   const sdkSteps = ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"];
+  // The analytics load check (issue 1514) is since v0.7.1, so no earlier release carries it.
+  const laterSteps = template.steps.filter((s) => s.since !== undefined && releaseBefore("v0.7.0", s.since)).map((s) => s.id);
 
   test("the template's SDK steps name v0.7.0, and v0.6.2 (which predates them) still only adds", () => {
     for (const id of [...sdkSteps, ...breakingSteps]) expect(template.steps.find((s) => s.id === id)?.since).toBe("v0.7.0");
     expect(loadReleaseRunbook("v0.6.2").steps.some((s) => sdkSteps.includes(s.id))).toBe(false);
-    expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
+    expect(checkAddOnly(template, { ...runbook(template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id) && !laterSteps.includes(s.id)), "v0.6.9"), release: "v0.6.9" })).toEqual([]);
   });
 
   test("v0.7.0 carries the SDK steps unmarked, eleven added version checks, and every version step in its scope", () => {
@@ -248,7 +250,7 @@ describe("a template step's since", () => {
   });
 
   test("a step the earlier release added under a template id it predates is still its own addition", () => {
-    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id)), { ...added("Q36-sdk-quickstart", "v0.6.9"), phase: "qa" as const }];
+    const early = [...template.steps.filter((s) => !sdkSteps.includes(s.id) && !breakingSteps.includes(s.id) && !laterSteps.includes(s.id)), { ...added("Q36-sdk-quickstart", "v0.6.9"), phase: "qa" as const }];
     expect(checkAddOnly(template, runbook(early, "v0.6.9"))).toEqual([]);
   });
 });
@@ -297,5 +299,44 @@ describe("a release's breaking declaration", () => {
     // red: no other step gets the variable.
     const other = renderStep(template.steps.find((s) => s.id === "P08-log-baseline")!, target, templateValues(target, "a".repeat(40), "20260101T000000Z"));
     expect(other.remote).not.toContain("RM_RELEASE");
+  });
+});
+
+// ── the analytics load check (issue 1514): a stage-only Q step with no production twin ──
+describe("the template's analytics load step", () => {
+  const LOAD = "Q34a-analytics-load";
+  const step = template.steps.find((s) => s.id === LOAD)!;
+  const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+  const block = text.slice(text.indexOf(`  - id: "${LOAD}"`), text.indexOf('  - id: "Q35-archive-routes"'));
+
+  test("parses as a stage-only QA step on the target, after the soak's log collection, running the load check", () => {
+    expect(step).toBeDefined();
+    expect(step.phase).toBe("qa");
+    expect(step.onlyFor).toBe("stage");
+    expect(step.host).toBe("target");
+    expect((step as { stageOnly?: boolean }).stageOnly).toBe(true);
+    expect(step.since).toBe("v0.7.1");
+    expect(step.cmds[0]!.slice(0, 2)).toEqual(["bun", "scripts/release/analytics-load-check.ts"]);
+    expect(step.cmds[0]).toContain("--instance");
+    // It starts no analytics run: the check only reads the api's log and /health.
+    expect(step.cmds.flat().some((a) => /trigger|run-now|--run\b/.test(a))).toBe(false);
+    expect(ids.indexOf(LOAD)).toBe(ids.indexOf("Q34-collect-logs") + 1);
+    expect(step.receipts.map((r) => r.pattern)).toEqual(["analytics-load-check.*"]);
+  });
+
+  test("the runner accepts it without a C twin; a C twin, or the step without its stageOnly mark, refuses", () => {
+    expect(template.steps.some((s) => s.phase !== "qa" && s.id.endsWith("-analytics-load"))).toBe(false);
+    expect(() => parseTemplate(text, "kitchen-sink")).not.toThrow();
+    expect(() => parseTemplate(text.replace(block, block.replace("    stageOnly: true\n", "")), "kitchen-sink")).toThrow(`${LOAD} has no production twin named analytics-load`);
+    const twin = block.replace(`"${LOAD}"`, '"C22a-analytics-load"').replace('phase: "qa"', 'phase: "cutover"').replace('onlyFor: "stage"', 'onlyFor: "prod"').replace("    stageOnly: true\n", "");
+    const withTwin = text.replace('  - id: "C23-archive-routes"', `${twin}  - id: "C23-archive-routes"`);
+    expect(() => parseTemplate(withTwin, "kitchen-sink")).toThrow(`${LOAD} is stage-only but production has a step named analytics-load`);
+  });
+
+  test("a release from v0.7.1 on carries it, and v0.7.0's runbook, which predates it, still only adds", () => {
+    expect(loadReleaseRunbook("v0.7.0").steps.some((s) => s.id === LOAD)).toBe(false);
+    const without = template.steps.filter((s) => s.id !== LOAD);
+    expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain(`template step ${LOAD} is missing`);
+    expect(checkAddOnly(template, runbook(template.steps, "v0.7.1"))).toEqual([]);
   });
 });

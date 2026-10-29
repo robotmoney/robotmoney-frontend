@@ -47,7 +47,7 @@ import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
-import { checkAddOnly, loadTemplate, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
+import { checkAddOnly, loadTemplate, releaseBefore, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
 import { nextRcTag, rcStageProblems, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, paritySweepScheduleProblems, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
@@ -271,8 +271,10 @@ describe("one step list for every target (D61 rule 2)", () => {
       id: "D6.2a", added: "v0.7.0", standing: [], description: "one-time credential file", host: "target", phase: "cutover", irreversible: false, expectExit: 0, receipts: [],
       gateAbsent: "{home}/.config/robotmoney/credential.json", cmds: [["bun", "scripts/release/credentials-init.ts", "--receipt-dir", "{home}/r"]],
     };
-    const at = RELEASE_STEPS.findIndex((s) => s.id === "C07-env-rewrite") + 1;
-    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", scope: [], steps: [...RELEASE_STEPS.slice(0, at), oneTime, ...RELEASE_STEPS.slice(at)] };
+    // v0.7.0 carries the template's steps up to its own release (a later `since` binds later releases).
+    const steps = RELEASE_STEPS.filter((s) => s.since === undefined || !releaseBefore("v0.7.0", s.since));
+    const at = steps.findIndex((s) => s.id === "C07-env-rewrite") + 1;
+    const runbook: ReleaseRunbook = { release: "v0.7.0", template: "kitchen-sink", recovery: "fix forward", scope: [], steps: [...steps.slice(0, at), oneTime, ...steps.slice(at)] };
     expect(checkAddOnly(loadTemplate(), runbook)).toEqual([]);
     expect(stepListHash(runbook.steps)).not.toBe(stepListHash());
     const r = renderStep(oneTime, prod, templateValues(prod, SHA, "20261008T000000Z"));
@@ -1205,6 +1207,8 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
       "Q06-checkout", "Q07-host-identity", "Q08-install", "Q09-capture-checkout", "Q10-capture-identity", "Q11-capture-install", "Q12-state-baseline", "Q13-log-baseline",
       "Q14-backup", "Q15-backup-sums", "Q16-restore-proof", "Q17-probe-start", "Q18-migrate", "Q18a-maintenance-on", "Q18b-smoke-down", "Q18c-migrate-breaking", "Q19-env-rewrite", "Q20-set-identity", "Q21-tokens", "Q22-rolling-boot", "Q22a-full-boot", "Q23-ready", "Q24-site", "Q24a-maintenance-off", "Q25-probe-grade",
       "Q26-verify-version", "Q27-verify-product", "Q28-log-verdict", "Q29-soak-record", "Q30-compare-baseline", "Q31-host-guards", "Q32-soak-gate", "Q33-soak-checks", "Q34-collect-logs",
+      // The analytics load check (issue 1514, since v0.7.1): stage only, no production twin.
+      "Q34a-analytics-load",
       // The analyst SDK checks (since v0.7.0), on the control machine: read-only against the target, after the soak.
       "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests",
     ]);

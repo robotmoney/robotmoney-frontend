@@ -213,6 +213,39 @@ describe("research signals through research-signals.ts", () => {
     );
   });
 
+  test("issue 1514: BTC and QQQ collected from 2016 change neither research payload: rows before the 2018 axis are never read", () => {
+    const asof = "2020-06-30";
+    // QQQ trades on weekdays only, so the 2018 fixture has no 2018-01-01 row:
+    // a 2017-12-29 close must not forward-fill into the axis's first day.
+    const weekdays = (pts: Point[]) => pts.filter((p) => ![0, 6].includes(new Date(`${p.date}T00:00:00Z`).getUTCDay()) && p.date !== "2018-01-01");
+    const btcAll = daily("2016-01-01", asof, (i) => 400 + 30 * i + 2000 * Math.sin(i / 40));
+    const qqqAll = weekdays(daily("2016-01-01", asof, (i) => 100 + 0.1 * i + 10 * Math.sin(i / 55)));
+    const from2018 = (pts: Point[]) => pts.filter((p) => p.date >= "2018-01-01");
+    const rest = {
+      spy: daily("2010-01-01", asof, (i) => 110 + 0.05 * i + 6 * Math.sin(i / 90)),
+      stables: daily("2018-01-01", asof, (i) => 2e9 + 5e6 * i + 1e8 * Math.sin(i / 30)),
+    };
+    const lateInputs = {
+      spy: rest.spy,
+      rsp: daily("2010-01-01", asof, (i) => 40 + 0.015 * i + 2 * Math.sin(i / 80)),
+      top7: TOP7.map((_, k) => daily("2010-01-01", asof, (i) => 50 + 0.03 * i * (k + 1) + 5 * Math.sin(i / (60 + k)))),
+      mna: monthly(daily("2010-01-01", asof, (i) => 30 + 10 * Math.sin(i / 200))),
+      margin: monthly(daily("2010-01-01", asof, (i) => 3e5 + 100 * i)).filter((_, k) => k % 3 === 0),
+      conf: monthly(daily("2010-01-01", asof, (i) => 80 + 10 * Math.sin(i / 300))),
+    };
+    const short = { ...rest, btc: from2018(btcAll), qqq: from2018(qqqAll) };
+    const long = { ...rest, btc: btcAll, qqq: qqqAll };
+    expect(long.btc[0]!.date).toBe("2016-01-01");
+    expect(short.qqq[0]!.date).toBe("2018-01-02");
+    const channel = JSON.stringify(computeChannelDivergence(short, asof));
+    expect(channel).toContain("CHANNEL");
+    expect(JSON.stringify(computeChannelDivergence(long, asof))).toBe(channel);
+    // The late-cycle signal shares the research run's inputs and reads neither series.
+    expect(JSON.stringify(computeLateCycle({ ...lateInputs, ...({ btc: long.btc, qqq: long.qqq } as object) }, asof))).toBe(
+      JSON.stringify(computeLateCycle({ ...lateInputs, ...({ btc: short.btc, qqq: short.qqq } as object) }, asof)),
+    );
+  });
+
   test("a missing payload or gauge reading gives null", () => {
     expect(researchSignalValues()).toEqual({ channel_divergence: null, late_cycle: null });
     expect(

@@ -10,8 +10,25 @@
 // as the provider published it. A gap, a late inception or a proxy is recorded
 // here, never repaired downstream: requireCoverage names the missing series and
 // date range, and nothing after extract fetches.
+//
+// Two inventories ship (issue 1514): model-portfolio.json and
+// research-series.json, the series the SDK's research clients read. The
+// backend's background collection reads both, and fetches each storage key once.
 import type { Point } from "./types.ts";
 import shipped from "../inventory/model-portfolio.json";
+import researchShipped from "../inventory/research-series.json";
+
+/**
+ * The earliest date every background source fetch requests (issue 1514). A
+ * fetch whose existing start is earlier (the 2010-01-01 starts of SPY, RSP,
+ * the top seven, ^GSPC and ETH-USD) keeps it. This is the COLLECTION start
+ * only: computation starts (the regime backfill, the research-signals axis)
+ * stay where they are, so the stored history gets longer and no published
+ * output changes. Research reads trailing windows before 2018 (a covariance
+ * window of up to two years ending at the 2018 axis), so a new consumer never
+ * needs a one-off backfill.
+ */
+export const COLLECTION_START = "2016-01-01";
 
 export const INVENTORY_PROVIDERS = ["yahoo", "fred", "defillama-yields"] as const;
 export type InventoryProvider = (typeof INVENTORY_PROVIDERS)[number];
@@ -72,6 +89,7 @@ function checkSeries(raw: unknown, i: number): InventorySeries {
   if (!INVENTORY_KINDS.includes(o.kind as InventoryKind)) throw new InventoryError(`${where}: kind must be one of ${INVENTORY_KINDS.join(", ")}`);
   if (!isText(o.units)) throw new InventoryError(`${where}: units must be a non-empty string`);
   for (const f of ["requestedStart", "inception"] as const) if (!isDay(o[f])) throw new InventoryError(`${where}: ${f} must be a real YYYY-MM-DD date`);
+  if (o.requestedStart !== COLLECTION_START) throw new InventoryError(`${where}: requestedStart must be COLLECTION_START (${COLLECTION_START}), not ${o.requestedStart}`);
   if (o.limitation !== null && !isText(o.limitation)) throw new InventoryError(`${where}: limitation must be null or a non-empty string`);
   if (!isText(o.storageKey)) throw new InventoryError(`${where}: storageKey must be a non-empty string`);
   // A series whose inception is after its requested start leaves a gap that
@@ -115,6 +133,29 @@ export function loadInventory(data: unknown = shipped): Inventory {
 /** True when extract collects this series under its own id (no existing collector holds it). */
 export function collectedByInventory(s: InventorySeries): boolean {
   return s.storageKey === s.id;
+}
+
+/** The shipped research-series inventory (issue 1514), validated. */
+export function loadResearchSeriesInventory(): Inventory {
+  return loadInventory(researchShipped);
+}
+
+/**
+ * The series the background collection fetches for these inventories: the
+ * entries no other collector holds, one per storage key (the first inventory
+ * that lists a key wins), so a key listed in two inventories is fetched once.
+ */
+export function inventoryCollection(inventories: readonly Inventory[] = [loadInventory(), loadResearchSeriesInventory()]): InventorySeries[] {
+  const seen = new Set<string>();
+  const out: InventorySeries[] = [];
+  for (const inv of inventories) {
+    for (const s of inv.series) {
+      if (!collectedByInventory(s) || seen.has(s.storageKey)) continue;
+      seen.add(s.storageKey);
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 export interface CoverageGap {
