@@ -3,7 +3,7 @@
 //
 // The page this replaced reported two pools of money under one heading and
 // read four dashboard feeds. RM-115 splits them: the allocation is a POLICY
-// and this page is the policy and the three vaults that carry it out. The house
+// and this page is the policy and the vaults that carry it out. The house
 // book (wallet-balances / wallet-sleeves) belongs to RM-103 and is not read
 // here at all — the first test below asserts that as the absence of the
 // REQUEST, because a page that fetched the house book and merely declined to
@@ -17,10 +17,10 @@
 //   - GET /api/dashboards/vault-economics → the COMMITTED GOLDEN
 //     (goldens/api-goldens.json), the single source of truth per
 //     docs/architecture.md's preview section, or a degraded variant of it;
-//   - GET /api/dashboards/allocation → the three-sleeve framework #1496
-//     publishes, built from the committed golden (which still carries four
-//     sleeves): the policy the ring draws, whose sleeve targets are also the
-//     vaults' Target, since nothing on Base applies weights (RM-115);
+//   - GET /api/dashboards/allocation → the framework #1496 publishes, built
+//     from the committed golden (which still carries Small Cap Tokens): the
+//     policy the ring draws, whose sleeve targets are also the vaults' Target,
+//     since nothing on Base applies weights (RM-115);
 //   - GET /api/swarm/sessions → an inline stub (the golden's sessions are on
 //     other portfolios, and the allocation's own published sessions are what
 //     the Vaults section's Recommended and the latest recommendation beside
@@ -110,13 +110,23 @@ function allocationSession(overrides: Record<string, unknown> = {}) {
 }
 
 // The same session publishing sleeve weights: what the Vaults section's
-// Recommended column reads. A take still names all four buckets, with Small
-// Cap Tokens closed at 0 (#1496).
+// Recommended column reads. A take names the four sleeves (#1496); Hard Assets
+// at 0 leaves the three vaults a complete layer.
 function weightsSession() {
   return allocationSession({
     swarmRecommendation: {
       type: "bucket_weights",
-      weights: { conservative_defi_yield: 0.92, agent_tokens: 0, protocol_tokens: 0.06, real_world_assets: 0.02 },
+      weights: { conservative_defi_yield: 0.92, protocol_tokens: 0.06, real_world_assets: 0.02, hard_assets: 0 },
+    },
+  });
+}
+
+// A recommendation that weighs Hard Assets, whose gold vault has no row yet.
+function hardAssetsWeightsSession() {
+  return allocationSession({
+    swarmRecommendation: {
+      type: "bucket_weights",
+      weights: { conservative_defi_yield: 0.5, protocol_tokens: 0.07, real_world_assets: 0.29, hard_assets: 0.14 },
     },
   });
 }
@@ -168,10 +178,13 @@ const goldenVault = () => loadGolden<VaultEconomics>("/api/dashboards/vault-econ
 // The golden as committed: the four-sleeve framework the API serves until
 // #1496 lands.
 const fourSleeveGolden = () => loadGolden<AllocationFramework>("/api/dashboards/allocation");
-// The framework #1496 publishes (RM-190): three sleeves, Small Cap Tokens
-// gone, Protocol Tokens BTC/ETH 50/50. Fixed Income keeps the golden's own
-// constituents. Targets default to the decided 100/0/0.
-function policy(targets: [number, number, number] = [100, 0, 0]): AllocationFramework {
+// The framework #1496 publishes (RM-190): four sleeves, Hard Assets (gold) in
+// Small Cap Tokens' place, Protocol Tokens BTC/ETH 50/50, Real World Assets the
+// S&P 500. Conservative DeFi Yield keeps the golden's own constituents.
+// Targets default to 100/0/0/0, a complete layer over the three vaults; the
+// decided 50/7/29/14 (DECIDED) leaves 14% with no vault and has its own test.
+const DECIDED: [number, number, number, number] = [50, 7, 29, 14];
+function policy(targets: [number, number, number, number] = [100, 0, 0, 0]): AllocationFramework {
   const golden = fourSleeveGolden();
   const fixedIncome = golden.buckets.find((b) => b.key === "defi-yield")!;
   return {
@@ -180,11 +193,13 @@ function policy(targets: [number, number, number] = [100, 0, 0]): AllocationFram
       { label: "Conservative DeFi Yield", targetPct: targets[0] },
       { label: "Protocol Tokens", targetPct: targets[1] },
       { label: "Real World Assets", targetPct: targets[2] },
+      { label: "Hard Assets", targetPct: targets[3] },
     ],
     buckets: [
       fixedIncome,
       { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
-      { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 50 }, { label: "Gold", targetPct: 50 }] },
+      { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 100 }] },
+      { key: "hard-assets", label: "Hard Assets", items: [{ label: "Gold", targetPct: 100 }] },
     ],
     asOf: "2026-10-27",
   };
@@ -282,7 +297,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other two as 
 
   const rows = vaultRows(page);
   await expect(rows).toHaveCount(3);
-  await expect(rows.locator("th a")).toHaveText(["Fixed Income", "Protocol Tokens", "Real World Assets"]);
+  await expect(rows.locator("th a")).toHaveText(["Conservative DeFi Yield", "Protocol Tokens", "Real World Assets"]);
   for (const [i, slug] of ["rmusdc", "rmproto", "rmrwa"].entries()) {
     await expect(rows.nth(i).locator("th a")).toHaveAttribute("href", `/vault/${slug}`);
   }
@@ -339,7 +354,8 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   const errors = failOnBrowserErrors(page);
   const session = weightsSession();
   const vault = goldenVault();
-  const target = policy().strategy.map((s) => s.targetPct);
+  // The three vaults' targets; Hard Assets, at 0, has no vault.
+  const target = policy().strategy.slice(0, 3).map((s) => s.targetPct);
   await stubEnvironment(page, { vault, sessions: [session] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
@@ -407,6 +423,30 @@ test("the four-sleeve framework still draws Small Cap Tokens, and sets no vault 
   await expectNoBrowserErrors(errors);
 });
 
+// The decided framework gives Hard Assets 14%, and its gold vault has no row
+// yet: the ring draws all four sleeves, and the three vaults carry only 86% of
+// the policy, so they have no target and a recommendation that weighs Hard
+// Assets is no Recommended layer. Neither is rescaled into one.
+test("the decided framework draws Hard Assets, and with no gold vault the vaults have no target", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubEnvironment(page, { framework: policy(DECIDED), sessions: [hardAssetsWeightsSession()] });
+  await page.goto("/index.html");
+  await navigate(page, "/allocation");
+  await vaultsLoaded(page);
+  const legend = page.locator(".alp__ring .rr-legend__row");
+  await expect(legend.locator(".rr-legend__l")).toHaveText(["Conservative DeFi Yield", "Protocol Tokens", "Real World Assets", "Hard Assets"]);
+  await expect(legend.locator("> b")).toHaveText(DECIDED.map((t) => `${t}%`));
+  await expect(page.locator(".alp__ring circle[data-sleeve]")).toHaveCount(4);
+  await legend.nth(3).click();
+  const panel = page.locator(".alp__ring .rr-x__panel");
+  await expect(panel.locator(".rr-x__head b")).toHaveText("Hard Assets");
+  await expect(panel.locator(".rr-x__head a")).toHaveCount(0);
+  await expect(panel.locator(".rm-tip__bub")).toContainText("gold");
+  await expect(page.locator("#vaults thead th")).toHaveText(heads(["Sleeve", "Recommended", "Actual", "Gap"]));
+  await expect(vaultRows(page).locator("td:nth-of-type(1) > span")).toHaveText(["—", "—", "—"]);
+  await expectNoBrowserErrors(errors);
+});
+
 // A newer allocation session that published no weights held the target: the
 // rail over the ring names it with the target's other facts, and the panel
 // beside the ring is the recommendation that stands.
@@ -441,7 +481,7 @@ test("a sleeve's recipe opens from the ring and names its vault, with no status 
   await navigate(page, "/allocation");
 
   const rows = page.locator(".alp__ring .rr-legend__row");
-  await expect(rows).toHaveCount(3);
+  await expect(rows).toHaveCount(4);
   await rows.nth(1).click();
   const panel = page.locator(".alp__ring .rr-x__panel");
   await expect(panel).toBeVisible();
@@ -486,13 +526,13 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   // rest the centre names the sleeve the breakdown rests on, the largest.
   await expect(ring.locator("circle:not([data-sleeve])")).toHaveCount(1);
   // The served label is the framework's first name; the ring prints the sleeve's name.
-  await expect(ring.locator("figcaption")).toContainText("Fixed Income");
+  await expect(ring.locator("figcaption")).toContainText("Conservative DeFi Yield");
 
   // The legend keys every sleeve, funded or not, and a sleeve at zero keeps
   // its hue: it holds nothing, which is not the same as having no identity.
   const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend).toHaveCount(framework.strategy.length);
-  await expect(legend.first()).toContainText("Fixed Income");
+  await expect(legend.first()).toContainText("Conservative DeFi Yield");
   // A row carries its figures and nothing under them: what a sleeve holds is
   // its recipe, opened from the row.
   await expect(legend.locator("small")).toHaveCount(0);
@@ -502,7 +542,7 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   // Hovering a sleeve names it in the centre, as on /swarm.
   await legend.first().hover();
   // The served label is the framework's first name; the ring prints the sleeve's name.
-  await expect(ring.locator("figcaption")).toContainText("Fixed Income");
+  await expect(ring.locator("figcaption")).toContainText("Conservative DeFi Yield");
 });
 
 // Where the money is, beside the target: each sleeve's vault's share of the
@@ -510,7 +550,7 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
 // everything; a 95/5/0 policy puts it 5 points over its target and rmPROTO 5
 // under.
 test("the ring's legend sets each sleeve's actual share against its target", async ({ page }) => {
-  await stubEnvironment(page, { framework: policy([95, 5, 0]), sessions: [weightsSession()] });
+  await stubEnvironment(page, { framework: policy([95, 5, 0, 0]), sessions: [weightsSession()] });
   await page.goto("/index.html");
   await navigate(page, "/allocation");
   await vaultsLoaded(page);
@@ -556,7 +596,8 @@ test("a constituent keeps its hue in its sleeve's recipe, and reads against the 
 // A vault wears its sleeve's hue: the Vaults table's dot, the sleeve's arc
 // and its legend swatch are one colour, the sleeve's slot in the published
 // order (lib/vault-data.js VAULTS color === bucketHue). Protocol Tokens stays
-// sand and Real World Assets slate with Small Cap Tokens' cyan slot closed.
+// sand and Real World Assets slate with Small Cap Tokens' cyan slot closed,
+// and Hard Assets takes a slot of its own, beacon, rather than inherit cyan.
 test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   await stubEnvironment(page, { sessions: [weightsSession()] });
   await page.goto("/index.html");
@@ -570,7 +611,7 @@ test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   expect(dotStyles).toEqual(slots.map((c) => [c, "0px"]));
   const swatches = await page.locator(".alp__ring .rr-legend__row > i").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(swatches).toEqual(slots);
+  expect(swatches).toEqual([...slots, CATEGORICAL_RGB[4]]);
 });
 
 // The largest sleeve rests open: its recipe shows without a hover, the panel
@@ -583,7 +624,7 @@ test("the breakdown rests on the largest sleeve, with its vault in the head", as
   await navigate(page, "/allocation");
   const panel = page.locator(".alp__ring .rr-x__panel");
   await expect(panel).toBeVisible();
-  await expect(panel.locator(".rr-x__head b")).toHaveText("Fixed Income");
+  await expect(panel.locator(".rr-x__head b")).toHaveText("Conservative DeFi Yield");
   await expect(panel.locator(".rr-x__head > .alp__vault a")).toHaveText("rmUSDC");
   await expect(page.locator(".rr-x__close")).toHaveCount(0);
   await expectNoBrowserErrors(errors);
@@ -880,7 +921,7 @@ test("on a phone the ring keeps its size and nothing scrolls the page sideways",
   const ringBox = await ring.boundingBox();
   expect(ringBox!.width).toBeGreaterThan(120);
   expect(ringBox!.width).toBeLessThanOrEqual(390);
-  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(3);
+  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(4);
 
   // The Vaults table fits the phone rather than hiding columns behind a
   // sideways scroll: the two gaps give way (each vault's page carries them),

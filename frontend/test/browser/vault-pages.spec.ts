@@ -14,10 +14,10 @@
 //   - "saved": every /api but the policy answers 503, so a local host shows
 //     the saved Base snapshot (data/vaults/base/vault-economics.json), the
 //     archive's 2026-06-24 recommendation and the archive's subject. The
-//     policy is the three-sleeve framework #1496 publishes (100/0/0), the
-//     vaults' target;
+//     policy is the framework #1496 publishes, at 100/0/0/0 so the three
+//     vaults have a complete target;
 //   - "live": the vaults route is absent (404), vault-economics answers with
-//     the committed golden, the policy is the same three-sleeve framework,
+//     the committed golden, the policy is the same framework,
 //     and the allocation's sessions with one published bucket_weights
 //     session.
 // The archive's 2026-06-24 recommendation still gives Small Cap Tokens 3%, so
@@ -70,9 +70,11 @@ function loadGolden<T>(route: string): T {
   return payload as T;
 }
 const goldenVault = () => loadGolden<any>("/api/dashboards/vault-economics");
-// The framework #1496 publishes (RM-190): three sleeves at 100/0/0, Protocol
-// Tokens BTC/ETH 50/50. The committed golden still carries four sleeves, so
-// Fixed Income's constituents come from it, and so does its date: a target
+// The framework #1496 publishes (RM-190): four sleeves, Hard Assets (gold) in
+// Small Cap Tokens' place, here at 100/0/0/0: Hard Assets has no vault yet, so
+// any weight on it would leave the vaults no target (allocation-view.spec.ts).
+// The committed golden still carries Small Cap Tokens, so
+// Conservative DeFi Yield's constituents come from it, and so does its date: a target
 // is read only on readings on or after it, and the readings drawn here are
 // from July and August.
 function policy() {
@@ -83,11 +85,13 @@ function policy() {
       { label: "Conservative DeFi Yield", targetPct: 100 },
       { label: "Protocol Tokens", targetPct: 0 },
       { label: "Real World Assets", targetPct: 0 },
+      { label: "Hard Assets", targetPct: 0 },
     ],
     buckets: [
       golden.buckets.find((b: any) => b.key === "defi-yield"),
       { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
-      { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 50 }, { label: "Gold", targetPct: 50 }] },
+      { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 100 }] },
+      { key: "hard-assets", label: "Hard Assets", items: [{ label: "Gold", targetPct: 100 }] },
     ],
   };
 }
@@ -95,7 +99,7 @@ function policy() {
 type Mode = "base" | "devnet" | "devnet-unreadable" | "devnet-no-recommendation" | "devnet-stale" | "devnet-paused";
 
 const SLUGS = [
-  { slug: "rmusdc", symbol: "rmUSDC", name: "Fixed Income", hue: CATEGORICAL_RGB[0] },
+  { slug: "rmusdc", symbol: "rmUSDC", name: "Conservative DeFi Yield", hue: CATEGORICAL_RGB[0] },
   { slug: "rmproto", symbol: "rmPROTO", name: "Protocol Tokens", hue: CATEGORICAL_RGB[2] },
   { slug: "rmrwa", symbol: "rmRWA", name: "Real World Assets", hue: CATEGORICAL_RGB[3] },
 ];
@@ -648,7 +652,7 @@ test("/allocation from the saved Base snapshot: rmUSDC alone, the archive's reco
   await expect(page.locator(".alp__ring")).not.toContainText("Not live");
 
   // The recipe renders, from the published framework.
-  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(3);
+  await expect(page.locator(".alp__ring .rr-legend__row")).toHaveCount(4);
   await page.locator(".alp__ring .rr-legend__row").first().click();
   await expect(page.locator(".alp__ring .rr-x__assets tbody tr")).not.toHaveCount(0);
   for (const devnetOnly of ["Devnet test data", "$72,000", "$91,000", "Staging devnet"]) {
@@ -903,7 +907,7 @@ test("the vault subject on the devnet: the router and three vaults, one book gro
   await expect(ring.nth(0).locator(".rr-legend__d .alp__mv")).toHaveText("−0.9 pp");
   await expect(ring.nth(0).locator("b")).toHaveText("Actual 79.1%");
   // At rest it opens on Conservative DeFi Yield, the first vault.
-  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/79\.1%\s*Fixed Income/);
+  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/79\.1%\s*Conservative DeFi Yield/);
 
   // A sleeve brings itself forward and opens nothing, so nothing below moves:
   // its positions are By position, under it.
@@ -952,7 +956,7 @@ test("the vault subject on the devnet: the router and three vaults, one book gro
   // The chart stacks the three vaults with the target drawn over them: one
   // line at each boundary between two vaults.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
-  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income", "Protocol Tokens", "Real World Assets", "Target"]);
+  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Conservative DeFi Yield", "Protocol Tokens", "Real World Assets", "Target"]);
   await expect(hold.locator(".rr-area__legend li i.is-target")).toHaveCount(1);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(2);
 
@@ -1034,7 +1038,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 
   // The vaults are the Vaults table below; rmUSDC's contract is its page's.
   await expect(hold.locator(".rr-sources")).toHaveCount(0);
-  await expect(byVault(page).first().locator(".rr-legend__l")).toHaveText("Fixed Income");
+  await expect(byVault(page).first().locator(".rr-legend__l")).toHaveText("Conservative DeFi Yield");
   await expect(byVault(page).first().locator(".rr-legend__tk")).toHaveText("rmUSDC");
   // One reading, the vault feed's: the book is rmUSDC's TVL on the feed's
   // date, as its vault page reads it, not the subject's archived book (its
@@ -1052,7 +1056,7 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
   await expect(ring.nth(0).locator("b")).toHaveText("Actual 100%");
   await expect(byVaultTarget(page)).toHaveText(["Target 100%", "Target 0%", "Target 0%"]);
   await expect(ring.locator(".rr-legend__d .alp__mv")).toHaveCount(0);
-  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/100%\s*Fixed Income/);
+  await expect(hold.locator(".rr-ring figcaption")).toHaveText(/100%\s*Conservative DeFi Yield/);
   const first = page.locator("#latest .rr-legend__row").first();
   await expect(first.locator(".rr-legend__was")).toHaveText("Actual 100%");
   await expect(first.locator(".rr-legend__d")).toContainText("−5 pp");
@@ -1064,13 +1068,13 @@ test("the vault subject on Base: rmUSDC alone, against the weights in force", as
 
   await expect(hold.locator("tr.rr-group")).toHaveCount(1);
   // TVL and Sleeves over time both draw the archive's readings of rmUSDC's
-  // own book up to the feed's reading now: one sleeve, Fixed Income. Its
+  // own book up to the feed's reading now: one sleeve, Conservative DeFi Yield. Its
   // target, 100%, is the chart's own top edge, so no target line is drawn and
   // the legend keys none.
   await expect(hold.locator(".rr-area__head .rr-subhead__h")).toHaveText(["TVL", "Sleeves over time"]);
   await expect(hold.locator("#tvl polyline")).not.toHaveCount(0);
   await expect(hold.locator(".rr-area .rm-nodata__h")).toHaveCount(0);
-  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Fixed Income"]);
+  await expect(hold.locator(".rr-area__legend li")).toHaveText(["Conservative DeFi Yield"]);
   await expect(hold.locator('.rr-area__svg polyline[data-token="target"]')).toHaveCount(0);
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
   await expect(page.locator("#view")).not.toContainText("Staging devnet");

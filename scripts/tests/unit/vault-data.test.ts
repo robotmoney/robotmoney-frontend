@@ -75,6 +75,8 @@ const GOLDEN_ECONOMICS = goldens.routes["/api/dashboards/vault-economics"];
 const GOLDEN_ALLOCATION = goldens.routes["/api/dashboards/allocation"];
 const DEVNET = readJson("data/vaults/devnet/overview.json");
 const ALLOCATION_2026_06_24 = { conservative_defi_yield: 9500, agent_tokens: 300, protocol_tokens: 0, real_world_assets: 200 };
+// As a recommendation reads it: Hard Assets, which it predates, is missing, not 0.
+const beforeGold = (bps: Record<string, number>) => ({ ...bps, hard_assets: null });
 const ALLOCATION_2026_06_24_FRACTIONS = { conservative_defi_yield: 0.95, agent_tokens: 0.03, protocol_tokens: 0, real_world_assets: 0.02 };
 const PROD_HOSTS = ["robotmoney.network", "robotmoney.network.", "site.robotmoney.net", "app.robotmoney.network", "vaults.example.org"];
 
@@ -132,8 +134,8 @@ beforeEach(() => {
 });
 
 describe("vault identity", () => {
-  test("three vaults in the framework's order, each in its sleeve's hue", () => {
-    expect(VAULTS.map((v) => v.bucket)).toEqual(BUCKET_ORDER.filter((b) => !RETIRED_BUCKETS.includes(b)));
+  test("three vaults in the framework's order, each in its sleeve's hue; Hard Assets has none yet", () => {
+    expect(VAULTS.map((v) => v.bucket)).toEqual(BUCKET_ORDER.filter((b) => !RETIRED_BUCKETS.includes(b) && b !== "hard_assets"));
     expect(VAULT_SLUGS).toEqual(["rmusdc", "rmproto", "rmrwa"]);
     // A vault's hue is its sleeve's slot in the published order, so rmPROTO
     // keeps CATEGORICAL[2] with rmAGENT gone.
@@ -183,6 +185,9 @@ describe("vault identity", () => {
     expect(sleeveNote("conservative_defi_yield")).toBe("Lending USDC. The lowest-volatility sleeve, aimed at capital preservation.");
     expect(sleeveNote("rwa")).toBe(SLEEVE_NOTE.rwa);
     expect(sleeveNote("Agent Tokens")).toBe(SLEEVE_NOTE["agent-tokens"]);
+    // A sleeve with no vault yet is still described.
+    expect(sleeveNote("hard_assets")).toBe("Tokenised gold.");
+    expect(sleeveNote("Hard Assets")).toBe("Tokenised gold.");
     expect(sleeveNote("nope")).toBe("");
     expect(Object.values(SLEEVE_NOTE).some((s) => /on Base/.test(s))).toBe(false);
   });
@@ -303,15 +308,17 @@ describe("layers", () => {
     expect(layerComplete([7000, 1000, 1500, 500])).toBe(false);
   });
 
-  test("a recommendation that weighs Small Cap Tokens is no layer over three vaults; one that gives it 0 is", () => {
+  test("a recommendation that weighs Small Cap Tokens or Hard Assets is no layer over three vaults; one that gives Hard Assets 0 is", () => {
     const rec = (weights: Record<string, number>) => recommendationFromSession({ id: "x", swarmRecommendation: { type: "bucket_weights", weights } });
     const over = (r: any) => layer(normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), r)), "recommendedBps");
     // The sleeve's 3% is kept, so the three vaults hold 9700: never rescaled.
     const old = rec(ALLOCATION_2026_06_24_FRACTIONS);
-    expect(old?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(old?.bpsByBucket).toEqual(beforeGold(ALLOCATION_2026_06_24));
     expect(over(old)).toEqual([null, null, null]);
-    const closed = rec({ conservative_defi_yield: 0.95, agent_tokens: 0, protocol_tokens: 0.03, real_world_assets: 0.02 });
-    expect(over(closed)).toEqual([9500, 300, 200]);
+    // Gold has no vault yet: its 14% leaves the three vaults 8600.
+    expect(over(rec({ conservative_defi_yield: 0.5, protocol_tokens: 0.07, real_world_assets: 0.29, hard_assets: 0.14 }))).toEqual([null, null, null]);
+    const noGold = rec({ conservative_defi_yield: 0.95, protocol_tokens: 0.03, real_world_assets: 0.02, hard_assets: 0 });
+    expect(over(noGold)).toEqual([9500, 300, 200]);
   });
 
   test("a recommendation missing a sleeve is no recommended layer at all, never rescaled", () => {
@@ -456,8 +463,8 @@ describe("the Base feed as an overview", () => {
     expect(fmtDate(recommendationDate(o.recommendation))).toBe("Jun 24, 2026");
   });
 
-  test("a three-sleeve recommendation over it: total gaps and tracking error, governance unknown", () => {
-    const bpsByBucket = { conservative_defi_yield: 9500, agent_tokens: 0, protocol_tokens: 300, real_world_assets: 200 };
+  test("a recommendation the three vaults carry whole: total gaps and tracking error, governance unknown", () => {
+    const bpsByBucket = { conservative_defi_yield: 9500, protocol_tokens: 300, real_world_assets: 200, hard_assets: 0 };
     const o = normalizeOverview(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), { sessionId: "x", bpsByBucket }));
     expect(layer(o, "recommendedBps")).toEqual([9500, 300, 200]);
     expect(o.vaults.map((v) => v.gaps.total)).toEqual([500, -300, -200]);
@@ -471,6 +478,26 @@ describe("the Base feed as an overview", () => {
     expect(withRecommendation(legacyRaw(GOLDEN_ECONOMICS), null).recommendation).toBeNull();
   });
 });
+
+// The framework #1496 publishes (RM-190): Hard Assets (gold) in Small Cap
+// Tokens' place, Protocol Tokens BTC/ETH 50/50, Real World Assets the S&P 500.
+function fourSleevePolicy(t: [number, number, number, number]) {
+  return {
+    strategy: [
+      { label: "Conservative DeFi Yield", targetPct: t[0] },
+      { label: "Protocol Tokens", targetPct: t[1] },
+      { label: "Real World Assets", targetPct: t[2] },
+      { label: "Hard Assets", targetPct: t[3] },
+    ],
+    buckets: [
+      { key: "defi-yield", label: "Conservative DeFi Yield", items: [] },
+      { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
+      { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 100 }] },
+      { key: "hard-assets", label: "Hard Assets", items: [{ label: "Gold", targetPct: 100 }] },
+    ],
+    asOf: "2026-10-29",
+  };
+}
 
 describe("canDeposit", () => {
   const legacy = normalizeOverview(legacyRaw(GOLDEN_ECONOMICS));
@@ -508,7 +535,7 @@ describe("the latest published recommendation", () => {
       publishedAt: "2026-06-24T23:54:23.120Z",
     });
     const rec = recommendationFromSession(archived);
-    expect(rec?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(rec?.bpsByBucket).toEqual(beforeGold(ALLOCATION_2026_06_24));
     expect(rec?.href).toBe("/swarm/2026-06-24/robotmoney-allocation");
     expect(rec?.sessionId).toBeNull();
   });
@@ -531,7 +558,7 @@ describe("the latest published recommendation", () => {
         ],
       },
     });
-    expect(rec?.bpsByBucket).toEqual({ conservative_defi_yield: 9000, agent_tokens: 500, protocol_tokens: 300, real_world_assets: 200 });
+    expect(rec?.bpsByBucket).toEqual(beforeGold({ conservative_defi_yield: 9000, agent_tokens: 500, protocol_tokens: 300, real_world_assets: 200 }));
     expect(rec?.href).toBe(`/swarm/sessions/${id}`);
     expect(rec?.sessionId).toBe(id);
     expect(recommendationFromSession({ id, swarmRecommendation: { type: "position_actions", actions: [] } })).toBeNull();
@@ -561,7 +588,7 @@ describe("the latest published recommendation", () => {
     });
     const got = await loadLatestRecommendation({ hostname: "robotmoney.network" });
     expect(got.error).toBe(false);
-    expect(got.rec?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(got.rec?.bpsByBucket).toEqual(beforeGold(ALLOCATION_2026_06_24));
     expect(got.rec?.href).toBe(`/swarm/sessions/${id}`);
 
     serve({ "/api/swarm/sessions": json({ sessions: [] }) });
@@ -583,14 +610,14 @@ describe("the latest published recommendation", () => {
     const got = await loadLatestRecommendation({ hostname: "robotmoney.network" });
     expect(got.error).toBe(false);
     expect(got.rec?.date).toBe("2026-08-03");
-    expect(got.rec?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(got.rec?.bpsByBucket).toEqual(beforeGold(ALLOCATION_2026_06_24));
   });
 
   test("the archive answers only for a local host when the API cannot", async () => {
     serve();
     const local = await loadLatestRecommendation({ hostname: "127.0.0.1" });
     expect(local.error).toBe(false);
-    expect(local.rec?.bpsByBucket).toEqual(ALLOCATION_2026_06_24);
+    expect(local.rec?.bpsByBucket).toEqual(beforeGold(ALLOCATION_2026_06_24));
     expect(local.rec?.href).toBe("/swarm/2026-06-24/robotmoney-allocation");
 
     requests = [];
@@ -780,20 +807,9 @@ describe("loadVaultOverview", () => {
   });
 
   test("on Base the policy's targets are the vaults' targets until a router reports its own (RM-115)", async () => {
-    // The three-sleeve framework #1496 publishes.
-    const policy = {
-      strategy: [
-        { label: "Conservative DeFi Yield", targetPct: 100 },
-        { label: "Protocol Tokens", targetPct: 0 },
-        { label: "Real World Assets", targetPct: 0 },
-      ],
-      buckets: [
-        { key: "defi-yield", label: "Conservative DeFi Yield", items: [] },
-        { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
-        { key: "rwa", label: "Real World Assets", items: [] },
-      ],
-      asOf: "2026-10-27",
-    };
+    // The framework #1496 publishes, with Hard Assets at 0: the three vaults
+    // carry all of it.
+    const policy = fourSleevePolicy([100, 0, 0, 0]);
     serve({
       [VAULTS_ENDPOINT]: statusOnly(404),
       "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS),
@@ -822,6 +838,17 @@ describe("loadVaultOverview", () => {
     });
     const o = (await loadVaultOverview(baseAt("127.0.0.1"))).overview;
     expect(GOLDEN_ALLOCATION.strategy.map((s: { targetPct: number }) => s.targetPct)).toEqual([95, 5, 0, 0]);
+    expect(o?.targetSource).toBeNull();
+    expect(hasTargetLayer(o)).toBe(false);
+  });
+
+  test("a policy that funds Hard Assets, whose gold vault has no row yet, is no target over three vaults", async () => {
+    serve({
+      [VAULTS_ENDPOINT]: statusOnly(404),
+      "/api/dashboards/vault-economics": json(GOLDEN_ECONOMICS),
+      "/api/dashboards/allocation": json(fourSleevePolicy([50, 7, 29, 14])),
+    });
+    const o = (await loadVaultOverview(baseAt("127.0.0.1"))).overview;
     expect(o?.targetSource).toBeNull();
     expect(hasTargetLayer(o)).toBe(false);
   });
@@ -1081,7 +1108,8 @@ describe("the vault stack's book in sleeves", () => {
     buckets: manifest.buckets.map((b: any) => ({ id: b.id, tokens: (b.tokens || []).map((t: string) => String(t).toUpperCase()) })),
   };
   const book = readJson("data/vaults/devnet/subject.json").snapshots.at(-1);
-  const shares = (m: Map<string, number>) => BUCKET_ORDER.map((id) => Math.round((m.get(id) ?? NaN) * 10000));
+  // The golden framework's four sleeves, which these books predate Hard Assets in.
+  const shares = (m: Map<string, number>) => BUCKET_ORDER.slice(0, 4).map((id) => Math.round((m.get(id) ?? NaN) * 10000));
 
   test("idle USDC inside rmAGENT is Agent Tokens money, in a book read before rmAGENT closed", () => {
     expect(framework.buckets[0].tokens).toContain("USDC");
