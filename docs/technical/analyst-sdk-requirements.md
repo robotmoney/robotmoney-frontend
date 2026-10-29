@@ -32,6 +32,7 @@ Non-goals:
 - **The archive tool fetches supported series.** csvb owns the local copy, every fill and the download client. The SDK's `fetch` command owns the supplementary directory: it fetches with the source clients in `src/extract/` and writes nowhere else. Provider collection, archive downloads and supplementary fetches are extract-stage acquisition, completed before downstream execution. The SDK run reads supplied local inputs.
 - **Two directories.** Supported series live in the local copy. Supplementary series live in the supplementary directory. The two are separate directories, and neither is inside the other. Nothing writes a supplementary series into the local copy, and a fill never writes into the supplementary directory.
 - **No HTTP after extract.** Preparation, transforms, regime and research calculations, allocation, backtesting and reporting, including callbacks and dependencies, make no HTTP requests. A run never downloads a missing series or invokes csvb or a source client. Missing required inputs fail explicitly; optional missing inputs produce the documented missing result.
+- **Clients can tune every analysis.** Constants are options with defaults: each is an optional field of one options object whose default is today's value, and an unknown option key throws `RangeError` naming the key. Strategy steps are callbacks: expected returns, covariance, solver, the mapping onto holdings, the re-optimisation dates and the simulator are functions a client passes. Building blocks are exported: the solvers, the covariance, the schedule, the simulators and the statistics are exported from the package entry and return plain data, so a client composes its own analysis from them or extends the SDK's types.
 
 ## 3. The local copy
 
@@ -55,6 +56,14 @@ The default exists so an analyst gets up and running faster. The repo gives the 
 SDK computation never fetches from original sources or the public API. An analyst invokes acquisition separately to collect or download the inputs before running computation. Optional source clients support that extract stage only. The API serves source data that the backend has already cleaned.
 
 **Access.** The csv-backups repo is private and holds production data. Only holders of read access use the default fill. Everyone else uses the API-only fill. The two fills produce the same local copy.
+
+**Reading the local copy.** The SDK exports one reader for the local copy. It takes the copy's files through an injected reader, so the reader itself touches no filesystem (section 2). It opens the copy as of a backup id, or as of the newest backup. Before it returns anything, it checks the backup selection, the watermark chain, each file's inflated size, the SHA-256 of every listed file and the row count of every file it reads. A client reads three things from an open copy:
+
+- **A run's inputs.** The values in the run's frozen vintage, the input file of section 5.
+- **A revised table as of the backup.** These tables are `regime_snapshots`, `raw_indicator_history` and `asset_prices`. The reader applies every selected backup's revisions file in backup order. Each change upserts or deletes the row named by the key columns in the backup record. Deleted rows are gone, the `_backup` and `_op` columns are dropped, and rows sort by key column by column. A backup record whose revision names no key, an empty key or a key column that is not a non-empty string is refused when the copy opens.
+- **The latest values of chosen storage keys.** For each storage key and market date, the reader returns the version with the highest id, comparing ids as integers of any size. Each value is tagged with the input id it is read under. A key no input id is read under is refused. These are the newest values, not a run's vintage, so they do not reproduce a published run.
+
+The SDK never writes flat copies of revised tables to disk.
 
 ## 4. Supplementary series
 
@@ -126,6 +135,11 @@ Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative t
 | A supplementary series round-trips through its file to the same doubles, its manifest pins the file's bytes, its path encodes the source id reversibly, and an existing series is kept unless replaced. | `tests/supplementary.test.ts` |
 | The supplementary directory is refused when it is, contains or lies inside a local copy, by the library and by `bun run fetch`. | `tests/supplementary.test.ts` |
 | `fetchSupplementary` fetches Yahoo and FRED through `src/extract/http.ts`, cuts to the window, and fails on an empty window or a provider with no client. `bun run fetch` rejects bad arguments before its first request. | `tests/supplementary.test.ts` |
+| Each covariance entry is the correctly rounded exact sample covariance of the doubles, also near 1e160 and 1e-155; each correlation is the exact Pearson value; the refined solve returns the correctly rounded exact solution or throws `UnsupportedError` when the matrix is singular, non-square, non-finite or too ill-conditioned for one certain digit. | `tests/linalg.test.ts` |
+| The optimizers (budgeted ERC, minimum variance, mean-variance with a slack or binding budget, maximum Sharpe) return a certified optimum at rounding-size residual, no 0.001 grid point beats them, ties break to the lower index, and each residual scores an infeasible point at least at its infeasibility; otherwise they throw `UnsupportedError`. | `tests/optimizers.test.ts` |
+| The shrunk covariance keeps the diagonal bit for bit, multiplies each off-diagonal entry by `1 - s`, and annualizes the exact covariance by `periodsPerYear`. | `tests/optimizers.test.ts` |
+| Markowitz sizing returns certified tangency and mean-variance books from closes; the schedule re-optimises on the first axis date of each month from the history strictly before it, never sees a later return, and its backtest equals `simulatePortfolio` (or `simulateDrift`) and `periodStats` run on its own schedule. | `tests/markowitz.test.ts` |
+| Every backtest option (simulator, expansion, re-optimisation dates, covariance and lookback, solver, and each constant) changes the result as named, defaults to today's value, and an unknown option key throws `RangeError` naming it; the building blocks are exported from the package entry. | `tests/markowitz.test.ts`, `tests/exports.test.ts` |
 | An API-only fill and a repo fill give the same local copy for the same backup id. | csvb `tests/fill-parity.test.ts` |
 | The download client never has two requests in flight, waits `Retry-After`, stays inside the retry bounds, and adds no partial archive when interrupted. | csvb `tests/download-client.test.ts` |
 | Canonical input generation preserves stored values, dates and vintage membership, including historical replay inputs. | csvb `tests/rerun-vintage.test.ts` |

@@ -188,6 +188,16 @@ The result includes the daily value series, trade count, cost evidence and the p
 
 Weights set at today's close apply to later returns; changing today's target can change today's cost, but cannot change today's pre-cost return or earlier values. Computation reads no file and makes no HTTP request.
 
+`simulateDrift(dateAxis, schedule, prices, cashRate, options)` is the drift-aware variant for client research. It takes the same inputs, checks and start date as `simulatePortfolio`. Holdings drift between rebalances: each weight becomes w (1 + r_k) / (1 + r_p) after a day's return, rounded once (D78).
+
+| Option | Meaning |
+| ------ | ------- |
+| `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points. |
+| `options.freq` | Calendar rebalance: `daily` (default), `weekly` (the first date of a new Monday-to-Sunday week), `monthly` (a new YYYY-MM), `quarterly` (a new January, April, July or October) or `never`, each judged against the previous axis date. |
+| `options.band` | Rebalance when any weight is more than this absolute distance from its target. Default: no band. |
+
+The book also rebalances when the target changes. A rebalance with turnover above 1e-9 costs turnover times `costBps` / 10000 and is recorded as a trade. The first date with weights sets the holdings at no cost. An unknown option key, or a bad `costBps`, `freq` or `band`, is refused with an error naming it. A day whose portfolio factor 1 + r_p is not positive is refused with an error naming the date. The result has the same shape as `simulatePortfolio`'s, so period statistics (section 5.4) accept it unchanged. With `costBps` 0 and `freq` daily its values and returns equal `simulatePortfolio`'s bit for bit. No report uses it.
+
 ### 5.4 Period statistics
 
 `periodStats(valueSeries, from, to, options)` uses the same statistics calculation as production. `options` supplies the simulator's original pre-cost daily returns and date-boundary evidence where required; there is no methodology selector. A net value series alone cannot reproduce existing Sharpe, because values include trading costs and the daily returns used for Sharpe do not.
@@ -213,7 +223,7 @@ The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existi
 
 ### 5.7 Outside this module
 
-- Choosing weights: rules, signals, bands, tilts and optimizers.
+- Choosing weights: rules, signals, bands, tilts and optimizers. The analyst SDK's weight choosers that feed this backtest are the certified optimizers in `packages/analyst-sdk/src/allocate/optimize.ts` and the Markowitz sizing, point-in-time schedule and backtest in `packages/analyst-sdk/src/allocate/markowitz.ts`; they produce a schedule and call the simulation of 5.2 and 5.3 and the statistics of 5.4 unchanged.
 - Sourcing prices for assets.
 - The command line and any file format.
 

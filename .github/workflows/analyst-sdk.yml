@@ -107,7 +107,7 @@ jobs:
       - name: Exact numerics suite ran (D78)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
-          tests/exact-numerics.test.ts:34
+          tests/exact-numerics.test.ts:43
           tests/numeric-diff-negative-control.test.ts:11
       # Decision D79 (issue 1513): the supplementary series suite ran (format, the pure
       # reader over injected files, the directory rules, the fetch seam, the command's refusals).
@@ -115,6 +115,19 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/supplementary.test.ts:17
+      # Issue 1513: the archive reader suite ran (openArchive over injected files against
+      # the bin/ adapter, the revised-table replay, the revisions key check, latestValues).
+      - name: Archive reader suite ran (issue 1513)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/local-copy.test.ts:17
+      # Issue 1513: the drift-aware simulation suite ran (never, daily, band and
+      # target-change fixtures, the calendar rules, the BigInt-rational weight
+      # update, parity with simulatePortfolio, the option checks).
+      - name: Drift-aware simulation suite ran (issue 1513)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/backtest-drift.test.ts:19
       # Issue 1399: the as-of label suite ran, the 419-run hindsight case included.
       - name: As-of label suite ran (issue 1399)
         run: >-
@@ -135,6 +148,16 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
           tests/engine.test.ts:18
+      # Issue 1513: the certified optimizers, their linear algebra, the
+      # Markowitz workflow and its tuning options, and the package-entry exports
+      # ran with at least their number of cases and none skipped.
+      - name: Optimizer, linear algebra and Markowitz suites ran (issue 1513)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/linalg.test.ts:10
+          tests/optimizers.test.ts:18
+          tests/markowitz.test.ts:19
+          tests/exports.test.ts:3
       # Issue 1404: the backtest, CLI and producer-to-SDK suites ran with at
       # least their number of cases and none skipped (JUnit, not console text).
       - name: Backtest, CLI and input suites ran (issue 1404)

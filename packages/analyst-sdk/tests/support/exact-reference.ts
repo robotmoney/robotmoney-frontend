@@ -241,7 +241,52 @@ export function exactSharpe(xs: readonly number[], periods = 365): number {
   return sx < 0n ? -mag : mag;
 }
 
+/**
+ * Exact q quantile of doubles by linear interpolation at the position q (n - 1),
+ * all in rationals: lo + (hi - lo) f with k the integer part and f the fraction
+ * of the exact position, rounded once.
+ */
+export function exactQuantile(xs: readonly number[], q: number): number {
+  const sorted = [...xs].sort((a, b) => a - b);
+  const pos = Q.of(q).mul(new Q(BigInt(sorted.length - 1)));
+  const k = pos.n / pos.d; // floor: pos >= 0
+  const f = pos.sub(new Q(k));
+  const lo = Q.of(sorted[Number(k)]!);
+  if (f.isZero()) return lo.toNumber();
+  const hi = Q.of(sorted[Number(k) + 1]!);
+  return lo.add(hi.sub(lo).mul(f)).toNumber();
+}
+
 /** Relative error |got - want| / |want|; the absolute error when want is 0. */
 export function relErr(got: number, want: number): number {
   return want === 0 ? Math.abs(got) : Math.abs(got - want) / Math.abs(want);
+}
+
+/**
+ * Exact solution of A X = B for a small dense square system, by fraction-based
+ * Gauss-Jordan with row pivoting. Throws on a singular matrix.
+ */
+export function exactSolveQ(A: readonly (readonly Q[])[], B: readonly (readonly Q[])[]): Q[][] {
+  const n = A.length;
+  const m = B[0]!.length;
+  const M = A.map((row, i) => [...row, ...B[i]!]);
+  for (let c = 0; c < n; c++) {
+    let p = -1;
+    for (let r = c; r < n; r++) if (!M[r]![c]!.isZero() && (p < 0 || M[r]![c]!.cmpAbs(M[p]![c]!) > 0)) p = r;
+    if (p < 0) throw new Error("exact reference: singular matrix");
+    [M[c], M[p]] = [M[p]!, M[c]!];
+    const piv = M[c]![c]!;
+    M[c] = M[c]!.map((v) => v.div(piv));
+    for (let r = 0; r < n; r++) {
+      if (r === c || M[r]![c]!.isZero()) continue;
+      const f = M[r]![c]!;
+      M[r] = M[r]!.map((v, j) => v.sub(f.mul(M[c]![j]!)));
+    }
+  }
+  return M.map((row) => row.slice(n, n + m));
+}
+
+/** Exact solution of A x = b (A square) of the doubles, each entry rounded once. Ported from rosemarys-baby src/tests/exact.ts. */
+export function exactSolve(A: readonly (readonly number[])[], b: readonly number[]): number[] {
+  return exactSolveQ(A.map((r) => r.map((v) => Q.of(v))), b.map((v) => [Q.of(v)])).map((r) => r[0]!.toNumber());
 }
