@@ -6122,3 +6122,22 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 **Why.** The published numbers should be the exact result of the published inputs, not of a particular summation order. The plain loops were accurate to a few ulps on these data, so no report moved materially, but they made a zero variance nonzero, which turned a constant return into a Sharpe of 4e14, and they made the backtest depend on the order of additions. Error-free arithmetic fixes both without a tolerance, at no runtime cost on the regime pipeline (a full run takes about 0.65 s, against 1.1 s before, because the fused correlation pass replaced per-pair array building).
 
 **Left alone.** `rollingPercentileRank` and `percentileInWindow` only compare and count. `pctChange`, `pctChangeLag`, `ratio` and the ratio transforms are one rounded operation each. The 1e-9 weight-sum checks in `backtest.ts` and `allocate/` validate input and publish nothing. The allocation engine (`allocate/engine.ts`, `allocate/signals.ts`) sums a handful of percent weights and percentiles; it is outside the compute core and keeps plain sums. Max drawdown is one division per day. A label change can still come from a genuine tie at a bucket edge on other data; none occurs on the fixtures.
+
+---
+
+<a id="d79"></a>
+## D79 — The analyst SDK separates supported series from supplementary series, each in its own directory (owner, 2026-10-28)
+
+**Status:** Proposed 2026-10-28. Items 1 to 3 are the owner's direction. The format and command details in items 4 and 5 are proposed with their implementation in `packages/analyst-sdk/src/input/supplementary.ts`, `src/extract/supplementary.ts`, `bin/supplementary-dir.ts` and `bin/fetch.ts`. Specified in `docs/technical/analyst-sdk-requirements.md` sections 1, 2 and 4 and `docs/definitions.md`.
+
+**Decision.**
+
+1. **Supported series are turnkey.** The platform's public API and the csv-backups repo serve many source series cleaned, versioned and formatted for immediate use. They reach the analyst through the local copy (section 3 of the analyst SDK requirements).
+2. **Supplementary series fill the gaps.** The platform cannot cover the full history of every asset an analyst may want. The SDK therefore (a) defines a format in which an analyst stores series they fetch elsewhere, so those series work with the SDK's calculations, and (b) ships fetchers for common providers (Yahoo and FRED), so an analyst does not have to write their own.
+3. **Two directories.** Supplementary series live in a supplementary directory. It is separate from the directory that holds supported series (the local copy, whether filled from the csv-backups repo or from the API). Neither is inside the other. The SDK refuses a supplementary directory that is, contains or lies inside a local copy. No code merges the two: reading code names the directory for each series.
+4. **Format.** One series per file, `<dir>/<provider>/<percent-encoded symbol>.csv`, in the source input contract (`date,series,value`, one source id, dates strictly ascending), with a `<symbol>.manifest.json` sidecar: source id, field, row count, first and last date, SHA-256 of the file, `fetched_at` and `fetched_by`. A reader checks the file against its manifest.
+5. **Fetch command.** `bun run fetch --into <dir> [--start] [--end] [--replace] <source id>...` fetches Yahoo and FRED series through `src/extract/http.ts`. `--start` defaults to 2016-01-01, the collection floor proposed for the platform in frontend issue 1514. An existing series is kept unless `--replace` is given.
+
+**Why.** An analyst should get the platform's data with no work, and should not have to write a Yahoo client to study an asset the platform does not carry. Keeping the two kinds of data in separate directories keeps the record clean: a supported series is exactly what csvb wrote, with its vintages, and a supplementary series carries only its own manifest. Mixing them would let a hand-fetched value pass as platform data. The research repo `rosemarys-baby` kept hand-fetched Yahoo closes next to its resolved platform tables; this decision is the general form of separating them.
+
+**Left alone.** The local copy, the fills, csvb and the input file contract are unchanged. The source clients' existing callers keep their behaviour: `fetchFred` gains an optional start, defaulting to the 2010-01-01 it used before.
