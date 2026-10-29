@@ -484,7 +484,8 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
           date: d,
           historyDates: [...historyDates],
           trailing: (n) => {
-            const from = Math.max(0, end - countOption(where, "trailing", n));
+            if (typeof n !== "number" || !Number.isInteger(n) || n < 0) throw new RangeError(`${where} ${d}: trailing(n) needs a nonnegative integer n, got ${JSON.stringify(n)}`);
+            const from = Math.max(0, end - n);
             const dates = rdays.slice(from, end);
             return { dates, rows: dates.map((x) => [...returns.get(x)!]) };
           },
