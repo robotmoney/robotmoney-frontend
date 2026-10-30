@@ -26,7 +26,7 @@ test("a page cites by the name before its qualifier", () => {
 });
 
 test("a title qualified after a pipe cites by its name too", () => {
-  expect(citeTitle("/deposit")).toBe("Deposit USDC with Your Agent");
+  expect(citeTitle("/early-access")).toBe("Early Access to the Vaults");
   expect(citeTitle("/skills")).toBe("Agent Skills");
   expect(citeTitle("/allocation")).toBe("Allocation: Target Sleeves and Vaults");
 });

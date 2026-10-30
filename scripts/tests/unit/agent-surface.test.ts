@@ -222,9 +222,9 @@ describe("prerendered routes", () => {
     // about there being exactly one inlining, not two stacking: a route whose
     // build-time fill silently regressed to leaving the mount empty (or ran
     // twice) both fail here.
-    const html = readFileSync(join(dir, "docs/skill/index.html"), "utf8");
+    const html = readFileSync(join(dir, "docs/investment-swarm/how-it-works/index.html"), "utf8");
     expect(html.includes('<main id="view"></main>')).toBe(false);
-    expect(html).toContain("Robot Money Skill");
+    expect(html).toContain("How it works");
     rmSync(dir, { recursive: true, force: true });
   });
 });

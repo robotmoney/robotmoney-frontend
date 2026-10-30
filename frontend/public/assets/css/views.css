@@ -1780,6 +1780,14 @@ a.sv__session-title:focus-visible, .sv__take-who:focus-visible {
 .rr-meta__i--list { flex-wrap: wrap; row-gap: 0.25rem; white-space: normal; }
 .rr-meta__i--list > a { white-space: nowrap; }
 .rr-meta__i b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; }
+/* A copy button beside a figure in the strip (a member's referral code): the
+   footer's outlined Copy, sized to the row, with a square copy mark. */
+.rr-copy { display: inline-flex; align-items: center; gap: 0.375rem; min-height: 1.75rem; padding: 0 0.5rem;
+  border: 1px solid var(--color-border-light); border-radius: 0; background: transparent; color: var(--color-text-soft);
+  font-family: var(--font-mono); font-size: 0.625rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em;
+  cursor: pointer; transition: border-color 100ms var(--ease-out-expo), color 100ms var(--ease-out-expo); }
+.rr-copy:hover, .rr-copy.is-copied { border-color: var(--color-text); color: var(--color-text); }
+.rr-copy__i { width: 0.75rem; height: 0.75rem; flex: none; }
 .rr-meta__i i { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 /* The live mark stays square beside the round regime dot it would inherit. */
 .rr-meta__i .rm-pulse { width: 0.4rem; height: 0.4rem; border-radius: 0; }

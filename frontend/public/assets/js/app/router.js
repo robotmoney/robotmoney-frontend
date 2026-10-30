@@ -7,7 +7,7 @@
 // back to the home view so internal links never 404 during early development.
 
 import { isProduction, isPrivilegedRoute } from "./analytics-policy.js";
-import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
+import { NOT_FOUND_VIEW, RETIRED_SKILL_DOCS, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
 import { isCurrentLink, navSectionFor } from "./lib/site-nav.js";
 
@@ -84,6 +84,13 @@ async function render(pathname) {
   if (pathname === "/performance" || pathname === "/allocation2") {
     history.replaceState(history.state, "", "/treasury" + location.search + location.hash);
     pathname = "/treasury";
+  }
+  // Deposits wait for the vaults to open (RM-190): the deposit page and the
+  // deposit skill's docs move to early access, query kept (a referral rides
+  // on it). Their fragments named sections early access does not have.
+  if (pathname === "/deposit" || pathname === "/deposit/" || RETIRED_SKILL_DOCS.test(pathname)) {
+    history.replaceState(history.state, "", "/early-access" + location.search);
+    pathname = "/early-access";
   }
   const host = viewEl();
   if (!host) return;

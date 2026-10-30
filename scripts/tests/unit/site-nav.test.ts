@@ -51,7 +51,7 @@ describe("navSectionFor", () => {
     ["/media/articles", "company"],
     ["/tokenomics", "company"],
     ["/skills", "docs"],
-    ["/deposit", "vaults"],
+    ["/early-access", "vaults"],
     ["/docs/investment-swarm/api-reference", "docs"],
     ["/changelog", "docs"],
   ])("%s is in %s", (path, key) => {
@@ -154,8 +154,8 @@ describe("the nav markup", () => {
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
 
-  test("the primary action is to deposit, on its own page", () => {
-    expect(nav).toMatch(/<a href="\/deposit" class="btn-primary[^"]*nav__cta">Deposit<\/a>/);
+  test("the primary action is early access, on its own page", () => {
+    expect(nav).toMatch(/<a href="\/early-access" class="btn-primary[^"]*nav__cta">Request early access<\/a>/);
   });
 
   test("what is not built yet is named, marked, and not a link", () => {
@@ -179,30 +179,27 @@ describe("the nav markup", () => {
   });
 });
 
-// RM-129: depositing has its own page, and /skills is the index of every
-// skill. The deposit page keeps the section ids the old /skills page had, so
-// the links that pointed into it still land.
-describe("the deposit page and the skills index", () => {
-  const deposit = readFileSync(join(pub, "views/deposit.html"), "utf8");
+// RM-190: deposits wait for the vaults to open. The deposit page and the
+// deposit skill's docs are gone, their addresses move to /early-access, and
+// /skills lists the swarm skill alone.
+describe("deposits wait for the vaults", () => {
   const skills = readFileSync(join(pub, "views/skills.html"), "utf8");
 
-  test("/deposit keeps every section the deposit skill's page had", () => {
-    for (const id of ["how-it-works", "capabilities", "mechanics", "contracts", "about"]) {
-      expect(deposit, id).toContain(`id="${id}"`);
+  test("the deposit page and the deposit skill's docs are gone", () => {
+    for (const v of ["deposit", "docs/skill", "docs/skill/installation", "docs/skill/commands", "docs/skill/agent-basket"]) {
+      expect(existsSync(join(pub, `views/${v}.html`)), v).toBe(false);
     }
-    expect(deposit).toContain("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
   });
 
-  test("/skills lists each skill with its way in", () => {
-    expect(skills).toContain('id="deposit-skill"');
-    expect(skills).toContain('href="/deposit"');
+  test("/skills lists the swarm skill with its way in, and no deposit skill", () => {
+    expect(skills).not.toContain('id="deposit-skill"');
     expect(skills).toContain('id="swarm-onboarding"');
     expect(skills).toContain('href="/swarm/apply"');
     expect(existsSync(join(pub, "skills/swarm-onboarding/SKILL.md"))).toBe(true);
   });
 
-  test("nothing on the site still sends a reader to /skills for a deposit section", () => {
-    const pages = [html, ...["home", "tokenomics", "vault", "deposit", "skills"].map((v) => readFileSync(join(pub, `views/${v}.html`), "utf8"))];
-    for (const page of pages) expect(page).not.toMatch(/href="\/skills#/);
+  test("nothing on the site still links to the deposit page or the deposit skill's docs", () => {
+    const pages = [html, ...["home", "tokenomics", "vault", "skills", "faq", "docs"].map((v) => readFileSync(join(pub, `views/${v}.html`), "utf8"))];
+    for (const page of pages) expect(page).not.toMatch(/href="\/(deposit|docs\/skill)\b|href="\/skills#/);
   });
 });

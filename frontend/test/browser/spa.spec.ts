@@ -205,35 +205,29 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
   expect(reserved!.filled).toBeLessThan(reserved!.viewport);
 });
 
-test("the deposit hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
+// Deposits wait for the vaults to open (RM-190): the deposit page and the
+// deposit skill's docs move to early access, query kept so a referral rides
+// along and fills in the form's code (RM-195). That an address the docs never
+// had is no alias is seo-legacy-aliases.test.ts's.
+test("/deposit and the deposit skill's docs move to /early-access with their query", async ({ page }) => {
+  // Loaded directly, as a held link would be: navigate() waits for the path it
+  // was given, and these never render under it.
+  for (const from of ["/deposit", "/docs/skill", "/docs/skill/commands"]) {
+    await page.goto(`${from}?ref=rm_athena`);
+    await expect(page, from).toHaveURL(/\/early-access\?ref=rm_athena$/);
+    await expect(page.locator("h1"), from).toHaveText("Early access");
+    await expect(page.locator("#ea-referral"), from).toHaveValue("rm_athena");
+  }
+});
+
+// The skills page keeps the tree canvas the deposit page shared with it.
+test("the skills hero runs the tree canvas", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
-  // /deposit since RM-129; this was /skills, now the index of every skill.
-  await navigate(page, "/deposit");
-
-  // The install command is the call to action on this page, so it belongs in
-  // the hero beside the headline rather than in a block further down.
+  await navigate(page, "/skills");
   const hero = page.locator(".sk__head");
-  await expect(hero.locator(".sk__title")).toContainText("Deposit");
-  await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
-  await expect(hero.locator(".sk__cta")).toBeVisible();
-
-  // Two columns above the breakpoint: the card sits to the right of the copy,
-  // not under it.
-  const copyBox = await hero.locator(".sk__head-copy").boundingBox();
-  const cardBox = await hero.locator(".sk__install-card").boundingBox();
-  expect(cardBox!.x).toBeGreaterThan(copyBox!.x + copyBox!.width / 2);
-
-  // treeHero() mounted and produced a canvas rather than failing silently.
+  await expect(hero.locator(".sk__title")).toContainText("Skills");
   await expect(hero.locator(".sk__head-viz canvas")).toHaveCount(1);
-
-  // Copy button writes the exact command.
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await hero.locator(".sk__install-copy").click();
-  await expect(hero.locator(".sk__install-copy")).toHaveClass(/is-copied/);
-  const clip = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
-
   await expectNoBrowserErrors(errors);
 });
 
