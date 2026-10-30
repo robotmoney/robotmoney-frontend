@@ -276,13 +276,14 @@
 .rv__fig-d { flex-basis: 100%; margin: 0.25rem 0 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-muted); }
 
 /* Methodology: the panels table in prose type, the method as key and value
-   rows, then the reading list. */
+   rows, then the reading list. The cell rule names .rr-table too: the shared
+   table's mono, centred cells come later in this file and would otherwise
+   win. Every column wraps, so no one cell sets the table's width. */
 .rv__method-lead { margin: 0 0 2rem; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
 #methodology-sec .rr-subhead__h { margin: 2.25rem 0 1rem; }
 .rv__mtable { min-width: 52rem; }
-.rv__mtable td { font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.55; vertical-align: top; }
+.rr-table.rv__mtable td { font-family: var(--font-sans); font-variant-numeric: normal; font-size: 0.8125rem; line-height: 1.55; vertical-align: top; text-wrap: pretty; }
 .rv__mtable tbody th { vertical-align: top; white-space: nowrap; }
-.rv__mtable td:last-child { white-space: nowrap; }
 .rv__method-note { margin: 1rem 0 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
 .rv__mdl > div { grid-template-columns: 9rem minmax(0, 1fr); }
 .rv__mdl dd { color: var(--color-text-soft); line-height: 1.6; }
