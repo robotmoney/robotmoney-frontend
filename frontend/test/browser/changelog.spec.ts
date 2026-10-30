@@ -88,9 +88,9 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
   await expect(frame.locator(".cl__now")).toBeVisible();
   await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
   await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
-  // The changelog is under Docs; the nav's button is Early access (RM-190).
+  // The changelog is under Docs; the nav's button is Request early access (RM-190).
   await expect(frame.locator('.nav__panel a[href="/changelog"]')).toHaveText("Changelog");
-  await expect(frame.locator(".nav__cta")).toHaveText("Early access");
+  await expect(frame.locator(".nav__cta")).toHaveText("Request early access");
 
   const title = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;

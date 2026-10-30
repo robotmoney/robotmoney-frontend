@@ -155,7 +155,7 @@ describe("the nav markup", () => {
   });
 
   test("the primary action is early access, on its own page", () => {
-    expect(nav).toMatch(/<a href="\/early-access" class="btn-primary[^"]*nav__cta">Early access<\/a>/);
+    expect(nav).toMatch(/<a href="\/early-access" class="btn-primary[^"]*nav__cta">Request early access<\/a>/);
   });
 
   test("what is not built yet is named, marked, and not a link", () => {

@@ -307,7 +307,7 @@ test.describe("phone", () => {
     }
 
     const cta = page.locator(".nav__cta");
-    await expect(cta).toHaveText("Early access");
+    await expect(cta).toHaveText("Request early access");
     const box = await cta.boundingBox();
     expect(box!.y + box!.height).toBeLessThanOrEqual(844);
     // The page behind does not scroll, and nothing runs off the side.
