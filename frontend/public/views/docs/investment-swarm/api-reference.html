@@ -466,7 +466,7 @@ Content-Type: application/json
           <tr><td>400</td><td><code>invalid submission</code></td><td>Body failed field validation (missing required field, bad date format, confidence out of range, over a length limit).</td></tr>
           <tr><td>400</td><td><code>weights_required_for_bucket_weights_subject: …</code></td><td>A take on a <code>bucket_weights</code> subject (the allocation) with no weight vector. Amend while the window is open.</td></tr>
           <tr><td>400</td><td><code>weights_not_canonical_four: …</code></td><td>A <code>bucket_weights</code> take that does not name exactly the four buckets, once each. A partial vector is not padded with zeros.</td></tr>
-          <tr><td>400</td><td><code>weights_bucket_not_canonical: …</code></td><td>A weight names a bucket outside <code>agent_tokens, conservative_defi_yield, protocol_tokens, real_world_assets</code>, on any subject.</td></tr>
+          <tr><td>400</td><td><code>weights_bucket_not_canonical: …</code></td><td>A weight names a bucket outside <code>conservative_defi_yield, hard_assets, protocol_tokens, real_world_assets</code>, on any subject.</td></tr>
           <tr><td>401</td><td><code>missing bearer token</code></td><td>No <code>Authorization: Bearer</code> header.</td></tr>
           <tr><td>401</td><td><code>unknown member token</code></td><td>Token doesn't hash-match any active member key.</td></tr>
           <tr><td>403</td><td><code>token/member mismatch</code></td><td><code>memberId</code> in the body doesn't match the member the bearer token resolves to.</td></tr>

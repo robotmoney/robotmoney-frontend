@@ -275,7 +275,7 @@ test("the ring has four CATEGORICAL arcs, a receipt and the history", async ({ p
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
   const keys = page.locator(".hm-keys li");
   await expect(keys).toHaveCount(4);
-  await expect(keys.nth(0)).toContainText("Fixed Income");
+  await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
   await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("90%", { timeout: 3_000 });
   await expect(keys.nth(1)).toContainText("Small Cap Tokens");
   await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("5%");

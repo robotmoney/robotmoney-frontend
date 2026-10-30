@@ -2,14 +2,14 @@
      where the recommendation meets execution (docs/plans/vault-pages.md).
      The allocation is a POLICY and gets a page of its own. A portfolio is a
      book of holdings and gets a row on /swarm plus its own subject page. This
-     page is the policy as it stands now, and the four vaults that carry it
+     page is the policy as it stands now, and the vaults that carry it
      out. How it has changed is every session that reviewed it, on the swarm's
      page for the subject.
 
      THE CONSTRAINT A REVIEWER SHOULD CHECK FIRST: this page reads the
      allocation DTO (GET /api/dashboards/allocation; the shipped manifest
-     stands in on a local host only), the four-vault overview
-     (lib/vault-source.js: the four-vault route, else the Base vault feed with
+     stands in on a local host only), the vault overview
+     (lib/vault-source.js: the vaults route, else the Base vault feed with
      the latest published robotmoney-allocation session laid over it), and
      nothing else. It never reads wallet-balances or wallet-sleeves: those are
      the three protocol-owned prop wallets, a different pot of money that
@@ -23,7 +23,7 @@
      gaps) · How the weights are set.
 
      A vault's asset-level holdings are on its own page, /vault/:slug, which
-     each Vaults row and each sleeve's recipe links to, and the four vaults'
+     each Vaults row and each sleeve's recipe links to, and the vaults'
      combined holdings on the vault subject's page.
 
      id="allocation", id="vaults" and id="vault" are load-bearing: RM-115
@@ -242,13 +242,13 @@
 
 
   <!-- ── § VAULTS ─────────────────────────────────────────────────────────
-       Where the recommendation meets execution: four leg vaults, one per
-       sleeve, behind a router that routes new deposits by its applied weights
+       Where the recommendation meets execution: a leg vault per sleeve
+       (three: Hard Assets has none yet), behind a router that routes new deposits by its applied weights
        and holds nothing itself. Recommended is the latest published
        robotmoney-allocation recommendation; Target the weights in force, the
        router's once it reports them and the published policy's until then
        (Base today), the same targets the ring above draws; Actual each
-       vault's share of the four vaults' TVL. Pending is recommended minus
+       vault's share of the vaults' combined TVL. Pending is recommended minus
        target (a recommendation not applied; RM-97), drift actual
        minus target (RM-115): on Base the ring's gap, both measured against
        the policy. On the devnet the router's weights are the target, and the
@@ -297,7 +297,7 @@
                    taken: the difference of the two columns it names. -->
               <th scope="col" class="q">Recommended <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Recommended">i</button><span class="rm-tip__bub" role="tooltip">The weights the swarm's latest recommendation set.</span></span></th>
               <template x-if="threeLayers()"><th scope="col" class="q">Target <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Target">i</button><span class="rm-tip__bub" role="tooltip">The weights in force: the published policy, until the vault router reports the weights it applied.</span></span></th></template>
-              <th scope="col" class="q">Actual <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Actual">i</button><span class="rm-tip__bub" role="tooltip">Each vault's share of the four vaults' combined value.</span></span></th>
+              <th scope="col" class="q">Actual <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Actual">i</button><span class="rm-tip__bub" role="tooltip">Each vault's share of their combined value.</span></span></th>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Pending <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Pending">i</button><span class="rm-tip__bub" role="tooltip">Recommended minus target: the change the swarm's latest recommendation would make if it were applied.</span></span></th></template>
               <template x-if="threeLayers()"><th scope="col" class="q rr-vaults__wide">Drift <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Drift">i</button><span class="rm-tip__bub" role="tooltip">Actual minus target: how far what the vaults hold has moved from the weights in force.</span></span></th></template>
               <template x-if="!threeLayers()"><th scope="col" class="q">Gap <span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About Gap">i</button><span class="rm-tip__bub" role="tooltip">Actual minus recommended: how far what the vaults hold is from the swarm's latest recommendation.</span></span></th></template>

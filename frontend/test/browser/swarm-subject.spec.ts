@@ -194,7 +194,7 @@ test("public subject profile lists no NFT contract for an archived subject with 
   // docs/plans/vault-pages.md): the Vaults table names it, and there is no
   // separate Read from table, so no NFT contract row.
   await expect(page.locator(".rr-sources")).toHaveCount(0);
-  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("Fixed Income");
+  await expect(page.locator("#holdings .rr-legend__row .rr-legend__l").first()).toHaveText("Conservative DeFi Yield");
   // The unvalued-NFT count goes with them.
   await expect(page.locator("#holdings")).not.toContainText("NFT contracts");
 
@@ -382,7 +382,7 @@ test("a subject's latest session carries the consensus and the decision, as /swa
   // numbers back onto four names they were holding in their head.
   const keys = latest.locator(".rr-legend__row");
   await expect(keys).toHaveCount(4);
-  await expect(keys.nth(0)).toContainText("Fixed Income");
+  await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
   await expect(keys.nth(0)).toContainText("95%");
   await expect(keys.nth(1)).toContainText("Small Cap Tokens");
   await expect(keys.nth(1)).toContainText("5%");
@@ -404,7 +404,7 @@ test("a subject's latest session carries the consensus and the decision, as /swa
   // sleeve wears on /allocation's donut and a weight change never repaints the
   // sleeves that did not move.
   await expect(arcs.first()).toHaveAttribute("stroke", "#10b981"); // CATEGORICAL[0]
-  await expect(latest.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Fixed Income 95%/);
+  await expect(latest.locator(".sv__wdonut-host")).toHaveAttribute("aria-label", /Conservative DeFi Yield 95%/);
   // The way through to the session itself.
   await expect(latest.locator(".rr-cta")).toHaveAttribute("href", `/swarm/sessions/${session.id}`);
   await expect(latest.locator(".rr-cta")).toContainText("Read the Sep 1, 2026 session");
@@ -421,6 +421,42 @@ test("a subject's latest session carries the consensus and the decision, as /swa
 
   // One fetch built both.
   expect(detailFetches).toBe(1);
+});
+
+// Hard Assets took Small Cap Tokens' place under a key of its own (RM-190), so
+// the history keeps both apart: a session that weighed agent tokens keeps its
+// Small Cap Tokens figure, one that weighs gold reads under Hard Assets, and
+// neither shows a figure for the sleeve it never voted on.
+test("the history gives Small Cap Tokens and Hard Assets their own columns, each only where a session weighs it", async ({ page }) => {
+  const session = (id: string, date: string, weights: Record<string, number>) => ({
+    id, date, subject_id: "robotmoney-allocation", subject_name: "Robot Money Allocation", state: "published",
+    swarm_recommendation: { type: "bucket_weights", weights },
+  });
+  const gold = session("8c2d4e6f-1a3b-4c5d-8e9f-0a1b2c3d4e5f", "2026-11-03",
+    { conservative_defi_yield: 0.5, protocol_tokens: 0.07, real_world_assets: 0.29, hard_assets: 0.14 });
+  const agents = session("3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41", "2026-09-01",
+    { conservative_defi_yield: 0.95, agent_tokens: 0.05, protocol_tokens: 0, real_world_assets: 0 });
+  const json = (body: unknown) => ({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/swarm/subjects/robotmoney-allocation", (route) =>
+    route.fulfill(json({ id: "robotmoney-allocation", name: "Robot Money Allocation", source: { type: "framework" }, structural_notes: [], wallets: [] })));
+  await page.route("**/api/swarm/subjects/robotmoney-allocation/snapshots", (route) => route.fulfill(json({ snapshots: [] })));
+  await page.route("**/api/swarm/sessions?**", (route) => route.fulfill(json({ sessions: [gold, agents], nextCursor: null })));
+  await page.route("**/api/swarm/sessions", (route) => route.fulfill(json({ sessions: [gold, agents], nextCursor: null })));
+  for (const s of [gold, agents]) {
+    await page.route(`**/api/swarm/sessions/${s.id}`, (route) => route.fulfill(json({ session: s, takes: [] })));
+  }
+
+  await page.goto("/index.html");
+  await navigate(page, "/swarm/subjects/robotmoney-allocation");
+  const rows = page.locator("#history .sv__session-card");
+  await expect(rows).toHaveCount(2);
+  await expect(page.locator("#history thead th.q .sp-h")).toHaveText(
+    ["Conservative DeFi Yield", "Small Cap Tokens", "Protocol Tokens", "Real World Assets", "Hard Assets"]);
+  await expect(rows.nth(0).locator("td.q > span:first-child")).toHaveText(["50%", "—", "7%", "29%", "14%"]);
+  await expect(rows.nth(1).locator("td.q > span:first-child")).toHaveText(["95%", "5%", "0%", "0%", "—"]);
+  // The latest recommendation names the gold sleeve, and no closed one.
+  const keys = page.locator("#latest .rr-legend__row .rr-legend__l");
+  await expect(keys).toHaveText(["Conservative DeFi Yield", "Protocol Tokens", "Real World Assets", "Hard Assets"]);
 });
 
 // The archive fallback was keyed on the REQUEST failing. This route answers
@@ -497,7 +533,7 @@ test("a session with no consensus to report prints no consensus line", async ({ 
   await expect(latest).toBeVisible();
 
   // The session is here, and it does carry the decision...
-  await expect(latest.locator(".rr-legend__row").first()).toContainText("Fixed Income");
+  await expect(latest.locator(".rr-legend__row").first()).toContainText("Conservative DeFi Yield");
   await expect(latest.locator(".rr-legend__row").first()).toContainText("95%");
   await expect(page.locator("#history .sv__session-card").first().locator("td.q").first()).toHaveText("95%");
   // ...but nothing to say about the consensus, so the line is absent rather
@@ -624,7 +660,7 @@ test("the allocation subject carries the weights in force, and no other subject 
 
   const rows = card.locator(".sv__sleeve");
   await expect(rows).toHaveCount(4);
-  await expect(rows.first()).toContainText("Fixed Income");
+  await expect(rows.first()).toContainText("Conservative DeFi Yield");
   await expect(rows.first()).toContainText("95%");
 
   // A published zero draws an empty TRACK rather than no track: an absent
@@ -847,7 +883,7 @@ test("on a v0 archive reading, factor is drawn as the input it was", async ({ pa
   const hand = page.locator("#session-handover");
   // Figures, not bars: each sleeve and its target, in the hue it wears on the page.
   const targets = hand.locator('[data-part="targets"] .hand__targets li');
-  await expect(targets.locator("span")).toHaveText(["Fixed Income", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"]);
+  await expect(targets.locator("span")).toHaveText(["Conservative DeFi Yield", "Small Cap Tokens", "Protocol Tokens", "Real World Assets"]);
   await expect(targets.locator("b")).toHaveText(["95%", "5%", "0%", "0%"]);
   await expect(hand.locator('[data-part="targets"] .sv__sleeve-track')).toHaveCount(0);
   await expect(targets.first().locator("i")).toHaveAttribute("style", cardHue || "missing");
@@ -911,14 +947,14 @@ test("a subject with a book reads its latest recommendation against the book, as
   // The archived 2026-06-22 session: 95/5/0/0 recommended, the book entirely
   // in Conservative DeFi Yield (Aave, Compound, Morpho).
   await page.goto("/swarm/2026-06-22/robotmoney-vault");
-  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Fixed Income" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
+  await expect(page.locator("#recommendation .rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
   await expect(page.locator("#recommendation p.rr-k.rr-sub")).toHaveCount(0);
   const onSession = await moves("#recommendation");
   expect(onSession).toHaveLength(2);
 
   await page.goto("/swarm/subjects/robotmoney-vault");
   const latest = page.locator("#latest");
-  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Fixed Income" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
+  await expect(latest.locator(".rr-legend__row").filter({ hasText: "Conservative DeFi Yield" }).locator(".rr-legend__was")).toHaveText("Actual 100%");
   await expect(latest.locator(".rr-legend__row").filter({ hasText: "Small Cap Tokens" }).locator(".rr-legend__was")).toHaveText("Actual 0%");
   expect(await moves("#latest")).toEqual(onSession);
   await expect(latest.locator(".rr-legend__head")).not.toContainText("Target");

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { navigate } from "./navigation.ts";
 import { renderMeta } from "../../public/assets/js/app/seo.js";
+import { VAULTS } from "../../public/assets/js/app/lib/vault-data.js";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -85,7 +86,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
 
   // RM-115: the page reads the VAULTS and the allocation framework, and the
-  // house book is gone from it entirely. Until the four-vault route is served,
+  // house book is gone from it entirely. Until the vaults route is served,
   // the Vaults section reads rmUSDC from vault-economics (lib/vault-source.js),
   // so its TVL is derived from that same endpoint and stays correct as the
   // in-CI Base RPC stub's fixtures evolve (issue #48; zero live Base mainnet
@@ -104,7 +105,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   // meta rail above the weights carries the router, which holds nothing.
   const vaultRows = page.locator("#vaults tbody tr");
   const rmusdcTvl = vaultRows.first().locator("td[data-col=actual] small");
-  await expect(vaultRows).toHaveCount(4);
+  // One row per vault in VAULTS: three since rmAGENT closed with its sleeve,
+  // and a fourth when the gold vault gets one (RM-190).
+  await expect(vaultRows).toHaveCount(VAULTS.length);
   await expect(rmusdcTvl).toHaveText(expected.vault);
   await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
 
@@ -401,7 +404,7 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
 }
 
 test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
-  // Bare /vault is the four vaults on /allocation: the router moves the
+  // Bare /vault is the vaults table on /allocation: the router moves the
   // address to /allocation#vaults before it renders, so navigate(), which
   // waits for the render of the path it pushed, cannot drive it. A direct load
   // can. It is still an EXPLICIT route, not an absence: the catch-all maps an

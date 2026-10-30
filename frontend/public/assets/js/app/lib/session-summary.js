@@ -35,23 +35,34 @@ const STANCE_ORDER = ["bullish", "constructive", "neutral", "cautious", "bearish
 const VOTE_AXIS = ["bearish", "cautious", "neutral", "constructive", "bullish"];
 
 // The bucket order the allocation framework publishes in. Weights are printed
-// in this order rather than the object's, so "95 / 5 / 0 / 0" names the same
-// four sleeves every time.
-export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets"];
+// in this order rather than the object's, so "50 / 7 / 29 / 14" names the same
+// four sleeves every time. Hard Assets is last: it joined when Agent Tokens
+// closed, under a key of its own, so a weight filed for agent tokens never
+// reads as gold.
+export const BUCKET_ORDER = ["conservative_defi_yield", "agent_tokens", "protocol_tokens", "real_world_assets", "hard_assets"];
 
-// Named, not humanised from the key. The names are RM-97's (2026-09-15):
-// the API and the archive still send the framework's first names, which match
-// through LEGACY_LABELS and never print.
+// Sleeves the framework has closed. Each keeps its place in BUCKET_ORDER, and
+// so its hue and its name, because the sessions and receipts filed while it
+// was open still carry it. A view of the portfolio NOW leaves one out only
+// while it holds nothing (retiredAndEmpty): an old session's 5% still prints.
+// Agent Tokens closed with RM-190, and Hard Assets took its place.
+export const RETIRED_BUCKETS = ["agent_tokens"];
+
+// Named, not humanised from the key. Small Cap Tokens is RM-97's name
+// (2026-09-15); RM-190 gave Conservative DeFi Yield its own name back, because
+// "Fixed Income" read as bonds. Older names still match through LEGACY_LABELS
+// and never print.
 /** @type {Record<string, string>} */
 const BUCKET_LABELS = {
-  conservative_defi_yield: "Fixed Income",
+  conservative_defi_yield: "Conservative DeFi Yield",
   agent_tokens: "Small Cap Tokens",
   protocol_tokens: "Protocol Tokens",
   real_world_assets: "Real World Assets",
+  hard_assets: "Hard Assets",
 };
 /** @type {Record<string, string>} */
 const LEGACY_LABELS = {
-  conservative_defi_yield: "Conservative DeFi Yield",
+  conservative_defi_yield: "Fixed Income",
   agent_tokens: "Agent Tokens",
 };
 
@@ -95,6 +106,19 @@ export function bucketRank(idOrName) {
   const i = bucketIndex(idOrName);
   return i < 0 ? BUCKET_ORDER.length : i;
 }
+/** @param {unknown} idOrName */
+export function isRetiredBucket(idOrName) {
+  const i = bucketIndex(idOrName);
+  return i >= 0 && RETIRED_BUCKETS.includes(BUCKET_ORDER[i]);
+}
+// A closed sleeve with no weight to show: a 0, or no figure at all. A weight
+// it still carries is data and is never dropped.
+/** @param {unknown} idOrName @param {unknown} weight */
+export function retiredAndEmpty(idOrName, weight) {
+  if (!isRetiredBucket(idOrName)) return false;
+  const w = Number(weight);
+  return weight == null || !Number.isFinite(w) || w === 0;
+}
 /** @param {unknown} idOrName @param {number} [fallback] */
 export function bucketHue(idOrName, fallback = 0) {
   const i = bucketIndex(idOrName);
@@ -114,7 +138,7 @@ export function bucketLabel(idOrName) {
 // vault page's lede.
 // A sleeve's short name, for a narrow column on a phone.
 /** @type {Record<string, string>} */
-const BUCKET_SHORT = { conservative_defi_yield: "Fixed income", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA" };
+const BUCKET_SHORT = { conservative_defi_yield: "DeFi yield", agent_tokens: "Small caps", protocol_tokens: "Protocol tokens", real_world_assets: "RWA", hard_assets: "Hard assets" };
 /** @param {unknown} idOrName */
 export function bucketShort(idOrName) {
   const i = bucketIndex(idOrName);
@@ -140,10 +164,12 @@ export function bucketNote(idOrName) {
 // lists and a valued snapshot are both in hand and the snapshot was read on
 // or before `date`: a book read after the session is not what it acted on.
 //
-// A position that names its vault (the four-vault stack: `vault` is a slug)
+// A position that names its vault (the vault stack: `vault` is a slug)
 // counts toward that vault's sleeve, whatever its token: idle USDC inside
-// rmAGENT is Agent Tokens money. A book whose every position names its vault
-// needs no token lists, and is summed over the four published sleeves.
+// rmAGENT is Agent Tokens money, rmAGENT's retirement notwithstanding, since a
+// book read before it closed still holds it. A book whose every position
+// names its vault needs no token lists, and is summed over every published
+// sleeve.
 /**
  * @param {{ buckets?: Array<{ id: string, tokens: string[] }> } | null | undefined} framework
  * @param {{ date?: unknown, totalValueUsd?: unknown, total_value_usd?: unknown, positions?: any[] } | null | undefined} snapshot
@@ -156,7 +182,7 @@ export function bookSleeveShares(framework, snapshot, date) {
   const buckets = framework?.buckets || [];
   const positions = snapshot?.positions || [];
   const total = Number(snapshot?.totalValueUsd ?? snapshot?.total_value_usd ?? 0);
-  const vaultOf = (/** @type {any} */ p) => vaultBySlug(p?.vault);
+  const vaultOf = (/** @type {any} */ p) => vaultBySlug(p?.vault, { withRetired: true });
   const ids = buckets.length
     ? buckets.map((b) => b.id)
     : positions.length && positions.every((p) => vaultOf(p)) ? BUCKET_ORDER : [];

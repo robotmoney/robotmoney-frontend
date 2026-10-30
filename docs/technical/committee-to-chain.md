@@ -52,8 +52,10 @@ Only the last step changes weights. Everything before it is signalling.
 | --- | --- |
 | `conservative_defi_yield` | `rmUSDC` |
 | `protocol_tokens` | `rmPROTO` |
-| `agent_tokens` | `rmAGENT` |
+| `agent_tokens` | none: rmAGENT is retired (core ADR-0017). `apply-receipt` accepts the bucket at 0 bps and drops it, and refuses it with any weight. |
 | `real_world_assets` | `rmRWA` |
+
+Hard Assets (gold) replaces Agent Tokens as the fourth sleeve (RM-190). It has no vault yet: its bucket key comes with #1496, and its vault with the gold vault's deployment.
 
 Vault addresses come from the deployment's `vault_addresses` manifest only.
 

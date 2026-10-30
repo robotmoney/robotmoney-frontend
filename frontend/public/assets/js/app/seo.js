@@ -120,7 +120,7 @@ const META = {
   // which is now the index of every Robot Money agent skill.
   "/deposit": {
     title: "Deposit USDC with Your Agent | Robot Money",
-    description: "Deposit USDC from any AI agent with one skill: 95% into Fixed Income (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, less a 0.25% fee.",
+    description: "Deposit USDC from any AI agent with one skill: 95% into Conservative DeFi Yield (rmUSDC) on Base, 5% into seven Small Cap Tokens. Withdraw anytime, less a 0.25% fee.",
   },
   "/skills": {
     title: "Agent Skills | Robot Money",
@@ -137,19 +137,14 @@ const META = {
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",
-    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
+    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the vaults measured against the latest recommendation.",
   },
   // The four vault pages (/vault/:slug). noindex until the production launch
   // review: three of the four are not on Base yet, and none is in sitemap.xml.
   // `follow`, because every link on them goes to a real page.
   "/vault/rmusdc": {
-    title: "rmUSDC: Fixed Income Vault | Robot Money",
-    description: "rmUSDC, the Robot Money vault for the Fixed Income sleeve.",
-    robots: "noindex, follow",
-  },
-  "/vault/rmagent": {
-    title: "rmAGENT: Small Cap Tokens Vault | Robot Money",
-    description: "rmAGENT, the Robot Money vault for the Small Cap Tokens sleeve.",
+    title: "rmUSDC: Conservative DeFi Yield Vault | Robot Money",
+    description: "rmUSDC, the Robot Money vault for the Conservative DeFi Yield sleeve.",
     robots: "noindex, follow",
   },
   "/vault/rmproto": {
@@ -622,6 +617,9 @@ const LEGACY_ALIASES = [
   // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
   // /allocation.
   ["/vault", "/allocation", "exact"],
+  // rmAGENT closed with the Small Cap Tokens sleeve (RM-190) and its address
+  // renders the allocation view, so it names /allocation canonical too.
+  ["/vault/rmagent", "/allocation", "exact"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META

@@ -72,10 +72,16 @@ async function render(pathname) {
     location.reload();
     return;
   }
-  // Bare /vault is the four vaults on /allocation. The address moves there,
+  // Bare /vault is the vaults on /allocation. The address moves there,
   // query kept (the vault data switch rides on it), so the page, its canonical
   // and its #vaults section all agree on where the reader is.
   if (pathname === "/vault" || pathname === "/vault/") {
+    history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
+    pathname = "/allocation";
+  }
+  // rmAGENT closed with the Small Cap Tokens sleeve (RM-190). Its old address
+  // goes to the vaults that remain, the same way.
+  if (pathname === "/vault/rmagent" || pathname === "/vault/rmagent/") {
     history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
     pathname = "/allocation";
   }

@@ -525,7 +525,7 @@ also lists `cites`, but `submit` does not accept it yet: leave it out.
   (`recommendationType` `bucket_weights`) and `true` on every other subject
   (the vault, the treasury and Woon, all `position_actions`). On the allocation
   subject a take must carry exactly the four buckets in `takeSchema.weights.buckets`
-  (`agent_tokens`, `conservative_defi_yield`, `protocol_tokens`,
+  (`conservative_defi_yield`, `hard_assets`, `protocol_tokens`,
   `real_world_assets`), one entry each, as
   `[{ "bucket": …, "weight": … }]` with non-negative weights summing to 1.
   Anything less is refused `400 weights_required_for_bucket_weights_subject` or

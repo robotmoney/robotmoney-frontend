@@ -41,7 +41,6 @@
 // test.
 import { api, ROUTES, path } from "./api.js";
 import {
-  VAULTS,
   VAULTS_ENDPOINT,
   bpsFromWeights,
   isLocalHost,
@@ -49,12 +48,11 @@ import {
   normalizeOverview,
   numberOrNull,
   vaultBySlug,
-  vaultForBucket,
   withPolicyTargets,
   withRecommendation,
 } from "./vault-data.js";
 import { loadAllocationDto } from "./allocation-framework.js";
-import { weightEntries } from "./session-summary.js";
+import { BUCKET_ORDER, bucketRank, weightEntries } from "./session-summary.js";
 import { ALLOCATION_SUBJECT_ID, isPublishedAllocationSession } from "./allocation-subject.js";
 
 export const VAULT_MODE_PARAM = "vaults";
@@ -218,6 +216,9 @@ const sessionRecommendationOf = (s) => s?.swarmRecommendation ?? s?.swarm_recomm
 
 // A bucket_weights session's weights as basis points per bucket, with where it
 // is published. null for any other kind of session or one without weights.
+// Every sleeve in BUCKET_ORDER, a retired one included: a recommendation that
+// still gave Small Cap Tokens 3% keeps that 3%, so its vault layer stays
+// incomplete (layerComplete) rather than reading as a full one.
 /**
  * @param {any} session
  * @returns {{ sessionId: string | null, date: string | null, subjectId: string | null, publishedAt: string | null, releasedOnChain: null, href: string | null, bpsByBucket: Record<string, number | null> } | null}
@@ -228,15 +229,15 @@ export function recommendationFromSession(session) {
   /** @type {Map<string, number | null>} */
   const byBucket = new Map();
   for (const [k, w] of weightEntries(r.weights)) {
-    const v = vaultForBucket(k);
-    if (v) byBucket.set(v.bucket, numberOrNull(w));
+    const i = bucketRank(k);
+    if (i < BUCKET_ORDER.length) byBucket.set(BUCKET_ORDER[i], numberOrNull(w));
   }
-  const weights = VAULTS.map((v) => (byBucket.has(v.bucket) ? byBucket.get(v.bucket) ?? null : null));
+  const weights = BUCKET_ORDER.map((b) => (byBucket.has(b) ? byBucket.get(b) ?? null : null));
   if (weights.every((w) => w === null)) return null;
   const list = bpsFromWeights(weights);
   /** @type {Record<string, number | null>} */
   const bpsByBucket = {};
-  VAULTS.forEach((v, i) => { bpsByBucket[v.bucket] = list[i]; });
+  BUCKET_ORDER.forEach((b, i) => { bpsByBucket[b] = list[i]; });
   const date = session?.date ? String(session.date) : null;
   const subjectId = session?.subjectId ?? session?.subject_id ?? null;
   const id = session?.id ? String(session.id) : null;

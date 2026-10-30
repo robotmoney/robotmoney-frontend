@@ -94,11 +94,15 @@ test("/vault is an exact alias: the bare path is /allocation, each vault page is
   expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/allocation");
   expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/allocation");
   expect(metaFor("/vault")).toEqual(metaFor("/allocation"));
+  // rmAGENT's address, closed with its sleeve, renders /allocation too.
+  expect(canonicalUrlFor("/vault/rmagent")).toBe("https://robotmoney.network/allocation");
+  expect(canonicalUrlFor("/vault/rmagent/")).toBe("https://robotmoney.network/allocation");
+  expect(metaFor("/vault/rmagent")).toEqual(metaFor("/allocation"));
 
-  // The four vault pages are NOT rewritten under /allocation: each keeps its
+  // The three vault pages are NOT rewritten under /allocation: each keeps its
   // own address, stays out of the index until the launch review, and titles
   // itself by its symbol.
-  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmagent: "rmAGENT", rmproto: "rmPROTO", rmrwa: "rmRWA" };
+  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmproto: "rmPROTO", rmrwa: "rmRWA" };
   for (const [slug, symbol] of Object.entries(symbols)) {
     const path = `/vault/${slug}`;
     expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });
