@@ -322,6 +322,9 @@ describe("the quickstart replays the newest published run the archive holds", ()
     expect(isFixedProducer(runs.get(k1)!.buildIdentity)).toBe(false);
     expect(isFixedProducer(runs.get(k2)!.buildIdentity)).toBe(true);
     expect(isFixedProducer("")).toBe(false);
+    // v0.7.0 predates D78's exact arithmetic: its runs replay equal on the labels only.
+    expect(isFixedProducer("8c2690bac11440a8d8ef86733a567066afaea116")).toBe(false);
+    expect(isFixedProducer("4928ee57f5bb833dd4b543113b385f1570251eac")).toBe(true);
     expect(archivedRuns(join(dir, "missing")).size).toBe(0);
   });
 });

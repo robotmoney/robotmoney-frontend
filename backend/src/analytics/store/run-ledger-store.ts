@@ -146,14 +146,21 @@ const selectHistoricalSourceValues = registerQuery({
   purpose: "Read the newest revision per source coordinate known at a knowledge-time cutoff, the boundary a vintage freezes (issue #977 AC2).",
   callers: [ANALYTICS_ROUTE],
   probe: {
-    statement: `SELECT DISTINCT ON (source_key, market_date, market_instant)
-      id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
-    FROM source_value_versions
-    WHERE knowledge_time <= $1::timestamptz
-      AND (market_date IS NULL OR market_date <= $2::date)
-      AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
-    ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC`,
-    params: ["2000-01-01T00:00:00Z", "2000-01-01"],
+    statement: `SELECT source_key, string_agg(
+      id::text || E'\t' || coalesce(market_date::text, '') || E'\t' || coalesce(market_instant::text, '') || E'\t' || value::text,
+      E'\n' ORDER BY market_date, market_instant) AS points
+    FROM (
+      SELECT DISTINCT ON (source_key, market_date, market_instant)
+        id, source_key, market_date, market_instant, value
+      FROM source_value_versions
+      WHERE knowledge_time <= $1::timestamptz
+        AND (market_date IS NULL OR market_date <= $2::date)
+        AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
+        AND source_key <> ALL($3::text[])
+      ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC
+    ) heads
+    GROUP BY source_key`,
+    params: ["2000-01-01T00:00:00Z", "2000-01-01", "{}"],
   },
 });
 
@@ -424,21 +431,48 @@ export async function loadCurrentSourceValues(db: DbHandle = sql): Promise<Froze
 // freezeVintage below uses, and it is intentionally a SEPARATE function from
 // loadCurrentSourceValues rather than an optional-cutoff overload of it, so
 // the two can never be confused at a call site.
+// Issue 1514 (v0.7.1): a freeze reads ~270k ledger heads on the request path. One row per head
+// cost 2.3 s of client row decoding on the stage run. This ships one tab-separated text value per
+// series instead, and decodes in 0.15 s. The text is the columns' own output (id, market_date and
+// market_instant as ::text, value as float8 text, which round-trips exactly), so the members are
+// the ones the row-per-head form returned. A caller that supplies its own members for some keys
+// (the regime run, issue 1534) passes them in `excludeSourceKeys` and skips reading them.
 export async function loadHistoricalSourceValues(
   knowledgeTimeCutoff: string,
   marketTimeCutoff: string,
   db: DbHandle = sql,
+  excludeSourceKeys: readonly string[] = [],
 ): Promise<FrozenSourceValue[]> {
   const rows = (await on(db, selectHistoricalSourceValues)`
-    SELECT DISTINCT ON (source_key, market_date, market_instant)
-      id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value
-    FROM source_value_versions
-    WHERE knowledge_time <= ${knowledgeTimeCutoff}::timestamptz
-      AND (market_date IS NULL OR market_date <= ${marketTimeCutoff}::date)
-      AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= ${marketTimeCutoff}::date)
-    ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC
-  `) as unknown as SourceValueRow[];
-  return rows.map(toFrozen);
+    SELECT source_key, string_agg(
+      id::text || E'\t' || coalesce(market_date::text, '') || E'\t' || coalesce(market_instant::text, '') || E'\t' || value::text,
+      E'\n' ORDER BY market_date, market_instant) AS points
+    FROM (
+      SELECT DISTINCT ON (source_key, market_date, market_instant)
+        id, source_key, market_date, market_instant, value
+      FROM source_value_versions
+      WHERE knowledge_time <= ${knowledgeTimeCutoff}::timestamptz
+        AND (market_date IS NULL OR market_date <= ${marketTimeCutoff}::date)
+        AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= ${marketTimeCutoff}::date)
+        AND source_key <> ALL(${[...excludeSourceKeys]}::text[])
+      ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC
+    ) heads
+    GROUP BY source_key
+  `) as unknown as { source_key: string; points: string }[];
+  const out: FrozenSourceValue[] = [];
+  for (const row of rows) {
+    for (const line of row.points.split("\n")) {
+      const [id, marketDate, marketInstant, value] = line.split("\t");
+      out.push({
+        versionId: id!,
+        sourceKey: row.source_key,
+        marketDate: marketDate || null,
+        marketInstant: marketInstant || null,
+        value: Number(value),
+      });
+    }
+  }
+  return out;
 }
 
 // AN-16 (owner decision): a regime run computes from exactly the values its
@@ -587,14 +621,18 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     throw new VintageConflictError({ vintageId: frozen.vintageId, manifest: frozen.manifest, memberCount: frozen.memberCount, replayed: false });
   }
 
-  const byCutoff = await loadHistoricalSourceValues(input.knowledgeTimeCutoff, input.marketTimeCutoff);
+  const byCutoff = await loadHistoricalSourceValues(
+    input.knowledgeTimeCutoff,
+    input.marketTimeCutoff,
+    sql,
+    input.regimeVersionIds ? REGIME_STORAGE_KEYS : [],
+  );
   try {
     return await sql.begin(async (tx) => {
       let members = byCutoff;
       if (input.regimeVersionIds) {
-        const regimeKeys = new Set(REGIME_STORAGE_KEYS);
         const regime = await loadRegimeMembers(tx, input.regimeVersionIds, input.knowledgeTimeCutoff, input.marketTimeCutoff);
-        members = [...regime, ...byCutoff.filter((m) => !regimeKeys.has(m.sourceKey))];
+        members = [...regime, ...byCutoff];
       }
       const { manifest } = buildVintageManifest(
         members,
