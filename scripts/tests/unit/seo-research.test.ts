@@ -16,6 +16,7 @@ import {
   citeTitle,
   metaFor,
   renderMeta,
+  newsIndex,
   researchIndex,
   researchRoutes,
   routeDownloads,
@@ -32,7 +33,7 @@ const ORG_ID = ORIGIN + "/#org";
 const REVISED = "2026-09-24";
 const EM_DASH = "\u2014";
 
-// The 14 research pages and the schema.org type each one declares.
+// The 15 research and news pages and the schema.org type each one declares.
 const EXPECTED: Record<string, string> = {
   "/regime": "Dataset",
   "/regime/indicators": "TechArticle",
@@ -48,7 +49,11 @@ const EXPECTED: Record<string, string> = {
   "/blog/regime-conservative-aggressive": "BlogPosting",
   "/blog/regime-eq-vs-base": "BlogPosting",
   "/blog/treasury-allocation": "BlogPosting",
+  "/news": "CollectionPage",
 };
+// Announcements and partnerships (RM-197): listed on /news, not the research
+// index, and their breadcrumb's middle step is News.
+const NEWS = new Set(["/news", "/blog/announcement", "/blog/peaq-partnership"]);
 const RESEARCH = Object.keys(EXPECTED);
 const ARTICLE_TYPES = new Set(["TechArticle", "BlogPosting", "Article"]);
 
@@ -217,7 +222,7 @@ describe.each(RESEARCH)("%s", (route) => {
     const items: Json[] = crumbs!.itemListElement;
     expect(items.map((c) => c.position)).toEqual(items.map((_, i) => i + 1));
     expect(items[0]).toMatchObject({ name: "Home", item: ORIGIN + "/" });
-    expect(items[1]).toMatchObject({ name: "Research", item: ORIGIN + "/blog" });
+    expect(items[1]).toMatchObject(NEWS.has(route) ? { name: "News", item: ORIGIN + "/news" } : { name: "Research", item: ORIGIN + "/blog" });
     expect(items.at(-1)!.item).toBe(ORIGIN + route);
     for (const c of items) expect(c["@type"]).toBe("ListItem");
   });
@@ -302,6 +307,14 @@ describe("structured data details", () => {
     expect(listed).toEqual(researchIndex().map((e) => ORIGIN + e.path));
     const dates = researchIndex().map((e) => e.meta.published!);
     expect(dates).toEqual([...dates].sort().reverse());
+  });
+
+  test("/news lists the announcements, newest first, and the research index none of them", () => {
+    const page = graphOf(routeStructuredData("/news")).find((n) => n["@type"] === "CollectionPage")!;
+    const listed = page.mainEntity.itemListElement.map((e: Json) => e.url);
+    expect(listed).toEqual(newsIndex().map((e) => ORIGIN + e.path));
+    expect(listed).toEqual([ORIGIN + "/blog/peaq-partnership", ORIGIN + "/blog/announcement"]);
+    for (const e of researchIndex()) expect(NEWS.has(e.path), e.path).toBe(false);
   });
 
   test("a route outside research gets no route JSON-LD and stays a website", () => {
@@ -465,7 +478,7 @@ describe("blog/feed.xml", () => {
 
   test("lists every blog post in the sitemap", () => {
     const links = new Set(items.map((it) => kid(it, "link")?.text));
-    for (const post of SITEMAP_ROUTES.filter((r) => r.startsWith("/blog/"))) {
+    for (const post of SITEMAP_ROUTES.filter((r) => r.startsWith("/blog/") && !NEWS.has(r))) {
       expect(links.has(ORIGIN + post), `${post} is not in the feed`).toBe(true);
     }
   });

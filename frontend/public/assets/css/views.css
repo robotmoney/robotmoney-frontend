@@ -276,13 +276,14 @@
 .rv__fig-d { flex-basis: 100%; margin: 0.25rem 0 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-muted); }
 
 /* Methodology: the panels table in prose type, the method as key and value
-   rows, then the reading list. */
+   rows, then the reading list. The cell rule names .rr-table too: the shared
+   table's mono, centred cells come later in this file and would otherwise
+   win. Every column wraps, so no one cell sets the table's width. */
 .rv__method-lead { margin: 0 0 2rem; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }
 #methodology-sec .rr-subhead__h { margin: 2.25rem 0 1rem; }
 .rv__mtable { min-width: 52rem; }
-.rv__mtable td { font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.55; vertical-align: top; }
+.rr-table.rv__mtable td { font-family: var(--font-sans); font-variant-numeric: normal; font-size: 0.8125rem; line-height: 1.55; vertical-align: top; text-wrap: pretty; }
 .rv__mtable tbody th { vertical-align: top; white-space: nowrap; }
-.rv__mtable td:last-child { white-space: nowrap; }
 .rv__method-note { margin: 1rem 0 0; font-size: 0.8125rem; line-height: 1.65; color: var(--color-text-muted); }
 .rv__mdl > div { grid-template-columns: 9rem minmax(0, 1fr); }
 .rv__mdl dd { color: var(--color-text-soft); line-height: 1.6; }
@@ -2617,4 +2618,137 @@ a.sv__vfy { text-decoration: none; }
 @media (max-width: 560px) {
   .rr-profile { flex-direction: column; gap: 0.75rem; }
   .rr-profile__mark { width: 3.5rem; height: 3.5rem; }
+}
+
+/* ── The post indexes: /blog (research) and /news (RM-197) ───────────────────
+   One look for both lists, moved here from views/blog.html when the
+   announcements got a page of their own. */
+.blog-idx {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 0 1.5rem 5rem;
+}
+/* The full-bleed headline band every nav page shares: the art spans the
+   viewport, the copy sits on the 80rem site column, and the shared hero rules
+   in components.css pin the headline to the same offset as /skills and
+   /changelog. No bottom fade: the band ends on its hairline. */
+.blog-idx__hero {
+  position: relative;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  overflow: hidden;
+  min-height: 52vh;
+  display: flex;
+  align-items: flex-start;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-void);
+  margin-bottom: 1.5rem;
+}
+.blog-idx__hero-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.blog-idx__hero-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 10rem 1.5rem 2.5rem;
+}
+.blog-idx__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: clamp(2.5rem, 4.2vw, 3.75rem);
+  line-height: 1.05;
+  color: var(--color-text);
+  margin: 0;
+}
+.blog-idx__title-alt {
+  font-family: var(--font-display);
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+.blog-idx__lede {
+  color: var(--color-text-soft);
+  margin: 1.25rem 0 0;
+  max-width: 44rem;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+/* One row per entry, divided by hairlines: the kind and date on the left,
+   the title and one excerpt on the right. Stacks under 768px. */
+.blog-idx__list {
+  display: flex;
+  flex-direction: column;
+}
+.blog-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--color-border);
+  text-decoration: none;
+  color: inherit;
+}
+.blog-card:last-child { border-bottom: 0; }
+.blog-card:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+.blog-card__body { min-width: 0; }
+.blog-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--color-text-muted);
+}
+.blog-card__dot { color: var(--color-border-light); }
+.blog-card__title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  font-size: 1.3125rem;
+  line-height: 1.2;
+  color: var(--color-text);
+  margin: 0 0 0.5rem;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: text-decoration-color 100ms var(--ease-out-expo);
+}
+.blog-card:hover .blog-card__title,
+.blog-card:focus-visible .blog-card__title { text-decoration-color: var(--color-link-line); }
+.blog-card__excerpt {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--color-text-soft);
+  max-width: 52rem;
+  margin: 0;
+}
+@media (min-width: 768px) {
+  .blog-card {
+    grid-template-columns: 12rem minmax(0, 1fr);
+    gap: 2.25rem;
+    padding: 2.25rem 0;
+  }
+  .blog-card__meta { flex-direction: column; gap: 0.25rem; padding-top: 0.35rem; }
+  .blog-card__dot { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .blog-card__title { transition: none; }
 }

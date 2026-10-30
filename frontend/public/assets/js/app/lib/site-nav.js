@@ -8,7 +8,9 @@
 // A section owns its prefixes on a segment boundary: "/regime" owns
 // /regime/indicators and not /regime-detection, which is listed on its own.
 // The longest prefix wins, so the Robot Money Vault's page lights Vaults and
-// the RM Protocol Labs Treasury's lights Company, though both sit under /swarm.
+// the RM Protocol Labs Treasury's lights Company, though both sit under /swarm,
+// and the two announcement posts light Company (News) though they sit under
+// /blog, which is the research index.
 
 /** @type {Array<{ key: string, prefixes: string[] }>} */
 export const NAV_SECTIONS = [
@@ -19,7 +21,10 @@ export const NAV_SECTIONS = [
     prefixes: ["/regime", "/regime-detection", "/regime_2panel", "/blog", "/research", "/articles", "/smart-contract-risks"],
   },
   { key: "docs", prefixes: ["/skills", "/docs", "/changelog"] },
-  { key: "company", prefixes: ["/tokenomics", "/media", "/treasury", "/performance", "/swarm/subjects/robotmoney-treasury"] },
+  {
+    key: "company",
+    prefixes: ["/tokenomics", "/news", "/blog/announcement", "/blog/peaq-partnership", "/media", "/treasury", "/performance", "/swarm/subjects/robotmoney-treasury"],
+  },
 ];
 
 /** @param {string} pathname */
