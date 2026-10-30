@@ -68,7 +68,8 @@
             <label class="ea__label" for="ea-referral">Referral code <span class="ea__opt-tag">Optional</span></label>
             <input class="ea__input ea__input--mono" id="ea-referral" name="referral" type="text" autocomplete="off" spellcheck="false"
                    autocapitalize="none" placeholder="rm_name" maxlength="64"
-                   x-model="draft.referralCode" />
+                   x-model="draft.referralCode" aria-describedby="ea-referral-hint" />
+            <p class="ea__hint" id="ea-referral-hint">It's on the page of the <a href="/swarm#members">swarm member</a> who sent you, and starts with rm_.</p>
           </div>
 
           <p class="ea__group">Three quick questions, so we reach the right treasuries first.</p>
@@ -220,11 +221,11 @@
 
 .ea__form { display: flex; flex-direction: column; gap: 1.75rem; }
 .ea__privacy { margin: 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-muted); }
-.ea__privacy a, .ea__err a, .ea__done-p a, .ea__fact a {
+.ea__privacy a, .ea__hint a, .ea__err a, .ea__done-p a, .ea__fact a {
   color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line);
   text-decoration-thickness: 1px; text-underline-offset: 3px;
 }
-.ea__privacy a:hover, .ea__err a:hover, .ea__done-p a:hover, .ea__fact a:hover { text-decoration-color: var(--color-link); }
+.ea__privacy a:hover, .ea__hint a:hover, .ea__err a:hover, .ea__done-p a:hover, .ea__fact a:hover { text-decoration-color: var(--color-link); }
 
 .ea__field { display: flex; flex-direction: column; gap: 0.5rem; }
 .ea__label { padding: 0; font-size: 0.9375rem; font-weight: 500; line-height: 1.4; color: var(--color-text); }

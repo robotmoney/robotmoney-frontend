@@ -38,6 +38,20 @@ export function referralCode(store) {
   try { return storage(store)?.getItem(KEY) || null; } catch { return null; }
 }
 
+// A member's code (RM-195): `rm_` and the member's handle, the shape the
+// referral spec issues (docs/technical/referrals-spec.md §5), shown on the
+// member's page so a visitor knows what to enter. Derived until the API serves
+// the issued code, which keeps its handle when a member is renamed. Null for a
+// handle that makes no valid code.
+const CODE = /^rm_[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const CODE_MAX = 32;
+
+/** @param {string | null | undefined} handle */
+export function memberReferralCode(handle) {
+  const code = `rm_${String(handle ?? "").trim().toLowerCase()}`;
+  return code.length <= CODE_MAX && CODE.test(code) ? code : null;
+}
+
 /** Forget the code once the form that carries it has been sent. @param {Storage} [store] */
 export function clearReferral(store) {
   try { storage(store)?.removeItem(KEY); } catch { /* nothing held */ }

@@ -3,7 +3,7 @@
 // sends. No DOM and no Alpine runtime: the factory's helpers are pure.
 import { test, expect, describe } from "bun:test";
 import { keccak256Hex, parseEvmAddress } from "../../../frontend/public/assets/js/app/lib/evm-address.js";
-import { captureReferral, referralCode, clearReferral } from "../../../frontend/public/assets/js/app/lib/referral.js";
+import { captureReferral, referralCode, clearReferral, memberReferralCode } from "../../../frontend/public/assets/js/app/lib/referral.js";
 import { validateEarlyAccess, earlyAccessPayload, sendEarlyAccess, sourceFor, normalizeHandle } from "../../../frontend/public/assets/js/app/alpine/views/early-access.js";
 
 function memoryStorage(): Storage {
@@ -74,6 +74,15 @@ describe("referral code", () => {
     captureReferral("?utm_source=x", s);
     captureReferral(`?ref=${"a".repeat(65)}`, s);
     expect(referralCode(s)).toBeNull();
+  });
+
+  test("a member's code is rm_ and its handle, lowercased, or none when that is no valid code", () => {
+    expect(memberReferralCode("dualmint-2")).toBe("rm_dualmint-2");
+    expect(memberReferralCode(" Minds-By-Animoca-Brands ")).toBe("rm_minds-by-animoca-brands");
+    for (const handle of ["", null, undefined, "a_b", "-lead", "trail-", "a--b", "x".repeat(30)]) {
+      expect(memberReferralCode(handle)).toBeNull();
+    }
+    expect(memberReferralCode("x".repeat(29))).toBe(`rm_${"x".repeat(29)}`);
   });
 
   test("is forgotten once the form is sent", () => {
