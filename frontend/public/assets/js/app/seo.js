@@ -137,7 +137,7 @@ const META = {
   },
   "/allocation": {
     title: "Allocation: Target Sleeves and Vaults | Robot Money",
-    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
+    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the vaults measured against the latest recommendation.",
   },
   // The four vault pages (/vault/:slug). noindex until the production launch
   // review: three of the four are not on Base yet, and none is in sitemap.xml.
