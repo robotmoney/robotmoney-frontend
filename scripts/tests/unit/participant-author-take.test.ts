@@ -9,7 +9,7 @@
 //
 // Cost class `unit` (docs/architecture.md §3 L1): no Docker, no network.
 import { describe, expect, test } from "bun:test";
-import { RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
+import { RECEIPT_HARD_ASSETS_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
 import {
   authorTakeDraft,
   readAuthorTakeEnv,
@@ -33,7 +33,7 @@ const ENV = {
   RM_INFERENCE_WIRE_ID: "w",
 };
 
-const WEIGHTS_LINE = `WEIGHTS: ${RECEIPT_CANONICAL_BUCKET_ORDER.map((b, i) => `${b}=${[0.55, 0.15, 0.2, 0.1][i]}`).join(" | ")}`;
+const WEIGHTS_LINE = `WEIGHTS: ${RECEIPT_HARD_ASSETS_BUCKET_ORDER.map((b, i) => `${b}=${[0.55, 0.15, 0.2, 0.1][i]}`).join(" | ")}`;
 /** A body of `n` words of plain prose: enough for the judge to read a position from. */
 const prose = (n: number): string => Array.from({ length: n }, (_, i) => (i % 9 === 8 ? "cautious," : "tape")).join(" ");
 const ENOUGH = prose(MIN_TAKE_WORDS + 20);
@@ -110,7 +110,7 @@ describe("the take prompt is production's persona prompt", () => {
     const prompt = takePrompt(cfg, context);
     for (const section of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) expect(prompt).toContain(section);
     expect(prompt).toContain("Sleeve targets in force: Agent Tokens 5% (Virtuals)");
-    for (const bucket of RECEIPT_CANONICAL_BUCKET_ORDER) expect(prompt).toContain(`${bucket}=<0-1>`);
+    for (const bucket of RECEIPT_HARD_ASSETS_BUCKET_ORDER) expect(prompt).toContain(`${bucket}=<0-1>`);
   });
 
   test("the in-house lens and bias table is the one the scenario roster uses", () => {
@@ -162,7 +162,7 @@ describe("the one-shot refuses a take the judge cannot read, and posts a memo fo
   test("a bucket_weights take carries exactly the four weights, and one without them is refused", async () => {
     const ok = newApi([GOOD_ALLOCATION], "bucket_weights");
     const draft = await authorTakeDraft(ENV, fakeFetch(ok));
-    expect(draft.weights).toEqual(RECEIPT_CANONICAL_BUCKET_ORDER.map((bucket, i) => ({ bucket, weight: [0.55, 0.15, 0.2, 0.1][i] })));
+    expect(draft.weights).toEqual(RECEIPT_HARD_ASSETS_BUCKET_ORDER.map((bucket, i) => ({ bucket, weight: [0.55, 0.15, 0.2, 0.1][i] })));
     expect(String(draft.body)).not.toContain("WEIGHTS");
 
     const noWeights = `**REGIME**\n- x\n\n**ALLOCATION**\n- ${ENOUGH}\n\nSTANCE: cautious | CONFIDENCE: 0.6`;

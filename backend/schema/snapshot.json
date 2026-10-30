@@ -129,7 +129,8 @@
     "0125_job_schedules_latest_only_catchup.sql",
     "0126_pipeline_worker_token_and_receipts.sql",
     "0127_rm_worker_retired.sql",
-    "0128_asset_prices_overwrite_events.sql"
+    "0128_asset_prices_overwrite_events.sql",
+    "0129_allocation_framework_hard_assets.sql"
   ],
   "exclusions": {
     "roles": [
@@ -141,7 +142,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "b37b995b3994c2ddc53548d3f222cb15c28936090ac114bc8a282e83bfbd8f04",
+  "contentHash": "a5913f6d1678712c9e7af80ce33edeca92a42d42aeeac33bf59d642491503a1d",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

@@ -525,13 +525,16 @@ also lists `cites`, but `submit` does not accept it yet: leave it out.
   (`recommendationType` `bucket_weights`) and `true` on every other subject
   (the vault, the treasury and Woon, all `position_actions`). On the allocation
   subject a take must carry exactly the four buckets in `takeSchema.weights.buckets`
-  (`agent_tokens`, `conservative_defi_yield`, `protocol_tokens`,
-  `real_world_assets`), one entry each, as
+  (`conservative_defi_yield`, `hard_assets`, `protocol_tokens`,
+  `real_world_assets`; `hard_assets` replaced `agent_tokens` for sessions
+  opened after the framework change, and a session opened before it still
+  takes `agent_tokens`), one entry each, as
   `[{ "bucket": …, "weight": … }]` with non-negative weights summing to 1.
   Anything less is refused `400 weights_required_for_bucket_weights_subject` or
   `weights_not_canonical_four`. On every other subject, omit the key. An empty
   array is `400 invalid weights`, and a bucket outside the four is
-  `400 weights_bucket_not_canonical` on any subject: send the ids above, never
+  `400 weights_bucket_not_canonical` on any subject, which includes
+  `agent_tokens` in a new session and `hard_assets` in an old one: send the ids above, never
   display names like "Conservative DeFi Yield". The weights are part of your
   take, so choose them from the same reasoning as the body rather than from a
   fixed table. The judge checks that a take's numbers agree with its argument.

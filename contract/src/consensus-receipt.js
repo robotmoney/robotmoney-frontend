@@ -49,10 +49,33 @@ export const RECEIPT_STANCE_KEYS = Object.freeze([
   "bearish", "cautious", "neutral", "constructive", "bullish",
 ]);
 
-/** The four PRD vaults, in the order `weights` must be emitted. */
+/**
+ * The four PRD vaults, in the order `weights` must be emitted, as the PUBLISHED
+ * canonicalization spec pins them (the pre-Hard-Assets list). It stays this list
+ * forever: past receipts and the published fixtures verify against it. A session
+ * picks its own list through `bucketOrderForAsOf`.
+ */
 export const RECEIPT_CANONICAL_BUCKET_ORDER = Object.freeze([
   "agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets",
 ]);
+
+/** The list for a session on or after the framework asOf: Hard Assets (gold) replaces Agent Tokens. */
+export const RECEIPT_HARD_ASSETS_BUCKET_ORDER = Object.freeze([
+  "conservative_defi_yield", "hard_assets", "protocol_tokens", "real_world_assets",
+]);
+
+/**
+ * THE ONE FUNCTION THAT PICKS A SESSION'S BUCKET LIST (issue 1496). A session
+ * whose asOf (YYYY-MM-DD, or any ISO timestamp, read by its first ten
+ * characters) is before the framework asOf uses the old list; on or after it,
+ * the Hard Assets list. Validation, the brief, the assembler and the verifier all
+ * call this, so a receipt's meaning never depends on any other date.
+ */
+export function bucketOrderForAsOf(sessionAsOf, frameworkAsOf) {
+  const session = String(sessionAsOf).slice(0, 10);
+  const framework = String(frameworkAsOf).slice(0, 10);
+  return session < framework ? RECEIPT_CANONICAL_BUCKET_ORDER : RECEIPT_HARD_ASSETS_BUCKET_ORDER;
+}
 
 // THE SPEC THIS MODULE USES WHEN THE CALLER SUPPLIES NONE — the five constants
 // above, assembled once, under the same key names consensus-receipt.canonicalization.json
@@ -727,13 +750,32 @@ function meanWeightsBps(vectors, bucketOrder) {
   return bucketSharesToBps(new Map(result.map((entry) => [entry.bucket, entry.weight])), bucketOrder);
 }
 
-export function receiptSemanticErrors(receipt, spec) {
+/**
+ * The session's asOf as the receipt itself states it: the `date` inside the first
+ * embedded signed submission (the submit route refuses a signed date that is not
+ * the session's). `created_at` is the publish instant, never the session day.
+ * Null when it cannot be read, and the caller then keeps the spec's list.
+ */
+export function receiptSessionAsOf(receipt) {
+  try {
+    const date = JSON.parse(receipt.analyst_signatures[0].canonical_submission).date;
+    return typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+  } catch {
+    return null;
+  }
+}
+
+export function receiptSemanticErrors(receipt, spec, options) {
   // Same all-or-nothing rule as canonicalizeReceipt, and read up front for the
   // same reason: `canonical_bucket_order` is only consulted for a receipt that
   // carries `weights`, so reading it at its use site would let a partial spec
   // pass unnoticed for every receipt that omits them.
   const s = resolveSpec(spec, "receiptSemanticErrors");
-  const bucketOrder = requiredSpecField(s, "canonical_bucket_order", "receiptSemanticErrors");
+  // With `options.frameworkAsOf` the list is the one the receipt's own session
+  // asOf selects (issue 1496); without it, the spec's list decides as before.
+  const specOrder = requiredSpecField(s, "canonical_bucket_order", "receiptSemanticErrors");
+  const sessionAsOf = options?.frameworkAsOf != null ? receiptSessionAsOf(receipt) : null;
+  const bucketOrder = sessionAsOf != null ? bucketOrderForAsOf(sessionAsOf, options.frameworkAsOf) : specOrder;
   const errors = [];
   const q = receipt.quorum;
   if (q.active !== q.submitted + q.absent) errors.push("quorum: active !== submitted + absent");

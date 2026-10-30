@@ -164,6 +164,7 @@ const NOT_IN_PRODUCTION = [
   "0126_pipeline_worker_token_and_receipts.sql",
   "0127_rm_worker_retired.sql",
   "0128_asset_prices_overwrite_events.sql",
+  "0129_allocation_framework_hard_assets.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

@@ -47,7 +47,7 @@ test("a session with no frozen roster counts analysts only: the judge is neither
   await domain.publishBrief(opened.id, 60);
   const date = opened.date instanceof Date ? opened.date.toISOString().slice(0, 10) : String(opened.date).slice(0, 10);
   for (const m of [a, b]) {
-    const payload = { memberId: m.id, date, subjectId, nonce: rid("nonce"), stance: "neutral", confidence: 0.5, body: memoBody(subjectId), weights: ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"].map((bucket) => ({ bucket, weight: 0.25 })) };
+    const payload = { memberId: m.id, date, subjectId, nonce: rid("nonce"), stance: "neutral", confidence: 0.5, body: memoBody(subjectId), weights: ["hard_assets", "conservative_defi_yield", "protocol_tokens", "real_world_assets"].map((bucket) => ({ bucket, weight: 0.25 })) };
     const signature = await signMessage(canonicalizeSubmission(payload), m.privateKey);
     const r: any = await domain.submitRecommendation(m.token, { ...payload, signature }); expect(r.status).toBe(201);
   }

@@ -5,7 +5,7 @@ import {
   canonicalizeApplication,
   canonicalizeJudgement,
   classifyRegime,
-  RECEIPT_CANONICAL_BUCKET_ORDER,
+  bucketOrderForAsOf,
   REGIME_METHOD,
   type RegimeLabel,
   type RegimeSummary,
@@ -18,6 +18,7 @@ import {
   type SwarmTakeCheck,
 } from "@robotmoney/contract";
 import { testSeamArmed } from "../test-seam.ts";
+import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 import type { JudgeDraw } from "./judge-draw.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../db/registry.ts";
@@ -1522,28 +1523,63 @@ export type SubmitTakeResult =
  * then refuses for its weights (post-mortem 2026-10-09, finding 10). Returns the
  * refusal, or null when the draft passes or the subject takes no vector.
  */
+const sessionBucketFramework = registerQuery({
+  role: "rm_app",
+  object: "allocation_framework",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:bucketOrderForSession",
+  purpose: "Read the framework asOf, the day the session bucket list changes from agent_tokens to hard_assets.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE, RECEIPTS_ROUTE, STREAM_ROUTE],
+  probe: { statement: "SELECT asof FROM allocation_framework WHERE id = 1" },
+});
+
+/**
+ * The canonical bucket list of the session whose asOf is `sessionAsOf`: the one
+ * rule validation, the brief, the receipt assembler and the verifier share
+ * (issue 1496). The framework asOf is the allocation_framework row's.
+ */
+export async function frameworkAsOf(h: DbHandle = sql): Promise<string> {
+  const row = (await on(h, sessionBucketFramework)<{ asof: Date | string }>`SELECT asof FROM allocation_framework WHERE id = 1`)[0];
+  return row ? day(row.asof) : ALLOCATION_FRAMEWORK_SEED.asof;
+}
+
+export async function bucketOrderForSession(sessionAsOf: string, h: DbHandle = sql): Promise<readonly string[]> {
+  return bucketOrderForAsOf(sessionAsOf, await frameworkAsOf(h));
+}
+
 export async function weightsRefusal(
   subjectId: string,
+  sessionAsOf: string,
   vector: { bucket: string; weight: number }[] | undefined | null,
 ): Promise<{ ok: false; status: 400; error: string } | null> {
   const subjectRow = (await on(sql, submitSubject)<{ recommendation_type: string | null }>`
     SELECT recommendation_type FROM swarm_subjects WHERE id = ${subjectId}`)[0];
   if (subjectRow?.recommendation_type !== "bucket_weights") return null;
+  const order = await bucketOrderForSession(sessionAsOf);
   if (vector == null || vector.length === 0) {
     return {
       ok: false,
       status: 400,
-      error: `weights_required_for_bucket_weights_subject: ${subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
+      error: `weights_required_for_bucket_weights_subject: ${subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...order].join(", ")}). ` +
         "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
     };
   }
   const named = new Set(vector.map((w) => w.bucket));
-  if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
-      !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
+  // A bucket outside THIS session's list (agent_tokens in a Hard Assets session,
+  // hard_assets in an older one) is refused by name and never read as another bucket.
+  const foreign = [...named].filter((bucket) => !order.includes(bucket));
+  if (foreign.length > 0) {
     return {
       ok: false,
       status: 400,
-      error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
+      error: `weights_bucket_not_canonical: "${foreign[0]}" is not one of ${order.join(", ")} for the session as of ${sessionAsOf}`,
+    };
+  }
+  if (named.size !== order.length) {
+    return {
+      ok: false,
+      status: 400,
+      error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...order].join(", ")}} — one entry each. ` +
         "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
     };
   }
@@ -1880,7 +1916,7 @@ async function checkTake(token: string, sub: SubmissionInput, collectAll: boolea
   // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
   // does not exist yet while takes are being collected, and the subject is what
   // the brief was built from (`publishBrief`, takeSchema.weights.optional).
-  const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
+  const weightsRefused = await weightsRefusal(sub.subjectId, sub.date, sub.weights);
   if (record(weightsRefused
     ? {
         check: "weights",
@@ -3859,6 +3895,7 @@ export async function buildBriefBody(
     : framework
       ? { asof: day(framework.asof), buckets: framework.buckets }
       : null;
+  const sessionBuckets = await bucketOrderForSession(day(s.date), h);
   const body = {
     ...(allocation ? { allocation } : {}),
     regime,
@@ -3886,9 +3923,9 @@ export async function buildBriefBody(
       weights: {
         type: "array",
         optional: recommendationType !== "bucket_weights",
-        buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER],
+        buckets: [...sessionBuckets],
         items: {
-          bucket: { type: "string", enum: [...RECEIPT_CANONICAL_BUCKET_ORDER] },
+          bucket: { type: "string", enum: [...sessionBuckets] },
           weight: { type: "number", minimum: 0 },
         },
       },

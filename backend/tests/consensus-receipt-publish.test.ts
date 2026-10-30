@@ -38,7 +38,9 @@ import {
 useCleanDatabasePerTest(import.meta.file);
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
-const CANONICAL_FOUR = ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
+const CANONICAL_FOUR = ["conservative_defi_yield", "hard_assets", "protocol_tokens", "real_world_assets"];
+// Shares in these fixtures are written in the original [hard-asset sleeve, defi, protocol, rwa] order.
+const SHARE_ORDER = ["hard_assets", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
 const get = (p: string) => handleSwarm(new Request(`http://localhost${p}`), new URL(`http://localhost${p}`));
 
 async function member() {
@@ -54,7 +56,7 @@ async function submit(m: Member, date: string, subjectId: string, weights: numbe
   const sub = {
     memberId: m.id, date, subjectId, nonce: o.nonce ?? rid("n"),
     stance: o.stance ?? "neutral", confidence: 0.5, body: `${m.id} take`,
-    ...(weights ? { weights: CANONICAL_FOUR.map((bucket, i) => ({ bucket, weight: weights[i]! })) } : {}),
+    ...(weights ? { weights: CANONICAL_FOUR.map((bucket) => ({ bucket, weight: weights[SHARE_ORDER.indexOf(bucket)]! })) } : {}),
   };
   const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
   const res = await ic.submitRecommendation(m.token, { ...sub, signature });
@@ -456,7 +458,7 @@ test("refusals reach the operator with a reason: an unjudged session, and a non-
       memberId: mi.id, date: date3, subjectId: threeSubject, nonce: rid("n"),
       stance: "neutral", confidence: 0.5, body: "three buckets",
       weights: [
-        { bucket: "agent_tokens", weight: 0.5 },
+        { bucket: "hard_assets", weight: 0.5 },
         { bucket: "conservative_defi_yield", weight: 0.3 },
         { bucket: "protocol_tokens", weight: 0.2 },
       ],

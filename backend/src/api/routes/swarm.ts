@@ -217,7 +217,7 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
     if (!res.ok) return { status: 400, body: { error: res.error } };
     // The same weights rule submit applies (ic.weightsRefusal), so a draft this
     // route signs is not one submit then refuses for its weights.
-    const refused = await ic.weightsRefusal(res.data.subjectId, res.data.weights);
+    const refused = await ic.weightsRefusal(res.data.subjectId, res.data.date, res.data.weights);
     if (refused) return { status: refused.status, body: { error: refused.error } };
     return { status: 200, body: { canonical: canonicalizeSubmission(res.data) } };
   }
