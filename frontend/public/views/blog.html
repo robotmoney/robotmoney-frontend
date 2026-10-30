@@ -4,14 +4,16 @@
      link root-relative to /blog/<slug>.
      RM-134: the hero sits on the site column like every other nav page (the
      shared hero rules in components.css pin its headline), and the list is lean:
-     one row per entry with its kind and date beside the title, no thumbnails. -->
+     one row per entry with its kind and date beside the title, no thumbnails.
+     RM-197: this is the research index. Announcements and partnerships list on
+     /news (views/news.html), which shares these styles from views.css. -->
 
 <section class="blog-idx container" data-anchors>
   <header class="blog-idx__hero">
     <div class="blog-idx__hero-art" x-data="blogHero()" aria-hidden="true"></div>
     <div class="blog-idx__hero-inner">
-      <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">Blog</span></h1>
-      <p class="blog-idx__lede">Announcements, research, and updates from the team.</p>
+      <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">Research</span></h1>
+      <p class="blog-idx__lede">Market regimes, allocation backtests and DeFi risk, from the team.</p>
     </div>
   </header>
 
@@ -88,154 +90,5 @@
         <p class="blog-card__excerpt">A field guide to how DeFi vaults get exploited: chronological case studies for protocol developers.</p>
       </div>
     </a>
-
-    <a href="/blog/peaq-partnership" class="blog-card">
-      <div class="blog-card__meta"><span>Partnership</span><span class="blog-card__dot">·</span><span>Mar 27, 2026</span></div>
-      <div class="blog-card__body">
-        <h3 class="blog-card__title" id="peaq-partnership">peaq Announces Partnership with Robot Money</h3>
-        <p class="blog-card__excerpt">peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot, a Hong Kong robo-farm, has already invested.</p>
-      </div>
-    </a>
-
-    <a href="/blog/announcement" class="blog-card">
-      <div class="blog-card__meta"><span>Announcement</span><span class="blog-card__dot">·</span><span>Mar 11, 2026</span></div>
-      <div class="blog-card__body">
-        <h3 class="blog-card__title" id="announcement">The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</h3>
-        <p class="blog-card__excerpt">Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</p>
-      </div>
-    </a>
-
   </div>
 </section>
-
-<style>
-.blog-idx {
-  max-width: 80rem;
-  margin: 0 auto;
-  padding: 0 1.5rem 5rem;
-}
-/* The full-bleed headline band every nav page shares: the art spans the
-   viewport, the copy sits on the 80rem site column, and the shared hero rules
-   in components.css pin the headline to the same offset as /skills and
-   /changelog. No bottom fade: the band ends on its hairline. */
-.blog-idx__hero {
-  position: relative;
-  width: 100vw;
-  margin-left: calc(50% - 50vw);
-  margin-right: calc(50% - 50vw);
-  overflow: hidden;
-  min-height: 52vh;
-  display: flex;
-  align-items: flex-start;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-void);
-  margin-bottom: 1.5rem;
-}
-.blog-idx__hero-art {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
-.blog-idx__hero-inner {
-  position: relative;
-  z-index: 1;
-  width: 100%;
-  max-width: 80rem;
-  margin-inline: auto;
-  padding: 10rem 1.5rem 2.5rem;
-}
-.blog-idx__title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: clamp(2.5rem, 4.2vw, 3.75rem);
-  line-height: 1.05;
-  color: var(--color-text);
-  margin: 0;
-}
-.blog-idx__title-alt {
-  font-family: var(--font-display);
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
-}
-.blog-idx__lede {
-  color: var(--color-text-soft);
-  margin: 1.25rem 0 0;
-  max-width: 44rem;
-  font-size: 1.0625rem;
-  line-height: 1.65;
-}
-
-/* One row per entry, divided by hairlines: the kind and date on the left,
-   the title and one excerpt on the right. Stacks under 768px. */
-.blog-idx__list {
-  display: flex;
-  flex-direction: column;
-}
-.blog-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0.75rem;
-  padding: 1.5rem 0;
-  border-bottom: 1px solid var(--color-border);
-  text-decoration: none;
-  color: inherit;
-}
-.blog-card:last-child { border-bottom: 0; }
-.blog-card:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
-.blog-card__body { min-width: 0; }
-.blog-card__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  line-height: 1.5;
-  text-transform: uppercase;
-  letter-spacing: 0.11em;
-  color: var(--color-text-muted);
-}
-.blog-card__dot { color: var(--color-border-light); }
-.blog-card__title {
-  font-family: var(--font-display);
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  font-size: 1.3125rem;
-  line-height: 1.2;
-  color: var(--color-text);
-  margin: 0 0 0.5rem;
-  text-decoration: underline;
-  text-decoration-color: transparent;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.2em;
-  transition: text-decoration-color 100ms var(--ease-out-expo);
-}
-.blog-card:hover .blog-card__title,
-.blog-card:focus-visible .blog-card__title { text-decoration-color: var(--color-link-line); }
-.blog-card__excerpt {
-  font-size: 0.9375rem;
-  line-height: 1.7;
-  color: var(--color-text-soft);
-  max-width: 52rem;
-  margin: 0;
-}
-@media (min-width: 768px) {
-  .blog-card {
-    grid-template-columns: 12rem minmax(0, 1fr);
-    gap: 2.25rem;
-    padding: 2.25rem 0;
-  }
-  .blog-card__meta { flex-direction: column; gap: 0.25rem; padding-top: 0.35rem; }
-  .blog-card__dot { display: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .blog-card__title { transition: none; }
-}
-</style>
