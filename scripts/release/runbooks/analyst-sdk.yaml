@@ -1,0 +1,42 @@
+# scripts/release/runbooks/analyst-sdk.yaml — the analyst SDK release runbook (D77,
+# docs/technical/release-runbooks.md §11). `bun run release:sdk` runs it
+# (scripts/release/sdk-release.ts, loader and steps in ./../sdk-release-lib.ts).
+#
+# It is not a platform runbook: no Q/P/C phases, no stage or production target,
+# no ssh host, no target or go file (D77 (1)). It sits outside templates/ and
+# releases/, so scripts/release/runbook.ts never reads it.
+#
+# Each step names a `kind`. The six built-in kinds run once each, in this order:
+# preflight, branch, gate, tag, tag-guard, release. A `cmd` step runs its argv
+# `cmds` ({version}, {commit}, {branch} and {tag} are filled in); it has no done
+# check, so it is read only. `irreversible` marks a step that writes to GitHub.
+# The loader refuses an unknown key or kind, a duplicate id, a missing or
+# repeated built-in kind, and a built-in kind out of order.
+runbook: analyst-sdk
+steps:
+  - id: "S01-preflight"
+    kind: "preflight"
+    description: "The version (--version, else packages/analyst-sdk/package.json at origin/main) is A.B.C and above every analyst-sdk-v* tag; the commit (--commit, else the origin/main tip) is on origin/main and carries that version; the operator is a repository admin"
+    irreversible: false
+  - id: "S02-branch"
+    kind: "branch"
+    description: "Create analyst-sdk/releases-A.B.x at the commit (from main, §2), or fast-forward it to the commit; never force-push"
+    irreversible: true
+  - id: "S03-gate"
+    kind: "gate"
+    description: "The push runs of analyst-sdk.yml (job analyst-sdk) and backend.yml (job backend, step 'Analyst SDK proofs ran (issue 1404)') on the release branch at the commit concluded success"
+    irreversible: false
+    maxMinutes: 90
+  - id: "S04-tag"
+    kind: "tag"
+    description: "checkTag passes, then the annotated tag analyst-sdk-vA.B.C on the commit is created and pushed"
+    irreversible: true
+  - id: "S05-tag-guard"
+    kind: "tag-guard"
+    description: "The analyst-sdk-tag-guard run for the tag concluded success at the commit"
+    irreversible: false
+    maxMinutes: 20
+  - id: "S06-release"
+    kind: "release"
+    description: "The GitHub release for the tag, with the three D77 (3) notes items, the change list and the install block; --latest only for the highest SDK version"
+    irreversible: true
