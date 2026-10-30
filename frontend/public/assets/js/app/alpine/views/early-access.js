@@ -1,7 +1,8 @@
 // @ts-nocheck: buildless Alpine factory for the early-access page
 // (/early-access, RM-189): one form that registers interest in depositing
-// before the vault opens to outside depositors, carrying the referral code the
-// visitor's link brought (lib/referral.js).
+// before the vault opens to outside depositors, carrying a referral code: the
+// one the visitor types, or the one their link brought (lib/referral.js), which
+// fills the field in.
 //
 // The options are static HTML in views/early-access.html, so a reader without
 // JavaScript sees them; their `value`s are what is stored. Ranges, not
@@ -93,8 +94,11 @@ export async function sendEarlyAccess(payload, url = EARLY_ACCESS_URL, fetchFn =
   if (!res.ok || body?.ok !== true) throw new Error(body?.error || `send failed (${res.status})`);
 }
 
-/** The request body: trimmed, the wallet checksummed, blanks as null. */
-export function earlyAccessPayload(d, ref, host) {
+/**
+ * The request body: trimmed, the wallet checksummed, blanks as null. The
+ * referral code goes as typed: the report side judges it, as it does a link's.
+ */
+export function earlyAccessPayload(d, host) {
   return {
     handle: normalizeHandle(d.handle),
     email: d.email.trim() || null,
@@ -102,7 +106,7 @@ export function earlyAccessPayload(d, ref, host) {
     businessType: d.businessType,
     intendedDeposit: d.intendedDeposit,
     nonStableShare: d.nonStableShare,
-    referralCode: ref || null,
+    referralCode: d.referralCode?.trim() || null,
     source: sourceFor(host),
     // The honeypot. People never see the field; a bot that fills it is dropped.
     website: d.website || "",
@@ -111,7 +115,7 @@ export function earlyAccessPayload(d, ref, host) {
 
 export function registerEarlyAccessForm(Alpine) {
   Alpine.data("earlyAccessForm", () => ({
-    draft: { handle: "", email: "", wallet: "", businessType: "", intendedDeposit: "", nonStableShare: "", website: "" },
+    draft: { handle: "", email: "", wallet: "", referralCode: "", businessType: "", intendedDeposit: "", nonStableShare: "", website: "" },
     errors: {},
     // Errors show once a send has been tried, then follow every edit.
     tried: false,
@@ -125,6 +129,7 @@ export function registerEarlyAccessForm(Alpine) {
     widgetId: null,
 
     async init() {
+      this.draft.referralCode = referralCode() ?? "";
       if (!TURNSTILE_SITE_KEY) return;
       try {
         const turnstile = await loadTurnstile();
@@ -176,7 +181,7 @@ export function registerEarlyAccessForm(Alpine) {
           this.challengeMissing = true;
           return;
         }
-        const payload = earlyAccessPayload(this.draft, referralCode(), globalThis.location?.hostname);
+        const payload = earlyAccessPayload(this.draft, globalThis.location?.hostname);
         if (token) payload.turnstileToken = token;
         await sendEarlyAccess(payload);
         this.sentHandle = normalizeHandle(this.draft.handle);

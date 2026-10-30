@@ -51,7 +51,7 @@ One row per handle, on a tab named `Requests`:
 | Business type | `dao`, `agentic-company`, `wealth-manager`, `robotics-company`, `individual` |
 | Intended deposit | `under-10k`, `10k-100k`, `100k-1m`, `over-1m` |
 | Share outside stablecoins | `0`, `under-10`, `10-30`, `over-30` |
-| Referral code | Raw, from the visitor's `?ref=` link |
+| Referral code | As the visitor left it in the form, trimmed; their `?ref=` link fills it in |
 | Source | `early-access` in production; `early-access@<host>` from a preview or staging |
 
 - The same handle again (ignoring case and a leading `@`) updates its row. The

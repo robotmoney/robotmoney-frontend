@@ -118,8 +118,8 @@ describe("early-access form", () => {
     expect(validateEarlyAccess({ ...complete, wallet: "0x123" }).wallet).toContain("40 hex");
   });
 
-  test("the request carries every field, the wallet checksummed and the link's code", () => {
-    expect(earlyAccessPayload(complete, "rm_alice", "robotmoney.network")).toEqual({
+  test("the request carries every field, the wallet checksummed and the referral code trimmed", () => {
+    expect(earlyAccessPayload({ ...complete, referralCode: " rm_alice " }, "robotmoney.network")).toEqual({
       handle: "@treasurer",
       email: null,
       wallet: EIP55[0],
@@ -130,7 +130,13 @@ describe("early-access form", () => {
       source: "early-access",
       website: "",
     });
-    expect(earlyAccessPayload({ ...complete, wallet: "" }, null)).toMatchObject({ wallet: null, referralCode: null });
+    expect(earlyAccessPayload({ ...complete, wallet: "" })).toMatchObject({ wallet: null, referralCode: null });
+  });
+
+  test("the referral code goes as the visitor left it: a blank field sends none", () => {
+    expect(earlyAccessPayload({ ...complete, referralCode: "Alice from the Telegram group" }).referralCode).toBe("Alice from the Telegram group");
+    expect(earlyAccessPayload({ ...complete, referralCode: "   " }).referralCode).toBeNull();
+    expect(validateEarlyAccess({ ...complete, referralCode: "not a code" })).toEqual({});
   });
 
   test("a sign-up from anywhere but production names its host", () => {

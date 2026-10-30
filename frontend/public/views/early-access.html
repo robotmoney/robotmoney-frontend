@@ -3,7 +3,8 @@
      vault is permissionless, so a whitelist would be a claim we cannot back.
 
      A referral link (?ref=rm_<handle>, on any page) is read at boot and held
-     for the session by lib/referral.js; the form sends it unseen.
+     for the session by lib/referral.js; it fills in the form's referral code,
+     which the visitor can change or clear.
 
      The options are written out here (rmSelect, alpine/select.js, reads them
      from the page) rather than with x-for, so the prerendered page carries them for a reader that runs no JavaScript. Their
@@ -61,6 +62,13 @@
                    :aria-invalid="errors.wallet ? 'true' : 'false'" aria-describedby="ea-wallet-hint ea-wallet-err" />
             <p class="ea__hint" id="ea-wallet-hint">The address you'd deposit from. With your handle it links you to that wallet's holdings, so we keep it private.</p>
             <p class="ea__err" id="ea-wallet-err" x-show="errors.wallet" x-text="errors.wallet" x-cloak></p>
+          </div>
+
+          <div class="ea__field">
+            <label class="ea__label" for="ea-referral">Referral code <span class="ea__opt-tag">Optional</span></label>
+            <input class="ea__input ea__input--mono" id="ea-referral" name="referral" type="text" autocomplete="off" spellcheck="false"
+                   autocapitalize="none" placeholder="rm_name" maxlength="64"
+                   x-model="draft.referralCode" />
           </div>
 
           <p class="ea__group">Three quick questions, so we reach the right treasuries first.</p>

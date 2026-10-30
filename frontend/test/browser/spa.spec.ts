@@ -207,8 +207,8 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
 
 // Deposits wait for the vaults to open (RM-190): the deposit page and the
 // deposit skill's docs move to early access, query kept so a referral rides
-// along. That an address the docs never had is no alias is
-// seo-legacy-aliases.test.ts's.
+// along and fills in the form's code (RM-195). That an address the docs never
+// had is no alias is seo-legacy-aliases.test.ts's.
 test("/deposit and the deposit skill's docs move to /early-access with their query", async ({ page }) => {
   // Loaded directly, as a held link would be: navigate() waits for the path it
   // was given, and these never render under it.
@@ -216,6 +216,7 @@ test("/deposit and the deposit skill's docs move to /early-access with their que
     await page.goto(`${from}?ref=rm_athena`);
     await expect(page, from).toHaveURL(/\/early-access\?ref=rm_athena$/);
     await expect(page.locator("h1"), from).toHaveText("Early access");
+    await expect(page.locator("#ea-referral"), from).toHaveValue("rm_athena");
   }
 });
 
