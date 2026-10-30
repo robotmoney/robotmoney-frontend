@@ -16,7 +16,7 @@
 // first version drove the removed worker handler and died with the swarm lane
 // in 5d6476c4; the rewrite ports every one of its scenarios.
 import { describe, expect, test } from "bun:test";
-import { RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
+import { RECEIPT_HARD_ASSETS_BUCKET_ORDER } from "@robotmoney/contract";
 import {
   missingSectionLeadIns,
   parseStanceFromBody,
@@ -28,7 +28,7 @@ import {
   TAKE_WEIGHTS_LEAD_IN,
 } from "../../lib/swarm/inference.ts";
 
-const CANON = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+const CANON = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER];
 const PERSONA = { memberId: "athena", name: "Athena", lens: "macro", bias: 0.2 };
 const REGIME = { composite: 0.42 };
 
@@ -39,7 +39,7 @@ const PROSE = [
 ].join("\n");
 
 const weightsLine = (entries: string) => `${TAKE_WEIGHTS_LEAD_IN} ${entries}`;
-const FOUR = "agent_tokens=0.15 | conservative_defi_yield=0.70 | protocol_tokens=0.10 | real_world_assets=0.05";
+const FOUR = "hard_assets=0.15 | conservative_defi_yield=0.70 | protocol_tokens=0.10 | real_world_assets=0.05";
 
 // ── The bucket vocabulary is DERIVED, never re-declared ─────────────────────
 test("the take's buckets are the receipt's canonical four, by derivation", () => {
@@ -53,8 +53,8 @@ describe("parseWeightsFromBody — the vector, or a loud refusal", () => {
     const parsed = parseStanceFromBody([PROSE, weightsLine(FOUR), "STANCE: constructive | CONFIDENCE: 0.62"].join("\n"));
     const withWeights = parseWeightsFromBody(parsed.body);
     expect(withWeights.weights).toEqual([
-      { bucket: "agent_tokens", weight: 0.15 },
       { bucket: "conservative_defi_yield", weight: 0.7 },
+      { bucket: "hard_assets", weight: 0.15 },
       { bucket: "protocol_tokens", weight: 0.1 },
       { bucket: "real_world_assets", weight: 0.05 },
     ]);
@@ -70,18 +70,18 @@ describe("parseWeightsFromBody — the vector, or a loud refusal", () => {
   });
 
   test("emits canonical bucket order whatever order the model wrote", () => {
-    const scrambled = "real_world_assets=5 | agent_tokens=15 | protocol_tokens=10 | conservative_defi_yield=70";
+    const scrambled = "real_world_assets=5 | hard_assets=15 | protocol_tokens=10 | conservative_defi_yield=70";
     const parsed = parseWeightsFromBody([PROSE, weightsLine(scrambled)].join("\n"));
     expect(parsed.weights.map((w) => w.bucket)).toEqual(CANON);
     // Percentages and fractions are the SAME vector — the server normalizes by
     // the total — so the parser carries the numbers raw and rescales nothing.
-    expect(parsed.weights.map((w) => w.weight)).toEqual([15, 70, 10, 5]);
+    expect(parsed.weights.map((w) => w.weight)).toEqual([70, 15, 10, 5]);
   });
 
   test("accepts a zero bucket, which is a real allocation", () => {
-    const zeroRwa = "agent_tokens=0.05 | conservative_defi_yield=0.95 | protocol_tokens=0 | real_world_assets=0";
+    const zeroRwa = "hard_assets=0.05 | conservative_defi_yield=0.95 | protocol_tokens=0 | real_world_assets=0";
     expect(parseWeightsFromBody([PROSE, weightsLine(zeroRwa)].join("\n")).weights.map((w) => w.weight))
-      .toEqual([0.05, 0.95, 0, 0]);
+      .toEqual([0.95, 0.05, 0, 0]);
   });
 
   // ── The decoration the STANCE parser already tolerates ────────────────────
@@ -100,7 +100,7 @@ describe("parseWeightsFromBody — the vector, or a loud refusal", () => {
     test(`tolerates ${label} — a formatting quirk costs a re-sample at worst, never a take`, () => {
       const parsed = parseWeightsFromBody([PROSE, line].join("\n"));
       expect(parsed.weights.map((w) => w.bucket)).toEqual(CANON);
-      expect(parsed.weights.map((w) => w.weight)).toEqual([0.15, 0.7, 0.1, 0.05]);
+      expect(parsed.weights.map((w) => w.weight)).toEqual([0.7, 0.15, 0.1, 0.05]);
       expect(parsed.body).toBe(PROSE);
     });
   }
@@ -119,33 +119,42 @@ describe("parseWeightsFromBody — the vector, or a loud refusal", () => {
     // 91.74 / 7.80 / 0.37 / 0.09 — signed by the analyst and verifiable by the
     // receipt, because the verifier recomputes the same mean from the same
     // signed bytes. Nothing downstream could ever have caught it.
-    const mixed = "agent_tokens=10% | conservative_defi_yield=0.85 | protocol_tokens=0.04 | real_world_assets=0.01";
+    const mixed = "hard_assets=10% | conservative_defi_yield=0.85 | protocol_tokens=0.04 | real_world_assets=0.01";
     expect(() => parseWeightsFromBody([PROSE, weightsLine(mixed)].join("\n")))
       .toThrow(/MIXES percentages and fractions/);
   });
 
   test("all-percent and all-fraction are both fine, and are carried raw", () => {
-    const allPct = "agent_tokens=15% | conservative_defi_yield=70% | protocol_tokens=10% | real_world_assets=5%";
+    const allPct = "hard_assets=15% | conservative_defi_yield=70% | protocol_tokens=10% | real_world_assets=5%";
     expect(parseWeightsFromBody([PROSE, weightsLine(allPct)].join("\n")).weights.map((w) => w.weight))
-      .toEqual([15, 70, 10, 5]);
+      .toEqual([70, 15, 10, 5]);
     expect(parseWeightsFromBody([PROSE, weightsLine(FOUR)].join("\n")).weights.map((w) => w.weight))
-      .toEqual([0.15, 0.7, 0.1, 0.05]);
+      .toEqual([0.7, 0.15, 0.1, 0.05]);
   });
 
   for (const [label, line, pattern] of [
     ["a missing control line", PROSE, /missing its trailing "WEIGHTS:/],
-    ["a partial vector", weightsLine("agent_tokens=0.5 | conservative_defi_yield=0.5"), /missing protocol_tokens, real_world_assets/],
+    ["a partial vector", weightsLine("hard_assets=0.5 | conservative_defi_yield=0.5"), /missing protocol_tokens, real_world_assets/],
     ["an unknown bucket", weightsLine(`${FOUR} | gold=0.1`), /unsupported gold/],
-    ["a duplicated bucket", weightsLine(`${FOUR} | agent_tokens=0.2`), /names bucket 'agent_tokens' twice/],
-    ["a negative share", weightsLine("agent_tokens=0.15 | conservative_defi_yield=0.9 | protocol_tokens=0.1 | real_world_assets=-0.15"), /unparseable entry/],
-    ["an all-zero vector", weightsLine("agent_tokens=0 | conservative_defi_yield=0 | protocol_tokens=0 | real_world_assets=0"), /allocates nothing/],
-    ["prose where a number belongs", weightsLine("agent_tokens=a little | conservative_defi_yield=most"), /unparseable entry/],
+    ["a duplicated bucket", weightsLine(`${FOUR} | hard_assets=0.2`), /names bucket 'hard_assets' twice/],
+    ["a negative share", weightsLine("hard_assets=0.15 | conservative_defi_yield=0.9 | protocol_tokens=0.1 | real_world_assets=-0.15"), /unparseable entry/],
+    ["an all-zero vector", weightsLine("hard_assets=0 | conservative_defi_yield=0 | protocol_tokens=0 | real_world_assets=0"), /allocates nothing/],
+    ["prose where a number belongs", weightsLine("hard_assets=a little | conservative_defi_yield=most"), /unparseable entry/],
   ] as const) {
     test(`refuses ${label} rather than fabricating an allocation`, () => {
       const text = line === PROSE ? PROSE : [PROSE, line].join("\n");
       expect(() => parseWeightsFromBody(text)).toThrow(pattern);
     });
   }
+});
+
+describe("the team agent take prompt asks for hard_assets, never agent_tokens (issue 1496)", () => {
+  test("the WEIGHTS line names hard_assets and not agent_tokens", () => {
+    const prompt = promptFor(PERSONA, REGIME, "robotmoney-allocation", { requireWeights: true });
+    expect(prompt).toContain("hard_assets=<0-1>");
+    expect(prompt).not.toContain("agent_tokens");
+    expect(TAKE_WEIGHT_BUCKETS).not.toContain("agent_tokens");
+  });
 });
 
 describe("promptFor — the ask matches what the session wants", () => {

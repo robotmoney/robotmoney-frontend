@@ -304,6 +304,21 @@ test("a slow subject fetch does not stamp its name on the route the visitor move
 // `meanConfidence`, so the archive path cannot exercise the aggregate half of
 // the consensus at all.
 test("a subject's latest session carries the consensus and the decision, as /swarm does", async ({ page }) => {
+  // The published targets in force on these sessions' day (95/5/0/0, asOf 2026-06-02). The live
+  // stack's framework is the 50/7/29/14 one (issue 1496), dated after these sessions, so a row would
+  // read "No target recorded"; the site change (1497) moves the fixtures.
+  await page.route("**/api/dashboards/allocation", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        asOf: "2026-06-02", source: "live", managed: true, buckets: [],
+        strategy: [
+          { label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 },
+          { label: "Protocol Tokens", targetPct: 0 }, { label: "Real World Assets", targetPct: 0 },
+        ],
+      }),
+    }));
   const session = {
     id: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41",
     date: "2026-09-01",

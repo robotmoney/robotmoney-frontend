@@ -1,7 +1,7 @@
 import { test, expect, beforeEach } from "bun:test";
 import * as ic from "../src/swarm/domain.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
+import { canonicalizeApplication, canonicalizeSubmission, RECEIPT_HARD_ASSETS_BUCKET_ORDER, REGIME_METHOD, SWARM_ROSTER_CAP, path as routePath, ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
@@ -427,7 +427,7 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
       // outright. The assertion this feeds is unchanged — a position_actions
       // session must not aggregate a vector into its recommendation, whatever
       // buckets the take named.
-      weights: [{ bucket: "agent_tokens", weight: 1 }],
+      weights: [{ bucket: "hard_assets", weight: 1 }],
     };
     const signature = await signMessage(canonicalizeSubmission(sub), m.privateKey);
     const res = await ic.submitRecommendation(m.token, { ...sub, signature });
@@ -507,7 +507,7 @@ test("full open→brief→submit→aggregate cycle enriches the session (regime_
 // totals (6, 5, 2), so the published mean is right only if each take was
 // normalized before averaging.
 const canonical = (shares: number[]) =>
-  [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: shares[i]! }));
+  [...RECEIPT_HARD_ASSETS_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: shares[i]! }));
 
 test("bucket aggregation computes the normalized unweighted mean and attributes only stored non-empty bodies", async () => {
   const subjectId = rid("weighted");
@@ -578,7 +578,7 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
   expect(recommendation.weights).toEqual(expectedRounded);
   expect(recommendation.weights).not.toEqual([
     { bucket: "conservative_defi_yield", weight: 0.95 },
-    { bucket: "agent_tokens", weight: 0.05 },
+    { bucket: "hard_assets", weight: 0.05 },
     { bucket: "protocol_tokens", weight: 0 },
     { bucket: "real_world_assets", weight: 0 },
   ]);
@@ -601,8 +601,8 @@ test("bucket aggregation computes the normalized unweighted mean and attributes 
   expect(recommendation.disagreements[0].what_settles).not.toBe("");
   expect(recommendation.stances.neutral).toBe(1);
   expect(detail?.takes[2].weights).toEqual([
-    { bucket: "agent_tokens", weight: 0 },
-    { bucket: "conservative_defi_yield", weight: 0.5 },
+    { bucket: "conservative_defi_yield", weight: 0 },
+    { bucket: "hard_assets", weight: 0.5 },
     { bucket: "protocol_tokens", weight: 0.5 },
     { bucket: "real_world_assets", weight: 0 },
   ]);

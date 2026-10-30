@@ -25,13 +25,13 @@ async function subject(id: string, type: "bucket_weights" | "position_actions") 
     ON CONFLICT (id) DO UPDATE SET recommendation_type = EXCLUDED.recommendation_type`;
 }
 
-async function draft(subjectId: string, weights?: unknown): Promise<{ status: number; body: any }> {
+async function draft(subjectId: string, weights?: unknown, date = "2026-10-09"): Promise<{ status: number; body: any }> {
   const res = await handleSwarm(
     new Request(`http://localhost${ROUTES.swarm.signingPayload}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        memberId: "m1", date: "2026-10-09", subjectId, nonce: "n1", stance: "neutral", confidence: 0.5, body: "probe",
+        memberId: "m1", date, subjectId, nonce: "n1", stance: "neutral", confidence: 0.5, body: "probe",
         ...(weights === undefined ? {} : { weights }),
       }),
     }),
@@ -56,7 +56,7 @@ test("a bucket_weights subject: no weights and a two-bucket vector are refused, 
 
 test("the refusal text is submit's: one function answers both routes", async () => {
   await subject("parity_alloc", "bucket_weights");
-  const refused = await ic.weightsRefusal("parity_alloc", undefined);
+  const refused = await ic.weightsRefusal("parity_alloc", "2026-10-09", undefined);
   expect(refused).not.toBeNull();
   const route = await draft("parity_alloc");
   expect(route.body.error).toBe(refused!.error);
@@ -92,4 +92,28 @@ test("red control: a retyped vault stops needing a vector, allocation keeps need
   await fixtureDb`UPDATE swarm_subjects SET recommendation_type = 'position_actions' WHERE id = 'parity_vault'`;
   expect((await draft("parity_vault")).status).toBe(200);
   expect((await draft("parity_alloc")).status).toBe(400);
+});
+
+// ── The bucket list is picked by the session's asOf (issue 1496) ─────────────
+// The framework row seeds asof 2026-10-30: a session before it takes agent_tokens,
+// a session on or after it takes hard_assets. One function answers both, and a
+// bucket outside the session's list is never read as another bucket.
+const NEW_BUCKETS = ["conservative_defi_yield", "hard_assets", "protocol_tokens", "real_world_assets"];
+const newFour = NEW_BUCKETS.map((bucket) => ({ bucket, weight: 0.25 }));
+
+test("a session on or after the framework asOf takes hard_assets and refuses agent_tokens by name", async () => {
+  await subject("parity_alloc", "bucket_weights");
+  const ok = await draft("parity_alloc", newFour, "2026-10-30");
+  expect(ok.status).toBe(200);
+  const old = await draft("parity_alloc", four, "2026-10-30");
+  expect(old.status).toBe(400);
+  expect(old.body.error).toStartWith("weights_bucket_not_canonical");
+});
+
+test("a session before the framework asOf keeps agent_tokens and refuses hard_assets by name", async () => {
+  await subject("parity_alloc", "bucket_weights");
+  expect((await draft("parity_alloc", four, "2026-10-29")).status).toBe(200);
+  const refused = await draft("parity_alloc", newFour, "2026-10-29");
+  expect(refused.status).toBe(400);
+  expect(refused.body.error).toStartWith("weights_bucket_not_canonical");
 });

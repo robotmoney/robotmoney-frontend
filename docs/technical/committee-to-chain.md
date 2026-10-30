@@ -44,7 +44,7 @@ Only the last step changes weights. Everything before it is signalling.
 - Fields, in canonical order: `schema_version`, `session_id`, `subject_id`, `created_at`, `prompt_hash`, `inputs_digest`, `quorum`, `stances`, `judge`, `analyst_signatures`, `weights`.
 - Bytes: `"robotmoney:consensus-receipt:v1\n"` + compact JSON in that key order + `"\n"`.
 - `payloadDigest = keccak256(bytes)`. `receiptId = keccak256("robotmoney:consensus-receipt-id:v1\n" + session_id + "\n" + subject_id)`.
-- Bucket order: `agent_tokens`, `conservative_defi_yield`, `protocol_tokens`, `real_world_assets`.
+- Bucket order is picked by the session's asOf against the allocation framework's asOf (`bucketOrderForAsOf`). A session before it: `agent_tokens`, `conservative_defi_yield`, `protocol_tokens`, `real_world_assets`. A session on or after it: `conservative_defi_yield`, `hard_assets`, `protocol_tokens`, `real_world_assets`. Past receipts verify against the first list. The take refusal is `400 weights_bucket_not_canonical`.
 - Shares to bps: largest-remainder in IEEE-754 binary64. Total is exactly 10,000. Do not recompute in decimal: the two can differ by 1 bp per bucket.
 - Served at `GET /api/swarm/sessions/:id/consensus-receipt` as the read-time verification envelope, and as the bare canonical bytes at `GET /api/swarm/sessions/:id/consensus-receipt/canonical`. Fixtures are mirrored in `contract/src/__fixtures__/` and `robotmoney-core/tests/fixtures/`.
 
@@ -52,7 +52,8 @@ Only the last step changes weights. Everything before it is signalling.
 | --- | --- |
 | `conservative_defi_yield` | `rmUSDC` |
 | `protocol_tokens` | `rmPROTO` |
-| `agent_tokens` | `rmAGENT` |
+| `agent_tokens` (sessions before the framework asOf) | `rmAGENT` |
+| `hard_assets` (sessions on or after it) | gold vault, no address yet |
 | `real_world_assets` | `rmRWA` |
 
 Vault addresses come from the deployment's `vault_addresses` manifest only.

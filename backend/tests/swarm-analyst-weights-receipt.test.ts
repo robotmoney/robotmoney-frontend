@@ -37,7 +37,7 @@
 // scripts/tests/unit/swarm-take-weights.test.ts; the submission-time refusal of
 // a weightless take is backend/tests/swarm-take-weights-submission.test.ts.
 import { expect, test, beforeEach } from "bun:test";
-import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_HARD_ASSETS_BUCKET_ORDER } from "@robotmoney/contract";
 import * as epoch from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
@@ -63,8 +63,10 @@ beforeEach(async () => {
   SCHEDULER = await provisionSchedulerToken();
 });
 
-const CANON = [...RECEIPT_CANONICAL_BUCKET_ORDER];
-const full = (shares: number[]) => CANON.map((bucket, i) => ({ bucket, weight: shares[i]! }));
+const CANON = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER];
+// Shares are written in the original [hard-asset sleeve, defi, protocol, rwa] order.
+const SHARE_ORDER = ["hard_assets", "conservative_defi_yield", "protocol_tokens", "real_world_assets"];
+const full = (shares: number[]) => CANON.map((bucket) => ({ bucket, weight: shares[SHARE_ORDER.indexOf(bucket)]! }));
 type Vector = { bucket: string; weight: number }[] | null;
 
 async function member() {
@@ -284,7 +286,7 @@ test("a judge answer that tries to author weights is refused outright: no judgem
     rationale: "I have recomputed the allocation myself.",
     disagreements: [],
     release_safety: { release: "safe", concerns: [] },
-    weights: CANON.map((bucket) => ({ bucket, weight: bucket === "agent_tokens" ? 1 : 0 })),
+    weights: CANON.map((bucket) => ({ bucket, weight: bucket === "hard_assets" ? 1 : 0 })),
   });
   const judged = await submitSigned(await inHouseJudge(), sessionId, smuggle);
   // Refused by the smuggle's own name.
@@ -304,10 +306,10 @@ test("a judge answer that tries to author weights is refused outright: no judgem
   expect(await getConsensusReceipt(sessionId)).toBeFalsy();
 
   // The math still decided: the session's own served allocation is the real
-  // mean of the two signed takes (agent_tokens: (0.15 + 0.05) / 2 = 0.10),
+  // mean of the two signed takes (hard_assets: (0.15 + 0.05) / 2 = 0.10),
   // never the model's 1.0.
   const live = (await sessionRow(sessionId)).swarm_recommendation as { weights: { bucket: string; weight: number }[] };
-  expect(live.weights.find((w) => w.bucket === "agent_tokens")!.weight).toBeCloseTo(0.1, 6);
+  expect(live.weights.find((w) => w.bucket === "hard_assets")!.weight).toBeCloseTo(0.1, 6);
 });
 
 // ── RC2 review finding: the allocation's SUPPORT is a gate, not an accident ──
@@ -339,7 +341,7 @@ test("a take that never NAMED a bucket cannot be counted as a 0.00 vote on it", 
   const { sessionId } = await judgingEpoch("weights-union", "bucket_weights", [
     full([0.25, 0.25, 0.25, 0.25]),
     [
-      { bucket: "agent_tokens", weight: 0.5 },
+      { bucket: "hard_assets", weight: 0.5 },
       { bucket: "conservative_defi_yield", weight: 0.3 },
       { bucket: "protocol_tokens", weight: 0.2 },
     ],
@@ -378,7 +380,7 @@ test("a rollup vector that is not the canonical four keeps its OWN, more specifi
   // not canonical-four, and `weights_not_canonical_four` is the more specific
   // fact about that session. The support gate must not shadow it.
   const three = [
-    { bucket: "agent_tokens", weight: 0.5 },
+    { bucket: "hard_assets", weight: 0.5 },
     { bucket: "conservative_defi_yield", weight: 0.3 },
     { bucket: "protocol_tokens", weight: 0.2 },
   ];
