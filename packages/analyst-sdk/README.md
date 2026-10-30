@@ -167,42 +167,53 @@ bun run regime tests/fixtures/raw-indicator-history.csv --provenance
 
 A relative path resolves from the folder you ran the command in, also under `bun run`.
 
-## Read a local copy in code
+## Read the backups folder in code
 
 `bun run inputs` is one use of the archive reader, which the package exports
-(`src/archive/local-copy.ts`). `openArchive(files, asOf?)` opens a local copy as of a
-backup id (or its newest backup) and returns a `LocalCopy`, after the same checks the
-command makes: backup selection, the watermark chain, the bounded inflate, the SHA-256 of
-every listed file and the row count of every file it reads. It is pure: `files` is an
+(`src/archive/reader.ts`). The reader reads the csv-backups folder in place and copies
+nothing. `openArchive(files, asOf?)` opens it as of a backup id (or its newest backup)
+and returns an `Archive`. Opening reads and checks only the `backup.json` files: backup
+selection, the watermark chain, revision keys and file paths. Each listed data or
+revision file is read the first time a call needs it, and before any of its rows are
+returned it is inflated within its `bytes_raw`, SHA-256 checked and row-counted. A file no
+call needs is never read, and a missing or corrupt file fails the first call that reads
+it. Every file is strict UTF-8 with no byte order mark. It is pure: `files` is an
 `ArchiveFiles`, `{ root, backupDirs(): string[] | null, read(path): Uint8Array | null }`,
-over paths relative to the copy with `/` separators (`root` only names the copy in
-messages). On disk, `openLocalCopy(dir, asOf?)` in `bin/local-copy.ts` wraps it with the
+over paths relative to the folder with `/` separators (`root` only names the folder in
+messages). On disk, `openBackupsDir(dir, asOf?)` in `bin/backups-dir.ts` wraps it with the
 node:fs reader `diskArchiveFiles(dir)`.
 
 ```ts
-import { openLocalCopy } from "./bin/local-copy.ts";
+import { openBackupsDir } from "./bin/backups-dir.ts";
 import { collectRunInputs } from "./src/index.ts";
 
-const copy = openLocalCopy("api-copy");
-const run = collectRunInputs(copy, "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2"); // one run's frozen vintage
-const { header, rows } = copy.revisedTable("raw_indicator_history");
-const prices = copy.latestValues(["backtest:^GSPC", "backtest:ETH-USD", "backtest:DTB3"]);
+const archive = openBackupsDir("api-copy");
+const run = collectRunInputs(archive, "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2"); // one run's frozen vintage
+const { header, rows } = archive.revisedTable("raw_indicator_history");
+const prices = archive.latestValues(["backtest:^GSPC", "backtest:ETH-USD", "backtest:DTB3"]);
 ```
 
-- `copy.revisedTable(table)` is a revised table (`regime_snapshots`,
-  `raw_indicator_history`, `asset_prices`) as of the copy's as-of backup: every selected
+- `archive.revisedTable(table)` is a revised table (`regime_snapshots`,
+  `raw_indicator_history`, `asset_prices`) as of the archive's as-of backup: every selected
   backup's `revisions/<table>.csv.gz` applied in backup order (an upsert or a delete by
   the key columns its record names), without the `_backup` and `_op` columns, rows sorted
   by key column by column. A NULL stays `null`. A backup record whose revision names no
   key, an empty key or a key column that is not a non-empty string is refused when the
-  copy opens.
-- `copy.latestValues(sourceKeys)` is the newest `source_value_versions` value per storage
+  archive opens.
+- `archive.latestValues(sourceKeys)` is the newest `source_value_versions` value per storage
   key and market date (the highest id, compared as a BigInt), each tagged with the input
   id it is read under (`SPX`, `ETH`, `TBILL3M` for the three above), sorted by market date
-  then storage key. A key no input id is read under is refused. These are the newest
-  values, not a run's vintage: a published run's inputs come from `collectRunInputs`.
-- `copy.tables`, `copy.versions()`, `copy.files(table)` and `copy.readRows(file)` are the
-  run-ledger tables, the `source_value_versions` rows and any listed data file.
+  then storage key. A key no input id is read under is refused, and so is a
+  `market_instant` row of a requested key. These are the newest values, not a run's
+  vintage: a published run's inputs come from `collectRunInputs`.
+- A `source_value_versions` row with a missing or non-integer id, an empty `source_key`, an
+  empty value, or not exactly one of `market_date` and `market_instant` throws an
+  `ArchiveError` naming the file and the 1-based data row. `collectRunInputs` still counts
+  `market_instant` members and other consumers' keys in `skipped`.
+- `archive.table(name)`, `archive.versions()`, `archive.files(table)` and
+  `archive.readRows(file)` are a table's rows (the run-ledger tables, for example), the
+  `source_value_versions` rows and any listed data file. Parsed tables and versions are
+  kept for the life of the `Archive`.
 
 ## Input files
 
@@ -676,13 +687,13 @@ src/analyze/     regime, backtest, correlations, indicator registry
 src/transform/   series math, alignment, transforms
 src/input/       the input loaders, the manifest, the provenance envelope and the supplementary series format
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
-                 (format1.ts), and the reader over injected files (local-copy.ts: openArchive,
+                 (format1.ts), and the reader over injected files (reader.ts: openArchive,
                  revised tables, latest values)
 src/run.ts       source data in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
-bin/local-copy.ts  the node:fs side of the archive reader: openLocalCopy(dir, asOf)
+bin/backups-dir.ts  the node:fs side of the archive reader: openBackupsDir(dir, asOf)
 bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
 bin/fetch.ts     the `bun run fetch` entry (Yahoo and FRED series into a supplementary directory)
 bin/supplementary-dir.ts  the node:fs side of the supplementary directory: its reader, and writing

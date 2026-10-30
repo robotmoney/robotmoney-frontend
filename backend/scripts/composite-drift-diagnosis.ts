@@ -28,7 +28,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectRunInputs, openLocalCopy, type LocalCopy } from "../../packages/analyst-sdk/bin/local-copy.ts";
+import { collectRunInputs, openBackupsDir, type Archive } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { seriesForStorageKey, serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { parseInput } from "../../packages/analyst-sdk/src/input/load.ts";
 import { resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
@@ -88,8 +88,8 @@ function compositeOf(history: RawIndicatorHistory, asof: string): number {
   return run.result.composite[run.dateAxis.length - 1]!;
 }
 
-export function diagnoseRun(copy: LocalCopy, runId: string): Diagnosis {
-  const run = (copy.tables.analytics_ledger_runs ?? []).find((r) => r.id === runId);
+export function diagnoseRun(copy: Archive, runId: string): Diagnosis {
+  const run = copy.table("analytics_ledger_runs").find((r) => r.id === runId);
   if (!run || run.tool_id !== "regime") throw new Error(`run ${runId} is not a regime run in the copy`);
   const asof = run.asof!;
 
@@ -166,7 +166,7 @@ if (import.meta.main) {
   const poison = poisonNetwork("during the composite drift diagnosis");
   const out: Record<string, Diagnosis> = {};
   try {
-    const copy = openLocalCopy(archive);
+    const copy = openBackupsDir(archive);
     // A cause "other" needs a fix issue number: keep one already written for it.
     let kept: Record<string, Diagnosis> = {};
     try {

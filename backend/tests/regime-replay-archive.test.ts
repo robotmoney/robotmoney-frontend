@@ -10,7 +10,7 @@
 //
 // For each regime run with an as-of day on or after 2026-09-21 it takes the
 // run's frozen vintage through the analyst SDK's one archive reader
-// (packages/analyst-sdk/bin/local-copy.ts, the reader `bun run inputs` uses),
+// (packages/analyst-sdk/bin/backups-dir.ts, the reader `bun run inputs` uses),
 // replays it with the network poisoned and compares the as-of row field by
 // field, exactly, with the regime_snapshots artifact the run published. Every
 // run is reported (match, or every differing field and the first one's
@@ -36,7 +36,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { collectRunInputs, openLocalCopy } from "../../packages/analyst-sdk/bin/local-copy.ts";
+import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs, type Row } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
 import { publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
@@ -78,8 +78,8 @@ function table(results: RunResult[]): string {
 
 describe.skipIf(!ARCHIVE)("replay of every published production regime run from a format 1 local copy", () => {
   test("every published run since 2026-09-21 replays to its published as-of row, field by field", () => {
-    const copy = openLocalCopy(ARCHIVE!);
-    const runs = (copy.tables.analytics_ledger_runs ?? [])
+    const copy = openBackupsDir(ARCHIVE!);
+    const runs = copy.table("analytics_ledger_runs")
       .filter((r) => r.tool_id === "regime" && r.asof! >= LEDGER_START)
       .sort((a, b) => (a.asof! < b.asof! ? -1 : a.asof! > b.asof! ? 1 : Number(a.id) - Number(b.id)));
     expect(runs.length).toBeGreaterThan(0);
