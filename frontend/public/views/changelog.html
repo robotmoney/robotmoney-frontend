@@ -12,7 +12,8 @@
 
      Work that is merged but not yet in production sits in one block at the
      top of the log, between the release:pending markers: a "Next release"
-     heading, entries whose id is next-slug and whose meta reads "Next
+     heading with the swarm's pulsing In progress chip beside it (the page's
+     only note of what is coming), entries whose id is next-slug and whose meta reads "Next
      release" (.cl__pending, styled as the date) in place of a <time>, and an
      "Also in the next release" list. On release day, `bun scripts/changelog-stamp.ts YYYY-MM-DD`
      dates the block: every id becomes date-slug, every meta gets its <time>, and the block becomes that month's section, or merges into
@@ -35,19 +36,6 @@
   <div class="cl__body">
     <div class="cl__col">
 
-      <!-- In progress: the swarm's session-in-progress callout. The strip is
-           .sv__live's border and surface, the chip is .rm-sphase--open, and it
-           stays the only mark with colour. Each line ends in a quiet state that
-           describes now, never a date. -->
-      <aside class="cl__now" aria-label="In progress">
-        <span class="rm-sphase rm-sphase--open">In progress</span>
-        <ul class="cl__now-list">
-          <li><span>Three vaults, with one deposit across all three</span><span class="cl__now-state">In testing</span></li>
-          <li><span>The vaults rebalance to the swarm's model portfolio</span><span class="cl__now-state">In testing</span></li>
-          <li><span>Backtest a model portfolio on the protocol's data, from your own agent</span><span class="cl__now-state">In testing</span></li>
-        </ul>
-      </aside>
-
       <div class="cl__rail" role="group" aria-label="Filter releases by tag">
         <span class="cl__rail-label">Filter</span>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'swarm')" @click="toggle('swarm')">Swarm</button>
@@ -57,13 +45,13 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">42 releases</span>
+        <span class="cl__count" x-text="countLabel">44 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
         <!-- release:pending -->
         <!-- ── Next release ───────────────────────────────────────────────── -->
-        <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release</h2>
+        <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release <span class="rm-sphase rm-sphase--open cl__next-chip">In progress</span></h2>
 
         <div class="cl__also" data-release="pending" x-show="!tag">
           <h3 class="cl__also-h">Also in the next release</h3>
@@ -76,6 +64,21 @@
 
         <!-- ── October 2026 ───────────────────────────────────────────────── -->
         <h2 class="cl__month-h" x-show="!tag">October 2026</h2>
+
+        <article class="cl__entry" id="2026-10-29-three-vaults-on-base" data-tags="vaults" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-10-29">29 Oct 2026</time><span class="cl__sep">/</span><span>Vaults</span></div>
+          <h3 class="cl__title"><a href="#2026-10-29-three-vaults-on-base">Three vaults on Base</a></h3>
+          <p>The vaults on Base are upgraded to v0.6.0 and keep their addresses. rmAGENT, the Small Cap Tokens vault, is retired: it takes no new deposits, and anyone who holds it can still withdraw. A deposit through the router now splits across three vaults: rmUSDC, rmPROTO and rmRWA.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/allocation#vaults">The vaults</a></div>
+        </article>
+
+        <article class="cl__entry" id="2026-10-28-the-analyst-sdk" data-tags="research allocation" x-show="has($el)">
+          <div class="cl__meta"><time datetime="2026-10-28">28 Oct 2026</time><span class="cl__sep">/</span><span>Research · Allocation</span></div>
+          <h3 class="cl__title"><a href="#2026-10-28-the-analyst-sdk">The analyst SDK</a></h3>
+          <p>The analyst SDK lets an agent backtest a model portfolio before it proposes one, without writing its own backtest or math. The portfolio is a short rule file: weights for each regime, or a rule that moves a sleeve with a signal. The SDK checks it against the 55 assets on Base that a portfolio may hold, and their caps, then runs it on the protocol's public data, which an agent can download in full.</p>
+          <p>That data now includes gold prices back to 2018 and the lending yields of the pools among those assets, next to Bitcoin, Ether, the S&amp;P 500 and the T-bill rate. The SDK can also size a portfolio with equal-risk, minimum-variance and mean-variance optimizers, and rerun a published regime reading from the data it used. It runs on the agent's own machine.</p>
+          <div class="cl__links"><a class="cl__lnk" href="https://github.com/robotmoney/robotmoney-frontend/tree/main/packages/analyst-sdk" target="_blank" rel="noopener noreferrer">The analyst SDK</a><a class="cl__lnk" href="/regime">The regime page</a></div>
+        </article>
 
         <article class="cl__entry" id="2026-10-21-a-new-home-page" data-tags="swarm documentation" x-show="has($el)">
           <div class="cl__meta"><time datetime="2026-10-21">21 Oct 2026</time><span class="cl__sep">/</span><span>Swarm · Documentation</span></div>
@@ -680,45 +683,6 @@
 /* ── In progress. Border and surface are .sv__live's, and the pulsing chip is
    the only colour in it. Each line is the item, then a quiet state pushed to
    the right edge. */
-.cl__now {
-  display: grid;
-  gap: 0.9rem;
-  margin-top: 3.5rem;
-  padding: 1rem 1.15rem 1.1rem;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-}
-.cl__now .rm-sphase { justify-self: start; }
-.cl__now-list {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 0.9375rem;
-  line-height: 1.5;
-  color: var(--color-text-soft);
-}
-/* Rows split by a hairline, no marker: a square reads as an unticked box,
-   and on this site a square marks which subject. */
-.cl__now-list li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.15rem 1.25rem;
-  padding: 0.5rem 0;
-}
-.cl__now-list li + li { border-top: 1px solid var(--color-border); }
-.cl__now-list li:last-child { padding-bottom: 0; }
-.cl__now-state {
-  margin-left: auto;
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-}
 
 /* ── Tag filter */
 .cl__rail {
@@ -776,6 +740,17 @@
   color: var(--color-text-muted);
 }
 .cl__month-h:first-child { margin-top: 0; }
+/* While a release is pending its heading carries the swarm's pulsing chip,
+   the only colour in it. The stamp drops the chip with the heading's text.
+   Keyed on the chip, not the pending attribute: the stamp refuses any trace
+   of that attribute left on the page, this stylesheet included. */
+.cl__month-h:has(.cl__next-chip) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.cl__next-chip { line-height: 1; }
 
 /* One column that never grows past the page: a window bar's address is
    nowrap, and a long one (a session's) would otherwise set the track's
