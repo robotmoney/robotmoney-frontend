@@ -204,7 +204,7 @@ async function vaultsLoaded(page: Page) {
 }
 async function openAllocation(page: Page) {
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
 }
 
@@ -490,7 +490,7 @@ test("the vaults unreadable: the head from the slug, the error in place of the f
   await setMode(page, "base");
   await page.route("**/data/vaults/**", (route) => route.fulfill({ status: 404, body: "gone" }));
   await openVault(page, "rmagent");
-  await expect(page.locator(".rr-crumbs a")).toHaveAttribute("href", "/allocation#vaults");
+  await expect(page.locator(".rr-crumbs a")).toHaveAttribute("href", "/model-portfolio#vaults");
   await expect(page.locator("h1")).toHaveText("rmAGENT");
   await expect(page.locator(".rr-head .sv__eyebrow")).toContainText("Small Cap Tokens");
   await expect(page.locator(".sv__error")).toHaveText("Vault data unavailable");
@@ -505,12 +505,12 @@ test("an unknown vault slug renders not found", async ({ page }) => {
   expect(await page.title()).toBe("Page Not Found | Robot Money");
 });
 
-test("bare /vault moves to /allocation#vaults, scrolled to it, canonical /allocation", async ({ page }) => {
+test("bare /vault moves to /model-portfolio#vaults, scrolled to it, canonical /model-portfolio", async ({ page }) => {
   await stubSaved(page);
   await page.goto("/vault");
-  await expect(page).toHaveURL(/\/allocation#vaults$/);
+  await expect(page).toHaveURL(/\/model-portfolio#vaults$/);
   await expect(page.locator("#vaults")).toBeInViewport();
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://robotmoney.network/allocation");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://robotmoney.network/model-portfolio");
 });
 
 // ── /allocation: the Vaults section ─────────────────────────────────────────
@@ -647,7 +647,7 @@ test("?vaults=devnet persists for the tab: a later page with no query stays on t
   await openWithQuery(page, "/vault/rmusdc", "devnet");
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$72,000");
   await page.locator(".rr-crumbs a").click();
-  await expect(page).toHaveURL(/\/allocation#vaults$/);
+  await expect(page).toHaveURL(/\/model-portfolio#vaults$/);
   await navigate(page, "/vault/rmagent");
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$9,000");
   await expect(page.locator("[data-vault-label]").first()).toHaveText("Devnet test data");
@@ -656,7 +656,7 @@ test("?vaults=devnet persists for the tab: a later page with no query stays on t
 test("the switch carries from /allocation to a vault by its link, survives a reload, and ?vaults=base turns it off", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
-  await openWithQuery(page, "/allocation", "devnet");
+  await openWithQuery(page, "/model-portfolio", "devnet");
   await vaultsLoaded(page);
   await expect(vaultFact(page, "Combined TVL")).toContainText("$100,000");
 
@@ -670,7 +670,7 @@ test("the switch carries from /allocation to a vault by its link, survives a rel
   await page.reload();
   await expect(page.locator("#holdings .rr-stat__v")).toHaveText("$9,000");
 
-  await openWithQuery(page, "/allocation", "base");
+  await openWithQuery(page, "/model-portfolio", "base");
   await vaultsLoaded(page);
   await expect(vaultFact(page, "Network")).toContainText("Base");
   for (const devnetOnly of ["Devnet test data", "$72,000", "$100,000", "Staging devnet"]) {
@@ -768,10 +768,10 @@ test("devnet-stale and devnet-paused show in the facts", async ({ page }) => {
 
 test("devnet-stale and devnet-paused on /allocation: the read says stale, rmUSDC says paused", async ({ page }) => {
   await stubSaved(page);
-  await openWithQuery(page, "/allocation", "devnet-stale");
+  await openWithQuery(page, "/model-portfolio", "devnet-stale");
   await vaultsLoaded(page);
   await expect(vaultFact(page, "As of").locator("b")).toHaveText(/UTC$/);
-  await openWithQuery(page, "/allocation", "devnet-paused");
+  await openWithQuery(page, "/model-portfolio", "devnet-paused");
   await vaultsLoaded(page);
   await expect(vaultFact(page, "As of")).not.toContainText("delayed");
   await expect(vaultRows(page).nth(0).locator("th small")).toContainText("Paused");
@@ -1156,7 +1156,7 @@ test("the vault copy states facts: no em dash, no guarantee, no narration", asyn
   const errors = failOnBrowserErrors(page);
   await stubSaved(page);
   for (const mode of ["base", "devnet"] as const) {
-    await openWithQuery(page, "/allocation", mode);
+    await openWithQuery(page, "/model-portfolio", mode);
     await vaultsLoaded(page);
     expect(await copyFindings(page, "#vaults, .alp__ring")).toEqual([]);
     for (const slug of ["rmusdc", "rmagent"]) {
@@ -1184,7 +1184,7 @@ for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       await stubSaved(page);
 
-      await openWithQuery(page, "/allocation", mode);
+      await openWithQuery(page, "/model-portfolio", mode);
       await vaultsLoaded(page);
       await expect(vaultFact(page, "Network").locator("b")).toHaveText(mode === "devnet" ? "Staging devnet" : "Base");
       expect(await sideways(page)).toBe(0);

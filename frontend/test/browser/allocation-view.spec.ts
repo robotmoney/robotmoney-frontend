@@ -204,7 +204,7 @@ test("the product sheet never requests the house book (RM-115, RM-103)", async (
   });
 
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
   await page.waitForTimeout(300);
 
@@ -243,7 +243,7 @@ test("the Vaults section binds rmUSDC to the golden and states the other three a
   const vault = goldenVault();
   await stubEnvironment(page, { vault });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   const rows = vaultRows(page);
   await expect(rows).toHaveCount(4);
@@ -308,7 +308,7 @@ test("a published recommendation sets Recommended, the gaps and the tracking err
   const target = goldenFramework().strategy.map((s) => s.targetPct);
   await stubEnvironment(page, { vault, sessions: [session] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   const rows = vaultRows(page);
   await expect(page.locator("#vaults thead th")).toHaveText(heads(VAULT_HEADS));
@@ -350,7 +350,7 @@ test("a later session with no weights reads as the target held since the last re
   const standing = weightsSession();
   await stubEnvironment(page, { sessions: [held, standing] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   const latest = page.locator(".alp__rec");
   const rail = page.locator(".alp__meta");
@@ -372,7 +372,7 @@ test("a sleeve's recipe opens from the ring and names its vault, with no status 
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   const rows = page.locator(".alp__ring .rr-legend__row");
   await expect(rows).toHaveCount(4);
@@ -396,7 +396,7 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   // The ring every swarm page draws (lib/sleeve-explorer.js, ringSvg).
   const ring = page.locator(".alp__ring .rr-ring");
@@ -444,7 +444,7 @@ test("the ring draws one arc per funded sleeve, on the categorical palette, not 
 test("the ring's legend sets each sleeve's actual share against its target", async ({ page }) => {
   await stubEnvironment(page, { sessions: [weightsSession()] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
 
   await expect(page.locator(".alp__ring .rr-legend__head")).toHaveText("SleeveTargetActualDrift");
@@ -467,7 +467,7 @@ test("a constituent keeps its hue in its sleeve's recipe, and reads against the 
   const framework = goldenFramework();
   await stubEnvironment(page, { framework });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
 
   await page.locator(".alp__ring .rr-legend__row").first().click();
   const assets = page.locator(".alp__ring .rr-x__assets tbody tr");
@@ -476,7 +476,7 @@ test("a constituent keeps its hue in its sleeve's recipe, and reads against the 
   const fills = await assets.locator("th i").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
   expect(fills).toEqual(CATEGORICAL_RGB.slice(0, items.length));
-  // % of sleeve is the policy's own figure; % of allocation is it times the
+  // % of sleeve is the policy's own figure; % of portfolio is it times the
   // sleeve's target.
   const pct = (v: number) => `${v.toFixed(1).replace(/\.0$/, "")}%`;
   const sleeve = Number(framework.strategy[0].targetPct);
@@ -491,7 +491,7 @@ test("a constituent keeps its hue in its sleeve's recipe, and reads against the 
 test("each vault keeps its sleeve's hue, square", async ({ page }) => {
   await stubEnvironment(page, { sessions: [weightsSession()] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
 
   const dots = page.locator("#vaults tbody .rr-dot");
@@ -510,7 +510,7 @@ test("the breakdown rests on the largest sleeve, with its vault in the head", as
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   const panel = page.locator(".alp__ring .rr-x__panel");
   await expect(panel).toBeVisible();
   await expect(panel.locator(".rr-x__head b")).toHaveText("Fixed Income");
@@ -523,7 +523,7 @@ test("the breakdown rests on the largest sleeve, with its vault in the head", as
 test("the Vaults table's columns carry their definitions", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
   const tips = page.locator("#vaults thead .rm-tip__bub");
   await expect(tips).toHaveCount(5);
@@ -540,7 +540,7 @@ test("the page reports the allocation and narrates neither the swarm nor the bac
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { sessions: [allocationSession()] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   // The latest recommendation is the panel beside the ring, as /swarm sets
@@ -584,7 +584,7 @@ test("a stub vault feed is labelled on the Vaults section, not presented as a ch
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { vault: { ...goldenVault(), source: "stub" } });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator("[data-vault-label]")).toHaveCount(1);
   await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Stub data");
   await expectNoBrowserErrors(errors);
@@ -593,7 +593,7 @@ test("a stub vault feed is labelled on the Vaults section, not presented as a ch
 test("a stale vault feed states the time it was read, and no label beside it", async ({ page }) => {
   await stubEnvironment(page, { vault: { ...goldenVault(), stale: true } });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(vaultFact(page, "As of").locator("b")).toHaveText("Jul 30, 2026 16:20 UTC");
 });
 
@@ -604,7 +604,7 @@ test("the vault feed down: the saved Base snapshot, labelled as such", async ({ 
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { vault: null });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator("#vaults [data-vault-label]")).toHaveText("Saved Base snapshot");
   // rmUSDC's Actual, in dollars, is the snapshot's TVL.
   await expect(vaultRows(page).nth(0).locator("td").nth(2).locator("small")).toHaveText("$200");
@@ -615,7 +615,7 @@ test("no vault read at all: the section names the gap and prints no figure", asy
   await stubEnvironment(page, { vault: null });
   await page.route("**/data/vaults/**", (route) => route.fulfill({ status: 404, body: "gone" }));
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator("#vaults .alp__empty")).toHaveText("Vault data unavailable");
   await expect(page.locator("#vaults .rr-meta")).toBeHidden();
   await expect(page.locator("#vaults table")).toBeHidden();
@@ -636,7 +636,7 @@ test("the state chip reads seeded whatever source and managed say", async ({ pag
   ]) {
     await stubEnvironment(page, { framework });
     await page.goto("/index.html");
-    await navigate(page, "/allocation");
+    await navigate(page, "/model-portfolio");
     await expect(page.locator(".alp__chip")).toHaveText("seeded");
     // The date the weights have been in force is a fact about the weights, so
     // it is a rail item and not a sentence restating the rail beside it.
@@ -658,14 +658,14 @@ test("the chip flips to swarm-managed the moment a row carries a session's prove
     } as unknown as AllocationFramework,
   });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__chip")).toHaveText("swarm-managed");
 });
 
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   const findings = await page.evaluate((CATEGORICAL: string[]) => {
@@ -754,7 +754,7 @@ test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) =
 test("every categorical fill on the page declares itself a series mark", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   const marks = page.locator('section.alp [data-mark="series"]');
@@ -772,7 +772,7 @@ test("every categorical fill on the page declares itself a series mark", async (
 test("the page carries no em dash in its own copy", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   // The em dash is also the site's null glyph (fmtUsd returns "—"), so only
@@ -800,7 +800,7 @@ test("on a phone the ring keeps its size and nothing scrolls the page sideways",
   await page.setViewportSize({ width: 390, height: 844 });
   await stubEnvironment(page);
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(page.locator(".alp__ring .rr-legend__row").first()).toBeVisible();
 
   // The ring keeps its size above its legend rather than being swapped for a

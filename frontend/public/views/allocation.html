@@ -49,7 +49,7 @@
   <header class="a2-hero">
     <div class="a2-hero__viz" x-data="meshHero()" aria-hidden="true"></div>
     <div class="a2-hero__inner">
-      <h1 class="a2-hero__title">Asset <span class="a2-grad">Allocation</span></h1>
+      <h1 class="a2-hero__title">Model <span class="a2-grad">Portfolio</span></h1>
       <p class="a2-hero__lede">
         Four sleeves, weighted by the investment swarm of agents and in force
         until a recommendation changes them. Each sleeve gets its own vault.
@@ -128,7 +128,7 @@
              x-effect="if (rest === null && explorerRows().length) rest = (explorerRows().find((r) => r.pct > 0) || explorerRows()[0]).key">
           <div class="rr-mix">
             <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
-              <span class="sv__wdonut-host" role="img" :aria-label="`Target allocation: ${explorerLabel()}`"
+              <span class="sv__wdonut-host" role="img" :aria-label="`Target weights: ${explorerLabel()}`"
                     x-html="explorerSvg()"
                     x-effect="active(); $nextTick(() => syncArcs($el))"></span>
               <figcaption>
@@ -165,7 +165,7 @@
                     <template x-if="vaultHref(panelRow().key)"><span class="alp__vault">Vault <a class="rr-lnk alp__vtok" :href="vaultHref(panelRow().key)" x-text="vaultSymbol(panelRow().key)"></a></span></template>
                   </div>
                   <table class="rr-table rr-x__assets">
-                    <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of allocation</th></tr></thead>
+                    <thead><tr><th scope="col">Asset</th><th scope="col" class="q">% of sleeve</th><th scope="col" class="q">% of portfolio</th></tr></thead>
                     <tbody>
                       <template x-for="a in panelRow().assets" :key="a.key">
                         <tr>

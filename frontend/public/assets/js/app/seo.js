@@ -135,8 +135,8 @@ const META = {
     faq: TOKEN_FAQ,
     nodes: tokenNodes,
   },
-  "/allocation": {
-    title: "Allocation: Target Sleeves and Vaults | Robot Money",
+  "/model-portfolio": {
+    title: "Model Portfolio: Target Sleeves and Vaults | Robot Money",
     description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
   },
   // The four vault pages (/vault/:slug). noindex until the production launch
@@ -614,14 +614,16 @@ const LEGACY_ALIASES = [
   ["/allocation2", "/treasury"],
   // RM-157: the protocol wallets' page moved from /performance to /treasury.
   ["/performance", "/treasury", "exact"],
+  // RM-190: the model portfolio moved from /allocation to /model-portfolio.
+  ["/allocation", "/model-portfolio", "exact"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   // /vault renders views/allocation.html (RM-115). Without an entry here both
   // addresses return 200 with the same page and neither names the other
   // canonical, and /vault, having no META entry of its own, would serve the
   // product sheet under "Page Not Found" and `noindex, follow`. "exact": the
   // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
-  // /allocation.
-  ["/vault", "/allocation", "exact"],
+  // /model-portfolio.
+  ["/vault", "/model-portfolio", "exact"],
 ];
 
 // The last resort in metaFor(), reached only by a path that is in no META

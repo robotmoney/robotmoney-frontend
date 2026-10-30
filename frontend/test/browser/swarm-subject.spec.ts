@@ -576,7 +576,7 @@ test("a framework subject renders no book, even when the API serves it one", asy
   // gate firing rather than a fixture too thin to render. The facts row is
   // drawn: this subject has no session, so its one item is the link to the
   // allocation it is.
-  await expect(page.locator(".rr-meta")).toContainText("Asset allocation");
+  await expect(page.locator(".rr-meta")).toContainText("Model portfolio");
   await expect(page.locator("#history .rr-table__empty")).toBeVisible();
 
   // And the request is never made: a subject with no book has none to fetch.
@@ -634,8 +634,8 @@ test("the allocation subject carries the weights in force, and no other subject 
   await expect(card).not.toContainText("not gaps");
 
   // The way to the product page is the facts row's, once: not again in here.
-  await expect(card.locator('a[href="/allocation"]')).toHaveCount(0);
-  await expect(page.locator('.rr-meta a[href="/allocation"]')).toBeVisible();
+  await expect(card.locator('a[href="/model-portfolio"]')).toHaveCount(0);
+  await expect(page.locator('.rr-meta a[href="/model-portfolio"]')).toBeVisible();
 
   // Another weights subject reads the framework as the target its sessions
   // are measured against, and still carries no weights-in-force of its own:
@@ -763,7 +763,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
   // The regime by name; its composite is a market signal, read on the session.
   await expect(meta.locator(".rr-meta__i", { hasText: "Composite" })).toHaveCount(0);
   await expect(meta.locator(".rr-meta__i", { hasText: "Regime" }).locator("b")).toHaveText("risk-on");
-  await expect(meta.locator('a[href="/allocation"]')).toBeVisible();
+  await expect(meta.locator('a[href="/model-portfolio"]')).toBeVisible();
 
   // The vote: each stance counted, bearish to bullish, then who took part.
   const latest = page.locator("#latest");

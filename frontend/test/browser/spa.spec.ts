@@ -78,8 +78,8 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  await navigate(page, "/allocation");
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await navigate(page, "/model-portfolio");
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   // The allocationView factory draws the allocation donut and the yield
   // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
   await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
@@ -119,7 +119,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
     return route.continue();
   });
   await navigate(page, "/");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(rmusdcTvl).toHaveText(expected.vault);
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
@@ -324,13 +324,13 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
   await page.evaluate(() => {
     history.pushState({}, "", "/swarm/members/athena");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    history.pushState({}, "", "/allocation");
+    history.pushState({}, "", "/model-portfolio");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
 
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   await expect(page.locator(".profile-name")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
@@ -400,21 +400,32 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
   });
 }
 
-test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
-  // Bare /vault is the four vaults on /allocation: the router moves the
-  // address to /allocation#vaults before it renders, so navigate(), which
+test("/vault renders the model portfolio and declares it canonical", async ({ page }) => {
+  // Bare /vault is the four vaults on the model portfolio: the router moves the
+  // address to /model-portfolio#vaults before it renders, so navigate(), which
   // waits for the render of the path it pushed, cannot drive it. A direct load
   // can. It is still an EXPLICIT route, not an absence: the catch-all maps an
   // unknown path to /views/<path>.html, which for /vault is now the per-vault
   // page.
   await page.goto("/vault");
-  await expect(page).toHaveURL(/\/allocation#vaults$/);
+  await expect(page).toHaveURL(/\/model-portfolio#vaults$/);
   await expect(page.locator("section.alp")).toHaveCount(1);
-  // Two addresses, one page: seo.js names /allocation canonical for both so
+  // Two addresses, one page: seo.js names /model-portfolio canonical for both so
   // they do not compete as duplicates, and the page stays indexable.
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
-    "href", "https://robotmoney.network/allocation");
+    "href", "https://robotmoney.network/model-portfolio");
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+});
+
+test("/allocation moves to /model-portfolio with its query and fragment", async ({ page }) => {
+  // The model portfolio's old address (RM-190). Archived sessions and the
+  // deposit skill cite /allocation#vault, and the vault data switch rides on
+  // the query, so the move keeps both.
+  await page.goto("/allocation?vaults=devnet#vaults");
+  await expect(page).toHaveURL(/\/model-portfolio\?vaults=devnet#vaults$/);
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href", "https://robotmoney.network/model-portfolio");
 });
 
 test("the noindex override does not leak onto the next route", async ({ page }) => {
