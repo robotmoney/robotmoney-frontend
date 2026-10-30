@@ -785,6 +785,7 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.participants.pending]: "participant work queue; requires that member's own bearer and answers only about itself",
   [ROUTES.swarm.participants.judgeSubscribe]: "judge participant bearer only; a long-lived event-stream of that judge's own work",
   [ROUTES.swarm.participants.judgement]: "judge participant write flow; requires a judge's member bearer",
+  [ROUTES.swarm.participants.health]: "a seat's own health read; requires that seat's member bearer and answers only about itself",
   [ROUTES.swarm.participants.judgeRefusal]: "judge participant report of a refused attempt; requires a judge's member bearer and decides nothing",
 };
 

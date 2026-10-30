@@ -389,3 +389,103 @@ describe("member docs and scripts discover sessions through open-sessions, not o
     expect(offenders).toEqual([]);
   });
 });
+
+// Issue 1495: the skill and the participation docs must agree with the server
+// on the judging window and on the refusal codes a take or a judgement can
+// receive. The truths are READ out of the server's own files, so changing the
+// server without the docs fails here.
+const DOMAIN = "backend/src/swarm/domain.ts";
+const JUDGE = "backend/src/swarm/judge.ts";
+const SUBJECT_GRID_MIGRATION = "backend/migrations/0090_subject_grid_columns.sql";
+
+/** The default judging duration in seconds, from the migration that adds the column. */
+function serverJudgingWindowSeconds(): number {
+  const m = /judging_duration_seconds integer NOT NULL DEFAULT (\d+)/.exec(read(SUBJECT_GRID_MIGRATION));
+  if (!m) throw new Error(`${SUBJECT_GRID_MIGRATION} no longer declares judging_duration_seconds with a default`);
+  return Number(m[1]);
+}
+
+/** The judging windows a doc states ("You have 15 minutes", "A judge has 15 minutes"), in seconds. */
+function statedJudgingWindows(text: string): number[] {
+  const plain = textOf(text).replace(/\*\*/g, "");
+  return [...plain.matchAll(/(?:You have|A judge has) (\d+) minutes?\b/g)].map((m) => Number(m[1]) * 60);
+}
+
+/** Every complaint about `text` against the server's window and codes; empty when it agrees. */
+function docDrift(text: string, windowSeconds: number, codes: string[]): string[] {
+  const complaints: string[] = [];
+  const windows = statedJudgingWindows(text);
+  if (windows.length === 0) complaints.push("states no judging window");
+  for (const w of windows) if (w !== windowSeconds) complaints.push(`states a ${w} s judging window, the server default is ${windowSeconds} s`);
+  const plain = textOf(text);
+  for (const code of codes) if (!new RegExp(`(?<![a-z_])${code}(?![a-z_])`).test(plain)) complaints.push(`omits refusal code ${code}`);
+  return complaints;
+}
+
+/** The base name of every refusal code the server returns for a take or a judgement. */
+function serverRefusalCodes(): string[] {
+  const domain = read(DOMAIN);
+  const codes = new Set<string>();
+  // A judgement: refuseSubmission(status, "code") and the usage_malformed:<field> template.
+  for (const m of domain.matchAll(/refuseSubmission\(\d+, "([a-z_]+)(?::[^"]*)?"\)/g)) codes.add(m[1]!);
+  for (const m of domain.matchAll(/error: `(usage_[a-z_]+):\$\{/g)) codes.add(m[1]!);
+  // judgement_refused:<reason>, every reason the response parser can raise.
+  codes.add("judgement_refused");
+  for (const m of read(JUDGE).matchAll(/new JudgeResponseError\(["`]([a-z_]+)/g)) codes.add(m[1]!);
+  // A take: the codes recorded as `rejected_take`, the weights refusals and the judge-role refusal.
+  for (const m of domain.matchAll(/rejectedTake: "([a-z_]+)"/g)) codes.add(m[1]!);
+  for (const m of domain.matchAll(/error: `(weights_[a-z_]+):/g)) codes.add(m[1]!);
+  codes.add("judge_role_cannot_submit_takes");
+  return [...codes].sort();
+}
+
+describe("the skill and participation docs agree with the server on the judging window and refusal codes (issue 1495)", () => {
+  const windowSeconds = serverJudgingWindowSeconds();
+  const codes = serverRefusalCodes();
+
+  // Canaries against a vacuous pass.
+  test("the server's window and codes are read out of its files", () => {
+    expect(windowSeconds).toBe(900);
+    for (const known of ["signature_invalid", "nothing_to_judge", "usage_malformed", "unknown_member", "not_json",
+      "submission_window_closed", "amendment_cap_reached", "weights_not_canonical_four", "judgement_refused"]) {
+      expect(codes).toContain(known);
+    }
+  });
+
+  for (const [label, rel] of [["the onboarding skill", ONBOARDING_SKILL], ["participation.html", PARTICIPATION]] as const) {
+    test(`${label} states the server's judging window and names every refusal code`, () => {
+      expect(docDrift(read(rel), windowSeconds, codes)).toEqual([]);
+    });
+  }
+
+  test("a doc with another window or a missing code fails (negative fixture)", () => {
+    const wrongWindow = "**You have 20 minutes.** " + codes.join(" ");
+    expect(docDrift(wrongWindow, windowSeconds, codes)).toEqual(["states a 1200 s judging window, the server default is 900 s"]);
+    const missing = "**You have 15 minutes.** " + codes.filter((c) => c !== "signature_invalid").join(" ");
+    expect(docDrift(missing, windowSeconds, codes)).toEqual(["omits refusal code signature_invalid"]);
+    expect(docDrift("no window here " + codes.join(" "), windowSeconds, codes)).toEqual(["states no judging window"]);
+  });
+});
+
+describe("the self-check step is taught and its route is documented (issue 1495)", () => {
+  const health = ROUTES.swarm.participants.health;
+
+  test("the contract defines the self-health route", () => {
+    expect(health).toBe("/api/swarm/participants/health");
+  });
+
+  for (const [label, rel] of [["participation.html", PARTICIPATION], ["api-reference.html", API_REFERENCE]] as const) {
+    test(`${label} documents the self-health route`, () => {
+      expect(extractDocPaths(read(rel)).map(normalize)).toContain(normalize(health));
+    });
+  }
+
+  test("the skill runs the self-check after setup and after a refusal, and reports a failing check to the owner", () => {
+    const skill = read(ONBOARDING_SKILL);
+    expect(skill).toContain(`GET ${health}`);
+    const section = skill.slice(skill.indexOf("## Self-check: read your own health"), skill.indexOf("## Step 5"));
+    expect(section.length).toBeGreaterThan(0);
+    expect(section).toMatch(/after setup and after any refusal/);
+    expect(section).toMatch(/Report a failing check to your owner/);
+  });
+});
