@@ -17,8 +17,8 @@ export {
   ArchiveError, INPUT_TABLES, type BackupRecord, type FileRecord, type GeneratedRow, type RunIdentity, type RunInputs,
 } from "./archive/format1.ts";
 export {
-  openArchive, collectRunInputs, type ArchiveFiles, type LocalCopy, type RevisedTable, type LatestValue,
-} from "./archive/local-copy.ts";
+  openArchive, collectRunInputs, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
+} from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
 export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";

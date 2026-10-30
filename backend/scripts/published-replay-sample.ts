@@ -7,7 +7,7 @@
 // is data the public API already serves (D58, D73): each run's frozen vintage
 // (source value versions, exactly as stored) and the as-of row of its published
 // regime_snapshots artifact. It is read through the analyst SDK's one archive
-// reader (packages/analyst-sdk/bin/local-copy.ts, the reader of `bun run inputs`).
+// reader (packages/analyst-sdk/bin/backups-dir.ts, the reader of `bun run inputs`).
 //
 // A production vintage holds about 129k values and consecutive runs share most
 // of them, so the inputs of the sampled runs are written once, as the union:
@@ -18,7 +18,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { collectRunInputs, openLocalCopy } from "../../packages/analyst-sdk/bin/local-copy.ts";
+import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { COMPARED_FIELDS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "../tests/support/published-replay.ts";
 
@@ -36,9 +36,9 @@ const keys = argv;
 if (keys.length === 0) throw new Error("name at least one run_key");
 
 const sha256 = (s: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(s).digest("hex");
-const copy = openLocalCopy(archive);
+const copy = openBackupsDir(archive);
 const runs = keys.map((k) => {
-  const r = (copy.tables.analytics_ledger_runs ?? []).find((x) => x.run_key === k);
+  const r = copy.table("analytics_ledger_runs").find((x) => x.run_key === k);
   if (!r) throw new Error(`run ${k} is not in the copy`);
   return r;
 });

@@ -120,7 +120,7 @@ jobs:
       - name: Archive reader suite ran (issue 1513)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
-          tests/local-copy.test.ts:17
+          tests/archive-reader.test.ts:32
       # Issue 1477: format 1's writer half ran (COPY CSV rows, part splitting,
       # names, the day-cut rule and the legacy junction), and the inputs suite
       # read the legacy snapshot-time fixture beside the day-cut copies.

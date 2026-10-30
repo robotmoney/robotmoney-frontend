@@ -66,7 +66,7 @@ const IDENTITY_FILES = [
   "backend/src/analytics/store/public-archive-store.ts",
   "backend/src/api/routes/public-analytics.ts",
   "packages/analyst-sdk/src/archive",
-  "packages/analyst-sdk/bin/local-copy.ts",
+  "packages/analyst-sdk/bin/backups-dir.ts",
   "packages/analyst-sdk/bin/inputs.ts",
   "contract/src/schemas/public-analytics-archive-backup-record.schema.json",
   "contract/src/public-analytics.d.ts",

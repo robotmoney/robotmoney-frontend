@@ -112,7 +112,7 @@ export function comparisonProblems(c: RowComparison, run: string, asof: string):
 
 // ── the SDK side: imported from the clone, never from this checkout ──
 interface Sdk {
-  openLocalCopy(root: string): { tables: Record<string, Record<string, string | null>[]>; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
+  openBackupsDir(root: string): { table(name: string): Record<string, string | null>[]; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
   parseInput(text: string, o: { replay: boolean }): { history: unknown };
   runRegime(history: unknown, o: { asof: string; factor: boolean }): {
     dateAxis: string[];
@@ -126,9 +126,9 @@ interface Sdk {
 
 async function loadSdk(dir: string): Promise<Sdk> {
   const [local, load, run, ind] = await Promise.all([
-    import(join(dir, "bin/local-copy.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
+    import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
   ]);
-  return { openLocalCopy: local.openLocalCopy, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS };
+  return { openBackupsDir: local.openBackupsDir, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS };
 }
 
 const nn = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -178,8 +178,8 @@ async function main(): Promise<number> {
     return 2;
   }
   const sdk = await loadSdk(sdkDir);
-  const copy = sdk.openLocalCopy(archive);
-  const runRow = (copy.tables.analytics_ledger_runs ?? []).find((r) => r.run_key === run);
+  const copy = sdk.openBackupsDir(archive);
+  const runRow = copy.table("analytics_ledger_runs").find((r) => r.run_key === run);
   if (!runRow) {
     console.log(JSON.stringify({ problems: [`run ${run} is not in the local copy's run ledger`] }));
     return 1;
