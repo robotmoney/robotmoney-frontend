@@ -525,6 +525,22 @@ release. The SDK releases at any cadence, independent of the platform: an SDK ta
 platform release. The SDK runs on an analyst's machine. Nothing deploys, so it has no QA branch, no
 stage run, no rc tag and no production cutover of its own.
 
+**Runner.** The executable form of this section is `scripts/release/runbooks/analyst-sdk.yaml`, run by
+`bun run release:sdk [--version A.B.C] [--commit <sha>] [--dry-run] [--notes-file <f>]`
+(`scripts/release/sdk-release.ts`, steps in `scripts/release/sdk-release-lib.ts`, issue 1550). It is
+not a platform runbook: §5's runner and loader never read it. Its steps run in order: S01-preflight,
+S02-branch, S03-gate, S04-tag, S05-tag-guard and S06-release. S02, S04 and S06 are irreversible. The
+version defaults to `version` in `packages/analyst-sdk/package.json` at `origin/main`, and the commit
+to the `origin/main` tip. The runner stops at the first failure with the step id, the reason and the
+rerun command. A rerun reports the steps already done and continues at the first one that is not.
+`--dry-run` runs the preflight and every step's read-only done check, and writes nothing.
+
+The runner takes one branch route only: it creates `analyst-sdk/releases-A.B.x` at a commit of
+`main`, or fast-forwards it to one. It never force-pushes. A tip that is not an ancestor of the
+commit is refused, because a merge or cherry-pick onto an existing SDK release branch needs a pull
+request. The operator must hold the admin permission on the repository: the preflight refuses
+without it, because the tag push needs it.
+
 **Branch.** The SDK ships from `analyst-sdk/releases-A.B.x`, where A.B comes from the SDK's own
 semver. The `analyst-sdk/` prefix is required. Platform CI triggers on `releases-*`, and
 `scripts/release/tag.ts` and `scripts/release/preflight.ts` treat `releases-A.B.x` as a platform
