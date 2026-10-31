@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/sdk-release.ts — `bun run release:sdk`: runs the analyst SDK
+// scripts/release/sdk-release.ts — runs the analyst SDK
 // release runbook (./runbooks/analyst-sdk.yaml; D77, release-runbooks.md §11)
 // from the operator's checkout, with origin the GitHub repository.
 //
@@ -16,7 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadSdkRunbook, runSdkRelease, type Deps, type ExecResult } from "./sdk-release-lib.ts";
 
-const USAGE = "usage: bun run release:sdk [--version A.B.C] [--commit <sha>] [--dry-run] [--notes-file <f>]";
+const USAGE = "usage: bun --no-env-file scripts/release/sdk-release.ts [--version A.B.C] [--commit <sha>] [--dry-run] [--notes-file <f>]";
 
 function run(cmd: string, args: string[]): ExecResult {
   const r = spawnSync(cmd, args, { encoding: "utf8" });

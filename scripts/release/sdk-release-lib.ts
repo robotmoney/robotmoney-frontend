@@ -194,7 +194,7 @@ export const releaseBranchOf = (version: string): string => `analyst-sdk/release
 
 /** PURE. The rerun command for a run with these inputs (resolved values where the preflight found them). */
 export function rerunCommand(inputs: Inputs, release?: Release): string {
-  const parts = ["bun", "run", "release:sdk"];
+  const parts = ["bun", "--no-env-file", "scripts/release/sdk-release.ts"];
   const version = release?.version ?? inputs.version;
   const commit = release?.commit ?? inputs.commit;
   if (version) parts.push("--version", version);
