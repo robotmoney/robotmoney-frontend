@@ -1,6 +1,6 @@
 # scripts/release/runbooks/analyst-sdk.yaml — the analyst SDK release runbook (D77,
-# docs/technical/release-runbooks.md §11). `bun run release:sdk` runs it
-# (scripts/release/sdk-release.ts, loader and steps in ./../sdk-release-lib.ts).
+# docs/technical/release-runbooks.md §11). `bun --no-env-file scripts/release/sdk-release.ts` runs it
+# (loader and steps in ./../sdk-release-lib.ts).
 #
 # It is not a platform runbook: no Q/P/C phases, no stage or production target,
 # no ssh host, no target or go file (D77 (1)). It sits outside templates/ and

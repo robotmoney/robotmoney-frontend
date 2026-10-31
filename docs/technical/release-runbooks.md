@@ -526,8 +526,8 @@ platform release. The SDK runs on an analyst's machine. Nothing deploys, so it h
 stage run, no rc tag and no production cutover of its own.
 
 **Runner.** The executable form of this section is `scripts/release/runbooks/analyst-sdk.yaml`, run by
-`bun run release:sdk [--version A.B.C] [--commit <sha>] [--dry-run] [--notes-file <f>]`
-(`scripts/release/sdk-release.ts`, steps in `scripts/release/sdk-release-lib.ts`, issue 1550). It is
+`bun --no-env-file scripts/release/sdk-release.ts [--version A.B.C] [--commit <sha>] [--dry-run] [--notes-file <f>]`
+(steps in `scripts/release/sdk-release-lib.ts`, issue 1550). It is
 not a platform runbook: §5's runner and loader never read it. Its steps run in order: S01-preflight,
 S02-branch, S03-gate, S04-tag, S05-tag-guard and S06-release. S02, S04 and S06 are irreversible. The
 version defaults to `version` in `packages/analyst-sdk/package.json` at `origin/main`, and the commit

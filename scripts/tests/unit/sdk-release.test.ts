@@ -347,10 +347,10 @@ describe("the gate", () => {
     const s = greenGate(SHA);
     s.runs["backend.yml"] = [];
     const h = harness(ROOT, s);
-    const r = await poll(() => readGate(R, h.deps), 2, h.deps, "S03-gate", "bun run release:sdk --version 0.6.0");
+    const r = await poll(() => readGate(R, h.deps), 2, h.deps, "S03-gate", "bun --no-env-file scripts/release/sdk-release.ts --version 0.6.0");
     expect(r.state).toBe("failed");
     expect(r.detail).toContain("still waiting after 2 minutes");
-    expect(r.detail).toContain("rerun: bun run release:sdk --version 0.6.0");
+    expect(r.detail).toContain("rerun: bun --no-env-file scripts/release/sdk-release.ts --version 0.6.0");
     expect(h.sleeps.length).toBe((2 * 60_000) / POLL_MS);
   });
   test("the tag guard reads the analyst-sdk-tag-guard push run for the tag", () => {
@@ -507,7 +507,7 @@ describe("the runner", () => {
     expect(await runSdkRelease(loadSdkRunbook(), inputs(), first.deps)).toBe(1);
     const out1 = first.out.join("\n");
     expect(out1).toContain("FAILED at S05-tag-guard");
-    expect(out1).toContain(`rerun: bun run release:sdk --version 0.6.0 --commit ${f.c2}`);
+    expect(out1).toContain(`rerun: bun --no-env-file scripts/release/sdk-release.ts --version 0.6.0 --commit ${f.c2}`);
     expect(first.pushes.length).toBe(2);
     expect(first.gh.writes()).toEqual([]);
 

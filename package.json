@@ -41,7 +41,6 @@
     "prod:gate": "bun scripts/prod-gate.ts",
     "soak:checks": "bun scripts/standing-soak.ts",
     "release:run": "bun --no-env-file scripts/release/run.ts",
-    "release:sdk": "bun --no-env-file scripts/release/sdk-release.ts",
     "role-passwords": "bun --no-env-file scripts/release/role-passwords.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
