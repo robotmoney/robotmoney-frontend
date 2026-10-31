@@ -6,7 +6,7 @@
 // so production's voice and structure contract cannot drift between them. It
 // lives under scripts/agent/participant/ because the participant image copies
 // that directory and nothing else of scripts/lib: it imports only the contract.
-import { RECEIPT_CANONICAL_BUCKET_ORDER, STANCES } from "@robotmoney/contract";
+import { RECEIPT_HARD_ASSETS_BUCKET_ORDER, STANCES } from "@robotmoney/contract";
 import type { Stance } from "@robotmoney/contract";
 
 // Regime inputs passed to each live author. This used to live beside the retired
@@ -135,9 +135,9 @@ export const TAKE_WEIGHTS_LEAD_IN = "WEIGHTS:";
 
 // The four buckets, in the receipt's canonical order — DERIVED from the
 // contract constant, never re-declared, so the prompt, this parser and
-// `RECEIPT_CANONICAL_BUCKET_ORDER` can never drift into disagreeing about which
+// `RECEIPT_HARD_ASSETS_BUCKET_ORDER` (hard_assets replaced agent_tokens, issue 1496) can never drift into disagreeing about which
 // four vaults exist.
-export const TAKE_WEIGHT_BUCKETS: readonly string[] = Object.freeze([...RECEIPT_CANONICAL_BUCKET_ORDER]);
+export const TAKE_WEIGHT_BUCKETS: readonly string[] = Object.freeze([...RECEIPT_HARD_ASSETS_BUCKET_ORDER]);
 
 /**
  * Parse a trailing `WEIGHTS: <bucket>=<n> | …` line into the canonical
@@ -162,7 +162,7 @@ export const TAKE_WEIGHT_BUCKETS: readonly string[] = Object.freeze([...RECEIPT_
  * normalized at all.
  *
  * THE UNIT IS A PROPERTY OF THE LINE, NOT OF EACH ENTRY. That is the one shape
- * where "carried raw" stops being harmless: `agent_tokens=10% |
+ * where "carried raw" stops being harmless: `hard_assets=10% |
  * conservative_defi_yield=0.85 | protocol_tokens=0.04 | real_world_assets=0.01`
  * used to parse, because `%` was stripped and the value kept, and then
  * normalized to 91.74 / 7.80 / 0.37 / 0.09 — an allocation nobody wrote,
@@ -306,12 +306,12 @@ export interface TakeWeight {
 
 // The allocation contract the member prompt demands: every take proposes a
 // weight for each of the four canonical vault buckets (the SAME order the
-// consensus receipt emits them in — contract's RECEIPT_CANONICAL_BUCKET_ORDER).
+// consensus receipt emits them in — contract's RECEIPT_HARD_ASSETS_BUCKET_ORDER).
 // `parseStanceFromBody` requires exactly this set, so a take that omits or
 // renames a bucket is an ABSENT member, never a silently-partial proposal
 // (the vector a member DID propose must be recomputable by anyone holding the
 // take set, which a member whose weights a reader cannot rebuild would break).
-export const TAKE_WEIGHTS_BUCKETS: readonly string[] = RECEIPT_CANONICAL_BUCKET_ORDER;
+export const TAKE_WEIGHTS_BUCKETS: readonly string[] = RECEIPT_HARD_ASSETS_BUCKET_ORDER;
 
 // Parse the WEIGHTS clause of a take's trailing control line into entries.
 // The clause is `WEIGHTS: <bucket>=<fraction>, <bucket>=<fraction>, ...` and

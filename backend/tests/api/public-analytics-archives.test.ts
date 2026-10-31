@@ -827,7 +827,7 @@ describe("committed persistence only", () => {
     const forbidden = reached.filter(
       (f) =>
         /^backend\/src\/analytics\/(analyze|extract|transform|access)\/|^backend\/src\/analytics\/(prepare|index)\.ts$/.test(f) ||
-        /^packages\/analyst-sdk\/src\/(transform|allocate|extract|access)\/|^packages\/analyst-sdk\/src\/analyze\/(?!indicators\.ts$)|^packages\/analyst-sdk\/src\/(run|prepare|index|coverage)\.ts$|^packages\/analyst-sdk\/src\/archive\/local-copy\.ts$/.test(f),
+        /^packages\/analyst-sdk\/src\/(transform|allocate|extract|access)\/|^packages\/analyst-sdk\/src\/analyze\/(?!indicators\.ts$)|^packages\/analyst-sdk\/src\/(run|prepare|index|coverage)\.ts$|^packages\/analyst-sdk\/src\/archive\/reader\.ts$/.test(f),
     );
     expect(forbidden).toEqual([]);
   });

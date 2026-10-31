@@ -270,6 +270,185 @@ describe("markowitzSchedule tuning", () => {
   });
 });
 
+describe("markowitzSchedule gives callbacks the date, rf, a longer trailing history and the rebalance in force", () => {
+  test("cov(history, context) and solve(mu, S, rf, context) get the date, the history dates and rf; trailing(n) reaches past lookback", () => {
+    const seen: { d: string; hd: string[]; rf: number; trail: string[]; trailRows: number[][] }[] = [];
+    const out = markowitzSchedule({
+      ...base(),
+      lookback: 252,
+      cov: (h, ctx) => {
+        const t = ctx.trailing(500);
+        seen.push({ d: ctx.date, hd: [...ctx.historyDates], rf: NaN, trail: t.dates, trailRows: t.rows });
+        expect(h.length).toBe(252);
+        return shrunkCov(h);
+      },
+      solve: (mu, S, rf, ctx) => {
+        expect(ctx.date).toBe(seen.at(-1)!.d);
+        seen.at(-1)!.rf = rf;
+        return meanVarExact(S, mu.map((m) => m - rf), 4);
+      },
+    });
+    expect(seen.map((x) => x.d)).toEqual(out.rebalances.map((r) => r.date));
+    for (const x of seen) {
+      expect(x.rf).toBe(rfOn(x.d));
+      expect(x.hd).toEqual(RDAYS.filter((r) => r < x.d).slice(-252));
+      expect(x.trail).toEqual(RDAYS.filter((r) => r < x.d).slice(-500));
+      expect(x.trailRows).toEqual(x.trail.map((r) => RETURNS.get(r)!));
+    }
+    expect(seen.at(-1)!.trail.length).toBe(500);
+  });
+  test("trailing(n) is capped at the data from `from`, never reaches the date, and is a copy", () => {
+    const from = "2020-01-01";
+    markowitzSchedule({
+      ...base(),
+      from,
+      cov: (h, ctx) => {
+        const all = ctx.trailing(100_000);
+        expect(all.dates).toEqual(RDAYS.filter((r) => r >= from && r < ctx.date));
+        expect(all.dates.every((r) => r < ctx.date)).toBe(true);
+        all.rows[0]![0] = 123;
+        expect(ctx.trailing(100_000).rows[0]![0]).not.toBe(123);
+        return shrunkCov(h);
+      },
+    });
+    expect(() => markowitzSchedule({ ...base(), cov: (h, ctx) => (ctx.trailing(-1), shrunkCov(h)) })).toThrow(RangeError);
+    for (const bad of [-1, 1.5, NaN, Infinity]) expect(() => markowitzSchedule({ ...base(), cov: (h, ctx) => (ctx.trailing(bad), shrunkCov(h)) })).toThrow(RangeError);
+    expect(() => markowitzSchedule({ ...base(), cov: (h, ctx) => (expect(ctx.trailing(0)).toEqual({ dates: [], rows: [] }), shrunkCov(h)) })).not.toThrow();
+  });
+  test("mu gets rf as its fourth argument: the same rf the rebalance records", () => {
+    const rfs: number[] = [];
+    const out = markowitzSchedule({ ...base(), mu: (_d, _h, _dates, rf) => (rfs.push(rf), MU) });
+    expect(rfs).toEqual(out.rebalances.map((r) => r.rf));
+    expect(rfs.some((r) => r > 0)).toBe(true);
+  });
+  test("a rebalance records vol = sqrt(w' S w) on the covariance the solver saw, the same for the default and a custom cov", () => {
+    const out = markowitzSchedule(base());
+    for (const r of out.rebalances) {
+      const S = shrunkCov(historyBefore(r.date));
+      const w = ASSETS.map((a) => r.weights[a]!);
+      expect(r.vol).toBe(Math.sqrt(dot2(w, S.map((row) => dot2(row, w)))));
+      expect(r.vol).toBeGreaterThan(0);
+    }
+    const custom = markowitzSchedule({ ...base(), cov: (h) => shrunkCov(h) });
+    expect(custom.rebalances.map((r) => r.vol)).toEqual(out.rebalances.map((r) => r.vol));
+  });
+  test("expand(weights, date, rebalance) gets the rebalance in force, in ascending date order, as a copy", () => {
+    const calls: { d: string; at: string }[] = [];
+    const out = markowitzSchedule({
+      ...base(),
+      expand: (w, d, rb) => {
+        calls.push({ d, at: rb.date });
+        expect(rb.weights).toEqual(w);
+        expect(rb.date <= d).toBe(true);
+        rb.mu[0] = 999;
+        rb.weights.SPX = 999;
+        return w;
+      },
+    });
+    expect(calls.map((c) => c.d)).toEqual([...calls.map((c) => c.d)].sort());
+    expect(calls.map((c) => c.d)).toEqual(AXIS.slice(AXIS.indexOf(out.rebalances[0]!.date)));
+    expect(new Set(calls.map((c) => c.at))).toEqual(new Set(out.rebalances.map((r) => r.date)));
+    expect(out.rebalances.every((r) => r.mu[0] !== 999 && r.weights.SPX !== 999)).toBe(true);
+  });
+  test("a vol target in expand: scaling the book by sigma / rb.vol reproduces a hand-computed schedule", () => {
+    const sigma = 0.1;
+    const base0 = markowitzSchedule(base());
+    const out = markowitzSchedule({
+      ...base(),
+      expand: (w, _d, rb) => {
+        const s = Math.min(1, sigma / rb.vol);
+        const o: Weights = { cash: 1 - s * (1 - w.cash!) };
+        for (const a of ASSETS) o[a] = s * w[a]!;
+        return o;
+      },
+    });
+    out.schedule.forEach((row, i) => {
+      if (row === null) return;
+      const rb = base0.rebalances.filter((r) => r.date <= AXIS[i]!).at(-1)!;
+      expect(row.SPX).toBe(Math.min(1, sigma / rb.vol) * base0.schedule[i]!.SPX!);
+    });
+  });
+  test("a regime-conditioned covariance (cov reads context.date and context.trailing(756)) equals a hand computation from shrunkCov and the same rows", () => {
+    const sizes: number[] = [];
+    const out = markowitzSchedule({
+      ...base(),
+      lookback: 252,
+      cov: (_h, ctx) => {
+        const t = ctx.trailing(756);
+        sizes.push(t.rows.length);
+        // the second half of the sample weights recent years: rows from 2021 on only when the date is later than 2023-01-01
+        return shrunkCov(ctx.date > "2023-01-01" ? t.rows : t.rows.slice(-252));
+      },
+    });
+    expect(out.rebalances.length).toBeGreaterThan(10);
+    expect(sizes).toEqual(out.rebalances.map((r) => Math.min(756, historyBefore(r.date).length)));
+    expect(Math.max(...sizes)).toBeGreaterThan(252);
+    for (const r of out.rebalances) {
+      const trail = historyBefore(r.date).slice(-756);
+      const S = shrunkCov(r.date > "2023-01-01" ? trail : trail.slice(-252));
+      expect(r.weights).toEqual(asWeights(meanVarExact(S, muVec.map((m) => m - rfOn(r.date)), LAMBDA)));
+      const w = ASSETS.map((a) => r.weights[a]!);
+      expect(r.vol).toBe(Math.sqrt(dot2(w, S.map((row) => dot2(row, w)))));
+    }
+  });
+  test("a date-dependent risk budget (solve reads context.date) equals the exported risk-budget solver called by hand per date", () => {
+    const budgetOn = (d: string): number[] => (d < "2023-07-01" ? [0.5, 0.25, 0.25] : [0.2, 0.3, 0.5]);
+    const out = markowitzSchedule({ ...base(), lookback: 252, solve: (_mu, S, _rf, ctx) => ercCertified(S, budgetOn(ctx.date)) });
+    expect(new Set(out.rebalances.map((r) => budgetOn(r.date).join()))).toEqual(new Set(["0.5,0.25,0.25", "0.2,0.3,0.5"]));
+    for (const r of out.rebalances) {
+      expect(r.weights).toEqual(asWeights(ercCertified(shrunkCov(historyBefore(r.date).slice(-252)), budgetOn(r.date))));
+    }
+  });
+  test("a volatility target in expand, min(1, sigma / rebalance.vol) with a running state between calls, equals the hand-computed schedule and binds", () => {
+    const sigma = 0.08;
+    const step = 0.05;
+    let level: number | null = null;
+    const calls: number[] = [];
+    const out = markowitzSchedule({
+      ...base(),
+      expand: (w, _d, rb) => {
+        const target = Math.min(1, sigma / rb.vol);
+        level = level === null ? target : level + Math.max(-step, Math.min(step, target - level));
+        calls.push(level);
+        const o: Weights = { cash: 1 - level * (1 - w.cash!) };
+        for (const a of ASSETS) o[a] = level * w[a]!;
+        return o;
+      },
+    });
+    const plain = markowitzSchedule(base());
+    const first = AXIS.indexOf(out.rebalances[0]!.date);
+    let hand: number | null = null;
+    const targets: number[] = [];
+    AXIS.forEach((d, i) => {
+      if (i < first) return expect(out.schedule[i]).toBeNull();
+      const rb = plain.rebalances.filter((r) => r.date <= d).at(-1)!;
+      const target = Math.min(1, sigma / rb.vol);
+      targets.push(target);
+      hand = hand === null ? target : hand + Math.max(-step, Math.min(step, target - hand));
+      const w = plain.schedule[i]!;
+      expect(out.schedule[i]!.cash).toBe(1 - hand * (1 - w.cash!));
+      for (const a of ASSETS) expect(out.schedule[i]![a]).toBe(hand * w[a]!);
+    });
+    expect(calls.length).toBe(AXIS.length - first);
+    expect(targets.some((t) => t < 1)).toBe(true);
+    expect(targets.some((t) => t === 1)).toBe(true);
+    expect(out.rebalances).toEqual(plain.rebalances);
+  });
+  test("callbacks with the old arities give the same schedule and rebalances as the defaults, vol included", () => {
+    const defaults = markowitzSchedule(base());
+    const old = markowitzSchedule({
+      ...base(),
+      mu: (_d: string, _h: number[][], _dates: string[]) => MU,
+      cov: (h: number[][]) => shrunkCov(h),
+      solve: (mu: number[], S: Mat, rf: number) => meanVarExact(S, mu.map((m) => m - rf), LAMBDA),
+      expand: (w: Weights, _d: string) => w,
+    });
+    expect(old.schedule).toEqual(defaults.schedule);
+    expect(old.rebalances).toEqual(defaults.rebalances);
+  });
+
+});
+
 describe("markowitzBacktest", () => {
   test("the simulation and stats are bit-identical to simulatePortfolio and periodStats run on its own returned schedule", () => {
     const bt = markowitzBacktest({ ...base(), prices: pricesOf() });

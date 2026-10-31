@@ -7,7 +7,7 @@
  * deterministic author so the signing and transport path can be exercised
  * without a model, API key, or hidden fallback.
  */
-import { canonicalizeSubmission, path as routePath, RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
+import { canonicalizeSubmission, path as routePath, RECEIPT_HARD_ASSETS_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
 import type { SwarmBrief, SwarmSession, SwarmTake } from "@robotmoney/contract";
 import { requireOperatorToken } from "./lib/operator-token.ts";
 
@@ -111,8 +111,8 @@ export function briefRequiresWeights(brief: SwarmBrief): boolean {
  * agent replaces it along with `deterministicAuthorTake`.
  */
 export function evenCanonicalWeights(): TakeWeight[] {
-  const share = 1 / RECEIPT_CANONICAL_BUCKET_ORDER.length;
-  return [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket) => ({ bucket, weight: share }));
+  const share = 1 / RECEIPT_HARD_ASSETS_BUCKET_ORDER.length;
+  return [...RECEIPT_HARD_ASSETS_BUCKET_ORDER].map((bucket) => ({ bucket, weight: share }));
 }
 
 /** A stable, model-free default. Replace this callback in a real agent. */
@@ -209,7 +209,7 @@ function assertAuthoredTake(take: AuthoredTake, brief: SwarmBrief): void {
   // AuthorTake callback that produced it rather than an HTTP status.
   if (!briefRequiresWeights(brief)) return;
   const named = new Set((take.weights ?? []).map((w) => w.bucket));
-  const canonical = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+  const canonical = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER];
   if (named.size !== canonical.length || !canonical.every((bucket) => named.has(bucket))) {
     throw new Error(
       `this session asks for an allocation, so AuthorTake must return \`weights\` naming exactly ` +

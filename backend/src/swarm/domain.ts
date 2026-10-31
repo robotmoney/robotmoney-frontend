@@ -5,7 +5,7 @@ import {
   canonicalizeApplication,
   canonicalizeJudgement,
   classifyRegime,
-  RECEIPT_CANONICAL_BUCKET_ORDER,
+  bucketOrderForAsOf,
   REGIME_METHOD,
   type RegimeLabel,
   type RegimeSummary,
@@ -18,6 +18,7 @@ import {
   type SwarmTakeCheck,
 } from "@robotmoney/contract";
 import { testSeamArmed } from "../test-seam.ts";
+import { ALLOCATION_FRAMEWORK_SEED } from "../chain/allocation-framework.ts";
 import type { JudgeDraw } from "./judge-draw.ts";
 import { type DbHandle, jsonValue, sql } from "../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../db/registry.ts";
@@ -72,7 +73,8 @@ import { ledgerCurrentBriefBySession } from "../analytics/cutover/ledger-current
 // UUID applyMember minted for it. Leaf module — imports nothing from here, so
 // admin.ts can call it on the manual-add path too without a cycle.
 import { deriveMemberHandle, handleIsUnset } from "./handle.ts";
-import { silentSessionsByMember } from "./dormancy.ts";
+import { dormancyThresholdSessions, silentSessionsByMember } from "./dormancy.ts";
+import { refusalsForMember } from "./judge-refusals.ts";
 import {
   day,
   instant,
@@ -440,7 +442,7 @@ const resolveMembers = registerQuery({
   privileges: ["SELECT"],
   site: "src/swarm/domain:resolveMemberRow.members",
   purpose: "Resolve a public member reference (a handle or a legacy id) to its row, the one implementation of that rule.",
-  callers: [SWARM_ROUTE, ONBOARDING_ROUTE, ADMIN_ROUTE],
+  callers: [SWARM_ROUTE, ONBOARDING_ROUTE, ADMIN_ROUTE, JUDGE_ROUTE],
   probe: RESOLVE_MEMBER_PROBE,
 });
 const resolveTakes = registerQuery({
@@ -449,7 +451,7 @@ const resolveTakes = registerQuery({
   privileges: ["SELECT"],
   site: "src/swarm/domain:resolveMemberRow.takes",
   purpose: "Give the resolved member row its newest take instant, as getMembers does.",
-  callers: [SWARM_ROUTE, ONBOARDING_ROUTE, ADMIN_ROUTE],
+  callers: [SWARM_ROUTE, ONBOARDING_ROUTE, ADMIN_ROUTE, JUDGE_ROUTE],
   probe: RESOLVE_MEMBER_PROBE,
 });
 async function resolveMemberRow(ref: string) {
@@ -1522,28 +1524,63 @@ export type SubmitTakeResult =
  * then refuses for its weights (post-mortem 2026-10-09, finding 10). Returns the
  * refusal, or null when the draft passes or the subject takes no vector.
  */
+const sessionBucketFramework = registerQuery({
+  role: "rm_app",
+  object: "allocation_framework",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:bucketOrderForSession",
+  purpose: "Read the framework asOf, the day the session bucket list changes from agent_tokens to hard_assets.",
+  callers: [SWARM_ROUTE, ADMIN_ROUTE, RECEIPTS_ROUTE, STREAM_ROUTE],
+  probe: { statement: "SELECT asof FROM allocation_framework WHERE id = 1" },
+});
+
+/**
+ * The canonical bucket list of the session whose asOf is `sessionAsOf`: the one
+ * rule validation, the brief, the receipt assembler and the verifier share
+ * (issue 1496). The framework asOf is the allocation_framework row's.
+ */
+export async function frameworkAsOf(h: DbHandle = sql): Promise<string> {
+  const row = (await on(h, sessionBucketFramework)<{ asof: Date | string }>`SELECT asof FROM allocation_framework WHERE id = 1`)[0];
+  return row ? day(row.asof) : ALLOCATION_FRAMEWORK_SEED.asof;
+}
+
+export async function bucketOrderForSession(sessionAsOf: string, h: DbHandle = sql): Promise<readonly string[]> {
+  return bucketOrderForAsOf(sessionAsOf, await frameworkAsOf(h));
+}
+
 export async function weightsRefusal(
   subjectId: string,
+  sessionAsOf: string,
   vector: { bucket: string; weight: number }[] | undefined | null,
 ): Promise<{ ok: false; status: 400; error: string } | null> {
   const subjectRow = (await on(sql, submitSubject)<{ recommendation_type: string | null }>`
     SELECT recommendation_type FROM swarm_subjects WHERE id = ${subjectId}`)[0];
   if (subjectRow?.recommendation_type !== "bucket_weights") return null;
+  const order = await bucketOrderForSession(sessionAsOf);
   if (vector == null || vector.length === 0) {
     return {
       ok: false,
       status: 400,
-      error: `weights_required_for_bucket_weights_subject: ${subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}). ` +
+      error: `weights_required_for_bucket_weights_subject: ${subjectId} convenes for an allocation, so a take must carry the four-bucket weight vector (${[...order].join(", ")}). ` +
         "A weightless take cannot support the receipt this session must publish, and once the window closes the refusal is no longer recoverable — so it is refused now, while amending is still possible.",
     };
   }
   const named = new Set(vector.map((w) => w.bucket));
-  if (named.size !== RECEIPT_CANONICAL_BUCKET_ORDER.length ||
-      !RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => named.has(bucket))) {
+  // A bucket outside THIS session's list (agent_tokens in a Hard Assets session,
+  // hard_assets in an older one) is refused by name and never read as another bucket.
+  const foreign = [...named].filter((bucket) => !order.includes(bucket));
+  if (foreign.length > 0) {
     return {
       ok: false,
       status: 400,
-      error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...RECEIPT_CANONICAL_BUCKET_ORDER].join(", ")}} — one entry each. ` +
+      error: `weights_bucket_not_canonical: "${foreign[0]}" is not one of ${order.join(", ")} for the session as of ${sessionAsOf}`,
+    };
+  }
+  if (named.size !== order.length) {
+    return {
+      ok: false,
+      status: 400,
+      error: `weights_not_canonical_four: this take names {${[...named].join(", ")}}, and a bucket_weights take must name exactly {${[...order].join(", ")}} — one entry each. ` +
         "A partial vector is NOT padded with zeros: a bucket a member never named would otherwise be signed as that member's explicit 0.00 vote.",
     };
   }
@@ -1880,7 +1917,7 @@ async function checkTake(token: string, sub: SubmissionInput, collectAll: boolea
   // THE TYPE IS READ OFF THE SUBJECT, not off the session's rollup: the rollup
   // does not exist yet while takes are being collected, and the subject is what
   // the brief was built from (`publishBrief`, takeSchema.weights.optional).
-  const weightsRefused = await weightsRefusal(sub.subjectId, sub.weights);
+  const weightsRefused = await weightsRefusal(sub.subjectId, sub.date, sub.weights);
   if (record(weightsRefused
     ? {
         check: "weights",
@@ -3859,6 +3896,7 @@ export async function buildBriefBody(
     : framework
       ? { asof: day(framework.asof), buckets: framework.buckets }
       : null;
+  const sessionBuckets = await bucketOrderForSession(day(s.date), h);
   const body = {
     ...(allocation ? { allocation } : {}),
     regime,
@@ -3886,9 +3924,9 @@ export async function buildBriefBody(
       weights: {
         type: "array",
         optional: recommendationType !== "bucket_weights",
-        buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER],
+        buckets: [...sessionBuckets],
         items: {
-          bucket: { type: "string", enum: [...RECEIPT_CANONICAL_BUCKET_ORDER] },
+          bucket: { type: "string", enum: [...sessionBuckets] },
           weight: { type: "number", minimum: 0 },
         },
       },
@@ -5802,6 +5840,10 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
   for (const r of rows) {
     const frozen = await loadFrozenTakeSet(String(r.id));
     if (!frozen) continue;
+    // A session with no take has nothing to judge: submitting would be refused
+    // `nothing_to_judge:no_takes`, so it is not offered (issue 1495).
+    const input = await judgeInputFromFrozen(frozen, minTakes);
+    if (input.takes.length === 0) continue;
     pending.push({
       sessionId: String(r.id),
       subjectId: r.subject_id,
@@ -5809,10 +5851,208 @@ export async function pendingJudgingFor(memberId: string): Promise<PendingJudgin
       judgingDeadlineAt: new Date(r.judging_deadline_at).toISOString(),
       judgingRequestedAt: r.judging_requested_at ? new Date(r.judging_requested_at).toISOString() : null,
       model,
-      input: await judgeInputFromFrozen(frozen, minTakes),
+      input,
     });
   }
   return pending;
+}
+
+// ── A seat's own health (issue 1495) ──────────────────────────────────────
+//
+// GET /api/swarm/participants/health with the seat's own bearer. It exists
+// because outside agents fail silently: the count of missed sessions, the
+// refusals and a judge's late answers were readable by admin alone. Everything
+// here is about the bearer's own seat and nothing else.
+
+/** How one judgement stands against its session's judging deadline. */
+export type JudgementTiming = "on_time" | "after_deadline" | "late_evidence" | "drawn";
+
+/** Classify a stored judgement; the same words the submit answer's `onTime` and `lateEvidence` use. */
+export function judgementTiming(r: {
+  applied: boolean;
+  appliedSkippedReason: string | null;
+  createdAt: Date | string;
+  judgingDeadlineAt: Date | string | null;
+  drawnJudgementId: string | null;
+  id: string | number;
+}): JudgementTiming {
+  if (r.applied === true || (r.drawnJudgementId != null && String(r.drawnJudgementId) === String(r.id))) return "drawn";
+  if (r.appliedSkippedReason === "late_evidence") return "late_evidence";
+  if (r.appliedSkippedReason === "after_deadline") return "after_deadline";
+  if (r.judgingDeadlineAt != null && new Date(r.createdAt).getTime() > new Date(r.judgingDeadlineAt).getTime()) return "after_deadline";
+  return "on_time";
+}
+
+const SEAT_HEALTH_LIMIT = 10;
+const seatRefusalsRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_agent_health_events",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getSeatHealth.refusals",
+  purpose: "Read a seat's own most recent refused takes and rejected signatures, for its self-health answer.",
+  callers: [JUDGE_ROUTE],
+  probe: {
+    statement: `SELECT event_type, session_id, detail, created_at FROM swarm_agent_health_events
+      WHERE member_id = $1 AND event_type IN ('rejected_take', 'rejected_signature')
+      ORDER BY created_at DESC LIMIT $2`,
+    params: ["probe", SEAT_HEALTH_LIMIT],
+  },
+});
+const SEAT_JUDGEMENTS_PROBE = {
+  statement: `SELECT j.id, j.session_id, j.applied, j.applied_skipped_reason, j.created_at, s.judging_deadline_at,
+           s.swarm_recommendation->'judge'->>'judgement_id' AS drawn_judgement_id
+      FROM swarm_session_judgements j JOIN swarm_sessions s ON s.id = j.session_id
+     WHERE j.judged_by_member_id = $1
+     ORDER BY j.id DESC LIMIT $2`,
+  params: ["probe", SEAT_HEALTH_LIMIT],
+} as const;
+const seatJudgementsRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_session_judgements",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getSeatHealth.judgements",
+  purpose: "Read a judge's own most recent judgements, each with its session's deadline, for its self-health answer.",
+  callers: [JUDGE_ROUTE],
+  probe: SEAT_JUDGEMENTS_PROBE,
+});
+const seatJudgementSessionsRead = registerQuery({
+  role: "rm_app",
+  object: "swarm_sessions",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:getSeatHealth.sessions",
+  purpose: "Read the judging deadline and drawn judgement of the sessions a judge answered, for its self-health answer.",
+  callers: [JUDGE_ROUTE],
+  probe: SEAT_JUDGEMENTS_PROBE,
+});
+
+export interface SeatHealth {
+  memberId: string;
+  handle: string;
+  role: "member" | "judge";
+  status: string;
+  /** Fingerprint of the key the seat signs with now, null when it has none. */
+  activeKeyFingerprint: string | null;
+  lastTakeAt: string | null;
+  /** Consecutive missed sessions (take for a member, on-time answer for a judge); null when the seat is not active. */
+  missedSessions: number | null;
+  missedThreshold: number;
+  /** Newest first. `kind` says which store the code came from. */
+  refusals: { kind: "rejected_take" | "rejected_signature" | "judge_report"; sessionId: string | null; code: string; at: string }[];
+  /** A judge's own recent judgements, newest first. Absent for a member seat. */
+  judgements?: { judgementId: string; sessionId: string; at: string; judgingDeadlineAt: string | null; timing: JudgementTiming }[];
+}
+
+export async function getSeatHealth(memberId: string): Promise<SeatHealth | null> {
+  const row = await resolveMemberRow(memberId);
+  if (!row || row.id !== memberId) return null;
+  const role = row.role === "judge" ? "judge" : "member";
+  const key = await activeKeyFor(memberId);
+  const silent = await silentSessionsByMember(memberId);
+  const events = await on(sql, seatRefusalsRead)<{ event_type: "rejected_take" | "rejected_signature"; session_id: string | null; detail: Record<string, unknown> | null; created_at: Date }>`
+    SELECT event_type, session_id, detail, created_at FROM swarm_agent_health_events
+      WHERE member_id = ${memberId} AND event_type IN ('rejected_take', 'rejected_signature')
+      ORDER BY created_at DESC LIMIT ${SEAT_HEALTH_LIMIT}`;
+  const refusals: SeatHealth["refusals"] = events.map((e) => ({
+    kind: e.event_type,
+    sessionId: e.session_id,
+    // Only the short token the submit path wrote (never a body, key or signature).
+    code: String((e.detail?.["code"] ?? e.detail?.["reason"] ?? e.event_type)),
+    at: new Date(e.created_at).toISOString(),
+  }));
+  for (const r of refusalsForMember(memberId, SEAT_HEALTH_LIMIT)) {
+    refusals.push({ kind: "judge_report", sessionId: r.sessionId, code: r.reason, at: r.at });
+  }
+  refusals.sort((a, b) => b.at.localeCompare(a.at));
+  const health: SeatHealth = {
+    memberId,
+    handle: row.handle ?? row.id,
+    role,
+    status: row.status,
+    activeKeyFingerprint: key ? await fingerprintPublicKey(key.publicKey) : null,
+    lastTakeAt: instant(row.last_take_at),
+    missedSessions: silent.get(memberId) ?? null,
+    missedThreshold: dormancyThresholdSessions(),
+    refusals: refusals.slice(0, SEAT_HEALTH_LIMIT),
+  };
+  if (role === "judge") {
+    const rows = await on(sql, seatJudgementsRead, seatJudgementSessionsRead)<{
+      id: string; session_id: string; applied: boolean; applied_skipped_reason: string | null;
+      created_at: Date; judging_deadline_at: Date | null; drawn_judgement_id: string | null;
+    }>`
+      SELECT j.id, j.session_id, j.applied, j.applied_skipped_reason, j.created_at, s.judging_deadline_at,
+             s.swarm_recommendation->'judge'->>'judgement_id' AS drawn_judgement_id
+        FROM swarm_session_judgements j JOIN swarm_sessions s ON s.id = j.session_id
+       WHERE j.judged_by_member_id = ${memberId}
+       ORDER BY j.id DESC LIMIT ${SEAT_HEALTH_LIMIT}`;
+    health.judgements = rows.map((r) => ({
+      judgementId: String(r.id),
+      sessionId: r.session_id,
+      at: new Date(r.created_at).toISOString(),
+      judgingDeadlineAt: r.judging_deadline_at ? new Date(r.judging_deadline_at).toISOString() : null,
+      timing: judgementTiming({
+        applied: r.applied,
+        appliedSkippedReason: r.applied_skipped_reason,
+        createdAt: r.created_at,
+        judgingDeadlineAt: r.judging_deadline_at,
+        drawnJudgementId: r.drawn_judgement_id,
+        id: r.id,
+      }),
+    }));
+  }
+  return health;
+}
+
+/** What the judge feed says besides the list (issue 1495). */
+export interface JudgeFeed {
+  pending: PendingJudging[];
+  /**
+   * `enabled`, or `outside_judging_disabled` when this judge is an outside seat
+   * and Robot Money has outside judging switched off. The list is then empty
+   * because the judge is refused, not because there is nothing to judge.
+   */
+  judging: "enabled" | "outside_judging_disabled";
+  message?: string;
+}
+
+const judgeGateProbe = {
+  statement: `SELECT (m.operator = $2 OR m.handle = ANY(string_to_array($3, ','))
+            OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)) AS enabled
+      FROM swarm_members m WHERE m.id = $1`,
+  params: ["probe", "robotmoney", "athena"],
+} as const;
+const judgeGateMembers = registerQuery({
+  role: "rm_app",
+  object: "swarm_members",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeFeed.members",
+  purpose: "Tell an outside judge whether outside judging is switched on, so the feed can say it is off.",
+  callers: [JUDGE_ROUTE],
+  probe: judgeGateProbe,
+});
+const judgeGateConfig = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/domain:judgeFeed.config",
+  purpose: "Read whether third-party judging is enabled for the judge feed's off-switch state.",
+  callers: [JUDGE_ROUTE],
+  probe: judgeGateProbe,
+});
+
+/** The pending list with an explicit state: an off switch is not an empty list. */
+export async function judgeFeedFor(memberId: string): Promise<JudgeFeed> {
+  const [gate] = await on(sql, judgeGateMembers, judgeGateConfig)<{ enabled: boolean }>`
+    SELECT (m.operator = ${IN_HOUSE_OPERATOR} OR m.handle = ANY(string_to_array(${IN_HOUSE_SEAT_HANDLES.join(",")}, ','))
+            OR COALESCE((SELECT c.third_party_enabled FROM swarm_judge_config c WHERE c.id = 1), false)) AS enabled
+      FROM swarm_members m WHERE m.id = ${memberId}`;
+  if (gate && gate.enabled !== true) {
+    return {
+      pending: [],
+      judging: "outside_judging_disabled",
+      message: "Outside judging is switched off, so no session is served to this seat. Keep the loop running; it resumes when Robot Money switches it on.",
+    };
+  }
+  return { pending: await pendingJudgingFor(memberId), judging: "enabled" };
 }
 
 /**
@@ -5919,6 +6159,14 @@ export type SubmitJudgementResult =
       recordedAt: string;
       /** The judgement landed after the session was published: kept, decides nothing (§4.4). */
       lateEvidence: boolean;
+      /**
+       * The answer was accepted at or before `judgingDeadlineAt` and before the session published:
+       * the only answers that can be drawn (issue 1495). `lateEvidence` alone leaves an answer between
+       * the deadline and publication looking on time.
+       */
+      onTime: boolean;
+      /** The session's stored judging deadline, the instant `onTime` is judged against. */
+      judgingDeadlineAt: string | null;
       /** This judge had already submitted for this session; the original row is returned. */
       duplicate: boolean;
       /** Same as `applied`: the judge of record is the judge whose answer was drawn (D71). */
@@ -6229,6 +6477,10 @@ export async function submitJudgement(
         state: String(session.state),
         recordedAt: new Date(existing.created_at).toISOString(),
         lateEvidence: existing.applied_skipped_reason === "late_evidence",
+        onTime: existing.applied_skipped_reason !== "late_evidence" && existing.applied_skipped_reason !== "after_deadline" &&
+          session.judging_deadline_at != null &&
+          new Date(existing.created_at).getTime() <= new Date(session.judging_deadline_at).getTime(),
+        judgingDeadlineAt: session.judging_deadline_at ? new Date(session.judging_deadline_at).toISOString() : null,
         duplicate: true,
         judgeOfRecord: drawn,
         applied: drawn,
@@ -6340,6 +6592,8 @@ export async function submitJudgement(
       state: String(session.state),
       recordedAt: new Date(created.created_at).toISOString(),
       lateEvidence: skipped === "late_evidence",
+      onTime: skipped !== "late_evidence" && session.past_deadline !== true,
+      judgingDeadlineAt: new Date(session.judging_deadline_at).toISOString(),
       duplicate: false,
       judgeOfRecord: false,
       applied: false,
@@ -6595,14 +6849,15 @@ export function openJudgeStream(memberId: string, opts: JudgeStreamOptions = {})
       let lastPendingAt = 0;
       void (async () => {
         while (live) {
-          const pending = await pendingJudgingFor(memberId).catch(() => null);
-          if (pending) {
+          const feed = await judgeFeedFor(memberId).catch(() => null);
+          const pending = feed?.pending ?? null;
+          if (feed && pending) {
             // The model is part of the fingerprint: a switch made while a
             // session waits must re-serve it, or the judge keeps the old one.
-            const fingerprint = JSON.stringify(pending.map((p) => [p.sessionId, p.model]));
+            const fingerprint = JSON.stringify([feed.judging, pending.map((p) => [p.sessionId, p.model])]);
             if (fingerprint !== lastServed || (pending.length > 0 && Date.now() - lastPendingAt >= resendMs)) {
               lastServed = fingerprint;
-              send("pending", { pending });
+              send("pending", feed);
               lastFrameAt = Date.now();
               lastPendingAt = lastFrameAt;
             } else if (Date.now() - lastFrameAt >= keepaliveMs) {

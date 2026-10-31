@@ -14,7 +14,15 @@ export const TAG_PREFIX = "analyst-sdk-v";
 export const MANIFEST = "packages/analyst-sdk/package.json";
 export const RELEASE_BRANCH_GLOB = "origin/analyst-sdk/releases-*";
 
-const SEMVER = /^\d+\.\d+\.\d+$/;
+export const SEMVER = /^\d+\.\d+\.\d+$/;
+
+/** PURE. Orders two A.B.C versions: negative when a < b, 0 when equal, positive when a > b. */
+export function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return (pa[i] ?? 0) - (pb[i] ?? 0);
+  return 0;
+}
 
 export interface GuardInput {
   tag: string;

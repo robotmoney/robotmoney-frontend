@@ -71,7 +71,7 @@ These terms support the four above.
 | Supported series | A source series the platform collects. It reaches an analyst through the local copy (a csv-backups clone or the API fill) or the public API, already cleaned and in the input file format. |
 | Supplementary series | A source series an analyst collects outside the platform, for an asset or a date range the platform does not carry. It is source data under the same rules, stored in the supplementary directory with a manifest. The SDK's `fetch` command fetches the common providers (Yahoo, FRED). |
 | Supplementary directory | The directory on an analyst's machine that holds supplementary series, one file per source id. It is never the local copy and never inside or around it. |
-| Local copy | The backups on an analyst's machine. It holds supported series only. |
+| Local copy | The backups on an analyst's machine. It holds supported series only. The SDK reader reads the backups folder in place and copies nothing. |
 | Fill | A way to bring the local copy up to date: from the csv-backups repo (data only), from the API or from the database with csvb. A repo clone and an API increment join at the legacy junction backup (D80). A fill never writes supplementary series. |
 | Watermark | The last id or time the local copy holds for one table. A fill fetches only what is past it. |
 | Input file | A report of source data for one run, written from the local copy. The analyst SDK computes from it. |

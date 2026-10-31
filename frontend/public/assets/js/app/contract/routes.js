@@ -262,6 +262,12 @@ export const ROUTES = {
       // reporting that one attempt submitted nothing, by its D-A7 name. It
       // decides nothing: the admin overview reads it to say WHY (issue #1117).
       judgeRefusal: "/api/swarm/participants/judge/refusal",
+      // GET (the seat's own member bearer, member or judge) → the seat's health
+      // (issue 1495): role, active key fingerprint, last take, consecutive
+      // missed sessions, its most recent refusals with reason codes, and for a
+      // judge its recent judgements each marked on_time, after_deadline,
+      // late_evidence or drawn. `?member=<id>` must be the bearer's own id.
+      health: "/api/swarm/participants/health",
     },
 
     // Admin lifecycle (X-Admin-Token). The backend registers ONE dispatcher at
@@ -338,6 +344,9 @@ export const ROUTES = {
       // source, fallback reason, whether an `enforce` opinion actually reached
       // the session, and what the parser dropped out of the model's response.
       sessionJudgements: "/api/swarm/admin/sessions/:id/judgements",
+      // GET — one judgement by its id, drawn or not, without its session id
+      // (issue 1495). 404 for an id no judgement has.
+      judgement: "/api/swarm/admin/judgements/:id",
       rosterAdd: "/api/swarm/admin/sessions/:id/roster/add", // POST { memberId } — before collecting only
       // POST { memberId, force?, reason? } — before collecting only, UNLESS
       // `force` is set: the audited T17 lever that clears a session already

@@ -9,6 +9,7 @@ import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import { getNextSwarmSession } from "../swarm/domain.ts";
 import { describeJudgeRefusal, latestRefusals, refusalsForSession } from "../swarm/judge-refusals.ts";
+import { dormancyThresholdSessions, quietSeats } from "../swarm/dormancy.ts";
 import { computeRegimeSnapshotStaleness, type RegimeStaleness } from "../analytics/report/regime-projection.ts";
 import { loadRosterSeedManifest } from "../projects/seed/roster-seed.ts";
 import {
@@ -504,6 +505,30 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
       level: "degraded",
       source: `swarm.judge_refusal:${r.sessionId}`,
       message: describeJudgeRefusal(r, refusalsForSession(r.sessionId).length),
+    });
+  }
+
+  // ── Seats gone quiet (issue 1495) ───────────────────────────────────────
+  // A member past SWARM_DORMANCY_THRESHOLD_SESSIONS, and a judge with no
+  // on-time answer for a day of sessions. Read only: the 2026-10-09 decision
+  // stands, nothing here deactivates, excuses or revokes anything.
+  try {
+    const threshold = dormancyThresholdSessions();
+    for (const seat of await quietSeats(threshold)) {
+      const who = `${seat.role} ${seat.handle ?? seat.memberId}${seat.name ? ` (${seat.name})` : ""}`;
+      alerts.push({
+        level: "degraded",
+        source: `swarm.quiet_seat:${seat.memberId}`,
+        message: seat.role === "judge"
+          ? `${who} has filed no on-time answer in ${seat.silentSessions} session(s), the first at ${seat.oldestMissAt?.toISOString()}`
+          : `${who} has missed ${seat.silentSessions} consecutive session(s), at or past the threshold of ${threshold}`,
+      });
+    }
+  } catch (e) {
+    alerts.push({
+      level: "failed",
+      source: "swarm.quiet_seat",
+      message: `quiet-seat detection failed: ${e instanceof Error ? e.message : String(e)}`,
     });
   }
 

@@ -29,7 +29,7 @@
 // main.ts pollForWork), and this is the handler it reaches.
 import { ROUTES } from "@robotmoney/contract";
 import { bearer } from "../auth.ts";
-import { isJudgeMember, memberIdForToken, openJudgeStream, pendingTakesFor, submitJudgement } from "../../swarm/domain.ts";
+import { getSeatHealth, isJudgeMember, memberIdForToken, openJudgeStream, pendingTakesFor, submitJudgement } from "../../swarm/domain.ts";
 import { recordJudgeRefusal } from "../../swarm/judge-refusals.ts";
 import { readJsonObject } from "../validation.ts";
 import type { SwarmRouteResult } from "./swarm/types.ts";
@@ -57,6 +57,21 @@ export async function handleJudgeParticipant(
     // loudly at the first poll rather than authoring a take that is refused.
     if (await isJudgeMember(memberId)) return { status: 403, body: { error: "judge_role_cannot_submit_takes" } };
     return { status: 200, body: { pending: await pendingTakesFor(memberId) } };
+  }
+
+  // A seat reads its own health: role, key fingerprint, last take, missed
+  // sessions, refusals and (for a judge) its judgements' timing (issue 1495).
+  // Any active seat may read it, and only its own: the bearer decides whose.
+  if (p === P.health && m === "GET") {
+    const token = bearer(req);
+    if (!token) return { status: 401, body: { error: "missing bearer token" } };
+    const memberId = await memberIdForToken(token);
+    if (!memberId) return { status: 401, body: { error: "invalid token" } };
+    const named = url.searchParams.get("member");
+    if (named !== null && named !== memberId) return { status: 403, body: { error: "token/member mismatch" } };
+    const health = await getSeatHealth(memberId);
+    if (!health) return { status: 404, body: { error: "member_not_found" } };
+    return { status: 200, body: health };
   }
 
   if (p === P.judgeSubscribe && m === "GET") {
