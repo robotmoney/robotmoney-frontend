@@ -13,10 +13,12 @@ notes: |
   qa/0.7.x-2026-10-27 on releases-0.7.x) to v0.7.1 at the commit the rc tag names, in a new
   checkout. The target files' `release` reads v0.7.1 and prod's `checkout` names the new folder
   (/root/rm-071) before the run. Tracking: the v0.7.1 release issue (1538).
-  The QA branch is qa/0.7.x-2026-10-29, cut from releases-0.7.x at
-  06c64a42 (main merged into releases-0.7.x twice: 500b7345, then 06c64a42).
+  The QA branch is qa/0.7.x-2026-10-31, cut from releases-0.7.x at 8bd40941 (main merged into
+  releases-0.7.x three times: 500b7345, 06c64a42, then 8bd40941 at main 10a244b3). It carries the
+  runbook, the stage-up Bun fix and the analytics 5 s budget fix forward from qa/0.7.x-2026-10-29,
+  whose stage run never passed.
 
-  Scope is regenerated at the QA commit. The `scope:` below is `git log v0.7.0..06c64a42` (13 PRs,
+  Scope is regenerated at the QA commit. The `scope:` below is `git log v0.7.0..8bd40941` (22 PRs,
   every commit subject that names one). Q05-scope refuses the QA commit if the range then carries
   a PR the list lacks.
 
@@ -27,6 +29,15 @@ notes: |
     asset_prices_capture_delete AFTER DELETE, both ENABLE ALWAYS) record each overwrite. v0.7.0's
     upsert keeps its meaning between C05-migrate and C10-rolling-boot; the capture runs through the
     owner's SECURITY DEFINER function. Nothing is removed, reshaped or revoked.
+  - 0129_allocation_framework_hard_assets: compat additive (PR 1547, issue 1496). One UPDATE of the
+    allocation_framework row id = 1: buckets become 50 / 7 / 29 / 14 with hard_assets (gold) in the
+    place of agent_tokens, and asof moves to the first day no session holds yet, so a session open
+    at the migrate keeps the agent_tokens list. No schema change. v0.7.0 reads the row the same way
+    between C05-migrate and C10-rolling-boot (its dashboard keys an unknown bucket by slug, and its
+    take schema keeps its own canonical bucket list). One window to know: a session v0.7.0's
+    scheduler opens between C05-migrate and C10-rolling-boot on a day at or after the new asof gets
+    a brief whose allocation is the new framework and whose take schema is still v0.7.0's. Start
+    the cutover with no session about to open (the D71 advice), and the window holds none.
   No migration is compat: breaking, so this runbook declares no `breaking:`: the runner runs
   Q18-migrate/C05-migrate and the rolling boot, and records the breakingOnly steps skipped.
 
@@ -64,9 +75,16 @@ notes: |
     has already waited one out.
   - Q39-migration-ledger (0128): nothing pending, the ledger ends at 0128, the two triggers and the
     validated check are in place.
+  - Q39-migration-ledger also proves 0129 (1547): the allocation_framework row is the 50/7/29/14
+    Hard Assets framework. The dashboard route serves the seed (the same framework) when its read
+    fails, so only the row proves the migration reached the database.
   - Q40-research-series (1524 collection floor and new series): every research-series inventory key
     is in source_value_versions from 2016-01-01 or its inception. It runs after Q38, which has seen
     a regime run of this release, and the regime run is the one that collects them.
+  - Q41-public-surface (1546, 1549): the CSP on / names the Google Apps Script and Turnstile
+    sources (the rolling boot reloads nginx.conf into the running website-server, it never rebuilds
+    it, so the header proves the reload), and GET /api/swarm/participants/health with no credential
+    answers 401 (v0.7.0 answers 404).
   The 1524 batch pool is Q34a's (above). The SDK PRs (1499, 1510, 1525) are Q37-sdk-tests' (the SDK
   package tests at the release commit). Q36-sdk-quickstart replays the newest archived run: this
   release carries D78, so a run this release makes replays its whole row byte for byte, but the
@@ -100,12 +118,12 @@ notes: |
     Q01-lockfile does not check it. csvb is an operator tool on the csv-backups host and no step
     installs it on a target.
 recovery: |
-  0128 is compat: additive and takes no grant from a runtime role. No migration is breaking.
+  0128 and 0129 are compat: additive and take no grant from a runtime role. No migration is breaking.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed; fix on a new QA branch
     and cut v0.7.1-rc.(N+1).
   - A failed C05-migrate: resume at C05-migrate; v0.7.0 keeps serving, and the website stays up.
   - After C05-migrate: v0.7.0 runs correctly on the 0128 schema (its asset_prices upsert also records
-    each overwrite). Fix forward on v0.7.2, or restore the C01-backup dump with the write loss it implies.
+    each overwrite) and on 0129's framework row (it reads the row as before). Fix forward on v0.7.2, or restore the C01-backup dump with the write loss it implies.
     v0.7.1 is tagged at C06-version-tag either way (D70).
   - A rolling boot that stops after the api and before the new analytics-producer starts leaves the old producer,
     or none once the seed step stopped it, beside the new api; both are safe (an old producer never calls committed-inputs). Resume at C10-rolling-boot.
@@ -123,6 +141,15 @@ scope:
   - {pr: 1533, what: "review fixes: GET /api/analytics/committed-inputs (AN-16), migration 0128 asset_prices overwrite capture (API-6), SDK-10, SDK-11, AN-4, TEST-4", check: "Q38-committed-inputs"}
   - {pr: 1536, what: "the regime vintage frozen from the exact versionIds the run read (issue 1534)", check: "Q38-committed-inputs"}
   - {pr: 1537, what: "chore(release): backport the five v0.7.0 QA-branch runbook and gate fixes to main", none: "release tooling and gate classifications: the run itself exercises them (Q32-soak-gate, Q35-archive-routes to Q37-sdk-tests)"}
+  - {pr: 1494, what: "docs(swarm): the judge guide leads with the 15-minute judging window", none: "docs only: the onboarding skill text and the swarm docs pages, served as static files with the site"}
+  - {pr: 1540, what: "SDK: date, trailing history, rf and basket volatility for the Markowitz schedule callbacks; split() handles Infinity", check: "Q37-sdk-tests"}
+  - {pr: 1541, what: "chore(analyst-sdk): version 0.5.0", none: "SDK version label only; the SDK ships on its own line (D77)"}
+  - {pr: 1545, what: "SDK: a strict, lazily verifying csv-backups reader (the local-copy reader API renamed)", check: "Q37-sdk-tests"}
+  - {pr: 1546, what: "website-server CSP lets the early-access form reach Google Apps Script and Cloudflare Turnstile (issue 1434)", check: "Q41-public-surface"}
+  - {pr: 1547, what: "Hard Assets (gold) replaces the Agent Tokens sleeve; framework 50/7/29/14, migration 0129 (issue 1496)", check: "Q39-migration-ledger"}
+  - {pr: 1549, what: "outside seats read their own health (GET /api/swarm/participants/health); admin hears when a seat goes quiet (issue 1495)", check: "Q41-public-surface"}
+  - {pr: 1551, what: "an analyst SDK release runbook YAML and runner (analyst-sdk-vA.B.C tag)", none: "release tooling for the SDK's own line (D77): no step of this runbook runs it, and nothing on a target uses it"}
+  - {pr: 1553, what: "chore(release): the SDK release runner is a documented script, not a package.json entry", none: "release tooling for the SDK's own line (D77): no step of this runbook runs it"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).
@@ -728,7 +755,7 @@ steps:
     host: "target"
     phase: "qa"
     added: "v0.7.1"
-    description: "Migration 0128 (1533, API-6): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated"
+    description: "Migrations 0128 (1533, API-6) and 0129 (1547): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated; the allocation_framework row is 0129's 50/7/29/14 with Hard Assets (gold) in the place of Agent Tokens"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "migration-ledger", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -748,6 +775,20 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-research-series.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q41-public-surface"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.1"
+    description: "Public surface (1546, issue 1434; 1549, issue 1495): the site's Content-Security-Policy on / lets the early-access form reach Google Apps Script and Cloudflare Turnstile (script-src and frame-src name challenges.cloudflare.com, connect-src names script.google.com and script.googleusercontent.com), so the rolling boot's nginx.conf reload carried the new file; and GET /api/swarm/participants/health with no credential answers 401, not the 404 of an api without the seat health route"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "public-surface", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-public-surface.json", "required": true}
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
@@ -1273,7 +1314,7 @@ steps:
     host: "target"
     phase: "cutover"
     added: "v0.7.1"
-    description: "Migration 0128 (1533, API-6): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated"
+    description: "Migrations 0128 (1533, API-6) and 0129 (1547): the ledger ends at the release's last migration with nothing pending; asset_prices carries asset_prices_capture_overwrite and asset_prices_capture_delete, enabled ALWAYS; analytics_overwrite_events' table_name check admits asset_prices and is validated; the allocation_framework row is 0129's 50/7/29/14 with Hard Assets (gold) in the place of Agent Tokens"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "migration-ledger", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -1293,6 +1334,20 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-research-series.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  - id: "C29-public-surface"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.1"
+    description: "Public surface (1546, issue 1434; 1549, issue 1495): the site's Content-Security-Policy on / lets the early-access form reach Google Apps Script and Cloudflare Turnstile (script-src and frame-src name challenges.cloudflare.com, connect-src names script.google.com and script.googleusercontent.com), so the rolling boot's nginx.conf reload carried the new file; and GET /api/swarm/participants/health with no credential answers 401, not the 404 of an api without the seat health route"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "public-surface", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-public-surface.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
