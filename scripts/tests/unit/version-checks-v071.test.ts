@@ -11,7 +11,7 @@ import { loadReleaseRunbook, stepNameOf } from "../../release/runbook.ts";
 import {
   archiveProblems, archiveRecords, BUDGET_MS, chosenBackups, type Answer, type ArchiveDeps,
 } from "../../release/version-checks/v0.7.1/archive-records.ts";
-import { committedInputs, routeProblems, vintageProblems, type RegimeVintage } from "../../release/version-checks/v0.7.1/committed-inputs.ts";
+import { committedInputs, NEWEST_REGIME_VINTAGE_SQL, routeProblems, vintageProblems, type RegimeVintage } from "../../release/version-checks/v0.7.1/committed-inputs.ts";
 import { captureProblems, FRAMEWORK, FRAMEWORK_MIGRATION, frameworkProblems, MIGRATION, TRIGGERS } from "../../release/version-checks/v0.7.1/migration-ledger.ts";
 import { cspProblems, healthProblems } from "../../release/version-checks/v0.7.1/public-surface.ts";
 import { expectedStart, loadSeries, seriesProblems, storageKeyOf, type KeyRow } from "../../release/version-checks/v0.7.1/research-series.ts";
@@ -50,6 +50,10 @@ describe("Q38-committed-inputs/C26-committed-inputs (1533, 1536)", () => {
     expect(stale.found.polls).toBe(7);
     expect(vintageProblems(COMMIT, undefined).join()).toContain("no regime vintage");
     expect(vintageProblems(null, vintage(COMMIT)).join()).toContain("no commit");
+  });
+  test("the newest-vintage read orders by the bigint column, never the id::text alias (99 outranked 805 on stage 2026-11-02)", () => {
+    expect(NEWEST_REGIME_VINTAGE_SQL).toContain("ORDER BY analytics_data_vintages.id DESC");
+    expect(NEWEST_REGIME_VINTAGE_SQL).not.toMatch(/ORDER BY id\b/);
   });
 });
 

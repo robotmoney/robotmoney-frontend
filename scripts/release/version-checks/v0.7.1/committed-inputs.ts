@@ -22,6 +22,13 @@ export const ROUTE = "/api/analytics/committed-inputs";
 /** The longest the check waits for a regime run of this release: one 3-hour cycle, the run itself, and margin. */
 export const WAIT_MS = 200 * 60_000;
 export const POLL_MS = 5 * 60_000;
+/**
+ * The newest regime vintage. ORDER BY names the table's bigint column: a bare `id` binds to the
+ * `id::text AS id` output alias first, which sorts as text, so vintage 99 outranked 805 on the
+ * 2026-11-02 stage run and the check waited out WAIT_MS for a run that had already frozen.
+ */
+export const NEWEST_REGIME_VINTAGE_SQL =
+  "SELECT id::text AS id, build_identity, knowledge_time_cutoff::text AS knowledge_time_cutoff, created_at::text AS created_at, member_count::text AS member_count FROM analytics_data_vintages WHERE tool_id = 'regime' ORDER BY analytics_data_vintages.id DESC LIMIT 1";
 
 /** PURE. Why the route's answer to a request with no credential does not show the route is there; empty when it does. */
 export function routeProblems(status: number, body: string): string[] {
@@ -81,9 +88,7 @@ export default (async (ctx) => {
   const db = await ctx.db();
   return committedInputs({
     http: ctx.http,
-    newestRegimeVintage: async () => (await db.query<RegimeVintage>(
-      "SELECT id::text AS id, build_identity, knowledge_time_cutoff::text AS knowledge_time_cutoff, created_at::text AS created_at, member_count::text AS member_count FROM analytics_data_vintages WHERE tool_id = 'regime' ORDER BY id DESC LIMIT 1",
-    ))[0],
+    newestRegimeVintage: async () => (await db.query<RegimeVintage>(NEWEST_REGIME_VINTAGE_SQL))[0],
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     log: (m) => console.log(m),
