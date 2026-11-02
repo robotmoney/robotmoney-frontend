@@ -1,7 +1,7 @@
 // Format 1 (D72): the one module that defines the layout, for both its writers
 // and its reader (issue 1477, D80). csvb (packages/csvb) and the public archive
 // routes (backend/src/analytics/store/public-archive-store.ts) write with the
-// writer half; the SDK's local-copy reader reads with the reader half. Pure: no
+// writer half; the SDK's archive reader reads with the reader half. Pure: no
 // file, database or network access here. Each caller does its own I/O and hands
 // text or bytes in.
 //
@@ -643,6 +643,22 @@ export function seriesForStorageKey(key: string): string | null {
   return INPUT_ID_OF_KEY.get(key) ?? null;
 }
 
+// One source_value_versions row as the database allows it (migration 0057): an
+// integer id, a source_key, a value, and exactly one of market_date and
+// market_instant. Anything else in a backup is corruption, not data. Returns
+// "date" or "instant" for a valid row, else throws naming the file and the
+// 1-based data row.
+export function checkVersionRow(r: Row, file: string, rowNo: number): "date" | "instant" {
+  const at = `corrupt archive: ${file} row ${rowNo}: a source_value_versions row`;
+  if (r.id == null || !/^\d+$/.test(r.id)) throw new ArchiveError(`${at} has the id ${JSON.stringify(r.id ?? null)}, not an integer`);
+  if (r.source_key == null || r.source_key === "") throw new ArchiveError(`${at} (id ${r.id}) has no source_key`);
+  if (r.value == null || r.value === "") throw new ArchiveError(`${at} (id ${r.id}) has no value`);
+  const hasDate = r.market_date != null && r.market_date !== "";
+  const hasInstant = r.market_instant != null && r.market_instant !== "";
+  if (hasDate === hasInstant) throw new ArchiveError(`${at} (id ${r.id}) must have exactly one of market_date and market_instant`);
+  return hasDate ? "date" : "instant";
+}
+
 export interface GeneratedRow {
   date: string;
   series: string;
@@ -726,8 +742,9 @@ export class RunInputCollector {
     return null;
   }
 
-  addVersions(rows: readonly Row[]): void {
-    for (const r of rows) {
+  addVersions(rows: readonly Row[], file = "source_value_versions"): void {
+    for (const [i, r] of rows.entries()) {
+      const kind = checkVersionRow(r, file, i + 1);
       const id = Number(r.id);
       const range = this.rangeOf(id);
       if (!range) continue;
@@ -735,7 +752,7 @@ export class RunInputCollector {
       if (this.seen.has(id)) throw new ArchiveError(`source_value_versions id ${r.id} appears twice in the local copy`);
       this.seen.add(id);
       const series = seriesForStorageKey(r.source_key!);
-      if (series === null || r.market_date === null || r.value === null) {
+      if (series === null || kind === "instant") {
         this.skipped[r.source_key!] = (this.skipped[r.source_key!] ?? 0) + 1;
         continue;
       }

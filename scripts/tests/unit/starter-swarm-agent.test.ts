@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_HARD_ASSETS_BUCKET_ORDER, ROUTES } from "@robotmoney/contract";
 import type { SwarmBrief } from "@robotmoney/contract";
 import {
   briefRequiresWeights,
@@ -88,14 +88,14 @@ describe("starter swarm agent canonical signing", () => {
       createdAt: "2026-07-21T00:00:00.000Z",
       body: {
         subject: { recommendationType: "bucket_weights" },
-        takeSchema: { weights: { optional: false, buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER] } },
+        takeSchema: { weights: { optional: false, buckets: [...RECEIPT_HARD_ASSETS_BUCKET_ORDER] } },
       },
     } as unknown as SwarmBrief;
     const proseBrief = {
       ...allocationBrief,
       body: {
         subject: { recommendationType: "position_actions" },
-        takeSchema: { weights: { optional: true, buckets: [...RECEIPT_CANONICAL_BUCKET_ORDER] } },
+        takeSchema: { weights: { optional: true, buckets: [...RECEIPT_HARD_ASSETS_BUCKET_ORDER] } },
       },
     } as unknown as SwarmBrief;
 
@@ -103,7 +103,7 @@ describe("starter swarm agent canonical signing", () => {
     expect(briefRequiresWeights(proseBrief)).toBe(false);
 
     const authored = await deterministicAuthorTake({ session, brief: allocationBrief });
-    expect(authored.weights?.map((w) => w.bucket)).toEqual([...RECEIPT_CANONICAL_BUCKET_ORDER]);
+    expect(authored.weights?.map((w) => w.bucket)).toEqual([...RECEIPT_HARD_ASSETS_BUCKET_ORDER]);
     expect(authored.weights!.reduce((sum, w) => sum + w.weight, 0)).toBeCloseTo(1, 12);
     // …and a prose session is untouched: no vector is invented for it.
     expect((await deterministicAuthorTake({ session, brief: proseBrief })).weights).toBeUndefined();
@@ -111,7 +111,7 @@ describe("starter swarm agent canonical signing", () => {
     // The vector reaches the SIGNED BYTES, which is the half that matters: the
     // server verifies the signature over a payload that includes `weights`.
     const signed = canonicalizeSubmission({ ...draft, weights: evenCanonicalWeights() });
-    expect(signed).toContain("agent_tokens");
+    expect(signed).toContain("hard_assets");
   });
 });
 

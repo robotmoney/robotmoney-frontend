@@ -8,7 +8,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { openLocalCopy } from "../bin/local-copy.ts";
+import { openBackupsDir } from "../bin/backups-dir.ts";
 import {
   ArchiveError,
   RunInputCollector,
@@ -369,8 +369,8 @@ describe("archive identity is the content, not the gzip encoder", () => {
     for (const [name, make] of Object.entries(encoders)) {
       const gz = make();
       gzips.add(sha(gz));
-      const copy = openLocalCopy(copyWith(gz));
-      expect(copy.tables[TABLE], name).toEqual([{ id: "1", run_key: "a" }, { id: "2", run_key: "b" }]);
+      const copy = openBackupsDir(copyWith(gz));
+      expect(copy.table(TABLE), name).toEqual([{ id: "1", run_key: "a" }, { id: "2", run_key: "b" }]);
     }
     expect(gzips.size, "the encoders must differ for this to test anything").toBeGreaterThan(1);
   });
@@ -378,7 +378,7 @@ describe("archive identity is the content, not the gzip encoder", () => {
   test("an archive whose decompressed bytes differ is refused, even when its gzip is valid", () => {
     const other = CONTENT.replace("b\n", "c\n");
     for (const make of [() => Bun.gzipSync(Buffer.from(other)), () => gzipSync(Buffer.from(other), { level: 1 })]) {
-      expect(() => openLocalCopy(copyWith(make()))).toThrow(/content sha256 .* does not match the record/);
+      expect(() => openBackupsDir(copyWith(make())).table(TABLE)).toThrow(/content sha256 .* does not match the record/);
     }
   });
 
@@ -398,7 +398,7 @@ describe("archive identity is the content, not the gzip encoder", () => {
     const root = copyRecorded(bomb, { bytes_raw: 10 });
     let err: unknown;
     try {
-      openLocalCopy(root);
+      openBackupsDir(root).table(TABLE);
     } catch (e) {
       err = e;
     }
@@ -411,10 +411,10 @@ describe("archive identity is the content, not the gzip encoder", () => {
     const content = CONTENT + "x";
     const root = copyRecorded(gzipSync(Buffer.from(content)), { bytes_raw: Buffer.byteLength(CONTENT), sha256_raw: sha(content) });
     // The record's hash matches the longer content, so only the length check can refuse it.
-    expect(() => openLocalCopy(root)).toThrow(/inflates to .*bytes_raw/);
+    expect(() => openBackupsDir(root).table(TABLE)).toThrow(/inflates to .*bytes_raw/);
     // And a shorter inflate is refused the same way.
     const short = copyRecorded(gzipSync(Buffer.from(CONTENT)), { bytes_raw: Buffer.byteLength(CONTENT) + 1 });
-    expect(() => openLocalCopy(short)).toThrow(/inflates to .*bytes_raw/);
+    expect(() => openBackupsDir(short).table(TABLE)).toThrow(/inflates to .*bytes_raw/);
   });
 
   test("inflateBounded passes maxOutputLength of min(bytes_raw, 64 MB) + 1 to gunzip", () => {
@@ -447,13 +447,13 @@ describe("archive identity is the content, not the gzip encoder", () => {
 
   test("a listed file with no sha256_raw is refused, naming the field", () => {
     const root = copyRecorded(gzipSync(Buffer.from(CONTENT)), { sha256_raw: undefined });
-    expect(() => openLocalCopy(root)).toThrow(/sha256_raw/);
+    expect(() => openBackupsDir(root)).toThrow(/sha256_raw/);
   });
 
   test("a file that is not a gzip is corrupt, and a missing one is incomplete", () => {
-    expect(() => openLocalCopy(copyWith(Buffer.from("not gzip")))).toThrow(/not a readable gzip/);
+    expect(() => openBackupsDir(copyWith(Buffer.from("not gzip"))).table(TABLE)).toThrow(/not a readable gzip/);
     const root = copyWith(gzipSync(Buffer.from(CONTENT)));
     rmSync(join(root, PATH));
-    expect(() => openLocalCopy(root)).toThrow(/incomplete local copy/);
+    expect(() => openBackupsDir(root).table(TABLE)).toThrow(/incomplete local copy/);
   });
 });

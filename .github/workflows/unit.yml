@@ -151,6 +151,10 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/d78-replay-wording.test.ts:7
+      - name: Analyst SDK release runner tests ran (issue 1550)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/sdk-release.test.ts:42
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

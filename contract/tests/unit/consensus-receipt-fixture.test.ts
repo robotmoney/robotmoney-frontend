@@ -25,6 +25,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   RECEIPT_CANONICAL_BUCKET_ORDER,
+  RECEIPT_HARD_ASSETS_BUCKET_ORDER,
+  bucketOrderForAsOf,
+  receiptSessionAsOf,
   RECEIPT_DOMAIN_SEPARATOR,
   RECEIPT_SCHEMA_VERSION,
   RECEIPT_STANCE_KEYS,
@@ -1051,5 +1054,22 @@ describe("Project Fusion consensus-receipt shared fixture", () => {
     expect(invariants).toContain("SCOPE, NOT AN INVARIANT");
     expect(invariants).toContain("anchored");
     expect(spec.assembler_obligations.key_compromise_has_no_remedy).toContain("must not be published");
+  });
+});
+
+// ── The bucket list is picked by the session's asOf (issue 1496) ─────────────
+describe("bucket list by session asOf", () => {
+  test("a session before the framework asOf gets agent_tokens, on or after it gets hard_assets", () => {
+    expect(bucketOrderForAsOf("2026-10-29", "2026-10-30")).toBe(RECEIPT_CANONICAL_BUCKET_ORDER);
+    expect(bucketOrderForAsOf("2026-10-30", "2026-10-30")).toBe(RECEIPT_HARD_ASSETS_BUCKET_ORDER);
+    expect(RECEIPT_HARD_ASSETS_BUCKET_ORDER).toEqual(["conservative_defi_yield", "hard_assets", "protocol_tokens", "real_world_assets"]);
+  });
+
+  test("the published past receipt verifies unchanged under the old list, picked by its own session date", () => {
+    const valid = readJson("consensus-receipt.valid.json");
+    expect(receiptSessionAsOf(valid)).toBe("2026-08-26");
+    expect(receiptSemanticErrors(valid, undefined, { frameworkAsOf: "2026-10-30" })).toEqual([]);
+    // The same receipt read as a post-framework session is not canonical: the list never depends on another date.
+    expect(receiptSemanticErrors(valid, undefined, { frameworkAsOf: "2026-08-01" })).toContain("weights: not in canonical bucket order");
   });
 });

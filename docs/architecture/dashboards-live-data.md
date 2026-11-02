@@ -342,6 +342,9 @@ interface AllocationFramework {
   "managed": true
 }
 ```
+> The live framework is 50/7/29/14 (Conservative DeFi Yield, Protocol Tokens,
+> Real World Assets, Hard Assets with key `hard-assets`); the golden below is
+> still the pre-Hard-Assets shape until the site change (issue 1497) moves it.
 > The bucket-item weights above are the shape/example only. The implementer
 > seeds the exact `target_weight` values from
 > `robotmoney-site/data/swarm/allocation.json`; do not invent weights the

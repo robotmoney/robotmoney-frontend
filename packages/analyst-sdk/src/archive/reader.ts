@@ -1,21 +1,25 @@
-// Reading a format 1 local copy (issue 1513): the reader core, pure. File access
+// Reading a format 1 archive (issues 1513, 1544): the reader core, pure. The
+// reader reads the csv-backups folder in place and copies nothing. File access
 // goes through an injected ArchiveFiles reader, so the same code runs over a
-// directory on disk (bin/local-copy.ts, the reader of `bun run inputs`), an
+// directory on disk (bin/backups-dir.ts, the reader of `bun run inputs`), an
 // in-memory map in a test, or anything else a client hands it. The SDK never
 // fetches and never touches a filesystem here (analyst SDK requirements
 // section 2, D57; scripts/tests/unit/analyst-sdk-purity.test.ts).
 //
-// Every listed file of the selected backups is checked before anything is
-// returned: present and, once inflated within its record's bytes_raw, matching
-// its recorded SHA-256 (the hash of the uncompressed bytes: gzip is only a
-// transport encoding, so any encoder's output verifies). Files of the run-ledger
-// tables are also parsed and row-counted against their record; every other file
-// (source_value_versions, revision files) is row-counted when it is read.
+// Opening reads only the backup.json files: backup selection, the watermark
+// chain, revision keys and file paths. Each listed data or revision file is read
+// the first time a call needs it, before any of its rows are returned: present
+// and, once inflated within its record's bytes_raw, matching its recorded SHA-256
+// (the hash of the uncompressed bytes: gzip is only a transport encoding, so any
+// encoder's output verifies) and its recorded row count. A file no call needs is
+// never read. Every file is decoded as strict UTF-8 with no byte order mark.
 //
-// Beyond one run's inputs (collectRunInputs), a copy answers two questions a
+// Beyond one run's inputs (collectRunInputs), an archive answers questions a
 // research client asks of the whole archive:
+//   table(name)            a table's listed data files, read and parsed once (the
+//                          run-ledger tables, for instance).
 //   revisedTable(table)    a revised table (regime_snapshots, raw_indicator_history,
-//                          asset_prices, ...) as of the copy's as-of backup: every
+//                          asset_prices, ...) as of the archive's as-of backup: every
 //                          selected backup's revisions/<table>.csv.gz replayed in
 //                          backup order, upserting or deleting by the key columns
 //                          its record names.
@@ -30,6 +34,7 @@ import {
   listedFiles,
   parseCopyCsv,
   RunInputCollector,
+  checkVersionRow,
   selectBackups,
   seriesForStorageKey,
   toObjects,
@@ -42,11 +47,11 @@ import {
 
 // The one thing the reader needs from where a copy lives.
 export interface ArchiveFiles {
-  // The copy's location, used only in messages (a directory path, or any label).
+  // The archive's location, used only in messages (a directory path, or any label).
   readonly root: string;
-  // The directory names under csv/ (one per backup), or null when the copy has no csv/ directory.
+  // The directory names under csv/ (one per backup), or null when the folder has no csv/ directory.
   backupDirs(): string[] | null;
-  // The bytes of a file at a path relative to the copy root, with "/" separators,
+  // The bytes of a file at a path relative to the root, with "/" separators,
   // or null when the file is absent.
   read(path: string): Uint8Array | null;
 }
@@ -66,23 +71,24 @@ export interface LatestValue {
   date: string;
   // The source_value_versions id of the newest version (decimal text, compared as BigInt).
   id: string;
-  // The stored value text, unchanged (null when the newest version stores NULL).
-  value: string | null;
+  // The stored value text, unchanged.
+  value: string;
 }
 
-export interface LocalCopy {
+export interface Archive {
   root: string;
   // The selected backups, oldest first; the last is the as-of backup.
   records: BackupRecord[];
   asOf: BackupRecord;
-  // The run-ledger tables (INPUT_TABLES except source_value_versions), as objects.
-  tables: Record<string, Row[]>;
-  // The listed data files of any table, verified, for the caller to read with readRows.
+  // The rows of a table's listed data files, read and verified on the first call, then memoized.
+  table(name: string): Row[];
+  // The listed data files of any table (not read), for the caller to read with readRows.
   files(table: string): FileRecord[];
+  // One file's rows, verified before they are returned.
   readRows(f: FileRecord): Row[];
-  // Every source_value_versions file's rows, read once.
+  // Every source_value_versions file's rows, read once on the first call.
   versions(): Row[][];
-  // A revised table as of the copy's as-of backup (see the header).
+  // A revised table as of the archive's as-of backup (see the header).
   revisedTable(table: string): RevisedTable;
   // The newest value per (source_key, market_date) for these storage keys, sorted
   // by market date then source key. A key no input id maps to is refused.
@@ -90,23 +96,34 @@ export interface LocalCopy {
 }
 
 const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
-// readFileSync(path, "utf8") keeps a byte order mark; so does this.
-const utf8 = new TextDecoder("utf-8", { ignoreBOM: true });
+// Strict UTF-8: an invalid byte throws. ignoreBOM keeps a byte order mark in the
+// text so decodeText can refuse it, rather than the decoder silently dropping it.
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function decodeText(bytes: Uint8Array, path: string): string {
+  let text: string;
+  try {
+    text = utf8.decode(bytes);
+  } catch {
+    throw new ArchiveError(`corrupt archive: ${path} is not valid UTF-8`);
+  }
+  if (text.charCodeAt(0) === 0xfeff) throw new ArchiveError(`corrupt archive: ${path} starts with a byte order mark`);
+  return text;
+}
 const where = (root: string, path: string) => (root === "" ? path : `${root.replace(/\/+$/, "")}/${path}`);
 const tableOf = (f: FileRecord): string => f.path.split("/").pop()!.split(".")[0]!;
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 // Key cells sort in code point order; a NULL cell sorts before any text.
 const cmpCell = (a: string | null, b: string | null) => (a === b ? 0 : a === null ? -1 : b === null ? 1 : cmp(a, b));
 
-// Open and verify a local copy as of a backup id (or its newest backup).
-export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
+// Open an archive as of a backup id (or its newest backup): reads only the backup.json files.
+export function openArchive(fs: ArchiveFiles, asOf?: string): Archive {
   const root = fs.root;
   const dirs = fs.backupDirs();
   if (dirs === null) throw new ArchiveError(`${root} is not a format 1 local copy (no csv/ directory)`);
   const texts: Record<string, string> = {};
   for (const d of dirs) {
     const rec = fs.read(`csv/${d}/backup.json`);
-    if (rec !== null) texts[d] = utf8.decode(rec);
+    if (rec !== null) texts[d] = decodeText(rec, where(root, `csv/${d}/backup.json`));
   }
   const records = selectBackups(texts, asOf);
   const all = listedFiles(records);
@@ -130,33 +147,38 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
     const content = contentOf(f);
     const digest = content === null ? null : sha256(content);
     verifyFile(f, { sha256_raw: digest });
-    const csv = parseCopyCsv(utf8.decode(content!));
+    const csv = parseCopyCsv(decodeText(content!, where(root, f.path)));
     verifyFile(f, { sha256_raw: digest, rows: csv.rows.length });
     return csv;
   };
-  const readRows = (f: FileRecord): Row[] => toObjects(readCsv(f));
-
-  // Every listed file must be present and match its recorded hash; the
-  // run-ledger tables are parsed now, the rest when a caller asks.
-  const tables: Record<string, Row[]> = {};
-  for (const f of all) {
-    const table = tableOf(f);
-    if ((INPUT_TABLES as readonly string[]).includes(table) && table !== "source_value_versions") {
-      // A loop, not push(...rows): a production vintage file holds over a
-      // million member rows, past the engine's argument limit.
-      const into = (tables[table] ??= []);
-      for (const r of readRows(f)) into.push(r);
-      continue;
-    }
-    const content = contentOf(f);
-    verifyFile(f, { sha256_raw: content === null ? null : sha256(content) });
-  }
+  // A data file's rows, verified on first read and memoized by path.
+  const rowsOf = new Map<string, Row[]>();
+  const readRows = (f: FileRecord): Row[] => {
+    let rows = rowsOf.get(f.path);
+    if (rows === undefined) rowsOf.set(f.path, (rows = toObjects(readCsv(f))));
+    return rows;
+  };
 
   const files = (table: string) => all.filter((f) => tableOf(f) === table && f.path.includes("/data/"));
+  const tableRows = new Map<string, Row[]>();
+  const table = (name: string): Row[] => {
+    let rows = tableRows.get(name);
+    if (rows === undefined) {
+      rows = [];
+      // A loop, not push(...rows): a production vintage file holds over a
+      // million member rows, past the engine's argument limit.
+      for (const f of files(name)) for (const r of readRows(f)) rows.push(r);
+      tableRows.set(name, rows);
+    }
+    return rows;
+  };
   let versionRows: Row[][] | null = null;
   const versions = () => (versionRows ??= files("source_value_versions").map(readRows));
 
+  const revised = new Map<string, RevisedTable>();
   const revisedTable = (table: string): RevisedTable => {
+    const memo = revised.get(table);
+    if (memo !== undefined) return memo;
     const state = new Map<string, Row>();
     let header: string[] | null = null;
     let keyCols: readonly string[] = [];
@@ -194,7 +216,9 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
       }
       return 0;
     });
-    return { header: cols, rows };
+    const out = { header: cols, rows };
+    revised.set(table, out);
+    return out;
   };
 
   const latestValues = (sourceKeys: readonly string[]): LatestValue[] => {
@@ -205,21 +229,19 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
       seriesOf.set(k, s);
     }
     const best = new Map<string, { n: bigint; v: LatestValue }>();
-    for (const rows of versions()) {
-      for (const r of rows) {
-        const sk = r.source_key;
-        if (sk === null || sk === undefined || !seriesOf.has(sk) || r.market_date === null || r.market_date === undefined) continue;
-        let n: bigint;
-        try {
-          n = BigInt(r.id ?? "");
-        } catch {
-          throw new ArchiveError(`corrupt local copy: a source_value_versions row of ${sk} has the id ${JSON.stringify(r.id)}, not an integer`);
-        }
+    const vfiles = files("source_value_versions");
+    versions().forEach((rows, i) => {
+      rows.forEach((r, j) => {
+        const bad = checkVersionRow(r, where(root, vfiles[i]!.path), j + 1);
+        const sk = r.source_key!;
+        if (!seriesOf.has(sk)) return;
+        if (bad === "instant") throw new ArchiveError(`corrupt archive: ${where(root, vfiles[i]!.path)} row ${j + 1}: ${sk} version ${r.id} has a market_instant and no market_date, which latestValues cannot place on a date`);
+        const n = BigInt(r.id!);
         const k = `${sk}\u0001${r.market_date}`;
         const prior = best.get(k);
-        if (!prior || n > prior.n) best.set(k, { n, v: { series: seriesOf.get(sk)!, sourceKey: sk, date: r.market_date, id: r.id!, value: r.value ?? null } });
-      }
-    }
+        if (!prior || n > prior.n) best.set(k, { n, v: { series: seriesOf.get(sk)!, sourceKey: sk, date: r.market_date!, id: r.id!, value: r.value! } });
+      });
+    });
     return [...best.values()].map((b) => b.v).sort((a, b) => cmp(a.date, b.date) || cmp(a.sourceKey, b.sourceKey));
   };
 
@@ -227,7 +249,7 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
     root,
     records,
     asOf: records[records.length - 1]!,
-    tables,
+    table,
     files,
     readRows,
     versions,
@@ -236,14 +258,15 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): LocalCopy {
   };
 }
 
-// One run's frozen inputs from an open copy (exactly its vintage).
-export function collectRunInputs(copy: LocalCopy, runKey: string): RunInputs {
+// One run's frozen inputs from an open archive (exactly its vintage).
+export function collectRunInputs(archive: Archive, runKey: string): RunInputs {
   const collector = new RunInputCollector(runKey, {
-    runs: copy.tables.analytics_ledger_runs ?? [],
-    methodologies: copy.tables.analytics_ledger_methodology_versions ?? [],
-    vintages: copy.tables.analytics_data_vintages ?? [],
-    members: copy.tables.analytics_vintage_members ?? [],
+    runs: archive.table("analytics_ledger_runs"),
+    methodologies: archive.table("analytics_ledger_methodology_versions"),
+    vintages: archive.table("analytics_data_vintages"),
+    members: archive.table("analytics_vintage_members"),
   });
-  for (const rows of copy.versions()) collector.addVersions(rows);
+  const vfiles = archive.files("source_value_versions");
+  archive.versions().forEach((rows, i) => collector.addVersions(rows, `${archive.root.replace(/\/+$/, "")}/${vfiles[i]!.path}`));
   return collector.finish();
 }

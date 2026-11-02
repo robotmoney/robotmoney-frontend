@@ -17,8 +17,8 @@ export {
   ArchiveError, INPUT_TABLES, type BackupRecord, type FileRecord, type GeneratedRow, type RunIdentity, type RunInputs,
 } from "./archive/format1.ts";
 export {
-  openArchive, collectRunInputs, type ArchiveFiles, type LocalCopy, type RevisedTable, type LatestValue,
-} from "./archive/local-copy.ts";
+  openArchive, collectRunInputs, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
+} from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
 export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
@@ -49,7 +49,7 @@ export { SHRINK, PERIODS_PER_YEAR, annualCov, shrinkToDiagonal, shrunkCov } from
 export {
   markowitzBooks, markowitzSizing, markowitzSchedule, markowitzBacktest, canonZero, ZERO_TOL, MIN_OBS, LAMBDA,
   type Book, type MarkowitzBooksInput, type MarkowitzBooks, type MarkowitzSizingInput, type MarkowitzSizing,
-  type Reoptimise, type MuFn, type CovFn, type SolveFn, type ExpandFn, type MarkowitzScheduleOptions,
+  type Reoptimise, type RebalanceContext, type MuFn, type CovFn, type SolveFn, type ExpandFn, type MarkowitzScheduleOptions,
   type MarkowitzRebalance, type MarkowitzScheduleResult, type Simulator, type MarkowitzBacktestOptions,
   type MarkowitzBacktestResult,
 } from "./allocate/markowitz.ts";

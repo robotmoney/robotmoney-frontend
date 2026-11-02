@@ -37,7 +37,7 @@ import * as ic from "../src/swarm/domain.ts";
 import * as admin from "../src/swarm/admin.ts";
 import * as verbs from "./support/session-verbs.ts";
 import { generateKeyPair, signMessage } from "../src/lib/signing.ts";
-import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_HARD_ASSETS_BUCKET_ORDER } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
@@ -126,7 +126,7 @@ const latestRow = async (sessionId: string) =>
 // aimed at such a subject is refused at submission unless it names exactly the
 // four receipt buckets. Every assertion below compares the rollup's weights
 // BEFORE and AFTER a judgement, so the values themselves are arbitrary.
-const W = [...RECEIPT_CANONICAL_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: 4 - i }));
+const W = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER].map((bucket, i) => ({ bucket, weight: 4 - i }));
 
 /** Open, submit `count` takes, close, aggregate. Returns the session. */
 async function aggregatedSession(prefix: string, count = 3) {

@@ -246,6 +246,7 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0126_pipeline_worker_token_and_receipts.sql",
     "0127_rm_worker_retired.sql",
     "0128_asset_prices_overwrite_events.sql",
+    "0129_allocation_framework_hard_assets.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {
