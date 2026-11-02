@@ -22,7 +22,7 @@ const time = (iso: string, label: string) => `<time datetime="${iso}">${label}</
 
 const PENDING = `        <!-- release:pending -->
         ${monthDivider("Next release")}
-        <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release</h2>
+        <h2 class="cl__month-h" data-release="pending" x-show="!tag">Next release <span class="rm-sphase rm-sphase--open cl__next-chip">In progress</span></h2>
 
 ${entry("next-research-records", pendingMeta, "Research records")}
 
@@ -89,6 +89,8 @@ function noPendingTrace(html: string): void {
   expect(html).not.toContain('class="cl__pending"');
   expect(html).not.toContain(">Next release<");
   expect(html).not.toContain(">Also in the next release<");
+  expect(html).not.toMatch(/class="[^"]*\bcl__next-chip\b/);
+  expect(html).not.toContain(">Next release ");
 }
 
 const ids = (html: string) => [...html.matchAll(/<article class="cl__entry" id="([^"]+)"/g)].map((m) => m[1]);
