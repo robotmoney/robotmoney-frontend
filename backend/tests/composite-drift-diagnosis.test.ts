@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { DIAGNOSED_RUN_IDS, FIXTURE_PATH, diagnoseRun, type Diagnosis } from "../scripts/composite-drift-diagnosis.ts";
-import { openLocalCopy } from "../../packages/analyst-sdk/bin/local-copy.ts";
+import { openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 
 const diagnosis = JSON.parse(readFileSync(FIXTURE_PATH, "utf8")) as Record<string, Diagnosis>;
 const ARCHIVE = process.env.RM_FORMAT1_ARCHIVE;
@@ -59,7 +59,7 @@ if (!ARCHIVE) {
 }
 describe.skipIf(!ARCHIVE)("composite drift diagnosis regenerated from a format 1 local copy", () => {
   test("replaying runs 73, 111 and 133 gives the committed file", () => {
-    const copy = openLocalCopy(ARCHIVE!);
+    const copy = openBackupsDir(ARCHIVE!);
     for (const id of DIAGNOSED_RUN_IDS) {
       const d = diagnoseRun(copy, id);
       expect({ ...d, linked_issue: diagnosis[id]!.linked_issue }).toEqual(diagnosis[id]!);

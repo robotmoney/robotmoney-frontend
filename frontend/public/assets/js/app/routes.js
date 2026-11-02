@@ -3,8 +3,8 @@ export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
 // One page per vault, /vault/:slug (rmusdc, rmagent, rmproto, rmrwa; a slug,
 // never an address, because staging addresses reset). Bare /vault is still
-// /allocation, whose Vaults section lists all four: router.js moves the
-// address to /allocation#vaults.
+// the model portfolio, whose Vaults section lists all four: router.js moves
+// the address to /model-portfolio#vaults.
 export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
 export const TREASURY_VIEW = `${VIEW_DIR}/treasury.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
@@ -153,17 +153,22 @@ const ROUTES = {
   // /blog already lists both research pieces as cards, so a second listing would
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
-  "/allocation": ALLOCATION_VIEW,
+  // The model portfolio (RM-190). /allocation was its address until October
+  // 2026; it resolves here and router.js moves the address bar to
+  // /model-portfolio, query and fragment kept, so the #allocation and #vault
+  // anchors the deposit skill and archived sessions cite still land.
+  "/model-portfolio": ALLOCATION_VIEW,
+  "/allocation": ALLOCATION_VIEW, // legacy redirect
   // The protocol wallets' page (RM-157). /performance was its address until
   // October 2026 and /allocation2 before that; both resolve here and router.js
   // moves the address bar to /treasury.
   "/treasury": TREASURY_VIEW,
   "/performance": TREASURY_VIEW, // legacy redirect
   "/allocation2": TREASURY_VIEW, // legacy redirect
-  // /vault renders /allocation (RM-115's URL table): an address people
+  // /vault renders the model portfolio (RM-115's URL table): an address people
   // already hold is worth more resolving to the page that answers it than
-  // 404ing. router.js rewrites it to /allocation#vaults before rendering, and
-  // seo.js's LEGACY_ALIASES names /allocation canonical for the exact path
+  // 404ing. router.js rewrites it to /model-portfolio#vaults before rendering,
+  // and seo.js's LEGACY_ALIASES names /model-portfolio canonical for the exact path
   // only, so the two addresses do not compete as duplicates and /vault/:slug
   // keeps its own. It stays an explicit entry: the catch-all at the bottom of
   // viewFor() would otherwise look for views/vault.html, which is now the

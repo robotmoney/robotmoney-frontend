@@ -38,6 +38,7 @@ function ownsPath(p: string): boolean {
     rest === "members" || rest.startsWith("members/") ||
     rest === "applications" ||
     rest === "sessions" || rest.startsWith("sessions/") ||
+    rest.startsWith("judgements/") ||
     rest === "audit" ||
     rest === "judge" ||
     rest === "agent-health"
@@ -324,6 +325,11 @@ export async function handleSwarmAdmin(
       }
     }
     return { status: 404, body: { error: "unknown members admin route" } };
+  }
+
+  // One judgement by id, drawn or not, without knowing its session (issue 1495).
+  if (segs[0] === "judgements" && segs.length === 2 && m === "GET") {
+    return fromResult(await admin.getJudgementAdmin(decodeURIComponent(segs[1]!)));
   }
 
   // ── Applications ──────────────────────────────────────────────────────

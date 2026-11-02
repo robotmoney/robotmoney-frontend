@@ -471,16 +471,18 @@ test("wallet-sleeves seam: amount and price readers inject independently and per
 });
 
 // ── allocation ──────────────────────────────────────────────────────────────
-test("allocation: seeded swarm framework → 4 buckets, exact pct conversion, managed:true", async () => {
+test("allocation: seeded swarm framework → exactly four sleeves 50/7/29/14, Hard Assets is Gold 100, no agent_tokens (issue 1496)", async () => {
   const r = await getAllocation();
   expect(r.managed).toBe(true);
-  expect(r.buckets.map((b) => b.key)).toEqual(["defi-yield", "agent-tokens", "protocol-tokens", "rwa"]);
-  const strat = Object.fromEntries(r.strategy.map((s) => [s.label, s.targetPct]));
-  expect(strat["Conservative DeFi Yield"]).toBe(95); // 0.95 → 95, not a losing int round
-  expect(strat["Agent Tokens"]).toBe(5);
-  // fractional item weight preserved to 2dp (0.1429 → 14.29).
-  const agent = r.buckets.find((b) => b.key === "agent-tokens")!;
-  expect(agent.items.find((i) => i.label === "RobotMoney")!.targetPct).toBe(14.29);
+  expect(r.buckets.map((b) => b.key)).toEqual(["defi-yield", "protocol-tokens", "rwa", "hard-assets"]);
+  expect(r.strategy.map((s) => [s.label, s.targetPct])).toEqual([
+    ["Conservative DeFi Yield", 50],
+    ["Protocol Tokens", 7],
+    ["Real World Assets", 29],
+    ["Hard Assets", 14],
+  ]);
+  expect(r.buckets.find((b) => b.key === "hard-assets")!.items).toEqual([{ label: "Gold", targetPct: 100 }]);
+  expect(JSON.stringify(r)).not.toContain("agent");
 });
 
 test("allocation: with the row absent, getAllocation falls back to the swarm seed default (managed data is static, not a degraded chain read)", async () => {
@@ -492,7 +494,7 @@ test("allocation: with the row absent, getAllocation falls back to the swarm see
     const r = await getAllocation();
     expect(r.managed).toBe(true);
     expect(r.buckets).toHaveLength(4); // served from ALLOCATION_FRAMEWORK_SEED, not a chain read
-    expect(r.strategy.find((s) => s.label === "Conservative DeFi Yield")!.targetPct).toBe(95);
+    expect(r.strategy.find((s) => s.label === "Conservative DeFi Yield")!.targetPct).toBe(50);
   } finally {
     // Restore the swarm seed row (id=1) exactly as db/seed.ts wrote it.
     await fixtureDb`

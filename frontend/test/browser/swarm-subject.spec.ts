@@ -304,6 +304,21 @@ test("a slow subject fetch does not stamp its name on the route the visitor move
 // `meanConfidence`, so the archive path cannot exercise the aggregate half of
 // the consensus at all.
 test("a subject's latest session carries the consensus and the decision, as /swarm does", async ({ page }) => {
+  // The published targets in force on these sessions' day (95/5/0/0, asOf 2026-06-02). The live
+  // stack's framework is the 50/7/29/14 one (issue 1496), dated after these sessions, so a row would
+  // read "No target recorded"; the site change (1497) moves the fixtures.
+  await page.route("**/api/dashboards/allocation", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        asOf: "2026-06-02", source: "live", managed: true, buckets: [],
+        strategy: [
+          { label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 },
+          { label: "Protocol Tokens", targetPct: 0 }, { label: "Real World Assets", targetPct: 0 },
+        ],
+      }),
+    }));
   const session = {
     id: "3f2b9c10-77aa-4d1e-9a3c-0b5e6f8d2c41",
     date: "2026-09-01",
@@ -576,7 +591,7 @@ test("a framework subject renders no book, even when the API serves it one", asy
   // gate firing rather than a fixture too thin to render. The facts row is
   // drawn: this subject has no session, so its one item is the link to the
   // allocation it is.
-  await expect(page.locator(".rr-meta")).toContainText("Asset allocation");
+  await expect(page.locator(".rr-meta")).toContainText("Model portfolio");
   await expect(page.locator("#history .rr-table__empty")).toBeVisible();
 
   // And the request is never made: a subject with no book has none to fetch.
@@ -634,8 +649,8 @@ test("the allocation subject carries the weights in force, and no other subject 
   await expect(card).not.toContainText("not gaps");
 
   // The way to the product page is the facts row's, once: not again in here.
-  await expect(card.locator('a[href="/allocation"]')).toHaveCount(0);
-  await expect(page.locator('.rr-meta a[href="/allocation"]')).toBeVisible();
+  await expect(card.locator('a[href="/model-portfolio"]')).toHaveCount(0);
+  await expect(page.locator('.rr-meta a[href="/model-portfolio"]')).toBeVisible();
 
   // Another weights subject reads the framework as the target its sessions
   // are measured against, and still carries no weights-in-force of its own:
@@ -763,7 +778,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
   // The regime by name; its composite is a market signal, read on the session.
   await expect(meta.locator(".rr-meta__i", { hasText: "Composite" })).toHaveCount(0);
   await expect(meta.locator(".rr-meta__i", { hasText: "Regime" }).locator("b")).toHaveText("risk-on");
-  await expect(meta.locator('a[href="/allocation"]')).toBeVisible();
+  await expect(meta.locator('a[href="/model-portfolio"]')).toBeVisible();
 
   // The vote: each stance counted, bearish to bullish, then who took part.
   const latest = page.locator("#latest");

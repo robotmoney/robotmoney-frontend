@@ -24,7 +24,7 @@ const originalBin = process.env.OPENCODE_BIN;
 
 const FILLER = Array.from({ length: 45 }, (_, i) => `word${i}`).join(" ");
 const PROSE = ["**REGIME**", "- one", "**ALLOCATION**", "- two", "**SUBJECT**", `- three ${FILLER}`].join("\n");
-const GOOD_WEIGHTS = "WEIGHTS: agent_tokens=0.15 | conservative_defi_yield=0.70 | protocol_tokens=0.10 | real_world_assets=0.05";
+const GOOD_WEIGHTS = "WEIGHTS: hard_assets=0.15 | conservative_defi_yield=0.70 | protocol_tokens=0.10 | real_world_assets=0.05";
 const STANCE = "STANCE: bullish | CONFIDENCE: 0.8";
 
 /** Install a fake CLI that emits `answers[min(callIndex, last)]`. */
@@ -67,8 +67,8 @@ test("a first sample that drops the WEIGHTS line is RE-SAMPLED, and the second t
   ]);
   const take = await authorTake(persona("athena"), regime, "robotmoney-allocation", { requireWeights: true });
   expect(take.weights).toEqual([
-    { bucket: "agent_tokens", weight: 0.15 },
     { bucket: "conservative_defi_yield", weight: 0.7 },
+    { bucket: "hard_assets", weight: 0.15 },
     { bucket: "protocol_tokens", weight: 0.1 },
     { bucket: "real_world_assets", weight: 0.05 },
   ]);
@@ -86,7 +86,7 @@ test("every attempt dropping the vector renders the member ABSENT — no zero-fi
 });
 
 test("a partial vector is refused by name across every attempt", async () => {
-  await installAnswers([[PROSE, "WEIGHTS: agent_tokens=0.5 | conservative_defi_yield=0.5", STANCE].join("\n")]);
+  await installAnswers([[PROSE, "WEIGHTS: hard_assets=0.5 | conservative_defi_yield=0.5", STANCE].join("\n")]);
   await expect(
     authorTake(persona("cygnus"), regime, "robotmoney-allocation", { requireWeights: true }),
   ).rejects.toThrow(/missing protocol_tokens, real_world_assets/);

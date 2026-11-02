@@ -14,7 +14,7 @@ import { mean, pearson, rollingBeta, rollingSum, sma, std, stddev } from "../src
 import { pearson as rankPearson, ranks } from "../src/analyze/correlations.ts";
 import { rollingBetaSeries } from "../src/analyze/research-signals.ts";
 import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
-import { correlation, mean2, meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
+import { correlation, dot2, mean2, meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
 import type { Point } from "../src/types.ts";
 import { median, quantile } from "../src/transform/exact.ts";
 import { exactQuantile } from "./support/exact-reference.ts";
@@ -162,6 +162,15 @@ describe("pearson at any scale", () => {
     }
   });
 
+  test("an infinite factor follows IEEE arithmetic instead of recursing: twoProd, dot2 and mean2 return Infinity or NaN", () => {
+    expect(dot2([Infinity], [1])).toBe(Infinity);
+    expect(dot2([-Infinity], [1])).toBe(-Infinity);
+    expect(dot2([1], [Infinity])).toBe(Infinity);
+    expect(dot2([Infinity], [0])).toBeNaN();
+    expect(dot2([NaN], [1])).toBeNaN();
+    expect(twoProd(Infinity, 2)[0]).toBe(Infinity);
+    expect(mean2([Infinity, 1])).toBe(Infinity);
+  });
   test("near overflow the split stays exact: means, products and dot products of values above 2^996", () => {
     expect(mean2([1.5e300, 1.5e300])).toBe(1.5e300);
     const big = [1.7e300, 1.3e300, 1.9e300, 1.1e300];
