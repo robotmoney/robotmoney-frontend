@@ -270,7 +270,7 @@ test("a judgement on a weights session says its recommendation set weights: its 
   await ic.publishBrief(session.id, 60);
   const date = session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10);
   const weights = [
-    { bucket: "conservative_defi_yield", weight: 0.9 }, { bucket: "agent_tokens", weight: 0.1 },
+    { bucket: "conservative_defi_yield", weight: 0.9 }, { bucket: "hard_assets", weight: 0.1 },
     { bucket: "protocol_tokens", weight: 0 }, { bucket: "real_world_assets", weight: 0 },
   ];
   for (const voter of [await member("wv_a"), await member("wv_b")]) await submit(voter, date, subjectId, "a weighted take", weights);

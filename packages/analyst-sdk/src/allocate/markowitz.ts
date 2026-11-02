@@ -276,14 +276,24 @@ export function markowitzSizing(input: MarkowitzSizingInput): MarkowitzSizing {
 /** When the schedule re-optimises: a calendar frequency, or a predicate over the date and the previous axis date (null on the first). */
 export type Reoptimise = "weekly" | "monthly" | "quarterly" | ((date: string, prevDate: string | null) => boolean);
 
-/** Expected annual returns at a re-optimisation date from the history before it: a record keyed by asset id, or an array in asset order. */
-export type MuFn = (date: string, history: number[][], historyDates: string[]) => Readonly<Record<string, number>> | readonly number[];
+/** What a callback sees about the re-optimisation it runs in. */
+export interface RebalanceContext {
+  /** The axis date being re-optimised. */
+  date: string;
+  /** Dates of the history rows the callback is given (after `from` and `lookback`), ascending. */
+  historyDates: readonly string[];
+  /** The last `n` return rows dated before `date` (not before `from`), whatever `lookback` says, with their dates. Fewer when the data is shorter. */
+  trailing(n: number): { dates: string[]; rows: number[][] };
+}
+
+/** Expected annual returns at a re-optimisation date from the history before it: a record keyed by asset id, or an array in asset order. `rf` is the annual fraction the solver will use. */
+export type MuFn = (date: string, history: number[][], historyDates: string[], rf: number) => Readonly<Record<string, number>> | readonly number[];
 /** A covariance estimate from the history rows (days x assets). */
-export type CovFn = (history: number[][]) => Mat;
+export type CovFn = (history: number[][], context: RebalanceContext) => Mat;
 /** Weights per asset (asset order) from mu, the covariance and rf (annual fraction); the rest is cash. */
-export type SolveFn = (mu: number[], S: Mat, rf: number) => readonly number[];
-/** Optimizer weights (cash plus one key per asset) to the day's holdings; null leaves that day unset. */
-export type ExpandFn = (weights: Weights, date: string) => Weights | null;
+export type SolveFn = (mu: number[], S: Mat, rf: number, context: RebalanceContext) => readonly number[];
+/** Optimizer weights (cash plus one key per asset) to the day's holdings; null leaves that day unset. Called once per axis date, in ascending date order, with the re-optimisation in force. */
+export type ExpandFn = (weights: Weights, date: string, rebalance: MarkowitzRebalance) => Weights | null;
 
 export interface MarkowitzScheduleOptions {
   /** Ascending YYYY-MM-DD dates. */
@@ -331,6 +341,8 @@ export interface MarkowitzRebalance {
   mu: number[];
   /** History rows used. */
   nObs: number;
+  /** Volatility of the optimizer weights under the covariance used: sqrt(w' S w), in the units of S. */
+  vol: number;
   /** Optimizer weights: cash plus one key per asset (before `expand`). */
   weights: Weights;
 }
@@ -468,15 +480,27 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
         const historyDates = rdays.slice(start, end);
         const history = historyDates.map((x) => [...returns.get(x)!]);
         const rf = rfOn(d);
-        const mu = muVector(`${where} ${d}`, o.mu(d, history.map((r) => [...r]), [...historyDates]), assets);
-        const S = cov(history.map((r) => [...r]));
+        const context: RebalanceContext = {
+          date: d,
+          historyDates: [...historyDates],
+          trailing: (n) => {
+            if (typeof n !== "number" || !Number.isInteger(n) || n < 0) throw new RangeError(`${where} ${d}: trailing(n) needs a nonnegative integer n, got ${JSON.stringify(n)}`);
+            const from = Math.max(0, end - n);
+            const dates = rdays.slice(from, end);
+            return { dates, rows: dates.map((x) => [...returns.get(x)!]) };
+          },
+        };
+        const mu = muVector(`${where} ${d}`, o.mu(d, history.map((r) => [...r]), [...historyDates], rf), assets);
+        const S = cov(history.map((r) => [...r]), context);
         if (o.cov) covMatrix(`${where} ${d}`, S, assets.length);
-        const raw = solve([...mu], S, rf);
+        const raw = solve([...mu], S, rf, context);
         cur = weightsOf(`${where} ${d}`, assets, raw, tol);
-        rebalances.push({ date: d, rf, mu, nObs: history.length, weights: { ...cur } });
+        const vol = Math.sqrt(dot2(assets.map((a) => cur![a]!), S.map((row) => dot2(row, assets.map((a) => cur![a]!)))));
+        rebalances.push({ date: d, rf, mu, nObs: history.length, vol, weights: { ...cur } });
       }
     }
-    schedule.push(cur === null ? null : expand({ ...cur }, d));
+    const inForce = rebalances[rebalances.length - 1];
+    schedule.push(cur === null || inForce === undefined ? null : expand({ ...cur }, d, { ...inForce, mu: [...inForce.mu], weights: { ...inForce.weights } }));
     prev = d;
   }
   return { schedule, rebalances };

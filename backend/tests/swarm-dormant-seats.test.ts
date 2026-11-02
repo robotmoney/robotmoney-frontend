@@ -20,8 +20,11 @@ import { handleSwarm } from "../src/api/routes/swarm.ts";
 import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { activeSubject, sessionDate, sessionRow } from "./support/epoch-fixtures.ts";
+import { activeSubject, sessionDate, sessionRow, setJudgeMode, submitTake, type TestMember } from "./support/epoch-fixtures.ts";
 import { provisionOperatorToken } from "./support/automation-auth.ts";
+import * as epochFixtures from "./support/epoch-fixtures.ts";
+import { getOverviewProjection } from "../src/admin/overview.ts";
+import { seatJudge, signedJudgement } from "./support/stub-judge.ts";
 
 // The page's helper, loaded from the frontend module that renders the line.
 // A computed specifier, so the backend typecheck does not resolve a browser
@@ -46,6 +49,7 @@ let OPERATOR = "";
 beforeEach(async () => {
   OPERATOR = await provisionOperatorToken();
   currentEpoch.clear();
+  judgingAuthor = null;
 });
 
 type Member = { id: string; token: string; privateKey: CryptoKey };
@@ -184,15 +188,99 @@ test("a session on which the operator excused the seat does not count", async ()
   expect(await silentOf(m.id)).toBe(1);
 });
 
-test("a judge-role member has no count whatever its absences", async () => {
+test("a judge-role member's count is its own, not its member absences", async () => {
   const subjectId = await activeSubject("dormant-judge", 3600);
   const m = await activeMember("dormant-judge");
   await convene(subjectId, 5);
   expect(await absences(m.id)).toBe(4);
   const [{ version }] = await fixtureDb<{ version: number }[]>`SELECT version FROM swarm_members WHERE id = ${m.id}`;
   expect((await admin.setMemberRoleAdmin(m.id, Number(version), "judge")).status).toBe(200);
-  expect(await silentOf(m.id)).toBeNull();
-  expect((await silentSessionsByMember()).has(m.id)).toBe(false);
+  // No session of this judge's was ever offered for judging, so nothing counts.
+  expect(await silentOf(m.id)).toBe(0);
+  expect((await silentSessionsByMember()).get(m.id)).toBe(0);
+});
+
+// A session in judging with one take, its deadline already past.
+let judgingAuthor: TestMember | null = null;
+async function judgedSession(prefix: string, deadlineAgo = "1 second"): Promise<string> {
+  await setJudgeMode("enforce");
+  judgingAuthor ??= await seatedAuthor();
+  const subjectId = await activeSubject(prefix, 600);
+  const opened = await ic.openEpoch(subjectId);
+  if (!opened.ok) throw new Error("openEpoch failed");
+  const took = await submitTake(judgingAuthor, sessionDate(await sessionRow(opened.sessionId)), subjectId, { body: `a take on ${prefix}` });
+  if (took.status !== 201) throw new Error(`submitTake failed: ${JSON.stringify(took)}`);
+  const turned = await ic.turnOverEpoch(subjectId, opened.sessionId);
+  if (!turned.ok) throw new Error("turnOverEpoch failed");
+  await ic.aggregateEpoch(turned.closedSessionId);
+  const requested = await ic.requestJudging(turned.closedSessionId);
+  if (!requested.ok) throw new Error("requestJudging failed");
+  await fixtureDb.unsafe(`UPDATE swarm_sessions SET judging_deadline_at = now() - interval '${deadlineAgo}' WHERE id = '${turned.closedSessionId}'`);
+  return turned.closedSessionId;
+}
+const seatedAuthor = () => epochFixtures.activeMember();
+
+test("a judge with no on-time answer in a session has its count incremented, an on-time answer resets it, a member's count is unchanged", async () => {
+  const judge = await seatJudge({ prefix: "dormant_judge" });
+  const member = await activeMember("dormant-judge-member");
+  const first = await judgedSession("dj_first");
+  const second = await judgedSession("dj_second");
+  await judgedSession("dj_third");
+  expect(await silentOf(judge.id)).toBe(3);
+  // The member's count is its own absences, which judging does not touch.
+  const memberCount = await silentOf(member.id);
+  expect(memberCount).toBe(await absences(member.id));
+
+  // An answer after the deadline is not on time: the session still counts.
+  await ic.submitJudgement(judge.token, await signedJudgement(judge, first));
+  expect(await silentOf(judge.id)).toBe(3);
+
+  // An on-time answer to a later session resets the count for every earlier one.
+  await fixtureDb`UPDATE swarm_sessions SET judging_deadline_at = now() + interval '1 hour' WHERE id = ${second}`;
+  const answered = await ic.submitJudgement(judge.token, await signedJudgement(judge, second));
+  expect(answered.ok && answered.onTime).toBe(true);
+  // The answer landed exactly at the deadline, which is on time; the session has since ended.
+  await fixtureDb`UPDATE swarm_sessions SET judging_deadline_at =
+                    (SELECT created_at FROM swarm_session_judgements WHERE session_id = ${second}) WHERE id = ${second}`;
+  await judgedSession("dj_fourth", "1 millisecond");
+  expect(await silentOf(judge.id)).toBe(1);
+
+  // An outside judge is not charged while outside judging is off.
+  const outside = await seatJudge({ prefix: "dormant_outside", operator: "someone-else" });
+  await fixtureDb`UPDATE swarm_judge_config SET third_party_enabled = false WHERE id = 1`;
+  expect(await silentOf(outside.id)).toBe(0);
+  await fixtureDb`UPDATE swarm_judge_config SET third_party_enabled = true WHERE id = 1`;
+  expect(await silentOf(outside.id)).toBeGreaterThan(0);
+  // The member's count is still just its own absences (the fourth session added one).
+  expect(await silentOf(member.id)).toBe(memberCount! + 1);
+  expect(await silentOf(member.id)).toBe(await absences(member.id));
+});
+
+test("the admin overview names a member past the threshold and a judge quiet for a day, and not a seat under it", async () => {
+  // The judged sessions come first, so the members below are seated in none of them.
+  const judge = await seatJudge({ prefix: "dormant_alert_judge" });
+  const fresh = await seatJudge({ prefix: "dormant_alert_fresh" });
+  await fixtureDb`UPDATE swarm_dormancy_baseline SET counted_from = now() - interval '3 days'`;
+  await judgedSession("da_old", "25 hours");
+  // `fresh` activated after the old session ended: its first miss is under a day old.
+  await fixtureDb`UPDATE swarm_members SET activated_at = now() - interval '2 hours' WHERE id = ${fresh.id}`;
+  await judgedSession("da_recent", "1 hour");
+
+  const subjectId = await activeSubject("dormant-alerts", 3600);
+  const quiet = await activeMember("dormant-quiet");
+  const near = await activeMember("dormant-near-alert");
+  await convene(subjectId, 4); // three absences each, the threshold
+  expect((await ic.getMember(quiet.id))!.silentSessions).toBe(3);
+  await submit(near, currentEpoch.get(subjectId)!, subjectId); // resets `near`
+  await convene(subjectId, 2); // `near` is at 1
+
+  const alerts = (await getOverviewProjection()).alerts.filter((a) => a.source.startsWith("swarm.quiet_seat:"));
+  const sources = alerts.map((a) => a.source);
+  expect(sources).toContain(`swarm.quiet_seat:${quiet.id}`);
+  expect(sources).toContain(`swarm.quiet_seat:${judge.id}`);
+  expect(sources).not.toContain(`swarm.quiet_seat:${near.id}`);
+  expect(sources).not.toContain(`swarm.quiet_seat:${fresh.id}`);
+  expect(alerts.find((a) => a.source.endsWith(quiet.id))!.message).toContain("threshold of 3");
 });
 
 test("GET /api/swarm/members/:id and the admin list serve silentSessions", async () => {

@@ -42,7 +42,21 @@ import {
 // #776 removed the possibility of: the assembler must break when the pin moves,
 // not silently keep reproducing an older document's bytes.
 import spec from "@robotmoney/contract/fixtures/consensus-receipt.canonicalization.json" with { type: "json" };
-import schema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
+import publishedSchema from "@robotmoney/contract/fixtures/consensus-receipt.schema.json" with { type: "json" };
+
+// The published schema 1.0 enumerates the pre-Hard-Assets bucket list. A receipt for
+// a session on or after the framework asOf carries `hard_assets`, so the one enum is
+// widened here, in memory, and the published fixture file stays byte-for-byte what
+// past receipts verified against (issue 1496).
+const schema = JSON.parse(
+  JSON.stringify(publishedSchema).replace(
+    '["agent_tokens","conservative_defi_yield","protocol_tokens","real_world_assets"]',
+    '["agent_tokens","conservative_defi_yield","hard_assets","protocol_tokens","real_world_assets"]',
+  ),
+) as typeof publishedSchema;
+if (JSON.stringify(schema) === JSON.stringify(publishedSchema)) {
+  throw new Error("consensus-receipt: the published schema's bucket enum was not found, so hard_assets cannot be admitted");
+}
 
 // THE RECEIPT STATEMENTS ARE REGISTERED (smoke-production-spec.md §7.1), all on
 // the api's `rm_app` credential. Publishing is reached from the admin route,
@@ -154,7 +168,7 @@ const readReceipt = registerQuery({
 import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
-import { judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
+import { bucketOrderForSession, frameworkAsOf, judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
 import { inputsDigest, type JudgeOpinion } from "./judge.ts";
 
 /** One contributing analyst, as the assembler needs them. */
@@ -208,6 +222,12 @@ export interface ConsensusReceiptAssemblyInput {
   stances: Record<string, number>;
   /** `swarm_recommendation.weights` — the vector meanTakeWeights() authored, or absent. */
   weights?: { bucket: string; weight: number }[] | null;
+  /**
+   * The session's canonical bucket list (`bucketOrderForAsOf` over the session's
+   * asOf). Absent means the published pre-Hard-Assets list, so every earlier
+   * caller keeps its bytes.
+   */
+  bucket_order?: readonly string[];
   analysts: ConsensusReceiptAnalystInput[];
 }
 
@@ -326,7 +346,10 @@ function hash32(value: string, field: string): string {
  * implementation both repos read and into a producer-local rule the verifier
  * does not know about.
  */
-function toBps(weights: { bucket: string; weight: number }[]): { bucket: string; weight_bps: number }[] {
+function toBps(
+  weights: { bucket: string; weight: number }[],
+  canonical: readonly string[],
+): { bucket: string; weight_bps: number }[] {
   // SHAPE FIRST, AND IT IS A NAMED REFUSAL. `swarm_recommendation.weights` is
   // jsonb: nothing in the database constrains it to an array of
   // {bucket, weight}, and a hand-written or half-migrated row carrying an
@@ -353,7 +376,6 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
     );
   }
   const byBucket = new Map(weights.map((w) => [String(w.bucket), Number(w.weight)]));
-  const canonical = RECEIPT_CANONICAL_BUCKET_ORDER;
   const missing = canonical.filter((bucket) => !byBucket.has(bucket));
   const extra = [...byBucket.keys()].filter((bucket) => !canonical.includes(bucket));
   if (missing.length > 0 || extra.length > 0) {
@@ -400,7 +422,7 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
   // always a proxy for "was the INPUT a share vector"; this checks the thing
   // itself, and does it where the answer is actually known.
   try {
-    return bucketSharesToBps(byBucket as Map<string, number>, canonical as readonly string[]);
+    return bucketSharesToBps(byBucket as Map<string, number>, canonical as string[]);
   } catch (e) {
     throw new ConsensusReceiptRefusal(
       "weights_not_a_share_vector",
@@ -417,7 +439,7 @@ function toBps(weights: { bucket: string; weight: number }[]): { bucket: string;
  * canonical allocation" are the same question asked twice, never two spellings
  * of it that can drift apart.
  */
-function isCanonicalFourVector(value: unknown): boolean {
+function isCanonicalFourVector(value: unknown, order: readonly string[]): boolean {
   if (!Array.isArray(value)) return false;
   const buckets = new Set<string>();
   for (const entry of value) {
@@ -427,8 +449,8 @@ function isCanonicalFourVector(value: unknown): boolean {
     if (typeof bucket !== "string" || typeof weight !== "number" || !Number.isFinite(weight)) return false;
     buckets.add(bucket);
   }
-  return buckets.size === RECEIPT_CANONICAL_BUCKET_ORDER.length &&
-    RECEIPT_CANONICAL_BUCKET_ORDER.every((bucket) => buckets.has(bucket));
+  return buckets.size === order.length &&
+    order.every((bucket) => buckets.has(bucket));
 }
 
 /**
@@ -550,9 +572,10 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
         revision: analyst.revision,
       })),
   };
+  const bucketOrder = input.bucket_order ?? RECEIPT_CANONICAL_BUCKET_ORDER;
   // OMITTED ENTIRELY when absent — a judged-but-unweighted receipt is legal and
   // byte-stable, and `weights` is the only optional field in 1.0.
-  if (input.weights != null) receipt.weights = toBps(input.weights);
+  if (input.weights != null) receipt.weights = toBps(input.weights, bucketOrder);
 
   // ── VALIDATE, RECOMPUTE, THEN CANONICALIZE ───────────────────────────────
   // The spec is passed WHOLE (it is the published document, not a hand-built
@@ -562,7 +585,7 @@ export function assembleConsensusReceipt(input: ConsensusReceiptAssemblyInput): 
   if (structural.length > 0) {
     throw new ConsensusReceiptRefusal("schema_invalid", "the assembled receipt does not validate against schema 1.0", structural);
   }
-  const semantic = receiptSemanticErrors(receipt as never, spec as never);
+  const semantic = receiptSemanticErrors(receipt as never, { ...spec, canonical_bucket_order: bucketOrder } as never);
   if (semantic.length > 0) {
     throw new ConsensusReceiptRefusal("semantics_invalid", "the assembled receipt fails a recomputable invariant", semantic);
   }
@@ -655,6 +678,8 @@ async function loadAssemblyInput(
   // would make the receipt attest to a take set nobody judged.
   const session = frozen.session;
   const rec = (session.swarm_recommendation ?? {}) as Record<string, unknown>;
+  // The session's own bucket list, picked by its asOf (issue 1496).
+  const bucketOrder = await bucketOrderForSession(session.date instanceof Date ? session.date.toISOString().slice(0, 10) : String(session.date).slice(0, 10));
 
   // ── 1. TERMINAL SESSIONS ONLY ─────────────────────────────────────────────
   // There used to be NO state predicate here at all, and that is the whole of
@@ -921,10 +946,10 @@ async function loadAssemblyInput(
   // canonical four is already refused by name (`weights_not_canonical_four`)
   // and that is the more specific fact about the same session, so this gate
   // speaks only when the published allocation would otherwise be well-formed.
-  if (recommendationType === "bucket_weights" && isCanonicalFourVector(rec.weights)) {
+  if (recommendationType === "bucket_weights" && isCanonicalFourVector(rec.weights, bucketOrder)) {
     const unsupported = frozen.takes.filter((take) => {
       const payload = (take.payload ?? {}) as { weights?: unknown };
-      return !isCanonicalFourVector(normalizedTakeWeights(payload.weights));
+      return !isCanonicalFourVector(normalizedTakeWeights(payload.weights), bucketOrder);
     });
     if (unsupported.length > 0) {
       throw new ConsensusReceiptRefusal(
@@ -1022,6 +1047,7 @@ async function loadAssemblyInput(
     // above, and a hand-written column of the wrong SHAPE is refused by
     // toBps()'s `weights_malformed`.
     weights: (rec.weights as { bucket: string; weight: number }[] | undefined) ?? null,
+    bucket_order: bucketOrder,
     analysts,
   };
 }
@@ -1134,7 +1160,7 @@ export async function verifyAssembledReceipt(
   const structural = validateReceipt(receipt, schema);
   for (const error of structural) reasons.push(`schema: ${error}`);
   if (structural.length === 0) {
-    for (const error of receiptSemanticErrors(receipt as never, spec as never)) reasons.push(`invariant: ${error}`);
+    for (const error of receiptSemanticErrors(receipt as never, spec as never, { frameworkAsOf: await frameworkAsOf() })) reasons.push(`invariant: ${error}`);
     let rebuilt: string | null = null;
     try {
       rebuilt = canonicalizeReceipt(receipt as never, spec as never);

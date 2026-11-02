@@ -71,6 +71,15 @@ export function refusalsForSession(sessionId: string): JudgeRefusal[] {
   return [...(bySession.get(sessionId) ?? [])].reverse();
 }
 
+/** Newest-first refusals this judge reported, across sessions, for its own health read (issue 1495). */
+export function refusalsForMember(memberId: string, limit = 10): JudgeRefusal[] {
+  const out: JudgeRefusal[] = [];
+  for (const list of [...bySession.values()].reverse()) {
+    for (const r of [...list].reverse()) if (r.memberId === memberId) out.push(r);
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
+}
+
 /** The latest refusal per session, newest session first, for the overview. */
 export function latestRefusals(limit = 10): JudgeRefusal[] {
   const out: JudgeRefusal[] = [];

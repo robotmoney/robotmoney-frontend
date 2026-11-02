@@ -60,7 +60,7 @@ writeFileSync(
     envKeys: Object.keys(process.env).sort(),
   }),
 );
-console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25" } }));
+console.log(JSON.stringify({ type: "text", part: { type: "text", text: "**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25" } }));
 `);
   await chmod(fakeOpenCode, 0o755);
   process.env.OPENCODE_BIN = fakeOpenCode;
@@ -161,13 +161,13 @@ describe("opencode subprocess env is scrubbed down to the single model credentia
 describe("parseStanceFromBody throws on a missing or malformed control line", () => {
 test("parses a well-formed trailing control line and strips it from the body", () => {
     const parsed = parseStanceFromBody(
-      "**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25",
+      "**REGIME**\n- x\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25",
     );
     expect(parsed).toEqual({
       stance: "bullish",
       confidence: 0.8,
       weights: [
-        { bucket: "agent_tokens", weight: 0.25 },
+        { bucket: "hard_assets", weight: 0.25 },
         { bucket: "conservative_defi_yield", weight: 0.25 },
         { bucket: "protocol_tokens", weight: 0.25 },
         { bucket: "real_world_assets", weight: 0.25 },
@@ -207,14 +207,14 @@ test("parses a well-formed trailing control line and strips it from the body", (
 
   test("throws when the WEIGHTS clause omits a canonical bucket", () => {
     expect(() =>
-      parseStanceFromBody("body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.5, conservative_defi_yield=0.5"),
+      parseStanceFromBody("body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.5, conservative_defi_yield=0.5"),
     ).toThrow(/omits the canonical bucket\(s\).*rendered ABSENT/);
   });
 
   test("throws when a WEIGHTS value is malformed or out of range", () => {
     expect(() =>
       parseStanceFromBody(
-        "body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=1.5",
+        "body\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=1.5",
       ),
     ).toThrow(/weight.*fraction in \[0, 1\].*rendered ABSENT/);
   });
@@ -239,7 +239,7 @@ test("parses a well-formed trailing control line and strips it from the body", (
 
   test("clamps out-of-range confidence into [0,1] without fabricating a stance", () => {
     expect(
-      parseStanceFromBody("body\nSTANCE: cautious | CONFIDENCE: 1.7 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25").confidence,
+      parseStanceFromBody("body\nSTANCE: cautious | CONFIDENCE: 1.7 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25").confidence,
     ).toBe(1);
   });
 });
@@ -516,7 +516,7 @@ test("an auxiliary GPT title error is classified separately from a successful De
   const bin = join(dir, "opencode-title-error");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("AI_APICallError: Model is disabled providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 `);
   await chmod(bin, 0o755);
   const previous = process.env.OPENCODE_BIN;
@@ -542,7 +542,7 @@ test("a legitimately selected gpt-5.4-nano primary is not mislabeled as an auxil
   const bin = join(dir, "opencode-gpt-primary");
   await writeFile(bin, `#!/usr/bin/env bun
 console.error("APIError providerID=opencode modelID=gpt-5.4-nano agent=title");
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 `);
   await chmod(bin, 0o755);
   const previousBin = process.env.OPENCODE_BIN;
@@ -571,7 +571,7 @@ test("a successful parent with a descendant retaining pipes remains hard-bounded
 const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 2000)"], {stdio:["ignore","inherit","inherit"]});
 child.unref();
-console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: agent_tokens=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
+console.log(JSON.stringify({type:"text",part:{type:"text",text:"retained output\\n**REGIME**\\n- one\\n**ALLOCATION**\\n- two\\n**SUBJECT**\\n- three word0 word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36 word37 word38 word39 word40 word41 word42 word43 word44\\nSTANCE: bullish | CONFIDENCE: 0.8 | WEIGHTS: hard_assets=0.25, conservative_defi_yield=0.25, protocol_tokens=0.25, real_world_assets=0.25"}}));
 process.exit(0);
 `);
   await chmod(bin, 0o755);
