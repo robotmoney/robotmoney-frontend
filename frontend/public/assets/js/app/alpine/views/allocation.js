@@ -1,5 +1,5 @@
 // Alpine factory for /allocation — the allocation as a POLICY (RM-115,
-// container rule RM-114), and where it meets the four vaults that carry it out.
+// container rule RM-114), and where it meets the vaults that carry it out.
 //
 // THE ONE RULE THIS FILE EXISTS TO KEEP: it never reads wallet-balances or
 // wallet-sleeves. Those are the three protocol-owned prop wallets — the house
@@ -14,11 +14,11 @@
 // Two reads, each settling on its own so one degraded feed leaves only its own
 // part of the page on "—":
 //   the policy   lib/allocation-framework.js loadAllocationDto():
-//                GET /api/dashboards/allocation, the four sleeve targets and
+//                GET /api/dashboards/allocation, the sleeve targets and
 //                their constituents, plus `asOf`. The shipped manifest stands
 //                in on a local host only. NOT `source`: on this DTO that is the
 //                Base RPC source, not the provenance of the weights.
-//   the vaults   lib/vault-source.js loadVaultOverview(): the four vaults'
+//   the vaults   lib/vault-source.js loadVaultOverview(): the vaults'
 //                Recommended, Applied and Actual weights, the gaps between
 //                them, combined TVL, tracking error, the router and the latest
 //                published robotmoney-allocation recommendation. The source
@@ -57,7 +57,7 @@ import {
   vaultForBucket,
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { sessionSummary, bucketShort, bucketLabel } from "../../lib/session-summary.js";
+import { sessionSummary, bucketShort, bucketLabel, bucketHue, retiredAndEmpty } from "../../lib/session-summary.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -74,13 +74,14 @@ const shortAddress = (a) => {
 // normal-vision floor below 15 means full-colour readers cannot tell the pair
 // apart either.
 //
-// Sleeves take CATEGORICAL by POSITION, all four of them, so a sleeve keeps
-// its hue whether or not it is funded and the legend row for a 0% sleeve is
-// keyed to the colour its arc would have. The vault that implements a sleeve
-// wears the same hue (lib/vault-data.js VAULTS[i].color === CATEGORICAL[i]).
+// Sleeves take CATEGORICAL by their slot in the published order (bucketHue),
+// never by their index in what the API sends, so a sleeve keeps its hue
+// whether or not it is funded, and when a sleeve before it closes: Protocol
+// Tokens stayed CATEGORICAL[2] when Small Cap Tokens left. The legend row for
+// a 0% sleeve is keyed to the colour its arc would have, and the vault that
+// implements a sleeve wears the same hue (lib/vault-data.js VAULTS color).
 // Constituents restart at the front inside their own sleeve, which is what the
 // mini bucket pies already do.
-const sleeveColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
 const itemColour = (i) => CATEGORICAL[i % CATEGORICAL.length];
 
 export function registerAllocationView(Alpine) {
@@ -108,7 +109,7 @@ export function registerAllocationView(Alpine) {
     // degraded feed leaves only its own part of the page on "—" rather than
     // blanking a page about money. A failed read becomes null, never a
     // fabricated value. The policy does not wait for the vaults: the Vaults
-    // table holds its four rows from the first paint and fills them in.
+    // table holds its rows from the first paint and fills them in.
     //
     // The policy and the recommendation are read once and handed to the
     // vaults' read too: the policy's targets are the vaults' targets, and the
@@ -171,14 +172,22 @@ export function registerAllocationView(Alpine) {
     sleeves() {
       const buckets = this.allocationFw?.buckets || [];
       const strategy = this.allocationFw?.strategy || [];
-      return buckets.map((b, i) => ({
-        key: b.key,
-        // The sleeve's name through the one display map every page uses
-        // (bucketLabel): the served label is the framework's first name,
-        // which the site no longer prints (RM-97).
-        name: bucketLabel(b.label || strategy[i]?.label || b.key),
-        target: Number(strategy[i]?.targetPct ?? 0),
-      }));
+      return buckets.flatMap((b, i) => {
+        const served = b.label || strategy[i]?.label || b.key;
+        const target = strategy[i]?.targetPct;
+        // A closed sleeve the policy still lists at 0% is not part of it. One
+        // it still funds stays until the policy says otherwise.
+        if (retiredAndEmpty(served, target)) return [];
+        return [{
+          key: b.key,
+          // The sleeve's name through the one display map every page uses
+          // (bucketLabel): the served label is the framework's first name,
+          // which the site no longer prints (RM-97).
+          name: bucketLabel(served),
+          target: Number(target ?? 0),
+          hue: bucketHue(served, i),
+        }];
+      });
     },
     // The legend swatch. Every sleeve carries its hue, funded or not: the
     // colour identifies the sleeve, and a sleeve at zero is still the same
@@ -187,17 +196,18 @@ export function registerAllocationView(Alpine) {
     sleeveSwatch(s) {
       return `background:${this.sleeveColours()[s.key] || "var(--color-border-light)"}`;
     },
-    // Keyed on POSITION in the published order, so a sleeve keeps its hue when
-    // another one's weight changes. Colour follows the entity, never its rank.
+    // Keyed on the sleeve's slot in the published order, so a sleeve keeps its
+    // hue when another one's weight changes or another one closes. Colour
+    // follows the entity, never its rank.
     sleeveColours() {
-      return Object.fromEntries(this.sleeves().map((row, i) => [row.key, sleeveColour(i)]));
+      return Object.fromEntries(this.sleeves().map((row) => [row.key, row.hue]));
     },
     // The weights in force as the ring every swarm page draws: the hover and
     // focus are lib/sleeve-explorer.js, the arcs session-summary's ringSvg.
     // Not normalised to its own sum: a policy that does not add to 100 leaves
     // the remainder of the track unfilled, and the centre names it.
     //
-    // Beside each target, where the money is: the share of the four vaults'
+    // Beside each target, where the money is: the share of the vaults'
     // combined TVL held by the sleeve's vault (one vault per sleeve), and the
     // gap between them in points. Selecting a sleeve opens its recipe.
     explorerRows() {
@@ -253,7 +263,7 @@ export function registerAllocationView(Alpine) {
     changeLabel(d) { return weightChange.changeLabel(d); },
     changeClass(d) { return weightChange.changeClass(d); },
 
-    // ── the four vaults ─────────────────────────────────────────────────────
+    // ── the vaults ─────────────────────────────────────────────────────────
     // One overview for the whole section (lib/vault-data.js normalizeOverview):
     // the page never recomputes a weight or a gap of its own.
     overview() { return this.vaults?.overview ?? null; },
@@ -298,7 +308,7 @@ export function registerAllocationView(Alpine) {
       const d = a - b;
       return d === 0 ? "$0" : `${d > 0 ? "+" : "−"}${fmtUsd(Math.abs(d))}`;
     },
-    // The four identities from the first paint, so the table holds its shape
+    // The vault identities from the first paint, so the table holds its shape
     // while the figures load; every figure reads "—" until then.
     vaultRows() {
       return VAULTS.map((id) => {

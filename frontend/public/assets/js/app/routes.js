@@ -1,10 +1,11 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// One page per vault, /vault/:slug (rmusdc, rmagent, rmproto, rmrwa; a slug,
-// never an address, because staging addresses reset). Bare /vault is still
-// the model portfolio, whose Vaults section lists all four: router.js moves
-// the address to /model-portfolio#vaults.
+// One page per vault, /vault/:slug (rmusdc, rmproto, rmrwa; a slug, never an
+// address, because staging addresses reset). Bare /vault is still
+// /model-portfolio, whose Vaults section lists all three: router.js moves the
+// address to /model-portfolio#vaults, and moves /vault/rmagent, whose sleeve
+// closed, there too.
 export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
 export const TREASURY_VIEW = `${VIEW_DIR}/treasury.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
@@ -220,12 +221,14 @@ export function viewFor(pathname) {
   if (pathname === "/docs/investment-committee" || pathname.startsWith("/docs/investment-committee/")) {
     return viewFor("/docs/investment-swarm" + pathname.slice("/docs/investment-committee".length));
   }
-  // The four vault pages. The slugs are spelled out, not read from
+  // The three vault pages. The slugs are spelled out, not read from
   // lib/vault-data.js (a unit test holds the two lists equal), and any other
   // /vault/... is not found rather than a catch-all fragment lookup. /vaults/:id
   // (plural) is the gated analytics dossier below and does not match.
-  if (/^\/vault\/(rmusdc|rmagent|rmproto|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
-  if (pathname === "/vault/") return ALLOCATION_VIEW;
+  if (/^\/vault\/(rmusdc|rmproto|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
+  // rmAGENT's page closed with its sleeve; router.js moves the address to
+  // /model-portfolio#vaults, as it does bare /vault.
+  if (pathname === "/vault/" || /^\/vault\/rmagent\/?$/.test(pathname)) return ALLOCATION_VIEW;
   if (RETIRED_SKILL_DOCS.test(pathname)) return EARLY_ACCESS_VIEW;
   if (pathname.startsWith("/vault/")) return NOT_FOUND_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];

@@ -103,11 +103,15 @@ test("/vault is an exact alias: the bare path is /model-portfolio, each vault pa
   expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/model-portfolio");
   expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/model-portfolio");
   expect(metaFor("/vault")).toEqual(metaFor("/model-portfolio"));
+  // rmAGENT's address, closed with its sleeve, renders /model-portfolio too.
+  expect(canonicalUrlFor("/vault/rmagent")).toBe("https://robotmoney.network/model-portfolio");
+  expect(canonicalUrlFor("/vault/rmagent/")).toBe("https://robotmoney.network/model-portfolio");
+  expect(metaFor("/vault/rmagent")).toEqual(metaFor("/model-portfolio"));
 
-  // The four vault pages are NOT rewritten under /model-portfolio: each keeps its
+  // The three vault pages are NOT rewritten under /model-portfolio: each keeps its
   // own address, stays out of the index until the launch review, and titles
   // itself by its symbol.
-  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmagent: "rmAGENT", rmproto: "rmPROTO", rmrwa: "rmRWA" };
+  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmproto: "rmPROTO", rmrwa: "rmRWA" };
   for (const [slug, symbol] of Object.entries(symbols)) {
     const path = `/vault/${slug}`;
     expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });

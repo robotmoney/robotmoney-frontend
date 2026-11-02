@@ -15,7 +15,7 @@ import { api, ROUTES } from "../../lib/api.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { isJudge } from "../../lib/judgements.js";
-import { sessionSummary } from "../../lib/session-summary.js";
+import { sessionSummary, retiredAndEmpty } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
 import { memberAvatarSrc } from "../../lib/member-logos.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
@@ -33,7 +33,7 @@ const plateSrc = (name) => `/assets/img/home/${name}.jpg`;
 
 // The hero's lanes name assets from the framework's universe and carry no
 // weights; this list stands in only when no framework can be read at all.
-const FALLBACK_UNIVERSE = ["Aave", "Morpho", "Compound", "Sky", "BTC", "ETH", "HYPE"];
+const FALLBACK_UNIVERSE = ["Aave", "Morpho", "Compound", "Sky", "BTC", "ETH"];
 
 // The bare ring, for a model portfolio not yet published: the same track
 // ringSvg draws under every mix.
@@ -104,8 +104,12 @@ export function registerHomeView(Alpine) {
       if (this._destroyed) return;
 
       const session = rec.status === "fulfilled" ? rec.value?.session : null;
-      const rows = session ? sessionSummary.sessionWeights(session) : null;
-      this.model = rows ? {
+      // The portfolio as it stands, so a closed sleeve the recommendation
+      // gives 0% is not one of its rows. The session's own page keeps it.
+      const rows = session
+        ? (sessionSummary.sessionWeights(session) || []).filter((r) => !retiredAndEmpty(r.key, r.pct))
+        : [];
+      this.model = rows.length ? {
         date: fmtDate(session.date || session.publishedAt),
         receiptHref: sessionTakes().sessionHref(session),
         rows: rows.map((r) => ({ ...r, assets: this._assetsFor(r.key) })),

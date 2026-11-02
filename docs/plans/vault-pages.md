@@ -1,6 +1,6 @@
 # Plan: the four vaults on /allocation, /vault/:slug and the vault subject
 
-**Branch:** `david/vault-pages` (frontend only). **Written:** 2026-09-17, revised 2026-09-19.
+**Branch:** `david/vault-pages` (frontend only). **Written:** 2026-09-17, revised 2026-09-19. **Since 2026-10-29:** four sleeves, three vaults. rmAGENT closed with the Small Cap Tokens sleeve (core ADR-0017, RM-190), and Hard Assets (gold) took its place; its gold vault is a new contract with no address yet, so it has no page or row. `/vault/rmagent` goes to `/allocation#vaults`, and the fixtures below describe three vaults.
 
 ## Decisions
 
@@ -24,7 +24,7 @@
 The switch is a query parameter kept per tab in sessionStorage (`rm.vaults`), so it survives clicks between the three pages. It acts only on a local host: `localhost`, `*.localhost`, `127.0.0.1`, `[::1]` and `stage.robotmoney-labs.dev`. Every other host is production-like, ignores the parameter and never reads a fixture, the saved snapshot or the archive.
 
 - `/allocation?vaults=devnet`
-- `/vault/rmagent?vaults=devnet`
+- `/vault/rmproto?vaults=devnet`
 - `/swarm/subjects/robotmoney-vault?vaults=devnet`
 - `/allocation?vaults=devnet-unreadable`, and likewise `devnet-no-recommendation`, `devnet-stale`, `devnet-paused`
 - `?vaults=base` switches back (the default).
@@ -35,9 +35,9 @@ Base mode reads, in order: `GET /api/dashboards/robotmoney-vaults`, once contrac
 
 All under `frontend/public/data/vaults/`, synthetic: no addresses, no prices of real tokens, no return claims. They ship publicly with the site, and only a local host reads them.
 
-- `devnet/overview.json`: the overview DTO for the four-vault stack. Combined $100,000; Recommended 65/15/15/5, Applied 70/10/15/5, Actual 72/9/14/5; tracking error 200 bps (Actual against Applied, the target in force).
-- `devnet/{rmusdc,rmagent,rmproto,rmrwa}.json`: detail DTOs (holdings, 15 daily TVL readings, 11 to 14 activity rows, router weights, recommendation receipts). Each vault has its own share price and its own events. Token holdings are labelled as `/allocation` names the constituent (BTC, Gold) and carry the held token as `symbol` (WBTC, GOLD); they have no balance or price, since the fixtures price no real token.
-- `devnet/subject.json`: the vault subject's devnet book: the router and four vault wallets, and 15 daily snapshots whose positions carry `vault`.
+- `devnet/overview.json`: the overview DTO for the three-vault stack. Combined $91,000; Recommended 75/20/5, Applied 80/15/5, Actual 79.12/15.38/5.49; tracking error 87.91 bps (Actual against Applied, the target in force).
+- `devnet/{rmusdc,rmproto,rmrwa}.json`: detail DTOs (holdings, 15 daily TVL readings, 11 to 14 activity rows, router weights, recommendation receipts). Each vault has its own share price and its own events. Token holdings are labelled as `/allocation` names the constituent (BTC, Gold) and carry the held token as `symbol` (WBTC, GOLD); they have no balance or price, since the fixtures price no real token.
+- `devnet/subject.json`: the vault subject's devnet book: the router and three vault wallets, and 15 daily snapshots whose positions carry `vault`.
 - `base/vault-economics.json`: the saved Base snapshot, verbatim from `goldens/api-goldens.json` (Jul 30, 2026, TVL $199.70).
 
 Each fixture carries the server-computed fields too; the unit test checks that `normalizeOverview` recomputes exactly those values.

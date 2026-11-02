@@ -102,7 +102,7 @@
               <div>
                 <template x-if="hasExplorer()">
                   <div>
-                    <!-- Fixed Income, first in the published order, rests open. -->
+                    <!-- Conservative DeFi Yield, first in the published order, rests open. -->
                     <div class="rr-x" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()" x-effect="if (isVaultStack() && rest === null && explorerRows().length) rest = explorerRows()[0].key">
                       <div class="rr-mix">
                         <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
@@ -274,7 +274,7 @@
              read from, then its concentration over time and what is notable
              in it. Today's positions are the latest recommendation's ring.
              The Robot Money Vault (isVaultStack) reads as one book grouped by
-             vault: the router and the four vaults it is read from, each
+             vault: the router and the vaults it is read from, each
              vault's weight against the weights in force, the positions under
              their vault, and the vaults over time with the target drawn over
              them. -->
@@ -716,11 +716,11 @@
                       </th>
                       <!-- Each sleeve's weight, and under it its move against the
                            target that session was handed, in percentage points. -->
-                      <template x-for="(v, i) in rowWeights(row)" :key="i">
-                        <td class="q" :class="v === 0 ? 'is-zero' : ''">
-                          <span x-text="v == null ? '—' : pctLabel(v)"></span>
-                          <template x-if="moveAt(row, i)">
-                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, i).d)" x-text="changeLabel(moveAt(row, i).d)"></span>
+                      <template x-for="c in rowCells(row)" :key="c.key">
+                        <td class="q" :class="c.v === 0 ? 'is-zero' : ''">
+                          <span x-text="c.v == null ? '—' : pctLabel(c.v)"></span>
+                          <template x-if="moveAt(row, c.key)">
+                            <span class="alp__mv sp-move" :class="changeClass(moveAt(row, c.key).d)" x-text="changeLabel(moveAt(row, c.key).d)"></span>
                           </template>
                         </td>
                       </template>

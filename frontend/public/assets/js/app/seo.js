@@ -146,19 +146,14 @@ const META = {
   },
   "/model-portfolio": {
     title: "Model Portfolio: Target Sleeves and Vaults | Robot Money",
-    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
+    description: "The four target sleeves of a Robot Money deposit, their target constituents, and the vaults measured against the latest recommendation.",
   },
   // The four vault pages (/vault/:slug). noindex until the production launch
   // review: three of the four are not on Base yet, and none is in sitemap.xml.
   // `follow`, because every link on them goes to a real page.
   "/vault/rmusdc": {
-    title: "rmUSDC: Fixed Income Vault | Robot Money",
-    description: "rmUSDC, the Robot Money vault for the Fixed Income sleeve.",
-    robots: "noindex, follow",
-  },
-  "/vault/rmagent": {
-    title: "rmAGENT: Small Cap Tokens Vault | Robot Money",
-    description: "rmAGENT, the Robot Money vault for the Small Cap Tokens sleeve.",
+    title: "rmUSDC: Conservative DeFi Yield Vault | Robot Money",
+    description: "rmUSDC, the Robot Money vault for the Conservative DeFi Yield sleeve.",
     robots: "noindex, follow",
   },
   "/vault/rmproto": {
@@ -641,6 +636,9 @@ const LEGACY_ALIASES = [
   // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
   // /model-portfolio.
   ["/vault", "/model-portfolio", "exact"],
+  // rmAGENT closed with the Small Cap Tokens sleeve (RM-190) and its address
+  // renders the allocation view, so it names /model-portfolio canonical too.
+  ["/vault/rmagent", "/model-portfolio", "exact"],
   // Deposits wait for the vaults to open (RM-190): the deposit page and the
   // deposit skill's docs render early access. Exact, one entry each: a prefix
   // entry would map /docs/skill/commands to /early-access/commands.

@@ -24,11 +24,13 @@ test.describe("desktop", () => {
     await page.goto("/");
     await expect(page.locator(".nav__top--active")).toHaveCount(0);
 
-    await navigate(page, "/vault/rmagent");
+    await navigate(page, "/vault/rmproto");
     await expect(page.locator(".nav__top--active")).toHaveCount(1);
     await expect(top(page, "vaults")).toHaveClass(/nav__top--active/);
     await expect(page.locator('.nav a[aria-current="page"]')).toHaveCount(1);
-    await expect(page.locator('.nav a[href="/vault/rmagent"]')).toHaveAttribute("aria-current", "page");
+    await expect(page.locator('.nav a[href="/vault/rmproto"]')).toHaveAttribute("aria-current", "page");
+    // rmAGENT closed with its sleeve: the card no longer lists it.
+    await expect(page.locator('.nav a[href="/vault/rmagent"]')).toHaveCount(0);
     const underline = top(page, "vaults").locator(".nav__underline");
     await expect(underline).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
     // Monochrome, like every link on the site: never the accent.
@@ -148,7 +150,7 @@ test.describe("desktop", () => {
   });
 
   test("the Vaults card shows each vault's value from a live read, and nothing from test data", async ({ page }) => {
-    // The Base vault's feed: the contract declares no four-vault route yet, so
+    // The Base vault's feed: the contract declares no vaults route yet, so
     // the loader reads this one (lib/vault-source.js), and "stub" is test data.
     const economics = { asOf: "2026-09-24T10:00:00Z", tvlUsd: 18390.4, sharePrice: 1.0177, idleUsdc: 0, adapters: [], source: "rpc" };
     let reads = 0;
@@ -163,9 +165,9 @@ test.describe("desktop", () => {
     await top(page, "vaults").click();
     const fig = (href: string) => panel(page, "vaults").locator(`a[href="${href}"] .nav__item-v`);
     await expect(fig("/vault/rmusdc")).toHaveText("$18,390");
-    await expect(fig("/vault/rmagent")).toHaveText("Coming soon");
+    await expect(fig("/vault/rmproto")).toHaveText("Coming soon");
     // Not on the network yet reads as a state, in a pill, not as a figure.
-    await expect(fig("/vault/rmagent").locator(".rm-soon")).toHaveText("Coming soon");
+    await expect(fig("/vault/rmproto").locator(".rm-soon")).toHaveText("Coming soon");
     await expect(fig("/vault/rmusdc").locator(".rm-soon")).toHaveCount(0);
     await expect(fig("/swarm/subjects/robotmoney-vault")).toHaveText("$18,390");
     expect(reads).toBe(1);
@@ -180,7 +182,7 @@ test.describe("desktop", () => {
     await test.locator('.nav__group[data-nav-section="vaults"] > .nav__top').click();
     await expect(test.locator("#nav-p-vaults")).toBeVisible();
     await test.waitForTimeout(500);
-    await expect(test.locator("#nav-p-vaults .nav__item-v")).toHaveText(["", "", "", "", ""]);
+    await expect(test.locator("#nav-p-vaults .nav__item-v")).toHaveText(["", "", "", ""]);
   });
 
   test("a link off the site shows its arrow before any pointer reaches it; one on the site shows it on hover", async ({ page }) => {
