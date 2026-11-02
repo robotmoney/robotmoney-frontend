@@ -481,12 +481,12 @@ test("a scheduler catch-up reads as caught up late, not as stale or stub", async
   await expect(page.locator("[data-vault-label]")).toHaveCount(0);
 });
 
-test("/vault/rmagent, closed with its sleeve, goes to the vaults on /allocation", async ({ page }) => {
+test("/vault/rmagent, closed with its sleeve, goes to the vaults on /model-portfolio", async ({ page }) => {
   await stubSaved(page);
   await setMode(page, "base");
   await page.goto("/vault/rmagent");
-  await expect(page).toHaveURL(/\/allocation#vaults$/);
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://robotmoney.network/allocation");
+  await expect(page).toHaveURL(/\/model-portfolio#vaults$/);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", "https://robotmoney.network/model-portfolio");
   await vaultsLoaded(page);
   await expect(page.locator('#view a[href="/vault/rmagent"]')).toHaveCount(0);
 });

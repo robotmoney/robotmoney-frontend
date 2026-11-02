@@ -399,7 +399,7 @@ test("a recommendation that still weighs Small Cap Tokens sets no Recommended ov
   const session = fourSleeveWeightsSession();
   await stubEnvironment(page, { sessions: [session] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
   await expect(vaultRows(page).locator("td:nth-of-type(1) > span")).toHaveText(["—", "—", "—"]);
   await expect(vaultFact(page, "Recommendation").locator("a")).toHaveText("Sep 1, 2026");
@@ -413,7 +413,7 @@ test("the four-sleeve framework still draws Small Cap Tokens, and sets no vault 
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { framework: fourSleeveGolden() });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
   const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend).toHaveCount(4);
@@ -431,7 +431,7 @@ test("the decided framework draws Hard Assets, and with no gold vault the vaults
   const errors = failOnBrowserErrors(page);
   await stubEnvironment(page, { framework: policy(DECIDED), sessions: [hardAssetsWeightsSession()] });
   await page.goto("/index.html");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await vaultsLoaded(page);
   const legend = page.locator(".alp__ring .rr-legend__row");
   await expect(legend.locator(".rr-legend__l")).toHaveText(["Conservative DeFi Yield", "Protocol Tokens", "Real World Assets", "Hard Assets"]);
