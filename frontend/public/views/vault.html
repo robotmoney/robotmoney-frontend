@@ -52,8 +52,8 @@
           <span class="rr-meta__i">As of <b x-text="readLabel()"></b></span>
           <!-- The vault's own contract: linked where the network has an
                explorer, the address where it has none, and said when the vault
-               is not deployed. -->
-          <span class="rr-meta__i">Contract
+               is not deployed. The nav's Contracts link lands here. -->
+          <span class="rr-meta__i" id="contract">Contract
             <template x-if="contractHref()"><a class="rr-lnk" :href="contractHref()" target="_blank" rel="noopener noreferrer" x-text="contractLabel()"></a></template>
             <template x-if="!contractHref()"><b x-text="contractText()"></b></template>
           </span>
@@ -404,13 +404,14 @@
         </section>
 
         <!-- DEPOSIT: rmUSDC on Base only, when it accepts deposits. Anywhere
-             else the Status fact already says why there is no way in. -->
+             else the Status fact already says why there is no way in. Deposits
+             open in small groups, so the way in is early access (RM-190). -->
         <template x-if="canDepositHere()">
           <section class="rr-sec" id="deposit" aria-labelledby="dep-h">
             <div class="rr-sec__head">
               <h2 class="rr-sec__h" id="dep-h">Deposit</h2>
             </div>
-            <a class="rr-cta" href="/deposit" style="margin-top:0"><span>Deposit skill</span><span aria-hidden="true">→</span></a>
+            <a class="rr-cta" href="/early-access" style="margin-top:0"><span>Request early access</span><span aria-hidden="true">→</span></a>
           </section>
         </template>
         </div>

@@ -72,6 +72,13 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
     ["/performance", "/treasury"],
     ["/allocation", "/model-portfolio"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
+    // RM-190: deposits wait for the vaults; the deposit page and the deposit
+    // skill's docs render early access.
+    ["/deposit", "/early-access"],
+    ["/docs/skill", "/early-access"],
+    ["/docs/skill/installation", "/early-access"],
+    ["/docs/skill/commands", "/early-access"],
+    ["/docs/skill/agent-basket", "/early-access"],
   ];
 
   for (const [from, to] of renames) {
@@ -116,4 +123,13 @@ test("/vault is an exact alias: the bare path is /model-portfolio, each vault pa
   expect(metaFor("/vault/nope").title).toBe("Page Not Found | Robot Money");
   expect(metaFor("/vault/nope").robots).toBe("noindex, follow");
   expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
+});
+
+test("/deposit and the deposit skill's docs name /early-access canonical, each by an exact entry", () => {
+  for (const path of ["/deposit", "/docs/skill", "/docs/skill/installation", "/docs/skill/commands", "/docs/skill/agent-basket"]) {
+    expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: "https://robotmoney.network/early-access" });
+  }
+  // Not a prefix rewrite: an address the docs never had stays not found.
+  expect(canonicalUrlFor("/docs/skill/nope")).toBe("https://robotmoney.network/docs/skill/nope");
+  expect(viewFor("/docs/skill/nope")).not.toBe(viewFor("/early-access"));
 });

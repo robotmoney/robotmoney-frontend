@@ -16,6 +16,7 @@ import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
 import { memberStatusLine } from "../lib/member-status.js";
+import { memberReferralCode } from "../lib/referral.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
@@ -2893,6 +2894,11 @@ export function registerStaticViews(Alpine) {
 
   Alpine.data("memberProfile", () => ({
     ...helpers,
+    // The code a visitor enters on the early access form (RM-195). Only a
+    // seated member's: a code stops working when its member leaves.
+    referralCode() {
+      return this.member?.status === "active" ? memberReferralCode(this.member.handle) : null;
+    },
     loading: true,
     error: null,
     member: null,

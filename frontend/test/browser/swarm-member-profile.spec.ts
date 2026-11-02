@@ -165,6 +165,42 @@ test("a renamed member's legacy-id URL and handle URL both render the LIVE recor
   await expectNoBrowserErrors(errors);
 });
 
+// A visitor a member sent needs that member's referral code for the early
+// access form (RM-195), so a seated member's page shows it and copies it. A
+// member who has left has none: its code stops working.
+test("a seated member's page shows its referral code, and the button copies it", async ({ page, context }) => {
+  const errors = failOnBrowserErrors(page);
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const member = { ...RENAMED_ATHENA, id: "dualmint", handle: "dualmint-2", name: "DualMint" };
+  let status = "active";
+  await page.route("**/api/swarm/**", (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (/\/api\/swarm\/members\/dualmint-2$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...member, status }) });
+    }
+    if (/\/api\/swarm\/members\/dualmint-2\/takes$/.test(pathname)) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ takes: [] }) });
+    }
+    return route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+  });
+
+  await page.goto("/swarm/members/dualmint-2");
+  await expect(page.locator(".profile-name")).toHaveText("DualMint");
+  const referral = page.getByTestId("member-referral");
+  await expect(referral.locator("b")).toHaveText("rm_dualmint-2");
+  const copy = referral.getByRole("button", { name: "Copy the referral code rm_dualmint-2" });
+  await copy.click();
+  await expect(copy).toContainText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("rm_dualmint-2");
+
+  status = "inactive";
+  await page.goto("/swarm/members/dualmint-2");
+  await expect(page.locator(".profile-name")).toHaveText("DualMint");
+  await expect(page.getByTestId("member-referral")).toHaveCount(0);
+
+  await expectNoBrowserErrors(errors);
+});
+
 test("with the swarm API unreachable, all four shipped manifests still render from the static archive", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
 
