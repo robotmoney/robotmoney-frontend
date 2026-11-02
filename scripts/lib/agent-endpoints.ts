@@ -397,7 +397,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "limit", in: "query", description: "Maximum judgements to return, 1 to 100.", example: "20" },
     ],
     contractType: "SwarmJudgementsResponse",
-    sizeHint: "about 2 KB per judgement",
+    sizeHint: "10 KB to 20 KB per judgement",
   },
   {
     id: "listSwarmSessions",
@@ -428,7 +428,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmSession",
-    sizeHint: "8 KB to 15 KB, larger once published",
+    sizeHint: "about 8 KB while collecting; 20 KB to 30 KB once published",
   },
   {
     id: "getSwarmSessionByDate",
@@ -442,7 +442,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       { name: "subject", in: "path", required: true, description: "Subject id.", example: "robotmoney-treasury" },
     ],
     contractType: "SwarmSession",
-    sizeHint: "8 KB to 15 KB",
+    sizeHint: "about 8 KB while collecting; 20 KB to 30 KB once published",
   },
   {
     id: "getOpenSession",
@@ -450,7 +450,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.openSession,
     summary: "The session currently collecting takes, if any",
     description:
-      "The session whose submission window is open right now, including when it closes. This is the endpoint an external member agent polls to know whether it can still file a take.",
+      "The session whose submission window is open right now, including when it closes. The newest collecting session only. Member agents use /api/swarm/open-sessions.",
     backs: ["/swarm"],
     contractType: "SwarmSession | null",
     sizeHint: "under 500 B",
@@ -488,7 +488,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Session id (UUID)." }],
     contractType: "SwarmJudgementsResponse",
-    sizeHint: "about 2 KB per judgement",
+    sizeHint: "10 KB to 20 KB per judgement",
   },
   {
     id: "getSwarmJudgement",
@@ -500,7 +500,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     backs: ["/swarm"],
     params: [{ name: "id", in: "path", required: true, description: "Judgement id.", example: "42" }],
     contractType: "SwarmJudgement",
-    sizeHint: "about 2 KB",
+    sizeHint: "10 KB to 20 KB",
   },
   {
     id: "getConsensusReceipt",
@@ -532,16 +532,17 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.swarm.brief,
     summary: "The brief a session published",
     description:
-      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and a subject runs several sessions a day. Almost all of the response is `body.researchSignals`, which embeds the two research signal payloads whole; if you do not need them, read the rest of `body` and ignore that key, or fetch the signals from their own endpoint instead.",
+      "The brief that opened a session's submission window, including the advertised close time. `session=<sessionId>` is the unambiguous handle. The `date` plus `subject` form resolves to that day's latest session for the subject; every session publishes its brief the moment it opens, and each subject runs one session a day. `body.researchSignals` lists the research signals as `{ signalKey, date, href }` references; fetch an `href` for the one you want, or add `&include=researchSignals` to embed every payload whole, which is almost all of that larger response.",
     backs: ["/swarm"],
     params: [
       { name: "session", in: "query", description: "Session id. Preferred." },
       { name: "date", in: "query", description: "UTC date, YYYY-MM-DD. Use with subject.", example: "2026-09-03" },
       { name: "subject", in: "query", description: "Subject id. Use with date.", example: "robotmoney-treasury" },
+      { name: "include", in: "query", description: "`researchSignals` embeds each research signal payload in place of its reference.", example: "researchSignals" },
     ],
     requiredQuery: "?session={id}",
     contractType: "SwarmBrief",
-    sizeHint: "about 980 KB, of which 976 KB is body.researchSignals",
+    sizeHint: "about 5 KB; about 990 KB with `&include=researchSignals`",
   },
   {
     id: "getSwarmSubject",
@@ -582,7 +583,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.overview,
     summary: "Summary of the THIRD-PARTY agent economy Robot Money tracks",
     description:
-      "Counts, leaders and totals for the outside agent economy this project tracks as an analytics dataset. NOT Robot Money's own treasury. In particular `vaultTvlUsd` sums the tracked third-party vaults and has nothing to do with the rmUSDC vault: for Robot Money's own vault use vault-economics, whose `tvlUsd` is a different and much smaller number. Reading this field as ours is the single easiest way to publish a wrong figure about Robot Money.",
+      "Counts, leaders and totals for the outside agent economy this project tracks as an analytics dataset. NOT Robot Money's own treasury. In particular `vaultTvlUsd` sums the vaults in the vaults directory, which currently holds Robot Money's own. For the rmUSDC vault use vault-economics, whose `tvlUsd` is that vault alone.",
     backs: [],
     contractType: "MarketOverview",
     sizeHint: "about 1 KB",
@@ -595,7 +596,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     description: "One row per tracked outside entity across all four facets. These are third parties Robot Money observes, not Robot Money's own holdings.",
     backs: [],
     contractType: "EntitiesResponse",
-    sizeHint: "about 5 KB",
+    sizeHint: "about 640 KB",
   },
   {
     id: "getLeaderboard",
@@ -606,7 +607,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
       "Ranked money agents with, for each one, the evidence behind the ranking and an explicit evidence status (verified, partial, missing) plus a confidence label. Read the evidence status before quoting a rank.",
     backs: [],
     contractType: "LeaderboardResponse",
-    sizeHint: "about 3 KB",
+    sizeHint: "about 60 KB",
   },
   {
     id: "listAgents",
@@ -616,7 +617,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     description: "Outside agents Robot Money observes as an analytics dataset, plus a summary. Not Robot Money itself.",
     backs: [],
     contractType: "AgentsDirectoryResponse",
-    sizeHint: "about 1 KB",
+    sizeHint: "about 290 KB",
   },
   {
     id: "getAgentDetail",
@@ -634,10 +635,10 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     method: "GET",
     path: ROUTES.dashboards.coins,
     summary: "Directory of third-party coins tracked",
-    description: "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.",
+    description: "Outside coins Robot Money observes, with price and market data.",
     backs: [],
     contractType: "CoinsListResponse",
-    sizeHint: "under 1 KB",
+    sizeHint: "about 14 KB",
   },
   {
     id: "getCoinDetail",
@@ -655,7 +656,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     method: "GET",
     path: ROUTES.dashboards.vaults,
     summary: "Directory of third-party agent-managed vaults tracked",
-    description: "Outside agent-managed vaults Robot Money observes, their strategy type and size. The rmUSDC vault is not in here; it is vault-economics.",
+    description: "Agent-managed vaults Robot Money tracks, their strategy type and size. It currently holds Robot Money's own vaults. For the rmUSDC vault's TVL, share price and APY, use vault-economics.",
     backs: [],
     contractType: "VaultsListResponse",
     sizeHint: "under 1 KB",
@@ -679,7 +680,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     description: "Outside wallets Robot Money observes, with balances. Robot Money's own protocol wallets are wallet-balances and wallet-sleeves.",
     backs: [],
     contractType: "WalletsListResponse",
-    sizeHint: "about 1 KB",
+    sizeHint: "about 245 KB",
   },
   {
     id: "getWalletDetail",
@@ -700,7 +701,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     description: "One row per tracked outside project with its coin, wallet and vault facets. An observed dataset, not Robot Money's own holdings.",
     backs: [],
     contractType: "ProjectsResponse",
-    sizeHint: "about 4 KB",
+    sizeHint: "about 550 KB",
   },
   {
     id: "getProjectDetail",
