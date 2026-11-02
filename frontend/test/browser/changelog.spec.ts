@@ -84,10 +84,9 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
 
   await expect(frame.locator("h1.cl__h1")).toHaveText("Changelog");
   await expect(frame.getByRole("heading", { name: /roadmap/i })).toHaveCount(0);
-  await expect(frame.locator(".cl__entry")).toHaveCount(41);
-  await expect(frame.locator(".cl__now")).toBeVisible();
-  await expect(frame.locator(".cl__now .rm-sphase--open")).toHaveText("In progress");
-  await expect(frame.locator(".cl__now-list li")).toHaveCount(3);
+  await expect(frame.locator(".cl__entry")).toHaveCount(46);
+  // What is coming is the Next release block, not a callout of its own.
+  await expect(frame.locator(".cl__now")).toHaveCount(0);
   // The changelog is under Docs; the nav's button is Deposit (RM-124).
   await expect(frame.locator('.nav__panel a[href="/changelog"]')).toHaveText("Changelog");
   await expect(frame.locator(".nav__cta")).toHaveText("Deposit");
@@ -106,8 +105,18 @@ test("/changelog is a shipped-work log, not a roadmap", async ({ page }) => {
   await expectNoBrowserErrors(errors);
 });
 
-test("the in-progress chip is the only colour in that callout", async ({ page }) => {
-  await openChangelog(page);
+// The Next release heading carries the swarm's pulsing In progress chip, and
+// only while something is pending: the stamp drops it with the heading.
+test("the in-progress chip sits on the Next release heading, its only colour", async ({ page }) => {
+  const frame = await openChangelog(page);
+
+  const heading = frame.locator('.cl__month-h[data-release="pending"]');
+  if ((await heading.count()) === 0) {
+    await expect(frame.locator(".cl__next-chip")).toHaveCount(0);
+    return;
+  }
+  await expect(frame.locator(".cl__next-chip")).toHaveCount(1);
+  await expect(heading.locator(".cl__next-chip.rm-sphase--open")).toHaveText("In progress");
 
   const styles = await page.evaluate(() => {
     const iframe = document.querySelector("#frame") as HTMLIFrameElement;
@@ -119,29 +128,31 @@ test("the in-progress chip is the only colour in that callout", async ({ page })
     doc.body.appendChild(probe);
     const warm = cs(probe).color;
     probe.remove();
-    const chip = doc.querySelector(".cl__now .rm-sphase--open");
-    const state = doc.querySelector(".cl__now-state");
-    const box = doc.querySelector(".cl__now");
+    const head = doc.querySelector('.cl__month-h[data-release="pending"]');
+    const chip = head?.querySelector(".cl__next-chip");
     const entry = doc.querySelector(".cl__entry");
     const frameEl = doc.querySelector(".cl__frame");
-    if (!chip || !state || !box || !entry || !frameEl) {
-      throw new Error("changelog callout or entry missing");
-    }
+    if (!head || !chip || !entry || !frameEl) throw new Error("changelog heading chip or entry missing");
     const before = win.getComputedStyle(chip, "::before");
+    const hb = head.getBoundingClientRect();
+    const cb = chip.getBoundingClientRect();
     return {
       warm,
+      headColor: cs(head).color,
       chipColor: cs(chip).color,
       beforeW: parseFloat(before.width),
       beforeH: parseFloat(before.height),
-      stateColor: cs(state).color,
-      boxShadow: [cs(box).boxShadow, cs(entry).boxShadow, cs(frameEl).boxShadow],
+      // The chip sits inside the heading's box, not under it on a desktop.
+      inside: cb.top >= hb.top - 1 && cb.bottom <= hb.bottom + 1,
+      boxShadow: [cs(head).boxShadow, cs(entry).boxShadow, cs(frameEl).boxShadow],
     };
   });
 
   expect(styles.chipColor).toBe(styles.warm);
+  expect(styles.headColor).not.toBe(styles.warm);
   expect(styles.beforeW).toBe(6);
   expect(styles.beforeH).toBe(6);
-  expect(styles.stateColor).not.toBe(styles.warm);
+  expect(styles.inside).toBe(true);
   for (const shadow of styles.boxShadow) {
     expect(shadow === "none" || shadow === "").toBe(true);
   }
@@ -152,7 +163,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   // In the page, not the nav: the nav has a Swarm button of its own (RM-124).
   const swarm = frame.locator("#view").getByRole("button", { name: "Swarm", exact: true });
-  await expect(frame.locator(".cl__count")).toHaveText("41 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("46 releases");
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "true");
   await expect(frame.locator(".cl__count")).toHaveText(/\d+ releases in Swarm/);
@@ -169,7 +180,7 @@ test("the tag filter hides entries that do not carry the tag", async ({ page }) 
 
   await swarm.click();
   await expect(swarm).toHaveAttribute("aria-pressed", "false");
-  await expect(frame.locator(".cl__count")).toHaveText("41 releases");
+  await expect(frame.locator(".cl__count")).toHaveText("46 releases");
 });
 
 // Merged work that is not in production yet sits in one block on top of the
@@ -194,7 +205,7 @@ test("pending entries read Next release, styled as a date", async ({ page }) => 
   // The heading and the Also block are marked too, and the heading comes first.
   // A release can ship with no smaller changes, so the Also block is optional,
   // and with only smaller changes the entries are.
-  await expect(frame.locator('.cl__month-h[data-release="pending"]')).toHaveText("Next release");
+  await expect(frame.locator('.cl__month-h[data-release="pending"]')).toHaveText(/^Next release\s*In progress$/);
   await expect(frame.locator(".cl__month-h").first()).toHaveAttribute("data-release", "pending");
   const also = frame.locator('.cl__also[data-release="pending"]');
   if (await also.count()) await expect(also.locator(".cl__also-h")).toHaveText("Also in the next release");
@@ -293,7 +304,7 @@ test("the tag filter counts pending entries with the rest", async ({ page }) => 
     expect(seen.headings).toBe(0);
     await expect(frame.locator(".cl__count")).toHaveText(`${seen.tagged} releases in ${name}`);
     await button.click();
-    await expect(frame.locator(".cl__count")).toHaveText("41 releases");
+    await expect(frame.locator(".cl__count")).toHaveText("46 releases");
   }
 });
 
@@ -322,7 +333,7 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
 
   const imgs = frame.locator(".cl__win img");
   const n = await imgs.count();
-  expect(n).toBe(13);
+  expect(n).toBe(15);
   for (let i = 0; i < n; i++) {
     await imgs.nth(i).scrollIntoViewIfNeeded();
     await expect.poll(async () =>
@@ -336,6 +347,13 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
     ).not.toBe("");
   }
 
+  // The home hero is a muted loop: it plays, and it carries a poster for a
+  // reader that runs no JavaScript or asks for reduced motion.
+  const clip = frame.locator(".cl__win video");
+  await expect(clip).toHaveCount(1);
+  await expect(clip).toHaveAttribute("poster", /home-hero\.jpg$/);
+  await expect.poll(() => clip.evaluate((v: HTMLVideoElement) => !v.paused && v.videoWidth > 100)).toBe(true);
+
   const permalink = frame.locator('[id="2026-09-21-a-new-allocation-page"] .cl__title a');
   await expect(permalink).toHaveAttribute("href", "#2026-09-21-a-new-allocation-page");
   await permalink.click();
@@ -347,6 +365,15 @@ test("captures load as real images, and permalinks are the titles", async ({ pag
       }),
     )
     .toBe("#2026-09-21-a-new-allocation-page");
+});
+
+test("the home hero clip holds still for a reader who asks for reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const frame = await openChangelog(page);
+  const clip = frame.locator(".cl__win video");
+  await clip.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(500);
+  expect(await clip.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
 });
 
 test("the hero is full-bleed, and a phone swaps every diagram", async ({ page }) => {
