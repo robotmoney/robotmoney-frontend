@@ -109,12 +109,12 @@ describe("prerendered routes carry their own content", () => {
     // passing if they alone regressed while the blog carried the total.
     for (const [route, marker] of [
       ["/regime", "Regime Classifier"],
-      ["/allocation", "Asset Allocation"],
+      ["/model-portfolio", "Model Portfolio"],
       ["/treasury", "Treasury"],
       ["/swarm", "Investment Swarm"],
     ] as const) {
       // Matched against EXTRACTED TEXT, not raw HTML: these headings are split
-      // by inner markup (`<h1>Asset <span>Allocation</span></h1>`), so a raw
+      // by inner markup (`<h1>Model <span>Portfolio</span></h1>`), so a raw
       // substring match fails on a page that is perfectly fine.
       const html = htmlFor(route);
       expect(readableText(html), `${route} lost its heading`).toContain(marker);
@@ -160,7 +160,7 @@ describe("research pages ship their structured data", () => {
   });
 
   test("a page that is not research carries none", () => {
-    for (const route of ["/", "/allocation", "/swarm"]) expect(ld(htmlFor(route)).length, route).toBe(0);
+    for (const route of ["/", "/model-portfolio", "/swarm"]) expect(ld(htmlFor(route)).length, route).toBe(0);
   });
 });
 

@@ -28,7 +28,7 @@ test("a page cites by the name before its qualifier", () => {
 test("a title qualified after a pipe cites by its name too", () => {
   expect(citeTitle("/deposit")).toBe("Deposit USDC with Your Agent");
   expect(citeTitle("/skills")).toBe("Agent Skills");
-  expect(citeTitle("/allocation")).toBe("Allocation: Target Sleeves and Vaults");
+  expect(citeTitle("/model-portfolio")).toBe("Model Portfolio: Target Sleeves and Vaults");
 });
 
 test("a path the site has no page for cites as nothing, so the text keeps it", () => {

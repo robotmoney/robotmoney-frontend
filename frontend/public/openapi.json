@@ -136,7 +136,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "VaultEconomics",
         "responses": {
@@ -163,7 +163,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation",
+          "https://robotmoney.network/model-portfolio",
           "https://robotmoney.network/"
         ],
         "x-contract-type": "AllocationFramework",
@@ -191,7 +191,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation",
+          "https://robotmoney.network/model-portfolio",
           "https://robotmoney.network/treasury"
         ],
         "x-contract-type": "WalletSleeves",
@@ -220,7 +220,7 @@
         ],
         "x-backs-pages": [
           "https://robotmoney.network/treasury",
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "WalletBalances",
         "responses": {
@@ -275,7 +275,7 @@
         ],
         "x-backs-pages": [
           "https://robotmoney.network/tokenomics",
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "{ asOf, source, stale, rows }",
         "responses": {

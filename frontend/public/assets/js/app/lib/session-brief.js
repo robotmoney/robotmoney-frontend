@@ -156,10 +156,10 @@ export function sessionBrief() {
           if (!x?.name || !Number.isFinite(w)) return null;
           return { key: `targets-${i}`, label: bucketLabel(x.name || x.id), pct: Math.round(w * 100), hue: bucketHue(x.id || x.name, i) };
         }).filter(Boolean);
-        // "Allocation targets", not "Targets": every v0 brief carried the
+        // "Model portfolio targets", not "Targets": every v0 brief carried the
         // allocation framework's weights, and on Woon's or the treasury's page a
         // bare "Targets" read as that subject's own.
-        if (bars.length) parts.push({ key: "targets", label: "Allocation targets", bars });
+        if (bars.length) parts.push({ key: "targets", label: "Model portfolio targets", bars });
       }
       const signals = b.researchSignals || b.research_signals;
       const articles = b.research?.articles;
