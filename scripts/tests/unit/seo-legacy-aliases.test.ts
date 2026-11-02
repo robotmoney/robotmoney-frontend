@@ -62,13 +62,15 @@ test("two ROUTES keys that render the same view declare one canonical between th
 test("an aliased path inherits the renamed page's metadata rather than 404 metadata", () => {
   // One case per rename shape: the /committee -> /swarm tree rename (public and
   // admin halves), the doc tree's product-name path, the /allocation2 page
-  // rename, and the /articles -> /blog move.
+  // rename, the /allocation -> /model-portfolio rename, and the /articles ->
+  // /blog move.
   const renames: [string, string][] = [
     ["/committee", "/swarm"],
     ["/admin/committee", "/admin/swarm"],
     ["/docs/investment-committee", "/docs/investment-swarm"],
     ["/allocation2", "/treasury"],
     ["/performance", "/treasury"],
+    ["/allocation", "/model-portfolio"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   ];
 
@@ -89,13 +91,13 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
   }
 });
 
-test("/vault is an exact alias: the bare path is /allocation, each vault page is its own", () => {
-  // Bare /vault renders the allocation view and names /allocation canonical.
-  expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/allocation");
-  expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/allocation");
-  expect(metaFor("/vault")).toEqual(metaFor("/allocation"));
+test("/vault is an exact alias: the bare path is /model-portfolio, each vault page is its own", () => {
+  // Bare /vault renders the model portfolio and names /model-portfolio canonical.
+  expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/model-portfolio");
+  expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/model-portfolio");
+  expect(metaFor("/vault")).toEqual(metaFor("/model-portfolio"));
 
-  // The four vault pages are NOT rewritten under /allocation: each keeps its
+  // The four vault pages are NOT rewritten under /model-portfolio: each keeps its
   // own address, stays out of the index until the launch review, and titles
   // itself by its symbol.
   const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmagent: "rmAGENT", rmproto: "rmPROTO", rmrwa: "rmRWA" };

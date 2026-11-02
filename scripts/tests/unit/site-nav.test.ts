@@ -31,6 +31,7 @@ describe("navSectionFor", () => {
   test.each([
     ["/vault/rmagent", "vaults"],
     ["/vault", "vaults"],
+    ["/model-portfolio", "vaults"],
     ["/allocation", "vaults"],
     ["/treasury", "company"],
     ["/performance", "company"],
