@@ -17,6 +17,7 @@
   <url><loc>https://robotmoney.network/media/articles</loc><lastmod>2026-09-22</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
   <url><loc>https://robotmoney.network/changelog</loc><lastmod>2026-10-16</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://robotmoney.network/blog</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
+  <url><loc>https://robotmoney.network/news</loc><lastmod>2026-09-24</lastmod><changefreq>weekly</changefreq><priority>0.6</priority></url>
   <url><loc>https://robotmoney.network/smart-contract-risks</loc><lastmod>2026-09-24</lastmod><changefreq>monthly</changefreq><priority>0.5</priority></url>
 
   <!-- Research. These four carry their own titles and descriptions in
