@@ -100,6 +100,9 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
 //   faq         its questions and answers, word for word as the page shows
 //               them; the route's JSON-LD is then a FAQPage (faqGraph).
 //   crumb       its breadcrumb name, when the nav calls it something else.
+// and, for an announcement or a partnership (RM-197):
+//   news        listed on /news rather than the research index, with News as
+//               its breadcrumb's middle step.
 //   image       its own share image, a site path at 1200x630, and imageAlt
 //               its alt text; every other route uses the default.
 /**
@@ -117,6 +120,7 @@ const DEFAULT_ROBOTS = "index, follow, max-image-preview:large, max-snippet:-1";
  *   downloads?: { path: string; title: string; type: string }[];
  *   faq?: { id: string; q: string; a: string }[];
  *   crumb?: string;
+ *   news?: boolean;
  *   image?: string;
  *   imageAlt?: string;
  * }} RouteMeta
@@ -140,8 +144,8 @@ const META = {
     faq: TOKEN_FAQ,
     nodes: tokenNodes,
   },
-  "/allocation": {
-    title: "Allocation: Target Sleeves and Vaults | Robot Money",
+  "/model-portfolio": {
+    title: "Model Portfolio: Target Sleeves and Vaults | Robot Money",
     description: "The four target sleeves of a Robot Money deposit, their target constituents, and the four vaults measured against the latest recommendation.",
   },
   // The four vault pages (/vault/:slug). noindex until the production launch
@@ -297,12 +301,23 @@ const META = {
   },
   // The blog index is the site's research index: every research piece is a
   // row on it, so it is also the "Research" step of every research breadcrumb.
+  // Announcements and partnerships list on /news instead (RM-197).
   "/blog": {
-    title: "Blog: Research and Announcements | Robot Money",
-    name: "Blog",
-    description: "Research and announcements from Robot Money: market regime signals, treasury allocation backtests, DeFi exploit case studies and partnership news.",
+    title: "Research: Regimes, Backtests and DeFi Risk | Robot Money",
+    name: "Research",
+    description: "Research from Robot Money: market regime signals, treasury allocation backtests and DeFi exploit case studies, with the data behind each piece.",
     type: "CollectionPage",
     modified: RESEARCH_REVISED,
+  },
+  // Announcements and partnerships (RM-197), under Company in the nav. The
+  // "News" step of an announcement's breadcrumb.
+  "/news": {
+    title: "News: Announcements and Partnerships | Robot Money",
+    name: "News",
+    description: "Announcements and partnerships from Robot Money, the model portfolio for crypto made by a swarm of AI agents, from its founding to its partners.",
+    type: "CollectionPage",
+    modified: RESEARCH_REVISED,
+    news: true,
   },
   // The research pages below carried real titles on production and were
   // inheriting the home page's here, so every one of them shared a title and a
@@ -508,8 +523,9 @@ const SECTIONS = [
 // `name` is the post's title cut to fit a 60-character <title> beside
 // " | Robot Money", and what a citing text reads; `headline` is the post's own
 // h1, which the BlogPosting carries (schema.org caps it at 110 characters);
-// `published` is the date on the post's row in the blog index.
-/** @type {Record<string, { name: string; headline: string; description: string; published: string }>} */
+// `published` is the date on the post's row in the blog index, or on /news for
+// a post marked `news`.
+/** @type {Record<string, { name: string; headline: string; description: string; published: string; news?: boolean }>} */
 const BLOG_POSTS = {
   "ai-ate-the-bull-market": {
     name: "AI ate the bull market",
@@ -546,12 +562,14 @@ const BLOG_POSTS = {
     headline: "peaq Announces Partnership with Robot Money",
     description: "peaq and Robot Money partner to bring autonomous treasury management to 3.3M+ machines on the peaq network. A Hong Kong robo-farm is the first robot to invest.",
     published: "2026-03-27",
+    news: true,
   },
   "announcement": {
     name: "ZHC and Generative Ventures Build Robot Money",
     headline: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
     description: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures are building Robot Money: a managed USDC vault on Base for AI agents and humans.",
     published: "2026-03-11",
+    news: true,
   },
 };
 
@@ -579,6 +597,7 @@ const POST_META = Object.fromEntries(
       type: "BlogPosting",
       published: p.published,
       modified: RESEARCH_REVISED,
+      ...(p.news ? { news: true } : {}),
       ...(BLOG_DATA[slug] ? { downloads: [{ path: BLOG_DATA[slug], title: "The backtest behind this post, as JSON", type: "application/json" }] } : {}),
     },
   ]),
@@ -612,14 +631,16 @@ const LEGACY_ALIASES = [
   ["/allocation2", "/treasury"],
   // RM-157: the protocol wallets' page moved from /performance to /treasury.
   ["/performance", "/treasury", "exact"],
+  // RM-190: the model portfolio moved from /allocation to /model-portfolio.
+  ["/allocation", "/model-portfolio", "exact"],
   ["/articles/treasury-allocation", "/blog/treasury-allocation"],
   // /vault renders views/allocation.html (RM-115). Without an entry here both
   // addresses return 200 with the same page and neither names the other
   // canonical, and /vault, having no META entry of its own, would serve the
   // product sheet under "Page Not Found" and `noindex, follow`. "exact": the
   // bare path only. /vault/rmusdc is a page of its own, not a sub-path of
-  // /allocation.
-  ["/vault", "/allocation", "exact"],
+  // /model-portfolio.
+  ["/vault", "/model-portfolio", "exact"],
   // Deposits wait for the vaults to open (RM-190): the deposit page and the
   // deposit skill's docs render early access. Exact, one entry each: a prefix
   // entry would map /docs/skill/commands to /early-access/commands.
@@ -825,17 +846,31 @@ function ogTypeFor(m) {
   return m.type && ARTICLE_TYPES.has(m.type) ? "article" : "website";
 }
 
+/** @param {boolean} news */
+function datedIndex(news) {
+  return [...Object.entries(META), ...Object.entries(POST_META)]
+    .filter(([, m]) => m.published && !!m.news === news)
+    .map(([path, meta]) => ({ path, meta }))
+    .sort((a, b) => String(b.meta.published).localeCompare(String(a.meta.published)));
+}
+
 /**
  * Every research page with a date on the blog index, newest first: the blog's
  * CollectionPage lists these, and blog/feed.xml carries one item for each.
- * Ties keep table order.
+ * Ties keep table order. Announcements are not research: see newsIndex().
  * @returns {{ path: string; meta: RouteMeta }[]}
  */
 export function researchIndex() {
-  return [...Object.entries(META), ...Object.entries(POST_META)]
-    .filter(([, m]) => m.published)
-    .map(([path, meta]) => ({ path, meta }))
-    .sort((a, b) => String(b.meta.published).localeCompare(String(a.meta.published)));
+  return datedIndex(false);
+}
+
+/**
+ * Every announcement and partnership on /news, newest first: its
+ * CollectionPage lists these (RM-197).
+ * @returns {{ path: string; meta: RouteMeta }[]}
+ */
+export function newsIndex() {
+  return datedIndex(true);
 }
 
 /**
@@ -857,10 +892,11 @@ export function researchRoutes() {
  *
  * One @graph: the page's own node (a Dataset for the regime classifier, a
  * TechArticle for a reference or research page, a BlogPosting for a post, a
- * CollectionPage for the blog index) and a BreadcrumbList. The blog index is
- * the "Research" step because it is the only page that lists the research; a
- * post's trail is Home > Research > post rather than a separate "Blog" step,
- * which would name the same URL twice.
+ * CollectionPage for the blog index or /news) and a BreadcrumbList. The blog
+ * index is the "Research" step because it is the only page that lists the
+ * research; a post's trail is Home > Research > post rather than a separate
+ * "Blog" step, which would name the same URL twice. An announcement's trail is
+ * Home > News > post (RM-197).
  *
  * @param {string} pathname
  * @returns {Record<string, unknown> | null}
@@ -872,10 +908,10 @@ export function routeStructuredData(pathname) {
   if (!m || !m.type) return null;
   const url = ORIGIN + p;
   const name = m.name || String(m.title).split(/\s+\|\s+/)[0];
-  const researchUrl = ORIGIN + "/blog";
+  const index = m.news ? { name: "News", url: ORIGIN + "/news" } : { name: "Research", url: ORIGIN + "/blog" };
 
-  const trail = [{ name: "Home", url: ORIGIN + "/" }, { name: "Research", url: researchUrl }];
-  if (p !== "/blog") trail.push({ name, url });
+  const trail = [{ name: "Home", url: ORIGIN + "/" }, index];
+  if (url !== index.url) trail.push({ name, url });
   const breadcrumb = {
     "@type": "BreadcrumbList",
     "@id": url + "#breadcrumb",
@@ -916,7 +952,7 @@ export function routeStructuredData(pathname) {
       dateModified: m.modified,
       mainEntity: {
         "@type": "ItemList",
-        itemListElement: researchIndex().map((e, i) => ({
+        itemListElement: (m.news ? newsIndex() : researchIndex()).map((e, i) => ({
           "@type": "ListItem",
           position: i + 1,
           url: ORIGIN + e.path,

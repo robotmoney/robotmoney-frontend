@@ -172,8 +172,8 @@ describe("prerendered routes", () => {
   });
 
   test("a data route names its endpoints in <head> and in <noscript>", () => {
-    const html = readFileSync(join(dir, "allocation/index.html"), "utf8");
-    const expected = endpointsForRoute("/allocation");
+    const html = readFileSync(join(dir, "model-portfolio/index.html"), "utf8");
+    const expected = endpointsForRoute("/model-portfolio");
     expect(expected.length).toBeGreaterThan(0);
     for (const e of expected) {
       const url = ORIGIN + openApiPath(e.path);
@@ -189,7 +189,7 @@ describe("prerendered routes", () => {
     // against the CLOSING tag, because since the prerender began inlining view
     // fragments the mount is never empty, and comparing against the empty-mount
     // literal would silently pass on indexOf's -1 forever.
-    const html = readFileSync(join(dir, "allocation/index.html"), "utf8");
+    const html = readFileSync(join(dir, "model-portfolio/index.html"), "utf8");
     expect(html.indexOf("<noscript>")).toBeGreaterThan(html.lastIndexOf("</main>"));
     expect(html.split("<noscript>").length - 1).toBe(html.split("</noscript>").length - 1);
   });

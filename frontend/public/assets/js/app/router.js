@@ -72,12 +72,17 @@ async function render(pathname) {
     location.reload();
     return;
   }
-  // Bare /vault is the four vaults on /allocation. The address moves there,
-  // query kept (the vault data switch rides on it), so the page, its canonical
-  // and its #vaults section all agree on where the reader is.
+  // Bare /vault is the four vaults on the model portfolio. The address moves
+  // there, query kept (the vault data switch rides on it), so the page, its
+  // canonical and its #vaults section all agree on where the reader is.
   if (pathname === "/vault" || pathname === "/vault/") {
-    history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
-    pathname = "/allocation";
+    history.replaceState(history.state, "", "/model-portfolio" + location.search + "#vaults");
+    pathname = "/model-portfolio";
+  }
+  // The model portfolio's old address (RM-190), query and fragment kept.
+  if (pathname === "/allocation" || pathname === "/allocation/") {
+    history.replaceState(history.state, "", "/model-portfolio" + location.search + location.hash);
+    pathname = "/model-portfolio";
   }
   // The protocol wallets' page moved to /treasury (RM-157); its old addresses
   // move there too, query and fragment kept.
