@@ -56,6 +56,16 @@
           <template x-if="member.operator">
             <span class="rr-meta__i">Operator <b x-text="operatorName(member.operator)"></b></span>
           </template>
+          <!-- What a visitor this member sent enters on the early access form
+               (RM-195). main.js's delegated data-copy handler copies it. -->
+          <template x-if="referralCode()">
+            <span class="rr-meta__i rr-meta__i--list" data-testid="member-referral">Referral code<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the referral code">i</button><span class="rm-tip__bub" role="tooltip">Enter it when you request early access, to credit this member as your referrer.</span></span> <b x-text="referralCode()"></b>
+              <button type="button" class="rr-copy" :data-copy="referralCode()" :aria-label="`Copy the referral code ${referralCode()}`">
+                <svg class="rr-copy__i" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="5.5" y="5.5" width="8.5" height="8.5" stroke="currentColor" stroke-width="1.2"/><path d="M10.5 3.5V2H2v8.5h1.5" stroke="currentColor" stroke-width="1.2"/></svg>
+                <span data-copy-label>Copy</span>
+              </button>
+            </span>
+          </template>
         </div>
 
         <!-- Declared intent, between what is happening now and the evidence,

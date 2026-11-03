@@ -50,9 +50,12 @@ afterAll(() => {
 describe("frontend route resolution", () => {
   test("resolves static routes to matching fragments", () => {
     expect(viewFor("/")).toBe("/views/home.html");
+    expect(viewFor("/model-portfolio")).toBe("/views/allocation.html");
+    // The model portfolio's old address renders it too; router.js moves the
+    // address to /model-portfolio.
     expect(viewFor("/allocation")).toBe("/views/allocation.html");
     // Bare /vault resolves to the allocation view (router.js moves the address
-    // to /allocation#vaults). It stays an EXPLICIT entry rather than an
+    // to /model-portfolio#vaults). It stays an EXPLICIT entry rather than an
     // absence: the catch-all maps any unknown path to `/views/<path>.html`,
     // which for /vault is now the per-vault page.
     expect(viewFor("/vault")).toBe("/views/allocation.html");
@@ -60,8 +63,8 @@ describe("frontend route resolution", () => {
     expect(viewFor("/research/channel-divergence")).toBe("/views/research/channel-divergence.html");
   });
 
-  test("/vault/:slug resolves the four vault pages, and nothing else under /vault/", () => {
-    for (const slug of ["rmusdc", "rmagent", "rmproto", "rmrwa"]) {
+  test("/vault/:slug resolves the three vault pages, and nothing else under /vault/", () => {
+    for (const slug of ["rmusdc", "rmproto", "rmrwa"]) {
       expect({ slug, view: viewFor(`/vault/${slug}`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
       expect({ slug, view: viewFor(`/vault/${slug}/`) }).toEqual({ slug, view: VAULT_DETAIL_VIEW });
       expect(routeMetaFor(`/vault/${slug}`)).toBeNull();
@@ -70,6 +73,10 @@ describe("frontend route resolution", () => {
     expect(existsSync(join(repoRoot, "frontend/public", VAULT_DETAIL_VIEW))).toBe(true);
     // An unknown slug, an address, or a path below a vault is not found, never
     // the catch-all's per-path fragment.
+    // rmAGENT closed with its sleeve: its address is the allocation view, as
+    // bare /vault is, and router.js moves it to /allocation#vaults.
+    expect(viewFor("/vault/rmagent")).toBe("/views/allocation.html");
+    expect(viewFor("/vault/rmagent/")).toBe("/views/allocation.html");
     expect(viewFor("/vault/nope")).toBe(NOT_FOUND_VIEW);
     expect(viewFor("/vault/0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd")).toBe(NOT_FOUND_VIEW);
     expect(viewFor("/vault/rmusdc/x")).toBe(NOT_FOUND_VIEW);
@@ -250,7 +257,7 @@ describe("frontend route resolution", () => {
 
   test("routeMetaFor returns null for every non-dashboard route — a strict addition, not a behavior change", () => {
     expect(routeMetaFor("/")).toBeNull();
-    expect(routeMetaFor("/allocation")).toBeNull();
+    expect(routeMetaFor("/model-portfolio")).toBeNull();
     expect(routeMetaFor("/admin")).toBeNull();
     expect(routeMetaFor("/projects")).toBeNull();
     expect(routeMetaFor("/swarm/members/athena")).toBeNull();

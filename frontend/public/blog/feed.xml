@@ -3,7 +3,7 @@
   <channel>
     <title>Robot Money research</title>
     <link>https://robotmoney.network/blog</link>
-    <description>Research and announcements from Robot Money: market regime signals, treasury allocation backtests, DeFi exploit case studies and partnership news.</description>
+    <description>Research from Robot Money: market regime signals, treasury allocation backtests and DeFi exploit case studies.</description>
     <language>en</language>
     <lastBuildDate>Thu, 24 Sep 2026 00:00:00 +0000</lastBuildDate>
     <atom:link href="https://robotmoney.network/blog/feed.xml" rel="self" type="application/rss+xml" />
@@ -78,22 +78,6 @@
       <pubDate>Thu, 02 Apr 2026 00:00:00 +0000</pubDate>
       <category>Research</category>
       <description>A field guide to how DeFi vaults get exploited: chronological case studies for protocol developers.</description>
-    </item>
-    <item>
-      <title>peaq Announces Partnership with Robot Money</title>
-      <link>https://robotmoney.network/blog/peaq-partnership</link>
-      <guid isPermaLink="true">https://robotmoney.network/blog/peaq-partnership</guid>
-      <pubDate>Fri, 27 Mar 2026 00:00:00 +0000</pubDate>
-      <category>Partnership</category>
-      <description>peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot, a Hong Kong robo-farm, has already invested.</description>
-    </item>
-    <item>
-      <title>The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</title>
-      <link>https://robotmoney.network/blog/announcement</link>
-      <guid isPermaLink="true">https://robotmoney.network/blog/announcement</guid>
-      <pubDate>Wed, 11 Mar 2026 00:00:00 +0000</pubDate>
-      <category>Announcement</category>
-      <description>Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</description>
     </item>
   </channel>
 </rss>

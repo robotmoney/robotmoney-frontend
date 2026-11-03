@@ -91,8 +91,8 @@ function buildOpenApi() {
       version: "1",
       summary: "Every number on robotmoney.network, callable directly.",
       description: [
-        "robotmoney.network renders in the browser, so fetching a page URL returns the shell and none of the data.",
-        "This is the surface that holds the data instead. Every operation below is a public, unauthenticated GET:",
+        "robotmoney.network's pages are prerendered: a page fetch returns its prose, and the figures come from these endpoints.",
+        "This is the surface that holds the data. Every operation below is a public, unauthenticated GET:",
         "no key, no signup, no rate limit beyond ordinary abuse protection. Absolute URLs are given so an agent",
         "whose fetch tool only follows URLs it has already read can take them straight from this document.",
         "",

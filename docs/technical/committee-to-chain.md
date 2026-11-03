@@ -56,6 +56,8 @@ Only the last step changes weights. Everything before it is signalling.
 | `hard_assets` (sessions on or after it) | gold vault, no address yet |
 | `real_world_assets` | `rmRWA` |
 
+Hard Assets (gold) replaces Agent Tokens as the fourth sleeve for sessions on or after the framework asOf (RM-190). The bucket key is `hard_assets`. The gold vault has no address yet; it arrives with that vault's deployment. Sessions before the asOf still carry `agent_tokens` and map to `rmAGENT`.
+
 Vault addresses come from the deployment's `vault_addresses` manifest only.
 
 ## Governance parameters

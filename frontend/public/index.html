@@ -80,15 +80,6 @@
           "name": "Robot Money",
           "url": "https://robotmoney.network",
           "publisher": { "@id": "https://robotmoney.network/#org" }
-        },
-        {
-          "@type": "SoftwareApplication",
-          "name": "Robot Money deposit skill",
-          "applicationCategory": "FinanceApplication",
-          "operatingSystem": "Any agent runtime that can run a shell command",
-          "url": "https://robotmoney.network/deposit",
-          "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-          "description": "An agent skill (robotmoney-cli) that lets any AI agent deposit into and withdraw from the Robot Money USDC yield vault on Base, at market value, with no human in the loop."
         }
       ]
     }
@@ -98,7 +89,7 @@
          then components. No @import; each file linked individually. -->
     <link rel="stylesheet" href="/assets/css/tokens.css?v=17e6f08f" />
     <link rel="stylesheet" href="/assets/css/design-system.css?v=9ff801b1" />
-    <link rel="stylesheet" href="/assets/css/components.css?v=83423dee" />
+    <link rel="stylesheet" href="/assets/css/components.css?v=6685b96a" />
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
@@ -106,7 +97,7 @@
     <link rel="stylesheet" href="/assets/css/sections/home.css?v=a2c966a9" />
 
     <!-- Data-driven view styles (regime + swarm). -->
-    <link rel="stylesheet" href="/assets/css/views.css?v=81ab383a" />
+    <link rel="stylesheet" href="/assets/css/views.css?v=20b95652" />
     <link rel="stylesheet" href="/assets/css/docs-shell.css?v=3b5cd222" />
 
     <!-- Analytics dashboard theme scope (issue #379): every rule inside
@@ -170,16 +161,15 @@
                         <li>
                           <a class="nav__item nav__item--fig" href="/swarm/subjects/robotmoney-vault"><span class="nav__item-t">Robot Money Vault</span> <span class="nav__item-v"><span x-text="vaultFigure('total')" :class="vaultSoon('total') ? 'rm-soon' : ''"></span></span></a>
                           <ul class="nav__tree">
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmusdc"><span class="nav__item-t">Fixed Income</span> <span class="nav__item-f">rmUSDC</span> <span class="nav__item-v"><span x-text="vaultFigure('rmusdc')" :class="vaultSoon('rmusdc') ? 'rm-soon' : ''"></span></span></a></li>
-                            <li><a class="nav__item nav__item--fig" href="/vault/rmagent"><span class="nav__item-t">Small Cap Tokens</span> <span class="nav__item-f">rmAGENT</span> <span class="nav__item-v"><span x-text="vaultFigure('rmagent')" :class="vaultSoon('rmagent') ? 'rm-soon' : ''"></span></span></a></li>
+                            <li><a class="nav__item nav__item--fig" href="/vault/rmusdc"><span class="nav__item-t">Conservative DeFi Yield</span> <span class="nav__item-f">rmUSDC</span> <span class="nav__item-v"><span x-text="vaultFigure('rmusdc')" :class="vaultSoon('rmusdc') ? 'rm-soon' : ''"></span></span></a></li>
                             <li><a class="nav__item nav__item--fig" href="/vault/rmproto"><span class="nav__item-t">Protocol Tokens</span> <span class="nav__item-f">rmPROTO</span> <span class="nav__item-v"><span x-text="vaultFigure('rmproto')" :class="vaultSoon('rmproto') ? 'rm-soon' : ''"></span></span></a></li>
                             <li><a class="nav__item nav__item--fig" href="/vault/rmrwa"><span class="nav__item-t">Real World Assets</span> <span class="nav__item-f">rmRWA</span> <span class="nav__item-v"><span x-text="vaultFigure('rmrwa')" :class="vaultSoon('rmrwa') ? 'rm-soon' : ''"></span></span></a></li>
                           </ul>
                         </li>
                       </ul>
-                      <p class="nav__label">Allocation</p>
+                      <p class="nav__label">Portfolio</p>
                       <ul class="nav__list">
-                        <li><a class="nav__item" href="/allocation"><span class="nav__item-t">Asset allocation</span></a></li>
+                        <li><a class="nav__item" href="/model-portfolio"><span class="nav__item-t">Model portfolio</span></a></li>
                       </ul>
                     </div>
                   </div>
@@ -220,7 +210,8 @@
                     <div class="nav__col">
                       <p class="nav__label">Publications</p>
                       <ul class="nav__list">
-                        <li><a class="nav__item" href="/blog"><span class="nav__item-t">Blog</span></a></li>
+                        <li><a class="nav__item" href="/blog"><span class="nav__item-t">Articles</span></a></li>
+                        <li><a class="nav__item" href="/regime-detection"><span class="nav__item-t">Regime detection</span></a></li>
                         <li><a class="nav__item" href="/smart-contract-risks"><span class="nav__item-t">Smart contract risks</span></a></li>
                       </ul>
                     </div>
@@ -263,6 +254,7 @@
                       <p class="nav__label">About</p>
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/tokenomics"><span class="nav__item-t">Token</span></a></li>
+                        <li><a class="nav__item" href="/news"><span class="nav__item-t">News</span></a></li>
                         <li><a class="nav__item" href="/media"><span class="nav__item-t">Media coverage</span></a></li>
                       </ul>
                       <p class="nav__label">Community</p>
@@ -276,7 +268,7 @@
                       <ul class="nav__list">
                         <li><a class="nav__item" href="/treasury"><span class="nav__item-t">Treasury</span></a></li>
                         <li><a class="nav__item" href="/swarm/subjects/robotmoney-treasury"><span class="nav__item-t">RM Protocol Labs Treasury</span></a></li>
-                        <li><a class="nav__item" href="/deposit#contracts"><span class="nav__item-t">Contracts</span></a></li>
+                        <li><a class="nav__item" href="/vault/rmusdc#contract"><span class="nav__item-t">Contracts</span></a></li>
                       </ul>
                     </div>
                   </div>
@@ -284,7 +276,7 @@
               </li>
             </ul>
             <div class="nav__ctas">
-              <a href="/deposit" class="btn-primary btn-primary--sm nav__cta">Deposit</a>
+              <a href="/early-access" class="btn-primary btn-primary--sm nav__cta">Request early access</a>
             </div>
           </div>
         </div>
@@ -323,12 +315,11 @@
               <h4 class="footer__heading">Vaults</h4>
               <div class="footer__links">
                 <a href="/swarm/subjects/robotmoney-vault" class="footer__link">Robot Money Vault</a>
-                <a href="/vault/rmusdc" class="footer__link">Fixed Income</a>
-                <a href="/vault/rmagent" class="footer__link">Small Cap Tokens</a>
+                <a href="/vault/rmusdc" class="footer__link">Conservative DeFi Yield</a>
                 <a href="/vault/rmproto" class="footer__link">Protocol Tokens</a>
                 <a href="/vault/rmrwa" class="footer__link">Real World Assets</a>
-                <a href="/allocation" class="footer__link">Asset allocation</a>
-                <a href="/deposit" class="footer__link">Deposit</a>
+                <a href="/model-portfolio" class="footer__link">Model portfolio</a>
+                <a href="/early-access" class="footer__link">Early access</a>
               </div>
             </div>
 
@@ -347,7 +338,8 @@
               <div class="footer__links">
                 <a href="/regime" class="footer__link">Regime</a>
                 <a href="/regime/indicators" class="footer__link">Indicators</a>
-                <a href="/blog" class="footer__link">Blog</a>
+                <a href="/blog" class="footer__link">Articles</a>
+                <a href="/regime-detection" class="footer__link">Regime detection</a>
                 <a href="/smart-contract-risks" class="footer__link">Smart contract risks</a>
               </div>
             </div>
@@ -369,11 +361,12 @@
               <h4 class="footer__heading">Company</h4>
               <div class="footer__links">
                 <a href="/tokenomics" class="footer__link">Token</a>
+                <a href="/news" class="footer__link">News</a>
                 <a href="/media" class="footer__link">Media coverage</a>
                 <a href="/faq" class="footer__link">FAQ</a>
                 <a href="/treasury" class="footer__link">Treasury</a>
                 <a href="/swarm/subjects/robotmoney-treasury" class="footer__link">RM Protocol Labs Treasury</a>
-                <a href="/deposit#contracts" class="footer__link">Contracts</a>
+                <a href="/vault/rmusdc#contract" class="footer__link">Contracts</a>
               </div>
             </div>
 

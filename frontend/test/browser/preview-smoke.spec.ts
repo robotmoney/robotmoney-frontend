@@ -105,7 +105,7 @@ test.describe("preview smoke (bun run preview URL space)", () => {
   });
 
   test("hash deep links round-trip", async ({ page }) => {
-    await page.goto(`${baseUrl}/#/allocation`);
+    await page.goto(`${baseUrl}/#/model-portfolio`);
     await expect(page.locator("#watermark")).toBeVisible();
 
     // The wrapper replays the hash into the iframe's history.
@@ -116,7 +116,7 @@ test.describe("preview smoke (bun run preview URL space)", () => {
           return iframe.contentWindow?.location.pathname ?? "";
         })
       )
-      .toBe("/allocation");
-    expect(page.url()).toContain("#/allocation");
+      .toBe("/model-portfolio");
+    expect(page.url()).toContain("#/model-portfolio");
   });
 });

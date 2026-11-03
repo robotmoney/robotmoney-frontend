@@ -4,7 +4,8 @@
 //
 // frontend/public/views/changelog.html keeps merged-but-unreleased work in one
 // block at the top of its log, between `<!-- release:pending -->` and
-// `<!-- /release:pending -->`: a "Next release" heading, entries whose id is
+// `<!-- /release:pending -->`: a "Next release" heading carrying the pulsing
+// In progress chip (`.cl__next-chip`), entries whose id is
 // `next-<slug>` and whose meta carries `<span class="cl__pending">Next
 // release</span>` where the date goes, and an "Also in the next release" list.
 //
@@ -133,7 +134,10 @@ export function stampChangelog(html: string, isoDate: string): StampResult {
 
   block = block.replace(/^[ \t]*<!-- \/?release:pending -->\n?/gm, "");
   const divider = /^[ \t]*<!-- ── [^\n]*? ─+ -->\n/m;
-  const heading = /^[ \t]*<h2 class="cl__month-h" data-release="pending"[^>]*>[^<]*<\/h2>\n/m;
+  // The heading holds the In progress chip, so it is matched to its line's
+  // end, never to the first `<`: a heading left in the block would be dated
+  // into the month as a second "Next release".
+  const heading = /^[ \t]*<h2 class="cl__month-h" data-release="pending"[^>]*>[^\n]*?<\/h2>\n/m;
   const alsoRe = /^[ \t]*<div class="cl__also" data-release="pending"[^>]*>[\s\S]*?<\/div>\n?/m;
   const alsoBlock = alsoRe.exec(block)?.[0] ?? "";
   const improvements = labelledItems(alsoBlock, "Improvements") ?? [];
@@ -214,7 +218,7 @@ export function stampChangelog(html: string, isoDate: string): StampResult {
   if (!heading.test(block)) throw new StampError("the release:pending block has no pending month heading to rename");
   block = block
     .replace(divider, (line) => line.replace(/<!-- ── [\s\S]*? -->/, monthDivider(month)))
-    .replace(heading, (line) => line.replace(/ data-release="pending"/, "").replace(/>[^<]*<\/h2>/, `>${month}</h2>`))
+    .replace(heading, (line) => line.replace(/ data-release="pending"/, "").replace(/(<h2[^>]*>)[^\n]*<\/h2>/, `$1${month}</h2>`))
     .replace(/(<h3 class="cl__also-h">)[^<]*(<\/h3>)/, `$1Also in ${monthName(date)}$2`);
   block = stampEntries(block);
   return { html: noPendingLeft(before + block + after), entries: entryCount, improvements: improvements.length, fixes: fixes.length, mode, month };
@@ -231,7 +235,7 @@ export function stampSitemap(xml: string, isoDate: string): string {
 
 /** The stamped page, or a StampError when any pending trace survived. */
 function noPendingLeft(html: string): string {
-  const leftover = [/data-release="pending"/, /<!-- \/?release:pending -->/, /id="next-/, /href="#next-/, /class="cl__pending"/].find((re) => re.test(html));
+  const leftover = [/data-release="pending"/, /<!-- \/?release:pending -->/, /id="next-/, /href="#next-/, /class="cl__pending"/, /class="[^"]*\bcl__next-chip\b/].find((re) => re.test(html));
   if (leftover) throw new StampError(`stamping left a pending trace behind (${leftover.source}); nothing written`);
   return html;
 }
