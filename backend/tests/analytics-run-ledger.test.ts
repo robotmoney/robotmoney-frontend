@@ -222,6 +222,27 @@ describe("AC2 + AC3: cutoff-boundary vintage freezing, and current vs. historica
     expect(loadCurrentSourceValues.length).toBe(0); // takes no cutoff arguments
     expect(loadHistoricalSourceValues.length).toBe(2); // (knowledgeTimeCutoff, marketTimeCutoff)
   });
+
+  test("issue 1514: the per-series text form returns the exact doubles and dates, and excludeSourceKeys skips a key", async () => {
+    const acq = await insertAcquisition("2024-01-01T00:00:00Z", "ac3-text");
+    const values = [0.1 + 0.2, 1e-7, -123456789.123456789, 5e-324, 1.7976931348623157e308];
+    const ids: string[] = [];
+    for (const [i, value] of values.entries()) {
+      ids.push(await insertValue({ acquisitionId: acq, sourceKey: "ac3:text-a", marketDate: `2024-01-0${i + 1}`, value, priorVersionId: null, revisionKind: "initial", knowledgeTime: "2024-01-01T00:00:00Z" }));
+    }
+    await insertValue({ acquisitionId: acq, sourceKey: "ac3:text-b", marketDate: "2024-01-01", value: 7, priorVersionId: null, revisionKind: "initial", knowledgeTime: "2024-01-01T00:00:00Z" });
+
+    const all = await loadHistoricalSourceValues("2025-01-01T00:00:00.000Z", "2024-01-31");
+    const a = all.filter((m) => m.sourceKey === "ac3:text-a").sort((x, y) => (x.marketDate! < y.marketDate! ? -1 : 1));
+    expect(a.map((m) => m.value)).toEqual(values);
+    expect(a.map((m) => m.versionId)).toEqual(ids);
+    expect(a.map((m) => m.marketDate)).toEqual(["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]);
+    expect(a.every((m) => m.marketInstant === null)).toBe(true);
+
+    const without = await loadHistoricalSourceValues("2025-01-01T00:00:00.000Z", "2024-01-31", sql, ["ac3:text-a"]);
+    expect(without.some((m) => m.sourceKey === "ac3:text-a")).toBe(false);
+    expect(without.some((m) => m.sourceKey === "ac3:text-b")).toBe(true);
+  });
 });
 
 describe("AC4: canonical manifests + per-series fingerprints are order-independent, and change with any selected input", () => {

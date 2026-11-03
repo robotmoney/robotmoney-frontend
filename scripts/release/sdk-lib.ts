@@ -153,7 +153,25 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
  * 1e-6 (regime-engine.md 8.1.1) and its replay is not exactly equal; a run with a commit identity replays
  * every field exactly. (The merge instant of the fix is no marker: production ran the old build after it.)
  */
-export const isFixedProducer = (buildIdentity: string): boolean => buildIdentity !== "" && !buildIdentity.startsWith("pkg:");
+export const isFixedProducer = (buildIdentity: string): boolean =>
+  buildIdentity !== "" && !buildIdentity.startsWith("pkg:") && !PRE_D78_RELEASE_COMMITS.has(buildIdentity);
+
+/**
+ * The image commits of every release before v0.7.1 (v0.6.0 to v0.7.0, and their rc tags, which name the
+ * same commits). D78's exact arithmetic (PR 1499) first ships in v0.7.1, and the SDK replays with it.
+ * A run these builds made published numbers that differ from the SDK's replay in the last bits, so it
+ * counts with the old producer: its labels must be equal, its whole row is not asserted. Without
+ * this, Q36/C24 at the v0.7.1 stage run and cutover (when the newest sealed run is a v0.7.0 run) refuse
+ * a mismatch that v0.7.1 exists to end.
+ */
+export const PRE_D78_RELEASE_COMMITS: ReadonlySet<string> = new Set([
+  "e96d4598678346260282e37ffd5a10df286186ba", // v0.6.0
+  "bca5186eeac13163c25a22c268bca87078d9fb93", // v0.6.1
+  "1acd5cb7faa42c5d9fcc6e7d5bfcc78dcff588a3", // v0.6.2
+  "b5c576f8aa00203643d15057e99ba26a4244b35d", // v0.6.3
+  "7869097abb4eaf758aea5a5649ab7218a1399e52", // v0.6.4
+  "8c2690bac11440a8d8ef86733a567066afaea116", // v0.7.0
+]);
 
 export interface ArchivedRun {
   readonly created: string;
@@ -235,7 +253,7 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cut
   Object.assign(found, { run_key, asof, created, buildIdentity, fixedProducer: fixed });
   if (mode === "post-seal" && !fixed) {
     const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
-    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
+    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix or before v0.7.1's D78 arithmetic): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
   }
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
@@ -255,7 +273,7 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cut
   }
   const notes: string[] = [];
   if (tier === "label") {
-    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created} by the old producer (build identity ${buildIdentity}), before issue 1421's fix, so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
+    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created} by the old producer (build identity ${buildIdentity}), before issue 1421's fix or before v0.7.1's D78 arithmetic, so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
   }
   return { found, problems: [], notes };
 }

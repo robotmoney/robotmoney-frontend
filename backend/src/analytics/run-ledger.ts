@@ -94,11 +94,10 @@ function memberSortKey(m: FrozenSourceValue): string {
 }
 
 export function sortedMembers(members: readonly FrozenSourceValue[]): FrozenSourceValue[] {
-  return [...members].sort((a, b) => {
-    const ka = memberSortKey(a);
-    const kb = memberSortKey(b);
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  });
+  // Issue 1514 (v0.7.1): each key is built once, not on every comparison of a 270k-member sort.
+  const keyed = members.map((member) => ({ member, key: memberSortKey(member) }));
+  keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return keyed.map((k) => k.member);
 }
 
 /**
@@ -126,12 +125,15 @@ export function buildVintageManifest(
 
   const seriesFingerprints: Record<string, string> = {};
   for (const sourceKey of [...bySeries.keys()].sort()) {
+    // Issue 1514 (v0.7.1): the keys below are written in sorted order (coordinate, value,
+    // versionId; then buildIdentity, methodologyVersionId, points, sourceKey), so JSON.stringify
+    // prints the bytes canonicalStringify would, without rebuilding 270k point objects.
     const points = bySeries.get(sourceKey)!.map((p) => ({
       coordinate: p.marketDate ?? p.marketInstant,
-      versionId: p.versionId,
       value: p.value,
+      versionId: p.versionId,
     }));
-    const seriesPayload = canonicalStringify({ sourceKey, methodologyVersionId, buildIdentity, points });
+    const seriesPayload = JSON.stringify({ buildIdentity, methodologyVersionId, points, sourceKey });
     seriesFingerprints[sourceKey] = sha256Hex(seriesPayload);
   }
 
