@@ -24,6 +24,14 @@ export interface FloorSeedResult {
   indicators: number; // distinct indicators touched by the seed
 }
 
+// AN-16: the database clock and, at it, the ledger heads of every storage key
+// the regime reads (store/run-ledger-store.ts loadCommittedInputs).
+export interface CommittedInputs {
+  /** The database clock the heads were read at, ISO 8601 with microseconds. */
+  knowledgeTimeCutoff: string;
+  values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
+}
+
 export interface BeginRunResult {
   runId: string;
   methodologyVersionId: string;
@@ -78,6 +86,9 @@ export interface AnalyticsPersistence {
     marketTimeCutoff: string;
     methodologyVersionId: string;
     buildIdentity: string;
+    // Issue 1534: the versionIds of the committed read the regime computed
+    // from; absent when the run read none.
+    regimeVersionIds?: readonly string[];
   }): Promise<FreezeVintageResult>;
   // Issue #978: submit one terminal run package (see output-snapshots.ts's
   // header) bound to this run's id — the complete, immutable output/report
@@ -91,6 +102,13 @@ export interface AnalyticsPersistence {
   // result's `committed` is the ledger head of every submitted value after the
   // D56 tolerance decision (issue 1421): what downstream must compute from.
   saveSourceAcquisition?(evidence: SourceAcquisitionEvidence): Promise<SaveSourceAcquisitionResult>;
+  // AN-16 (owner decision): a regime run computes from exactly the values its
+  // vintage pins. This reads the database clock and, at it, the ledger heads
+  // of every storage key the regime reads, dated on or before
+  // `marketTimeCutoff`; the run computes from them and passes the returned
+  // cutoff to freezeVintage. Optional like saveSourceAcquisition: a
+  // persistence without a source ledger has nothing to read.
+  loadCommittedInputs?(marketTimeCutoff: string): Promise<CommittedInputs>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap

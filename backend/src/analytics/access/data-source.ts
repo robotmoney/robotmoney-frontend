@@ -8,10 +8,11 @@
 // deterministic, network-free round-trip (see tests/analytics-suite.test.ts).
 import type { Point } from "../types.ts";
 import type { Indicator } from "../analyze/indicators.ts";
-import { fetchAll } from "../extract/sources.ts";
+import { fetchAll, createFetchMemo, mergeYahooPlans, registryYahooPlan, type FetchMemo } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
 import { EXTRA_WRITE_KEYS, LEDGER_EXTRA_KEYS } from "../extras.ts";
+import { INDICATORS } from "../analyze/indicators.ts";
 import { mergeSeries } from "../transform/math.ts";
 import {
   refreshEdgarWithTierFallback,
@@ -22,7 +23,7 @@ import {
 import type { ChannelInputs, LateCycleInputs } from "../analyze/research-signals.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
-import { loadInventory, collectedByInventory, fetchInventorySeries, describeCoverage } from "../extract/model-portfolio.ts";
+import { COLLECTION_START, inventoryCollection, fetchInventorySeries, describeCoverage, type InventorySeries } from "../extract/model-portfolio.ts";
 
 export type Logger = {
   log?: (m: string) => void;
@@ -122,9 +123,24 @@ export interface AnalyticsDataSource {
   // other collector holds into the source ledger. Collection only: the regime
   // reads none of it. Optional, so a fixture or hermetic source collects nothing.
   collectModelPortfolioInputs?(logger?: Logger, acquisitionSink?: AcquisitionSink, requestedByRunId?: number | null): Promise<ModelPortfolioCollection[]>;
+  // Issue 1514: the source one analytics run uses, when its collectors should
+  // share one provider request per symbol. `stages` says which collectors the
+  // run calls, so each symbol is requested from the widest start among those.
+  // Optional: a fixture or hermetic source is used as it is.
+  forRun?(stages: RunStages): AnalyticsDataSource;
 }
 
-const CHANNEL_START = "2018-01-01";
+/** Which collectors one analytics run calls: regime (registry, extras, inventory) and research. */
+export interface RunStages {
+  regime: boolean;
+  research: boolean;
+}
+
+// Fetch starts. Every background fetch requests from COLLECTION_START
+// (2016-01-01, issue 1514) unless it already requested from earlier. These are
+// collection starts only: the research-signals axis (CHANNEL_START in the SDK's
+// analyze/research-signals.ts) and the regime's BACKFILL_START stay at
+// 2018-01-01, so the longer history changes no published output.
 const LATECYCLE_START = "2010-01-01";
 const EXTRAS_START = "2010-01-01"; // Yahoo returns inception for younger tickers
 const unix = (iso: string) => Math.floor(new Date(iso + "T00:00:00Z").getTime() / 1000);
@@ -142,102 +158,145 @@ async function safe(label: string, fn: () => Promise<Point[]>, logger: Logger): 
   }
 }
 
-export const liveDataSource: AnalyticsDataSource = {
-  fetchIndicators(indicators, logger = console, acquisitionSink, requestedByRunId, opts) {
-    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    return fetchAll({ logger, indicators, acquisitionSink, requestedByRunId, provenance: opts?.provenance });
-  },
+// Each collector's Yahoo requests, as a plan for the run's fetch memo (issue
+// 1514): symbol -> its start in unix seconds. The registry reads full history.
+const RESEARCH_SYMBOLS_FROM_COLLECTION_START = ["BTC-USD", "QQQ"] as const;
+const RESEARCH_SYMBOLS_FROM_LATECYCLE_START = ["SPY", "RSP", ...TOP7] as const;
+function researchYahooPlan(): Record<string, number> {
+  const plan: Record<string, number> = {};
+  for (const sym of RESEARCH_SYMBOLS_FROM_COLLECTION_START) plan[sym] = unix(COLLECTION_START);
+  for (const sym of RESEARCH_SYMBOLS_FROM_LATECYCLE_START) plan[sym] = unix(LATECYCLE_START);
+  return plan;
+}
+function regimeYahooPlan(): Record<string, number> {
+  const plan: Record<string, number> = registryYahooPlan(INDICATORS);
+  const extras: Record<string, number> = {};
+  for (const x of [LEDGER_EXTRA_KEYS.spx, LEDGER_EXTRA_KEYS.eth]) extras[x.symbol] = unix(EXTRAS_START);
+  const inventory: Record<string, number> = {};
+  for (const s of inventoryCollection()) if (s.provider === "yahoo") inventory[s.symbol] = unix(s.requestedStart);
+  return mergeYahooPlans(plan, extras, inventory);
+}
 
-  async fetchResearchInputs(asof, logger = console, edgarCtx, acquisitionSink, requestedByRunId): Promise<ResearchInputs> {
-    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
-      captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
-    // Channel + late-cycle share Yahoo tickers; fetch the union concurrently.
-    const [btc, qqq, spy, rsp, ...top7] = await Promise.all([
-      safe("BTC-USD", () => acquire("yahoo", "research:BTC-USD", `BTC-USD:${CHANNEL_START}`, () => fetchYahoo("BTC-USD", unix(CHANNEL_START))), logger),
-      safe("QQQ", () => acquire("yahoo", "research:QQQ", `QQQ:${CHANNEL_START}`, () => fetchYahoo("QQQ", unix(CHANNEL_START))), logger),
-      safe("SPY", () => acquire("yahoo", "research:SPY", `SPY:${LATECYCLE_START}`, () => fetchYahoo("SPY", unix(LATECYCLE_START))), logger),
-      safe("RSP", () => acquire("yahoo", "research:RSP", `RSP:${LATECYCLE_START}`, () => fetchYahoo("RSP", unix(LATECYCLE_START))), logger),
-      ...TOP7.map((sym) => safe(sym, () => acquire("yahoo", `research:${sym}`, `${sym}:${LATECYCLE_START}`, () => fetchYahoo(sym, unix(LATECYCLE_START))), logger)),
-    ]);
+/** The run's Yahoo plan for these stages: each symbol from the widest start its consumers request. */
+export function liveYahooPlan(stages: RunStages): Record<string, number> {
+  return mergeYahooPlans(stages.regime ? regimeYahooPlan() : {}, stages.research ? researchYahooPlan() : {});
+}
 
-    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
-    // report.md finding 1.10): most runs are a cheap INCREMENTAL sweep
-    // (missing months + a small trailing revision window); periodically
-    // (see selectEdgarRefreshTier in ../edgar-incremental-refresh.ts) it's a
-    // FULL 2010-to-present crawl, matching v0's `late-cycle-signals.js`, so
-    // an EDGAR back-revision to any historical month still lands, just on a
-    // bounded periodic cadence rather than every run. One hard deadline
-    // either way, sized to whichever tier this asof selects. A degraded
-    // refresh (deadline hit, any planned month missing/duplicated/invalid,
-    // or — issue #509 — a complete batch that diverges from the persisted
-    // floor beyond bounds) falls back to the persisted floor UNCHANGED —
-    // never a partial fresh batch — and is reported via `mnaRefresh` so the
-    // orchestrator can skip publishing a signal against incomplete data
-    // this run.
-    //
-    // `refreshEdgarWithTierFallback` (not the bare refresh) so a degraded
-    // WEEKLY reconciliation sweep retries once as the cheap daily
-    // incremental sweep instead of suppressing that day's signal outright
-    // (issue #509). `persistedRows` feeds the batch-level divergence guard —
-    // the floor VALUES the fresh batch is about to overwrite, which is the
-    // only thing that guard can compare against.
-    const persistedMna = edgarCtx?.persistedMna ?? [];
-    const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
-    const [margin, conf, mnaRefresh] = await Promise.all([
-      safe("FRED BOGZ1FL663067003Q", () => acquire("fred", "research:MARGIN", "BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q")), logger),
-      safe("FRED UMCSENT", () => acquire("fred", "research:CONF", "UMCSENT", () => fetchFred("UMCSENT")), logger),
-      captureSourceAcquisition({ provider: "edgar", sourceKey: "raw_indicator_history:MNA", parserVersion: "edgar:1", cacheIdentity: `${asof}:${selectEdgarRefreshTier(asof)}`, requestedByRunId, points: (result: EdgarRefreshOutcome) => result.newRows }, acquisitionSink, () =>
-        refreshEdgarWithTierFallback({
-        asOf: asof,
-        persistedMonths: persistedMna.map((p) => p.date.slice(0, 7)),
-        persistedRows: persistedMna,
-        deadlineAt,
-        logger,
-        })),
-    ]);
-    const mna = mnaRefresh.status === "degraded" ? persistedMna : mergeSeries(persistedMna, mnaRefresh.newRows);
+/**
+ * The live source. With a memo, every collector reads its provider series
+ * through the run's one request per symbol (issue 1514); without one each
+ * call fetches on its own.
+ */
+function createLiveDataSource(memo: FetchMemo | null): AnalyticsDataSource {
+  const yahoo = (symbol: string, startUnix: number) => (memo ? memo.yahoo(symbol, startUnix) : fetchYahoo(symbol, startUnix));
+  const inventorySeries = (entry: InventorySeries) =>
+    memo && entry.provider === "yahoo" ? memo.yahoo(entry.symbol, unix(entry.requestedStart)) : fetchInventorySeries(entry);
+  return {
+    forRun(stages) {
+      return createLiveDataSource(createFetchMemo(liveYahooPlan(stages)));
+    },
 
-    return { btc, qqq, spy, rsp, top7, mna, margin, conf, mnaRefresh };
-  },
+    fetchIndicators(indicators, logger = console, acquisitionSink, requestedByRunId, opts) {
+      if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+      return fetchAll({ logger, indicators, acquisitionSink, requestedByRunId, provenance: opts?.provenance, ...(memo ? { memo } : {}) });
+    },
 
-  async fetchBacktestExtras(logger = console, acquisitionSink, requestedByRunId): Promise<BacktestExtras> {
-    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
-      captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
-    // The storage keys come from the D74 reverse mapping (W = EXTRA_WRITE_KEYS,
-    // packages/analyst-sdk/src/series-ids.ts), so they cannot drift from the keys the
-    // consumers read. The provider literals stay inline, and the `W.<name>` spelling is
-    // what tests/analytics-source-tolerance.test.ts resolves at acquire(...) call sites.
-    // tests/extras-key-map.test.ts pins both to LEDGER_EXTRA_KEYS.
-    const X = LEDGER_EXTRA_KEYS;
-    const W = EXTRA_WRITE_KEYS;
-    const [spx, eth, tbill3m] = await Promise.all([
-      safe(X.spx.symbol, () => acquire("yahoo", W.spx, `${X.spx.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
-      safe(X.eth.symbol, () => acquire("yahoo", W.eth, `${X.eth.symbol}:${EXTRAS_START}`, () => fetchYahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
-      safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
-    ]);
-    return { spx, eth, tbill3m };
-  },
+    async fetchResearchInputs(asof, logger = console, edgarCtx, acquisitionSink, requestedByRunId): Promise<ResearchInputs> {
+      if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+      const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
+        captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
+      // Channel + late-cycle share Yahoo tickers; fetch the union concurrently.
+      const [btc, qqq, spy, rsp, ...top7] = await Promise.all([
+        safe("BTC-USD", () => acquire("yahoo", "research:BTC-USD", `BTC-USD:${COLLECTION_START}`, () => yahoo("BTC-USD", unix(COLLECTION_START))), logger),
+        safe("QQQ", () => acquire("yahoo", "research:QQQ", `QQQ:${COLLECTION_START}`, () => yahoo("QQQ", unix(COLLECTION_START))), logger),
+        safe("SPY", () => acquire("yahoo", "research:SPY", `SPY:${LATECYCLE_START}`, () => yahoo("SPY", unix(LATECYCLE_START))), logger),
+        safe("RSP", () => acquire("yahoo", "research:RSP", `RSP:${LATECYCLE_START}`, () => yahoo("RSP", unix(LATECYCLE_START))), logger),
+        ...TOP7.map((sym) => safe(sym, () => acquire("yahoo", `research:${sym}`, `${sym}:${LATECYCLE_START}`, () => yahoo(sym, unix(LATECYCLE_START))), logger)),
+      ]);
 
-  async collectModelPortfolioInputs(logger = console, acquisitionSink, requestedByRunId): Promise<ModelPortfolioCollection[]> {
-    if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
-    // The inventory names each series' storage key. A series another collector
-    // already holds (backtest:^GSPC, research:BTC-USD, ...) is not fetched
-    // twice; the rest are recorded under their own source id (D74). Each is
-    // one acquisition, so one bounded request to the ingestion route, and a
-    // failure drops only that series.
-    const entries = loadInventory().series.filter(collectedByInventory);
-    return Promise.all(entries.map(async (entry): Promise<ModelPortfolioCollection> => {
-      try {
-        const points = await captureSourceAcquisition({ provider: entry.provider, sourceKey: entry.storageKey, parserVersion: `${entry.provider}:1`, cacheIdentity: `${entry.symbol}:${entry.requestedStart}`, requestedByRunId }, acquisitionSink, () => fetchInventorySeries(entry));
-        const coverage = describeCoverage(entry, points);
-        for (const l of coverage.limitations) logger.warn?.(`[extract] model portfolio ${l}`);
-        return { id: entry.id, storageKey: entry.storageKey, rows: points.length, limitations: coverage.limitations, error: null };
-      } catch (e: any) {
-        logger.error?.(`[extract] model portfolio ${entry.id} FAILED: ${e?.message ?? e}`);
-        return { id: entry.id, storageKey: entry.storageKey, rows: 0, limitations: [], error: String(e?.message ?? e) };
-      }
-    }));
-  },
-};
+      // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
+      // report.md finding 1.10): most runs are a cheap INCREMENTAL sweep
+      // (missing months + a small trailing revision window); periodically
+      // (see selectEdgarRefreshTier in ../edgar-incremental-refresh.ts) it's a
+      // FULL 2010-to-present crawl, matching v0's `late-cycle-signals.js`, so
+      // an EDGAR back-revision to any historical month still lands, just on a
+      // bounded periodic cadence rather than every run. One hard deadline
+      // either way, sized to whichever tier this asof selects. A degraded
+      // refresh (deadline hit, any planned month missing/duplicated/invalid,
+      // or — issue #509 — a complete batch that diverges from the persisted
+      // floor beyond bounds) falls back to the persisted floor UNCHANGED —
+      // never a partial fresh batch — and is reported via `mnaRefresh` so the
+      // orchestrator can skip publishing a signal against incomplete data
+      // this run.
+      //
+      // `refreshEdgarWithTierFallback` (not the bare refresh) so a degraded
+      // WEEKLY reconciliation sweep retries once as the cheap daily
+      // incremental sweep instead of suppressing that day's signal outright
+      // (issue #509). `persistedRows` feeds the batch-level divergence guard —
+      // the floor VALUES the fresh batch is about to overwrite, which is the
+      // only thing that guard can compare against.
+      const persistedMna = edgarCtx?.persistedMna ?? [];
+      const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
+      const [margin, conf, mnaRefresh] = await Promise.all([
+        safe("FRED BOGZ1FL663067003Q", () => acquire("fred", "research:MARGIN", "BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q")), logger),
+        safe("FRED UMCSENT", () => acquire("fred", "research:CONF", "UMCSENT", () => fetchFred("UMCSENT")), logger),
+        captureSourceAcquisition({ provider: "edgar", sourceKey: "raw_indicator_history:MNA", parserVersion: "edgar:1", cacheIdentity: `${asof}:${selectEdgarRefreshTier(asof)}`, requestedByRunId, points: (result: EdgarRefreshOutcome) => result.newRows }, acquisitionSink, () =>
+          refreshEdgarWithTierFallback({
+          asOf: asof,
+          persistedMonths: persistedMna.map((p) => p.date.slice(0, 7)),
+          persistedRows: persistedMna,
+          deadlineAt,
+          logger,
+          })),
+      ]);
+      const mna = mnaRefresh.status === "degraded" ? persistedMna : mergeSeries(persistedMna, mnaRefresh.newRows);
+
+      return { btc, qqq, spy, rsp, top7, mna, margin, conf, mnaRefresh };
+    },
+
+    async fetchBacktestExtras(logger = console, acquisitionSink, requestedByRunId): Promise<BacktestExtras> {
+      if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+      const acquire = (provider: string, key: string, identity: string, operation: () => Promise<Point[]>) =>
+        captureSourceAcquisition({ provider, sourceKey: key, parserVersion: `${provider}:1`, cacheIdentity: identity, requestedByRunId }, acquisitionSink, operation);
+      // The storage keys come from the D74 reverse mapping (W = EXTRA_WRITE_KEYS,
+      // packages/analyst-sdk/src/series-ids.ts), so they cannot drift from the keys the
+      // consumers read. The provider literals stay inline, and the `W.<name>` spelling is
+      // what tests/analytics-source-tolerance.test.ts resolves at acquire(...) call sites.
+      // tests/extras-key-map.test.ts pins both to LEDGER_EXTRA_KEYS.
+      const X = LEDGER_EXTRA_KEYS;
+      const W = EXTRA_WRITE_KEYS;
+      const [spx, eth, tbill3m] = await Promise.all([
+        safe(X.spx.symbol, () => acquire("yahoo", W.spx, `${X.spx.symbol}:${EXTRAS_START}`, () => yahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
+        safe(X.eth.symbol, () => acquire("yahoo", W.eth, `${X.eth.symbol}:${EXTRAS_START}`, () => yahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
+        safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
+      ]);
+      return { spx, eth, tbill3m };
+    },
+
+    async collectModelPortfolioInputs(logger = console, acquisitionSink, requestedByRunId): Promise<ModelPortfolioCollection[]> {
+      if (!acquisitionSink) throw new Error("live analytics source requires acquisition evidence persistence");
+      // Both shipped inventories (model-portfolio and, issue 1514,
+      // research-series) name each series' storage key. A series another
+      // collector already holds (backtest:^GSPC, research:BTC-USD, ...) is not
+      // fetched twice, and a key both inventories list is fetched once; the rest
+      // are recorded under their own source id (D74). Each is one acquisition,
+      // so one bounded request to the ingestion route, and a failure drops only
+      // that series.
+      const entries = inventoryCollection();
+      return Promise.all(entries.map(async (entry): Promise<ModelPortfolioCollection> => {
+        try {
+          const points = await captureSourceAcquisition({ provider: entry.provider, sourceKey: entry.storageKey, parserVersion: `${entry.provider}:1`, cacheIdentity: `${entry.symbol}:${entry.requestedStart}`, requestedByRunId }, acquisitionSink, () => inventorySeries(entry));
+          const coverage = describeCoverage(entry, points);
+          for (const l of coverage.limitations) logger.warn?.(`[extract] model portfolio ${l}`);
+          return { id: entry.id, storageKey: entry.storageKey, rows: points.length, limitations: coverage.limitations, error: null };
+        } catch (e: any) {
+          logger.error?.(`[extract] model portfolio ${entry.id} FAILED: ${e?.message ?? e}`);
+          return { id: entry.id, storageKey: entry.storageKey, rows: 0, limitations: [], error: String(e?.message ?? e) };
+        }
+      }));
+    },
+  };
+}
+
+/** The production default. A run takes `liveDataSource.forRun(stages)` to share one request per symbol. */
+export const liveDataSource: AnalyticsDataSource = createLiveDataSource(null);

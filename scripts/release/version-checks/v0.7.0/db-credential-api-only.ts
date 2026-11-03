@@ -1,4 +1,4 @@
-// V03-db-credential-api-only (D75, PR 1418): only the api holds a database
+// Q40-db-credential-api-only/C28-db-credential-api-only (D75, PR 1418): only the api holds a database
 // credential. The check reads `Config.Env` of every running container of the
 // instance, participants included, and refuses any container but the api that
 // carries a credential: a DB_CREDENTIAL_KEYS name, a PG* connection or pool

@@ -195,6 +195,16 @@ exposed admin-only via `GET /api/swarm/admin/agent-health` (raw event history
 + per-type counts). There is no automatic dead-agent threshold — an operator reads
 the history and decides.
 
+A seat can read its own health with its own bearer
+(`GET /api/swarm/participants/health`): role, active key fingerprint, last take,
+consecutive missed sessions, its recent refusals with reason codes, and for a
+judge its recent judgements marked `on_time`, `after_deadline`, `late_evidence`
+or `drawn`. A judge's missed-session count is the sessions it filed no on-time
+answer for (`src/swarm/dormancy.ts`). A member past
+`SWARM_DORMANCY_THRESHOLD_SESSIONS`, and a judge with no on-time answer for a day
+of sessions, appear in the admin overview alerts. Nothing deactivates, excuses or
+revokes a seat on this signal (owner decision 2026-10-09).
+
 ### 9.5 Surfaces — one core, one transport
 
 The backend is a **domain/service layer** (plain Bun/TS functions over Postgres:

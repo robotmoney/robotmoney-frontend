@@ -20,7 +20,8 @@ describe("the request and batch pools, as the api builds them", () => {
   let pools: ApiPools;
 
   beforeAll(() => {
-    const budget = deriveConnectionBudget({ maxConnections: 100, superuserReserved: 3, reserved: 0 }, { request: 1, batch: 1 });
+    // One connection a pool: no capped caller draws on these pools, only this test (issue 1514's batch invariant).
+    const budget = deriveConnectionBudget({ maxConnections: 100, superuserReserved: 3, reserved: 0 }, { request: 1, batch: 1 }, { analytics: 0, pipeline: 0 });
     pools = createApiPools(config.databaseUrl, budget, {
       request: { statementMs: 5_000, lockMs: 1_000, idleInTxnMs: IDLE_MS, connectMs: 5_000 },
     });

@@ -89,8 +89,11 @@ describe("LEDGER_EXTRA_KEYS", () => {
 describe("the D74 storage mapping", () => {
   // Pinned BEFORE the change: the storage keys each consumer read on main.
   const REGISTRY_IDS = INDICATORS.map((i) => i.id);
+  // The D74 amendment of 2026-10-28 (issue 1514) moves exactly two consumers:
+  // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES keys.
+  const AMENDED: Record<string, string> = { DEFI_GROWTH: "DEFI_TVL", STABLES_GROWTH: "STABLES" };
   const PINNED: Record<string, string[]> = {
-    ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${id}`]])),
+    ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`]])),
     correlations: ["backtest:ETH-USD", "backtest:^GSPC"],
     backtest: ["backtest:DTB3", "backtest:ETH-USD", "backtest:^GSPC"],
   };
@@ -103,8 +106,8 @@ describe("the D74 storage mapping", () => {
   test("writes use the reverse mapping: it returns the keys the extractors write and the readers read", () => {
     for (const ind of INDICATORS) {
       const m = SERIES_MAPPING.find((x) => x.consumer === `indicator:${ind.id}`)!;
-      expect(storageKeyForSourceId(m.consumer, m.series)).toBe(rawIndicatorSourceKey(ind.id));
-      expect(sourceIdForStorageKey(m.consumer, rawIndicatorSourceKey(ind.id))).toBe(m.series);
+      expect(storageKeyForSourceId(m.consumer, m.series)).toBe(rawIndicatorSourceKey(AMENDED[ind.id] ?? ind.id));
+      expect(sourceIdForStorageKey(m.consumer, rawIndicatorSourceKey(AMENDED[ind.id] ?? ind.id))).toBe(m.series);
     }
     expect(EXTRA_WRITE_KEYS).toEqual({ spx: "backtest:^GSPC", eth: "backtest:ETH-USD", tbill3m: "backtest:DTB3" });
     expect(sourceIdForStorageKey("backtest", "backtest:DTB3")).toBe("fred:DTB3");
@@ -139,5 +142,63 @@ describe("the D74 storage mapping", () => {
     const h = inputHistoryFromStorage(members);
     expect(h.SPX_TREND).toEqual([{ date: "2026-10-01", value: 5700.25 }, { date: "2026-10-02", value: 5711.5 }]);
     expect(h.SPX).toEqual([{ date: "2026-10-01", value: 5699.875 }, { date: "2026-10-02", value: 5712.125 }]);
+  });
+});
+
+// Issue 1514: the Yahoo ratio legs are stored as source series (analytics requirements 4.3).
+describe("the ratio leg mapping", () => {
+  test("validateSeriesMapping accepts it, alone and with the consumer mapping, and no consumer reads one leg from two keys", async () => {
+    const { RATIO_LEG_MAPPING, validateSeriesMapping, ratioLegStorageKey } = await import("../../packages/analyst-sdk/src/series-ids.ts");
+    expect(validateSeriesMapping(RATIO_LEG_MAPPING)).toBe(RATIO_LEG_MAPPING);
+    expect(() => validateSeriesMapping([...SERIES_MAPPING, ...RATIO_LEG_MAPPING])).not.toThrow();
+    expect(RATIO_LEG_MAPPING).toHaveLength(16);
+    const keyOf = new Map<string, string>();
+    for (const m of RATIO_LEG_MAPPING) {
+      const prior = keyOf.get(m.series);
+      if (prior !== undefined) expect({ leg: m.series, key: m.storageKey }).toEqual({ leg: m.series, key: prior });
+      keyOf.set(m.series, m.storageKey);
+      expect(m.storageKey).toBe(ratioLegStorageKey(m.series));
+    }
+    expect(keyOf.get("yahoo:SPY")).toBe("research:SPY");
+    expect(keyOf.get("yahoo:ETH-USD")).toBe(LEDGER_EXTRA_KEYS.eth.ledgerKey);
+    expect(keyOf.get("yahoo:IWM")).toBe("yahoo:IWM");
+    // A consumer reading one leg from two keys is refused.
+    const bad = [...RATIO_LEG_MAPPING, { ...RATIO_LEG_MAPPING.find((m) => m.series === "yahoo:SPY")!, storageKey: "yahoo:SPY" }];
+    expect(() => validateSeriesMapping(bad)).toThrow(/would read yahoo:SPY from two storage keys/);
+  });
+});
+
+// Issue 1514: the D74 amendment of 2026-10-28. One key per DefiLlama source.
+describe("the D74 amendment: DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES keys", () => {
+  test("the mapping maps indicator:DEFI_GROWTH to raw_indicator_history:DEFI_TVL and indicator:STABLES_GROWTH to raw_indicator_history:STABLES", () => {
+    expect(consumerStorageKeys()["indicator:DEFI_GROWTH"]).toEqual(["raw_indicator_history:DEFI_TVL"]);
+    expect(consumerStorageKeys()["indicator:STABLES_GROWTH"]).toEqual(["raw_indicator_history:STABLES"]);
+    expect(storageKeyForSourceId("indicator:DEFI_GROWTH", "defillama_tvl:total")).toBe("raw_indicator_history:DEFI_TVL");
+    expect(storageKeyForSourceId("indicator:STABLES_GROWTH", "defillama_stables:total")).toBe("raw_indicator_history:STABLES");
+    // No consumer reads the *_GROWTH keys any more.
+    expect(SERIES_MAPPING.some((m) => m.storageKey.endsWith("_GROWTH"))).toBe(false);
+  });
+
+  test("stored rows under DEFI_TVL and STABLES feed both indicators; rows under the old *_GROWTH keys reach no consumer", () => {
+    const rows = [
+      { sourceKey: "raw_indicator_history:DEFI_TVL", marketDate: "2024-01-02", value: 90e9 },
+      { sourceKey: "raw_indicator_history:STABLES", marketDate: "2024-01-02", value: 150e9 },
+      { sourceKey: "raw_indicator_history:DEFI_GROWTH", marketDate: "2024-01-01", value: 1 },
+    ];
+    const h = inputHistoryFromStorage(rows);
+    expect(h.DEFI_GROWTH).toEqual([{ date: "2024-01-02", value: 90e9 }]);
+    expect(h.DEFI_TVL).toEqual(h.DEFI_GROWTH!);
+    expect(h.STABLES_GROWTH).toEqual([{ date: "2024-01-02", value: 150e9 }]);
+  });
+
+  test("docs/decisions.md D74 carries the 2026-10-28 amendment naming both consumers and keys", () => {
+    const decisions = readFileSync(join(import.meta.dir, "..", "..", "docs", "decisions.md"), "utf8");
+    const start = decisions.indexOf("## D74 ");
+    expect(start).toBeGreaterThan(-1);
+    const d74 = decisions.slice(start, decisions.indexOf("\n## D", start + 1));
+    const amendment = d74.slice(d74.indexOf("### Amendment (issue 1514, owner 2026-10-28)"));
+    expect(amendment.length).toBeGreaterThan(100);
+    expect(amendment).toContain("**Status:** proposed");
+    for (const s of ["`indicator:DEFI_GROWTH`", "`raw_indicator_history:DEFI_TVL`", "`indicator:STABLES_GROWTH`", "`raw_indicator_history:STABLES`"]) expect(amendment).toContain(s);
   });
 });

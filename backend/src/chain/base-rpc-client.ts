@@ -310,6 +310,28 @@ function retryBaseMs(): number {
   return intEnv("BASE_RPC_RETRY_BASE_MS", 250, 1);
 }
 
+// A provider-declared rate limit (HTTP 429, JSON-RPC -32016) is not a blip, and is retried on its own schedule.
+//
+// WHY. The public endpoint publishes no limit and sends no Retry-After. One 429 drains our bucket
+// (noteRateLimitExhaustion), so each retry waited ~4 s for a token and the loop gave up after
+// BASE_RPC_MAX_RETRIES=3: about 12 s of trying. The v0.6.2 stage QA (run B, 2026-10-16) got four 429s
+// in a row inside that window and the buyback scan degraded ("live index failed"); the same code and
+// dump passed in the run before. A penalty window the provider applies after we exceed its limit is
+// longer than 12 s, so the retries all landed inside it. This waits longer between rate-limit
+// retries (5 s, 10 s, 20 s, 30 s with jitter) and retries more often, still inside
+// BASE_RPC_RETRY_TOTAL_MS (120 s), so a caller gets its answer in a bounded time either way.
+// Other transient statuses (502/503/504) keep the short schedule above.
+const DEFAULT_RATE_LIMIT_BACKOFF_BASE_MS = 5_000;
+function rateLimitBackoffBaseMs(): number {
+  return intEnv("BASE_RPC_RATE_LIMIT_BACKOFF_MS", DEFAULT_RATE_LIMIT_BACKOFF_BASE_MS, 1);
+}
+/** Retries allowed after a rate-limit answer: two more than BASE_RPC_MAX_RETRIES unless BASE_RPC_RATE_LIMIT_RETRIES says otherwise. BASE_RPC_MAX_RETRIES=0 still means no retry at all. */
+function maxRateLimitRetries(): number {
+  const base = maxRetries();
+  if (base === 0) return 0;
+  return intEnv("BASE_RPC_RATE_LIMIT_RETRIES", base + 2, 0);
+}
+
 // Hand-rolled async semaphore (no dependency — this repo is buildless). A slot
 // is transferred directly to the next waiter on release so `inFlight` is always
 // exactly the number of running-or-about-to-run requests, bounding peak
@@ -551,6 +573,15 @@ function backoffMs(attempt: number, retryAfterHeader: string | null): number {
   return Math.min(exp + jitter, MAX_BACKOFF_MS);
 }
 
+// Backoff for the Nth retry (1-based) after a rate-limit answer: Retry-After when the provider sends it,
+// otherwise base × 2^(n-1) plus full-base jitter, capped at MAX_BACKOFF_MS. See rateLimitBackoffBaseMs().
+function rateLimitBackoffMs(attempt: number, retryAfterHeader: string | null): number {
+  const retryAfter = parseRetryAfterMs(retryAfterHeader);
+  if (retryAfter !== null) return Math.min(retryAfter, MAX_BACKOFF_MS);
+  const base = rateLimitBackoffBaseMs();
+  return Math.min(base * Math.pow(2, attempt - 1) + Math.random() * base, MAX_BACKOFF_MS);
+}
+
 // Plain sleep, for waits that are NOT part of a network attempt: pacing and
 // retry backoff. Both are bounded on their own — the bucket by its refill rate,
 // backoff by MAX_BACKOFF_MS and a finite retry count — so neither needs, or
@@ -651,9 +682,11 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
           if (
             parsed.error.code != null &&
             TRANSIENT_RPC_ERROR_CODES.has(parsed.error.code) &&
-            attempt < retries
+            attempt < maxRateLimitRetries()
           ) {
-            await backoffOrGiveUp(backoffMs(attempt + 1, null), retryDeadline, method, attempt + 1);
+            const waitMs = rateLimitBackoffMs(attempt + 1, null);
+            console.warn(`Base RPC rate limited (${method}, JSON-RPC ${parsed.error.code}): retry ${attempt + 1} of ${maxRateLimitRetries()} in ${Math.round(waitMs)} ms`);
+            await backoffOrGiveUp(waitMs, retryDeadline, method, attempt + 1);
             continue;
           }
           throw new Error(
@@ -668,8 +701,15 @@ export async function rpcRequest<T>(method: string, params: unknown[], opts: Rpc
       // is now honorable: the wait is no longer competing with the request's own
       // deadline, so a header above ~7s stops guaranteeing an abort instead of
       // compliance.
-      if (res.status === 429) noteRateLimitExhaustion(); // same feedback as -32016 above
-      if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
+      if (res.status === 429) {
+        noteRateLimitExhaustion(); // same feedback as -32016 above
+        if (attempt < maxRateLimitRetries()) {
+          const waitMs = rateLimitBackoffMs(attempt + 1, res.headers.get("retry-after"));
+          console.warn(`Base RPC rate limited (${method}, HTTP 429): retry ${attempt + 1} of ${maxRateLimitRetries()} in ${Math.round(waitMs)} ms`);
+          await backoffOrGiveUp(waitMs, retryDeadline, method, attempt + 1);
+          continue;
+        }
+      } else if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
         await backoffOrGiveUp(
           backoffMs(attempt + 1, res.headers.get("retry-after")),
           retryDeadline,
@@ -834,8 +874,15 @@ export async function rpcBatchRequest<T>(
         }
 
         if (!res.ok) {
-          if (res.status === 429) noteRateLimitExhaustion();
-          if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
+          if (res.status === 429) {
+            noteRateLimitExhaustion();
+            if (attempt < maxRateLimitRetries()) {
+              const waitMs = rateLimitBackoffMs(attempt + 1, res.headers.get("retry-after"));
+              console.warn(`Base RPC rate limited (batch, HTTP 429): retry ${attempt + 1} of ${maxRateLimitRetries()} in ${Math.round(waitMs)} ms`);
+              await backoffOrGiveUp(waitMs, retryDeadline, "batch", attempt + 1);
+              continue;
+            }
+          } else if (TRANSIENT_STATUSES.has(res.status) && attempt < retries) {
             await backoffOrGiveUp(
               backoffMs(attempt + 1, res.headers.get("retry-after")),
               retryDeadline,
@@ -895,8 +942,10 @@ export async function rpcBatchRequest<T>(
         // as running out of attempts — those entries reported FAILED, their
         // siblings kept. Throwing would discard a chunk's successful results and
         // turn a partial answer into no answer at all.
-        const entryWaitMs = backoffMs(attempt + 1, res.headers.get("retry-after"));
-        if (throttled.length > 0 && attempt < retries && entryWaitMs <= retryDeadline - Date.now()) {
+        // Throttled entries are rate-limit answers, so they follow the rate-limit schedule.
+        const entryWaitMs = rateLimitBackoffMs(attempt + 1, res.headers.get("retry-after"));
+        if (throttled.length > 0 && attempt < maxRateLimitRetries() && entryWaitMs <= retryDeadline - Date.now()) {
+          console.warn(`Base RPC rate limited (batch, ${throttled.length} entr${throttled.length === 1 ? "y" : "ies"}): retry ${attempt + 1} of ${maxRateLimitRetries()} in ${Math.round(entryWaitMs)} ms`);
           pending = throttled;
           await sleep(entryWaitMs);
           continue;

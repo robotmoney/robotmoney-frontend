@@ -36,7 +36,7 @@ import {
   canonicalizeApplication,
   canonicalizeClaimChallenge,
   path as routePath,
-  RECEIPT_CANONICAL_BUCKET_ORDER,
+  RECEIPT_HARD_ASSETS_BUCKET_ORDER,
   ROUTES,
 } from "@robotmoney/contract";
 import { fetchRmpc } from "../../lib/rmpc-fetch.ts";
@@ -78,7 +78,7 @@ const repoRoot = join(import.meta.dir, "..", "..", "..");
 // The allocation the fixture model "authors". DERIVED from the contract's
 // canonical order, never re-declared, so this fixture and the receipt schema
 // cannot drift into disagreeing about which four vaults exist.
-const CANONICAL_BUCKETS = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+const CANONICAL_BUCKETS = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER];
 const AUTHORED_WEIGHTS = [0.15, 0.7, 0.1, 0.05].map((weight, i) => ({ bucket: CANONICAL_BUCKETS[i]!, weight }));
 
 // EVERY pure assertion this file used to carry alongside its Docker-backed

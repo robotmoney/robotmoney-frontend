@@ -2,7 +2,7 @@ import type { ApplyInput, MemberProfilePatch, SubmissionInput } from "../swarm/d
 // Type-only (erased at runtime, no cycle): the admin patch shape is owned by
 // the domain module that writes it, the same way MemberProfilePatch is.
 import type { MemberAdminPatch } from "../swarm/admin.ts";
-import { RECEIPT_CANONICAL_BUCKET_ORDER, STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
+import { RECEIPT_CANONICAL_BUCKET_ORDER, RECEIPT_HARD_ASSETS_BUCKET_ORDER, STANCES, type canonicalizeSubmission } from "@robotmoney/contract";
 // Runtime (not type-only) and safe: signing.ts imports nothing from this
 // module — its only import is @robotmoney/contract — so there is no cycle.
 import { isRegistrablePublicKey, PUBLIC_KEY_REFUSAL } from "../lib/signing.ts";
@@ -118,7 +118,14 @@ function optionalReportSnapshotId(body: JsonObject): string | null | undefined {
 // this function does not know which session a body is aimed at, and a take
 // with NO vector at all stays valid here because a `position_actions` session
 // is entitled to one.
-const CANONICAL_BUCKETS: ReadonlySet<string> = new Set(RECEIPT_CANONICAL_BUCKET_ORDER);
+//
+// This layer knows no session, so it admits the union of the two bucket lists
+// (agent_tokens for sessions before the framework asOf, hard_assets after).
+// The per-session list is enforced one layer up (swarm/domain.ts weightsRefusal),
+// which refuses a bucket outside the session's list with the same
+// `weights_bucket_not_canonical` code.
+const KNOWN_BUCKETS = [...new Set([...RECEIPT_CANONICAL_BUCKET_ORDER, ...RECEIPT_HARD_ASSETS_BUCKET_ORDER])];
+const CANONICAL_BUCKETS: ReadonlySet<string> = new Set(KNOWN_BUCKETS);
 const MAX_WEIGHT_ENTRIES = RECEIPT_CANONICAL_BUCKET_ORDER.length;
 
 export type WeightsParse =
@@ -149,7 +156,7 @@ export function parseOptionalWeights(body: JsonObject): WeightsParse {
     if (!CANONICAL_BUCKETS.has(bucket)) {
       return {
         ok: false,
-        error: `weights_bucket_not_canonical: "${bucket}" is not one of ${RECEIPT_CANONICAL_BUCKET_ORDER.join(", ")}`,
+        error: `weights_bucket_not_canonical: "${bucket}" is not one of ${KNOWN_BUCKETS.join(", ")}`,
       };
     }
     seen.add(bucket);

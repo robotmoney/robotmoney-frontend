@@ -101,6 +101,34 @@ export function gradeProbeReceipts(
   return { ok: problems.length === 0, receipts: sorted.length, nonOk, gaps, problems };
 }
 
+/**
+ * Grade the receipts of a window that holds one declared maintenance window
+ * (a breaking cutover: the stack is down between the maintenance page going
+ * on and off). Inside `declared` (epoch ms, on to off) a non-200 answer and
+ * the gaps that start and end within one interval of it are the window, and
+ * pass. Outside it, the grade is `gradeProbeReceipts` unchanged: any non-200
+ * or gap fails. A receipt still counts toward the window when it falls
+ * between its edges, so a probe that died before the window opened fails.
+ */
+export function gradeProbeWithDeclaredWindow(
+  receipts: readonly ProbeReceipt[],
+  window: { start: number; end: number },
+  declared: { start: number; end: number },
+  intervalMs: number = PROBE_INTERVAL_MS,
+  jitterMs: number = PROBE_JITTER_MS,
+): ProbeGrade {
+  const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs);
+  const limit = intervalMs + jitterMs;
+  const inWindow = (at: number) => at >= declared.start && at <= declared.end;
+  const nonOk = base.nonOk.filter((r) => !inWindow(r.at));
+  const gaps = base.gaps.filter(([from, to]) => !(from >= declared.start - limit && to <= declared.end + limit));
+  const problems: string[] = [];
+  if (base.receipts === 0) problems.push("no probe receipts in the window");
+  if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) outside the declared maintenance window were not 200`);
+  if (gaps.length > 0) problems.push(`${gaps.length} gap(s) outside the declared maintenance window exceeded ${intervalMs / 1000} s`);
+  return { ok: problems.length === 0, receipts: base.receipts, nonOk, gaps, problems };
+}
+
 /** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}. */
 export function parseProbeReceipts(text: string): ProbeReceipt[] {
   return text

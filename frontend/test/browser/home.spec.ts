@@ -177,9 +177,9 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await expect(hero.locator(".hm-rot.is-live .hm-rot__vis")).toHaveAttribute("aria-hidden", "true");
   await expect.poll(() => hero.locator(".hm-rot__w:last-child .hm-rot__l").evaluateAll((ls) => ls.map((l) => (l as HTMLElement).dataset.ch).join("")), { timeout: 8_000 })
     .toBe("DAOs");
-  await expect(hero.locator(".hm-hero__cta .btn-primary")).toHaveAttribute("href", "/deposit");
-  await expect(hero.locator(".hm-hero__cta .btn-primary")).toContainText("Deposit USDC");
-  await expect(hero.locator(".hm-hero__cta .rr-btn")).toHaveAttribute("href", "/allocation");
+  await expect(hero.locator(".hm-hero__cta .btn-primary")).toHaveAttribute("href", "/early-access");
+  await expect(hero.locator(".hm-hero__cta .btn-primary")).toContainText("Request early access");
+  await expect(hero.locator(".hm-hero__cta .rr-btn")).toHaveAttribute("href", "/model-portfolio");
 
   // Fixed and clear over the monument: a WebGL canvas is not sampled by
   // backdrop-filter, so a frosted fill would read as a lid.
@@ -222,7 +222,9 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await expect(page.locator("#members a").filter({ hasText: "Apply for a seat" })).toHaveAttribute("href", "/swarm/apply");
   await expect(page.locator("#members a").filter({ hasText: "regime" })).toHaveAttribute("href", "/regime");
   await expect(page.locator("#members a").filter({ hasText: "Read our research" })).toHaveAttribute("href", "/blog");
-  await expect(page.locator("#hold .btn-primary")).toHaveAttribute("href", "/deposit");
+  await expect(page.locator("#hold .btn-primary")).toHaveAttribute("href", "/early-access");
+  // Deposits wait for the vaults: no prompt sends an agent to the deposit skill.
+  await expect(page.locator("#hold")).not.toContainText("skill.md");
 
   // The problem comes first, then the answer: the section sits between the
   // hero and the model portfolio, and hands over to it.
@@ -275,7 +277,7 @@ test("the ring has four CATEGORICAL arcs, a receipt and the history", async ({ p
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
   const keys = page.locator(".hm-keys li");
   await expect(keys).toHaveCount(4);
-  await expect(keys.nth(0)).toContainText("Fixed Income");
+  await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
   await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("90%", { timeout: 3_000 });
   await expect(keys.nth(1)).toContainText("Small Cap Tokens");
   await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("5%");

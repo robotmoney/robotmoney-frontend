@@ -123,6 +123,11 @@ jobs:
       - name: Install deps
         working-directory: backend
         run: bun install --frozen-lockfile
+      # tests/csvb-api-archive-parity.test.ts runs csvb (packages/csvb) beside the
+      # archive store, so csvb's own dependencies are installed too (issue 1477).
+      - name: Install csvb deps
+        working-directory: packages/csvb
+        run: bun install --frozen-lockfile
       # The image copies packages/analyst-sdk before bun install. e2e builds it
       # only after merge, so build it here to catch a broken COPY on the PR.
       - name: Backend image builds (issue #1095)
@@ -201,11 +206,12 @@ jobs:
               || { echo "::error::$f did not run in the backend suite: an issue 1378 boot or stop proof is excluded"; exit 1; }
           done
       # Issue 1422: the public archive, report and load-protection proofs run
-      # against the seeded ephemeral Postgres. Absent or excluded is a red job.
+      # against the seeded ephemeral Postgres, with the members chain step's
+      # bound at 2,000,000 members (issue 1514). Absent or excluded is a red job.
       - name: Public analytics archive proofs ran (issue 1422)
         shell: bash
         run: |
-          for f in tests/api/public-analytics-archives.test.ts tests/api/public-analytics-limits.test.ts tests/api/public-analytics.test.ts tests/api/client-ip.test.ts tests/api/analytics-run-ledger.test.ts; do
+          for f in tests/api/public-analytics-archives.test.ts tests/api/public-archive-members-scale.test.ts tests/api/public-analytics-limits.test.ts tests/api/public-analytics.test.ts tests/api/client-ip.test.ts tests/api/analytics-run-ledger.test.ts; do
             test -f "backend/$f" || { echo "::error::backend/$f is missing: an issue 1422 proof would stop running"; exit 1; }
             grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/backend-bun-test.log" \
               || { echo "::error::$f did not run in the backend suite: an issue 1422 proof is excluded"; exit 1; }
@@ -243,6 +249,25 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/regime-fidelity.test.ts:7
           tests/backtest-correlations-fidelity.test.ts:7
-          tests/regime-replay-published.test.ts:5
+          tests/regime-replay-published.test.ts:8
           tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8
+          tests/analytics-compute-from-vintage.test.ts:7
+      # Issue 1477: format 1 has one writer. csvb and the archive store write the
+      # same day-cut backups byte for byte, the planted junction cases of the
+      # archive routes ran, and the api-recorded fixture is reproduced unchanged.
+      - name: Format 1 writer parity proofs ran (issue 1477)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/csvb-api-archive-parity.test.ts:2
+          tests/api/public-analytics-archives.test.ts:27
+          tests/analyst-sdk-public-archive-recording.test.ts:2
+      # Issue 1498: the vault TVL conversion keeps the raw amount as a BigInt
+      # until one correctly rounded raw / 10^decimals, proven against BigInt
+      # rational arithmetic with every case run and none skipped.
+      - name: Vault TVL fidelity proofs ran (issue 1498)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/projects-pipelines-fidelity.test.ts:14

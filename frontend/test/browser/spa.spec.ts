@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { navigate } from "./navigation.ts";
 import { renderMeta } from "../../public/assets/js/app/seo.js";
+import { VAULTS } from "../../public/assets/js/app/lib/vault-data.js";
 
 const vendorScripts = {
   "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js":
@@ -78,14 +79,14 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   const errors = failOnBrowserErrors(page);
 
   await page.goto("/");
-  await navigate(page, "/allocation");
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await navigate(page, "/model-portfolio");
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   // The allocationView factory draws the allocation donut and the yield
   // comparison as hand-authored inline SVG (RM-115 replaced the Chart.js pies).
   await expect(page.locator(".alp__ring circle[data-sleeve]").first()).toBeVisible();
 
   // RM-115: the page reads the VAULTS and the allocation framework, and the
-  // house book is gone from it entirely. Until the four-vault route is served,
+  // house book is gone from it entirely. Until the vaults route is served,
   // the Vaults section reads rmUSDC from vault-economics (lib/vault-source.js),
   // so its TVL is derived from that same endpoint and stays correct as the
   // in-CI Base RPC stub's fixtures evolve (issue #48; zero live Base mainnet
@@ -104,7 +105,9 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
   // meta rail above the weights carries the router, which holds nothing.
   const vaultRows = page.locator("#vaults tbody tr");
   const rmusdcTvl = vaultRows.first().locator("td[data-col=actual] small");
-  await expect(vaultRows).toHaveCount(4);
+  // One row per vault in VAULTS: three since rmAGENT closed with its sleeve,
+  // and a fourth when the gold vault gets one (RM-190).
+  await expect(vaultRows).toHaveCount(VAULTS.length);
   await expect(rmusdcTvl).toHaveText(expected.vault);
   await expect(page.locator(".alp__meta")).not.toContainText("Deployed");
 
@@ -119,7 +122,7 @@ test("renders allocation and dynamic swarm routes through Alpine", async ({ page
     return route.continue();
   });
   await navigate(page, "/");
-  await navigate(page, "/allocation");
+  await navigate(page, "/model-portfolio");
   await expect(rmusdcTvl).toHaveText(expected.vault);
   expect(houseBookHits).toEqual([]);
   await page.unroute("**/api/dashboards/wallet-*");
@@ -205,35 +208,29 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
   expect(reserved!.filled).toBeLessThan(reserved!.viewport);
 });
 
-test("the deposit hero pairs the headline with the install card and runs the tree canvas", async ({ page }) => {
+// Deposits wait for the vaults to open (RM-190): the deposit page and the
+// deposit skill's docs move to early access, query kept so a referral rides
+// along and fills in the form's code (RM-195). That an address the docs never
+// had is no alias is seo-legacy-aliases.test.ts's.
+test("/deposit and the deposit skill's docs move to /early-access with their query", async ({ page }) => {
+  // Loaded directly, as a held link would be: navigate() waits for the path it
+  // was given, and these never render under it.
+  for (const from of ["/deposit", "/docs/skill", "/docs/skill/commands"]) {
+    await page.goto(`${from}?ref=rm_athena`);
+    await expect(page, from).toHaveURL(/\/early-access\?ref=rm_athena$/);
+    await expect(page.locator("h1"), from).toHaveText("Early access");
+    await expect(page.locator("#ea-referral"), from).toHaveValue("rm_athena");
+  }
+});
+
+// The skills page keeps the tree canvas the deposit page shared with it.
+test("the skills hero runs the tree canvas", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await page.goto("/");
-  // /deposit since RM-129; this was /skills, now the index of every skill.
-  await navigate(page, "/deposit");
-
-  // The install command is the call to action on this page, so it belongs in
-  // the hero beside the headline rather than in a block further down.
+  await navigate(page, "/skills");
   const hero = page.locator(".sk__head");
-  await expect(hero.locator(".sk__title")).toContainText("Deposit");
-  await expect(hero.locator(".sk__install-cmd")).toContainText("npx skills add");
-  await expect(hero.locator(".sk__cta")).toBeVisible();
-
-  // Two columns above the breakpoint: the card sits to the right of the copy,
-  // not under it.
-  const copyBox = await hero.locator(".sk__head-copy").boundingBox();
-  const cardBox = await hero.locator(".sk__install-card").boundingBox();
-  expect(cardBox!.x).toBeGreaterThan(copyBox!.x + copyBox!.width / 2);
-
-  // treeHero() mounted and produced a canvas rather than failing silently.
+  await expect(hero.locator(".sk__title")).toContainText("Skills");
   await expect(hero.locator(".sk__head-viz canvas")).toHaveCount(1);
-
-  // Copy button writes the exact command.
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await hero.locator(".sk__install-copy").click();
-  await expect(hero.locator(".sk__install-copy")).toHaveClass(/is-copied/);
-  const clip = await page.evaluate(() => navigator.clipboard.readText());
-  expect(clip).toBe("npx skills add robotmoney/robotmoney-skills --skill robotmoney-cli");
-
   await expectNoBrowserErrors(errors);
 });
 
@@ -251,9 +248,11 @@ test("the deposit hero pairs the headline with the install card and runs the tre
 // vault route has since been rolled back, but the lesson is why this list is
 // derived: the next page added to the nav is covered the day it lands, not the
 // day someone remembers to edit an array.
-// Routed and hero-shaped, but not advertised in the nav. None today: the
-// projects directory, the last one, joined the nav with RM-186.
-const EXTRA_HERO_ROUTES: string[] = [];
+const EXTRA_HERO_ROUTES = [
+  // Routed and hero-shaped, but deliberately not advertised in the nav:
+  // /projects is linked from content only.
+  "/projects",
+];
 
 // The hero bands components.css pins to one offset. Since RM-124 the nav also
 // reaches pages that open without one (a vault, a subject, the docs), and the
@@ -322,13 +321,13 @@ test("latest navigation wins when an earlier fragment response is delayed", asyn
   await page.evaluate(() => {
     history.pushState({}, "", "/swarm/members/athena");
     window.dispatchEvent(new PopStateEvent("popstate"));
-    history.pushState({}, "", "/allocation");
+    history.pushState({}, "", "/model-portfolio");
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
 
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   await page.waitForTimeout(400);
-  await expect(page.getByRole("heading", { name: "Asset Allocation", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
   await expect(page.locator(".profile-name")).toHaveCount(0);
 
   await expectNoBrowserErrors(errors);
@@ -399,20 +398,31 @@ for (const { path, title } of NOINDEX_STUB_ROUTES) {
 }
 
 test("/vault renders the allocation page and declares it canonical", async ({ page }) => {
-  // Bare /vault is the four vaults on /allocation: the router moves the
-  // address to /allocation#vaults before it renders, so navigate(), which
+  // Bare /vault is the vaults table on /model-portfolio: the router moves the
+  // address to /model-portfolio#vaults before it renders, so navigate(), which
   // waits for the render of the path it pushed, cannot drive it. A direct load
   // can. It is still an EXPLICIT route, not an absence: the catch-all maps an
   // unknown path to /views/<path>.html, which for /vault is now the per-vault
   // page.
   await page.goto("/vault");
-  await expect(page).toHaveURL(/\/allocation#vaults$/);
+  await expect(page).toHaveURL(/\/model-portfolio#vaults$/);
   await expect(page.locator("section.alp")).toHaveCount(1);
-  // Two addresses, one page: seo.js names /allocation canonical for both so
+  // Two addresses, one page: seo.js names /model-portfolio canonical for both so
   // they do not compete as duplicates, and the page stays indexable.
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
-    "href", "https://robotmoney.network/allocation");
+    "href", "https://robotmoney.network/model-portfolio");
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /^index, follow/);
+});
+
+test("/allocation moves to /model-portfolio with its query and fragment", async ({ page }) => {
+  // The model portfolio's old address (RM-190). Archived sessions and the
+  // deposit skill cite /allocation#vault, and the vault data switch rides on
+  // the query, so the move keeps both.
+  await page.goto("/allocation?vaults=devnet#vaults");
+  await expect(page).toHaveURL(/\/model-portfolio\?vaults=devnet#vaults$/);
+  await expect(page.getByRole("heading", { name: "Model Portfolio", exact: true })).toBeVisible();
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href", "https://robotmoney.network/model-portfolio");
 });
 
 test("the noindex override does not leak onto the next route", async ({ page }) => {

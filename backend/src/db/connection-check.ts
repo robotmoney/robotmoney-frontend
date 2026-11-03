@@ -9,7 +9,7 @@
 import postgres from "postgres";
 import { config } from "../config.ts";
 import { configureApiPools, probeSql } from "./client.ts";
-import { deriveConnectionBudget, type BudgetOverrides, type ConnectionBudget, type ServerConnectionLimits } from "./connection-budget.ts";
+import { deriveConnectionBudget, type BatchCaps, type BudgetOverrides, type ConnectionBudget, type ServerConnectionLimits } from "./connection-budget.ts";
 import { onStatement, registerStatement, type RegistryDb } from "./registry.ts";
 
 const connectionCheck = registerStatement({
@@ -87,9 +87,9 @@ export function budgetOverridesFromEnv(env: Record<string, string | undefined> =
  * The api's boot step: read the server's limits on a short-lived connection,
  * derive the budget, and install the request, batch and probe pools. Throws
  * ConnectionBudgetError, naming the budget and each share, when an override
- * does not fit.
+ * does not fit or the batch pool cannot hold `caps` (issue 1514).
  */
-export async function configureApiPoolsFromServer(env: Record<string, string | undefined> = process.env): Promise<ConnectionBudget> {
+export async function configureApiPoolsFromServer(caps: BatchCaps, env: Record<string, string | undefined> = process.env): Promise<ConnectionBudget> {
   const overrides = budgetOverridesFromEnv(env);
   const once = postgres(config.databaseUrl, { max: 1, onnotice: () => {}, connect_timeout: 5, connection: { statement_timeout: 5_000 } });
   let limits: ServerConnectionLimits;
@@ -98,7 +98,7 @@ export async function configureApiPoolsFromServer(env: Record<string, string | u
   } finally {
     await once.end({ timeout: 5 });
   }
-  const budget = deriveConnectionBudget(limits, overrides);
+  const budget = deriveConnectionBudget(limits, overrides, caps);
   await configureApiPools(budget);
   return budget;
 }

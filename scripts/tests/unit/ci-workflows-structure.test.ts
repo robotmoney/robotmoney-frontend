@@ -51,6 +51,7 @@ const PATH_GATED_WORKFLOWS = [
   "backend.yml",
   "contract.yml",
   "analyst-sdk.yml",
+  "csvb.yml",
   "integration.yml",
   "web-client.yml",
   "research-pipeline.yml",

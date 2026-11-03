@@ -37,6 +37,8 @@ const KNOBS = [
   "BASE_RPC_MAX_CONCURRENCY",
   "BASE_RPC_MAX_RETRIES",
   "BASE_RPC_RETRY_BASE_MS",
+  "BASE_RPC_RATE_LIMIT_BACKOFF_MS",
+  "BASE_RPC_RATE_LIMIT_RETRIES",
   "BASE_RPC_MAX_CALLS_PER_SEC",
   "BASE_RPC_RATE_BURST",
   "BASE_RPC_MAX_BATCH_SIZE",
@@ -66,6 +68,8 @@ const calls = (n: number, method = "eth_blockNumber"): BatchCall[] =>
 beforeEach(() => {
   posts = [];
   process.env.BASE_RPC_RETRY_BASE_MS = "1";
+  // The rate-limit schedule is seconds by default; tiny here so the suite stays quick.
+  process.env.BASE_RPC_RATE_LIMIT_BACKOFF_MS = "1";
   // Pacing OFF by default here: a 429 deliberately DRAINS the shared bucket, so
   // the retry assertions would otherwise measure a multi-second refill instead
   // of the behaviour under test. The one test that IS about pacing turns it back
@@ -229,6 +233,7 @@ test("retries EXHAUSTED with entries still throttled: those report FAILED, the r
   // returning the throttled entries as anything other than failed — would make
   // an unrepaired day look repaired.
   process.env.BASE_RPC_MAX_RETRIES = "2";
+  process.env.BASE_RPC_RATE_LIMIT_RETRIES = "2";
   serve((e) =>
     e.params[0] === 2 || e.method === "stuck"
       ? { jsonrpc: "2.0", id: e.id, error: { code: -32016, message: "over rate limit" } }

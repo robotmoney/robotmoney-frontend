@@ -16,6 +16,7 @@ import type { AnalyticsDataSource, ResearchInputs } from "../../src/analytics/ac
 import { hermeticDataSource } from "../../src/analytics/access/hermetic-source.ts";
 import { captureSourceAcquisition, type AcquisitionSink, type CommittedSourceValue, type SourceAcquisitionEvidence } from "../../src/analytics/source-ledger.ts";
 import { TOP7 } from "../../src/analytics/analyze/research-signals.ts";
+import { STORED_UNDER } from "../../src/analytics/extras.ts";
 import type { Point, RawIndicatorHistory } from "../../src/analytics/types.ts";
 import type { TelemetryRunSubmission, TelemetrySink } from "../../src/analytics/telemetry.ts";
 import { variantInputs } from "./originals-source.ts";
@@ -42,8 +43,12 @@ const bumpLast = (pts: readonly Point[], f: (v: number) => number) =>
 export async function baseObservations(): Promise<Observations> {
   const v = variantInputs("production");
   const r = await hermeticDataSource.fetchResearchInputs(ASOF);
+  // The D74 amendment keys, as production writes them: DEFI_GROWTH and
+  // STABLES_GROWTH are read from DEFI_TVL and STABLES, and nothing is acquired
+  // under their own keys (TEST-4).
+  const registry = Object.fromEntries(Object.entries(v.registry).filter(([id]) => !Object.hasOwn(STORED_UNDER, id)));
   return {
-    registry: v.registry,
+    registry,
     mna: r.mna,
     extras: v.extras,
     research: { btc: r.btc, qqq: r.qqq, spy: r.spy, rsp: r.rsp, top7: r.top7, margin: r.margin, conf: r.conf },

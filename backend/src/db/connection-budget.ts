@@ -25,7 +25,18 @@
 // non-zero, before a port is bound. A share left unset is derived from what is
 // left, up to its default.
 //
-// Pure: no database, no environment. client.ts and connection-check.ts feed it.
+// THE BATCH POOL COVERS EVERY CAP THAT DRAWS ON IT (issue 1514). Two callers
+// share it: the analytics routes, capped at ANALYTICS_CONCURRENCY, and the
+// pipeline routes, capped at PIPELINE_TOKEN_CONCURRENCY per token. The batch
+// share used to be 3 (2 on a small server) against caps that add up to 4, so
+// while an analytics run held its two transactions a pipeline queue claim
+// waited past the admission wait and answered 503 db_saturated, at every run.
+// The batch share is now at least the two caps plus BATCH_UNCAPPED_RESERVE,
+// derived or overridden, on every server: a budget that cannot hold it refuses
+// the boot and names the shares.
+//
+// Pure: no database, no environment. client.ts and connection-check.ts feed it;
+// the caps come from the caller (api/index.ts), so this module imports no route.
 
 /** What the server allows, as `current_setting` reports it. */
 export interface ServerConnectionLimits {
@@ -59,8 +70,29 @@ export const DEFAULT_HEADROOM = 10;
 export const GUARD_SHARE = 1;
 /** The request pool's size when the budget allows it (the pool's size before this budget existed). */
 export const DEFAULT_REQUEST_SHARE = 10;
-/** The batch pool's size when the budget allows it. */
-export const DEFAULT_BATCH_SHARE = 3;
+/**
+ * Batch connections no cap bounds (issue 1514). The pipeline route looks its
+ * token up on the batch pool BEFORE it takes the per-token gate (the gate is
+ * keyed by the token it finds), and the analytics readiness probe is exempt
+ * from the analytics limiter. Each is one short statement, but without a
+ * connection of their own they take one of the capped callers' connections, and
+ * a capped request then waits behind them. One reserved connection gives them a
+ * place to run.
+ */
+export const BATCH_UNCAPPED_RESERVE = 1;
+
+/** The callers that draw on the batch pool, each with its cap. */
+export interface BatchCaps {
+  /** ANALYTICS_CONCURRENCY: analytics-provider requests at once. */
+  readonly analytics: number;
+  /** PIPELINE_TOKEN_CONCURRENCY: requests one pipeline-worker token holds at once. */
+  readonly pipeline: number;
+}
+
+/** The batch connections `caps` need: every cap, plus the reserve for the uncapped lookups. */
+export function batchShareFor(caps: BatchCaps): number {
+  return caps.analytics + caps.pipeline + BATCH_UNCAPPED_RESERVE;
+}
 
 export class ConnectionBudgetError extends Error {
   constructor(message: string) {
@@ -78,7 +110,7 @@ function describe(b: Omit<ConnectionBudget, "request" | "batch"> & { request: nu
 }
 
 /** The api's shares of the server's connections, or ConnectionBudgetError when they cannot fit. */
-export function deriveConnectionBudget(limits: ServerConnectionLimits, overrides: BudgetOverrides = {}): ConnectionBudget {
+export function deriveConnectionBudget(limits: ServerConnectionLimits, overrides: BudgetOverrides, caps: BatchCaps): ConnectionBudget {
   const headroom = overrides.headroom ?? DEFAULT_HEADROOM;
   const base = {
     maxConnections: limits.maxConnections,
@@ -89,6 +121,9 @@ export function deriveConnectionBudget(limits: ServerConnectionLimits, overrides
     guard: GUARD_SHARE,
   };
   const free = base.available - base.guard;
+  // The batch share is the caps' need on every server (issue 1514), never a
+  // quarter of what is free: a smaller one refuses requests at every analytics run.
+  const needed = batchShareFor(caps);
 
   let request: number;
   let batch: number;
@@ -97,21 +132,25 @@ export function deriveConnectionBudget(limits: ServerConnectionLimits, overrides
     batch = overrides.batch;
   } else if (overrides.request !== undefined) {
     request = overrides.request;
-    batch = Math.min(DEFAULT_BATCH_SHARE, free - request);
+    batch = needed;
   } else if (overrides.batch !== undefined) {
     batch = overrides.batch;
     request = Math.min(DEFAULT_REQUEST_SHARE, free - batch);
-  } else if (free >= DEFAULT_REQUEST_SHARE + DEFAULT_BATCH_SHARE) {
-    request = DEFAULT_REQUEST_SHARE;
-    batch = DEFAULT_BATCH_SHARE;
   } else {
-    // A small instance: a quarter for bulk work, the rest for requests.
-    batch = Math.max(1, Math.floor(free / 4));
-    request = free - batch;
+    // A small instance gives up request connections, never batch ones.
+    batch = needed;
+    request = Math.min(DEFAULT_REQUEST_SHARE, free - batch);
   }
 
   const budget = { ...base, request, batch };
-  if (request < 1 || batch < 1 || request + batch + base.guard > base.available) {
+  if (batch < needed) {
+    throw new ConnectionBudgetError(
+      `api refused to start: the batch pool cannot hold every cap that draws on it — batch ${batch} < ` +
+        `analytics ${caps.analytics} (ANALYTICS_CONCURRENCY) + pipeline ${caps.pipeline} (PIPELINE_TOKEN_CONCURRENCY) + ` +
+        `reserve ${BATCH_UNCAPPED_RESERVE} = ${needed}; ${describe(budget)}. Raise PG_BATCH_POOL_MAX or unset it.`,
+    );
+  }
+  if (request < 1 || request + batch + base.guard > base.available) {
     throw new ConnectionBudgetError(
       `api refused to start: the database connection shares do not fit the server's budget — ${describe(budget)}. ` +
         "Lower PG_REQUEST_POOL_MAX, PG_BATCH_POOL_MAX or PG_CONNECTION_HEADROOM, or raise max_connections.",

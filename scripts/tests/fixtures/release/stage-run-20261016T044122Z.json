@@ -1,0 +1,1431 @@
+{
+  "version": 1,
+  "target": "stage",
+  "rmEnv": "stage",
+  "release": "v0.6.2",
+  "commit": "b2405d0824a97a43c88a687da0b9e911cffaf118",
+  "stepListHash": "063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925",
+  "stepIds": [
+    "Q01-lockfile",
+    "Q02-dump",
+    "Q03-stage-up",
+    "Q04-role-passwords",
+    "Q05-scope",
+    "Q06-checkout",
+    "Q07-host-identity",
+    "Q08-install",
+    "Q09-capture-checkout",
+    "Q10-capture-identity",
+    "Q11-capture-install",
+    "Q12-state-baseline",
+    "Q13-log-baseline",
+    "Q14-backup",
+    "Q15-backup-sums",
+    "Q16-restore-proof",
+    "Q17-probe-start",
+    "Q18-migrate",
+    "Q19-env-rewrite",
+    "Q20-set-identity",
+    "Q21-tokens",
+    "Q22-rolling-boot",
+    "Q23-ready",
+    "Q24-site",
+    "Q25-probe-grade",
+    "Q26-verify-version",
+    "Q27-verify-product",
+    "Q28-log-verdict",
+    "Q29-soak-record",
+    "Q30-compare-baseline",
+    "Q31-host-guards",
+    "Q32-soak-gate",
+    "Q33-soak-checks",
+    "Q34-collect-logs",
+    "Q35-subject-spacing",
+    "Q36-maintenance-fallback",
+    "Q37-missed-sessions",
+    "Q38-closed-session-take",
+    "Q39-starter-takes",
+    "Q40-dry-run-take",
+    "Q41-brand-marks",
+    "Q42-fetch-cache",
+    "Q43-rm-env-retired",
+    "Q44-fixture-guard",
+    "Q45-take-rules",
+    "Q46-bankr-token-rows",
+    "Q47-latest-only-catchup",
+    "P01-checkout",
+    "P02-host-identity",
+    "P03-install",
+    "P04-capture-checkout",
+    "P05-capture-identity",
+    "P06-capture-install",
+    "P07-state-baseline",
+    "P08-log-baseline",
+    "C01-backup",
+    "C02-backup-sums",
+    "C03-restore-proof",
+    "C04-probe-start",
+    "C05-migrate",
+    "C06-version-tag",
+    "C07-env-rewrite",
+    "C08-set-identity",
+    "C09-tokens",
+    "C10-rolling-boot",
+    "C11-ready",
+    "C12-site",
+    "C13-probe-grade",
+    "C14-verify-version",
+    "C15-verify-product",
+    "C16-log-verdict",
+    "C17-soak-record",
+    "C18-compare-baseline",
+    "C19-host-guards",
+    "C20-soak-gate",
+    "C21-soak-checks",
+    "C22-collect-logs",
+    "C23-subject-spacing",
+    "C24-maintenance-fallback",
+    "C25-missed-sessions",
+    "C26-starter-takes",
+    "C27-brand-marks",
+    "C28-fetch-cache",
+    "C29-rm-env-retired",
+    "C30-fixture-guard",
+    "C31-take-rules",
+    "C32-bankr-token-rows",
+    "C33-latest-only-catchup"
+  ],
+  "goSha256": "a87aebe18b5893d7878cf8b649c8f5f9b158697a6682967c6ad03a72e29e05d6",
+  "runTs": "20261016T044122Z",
+  "startedAt": "2026-10-16T04:41:22.373Z",
+  "updatedAt": "2026-10-16T05:41:52.905Z",
+  "status": "passed",
+  "steps": {
+    "Q01-lockfile": {
+      "id": "Q01-lockfile",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:41:22.374Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:41:24.779Z",
+      "durationMs": 2405
+    },
+    "Q02-dump": {
+      "id": "Q02-dump",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:41:24.780Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:41:32.024Z",
+      "durationMs": 7244
+    },
+    "Q03-stage-up": {
+      "id": "Q03-stage-up",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:41:32.024Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage-target-up/credentials-init.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage-target-up/env-rewrite.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/provision-tokens-2026-10-16T04-47-19-326Z.json",
+          "missing": true
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/rebind-members-2026-10-16T04-48-06-977Z.json",
+          "missing": true
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:18.921Z",
+      "durationMs": 406897
+    },
+    "Q04-role-passwords": {
+      "id": "Q04-role-passwords",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:18.922Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/role-passwords-2026-10-16T04-48-53-564Z.json",
+          "missing": true
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:36.823Z",
+      "durationMs": 17901
+    },
+    "Q05-scope": {
+      "id": "Q05-scope",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:36.824Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:37.616Z",
+      "durationMs": 792
+    },
+    "Q06-checkout": {
+      "id": "Q06-checkout",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:37.616Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:40.457Z",
+      "durationMs": 2841
+    },
+    "Q07-host-identity": {
+      "id": "Q07-host-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:40.458Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q07-host-identity/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:45.772Z",
+      "durationMs": 5314
+    },
+    "Q08-install": {
+      "id": "Q08-install",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:45.773Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:47.804Z",
+      "durationMs": 2031
+    },
+    "Q09-capture-checkout": {
+      "id": "Q09-capture-checkout",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:47.805Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:50.393Z",
+      "durationMs": 2588
+    },
+    "Q10-capture-identity": {
+      "id": "Q10-capture-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:50.394Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261016T044122Z/host-identity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q10-capture-identity/receipts/host-identity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:56.285Z",
+      "durationMs": 5891
+    },
+    "Q11-capture-install": {
+      "id": "Q11-capture-install",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:56.285Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:48:58.033Z",
+      "durationMs": 1748
+    },
+    "Q12-state-baseline": {
+      "id": "Q12-state-baseline",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:48:58.034Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261016T044122Z/baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q12-state-baseline/receipts/baseline.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261016T044122Z/baseline-would-clear.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q12-state-baseline/receipts/baseline-would-clear.txt"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261016T044122Z/baseline-ledger.txt",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q12-state-baseline/receipts/baseline-ledger.txt"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:49:07.464Z",
+      "durationMs": 9430
+    },
+    "Q13-log-baseline": {
+      "id": "Q13-log-baseline",
+      "status": "ok",
+      "exit": 1,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:49:07.465Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-baseline.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q13-log-baseline/receipts/prod-gate-baseline.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q13-log-baseline/receipts/prod-gate-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:49:17.312Z",
+      "durationMs": 9847,
+      "triage": {
+        "file": "/drive2/home/lucas/tmp/claude-1003/-drive2-home-lucas-robotmoney-robotmoney-frontend/3a1662a5-609d-4ae1-ad28-3c3cdfc0bf09/scratchpad/triage-stage.txt",
+        "sha256": "638786acfbbd8a6d9f81949bbefa487e89d02de27db265de4f2525dbecbe0ddc",
+        "used": [
+          {
+            "check": "inventory",
+            "fragment": "[projects.refresh_wallets] wallet",
+            "reason": "v0.6.1 logs one error per wallet with no live read path (a chain other than base, or an address that is not 0x plus 40 hex). v0.6.2 skips those wallets and logs one info summary line per run (PR 1376, issue 1275)."
+          }
+        ]
+      }
+    },
+    "Q14-backup": {
+      "id": "Q14-backup",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:49:17.318Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261016T044122Z/manifest.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q14-backup/receipts/manifest.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:59:01.917Z",
+      "durationMs": 584599
+    },
+    "Q15-backup-sums": {
+      "id": "Q15-backup-sums",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:59:01.919Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/rm-backup-stage-20261016T044122Z/SHA256SUMS",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q15-backup-sums/receipts/SHA256SUMS"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T04:59:09.230Z",
+      "durationMs": 7311
+    },
+    "Q16-restore-proof": {
+      "id": "Q16-restore-proof",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T04:59:09.231Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/.local/state/robotmoney-release/stage/20261016T044122Z/restore-proof.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q16-restore-proof/receipts/restore-proof.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:03:56.048Z",
+      "durationMs": 286817
+    },
+    "Q17-probe-start": {
+      "id": "Q17-probe-start",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:03:56.049Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:03:56.238Z",
+      "durationMs": 189
+    },
+    "Q18-migrate": {
+      "id": "Q18-migrate",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:03:56.239Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/migrate-receipt-2026-10-16T05-04-15-030Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q18-migrate/receipts/migrate-receipt-2026-10-16T05-04-15-030Z.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/migrate-journal-2026-10-16T05-04-15-030Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q18-migrate/receipts/migrate-journal-2026-10-16T05-04-15-030Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:05:17.251Z",
+      "durationMs": 81012
+    },
+    "Q19-env-rewrite": {
+      "id": "Q19-env-rewrite",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:05:17.252Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/env-rewrite.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q19-env-rewrite/receipts/env-rewrite.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:05:23.087Z",
+      "durationMs": 5835
+    },
+    "Q20-set-identity": {
+      "id": "Q20-set-identity",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:05:23.088Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/set-identity-2026-10-16T05-05-42-379Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q20-set-identity/receipts/set-identity-2026-10-16T05-05-42-379Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:05:29.392Z",
+      "durationMs": 6304
+    },
+    "Q21-tokens": {
+      "id": "Q21-tokens",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:05:29.394Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/prod-init/provision-tokens-2026-10-16T05-05-48-514Z.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q21-tokens/receipts/provision-tokens-2026-10-16T05-05-48-514Z.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:05:35.499Z",
+      "durationMs": 6105
+    },
+    "Q22-rolling-boot": {
+      "id": "Q22-rolling-boot",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:05:35.501Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:08:49.551Z",
+      "durationMs": 194050
+    },
+    "Q23-ready": {
+      "id": "Q23-ready",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:08:49.552Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:08:53.201Z",
+      "durationMs": 3649
+    },
+    "Q24-site": {
+      "id": "Q24-site",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:08:53.202Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/web/receipt.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q24-site/receipts/receipt.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:08:58.611Z",
+      "durationMs": 5409
+    },
+    "Q25-probe-grade": {
+      "id": "Q25-probe-grade",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:08:58.613Z",
+      "receipts": [],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:08:58.798Z",
+      "durationMs": 185
+    },
+    "Q26-verify-version": {
+      "id": "Q26-verify-version",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:08:58.798Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/identity-check.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q26-verify-version/receipts/identity-check.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:04.182Z",
+      "durationMs": 5384
+    },
+    "Q27-verify-product": {
+      "id": "Q27-verify-product",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:09:04.184Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/rm-backup-v022/receipts/R7.verify.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q27-verify-product/receipts/R7.verify.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:08.872Z",
+      "durationMs": 4688
+    },
+    "Q28-log-verdict": {
+      "id": "Q28-log-verdict",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:09:08.873Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-post-release.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q28-log-verdict/receipts/prod-gate-post-release.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-post-release.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q28-log-verdict/receipts/prod-gate-post-release.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:19.436Z",
+      "durationMs": 10563
+    },
+    "Q29-soak-record": {
+      "id": "Q29-soak-record",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:09:19.437Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/soak-record.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q29-soak-record/receipts/soak-record.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/soak-record.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q29-soak-record/receipts/soak-record.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/soak-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q29-soak-record/receipts/soak-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:38.744Z",
+      "durationMs": 19307
+    },
+    "Q30-compare-baseline": {
+      "id": "Q30-compare-baseline",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:09:38.745Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-smoke/stage_target/release/20261016T044122Z/compare-baseline.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q30-compare-baseline/receipts/compare-baseline.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:44.583Z",
+      "durationMs": 5838
+    },
+    "Q31-host-guards": {
+      "id": "Q31-host-guards",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:09:44.584Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/host-guards.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q31-host-guards/receipts/host-guards.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:09:50.992Z",
+      "durationMs": 6408
+    },
+    "Q32-soak-gate": {
+      "id": "Q32-soak-gate",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:39:14.248Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-watch.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q32-soak-gate/receipts/prod-gate-watch.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/prod-gate-watch.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q32-soak-gate/receipts/prod-gate-watch.md"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:39:25.274Z",
+      "durationMs": 11026
+    },
+    "Q33-soak-checks": {
+      "id": "Q33-soak-checks",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:39:25.275Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/soak-full.md",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q33-soak-checks/receipts/soak-full.md"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/soak-full.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q33-soak-checks/receipts/soak-full.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:39:50.720Z",
+      "durationMs": 25445
+    },
+    "Q34-collect-logs": {
+      "id": "Q34-collect-logs",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:39:50.721Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/collect-logs.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/collect-logs.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-website-server-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-website-server-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-robot-money-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-analytics-producer-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-system-scheduler-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-worker-analytics-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-athena-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-api-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-api-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-website-server-1.log",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-website-server-1.log"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-agent-noop-analyst-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-api-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-api-1.inspect.json"
+        },
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.inspect.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q34-collect-logs/receipts/logs-rm_smoke_stack_75e6ee6b55-participant-judge-themis-1.inspect.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:40:34.907Z",
+      "durationMs": 44186
+    },
+    "Q35-subject-spacing": {
+      "id": "Q35-subject-spacing",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:40:34.907Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/schedule-parity.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q35-subject-spacing/receipts/schedule-parity.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:40:41.090Z",
+      "durationMs": 6183
+    },
+    "Q36-maintenance-fallback": {
+      "id": "Q36-maintenance-fallback",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:40:41.091Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-maintenance-fallback.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q36-maintenance-fallback/receipts/version-check-maintenance-fallback.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:40:47.293Z",
+      "durationMs": 6202
+    },
+    "Q37-missed-sessions": {
+      "id": "Q37-missed-sessions",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:40:47.294Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-missed-sessions.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q37-missed-sessions/receipts/version-check-missed-sessions.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:40:53.774Z",
+      "durationMs": 6480
+    },
+    "Q38-closed-session-take": {
+      "id": "Q38-closed-session-take",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:40:53.775Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-closed-session-take.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q38-closed-session-take/receipts/version-check-closed-session-take.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:40:59.766Z",
+      "durationMs": 5991
+    },
+    "Q39-starter-takes": {
+      "id": "Q39-starter-takes",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:40:59.766Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-starter-takes.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q39-starter-takes/receipts/version-check-starter-takes.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:05.134Z",
+      "durationMs": 5368
+    },
+    "Q40-dry-run-take": {
+      "id": "Q40-dry-run-take",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:05.135Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-dry-run-take.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q40-dry-run-take/receipts/version-check-dry-run-take.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:10.688Z",
+      "durationMs": 5553
+    },
+    "Q41-brand-marks": {
+      "id": "Q41-brand-marks",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:10.688Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-brand-marks.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q41-brand-marks/receipts/version-check-brand-marks.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:16.650Z",
+      "durationMs": 5962
+    },
+    "Q42-fetch-cache": {
+      "id": "Q42-fetch-cache",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:16.650Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-fetch-cache.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q42-fetch-cache/receipts/version-check-fetch-cache.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:23.671Z",
+      "durationMs": 7021
+    },
+    "Q43-rm-env-retired": {
+      "id": "Q43-rm-env-retired",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:23.672Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-rm-env-retired.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q43-rm-env-retired/receipts/version-check-rm-env-retired.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:30.379Z",
+      "durationMs": 6707
+    },
+    "Q44-fixture-guard": {
+      "id": "Q44-fixture-guard",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:30.379Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-fixture-guard.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q44-fixture-guard/receipts/version-check-fixture-guard.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:36.446Z",
+      "durationMs": 6067
+    },
+    "Q45-take-rules": {
+      "id": "Q45-take-rules",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:36.446Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-take-rules.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q45-take-rules/receipts/version-check-take-rules.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:41.990Z",
+      "durationMs": 5544
+    },
+    "Q46-bankr-token-rows": {
+      "id": "Q46-bankr-token-rows",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:41.991Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-bankr-token-rows.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q46-bankr-token-rows/receipts/version-check-bankr-token-rows.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:47.371Z",
+      "durationMs": 5380
+    },
+    "Q47-latest-only-catchup": {
+      "id": "Q47-latest-only-catchup",
+      "status": "ok",
+      "exit": 0,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:47.372Z",
+      "receipts": [
+        {
+          "remote": "/home/stage-server/stage-target/.local/state/robotmoney-release/stage/20261016T044122Z/version-check-latest-only-catchup.json",
+          "local": "/drive2/home/lucas/.local/state/robotmoney-release/stage/20261016T044122Z/Q47-latest-only-catchup/receipts/version-check-latest-only-catchup.json"
+        }
+      ],
+      "attempt": 1,
+      "endedAt": "2026-10-16T05:41:52.905Z",
+      "durationMs": 5533
+    },
+    "P01-checkout": {
+      "id": "P01-checkout",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.906Z",
+      "endedAt": "2026-10-16T05:41:52.906Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P02-host-identity": {
+      "id": "P02-host-identity",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.906Z",
+      "endedAt": "2026-10-16T05:41:52.906Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P03-install": {
+      "id": "P03-install",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P04-capture-checkout": {
+      "id": "P04-capture-checkout",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P05-capture-identity": {
+      "id": "P05-capture-identity",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P06-capture-install": {
+      "id": "P06-capture-install",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P07-state-baseline": {
+      "id": "P07-state-baseline",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "P08-log-baseline": {
+      "id": "P08-log-baseline",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.907Z",
+      "endedAt": "2026-10-16T05:41:52.907Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C01-backup": {
+      "id": "C01-backup",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.908Z",
+      "endedAt": "2026-10-16T05:41:52.908Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C02-backup-sums": {
+      "id": "C02-backup-sums",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.908Z",
+      "endedAt": "2026-10-16T05:41:52.908Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C03-restore-proof": {
+      "id": "C03-restore-proof",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.908Z",
+      "endedAt": "2026-10-16T05:41:52.908Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C04-probe-start": {
+      "id": "C04-probe-start",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.908Z",
+      "endedAt": "2026-10-16T05:41:52.908Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C05-migrate": {
+      "id": "C05-migrate",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.908Z",
+      "endedAt": "2026-10-16T05:41:52.908Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C06-version-tag": {
+      "id": "C06-version-tag",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.909Z",
+      "endedAt": "2026-10-16T05:41:52.909Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C07-env-rewrite": {
+      "id": "C07-env-rewrite",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.909Z",
+      "endedAt": "2026-10-16T05:41:52.909Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C08-set-identity": {
+      "id": "C08-set-identity",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.909Z",
+      "endedAt": "2026-10-16T05:41:52.909Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C09-tokens": {
+      "id": "C09-tokens",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.909Z",
+      "endedAt": "2026-10-16T05:41:52.909Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C10-rolling-boot": {
+      "id": "C10-rolling-boot",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.910Z",
+      "endedAt": "2026-10-16T05:41:52.910Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C11-ready": {
+      "id": "C11-ready",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.910Z",
+      "endedAt": "2026-10-16T05:41:52.910Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C12-site": {
+      "id": "C12-site",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.910Z",
+      "endedAt": "2026-10-16T05:41:52.910Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C13-probe-grade": {
+      "id": "C13-probe-grade",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.910Z",
+      "endedAt": "2026-10-16T05:41:52.910Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C14-verify-version": {
+      "id": "C14-verify-version",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.911Z",
+      "endedAt": "2026-10-16T05:41:52.911Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C15-verify-product": {
+      "id": "C15-verify-product",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.911Z",
+      "endedAt": "2026-10-16T05:41:52.911Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C16-log-verdict": {
+      "id": "C16-log-verdict",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.911Z",
+      "endedAt": "2026-10-16T05:41:52.911Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C17-soak-record": {
+      "id": "C17-soak-record",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.911Z",
+      "endedAt": "2026-10-16T05:41:52.911Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C18-compare-baseline": {
+      "id": "C18-compare-baseline",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.911Z",
+      "endedAt": "2026-10-16T05:41:52.911Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C19-host-guards": {
+      "id": "C19-host-guards",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.912Z",
+      "endedAt": "2026-10-16T05:41:52.912Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C20-soak-gate": {
+      "id": "C20-soak-gate",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.912Z",
+      "endedAt": "2026-10-16T05:41:52.912Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C21-soak-checks": {
+      "id": "C21-soak-checks",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.912Z",
+      "endedAt": "2026-10-16T05:41:52.912Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C22-collect-logs": {
+      "id": "C22-collect-logs",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.912Z",
+      "endedAt": "2026-10-16T05:41:52.912Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C23-subject-spacing": {
+      "id": "C23-subject-spacing",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.912Z",
+      "endedAt": "2026-10-16T05:41:52.912Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C24-maintenance-fallback": {
+      "id": "C24-maintenance-fallback",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.913Z",
+      "endedAt": "2026-10-16T05:41:52.913Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C25-missed-sessions": {
+      "id": "C25-missed-sessions",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.913Z",
+      "endedAt": "2026-10-16T05:41:52.913Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C26-starter-takes": {
+      "id": "C26-starter-takes",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.913Z",
+      "endedAt": "2026-10-16T05:41:52.913Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C27-brand-marks": {
+      "id": "C27-brand-marks",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.913Z",
+      "endedAt": "2026-10-16T05:41:52.913Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C28-fetch-cache": {
+      "id": "C28-fetch-cache",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.913Z",
+      "endedAt": "2026-10-16T05:41:52.913Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C29-rm-env-retired": {
+      "id": "C29-rm-env-retired",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.914Z",
+      "endedAt": "2026-10-16T05:41:52.914Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C30-fixture-guard": {
+      "id": "C30-fixture-guard",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.914Z",
+      "endedAt": "2026-10-16T05:41:52.914Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C31-take-rules": {
+      "id": "C31-take-rules",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.914Z",
+      "endedAt": "2026-10-16T05:41:52.914Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C32-bankr-token-rows": {
+      "id": "C32-bankr-token-rows",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.914Z",
+      "endedAt": "2026-10-16T05:41:52.914Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    },
+    "C33-latest-only-catchup": {
+      "id": "C33-latest-only-catchup",
+      "status": "skipped",
+      "skipped": "stage",
+      "exit": null,
+      "expectExit": 0,
+      "startedAt": "2026-10-16T05:41:52.915Z",
+      "endedAt": "2026-10-16T05:41:52.915Z",
+      "durationMs": 0,
+      "receipts": [],
+      "attempt": 1
+    }
+  },
+  "recovery": {
+    "ref": "/drive2/home/lucas/tmp/superfield-worktrees/robotmoney-frontend/qa-0-6-x-2026-10-16/scripts/release/runbooks/releases/v0.6.2.yaml#recovery",
+    "sha256": "2a7bddb7b0f8351a9b7d6dbebc4881d639a86b8b9b57070eb6301dc4a313740d"
+  },
+  "tree": "b16a900c7f1e6255f30f9717e56016d80aa8eaaf",
+  "cutoverSeconds": 297
+}

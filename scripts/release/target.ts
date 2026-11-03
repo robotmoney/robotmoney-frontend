@@ -27,12 +27,12 @@ import { DEFAULT_WATCH_HOURS, SOAK_HOURS, WATCH_SESSIONS, type WatchSessions } f
 
 /**
  * The capture checkout convention (owner decision 2026-10-08). The capture
- * checkout is a dedicated folder the release runner owns: P04-capture-checkout clones it when
+ * checkout is a dedicated folder the release runner owns: Q09-capture-checkout/P04-capture-checkout clones it when
  * it is missing, then fetches and detaches it at the commit. It is the same
  * folder for every target. It is never a release checkout: the stage target
  * (./stage-target.ts) removes its own checkout on every `down`, and a capture
  * checkout that was the stage checkout vanished with it (the v0.6.0 production
- * preflight's P04-capture-checkout failure, 2026-10-08). stage-target never creates or removes
+ * preflight's Q09-capture-checkout/P04-capture-checkout failure, 2026-10-08). stage-target never creates or removes
  * this folder.
  */
 export const CAPTURE_CHECKOUT = Object.freeze({ host: "rm-frontend-stage-2", checkout: "/home/stage-server/rm-capture" });
@@ -64,7 +64,7 @@ export interface CaptureHost {
   /** HOME on the capture host: its `~/.env` holds `rm_readonly` against production's replica. */
   readonly home: string;
   /**
-   * The runner-owned checkout on the capture host (CAPTURE_CHECKOUT). P04-capture-checkout
+   * The runner-owned checkout on the capture host (CAPTURE_CHECKOUT). Q09-capture-checkout/P04-capture-checkout
    * clones it when missing. Never the stage target's checkout, never this
    * target's own checkout on the same host.
    */
@@ -78,30 +78,30 @@ export interface ReleaseTarget {
   readonly rmEnv: "stage" | "prod";
   /** The ssh host alias. */
   readonly host: string;
-  /** The release checkout on the host. Every release names a new one; P01-checkout clones it when missing. */
+  /** The release checkout on the host. Every release names a new one; Q06-checkout/P01-checkout clones it when missing. */
   readonly checkout: string;
   /** HOME on the host for every command. Its `.env` is the target's credential file. */
   readonly home: string;
   readonly instance: string;
-  /** The public origin, for the identity check (S01-verify-version). */
+  /** The public origin, for the identity check (Q26-verify-version/C14-verify-version). */
   readonly publicOrigin: string;
   /**
-   * S07-soak-gate's `prod:gate --min-attendance`: the share of active members a good session needs.
+   * Q32-soak-gate/C20-soak-gate's `prod:gate --min-attendance`: the share of active members a good session needs.
    * Default 0.5, the gate's own default. A target where some active members cannot file
    * (stage: the external members run against production, never the stage database)
    * sets it lower in its file, with the reason in `$comment`.
    */
   readonly watchMinAttendance: number;
   /**
-   * Hours after READY (C11-ready's end) before the soak steps S07-soak-gate, S08-soak-checks and V01-subject-spacing
+   * Hours after READY (Q23-ready/C11-ready's end) before the soak steps Q32-soak-gate/C20-soak-gate, Q33-soak-checks/C21-soak-checks and Q35-subject-spacing/C23-subject-spacing
    * run. Default SOAK_HOURS (./watch.ts): 30 minutes on every target (owner,
    * 2026-10-14). A target that grades sessions in the soak must wait at least
    * DEFAULT_WATCH_HOURS, the slowest subject's first publish.
    */
   readonly watchHours: number;
   /**
-   * Whether the watch grades sessions (S07-soak-gate check 7, V01-subject-spacing's in-flight publish
-   * check) or defers them. Rendered into S07-soak-gate and V01-subject-spacing as
+   * Whether the watch grades sessions (Q32-soak-gate/C20-soak-gate check 7, Q35-subject-spacing/C23-subject-spacing's in-flight publish
+   * check) or defers them. Rendered into Q32-soak-gate/C20-soak-gate and Q35-subject-spacing/C23-subject-spacing as
    * `--sessions {watchSessions}`, so the step list stays one list. Default
    * "deferred" on every target: a 30-minute soak cannot see a 24 h epoch
    * close, and sessions are graded afterwards as a report (owner, 2026-10-14).
@@ -229,7 +229,7 @@ export function validateTarget(name: string, raw: unknown): { target: ReleaseTar
  * PURE. The capture checkout rule: the capture checkout is the release
  * runner's own folder. It may not be the stage target's checkout on the stage
  * host (`stage-target down` removes that folder), and it may not be this
- * target's own `checkout` on the same host (P01-checkout and P04-capture-checkout would share one
+ * target's own `checkout` on the same host (Q06-checkout/P01-checkout and Q09-capture-checkout/P04-capture-checkout would share one
  * folder, so stage would never rehearse the capture checkout steps).
  */
 export function captureCheckoutProblems(name: string, capture: CaptureHost, host: string | undefined, checkout: string | undefined): string[] {

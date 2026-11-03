@@ -30,6 +30,7 @@ import {
   inverseCorrelationWeights,
 } from "../transform/math.ts";
 import { smoothRegimes, bucketFn } from "./compute.ts";
+import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 import type { Point } from "../types.ts";
 
 export const CONSTANT_CASH_YR = 0.026;
@@ -119,16 +120,17 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
 
   const indsOf = (panel: Panel) => INDICATORS.filter((x) => x.panel === panel);
   const wmean = (panel: Panel, w: Record<string, number>, i: number): number => {
-    let num = 0;
-    let den = 0;
+    const ws: number[] = [];
+    const vs: number[] = [];
     for (const ind of indsOf(panel)) {
       const v = signed[ind.id][i];
       const ww = w[ind.id];
       if (!Number.isFinite(v) || !Number.isFinite(ww)) continue;
-      num += ww * v;
-      den += ww;
+      ws.push(ww);
+      vs.push(v);
     }
-    return den > 0 ? num / den : NaN;
+    const den = sumDD(ws);
+    return den[0] > 0 ? ddValue(ddDiv(dotDD(ws, vs), den)) : NaN;
   };
   const validCount = (id: string, fromIdx: number, toIdx: number): number => {
     let n = 0;
@@ -225,51 +227,65 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
   const w0 = (w: Record<string, number>, k: string): number => w[k] || 0;
   const sameW = (a: Record<string, number>, b: Record<string, number>): boolean =>
     ["cash", "eth", "spx"].every((k) => Math.abs(w0(a, k) - w0(b, k)) < 1e-9);
-  const turnover = (a: Record<string, number>, b: Record<string, number>): number =>
-    ["cash", "eth", "spx"].reduce((s, k) => s + Math.abs(w0(a, k) - w0(b, k)), 0) / 2;
+  // One-sided turnover with each |Δw| kept exact (twoSum) and summed compensated (D78).
+  const turnover = (a: Record<string, number>, b: Record<string, number>): number => {
+    const parts: number[] = [];
+    for (const k of ["cash", "eth", "spx"]) {
+      const [d, e] = twoSum(w0(a, k), -w0(b, k));
+      if (d < 0 || (d === 0 && e < 0)) parts.push(-d, -e);
+      else parts.push(d, e);
+    }
+    return ddValue(sumDD(parts)) / 2;
+  };
 
   function backtest(regimes: (string | null)[] | null, spec: PortfolioSpec & { fixed?: Record<string, number> }): BacktestResult {
     let i0 = 0;
     while (i0 < dateAxis.length && spec.risky.some((a) => (a === "eth" ? ethPx : spxPx)[i0] == null)) i0++;
-    let eq = 1;
+    const eq = new Compounder(1);
     let lw: Record<string, number> | null = null;
     let pk = 1;
     let mdd = 0;
     const rets: number[] = [];
     const curve: Point[] = [];
-    const cashDaily = Math.pow(1 + CONSTANT_CASH_YR, 1 / 365) - 1;
+    const cashDaily = periodicRate(CONSTANT_CASH_YR, 365);
     for (let i = i0; i < dateAxis.length; i++) {
       const w = spec.fixed || (regimes ? spec.weights[regimes[i] as string] : undefined);
       if (!w) continue;
       if (lw) {
-        let pr = w0(lw, "cash") * cashDaily;
+        // Daily return as one compensated dot product; equity compounds unrounded (D78).
+        const wv: number[] = [w0(lw, "cash")];
+        const rv: number[] = [cashDaily];
         for (const a of ["eth", "spx"]) {
           const ws = w0(lw, a);
           if (!ws) continue;
           const px = a === "eth" ? ethPx : spxPx;
           const p0 = px[i - 1];
           const p1 = px[i];
-          if (Number.isFinite(p0) && Number.isFinite(p1) && (p0 as number) > 0) pr += ws * ((p1 as number) / (p0 as number) - 1);
+          if (Number.isFinite(p0) && Number.isFinite(p1) && (p0 as number) > 0) {
+            wv.push(ws);
+            rv.push((p1 as number) / (p0 as number) - 1);
+          }
         }
-        eq *= 1 + pr;
+        const pr = ddValue(dotDD(wv, rv));
+        eq.grow(pr);
         rets.push(pr);
       }
-      if (lw && !sameW(lw, w)) eq *= 1 - turnover(lw, w) * COST_PER_REBALANCE;
+      if (lw && !sameW(lw, w)) eq.shrinkByProduct(turnover(lw, w), COST_PER_REBALANCE);
       lw = w;
-      if (eq > pk) pk = eq;
-      const dd = eq / pk - 1;
+      const eqv = eq.value;
+      if (eqv > pk) pk = eqv;
+      const dd = eqv / pk - 1;
       if (dd < mdd) mdd = dd;
-      curve.push({ date: dateAxis[i], value: eq });
+      curve.push({ date: dateAxis[i], value: eqv });
     }
     const yrs = (+new Date(curve[curve.length - 1].date) - +new Date(curve[0].date)) / (365.25 * 864e5);
-    const mean = rets.reduce((s, v) => s + v, 0) / rets.length;
-    const sd = Math.sqrt(rets.reduce((s, v) => s + (v - mean) ** 2, 0) / (rets.length - 1));
+    const { mean, sd } = meanAndSampleSd(rets);
     const monthEnd = new Map<string, Point>();
     for (const p of curve) monthEnd.set(p.date.slice(0, 7), p);
     return {
-      final_value: eq,
-      cagr: Math.pow(eq, 1 / yrs) - 1,
-      sharpe: sd > 0 ? (mean * 365) / (sd * Math.sqrt(365)) : 0,
+      final_value: eq.value,
+      cagr: annualizedGrowth(eq.dd, yrs),
+      sharpe: sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0,
       max_drawdown: mdd,
       equity_curve: [...monthEnd.values()],
       phases: PHASES.map((ph) => {
@@ -283,7 +299,7 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
           const dd = p.value / p2 - 1;
           if (dd < d2) d2 = dd;
         }
-        return { name: ph.name, cagr: Math.pow(w[w.length - 1].value / w[0].value, 1 / y) - 1, max_drawdown: d2 };
+        return { name: ph.name, cagr: annualizedGrowth(ddDiv([w[w.length - 1].value, 0], [w[0].value, 0]), y), max_drawdown: d2 };
       }),
     };
   }

@@ -3,7 +3,7 @@
 // sends. No DOM and no Alpine runtime: the factory's helpers are pure.
 import { test, expect, describe } from "bun:test";
 import { keccak256Hex, parseEvmAddress } from "../../../frontend/public/assets/js/app/lib/evm-address.js";
-import { captureReferral, referralCode, clearReferral } from "../../../frontend/public/assets/js/app/lib/referral.js";
+import { captureReferral, referralCode, clearReferral, memberReferralCode } from "../../../frontend/public/assets/js/app/lib/referral.js";
 import { validateEarlyAccess, earlyAccessPayload, sendEarlyAccess, sourceFor, normalizeHandle } from "../../../frontend/public/assets/js/app/alpine/views/early-access.js";
 
 function memoryStorage(): Storage {
@@ -76,6 +76,15 @@ describe("referral code", () => {
     expect(referralCode(s)).toBeNull();
   });
 
+  test("a member's code is rm_ and its handle, lowercased, or none when that is no valid code", () => {
+    expect(memberReferralCode("dualmint-2")).toBe("rm_dualmint-2");
+    expect(memberReferralCode(" Minds-By-Animoca-Brands ")).toBe("rm_minds-by-animoca-brands");
+    for (const handle of ["", null, undefined, "a_b", "-lead", "trail-", "a--b", "x".repeat(30)]) {
+      expect(memberReferralCode(handle)).toBeNull();
+    }
+    expect(memberReferralCode("x".repeat(29))).toBe(`rm_${"x".repeat(29)}`);
+  });
+
   test("is forgotten once the form is sent", () => {
     const s = memoryStorage();
     captureReferral("?ref=rm_alice", s);
@@ -118,8 +127,8 @@ describe("early-access form", () => {
     expect(validateEarlyAccess({ ...complete, wallet: "0x123" }).wallet).toContain("40 hex");
   });
 
-  test("the request carries every field, the wallet checksummed and the link's code", () => {
-    expect(earlyAccessPayload(complete, "rm_alice", "robotmoney.network")).toEqual({
+  test("the request carries every field, the wallet checksummed and the referral code trimmed", () => {
+    expect(earlyAccessPayload({ ...complete, referralCode: " rm_alice " }, "robotmoney.network")).toEqual({
       handle: "@treasurer",
       email: null,
       wallet: EIP55[0],
@@ -130,7 +139,13 @@ describe("early-access form", () => {
       source: "early-access",
       website: "",
     });
-    expect(earlyAccessPayload({ ...complete, wallet: "" }, null)).toMatchObject({ wallet: null, referralCode: null });
+    expect(earlyAccessPayload({ ...complete, wallet: "" })).toMatchObject({ wallet: null, referralCode: null });
+  });
+
+  test("the referral code goes as the visitor left it: a blank field sends none", () => {
+    expect(earlyAccessPayload({ ...complete, referralCode: "Alice from the Telegram group" }).referralCode).toBe("Alice from the Telegram group");
+    expect(earlyAccessPayload({ ...complete, referralCode: "   " }).referralCode).toBeNull();
+    expect(validateEarlyAccess({ ...complete, referralCode: "not a code" })).toEqual({});
   });
 
   test("a sign-up from anywhere but production names its host", () => {

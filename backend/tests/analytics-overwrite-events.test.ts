@@ -308,3 +308,36 @@ test("0056 installs over pre-existing current rows without fabricating historica
     await history.drop();
   }
 }, 120_000);
+
+// API-6 (issue 1532, migration 0128): asset_prices overwrites are revisions too.
+test("asset_prices: a price change records one event with both rows, a fetched_at-only rewrite records none, a delete records one, and the event is immutable", async () => {
+  const key = { price_date: "2041-02-01", symbol: "OVERWRITE_PRICE", time_basis: "utc-daily-close" };
+  const where = `price_date = '${key.price_date}' AND symbol = '${key.symbol}'`;
+  await fixtureDb`
+    INSERT INTO asset_prices (price_date, symbol, time_basis, price_usd, currency, source, observed_at, fetched_at, config_identity)
+    VALUES (${key.price_date}, ${key.symbol}, ${key.time_basis}, 2, 'USD', 'geckoterminal', '2041-02-01T23:59:59Z', '2041-02-02T00:05:00Z', 'fixture')`;
+  // Only fetched_at moves: every refresh does this, and it is not a revision.
+  await fixtureDb`UPDATE asset_prices SET fetched_at = '2041-02-03T00:05:00Z' WHERE price_date = ${key.price_date} AND symbol = ${key.symbol}`;
+  expect(await events("asset_prices", key)).toHaveLength(0);
+
+  const before = await rowJson("asset_prices", where);
+  await fixtureDb`UPDATE asset_prices SET price_usd = 3, fetched_at = '2041-02-04T00:05:00Z' WHERE price_date = ${key.price_date} AND symbol = ${key.symbol}`;
+  const after = await rowJson("asset_prices", where);
+  const updates = await events("asset_prices", key);
+  expect(updates).toHaveLength(1);
+  expect(updates[0]).toMatchObject({ table_name: "asset_prices", operation: "update", natural_key: key, previous_row: before, replacement_row: after });
+
+  await fixtureDb`DELETE FROM asset_prices WHERE price_date = ${key.price_date} AND symbol = ${key.symbol}`;
+  const all = await events("asset_prices", key);
+  expect(all).toHaveLength(2);
+  expect(all[1]).toMatchObject({ operation: "delete", previous_row: after, replacement_row: null });
+
+  let refusal: { code?: string; message?: string } | null = null;
+  try {
+    await fixtureDb`UPDATE analytics_overwrite_events SET operation = 'delete' WHERE table_name = 'asset_prices'`;
+  } catch (error) {
+    refusal = error as { code?: string; message?: string };
+  }
+  expect(refusal?.code).toBe("0A000");
+  expect(refusal?.message).toMatch(/analytics_overwrite_events is immutable/);
+});

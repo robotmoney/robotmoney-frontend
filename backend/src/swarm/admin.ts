@@ -20,6 +20,7 @@ import {
   isHandleUniqueViolation,
   SWARM_ROSTER_CAP,
   appendStreamEvent,
+  judgementTiming,
   listJudgements,
   sessionJudgeFingerprint,
 } from "./domain.ts";
@@ -527,6 +528,30 @@ const readSessionState = registerQuery({
   purpose: "Read a session's state before listing its judgements.",
   callers: ADMIN_CALLERS,
   probe: { statement: "SELECT id, state FROM swarm_sessions WHERE id = $1", params: [PROBE_UUID] },
+});
+
+const JUDGEMENT_BY_ID_PROBE = {
+  statement: `SELECT j.id, j.session_id, j.mode, j.source, j.fallback_reason, j.model, j.prompt_hash, j.inputs_digest, j.digest_scheme,
+           j.take_count, j.min_takes, j.applied, j.applied_skipped_reason,
+           j.dropped_positions, j.dropped_disagreements, j.judged_by, j.judged_by_member_id, j.opinion, j.created_at,
+           s.state AS session_state, s.judging_deadline_at
+      FROM swarm_session_judgements j JOIN swarm_sessions s ON s.id = j.session_id
+     WHERE j.id = $1::bigint`,
+  params: ["1"],
+} as const;
+const readJudgementById = registerQuery({
+  role: "rm_app", object: "swarm_session_judgements", privileges: ["SELECT"],
+  site: "src/swarm/admin:getJudgementAdmin.judgement",
+  purpose: "Read one judgement by its id for the admin lookup, drawn or not.",
+  callers: ADMIN_CALLERS,
+  probe: JUDGEMENT_BY_ID_PROBE,
+});
+const readJudgementSession = registerQuery({
+  role: "rm_app", object: "swarm_sessions", privileges: ["SELECT"],
+  site: "src/swarm/admin:getJudgementAdmin.session",
+  purpose: "Read the state and judging deadline of the session a looked-up judgement belongs to.",
+  callers: ADMIN_CALLERS,
+  probe: JUDGEMENT_BY_ID_PROBE,
 });
 
 const readRoster = registerQuery({
@@ -1931,6 +1956,44 @@ export async function getSessionJudgementsAdmin(sessionId: string, limit = 50): 
       judgements: rows.map((r) => toJudgementAdmin(r, carried)),
     };
   });
+}
+
+/**
+ * One judgement by id, drawn or not, with no session id needed (issue 1495).
+ * Privileged for the reason the session list is: an undrawn judgement is
+ * model-authored prose the public record does not serve. 404 for an id no
+ * judgement has, including one that is not a number.
+ */
+export async function getJudgementAdmin(id: string): Promise<AdminResult> {
+  if (!/^\d{1,18}$/.test(id)) return err(404, "judgement not found");
+  const [row] = await on(sql, readJudgementById, readJudgementSession)<Record<string, unknown>>`
+    SELECT j.id, j.session_id, j.mode, j.source, j.fallback_reason, j.model, j.prompt_hash, j.inputs_digest, j.digest_scheme,
+           j.take_count, j.min_takes, j.applied, j.applied_skipped_reason,
+           j.dropped_positions, j.dropped_disagreements, j.judged_by, j.judged_by_member_id, j.opinion, j.created_at,
+           s.state AS session_state, s.judging_deadline_at
+      FROM swarm_session_judgements j JOIN swarm_sessions s ON s.id = j.session_id
+     WHERE j.id = ${id}::bigint`;
+  if (!row) return err(404, "judgement not found");
+  const sessionId = String(row.session_id);
+  const carried = await sessionJudgeFingerprint(sql, sessionId);
+  const judgement = toJudgementAdmin(row, carried);
+  return {
+    ok: true,
+    status: 200,
+    sessionId,
+    sessionState: String(row.session_state),
+    judgingDeadlineAt: row.judging_deadline_at ? new Date(row.judging_deadline_at as string).toISOString() : null,
+    // The same four words the seat's own health read uses.
+    timing: judgementTiming({
+      applied: judgement.applied,
+      appliedSkippedReason: row.applied_skipped_reason as string | null,
+      createdAt: row.created_at as Date,
+      judgingDeadlineAt: (row.judging_deadline_at as Date | null) ?? null,
+      drawnJudgementId: carried?.judgementId ?? null,
+      id: String(row.id),
+    }),
+    judgement,
+  };
 }
 
 // Publish the consensus receipt for a judged session (issue #754).

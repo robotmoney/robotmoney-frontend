@@ -62,14 +62,23 @@ test("two ROUTES keys that render the same view declare one canonical between th
 test("an aliased path inherits the renamed page's metadata rather than 404 metadata", () => {
   // One case per rename shape: the /committee -> /swarm tree rename (public and
   // admin halves), the doc tree's product-name path, the /allocation2 page
-  // rename, and the /articles -> /blog move.
+  // rename, the /allocation -> /model-portfolio rename, and the /articles ->
+  // /blog move.
   const renames: [string, string][] = [
     ["/committee", "/swarm"],
     ["/admin/committee", "/admin/swarm"],
     ["/docs/investment-committee", "/docs/investment-swarm"],
     ["/allocation2", "/treasury"],
     ["/performance", "/treasury"],
+    ["/allocation", "/model-portfolio"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
+    // RM-190: deposits wait for the vaults; the deposit page and the deposit
+    // skill's docs render early access.
+    ["/deposit", "/early-access"],
+    ["/docs/skill", "/early-access"],
+    ["/docs/skill/installation", "/early-access"],
+    ["/docs/skill/commands", "/early-access"],
+    ["/docs/skill/agent-basket", "/early-access"],
   ];
 
   for (const [from, to] of renames) {
@@ -89,16 +98,20 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
   }
 });
 
-test("/vault is an exact alias: the bare path is /allocation, each vault page is its own", () => {
-  // Bare /vault renders the allocation view and names /allocation canonical.
-  expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/allocation");
-  expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/allocation");
-  expect(metaFor("/vault")).toEqual(metaFor("/allocation"));
+test("/vault is an exact alias: the bare path is /model-portfolio, each vault page is its own", () => {
+  // Bare /vault renders the model portfolio and names /model-portfolio canonical.
+  expect(canonicalUrlFor("/vault")).toBe("https://robotmoney.network/model-portfolio");
+  expect(canonicalUrlFor("/vault/")).toBe("https://robotmoney.network/model-portfolio");
+  expect(metaFor("/vault")).toEqual(metaFor("/model-portfolio"));
+  // rmAGENT's address, closed with its sleeve, renders /model-portfolio too.
+  expect(canonicalUrlFor("/vault/rmagent")).toBe("https://robotmoney.network/model-portfolio");
+  expect(canonicalUrlFor("/vault/rmagent/")).toBe("https://robotmoney.network/model-portfolio");
+  expect(metaFor("/vault/rmagent")).toEqual(metaFor("/model-portfolio"));
 
-  // The four vault pages are NOT rewritten under /allocation: each keeps its
+  // The three vault pages are NOT rewritten under /model-portfolio: each keeps its
   // own address, stays out of the index until the launch review, and titles
   // itself by its symbol.
-  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmagent: "rmAGENT", rmproto: "rmPROTO", rmrwa: "rmRWA" };
+  const symbols: Record<string, string> = { rmusdc: "rmUSDC", rmproto: "rmPROTO", rmrwa: "rmRWA" };
   for (const [slug, symbol] of Object.entries(symbols)) {
     const path = `/vault/${slug}`;
     expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });
@@ -114,4 +127,13 @@ test("/vault is an exact alias: the bare path is /allocation, each vault page is
   expect(metaFor("/vault/nope").title).toBe("Page Not Found | Robot Money");
   expect(metaFor("/vault/nope").robots).toBe("noindex, follow");
   expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
+});
+
+test("/deposit and the deposit skill's docs name /early-access canonical, each by an exact entry", () => {
+  for (const path of ["/deposit", "/docs/skill", "/docs/skill/installation", "/docs/skill/commands", "/docs/skill/agent-basket"]) {
+    expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: "https://robotmoney.network/early-access" });
+  }
+  // Not a prefix rewrite: an address the docs never had stays not found.
+  expect(canonicalUrlFor("/docs/skill/nope")).toBe("https://robotmoney.network/docs/skill/nope");
+  expect(viewFor("/docs/skill/nope")).not.toBe(viewFor("/early-access"));
 });

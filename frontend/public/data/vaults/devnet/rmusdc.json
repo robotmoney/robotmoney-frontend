@@ -9,13 +9,13 @@
   "tvlUsd": 72000,
   "sharePrice": 1.025,
   "exitFeeBps": null,
-  "recommendedBps": 6500,
-  "appliedBps": 7000,
-  "actualBps": 7200,
+  "recommendedBps": 7500,
+  "appliedBps": 8000,
+  "actualBps": 7912.09,
   "gaps": {
     "governance": 500,
-    "flow": 200,
-    "total": 700
+    "flow": -87.91,
+    "total": 412.09
   },
   "network": {
     "chainId": 918453,
@@ -228,7 +228,7 @@
     "weights": [
       {
         "t": "2026-09-01T10:00:00Z",
-        "appliedBps": 7000,
+        "appliedBps": 8000,
         "kind": "Effective weight"
       }
     ],
@@ -236,7 +236,7 @@
       {
         "sessionId": null,
         "t": "2026-09-16T10:00:00Z",
-        "recommendedBps": 6500,
+        "recommendedBps": 7500,
         "applied": false
       }
     ]

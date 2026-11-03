@@ -205,6 +205,17 @@ test("a session's regimeSummary reaches the screen on the session page", async (
 // row, with the recommendation the API had carried the whole time never
 // rendered at all.
 test("a published session's history row states its recommendation, its lean and who took part", async ({ page }) => {
+  // The published targets in force on these sessions' day (95/5/0/0, asOf 2026-06-02). The live
+  // stack's framework is the 50/7/29/14 one (issue 1496), dated after these sessions, so a row would
+  // read "No target recorded"; the site change (1497) moves the fixtures.
+  await page.route("**/api/dashboards/allocation", (route) =>
+    route.fulfill(json({
+      asOf: "2026-06-02", source: "live", managed: true, buckets: [],
+      strategy: [
+        { label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 },
+        { label: "Protocol Tokens", targetPct: 0 }, { label: "Real World Assets", targetPct: 0 },
+      ],
+    })));
   const session = (id: string, subjectId: string, subjectName: string, rec: unknown) => ({
     id,
     date: "2026-07-15",
@@ -287,6 +298,17 @@ test("a published session's history row states its recommendation, its lean and 
 // The history's recommendation is one word, and never a claim the record does
 // not support: Hold only when nothing moved against something to measure by.
 test("a history row's verdict: hold, no calls, nothing published", async ({ page }) => {
+  // The published targets in force on these sessions' day (95/5/0/0, asOf 2026-06-02). The live
+  // stack's framework is the 50/7/29/14 one (issue 1496), dated after these sessions, so a row would
+  // read "No target recorded"; the site change (1497) moves the fixtures.
+  await page.route("**/api/dashboards/allocation", (route) =>
+    route.fulfill(json({
+      asOf: "2026-06-02", source: "live", managed: true, buckets: [],
+      strategy: [
+        { label: "Conservative DeFi Yield", targetPct: 95 }, { label: "Agent Tokens", targetPct: 5 },
+        { label: "Protocol Tokens", targetPct: 0 }, { label: "Real World Assets", targetPct: 0 },
+      ],
+    })));
   const session = (id: string, subjectId: string, rec: unknown) => ({
     id, date: "2026-07-15", subjectId, subjectName: subjectId, state: "published",
     windowClosesAt: "2026-07-15T12:00:00Z", publishedAt: "2026-07-15T12:00:00Z",
@@ -523,8 +545,8 @@ test("the latest allocation and the history state each fact once", async ({ page
   await expect(row("Small Cap Tokens").locator(".rr-legend__was")).toHaveText("Target 5%");
   await expect(row("Small Cap Tokens").locator(".alp__mv")).toHaveText("−2 pp");
   await expect(row("Real World Assets").locator(".alp__mv")).toHaveText("+2 pp");
-  await expect(row("Fixed Income").locator("b")).toHaveText("95%");
-  await expect(row("Fixed Income").locator(".rr-legend__d .alp__mv")).toHaveCount(0);
+  await expect(row("Conservative DeFi Yield").locator("b")).toHaveText("95%");
+  await expect(row("Conservative DeFi Yield").locator(".rr-legend__d .alp__mv")).toHaveCount(0);
   await expect(alloc.locator("p.rr-k.rr-sub")).toHaveCount(0);
   await expect(alloc).not.toContainText(/sleeves? moves?/i);
 

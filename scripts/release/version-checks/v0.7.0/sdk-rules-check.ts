@@ -1,4 +1,4 @@
-// V07-sdk-rules-check (SDK 0.2.0, PR 1439): `bun run rules:check` exits 0 for
+// Q44-sdk-rules-check/C32-sdk-rules-check (SDK 0.2.0, PR 1439): `bun run rules:check` exits 0 for
 // every shipped rule file in packages/analyst-sdk/rules/, run from a sparse
 // clone of the release commit. A release with no rule file fails. Runs on the
 // control machine and touches no target.

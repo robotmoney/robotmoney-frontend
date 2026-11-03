@@ -8,7 +8,7 @@ import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
-import { openLocalCopy } from "../bin/local-copy.ts";
+import { openBackupsDir } from "../bin/backups-dir.ts";
 import {
   ArchiveError,
   RunInputCollector,
@@ -92,6 +92,37 @@ describe("generation from both local copies", () => {
     }
   });
 
+  // Issue 1477: the legacy snapshot-time layout, as csvb wrote it before the day cut (a synthetic chain of the same
+  // rows, tests/fixtures/archive/legacy-snapshot). Its ids are not day cuts; the shared BACKUP_ID_RE reads both.
+  test("the legacy snapshot-time copy and the day-cut copies write the same inputs, and only the manifest's backup id differs", async () => {
+    const all = await results;
+    const legacy = join(ARCHIVE, "legacy-snapshot");
+    const ids = readdirSync(join(legacy, "csv")).sort();
+    expect(ids.length).toBe(2);
+    for (const id of ids) expect(id).not.toMatch(/T000000Z$/);
+    for (const run of [RUN1, RUN2]) {
+      for (const json of [false, true]) {
+        const g = await generate(legacy, run, json);
+        expect(g.code, g.stderr).toBe(0);
+        const name = json ? "inputs.json" : "inputs.csv";
+        const day = all.find((x) => x.c === "api-only" && x.r === run && x.json === json)!;
+        expect(readFileSync(join(g.dir, name), "utf8")).toBe(readFileSync(join(day.g.dir, name), "utf8"));
+        const m = JSON.parse(readFileSync(join(g.dir, "inputs.manifest.json"), "utf8"));
+        const d = JSON.parse(readFileSync(join(day.g.dir, "inputs.manifest.json"), "utf8"));
+        expect(m.backup_id).toBe(ids[ids.length - 1]);
+        expect(m.source).toBe("db");
+        expect({ ...m, backup_id: d.backup_id, source: d.source }).toEqual(d);
+      }
+    }
+    // As of the first legacy backup, run 2 does not exist yet; run 1 does.
+    const early = await generate(legacy, RUN2);
+    expect(early.code).toBe(0);
+    const p = Bun.spawn(["bun", join(PKG, "bin/inputs.ts"), "--archive", legacy, "--run", RUN2, "--as-of", ids[0]!, "--out", mkdtempSync(join(TMP, "out-"))], { cwd: PKG, stdout: "pipe", stderr: "pipe" });
+    const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+    expect(code).toBe(1);
+    expect(stderr).toContain(`run ${RUN2} is not in the local copy's run ledger`);
+  });
+
   test("the input is exactly the run's frozen vintage, not the newest values", async () => {
     const all = await results;
     const csvOf = (run: string) => readFileSync(join(all.find((x) => x.r === run && !x.json && x.c === "api-only")!.g.dir, "inputs.csv"), "utf8");
@@ -121,7 +152,8 @@ describe("generation from both local copies", () => {
     let calculated = 0;
     for (const l of lines.slice(1)) {
       const [date, series, value, kind] = l.split(",");
-      const key = extra[series!] ?? `raw_indicator_history:${series}`;
+      // The old *_GROWTH keys come through under the storage key itself (D74 amendment, issue 1514).
+      const key = extra[series!] ?? (series!.startsWith("raw_indicator_history:") ? series! : `raw_indicator_history:${series}`);
       if (!(series === "VIX" && date === FACTS.revised.date)) expect(value).toBe(stored.get(`${key}|${date}`)!);
       if (kind === "calculated") calculated++;
     }
@@ -337,8 +369,8 @@ describe("archive identity is the content, not the gzip encoder", () => {
     for (const [name, make] of Object.entries(encoders)) {
       const gz = make();
       gzips.add(sha(gz));
-      const copy = openLocalCopy(copyWith(gz));
-      expect(copy.tables[TABLE], name).toEqual([{ id: "1", run_key: "a" }, { id: "2", run_key: "b" }]);
+      const copy = openBackupsDir(copyWith(gz));
+      expect(copy.table(TABLE), name).toEqual([{ id: "1", run_key: "a" }, { id: "2", run_key: "b" }]);
     }
     expect(gzips.size, "the encoders must differ for this to test anything").toBeGreaterThan(1);
   });
@@ -346,7 +378,7 @@ describe("archive identity is the content, not the gzip encoder", () => {
   test("an archive whose decompressed bytes differ is refused, even when its gzip is valid", () => {
     const other = CONTENT.replace("b\n", "c\n");
     for (const make of [() => Bun.gzipSync(Buffer.from(other)), () => gzipSync(Buffer.from(other), { level: 1 })]) {
-      expect(() => openLocalCopy(copyWith(make()))).toThrow(/content sha256 .* does not match the record/);
+      expect(() => openBackupsDir(copyWith(make())).table(TABLE)).toThrow(/content sha256 .* does not match the record/);
     }
   });
 
@@ -366,7 +398,7 @@ describe("archive identity is the content, not the gzip encoder", () => {
     const root = copyRecorded(bomb, { bytes_raw: 10 });
     let err: unknown;
     try {
-      openLocalCopy(root);
+      openBackupsDir(root).table(TABLE);
     } catch (e) {
       err = e;
     }
@@ -379,10 +411,10 @@ describe("archive identity is the content, not the gzip encoder", () => {
     const content = CONTENT + "x";
     const root = copyRecorded(gzipSync(Buffer.from(content)), { bytes_raw: Buffer.byteLength(CONTENT), sha256_raw: sha(content) });
     // The record's hash matches the longer content, so only the length check can refuse it.
-    expect(() => openLocalCopy(root)).toThrow(/inflates to .*bytes_raw/);
+    expect(() => openBackupsDir(root).table(TABLE)).toThrow(/inflates to .*bytes_raw/);
     // And a shorter inflate is refused the same way.
     const short = copyRecorded(gzipSync(Buffer.from(CONTENT)), { bytes_raw: Buffer.byteLength(CONTENT) + 1 });
-    expect(() => openLocalCopy(short)).toThrow(/inflates to .*bytes_raw/);
+    expect(() => openBackupsDir(short).table(TABLE)).toThrow(/inflates to .*bytes_raw/);
   });
 
   test("inflateBounded passes maxOutputLength of min(bytes_raw, 64 MB) + 1 to gunzip", () => {
@@ -415,13 +447,13 @@ describe("archive identity is the content, not the gzip encoder", () => {
 
   test("a listed file with no sha256_raw is refused, naming the field", () => {
     const root = copyRecorded(gzipSync(Buffer.from(CONTENT)), { sha256_raw: undefined });
-    expect(() => openLocalCopy(root)).toThrow(/sha256_raw/);
+    expect(() => openBackupsDir(root)).toThrow(/sha256_raw/);
   });
 
   test("a file that is not a gzip is corrupt, and a missing one is incomplete", () => {
-    expect(() => openLocalCopy(copyWith(Buffer.from("not gzip")))).toThrow(/not a readable gzip/);
+    expect(() => openBackupsDir(copyWith(Buffer.from("not gzip"))).table(TABLE)).toThrow(/not a readable gzip/);
     const root = copyWith(gzipSync(Buffer.from(CONTENT)));
     rmSync(join(root, PATH));
-    expect(() => openLocalCopy(root)).toThrow(/incomplete local copy/);
+    expect(() => openBackupsDir(root).table(TABLE)).toThrow(/incomplete local copy/);
   });
 });

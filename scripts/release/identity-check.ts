@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/identity-check.ts — release step S01-verify-version, run ON THE TARGET HOST.
+// scripts/release/identity-check.ts — release step Q26-verify-version/C14-verify-version, run ON THE TARGET HOST.
 // Standing check SV.1.
 //
 //   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] --receipt-dir <dir>
@@ -8,7 +8,7 @@
 // <origin>/version.json must name it too. Neither may say `+dirty` or
 // `+unknown`. When `--ref` is the rc tag the go named (a production run,
 // D64), GET <origin>/version must carry it as `tag`: the boot's RM_BUILD_TAG,
-// from the tag P01-checkout fetched. /version is buildIdentityJson(), the
+// from the tag Q06-checkout/P01-checkout fetched. /version is buildIdentityJson(), the
 // resolver /health reads; /api/version stays `{api, commit}` (D55 (1)) and
 // never serves the tag. Writes identity-check.json to --receipt-dir.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -81,7 +81,7 @@ async function main(): Promise<number> {
   const problems = identityProblems(apiText, versionText, siteText, commit, ref);
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
-  writeFileSync(file, `${JSON.stringify({ step: "S01-verify-version", origin, commit, ref, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[identity-check] ${origin}/api/version: ${apiText ?? "(no answer)"}`);
   console.log(`[identity-check] ${origin}/version: ${versionText ?? "(no answer)"}`);
   console.log(`[identity-check] receipt: ${file}`);

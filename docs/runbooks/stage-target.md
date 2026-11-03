@@ -9,11 +9,12 @@
 ## What it is
 
 The stage target is a copy of production as it stands before the next patch. It lives on
-`rm-frontend-stage-2`. The release runner runs the production step list against it with
-`bun run release:run --target stage`. The list's QA steps, Q01-lockfile to Q04-role-passwords, are
-stage's own preparation (the lockfile, the dump, this target, its role passwords): production skips
-them, and the step-list hash is the same for both. Every preflight and cutover step takes the same
-path on both.
+`rm-frontend-stage-2`. The release runner's QA phase runs against it with `bun run release:run --target stage`: stage's
+preparation (Q01-lockfile to Q05-scope: the lockfile, the dump, this target, its role passwords, the
+scope), then the whole upgrade and the soak as production will run them (Q06-checkout to
+Q34-collect-logs), then the release's version checks. Every production step (P and C) has a Q twin
+of the same commands. Production skips the Q steps, stage skips the P and C steps, and the
+step-list hash is the same for both.
 
 The tool holds no past-upgrade fact (issue 1272). The tag and commit come from production's
 `/api/version`; the ledger comes from the dump itself; the stack is booted the production way
@@ -108,7 +109,7 @@ A release never stops it: C10-rolling-boot replaces its services one at a time a
 
 ## Rebuild it for each rehearsal
 
-The release runbook's QA steps rebuild the target, so QA is one command (policy section 4.4):
+The release runbook's first QA steps rebuild the target, so QA is one command (policy section 4.4):
 
 ```bash
 bun run release:run --target stage --go <stage go>
@@ -124,7 +125,7 @@ bun run release:run --target stage --go <stage go>
   working runtime lines, makes `rm_owner` LOGIN, generates its password and writes the
   `rm_owner` line into the stage `~/.env`. A rerun keeps every role.
 
-Stage has no preflight: the same run goes on to the preflight and cutover steps. Read
+Stage has no preflight and no cutover: the QA run is every Q step. Read
 `bun scripts/release/stage-target.ts status` when something looks wrong.
 
 `up` refuses a dump older than 24 hours. `up` refuses when any piece already exists,

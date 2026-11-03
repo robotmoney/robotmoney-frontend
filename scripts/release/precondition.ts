@@ -1,9 +1,9 @@
 // scripts/release/precondition.ts — the target precondition every release run
-// checks first (P02-identity), on every target.
+// checks first (Q07-host-identity/P02-host-identity), on every target.
 //
 // A release run does not create its database. Production's database exists
 // before the run. A stage target's database is set up before the run by
-// `scripts/release/stage-target.ts up --dump <dir>`. Either way P02-identity proves,
+// `scripts/release/stage-target.ts up --dump <dir>`. Either way Q07-host-identity/P02-host-identity proves,
 // read-only, that the database `~/.env` names is one this repository upgrades:
 //   - it answers through `rm_readonly`;
 //   - `deployment_identity` is absent, or holds the kind RM_ENV implies
@@ -15,7 +15,7 @@
 // runs today and the one it runs after the next patch (issues 1272, 1273).
 //
 // The ledger's reconciliation with backend/migrations (./ledger.ts, D67) is
-// P07-baseline's, once: it refuses on the same receipt this step once read too.
+// Q12-state-baseline/P07-state-baseline's, once: it refuses on the same receipt this step once read too.
 //
 // Pure: the caller hands in what it read (the ledger, the identity). No import
 // outside node built-ins: it runs before `bun install`.

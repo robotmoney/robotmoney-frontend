@@ -11,6 +11,7 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
+import { SERIES_MAPPING } from "../extras.ts";
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
 const ANALYTICS_ROUTE = "src/api/routes/analytics";
@@ -153,6 +154,44 @@ const selectHistoricalSourceValues = registerQuery({
       AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
     ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC`,
     params: ["2000-01-01T00:00:00Z", "2000-01-01"],
+  },
+});
+
+const selectCommittedInputs = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadCommittedInputs",
+  purpose: "Read the database clock and, at it, the ledger heads of the regime's storage keys: the values a run computes from and its vintage pins (AN-16).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `WITH c AS (SELECT clock_timestamp() AS t)
+    SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
+      h.id, h.source_key, h.market_date, h.value
+    FROM c LEFT JOIN LATERAL (
+      SELECT DISTINCT ON (v.source_key, v.market_date) v.id, v.source_key, v.market_date::text AS market_date, v.value
+      FROM source_value_versions v
+      WHERE v.source_key = ANY($1::text[])
+        AND v.knowledge_time <= c.t
+        AND v.market_date IS NOT NULL AND v.market_date <= $2::date
+      ORDER BY v.source_key, v.market_date, v.knowledge_time DESC, v.id DESC
+    ) h ON true`,
+    params: ["{}", "2000-01-01"],
+  },
+});
+
+const selectRegimeMembers = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:freezeVintage.regimeMembers",
+  purpose: "Read the exact ledger versions a regime run computed from, to validate and freeze them as the vintage's regime-key members (issue 1534).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `SELECT id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value,
+      knowledge_time <= $1::text::timestamptz AS known
+    FROM source_value_versions WHERE id = ANY($2::bigint[])`,
+    params: ["2000-01-01T00:00:00Z", "{}"],
   },
 });
 
@@ -402,6 +441,49 @@ export async function loadHistoricalSourceValues(
   return rows.map(toFrozen);
 }
 
+// AN-16 (owner decision): a regime run computes from exactly the values its
+// vintage pins. This reads the database clock once and, in the same
+// statement, the ledger head of every dated coordinate under `sourceKeys`
+// known at that instant and dated on or before `marketTimeCutoff`. The run
+// computes from these values and passes the returned cutoff and versionIds to
+// freezeVintage, which freezes exactly those versions as its regime-key
+// members (issue 1534). It never re-selects them by the cutoff:
+// knowledge_time is the INSERT clock, so a row inserted before the cutoff and
+// committed after this read is invisible here but would match the cutoff.
+/** Every storage key the regime run reads: the registry indicators, the correlations and the backtest (D74 mapping). */
+export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING.map((m) => m.storageKey))].sort());
+
+export interface CommittedInputs {
+  /** The database clock the heads were read at, ISO 8601 with microseconds. */
+  knowledgeTimeCutoff: string;
+  values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
+}
+
+export async function loadCommittedInputs(
+  sourceKeys: readonly string[],
+  marketTimeCutoff: string,
+  db: DbHandle = sql,
+): Promise<CommittedInputs> {
+  const rows = await on(db, selectCommittedInputs)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
+    WITH c AS (SELECT clock_timestamp() AS t)
+    SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
+      h.id, h.source_key, h.market_date, h.value
+    FROM c LEFT JOIN LATERAL (
+      SELECT DISTINCT ON (v.source_key, v.market_date) v.id, v.source_key, v.market_date::text AS market_date, v.value
+      FROM source_value_versions v
+      WHERE v.source_key = ANY(${[...sourceKeys]}::text[])
+        AND v.knowledge_time <= c.t
+        AND v.market_date IS NOT NULL AND v.market_date <= ${marketTimeCutoff}::date
+      ORDER BY v.source_key, v.market_date, v.knowledge_time DESC, v.id DESC
+    ) h ON true`;
+  const values: CommittedInputs["values"] = [];
+  for (const r of rows) {
+    if (r.id === null) continue;
+    values.push({ versionId: String(r.id), sourceKey: r.source_key!, marketDate: r.market_date!, value: Number(r.value) });
+  }
+  return { knowledgeTimeCutoff: rows[0]!.cutoff, values };
+}
+
 export interface FreezeVintageInput {
   runId: string;
   toolId: string;
@@ -409,6 +491,13 @@ export interface FreezeVintageInput {
   marketTimeCutoff: string;
   methodologyVersionId: string;
   buildIdentity: string;
+  /**
+   * Issue 1534: the versionIds of the committed read the regime computed from.
+   * When present they are the vintage's members under REGIME_STORAGE_KEYS, and
+   * knowledgeTimeCutoff records the read's database clock. Absent keeps cutoff
+   * selection for every key (hermetic and fixture runs, an older producer).
+   */
+  regimeVersionIds?: readonly string[];
 }
 
 export interface FreezeVintageResult {
@@ -429,8 +518,52 @@ export class VintageConflictError extends Error {
   }
 }
 
+// Thrown by freezeVintage when a supplied regimeVersionIds list cannot be the
+// read set of a regime run at the given cutoffs (issue 1534). The route turns
+// it into a 400; the transaction rolls back, so nothing is written.
+export class VintageMembersInvalidError extends Error {
+  constructor(reason: string) {
+    super(`vintage.regimeVersionIds: ${reason}`);
+    this.name = "VintageMembersInvalidError";
+  }
+}
+
+// Issue 1534: load the listed versions and refuse any that a committed read at
+// these cutoffs could not have returned.
+async function loadRegimeMembers(
+  db: DbHandle,
+  ids: readonly string[],
+  knowledgeTimeCutoff: string,
+  marketTimeCutoff: string,
+): Promise<FrozenSourceValue[]> {
+  // The cutoff is bound as text: a parameter the server types timestamptz is
+  // serialized by postgres.js through a JS Date, which drops the
+  // microseconds the committed read's clock carries, and a head the read
+  // returned from that last millisecond would then read as after the cutoff.
+  const rows = (await on(db, selectRegimeMembers)`
+    SELECT id, source_key, market_date::text AS market_date, market_instant::text AS market_instant, value,
+      knowledge_time <= ${knowledgeTimeCutoff}::text::timestamptz AS known
+    FROM source_value_versions WHERE id = ANY(${[...ids]}::bigint[])`) as unknown as (SourceValueRow & { known: boolean })[];
+  const found = new Map(rows.map((r) => [String(r.id), r]));
+  const regimeKeys = new Set(REGIME_STORAGE_KEYS);
+  const coordinates = new Set<string>();
+  for (const id of ids) {
+    const r = found.get(id);
+    if (!r) throw new VintageMembersInvalidError(`version ${id} does not exist`);
+    if (!regimeKeys.has(r.source_key)) throw new VintageMembersInvalidError(`version ${id} has source_key ${r.source_key}, not a regime storage key`);
+    if (r.market_date === null || r.market_date > marketTimeCutoff) throw new VintageMembersInvalidError(`version ${id} has no market_date on or before ${marketTimeCutoff}`);
+    if (!r.known) throw new VintageMembersInvalidError(`version ${id} has a knowledge_time after ${knowledgeTimeCutoff}`);
+    const coordinate = `${r.source_key}\u0000${r.market_date}`;
+    if (coordinates.has(coordinate)) throw new VintageMembersInvalidError(`version ${id} shares (${r.source_key}, ${r.market_date}) with another listed version`);
+    coordinates.add(coordinate);
+  }
+  return rows.map(toFrozen);
+}
+
 // Freeze one data vintage: select the boundary-eligible source-value-version
-// ids (loadHistoricalSourceValues), build the canonical manifest, and persist
+// ids (loadHistoricalSourceValues; under the regime storage keys, the exact
+// regimeVersionIds the run computed from when it sends them, issue 1534),
+// build the canonical manifest, and persist
 // both the manifest and its membership (as runs of consecutive ids — see
 // memberRanges) atomically. Idempotent on
 // (run_id, tool_id) (issue #977 AC8): resubmitting the SAME cutoffs +
@@ -454,16 +587,22 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     throw new VintageConflictError({ vintageId: frozen.vintageId, manifest: frozen.manifest, memberCount: frozen.memberCount, replayed: false });
   }
 
-  const members = await loadHistoricalSourceValues(input.knowledgeTimeCutoff, input.marketTimeCutoff);
-  const { manifest } = buildVintageManifest(
-    members,
-    input.methodologyVersionId,
-    input.buildIdentity,
-    input.knowledgeTimeCutoff,
-    input.marketTimeCutoff,
-  );
+  const byCutoff = await loadHistoricalSourceValues(input.knowledgeTimeCutoff, input.marketTimeCutoff);
   try {
     return await sql.begin(async (tx) => {
+      let members = byCutoff;
+      if (input.regimeVersionIds) {
+        const regimeKeys = new Set(REGIME_STORAGE_KEYS);
+        const regime = await loadRegimeMembers(tx, input.regimeVersionIds, input.knowledgeTimeCutoff, input.marketTimeCutoff);
+        members = [...regime, ...byCutoff.filter((m) => !regimeKeys.has(m.sourceKey))];
+      }
+      const { manifest } = buildVintageManifest(
+        members,
+        input.methodologyVersionId,
+        input.buildIdentity,
+        input.knowledgeTimeCutoff,
+        input.marketTimeCutoff,
+      );
       const [vintage] = await on(tx, insertVintage)<{ id: string | number }>`
         INSERT INTO analytics_data_vintages
           (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id,

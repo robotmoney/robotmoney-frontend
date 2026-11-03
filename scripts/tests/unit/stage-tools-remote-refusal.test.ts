@@ -123,11 +123,11 @@ const NOT_A_REMOTE_STAGE_TOOL: Readonly<Record<string, string>> = {
   "scripts/lib/smoke-journal.ts": "names the table in a journal record",
   "scripts/lib/swarm/spoof-keys.ts": "rehearsal-only, requireRehearsalTarget",
   "scripts/prod-init.ts": "production initialisation; refuses a non-production target by its own rule",
-  "scripts/release/host-identity.ts": "the release run's P02-identity precondition; reads the identity row through rm_readonly on a read-only session and writes nothing",
-  "scripts/release/precondition.ts": "a pure judgement of the identity P02-identity read; it opens no connection",
+  "scripts/release/host-identity.ts": "the release run's P02-host-identity precondition; reads the identity row through rm_readonly on a read-only session and writes nothing",
+  "scripts/release/precondition.ts": "a pure judgement of the identity P02-host-identity read; it opens no connection",
   "scripts/release/stage-target.ts": "the D61 stage target's setup and status; it checks the restored copy has no identity row, read through its own local container",
   "scripts/release/stage-target-lib.ts": "the stage target's pure state query and its judgement (no identity row before the cutover)",
-  "scripts/release/baseline.ts": "the release baseline (P07-baseline); reads whether the table exists through rm_readonly on a read-only session and writes nothing",
+  "scripts/release/baseline.ts": "the release baseline (P07-state-baseline); reads whether the table exists through rm_readonly on a read-only session and writes nothing",
 };
 
 describe("a stage tool added without going through the policy is caught", () => {

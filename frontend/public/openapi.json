@@ -136,7 +136,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "VaultEconomics",
         "responses": {
@@ -158,12 +158,12 @@
       "get": {
         "operationId": "getAllocation",
         "summary": "Target allocation: strategy sleeves and bucket weights",
-        "description": "The target weights the protocol is managed against: the strategy sleeves (95 percent conservative DeFi yield, 5 percent agent tokens) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.\n\nResponse size: about 1 KB.\n\nResponse type: `AllocationFramework` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "The target weights the protocol is managed against: the four strategy sleeves (conservative DeFi yield, protocol tokens, real world assets, hard assets) and the per-bucket targets underneath them. These are TARGETS set by admin and swarm, not live holdings. Pair with wallet-sleeves and vault-economics to measure drift.\n\nResponse size: about 1 KB.\n\nResponse type: `AllocationFramework` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation",
+          "https://robotmoney.network/model-portfolio",
           "https://robotmoney.network/"
         ],
         "x-contract-type": "AllocationFramework",
@@ -191,7 +191,7 @@
           "public-read"
         ],
         "x-backs-pages": [
-          "https://robotmoney.network/allocation",
+          "https://robotmoney.network/model-portfolio",
           "https://robotmoney.network/treasury"
         ],
         "x-contract-type": "WalletSleeves",
@@ -220,7 +220,7 @@
         ],
         "x-backs-pages": [
           "https://robotmoney.network/treasury",
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "WalletBalances",
         "responses": {
@@ -275,7 +275,7 @@
         ],
         "x-backs-pages": [
           "https://robotmoney.network/tokenomics",
-          "https://robotmoney.network/allocation"
+          "https://robotmoney.network/model-portfolio"
         ],
         "x-contract-type": "{ asOf, source, stale, rows }",
         "responses": {
@@ -1913,7 +1913,7 @@
       "get": {
         "operationId": "listCoins",
         "summary": "Directory of third-party coins tracked",
-        "description": "Outside coins Robot Money observes, with price and market data. Distinct from the seven agent-basket tokens a deposit buys, which are documented at /docs/skill/agent-basket.\n\nResponse size: about 14 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
+        "description": "Outside coins Robot Money observes, with price and market data.\n\nResponse size: about 14 KB.\n\nResponse type: `CoinsListResponse` (see https://github.com/robotmoney/robotmoney-frontend/tree/main/contract/src).",
         "tags": [
           "public-read"
         ],

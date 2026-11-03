@@ -57,6 +57,20 @@ export const VAULT_TVL_GROUND_TRUTH: Record<string, number> = {
 };
 // A decimals-18 / non-stable case proving the scaling generalises.
 export const VAULT_TVL_18DEC = { input: { totalAssetsRaw: "5000000000000000000", decimals: 18, assetPriceUsd: 2 }, expected: 10 }; // 5 × $2
+// Issue 1498: 1.000000000000000065 units round to exactly 1. Converting the raw
+// amount to a double first gave 1000000000000000000 + 128, then 1.0000000000000002.
+export const VAULT_TVL_ONE_ULP = { input: { totalAssetsRaw: "1000000000000000065", decimals: 18, assetPriceUsd: 1 }, expected: 1 };
+// Raw amounts above 2^53, which a double cannot hold exactly. Their units are
+// checked against the BigInt-rational correctly rounded raw / 10^decimals.
+export const VAULT_RAW_ABOVE_2_53: { totalAssetsRaw: string; decimals: number }[] = [
+  { totalAssetsRaw: "9007199254740993", decimals: 6 }, // 2^53 + 1
+  { totalAssetsRaw: "18014398509481987", decimals: 8 },
+  { totalAssetsRaw: "12345678901234567890", decimals: 6 },
+  { totalAssetsRaw: "999999999999999999999", decimals: 18 },
+  { totalAssetsRaw: "123456789012345678901234567", decimals: 18 },
+  { totalAssetsRaw: "340282366920938463463374607431768211455", decimals: 18 }, // 2^128 - 1
+  { totalAssetsRaw: "115792089237316195423570985008687907853269984665640564039457584007913129639935", decimals: 18 }, // 2^256 - 1
+];
 
 // ── Coverage: compute_project_coverage parity cases ──────────────────────────
 // Full-facet agent project. breadth 100, identity 100, onchain trunc(270/3)=90,

@@ -1,11 +1,11 @@
-// V05-report-bytes-etag (PR 1427): the public reports route serves a run's
+// Q42-report-bytes-etag/C30-report-bytes-etag (PR 1427): the public reports route serves a run's
 // report bytes exactly as stored, with a strong ETag equal to their sha256. For
 // the newest published run the check requires: 200; ETag is the quoted sha256 of
 // the bytes served; X-Content-SHA256 and the list's `checksum` are that hash;
 // the list's `byte_length` is the length; and a request with that ETag as
 // If-None-Match answers 304 with no body.
 // Reads only: GETs of /reports.
-import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, realNet, sha256Hex, type Net, type ReportRow } from "../../public-analytics-read.ts";
+import { getWithRetry, latestReport, listReports, noRunMessage, originEtag, PUBLIC_API, realNet, sha256Hex, type Net, type ReportRow } from "../../public-analytics-read.ts";
 import type { VersionCheck } from "../../version-check.ts";
 
 export interface Served {
@@ -38,8 +38,9 @@ export async function reportBytesEtag(net: Net): Promise<{ found: Record<string,
   const path = `${PUBLIC_API}/reports?run=${encodeURIComponent(row.run_key)}`;
   const res = await getWithRetry(net, path);
   const bytes = res.status === 200 ? new Uint8Array(await res.arrayBuffer()) : null;
-  const etag = res.headers.get("etag");
-  const re = etag === null ? null : await getWithRetry(net, path, { headers: { "If-None-Match": etag } });
+  const etag = originEtag(res);
+  const sent = res.headers.get("etag");
+  const re = sent === null ? null : await getWithRetry(net, path, { headers: { "If-None-Match": sent } });
   const served: Served = { status: res.status, etag, xsha: res.headers.get("x-content-sha256"), bytes, revalidateStatus: re?.status ?? null };
   return { found: { run_key: row.run_key, bytes: bytes?.length ?? null, etag, revalidateStatus: served.revalidateStatus }, problems: reportServeProblems(row, served) };
 }

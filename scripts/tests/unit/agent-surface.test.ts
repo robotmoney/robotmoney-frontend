@@ -172,8 +172,8 @@ describe("prerendered routes", () => {
   });
 
   test("a data route names its endpoints in <head> and in <noscript>", () => {
-    const html = readFileSync(join(dir, "allocation/index.html"), "utf8");
-    const expected = endpointsForRoute("/allocation");
+    const html = readFileSync(join(dir, "model-portfolio/index.html"), "utf8");
+    const expected = endpointsForRoute("/model-portfolio");
     expect(expected.length).toBeGreaterThan(0);
     for (const e of expected) {
       const url = ORIGIN + openApiPath(e.path);
@@ -189,7 +189,7 @@ describe("prerendered routes", () => {
     // against the CLOSING tag, because since the prerender began inlining view
     // fragments the mount is never empty, and comparing against the empty-mount
     // literal would silently pass on indexOf's -1 forever.
-    const html = readFileSync(join(dir, "allocation/index.html"), "utf8");
+    const html = readFileSync(join(dir, "model-portfolio/index.html"), "utf8");
     expect(html.indexOf("<noscript>")).toBeGreaterThan(html.lastIndexOf("</main>"));
     expect(html.split("<noscript>").length - 1).toBe(html.split("</noscript>").length - 1);
   });
@@ -222,9 +222,9 @@ describe("prerendered routes", () => {
     // about there being exactly one inlining, not two stacking: a route whose
     // build-time fill silently regressed to leaving the mount empty (or ran
     // twice) both fail here.
-    const html = readFileSync(join(dir, "docs/skill/index.html"), "utf8");
+    const html = readFileSync(join(dir, "docs/investment-swarm/how-it-works/index.html"), "utf8");
     expect(html.includes('<main id="view"></main>')).toBe(false);
-    expect(html).toContain("Robot Money Skill");
+    expect(html).toContain("How it works");
     rmSync(dir, { recursive: true, force: true });
   });
 });

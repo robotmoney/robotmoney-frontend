@@ -8,7 +8,7 @@ import { fetchGeckoTerminalNewPools } from "./geckoterminal.ts";
 import { captureSourceAcquisition, type AcquisitionSink } from "../source-ledger.ts";
 import "./http.ts";
 
-export { mergeRatioSeries } from "../../../../packages/analyst-sdk/src/extract/sources.ts";
+export { mergeRatioSeries, createFetchMemo, mergeYahooPlans, registryYahooPlan, type FetchMemo, type YahooPlan } from "../../../../packages/analyst-sdk/src/extract/sources.ts";
 
 const extensions = { geckoterminal_newpools: fetchGeckoTerminalNewPools };
 

@@ -1,4 +1,4 @@
-// v0.7.0's version checks V01 to V10 (scripts/release/version-checks/v0.7.0/,
+// v0.7.0's version checks Q38 to Q47 (C26 to C35) (scripts/release/version-checks/v0.7.0/,
 // issue 1476): each check's decision with a passing case and a red control.
 // The checks that read the public API run against a fake of it
 // (support/fake-public-api.ts); the SDK 0.2.0 checks run the real SDK from a
@@ -13,6 +13,7 @@ import { archiveSamples, integrityProblems, type Sample } from "../../release/ve
 import { credentialProblems, credentialsIn } from "../../release/version-checks/v0.7.0/db-credential-api-only.ts";
 import { ledgerEndProblems } from "../../release/version-checks/v0.7.0/migration-ledger.ts";
 import { MAX_REQUESTS, rateLimit, rateLimitProblems } from "../../release/version-checks/v0.7.0/rate-limit.ts";
+import { NOT_FOUND_BODY, PROBES, referralLookup, referralLookupProblems } from "../../release/version-checks/v0.7.0/referral-lookup.ts";
 import { reportBytesEtag, reportServeProblems } from "../../release/version-checks/v0.7.0/report-bytes-etag.ts";
 import { goldenProblems, REFERENCE_DIR, sdkBacktestGolden } from "../../release/version-checks/v0.7.0/sdk-backtest-golden.ts";
 import { ruleProblems, sdkRulesCheck } from "../../release/version-checks/v0.7.0/sdk-rules-check.ts";
@@ -31,7 +32,7 @@ const localDeps = (net = fakeNet(), prepare?: (dir: string) => void): SdkDeps =>
   prepareSdk: async () => { const dir = exportPackage("rm-sdk-v070-"); cleanup.push(dir); prepare?.(dir); return { sdkDir: dir }; },
 });
 
-describe("V01-archive-integrity (1461)", () => {
+describe("Q38-archive-integrity/C26-archive-integrity (1461)", () => {
   const good = (path: string, encoding: "gzip" | "identity", sha = "a".repeat(64)): Sample => ({ path, encoding, status: 200, etag: `"${sha}"`, xsha: sha, actualSha: sha });
   test("passes: the ETag and X-Content-SHA256 are the content hash under both encodings", () => {
     expect(integrityProblems([good("p", "gzip"), good("p", "identity")], { p: "a".repeat(64) })).toEqual([]);
@@ -57,7 +58,7 @@ describe("V01-archive-integrity (1461)", () => {
   });
 });
 
-describe("V02-vintage-build-identity (1445)", () => {
+describe("Q39-vintage-build-identity/C27-vintage-build-identity (1445)", () => {
   test("passes when every vintage of the newest run carries the commit /api/version reports", async () => {
     const r = await vintageIdentity(fakeNet(withRun));
     expect(r.problems).toEqual([]);
@@ -73,7 +74,7 @@ describe("V02-vintage-build-identity (1445)", () => {
   });
 });
 
-describe("V03-db-credential-api-only (D75)", () => {
+describe("Q40-db-credential-api-only/C28-db-credential-api-only (D75)", () => {
   const row = (service: string, env: string[] | null) => ({ container: `rm_stack-${service}-1`, service, env });
   const clean = ["PATH=/usr/bin", "API_BASE_URL=http://api:3000", "PIPELINE_TOKEN_FILE=token-file"];
   test("passes: the api holds its credential and nothing else does", () => {
@@ -96,7 +97,7 @@ describe("V03-db-credential-api-only (D75)", () => {
   });
 });
 
-describe("V04-migration-ledger (0126, 0127)", () => {
+describe("Q41-migration-ledger/C29-migration-ledger (0126, 0127)", () => {
   const repo = repoMigrations();
   test("the release ships 0127 among its migrations", () => {
     expect(repo).toContain("0127_rm_worker_retired.sql");
@@ -111,7 +112,7 @@ describe("V04-migration-ledger (0126, 0127)", () => {
   });
 });
 
-describe("V05-report-bytes-etag (1427)", () => {
+describe("Q42-report-bytes-etag/C30-report-bytes-etag (1427)", () => {
   test("passes: the bytes served hash to the ETag, the list's checksum and X-Content-SHA256, and the ETag revalidates to 304", async () => {
     const r = await reportBytesEtag(fakeNet(withRun));
     expect(r.problems).toEqual([]);
@@ -130,7 +131,7 @@ describe("V05-report-bytes-etag (1427)", () => {
   });
 });
 
-describe("V10-rate-limit (1429)", () => {
+describe("Q47-rate-limit/C35-rate-limit (1429)", () => {
   test("passes: a 429 with a Retry-After in whole seconds and a reason arrives within the request cap", async () => {
     const r = await rateLimit(fakeNet({ ...withRun, limitAfter: 11 }));
     expect(r.problems).toEqual([]);
@@ -147,7 +148,42 @@ describe("V10-rate-limit (1429)", () => {
   });
 });
 
-describe("V06-sdk-fill-parity (SDK 0.2.0)", () => {
+describe("Q48-referral-lookup/C36-referral-lookup (1424)", () => {
+  const answer = (over: Record<string, unknown> = {}) => ({ name: "unknown code", status: 404, cacheControl: "public, max-age=60", setCookie: null, body: NOT_FOUND_BODY, ...over });
+  const net = (over: (path: string) => Partial<{ status: number; body: string; headers: Record<string, string> }> = () => ({})) => {
+    const seen: string[] = [];
+    return {
+      seen,
+      origin: "https://t.example",
+      sleep: async () => {},
+      fetch: async (url: string, init?: RequestInit) => {
+        const path = url.slice("https://t.example".length);
+        seen.push(`${init?.method ?? "GET"} ${path}`);
+        const o = over(path);
+        return new Response(o.body ?? NOT_FOUND_BODY, { status: o.status ?? 404, headers: { "Cache-Control": "public, max-age=60", ...(o.headers ?? {}) } });
+      },
+    };
+  };
+  test("passes: every probe answers the uniform cached 404, by GET only", async () => {
+    const n = net();
+    const r = await referralLookup(n);
+    expect(r.problems).toEqual([]);
+    expect(r.found.statuses).toEqual([404, 404, 404, 404]);
+    expect(n.seen).toEqual(PROBES.map((p) => `GET ${p.path}`));
+  });
+  test("red: a route that is absent, a 200, a wrong body, a missing cache header, a cookie and a rate-limited retry", async () => {
+    expect((await referralLookup(net(() => ({ status: 200, body: '{"code":"rm_x"}' })))).problems.join()).toContain("answered 200, not 404");
+    expect((await referralLookup(net(() => ({ body: "<html>Not Found</html>", headers: { "Cache-Control": "no-store" } })))).problems.join()).toContain("not {\"error\":\"not found\"}");
+    expect((await referralLookup(net(() => ({ headers: { "Cache-Control": "no-store" } })))).problems.join()).toContain("Cache-Control");
+    expect((await referralLookup(net(() => ({ status: 503, body: '{"error":"service unavailable"}' })))).problems.join()).toContain("answered 503");
+    expect(referralLookupProblems([answer()])).toEqual([]);
+    expect(referralLookupProblems([answer({ setCookie: "a=b" })]).join()).toContain("sets a cookie");
+    expect(referralLookupProblems([answer({ status: 405 })]).join()).toContain("answered 405");
+    expect(referralLookupProblems([]).join()).toContain("no answer");
+  });
+});
+
+describe("Q43-sdk-fill-parity/C31-sdk-fill-parity (SDK 0.2.0)", () => {
   test("passes: the fill into a fresh folder and the fill from the first recorded backup are the same copy", async () => {
     const api = fakeServer();
     try {
@@ -174,7 +210,7 @@ describe("V06-sdk-fill-parity (SDK 0.2.0)", () => {
   });
 });
 
-describe("V07-sdk-rules-check (SDK 0.2.0)", () => {
+describe("Q44-sdk-rules-check/C32-sdk-rules-check (SDK 0.2.0)", () => {
   test("passes for every shipped rule file; red: an invalid rule file in rules/ fails and is named", async () => {
     const ok = await sdkRulesCheck(localDeps(), COMMIT);
     expect(ok.problems).toEqual([]);
@@ -186,7 +222,7 @@ describe("V07-sdk-rules-check (SDK 0.2.0)", () => {
   });
 });
 
-describe("V08-sdk-backtest-golden (SDK 0.2.0)", () => {
+describe("Q45-sdk-backtest-golden/C33-sdk-backtest-golden (SDK 0.2.0)", () => {
   test("passes: the reference portfolio prints its golden output", async () => {
     expect((await sdkBacktestGolden(localDeps(), COMMIT)).problems).toEqual([]);
   });
@@ -208,7 +244,7 @@ describe("V08-sdk-backtest-golden (SDK 0.2.0)", () => {
   });
 });
 
-describe("V09-sdk-universe-check (SDK 0.2.0)", () => {
+describe("Q46-sdk-universe-check/C34-sdk-universe-check (SDK 0.2.0)", () => {
   test("passes for the reference holdings; red: a holding over its cap exits 2", async () => {
     expect((await sdkUniverseCheck(localDeps(), COMMIT)).problems).toEqual([]);
     const dir = homeScratch("sdk-ref-test-");
@@ -217,5 +253,41 @@ describe("V09-sdk-universe-check (SDK 0.2.0)", () => {
     writeFileSync(join(dir, "holdings.json"), JSON.stringify({ neutral: { BTC: 60, USDC: 40 } }));
     const red = await sdkUniverseCheck(localDeps(), COMMIT, dir);
     expect(red.problems.join()).toContain("universe:check exited 2");
+  });
+});
+
+describe("a CDN that compresses on the fly weakens the ETag; the origin's tag is what the checks read", () => {
+  const res = (headers: Record<string, string>) => ({ headers: new Headers(headers) });
+  test("W/ is dropped only from an encoded response", async () => {
+    const { originEtag } = await import("../../release/public-analytics-read.ts");
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    expect(originEtag(res({ etag: '"abc"', "content-encoding": "gzip" }))).toBe('"abc"');
+    // RED CONTROLS: an unencoded or identity response keeps a weak tag, so an origin that sends one still fails; no tag is no tag.
+    expect(originEtag(res({ etag: 'W/"abc"' }))).toBe('W/"abc"');
+    expect(originEtag(res({ etag: 'W/"abc"', "content-encoding": "identity" }))).toBe('W/"abc"');
+    expect(originEtag(res({}))).toBeNull();
+  });
+});
+
+describe("Q47: the probes are not answered by the web server's cache", () => {
+  test("a front cache answers a repeated URL 304 forever; only a probe URL of its own reaches the limiter", async () => {
+    const { rateLimit } = await import("../../release/version-checks/v0.7.0/rate-limit.ts");
+    const RUN = "81936943-7868-42f2-9364-e38639b67042";
+    const seen = new Set<string>();
+    let reachedApi = 0;
+    const fetchFake = async (url: string): Promise<Response> => {
+      const u = new URL(url);
+      if (u.pathname.endsWith("/reports") && !u.searchParams.has("run")) {
+        return Response.json({ reports: [{ report_id: 1, run_key: RUN, asof: "2026-10-27", checksum: "c", byte_length: 1 }], nextCursor: null });
+      }
+      const cached = seen.has(u.pathname + u.search);
+      seen.add(u.pathname + u.search);
+      if (cached) return new Response(null, { status: 304 });
+      reachedApi++;
+      return reachedApi > 10 ? new Response('{"error":"rate limit exceeded"}', { status: 429, headers: { "Retry-After": "5" } }) : new Response(null, { status: 304, headers: { etag: '"x"' } });
+    };
+    const net = { origin: "http://x", sleep: async () => {}, fetch: fetchFake as never };
+    const r = await rateLimit(net);
+    expect(r.problems).toEqual([]);
   });
 });

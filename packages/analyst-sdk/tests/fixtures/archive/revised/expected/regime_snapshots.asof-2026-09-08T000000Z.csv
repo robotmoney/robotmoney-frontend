@@ -1,0 +1,4 @@
+date,composite,regime,percentiles,version,source
+2026-08-28,0.38,risk_off,"{""VIX"": 0.75, ""DXY"": 0.5}",v3,live
+2026-08-31,0.52,risk_on,"{""VIX"": 0.25, ""DXY"": 0.25}",v3,live
+2026-09-04,0.55,risk_on,"{""VIX"": 0.2, ""DXY"": 0.3}",v3,live

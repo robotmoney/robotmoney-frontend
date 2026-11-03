@@ -15,8 +15,9 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { gradeProbeReceipts, parseProbeReceipts, probeOnce } from "../lib/rollout-probe.ts";
+import { dirname, join } from "node:path";
+import { readJournal, type RunJournal } from "./journal.ts";
+import { gradeProbeReceipts, gradeProbeWithDeclaredWindow, parseProbeReceipts, probeOnce, type ProbeGrade, type ProbeReceipt } from "../lib/rollout-probe.ts";
 
 /** How often the release probe asks. Far tighter than the 15 s rollout default: a release must show no gap a visitor would see. */
 export const PROBE_EVERY_MS = 2_000;
@@ -30,6 +31,36 @@ interface ProbeState { readonly pid: number; readonly startMs: number; readonly 
 /** The probe's directory in the run's control journal. */
 export function probeDir(target: string, runTs: string, root: string = join(homedir(), ".local", "state", "robotmoney-release")): string {
   return join(root, target, runTs, "probe");
+}
+
+/** The steps that bracket a breaking cutover's declared window, by name: Q18a-maintenance-on and C05a-maintenance-on open it, Q24a-maintenance-off and C12a-maintenance-off close it. */
+export const WINDOW_OPEN_NAME = "maintenance-on";
+export const WINDOW_CLOSE_NAME = "maintenance-off";
+const stepNamed = (steps: RunJournal["steps"], name: string) => Object.values(steps).find((r) => r.id.replace(/^[A-Z]\d{2}[a-z]?-/, "") === name);
+
+/**
+ * PURE. The declared maintenance window a run journal holds, in epoch ms: from the start of the step that
+ * puts the maintenance page on to the end of the step that takes it off. `none` when the run did not run
+ * the window steps (a rolling release: nothing is excused). An opened window that never closed is a problem.
+ */
+export function declaredWindow(steps: RunJournal["steps"]): { window: { start: number; end: number } } | { problem: string } | "none" {
+  const on = stepNamed(steps, WINDOW_OPEN_NAME);
+  if (on === undefined || on.status === "skipped") return "none";
+  if (!on.startedAt) return { problem: `${on.id} has no start time` };
+  const off = stepNamed(steps, WINDOW_CLOSE_NAME);
+  if (off?.status !== "ok" || !off.endedAt) return { problem: `the maintenance window was opened (${on.id}) and never closed (${off?.id ?? WINDOW_CLOSE_NAME} is ${off?.status ?? "absent"})` };
+  return { window: { start: Date.parse(on.startedAt), end: Date.parse(off.endedAt) } };
+}
+
+/** PURE. Grade a probe: a run that declared a maintenance window excuses exactly it, any other run excuses nothing. */
+export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: number; end: number }, steps: RunJournal["steps"], everyMs: number, slackMs: number): ProbeGrade {
+  const declared = declaredWindow(steps);
+  if (declared === "none") return gradeProbeReceipts(receipts, window, everyMs, slackMs);
+  if ("problem" in declared) {
+    const base = gradeProbeReceipts(receipts, window, everyMs, slackMs);
+    return { ...base, ok: false, problems: [declared.problem, ...base.problems] };
+  }
+  return gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs);
 }
 
 function flag(name: string): string | undefined {
@@ -77,7 +108,9 @@ if (import.meta.main) {
     try { process.kill(state.pid); } catch { /* already gone: the grade shows the gap */ }
     const receipts = (existsSync(join(dir, "probe.jsonl")) ? parseProbeReceipts(readFileSync(join(dir, "probe.jsonl"), "utf8")) : [])
       .filter((r) => r.at >= state.startMs && r.at <= endMs);
-    const grade = gradeProbeReceipts(receipts, { start: state.startMs, end: endMs }, state.everyMs, PROBE_SLACK_MS);
+    // The probe's directory is <run dir>/probe: the run's journal sits beside it and says whether a window was declared.
+    const journal = readJournal(dirname(dir));
+    const grade = gradeRun(receipts, { start: state.startMs, end: endMs }, journal?.steps ?? {}, state.everyMs, PROBE_SLACK_MS);
     writeFileSync(join(dir, "grade.json"), `${JSON.stringify({ ...grade, startMs: state.startMs, endMs }, null, 2)}\n`, { mode: 0o600 });
     console.log(`[probe] ${grade.receipts} answers over ${Math.round((endMs - state.startMs) / 1000)} s: ${grade.ok ? "every answer 200, no gap" : grade.problems.join("; ")}`);
     process.exit(grade.ok ? 0 : 1);

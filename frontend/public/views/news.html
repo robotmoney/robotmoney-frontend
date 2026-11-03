@@ -1,0 +1,33 @@
+<!-- /news (RM-197): announcements and partnerships, under Company in the nav.
+     The research lists on /blog. Same look as that index: its styles are in
+     views.css, and the hero is the same blogHero() factory. -->
+
+<section class="blog-idx container" data-anchors>
+  <header class="blog-idx__hero">
+    <div class="blog-idx__hero-art" x-data="blogHero()" aria-hidden="true"></div>
+    <div class="blog-idx__hero-inner">
+      <h1 class="blog-idx__title">Robot Money <span class="blog-idx__title-alt">News</span></h1>
+      <p class="blog-idx__lede">Announcements and partnerships, from the team.</p>
+    </div>
+  </header>
+
+  <div class="blog-idx__list">
+
+    <a href="/blog/peaq-partnership" class="blog-card">
+      <div class="blog-card__meta"><span>Partnership</span><span class="blog-card__dot">·</span><span>Mar 27, 2026</span></div>
+      <div class="blog-card__body">
+        <h3 class="blog-card__title" id="peaq-partnership">peaq Announces Partnership with Robot Money</h3>
+        <p class="blog-card__excerpt">peaq announced a partnership with Robot Money to bring autonomous treasury management to 3.3M+ machines on the peaq network. The first robot, a Hong Kong robo-farm, has already invested.</p>
+      </div>
+    </a>
+
+    <a href="/blog/announcement" class="blog-card">
+      <div class="blog-card__meta"><span>Announcement</span><span class="blog-card__dot">·</span><span>Mar 11, 2026</span></div>
+      <div class="blog-card__body">
+        <h3 class="blog-card__title" id="announcement">The Institute for Zero-Human Companies and Generative Ventures Are Building Robot Money</h3>
+        <p class="blog-card__excerpt">Autonomous Treasury Management for the Agent Economy. A partnership between ZHC Institute and Lex Sokolin's Generative Ventures to build a managed vault for AI agents.</p>
+      </div>
+    </a>
+
+  </div>
+</section>

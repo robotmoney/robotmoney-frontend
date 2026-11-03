@@ -1,0 +1,20 @@
+{
+  "name": "@robotmoney/csvb",
+  "private": true,
+  "type": "module",
+  "description": "csvb: makes and reads format 1 backups of the Robot Money analytics tables (D72, D80). Data lives in a separate checkout named with --repo.",
+  "engines": { "bun": ">=1.2" },
+  "scripts": {
+    "csvb": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@robotmoney/analyst-sdk": "file:../analyst-sdk",
+    "postgres": "^3.4.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.3"
+  }
+}

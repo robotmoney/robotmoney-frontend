@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/replay-row.ts — S11's comparison (issue 1476): replay a
+// scripts/release/replay-row.ts — Q36/C24's comparison (issue 1476): replay a
 // published run with the analyst SDK and compare the SDK's as-of row, field by
 // field, with the as-of row the run published.
 //
@@ -88,6 +88,20 @@ export function publishedAsofRow(payloadText: string, asof: string): AsofRow | n
   return rows.find((r) => r.date === asof) ?? null;
 }
 
+/** The as-of labels: a replay must reproduce them exactly for any archived run (issue 1431). */
+export const LABEL_FIELDS = ["regime", "macroRegime", "onchainRegime", "factorRegime"] as const;
+
+/**
+ * PURE. The label tier: only the as-of labels must be equal. Any other differing field is info, not a
+ * problem: a run made before issue 1421's fix computed from freshly fetched values stored to a relative
+ * tolerance (D56), so its numbers differ by about 1e-6 (regime-engine.md 8.1.1). A missing published row is a problem.
+ */
+export function labelProblems(c: RowComparison, run: string, asof: string): string[] {
+  if (c.publishedSha256 === null) return [`run ${run}: the published regime_snapshots artifact has no as-of row for ${asof}`];
+  const bad = c.differing.filter((f) => (LABEL_FIELDS as readonly string[]).includes(f));
+  return bad.length === 0 ? [] : [`run ${run} as of ${asof}: the SDK's as-of label differs from the published one in ${bad.join(", ")}`];
+}
+
 /** PURE. Why a comparison is a problem, in one line per fact; empty when the rows are equal. */
 export function comparisonProblems(c: RowComparison, run: string, asof: string): string[] {
   if (c.match) return [];
@@ -98,7 +112,7 @@ export function comparisonProblems(c: RowComparison, run: string, asof: string):
 
 // ── the SDK side: imported from the clone, never from this checkout ──
 interface Sdk {
-  openLocalCopy(root: string): { tables: Record<string, Record<string, string | null>[]>; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
+  openBackupsDir(root: string): { table(name: string): Record<string, string | null>[]; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
   parseInput(text: string, o: { replay: boolean }): { history: unknown };
   runRegime(history: unknown, o: { asof: string; factor: boolean }): {
     dateAxis: string[];
@@ -112,9 +126,9 @@ interface Sdk {
 
 async function loadSdk(dir: string): Promise<Sdk> {
   const [local, load, run, ind] = await Promise.all([
-    import(join(dir, "bin/local-copy.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
+    import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
   ]);
-  return { openLocalCopy: local.openLocalCopy, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS };
+  return { openBackupsDir: local.openBackupsDir, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS };
 }
 
 const nn = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -160,12 +174,12 @@ const flag = (name: string): string | undefined => {
 async function main(): Promise<number> {
   const [sdkDir, archive, run, inputs] = [flag("--sdk"), flag("--archive"), flag("--run"), flag("--inputs")];
   if (!sdkDir || !archive || !run || !inputs) {
-    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> --inputs <inputs.csv> [--print-row]");
+    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> --inputs <inputs.csv> [--tier full|label] [--print-row]");
     return 2;
   }
   const sdk = await loadSdk(sdkDir);
-  const copy = sdk.openLocalCopy(archive);
-  const runRow = (copy.tables.analytics_ledger_runs ?? []).find((r) => r.run_key === run);
+  const copy = sdk.openBackupsDir(archive);
+  const runRow = copy.table("analytics_ledger_runs").find((r) => r.run_key === run);
   if (!runRow) {
     console.log(JSON.stringify({ problems: [`run ${run} is not in the local copy's run ledger`] }));
     return 1;
@@ -194,8 +208,13 @@ async function main(): Promise<number> {
     return 1;
   }
   const c = compareRows(published, replay);
-  const problems = comparisonProblems(c, run, asof);
-  console.log(JSON.stringify({ run, asof, match: c.match, differing: c.differing, publishedSha256: c.publishedSha256, replaySha256: c.replaySha256, problems }));
+  const tier = flag("--tier") ?? "full";
+  if (tier !== "full" && tier !== "label") {
+    console.error("--tier is full or label");
+    return 2;
+  }
+  const problems = tier === "label" ? labelProblems(c, run, asof) : comparisonProblems(c, run, asof);
+  console.log(JSON.stringify({ run, asof, tier, match: c.match, differing: c.differing, publishedSha256: c.publishedSha256, replaySha256: c.replaySha256, problems }));
   return problems.length === 0 ? 0 : 1;
 }
 

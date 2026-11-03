@@ -1,4 +1,4 @@
-// V09-sdk-universe-check (SDK 0.2.0, PR 1433): `bun run universe:check` exits 0
+// Q46-sdk-universe-check/C34-sdk-universe-check (SDK 0.2.0, PR 1433): `bun run universe:check` exits 0
 // for the reference holdings (reference/holdings.json: the three states of the
 // reference rule R1), against the universe the release commit ships. The SDK is
 // the release commit's, from a sparse clone. Runs on the control machine and

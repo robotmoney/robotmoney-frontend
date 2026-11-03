@@ -1,15 +1,19 @@
 const VIEW_DIR = "/views";
 export const HOME_VIEW = `${VIEW_DIR}/home.html`;
 export const ALLOCATION_VIEW = `${VIEW_DIR}/allocation.html`;
-// One page per vault, /vault/:slug (rmusdc, rmagent, rmproto, rmrwa; a slug,
-// never an address, because staging addresses reset). Bare /vault is still
-// /allocation, whose Vaults section lists all four: router.js moves the
-// address to /allocation#vaults.
+// One page per vault, /vault/:slug (rmusdc, rmproto, rmrwa; a slug, never an
+// address, because staging addresses reset). Bare /vault is still
+// /model-portfolio, whose Vaults section lists all three: router.js moves the
+// address to /model-portfolio#vaults, and moves /vault/rmagent, whose sleeve
+// closed, there too.
 export const VAULT_DETAIL_VIEW = `${VIEW_DIR}/vault.html`;
 export const TREASURY_VIEW = `${VIEW_DIR}/treasury.html`;
 export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
 export const NOT_FOUND_VIEW = `${VIEW_DIR}/not-found.html`;
+export const EARLY_ACCESS_VIEW = `${VIEW_DIR}/early-access.html`;
+// The deposit skill's four docs pages, which early access replaces (RM-190).
+export const RETIRED_SKILL_DOCS = /^\/docs\/skill(\/(installation|commands|agent-basket))?\/?$/;
 
 // Analytics dashboard shell (issue #380, P0.3/P0.4 — docs/bot-analytics-ui-
 // port-plan.md §3, §4.1, §5.0). `DASH_LAYOUT_VIEW` is the shared
@@ -67,10 +71,10 @@ const ABOUT_VIEW = `${VIEW_DIR}/dash/about.html`;
 // ahead of the coming-soon placeholder above; see dash-ask-roboto.js for why
 // this is a deterministic rule-based matcher, never an LLM call.
 const ASK_ROBOTO_VIEW = `${VIEW_DIR}/dash/ask-roboto.html`;
-// /projects/:slug, a project's page (RM-186). It was the dashboards'
-// "ProjectProfile" dossier (issue #389) inside their sidebar layout; it is now
-// a public research record like a swarm member's page, with no layout.
-const PROJECT_VIEW = `${VIEW_DIR}/project.html`;
+// /projects/:slug "ProjectProfile" dossier (issue #389, §5.5, P3.1) — the
+// first PARAM route (DASH_PARAM_ROUTES below, not DASH_ROUTES) to ship real
+// content ahead of the coming-soon placeholder.
+const PROJECT_PROFILE_VIEW = `${VIEW_DIR}/dash/project-profile.html`;
 // /lobster/:id, /vaults/:id, /wallets/:id detail dossiers (issue #391, §5.10/
 // §5.12/§5.14, P3.3/P3.4/P3.5) — the first PARAM routes to ship real content
 // ahead of the coming-soon placeholder (§4.1's "5 param regexes").
@@ -104,14 +108,20 @@ const DASH_ROUTES = {
   "/submit": { view: SUBMIT_VIEW, layout: DASH_LAYOUT_VIEW, gated: false },
 };
 
-// Param-route regexes (§4.1's "5 param regexes"). `/projects/:slug` was the
-// fifth; since RM-186 it is a public page outside the dashboards (viewFor).
+// Param-route regexes (§4.1's "5 param regexes"). `/projects/:slug` is the
+// odd one out: its header in the plan (§5.5) explicitly marks ProjectProfile
+// "— public" (unlike its siblings) because /projects (the list) is already a
+// live, ungated page in this repo (INV-C §4) — gating its own profile
+// sub-route would be a product regression this issue does not own. Issue
+// #389 (P3.1) graduates it off the shared placeholder onto its own real
+// fragment — the first param route to do so; the other four are unchanged.
 /** @type {Array<{ test: RegExp; route: DashRoute }>} */
 const DASH_PARAM_ROUTES = [
   { test: /^\/agents\/[^/]+\/?$/, route: { view: AGENT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/lobster\/[^/]+\/?$/, route: { view: COIN_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/vaults\/[^/]+\/?$/, route: { view: VAULT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
   { test: /^\/wallets\/[^/]+\/?$/, route: { view: WALLET_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: true } },
+  { test: /^\/projects\/[^/]+\/?$/, route: { view: PROJECT_PROFILE_VIEW, layout: DASH_LAYOUT_VIEW, gated: false } },
 ];
 
 /** @param {string} pathname @returns {DashRoute | null} */
@@ -147,22 +157,31 @@ const ROUTES = {
   // /blog already lists both research pieces as cards, so a second listing would
   // just be /blog again under another address. Falling through to the catch-all
   // (→ views/research.html, absent → not-found) is the honest answer.
-  "/allocation": ALLOCATION_VIEW,
+  // The model portfolio (RM-190). /allocation was its address until October
+  // 2026; it resolves here and router.js moves the address bar to
+  // /model-portfolio, query and fragment kept, so the #allocation and #vault
+  // anchors the deposit skill and archived sessions cite still land.
+  "/model-portfolio": ALLOCATION_VIEW,
+  "/allocation": ALLOCATION_VIEW, // legacy redirect
   // The protocol wallets' page (RM-157). /performance was its address until
   // October 2026 and /allocation2 before that; both resolve here and router.js
   // moves the address bar to /treasury.
   "/treasury": TREASURY_VIEW,
   "/performance": TREASURY_VIEW, // legacy redirect
   "/allocation2": TREASURY_VIEW, // legacy redirect
-  // /vault renders /allocation (RM-115's URL table): an address people
+  // /vault renders the model portfolio (RM-115's URL table): an address people
   // already hold is worth more resolving to the page that answers it than
-  // 404ing. router.js rewrites it to /allocation#vaults before rendering, and
-  // seo.js's LEGACY_ALIASES names /allocation canonical for the exact path
+  // 404ing. router.js rewrites it to /model-portfolio#vaults before rendering,
+  // and seo.js's LEGACY_ALIASES names /model-portfolio canonical for the exact path
   // only, so the two addresses do not compete as duplicates and /vault/:slug
   // keeps its own. It stays an explicit entry: the catch-all at the bottom of
   // viewFor() would otherwise look for views/vault.html, which is now the
   // per-vault page.
   "/vault": ALLOCATION_VIEW,
+  // Deposits wait for the vaults to open (RM-190): the deposit page and the
+  // deposit skill's docs resolve to early access, and router.js moves the
+  // address bar there. The skill docs are RETIRED_SKILL_DOCS, in viewFor().
+  "/deposit": EARLY_ACCESS_VIEW, // legacy redirect
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite
@@ -202,12 +221,15 @@ export function viewFor(pathname) {
   if (pathname === "/docs/investment-committee" || pathname.startsWith("/docs/investment-committee/")) {
     return viewFor("/docs/investment-swarm" + pathname.slice("/docs/investment-committee".length));
   }
-  // The four vault pages. The slugs are spelled out, not read from
+  // The three vault pages. The slugs are spelled out, not read from
   // lib/vault-data.js (a unit test holds the two lists equal), and any other
   // /vault/... is not found rather than a catch-all fragment lookup. /vaults/:id
   // (plural) is the gated analytics dossier below and does not match.
-  if (/^\/vault\/(rmusdc|rmagent|rmproto|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
-  if (pathname === "/vault/") return ALLOCATION_VIEW;
+  if (/^\/vault\/(rmusdc|rmproto|rmrwa)\/?$/.test(pathname)) return VAULT_DETAIL_VIEW;
+  // rmAGENT's page closed with its sleeve; router.js moves the address to
+  // /model-portfolio#vaults, as it does bare /vault.
+  if (pathname === "/vault/" || /^\/vault\/rmagent\/?$/.test(pathname)) return ALLOCATION_VIEW;
+  if (RETIRED_SKILL_DOCS.test(pathname)) return EARLY_ACCESS_VIEW;
   if (pathname.startsWith("/vault/")) return NOT_FOUND_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];
   // Dashboard routes (issue #380) checked next: DASH_ROUTES/DASH_PARAM_ROUTES
@@ -232,8 +254,6 @@ export function viewFor(pathname) {
   // reads location.pathname to pick a section. Otherwise the catch-all
   // below would request a nonexistent per-path view fragment and 404.
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return ADMIN_VIEW;
-  // A project's page (RM-186): one fragment for every slug.
-  if (/^\/projects\/[^/]+\/?$/.test(pathname)) return PROJECT_VIEW;
   if (/^\/swarm\/members\/[^/]+\/?$/.test(pathname)) {
     return `${VIEW_DIR}/swarm/member.html`;
   }

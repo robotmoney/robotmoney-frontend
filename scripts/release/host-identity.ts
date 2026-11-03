@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/host-identity.ts — release step P02-identity / P05-capture-identity, run ON A HOST.
+// scripts/release/host-identity.ts — release step Q07-host-identity/P02-host-identity / Q10-capture-identity/P05-capture-identity, run ON A HOST.
 //
 //   bun scripts/release/host-identity.ts --commit <sha> [--confirm-target host:port/db] --receipt-dir <dir>
 //
@@ -12,12 +12,12 @@
 // this host actually names, before any write is attempted. Then it checks the
 // target precondition (./precondition.ts), read-only through `rm_readonly`:
 // the database answers, and its deployment_identity is absent or the kind
-// RM_ENV implies. The ledger's reconciliation is P07-baseline's (D67).
+// RM_ENV implies. The ledger's reconciliation is Q12-state-baseline/P07-state-baseline's (D67).
 //
 // With --confirm-target it also proves what the cutover needs later, before
-// C05-migrate starts the cutover (the run's first irreversible step):
+// Q18-migrate/C05-migrate starts the cutover (the run's first irreversible step):
 //   - `~/.env` holds non-empty `rm_owner` and `RM_CREDENTIALS` lines
-//     (./env-keys.ts PRE_CUTOVER_REQUIRED_KEYS). C07-env-rewrite checks them again.
+//     (./env-keys.ts PRE_CUTOVER_REQUIRED_KEYS). Q19-env-rewrite/C07-env-rewrite checks them again.
 //   - rm_owner logs in: `SELECT 1`, read-only, through the registry's
 //     object-less `connectionCheck` shape declared as rm_owner in
 //     backend/scripts/owner-login-check.ts (proveOwnerLogin).

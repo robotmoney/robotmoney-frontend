@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { ArchiveError, serializeInputs } from "../src/archive/format1.ts";
 import { serializeManifest } from "../src/input/manifest.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
-import { collectRunInputs, openLocalCopy } from "./local-copy.ts";
+import { collectRunInputs, openBackupsDir } from "./backups-dir.ts";
 
 const USAGE = "usage: bun run inputs --archive <local copy dir> --run <run_key> [--as-of <backup id>] [--out <dir>] [--json]";
 
@@ -44,7 +44,7 @@ try {
   const manifestPath = join(outDir, "inputs.manifest.json");
   for (const p of [inputPath, manifestPath]) if (existsSync(p)) throw new ArchiveError(`${p} exists; inputs are never overwritten`);
 
-  const copy = openLocalCopy(root, args.values.get("--as-of"));
+  const copy = openBackupsDir(root, args.values.get("--as-of"));
   const asOf = copy.asOf;
   const inputs = collectRunInputs(copy, args.values.get("--run")!);
 

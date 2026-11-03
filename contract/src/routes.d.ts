@@ -80,6 +80,7 @@ export const ROUTES: {
       judgeSubscribe: string;
       judgement: string;
       judgeRefusal: string;
+      health: string;
     };
     admin: {
       action: string;
@@ -108,6 +109,7 @@ export const ROUTES: {
       memberAvatar: string;
       sessionRoster: string;
       sessionJudgements: string;
+      judgement: string;
       rosterAdd: string;
       rosterExcuse: string;
       rosterRestore: string;
@@ -155,6 +157,7 @@ export const ROUTES: {
     runEvents: string;
     vintages: string;
     vintage: string;
+    committedInputs: string;
     runPackage: string;
     reportSnapshot: string;
     paritySweep: string;

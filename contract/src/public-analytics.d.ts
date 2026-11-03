@@ -79,7 +79,7 @@ export interface PublicVintagesResponse extends PublicAnalyticsPage {
 
 export interface PublicOverwriteEvent {
   id: number;
-  table_name: "raw_indicator_history" | "regime_snapshots" | "research_signals";
+  table_name: "raw_indicator_history" | "regime_snapshots" | "research_signals" | "asset_prices";
   operation: "update" | "delete";
   natural_key: Record<string, unknown>;
   previous_row: Record<string, unknown>;

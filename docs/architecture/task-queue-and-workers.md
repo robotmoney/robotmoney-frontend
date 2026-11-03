@@ -214,7 +214,7 @@ into six independently testable stages — **access → extract → transform �
 - **`transform/`** — normalize/clean. `math.ts` is the shared pure math
   (percentile-in-window, sign, rolling beta, ratios, `isoDay`, …) so normalization
   is identical suite-wide; `grid.ts` reshapes gappy real series onto the dense
-  daily grid (`shapeDaily` forward-fill, `ratioByDate`).
+  daily grid (`shapeDaily` forward-fill, `mergeRatioSeries`).
 - **`analyze/`** — the computations (pure, DB-free). `tool.ts` is the
   `AnalyticTool` interface (`id, kind, inputs, dependsOn, compute`) + a
   `Registry` that topologically orders `dependsOn` and runs tools — a tool

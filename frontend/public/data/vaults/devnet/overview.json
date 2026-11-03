@@ -11,10 +11,10 @@
     "stale": false
   },
   "combined": {
-    "tvlUsd": 100000,
-    "vaultsLive": 4
+    "tvlUsd": 91000,
+    "vaultsLive": 3
   },
-  "trackingErrorBps": 200,
+  "trackingErrorBps": 87.91,
   "router": {
     "address": null,
     "availability": "live",
@@ -37,33 +37,13 @@
       "tvlUsd": 72000,
       "sharePrice": 1.025,
       "exitFeeBps": null,
-      "recommendedBps": 6500,
-      "appliedBps": 7000,
-      "actualBps": 7200,
+      "recommendedBps": 7500,
+      "appliedBps": 8000,
+      "actualBps": 7912.09,
       "gaps": {
         "governance": 500,
-        "flow": 200,
-        "total": 700
-      }
-    },
-    {
-      "slug": "rmagent",
-      "symbol": "rmAGENT",
-      "name": "Agent Tokens",
-      "bucket": "agent_tokens",
-      "availability": "live",
-      "status": "active",
-      "address": null,
-      "tvlUsd": 9000,
-      "sharePrice": 0.938,
-      "exitFeeBps": null,
-      "recommendedBps": 1500,
-      "appliedBps": 1000,
-      "actualBps": 900,
-      "gaps": {
-        "governance": -500,
-        "flow": -100,
-        "total": -600
+        "flow": -87.91,
+        "total": 412.09
       }
     },
     {
@@ -77,13 +57,13 @@
       "tvlUsd": 14000,
       "sharePrice": 1.064,
       "exitFeeBps": null,
-      "recommendedBps": 1500,
+      "recommendedBps": 2000,
       "appliedBps": 1500,
-      "actualBps": 1400,
+      "actualBps": 1538.46,
       "gaps": {
-        "governance": 0,
-        "flow": -100,
-        "total": -100
+        "governance": -500,
+        "flow": 38.46,
+        "total": -461.54
       }
     },
     {
@@ -99,11 +79,11 @@
       "exitFeeBps": null,
       "recommendedBps": 500,
       "appliedBps": 500,
-      "actualBps": 500,
+      "actualBps": 549.45,
       "gaps": {
         "governance": 0,
-        "flow": 0,
-        "total": 0
+        "flow": 49.45,
+        "total": 49.45
       }
     }
   ]

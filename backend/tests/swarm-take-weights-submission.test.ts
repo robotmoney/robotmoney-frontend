@@ -20,7 +20,7 @@
 // The lever below is the backstop for sessions ALREADY stuck when this shipped;
 // it is audited, and it is deliberately not load-bearing.
 import { expect, test } from "bun:test";
-import { canonicalizeSubmission, RECEIPT_CANONICAL_BUCKET_ORDER } from "@robotmoney/contract";
+import { canonicalizeSubmission, RECEIPT_HARD_ASSETS_BUCKET_ORDER } from "@robotmoney/contract";
 import * as admin from "../src/swarm/admin.ts";
 import * as verbs from "./support/session-verbs.ts";
 import * as ic from "../src/swarm/domain.ts";
@@ -31,7 +31,7 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 useCleanDatabase(import.meta.file);
 
 const rid = (p: string) => `${p}_${crypto.randomUUID().slice(0, 8)}`;
-const CANON = [...RECEIPT_CANONICAL_BUCKET_ORDER];
+const CANON = [...RECEIPT_HARD_ASSETS_BUCKET_ORDER];
 const full = (shares: number[]) => CANON.map((bucket, i) => ({ bucket, weight: shares[i]! }));
 
 async function member() {
@@ -94,7 +94,7 @@ test("a WEIGHTLESS take is refused at submission for a bucket_weights subject, b
 test("a THREE-bucket take is refused at submission", async () => {
   const s = await openBucketWeightsSession("sub-three");
   const res = await submit(await member(), s.date, s.subjectId, [
-    { bucket: "agent_tokens", weight: 0.5 },
+    { bucket: "hard_assets", weight: 0.5 },
     { bucket: "conservative_defi_yield", weight: 0.3 },
     { bucket: "protocol_tokens", weight: 0.2 },
   ]);
@@ -105,13 +105,13 @@ test("a THREE-bucket take is refused at submission", async () => {
 test("an UNKNOWN bucket is refused at submission", async () => {
   const s = await openBucketWeightsSession("sub-unknown");
   const res = await submit(await member(), s.date, s.subjectId, [
-    { bucket: "agent_tokens", weight: 0.4 },
+    { bucket: "hard_assets", weight: 0.4 },
     { bucket: "conservative_defi_yield", weight: 0.3 },
     { bucket: "protocol_tokens", weight: 0.2 },
     { bucket: "memecoins", weight: 0.1 },
   ]);
   expect(res.status).toBe(400);
-  expect((res as { error: string }).error).toContain("weights_not_canonical_four");
+  expect((res as { error: string }).error).toContain("weights_bucket_not_canonical");
 });
 
 test("a FIVE-entry vector is refused at submission", async () => {
@@ -121,7 +121,7 @@ test("a FIVE-entry vector is refused at submission", async () => {
     { bucket: "memecoins", weight: 0.1 },
   ]);
   expect(res.status).toBe(400);
-  expect((res as { error: string }).error).toContain("weights_not_canonical_four");
+  expect((res as { error: string }).error).toContain("weights_bucket_not_canonical");
 });
 
 test("the canonical four is accepted — 201, and the vector is what was signed", async () => {
@@ -223,4 +223,28 @@ test("the forced excuse refuses on a TERMINAL session — it is a backstop, not 
   const res = await admin.rosterExcuseAdmin(sessionId, m.id, admin.ADMIN_ACTOR, { force: true });
   expect(res.ok).toBe(false);
   expect((res as any).status).toBe(409);
+});
+
+// ── Hard Assets replaces Agent Tokens by session asOf (issue 1496) ──────────
+const OLD_FOUR = ["agent_tokens", "conservative_defi_yield", "protocol_tokens", "real_world_assets"].map((bucket) => ({ bucket, weight: 0.25 }));
+
+test("a take naming agent_tokens in a session on or after the framework asOf is refused by name, never counted as gold", async () => {
+  const s = await openBucketWeightsSession("sub-agent-new");
+  const res = await submit(await member(), s.date, s.subjectId, OLD_FOUR);
+  expect(res.status).toBe(400);
+  expect((res as { error: string }).error).toStartWith("weights_bucket_not_canonical");
+  expect((await sql`SELECT 1 FROM swarm_recommendations WHERE session_id = ${s.sessionId}`).length).toBe(0);
+  const ok = await submit(await member(), s.date, s.subjectId, full([0.25, 0.25, 0.25, 0.25]));
+  expect(ok.status).toBe(201);
+});
+
+test("a session that opened before the framework asOf keeps agent_tokens and refuses hard_assets", async () => {
+  const s = await openBucketWeightsSession("sub-agent-old");
+  await sql`UPDATE swarm_sessions SET convened_at = '2026-10-01T10:00:00Z' WHERE id = ${s.sessionId}`;
+  const date = "2026-10-01";
+  const refused = await submit(await member(), date, s.subjectId, full([0.25, 0.25, 0.25, 0.25]));
+  expect(refused.status).toBe(400);
+  expect((refused as { error: string }).error).toStartWith("weights_bucket_not_canonical");
+  const ok = await submit(await member(), date, s.subjectId, OLD_FOUR);
+  expect(ok.status).toBe(201);
 });

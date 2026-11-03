@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-// scripts/release/version-check.ts — a release's version checks (phase
-// `version`, ids V01…), run ON THE TARGET HOST after the soak.
+// scripts/release/version-check.ts — a release's version checks (the steps it
+// adds after the soak: Q for stage, C for production, one pair per check), run ON THE TARGET HOST.
 //
 //   bun scripts/release/version-check.ts --release vA.B.C --check <name> --instance <name> --origin <url> --run <run-ts> --receipt-dir <dir> [--commit <sha>]
 //

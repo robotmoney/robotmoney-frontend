@@ -10,7 +10,7 @@
 //
 // For each regime run with an as-of day on or after 2026-09-21 it takes the
 // run's frozen vintage through the analyst SDK's one archive reader
-// (packages/analyst-sdk/bin/local-copy.ts, the reader `bun run inputs` uses),
+// (packages/analyst-sdk/bin/backups-dir.ts, the reader `bun run inputs` uses),
 // replays it with the network poisoned and compares the as-of row field by
 // field, exactly, with the regime_snapshots artifact the run published. Every
 // run is reported (match, or every differing field and the first one's
@@ -18,9 +18,12 @@
 //
 // What fails the test:
 //   - any as-of LABEL that differs from the published label (issue 1431);
-//   - any differing field at all on a run created after issue 1421 merged
-//     (POST_1421): since then a run computes from the committed values, so its
-//     replay must reproduce every field.
+//   - any field that differs by more than rounding on a run created after
+//     issue 1421 merged (POST_1421): since then a run computes from the
+//     committed values, so its replay must reproduce every field. Accepted
+//     decision D78 (compensated arithmetic) moves numbers in their last bits,
+//     so a run published before it replays up to rounding (status
+//     "rounding": same labels, nulls and keys, numbers within rounding).
 // Runs before issue 1421 computed from freshly fetched Yahoo values, which the
 // ledger stored only to a relative tolerance (D56), so their numbers can differ
 // from what they published (packages/analyst-sdk/README.md). Those differences
@@ -33,7 +36,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { collectRunInputs, openLocalCopy } from "../../packages/analyst-sdk/bin/local-copy.ts";
+import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs, type Row } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
 import { publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
@@ -58,7 +61,7 @@ interface RunResult {
   runKey: string;
   asof: string;
   createdAt: string;
-  status: "match" | "mismatch" | "not published";
+  status: "match" | "rounding" | "mismatch" | "not published";
   firstDiff: string | null;
   differing: string[];
   publishedLabel: string | null;
@@ -75,8 +78,8 @@ function table(results: RunResult[]): string {
 
 describe.skipIf(!ARCHIVE)("replay of every published production regime run from a format 1 local copy", () => {
   test("every published run since 2026-09-21 replays to its published as-of row, field by field", () => {
-    const copy = openLocalCopy(ARCHIVE!);
-    const runs = (copy.tables.analytics_ledger_runs ?? [])
+    const copy = openBackupsDir(ARCHIVE!);
+    const runs = copy.table("analytics_ledger_runs")
       .filter((r) => r.tool_id === "regime" && r.asof! >= LEDGER_START)
       .sort((a, b) => (a.asof! < b.asof! ? -1 : a.asof! > b.asof! ? 1 : Number(a.id) - Number(b.id)));
     expect(runs.length).toBeGreaterThan(0);
@@ -112,7 +115,7 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
         const outcome = replayPublishedRun(serializeInputs(inputs.rows, "csv"), run.asof!, published.get(run.id!)!);
         results.push({
           ...base,
-          status: outcome.match ? "match" : "mismatch",
+          status: outcome.match ? "match" : outcome.beyondRounding.length === 0 ? "rounding" : "mismatch",
           firstDiff: outcome.firstDiff ? `${outcome.firstDiff.field} (published ${outcome.firstDiff.published.slice(0, 80)}, replay ${outcome.firstDiff.replay.slice(0, 80)})` : null,
           differing: outcome.differing,
           publishedLabel: outcome.publishedLabel,
@@ -127,7 +130,7 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
     const count = (s: RunResult["status"]) => results.filter((r) => r.status === s).length;
     const labelMismatches = results.filter((r) => r.status !== "not published" && r.publishedLabel !== r.replayLabel);
     const summary =
-      `backup ${copy.asOf.backup}: ${results.length} regime runs since ${LEDGER_START}; ${count("match")} match, ${count("mismatch")} mismatch, ` +
+      `backup ${copy.asOf.backup}: ${results.length} regime runs since ${LEDGER_START}; ${count("match")} match, ${count("rounding")} match up to rounding (D78), ${count("mismatch")} mismatch, ` +
       `${count("not published")} not published (no regime_snapshots artifact); as-of label differs on ${labelMismatches.length}`;
     console.log(summary);
     for (const r of results) if (r.status === "mismatch") console.log(`MISMATCH run ${r.runKey} (id ${r.runId}) as of ${r.asof}: first differing field ${r.firstDiff}`);
@@ -137,9 +140,9 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
       writeFileSync(join(REPORT_DIR, "results.md"), `${summary}\n\n${table(results)}`);
     }
     // Every published run was replayed, and every published label reproduced.
-    expect(count("match") + count("mismatch")).toBe(published.size);
+    expect(count("match") + count("rounding") + count("mismatch")).toBe(published.size);
     expect(labelMismatches.map((r) => `${r.runKey} ${r.asof}: published ${r.publishedLabel}, replay ${r.replayLabel}`)).toEqual([]);
-    // A post-1421 run reproduces every field (created_at is COPY text in UTC, so it sorts as text).
+    // A post-1421 run reproduces every field up to rounding (D78; created_at is COPY text in UTC, so it sorts as text).
     expect(results.filter((r) => r.status === "mismatch" && r.createdAt >= POST_1421).map((r) => `${r.runKey} ${r.asof}: ${r.firstDiff}`)).toEqual([]);
   }, 3_600_000);
 });

@@ -1,12 +1,12 @@
 // scripts/release/db-read.ts — the read-only database session the release
-// baseline (P07-baseline) and the comparison (S05-compare-baseline) share.
+// baseline (Q12-state-baseline/P07-state-baseline) and the comparison (Q30-compare-baseline/C18-compare-baseline) share.
 //
 // It connects as `rm_readonly` from `$HOME/.env` (scripts/lib/env-role.ts),
 // sets the session read-only and PROVES it with `SHOW transaction_read_only`
 // before the first query. D61 rule 3: every database read a runbook needs is a
 // committed script, never a hand-typed psql line.
 //
-// It imports only node built-ins and env-role, because the P02-identity precondition
+// It imports only node built-ins and env-role, because the Q07-host-identity/P02-host-identity precondition
 // (./host-identity.ts) runs it before `bun install`.
 import { homeEnvFilePath, loadEnvFile, redactedTarget, urlForRole } from "../lib/env-role.ts";
 

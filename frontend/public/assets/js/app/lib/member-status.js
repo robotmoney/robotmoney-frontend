@@ -2,8 +2,9 @@
 //
 // The API counts `silentSessions` (backend/src/swarm/dormancy.ts): the
 // sessions an active analyst seat missed since the latest of its newest take,
-// its activation and the upgrade that started the count. A judge, an inactive
-// member and the roster list carry null. At the threshold the member page and
+// its activation and the upgrade that started the count. A judge's count is the
+// sessions it filed no on-time answer for (issue 1495). An inactive member and
+// the roster list carry null. At the threshold the member page and
 // the admin member list show one line. It is a line, never an action: the
 // member stays active, seated and keyed, and only an admin removes it.
 
@@ -17,7 +18,8 @@ export const SILENT_THRESHOLD_SESSIONS = 7;
  * `Silent: missed N consecutive sessions` once the count reaches the member's
  * served `silentThreshold` (SWARM_DORMANCY_THRESHOLD_SESSIONS), null below it
  * or when there is no count.
- * @param {{ silentSessions?: number | null, silentThreshold?: number | null } | null | undefined} member
+ * A judge's line says what its count is: sessions without an on-time answer.
+ * @param {{ role?: string, silentSessions?: number | null, silentThreshold?: number | null } | null | undefined} member
  * @returns {string | null}
  */
 export function memberStatusLine(member) {
@@ -25,5 +27,6 @@ export function memberStatusLine(member) {
   const threshold = typeof t === "number" && Number.isInteger(t) && t > 0 ? t : SILENT_THRESHOLD_SESSIONS;
   const n = member?.silentSessions;
   if (typeof n !== "number" || !Number.isFinite(n) || n < threshold) return null;
+  if (member?.role === "judge") return `Silent: no on-time answer in ${n} consecutive sessions`;
   return `Silent: missed ${n} consecutive sessions`;
 }

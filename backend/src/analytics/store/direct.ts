@@ -12,7 +12,7 @@ import { applyRawFloorSeed } from "./floor-seed.ts";
 import { loadRecentResearchSignalDates } from "./research-store.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
-import { beginRun, appendRunEvent, freezeVintage } from "./run-ledger-store.ts";
+import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, REGIME_STORAGE_KEYS } from "./run-ledger-store.ts";
 import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
@@ -21,6 +21,7 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   freezeVintage,
   submitTerminalRunPackage,
   saveSourceAcquisition,
+  loadCommittedInputs: (marketTimeCutoff) => loadCommittedInputs(REGIME_STORAGE_KEYS, marketTimeCutoff),
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a

@@ -8,7 +8,7 @@ import { withRequestTiming } from "./request-timing.ts";
 import { closeDb, dbPoolTelemetry, runOnBatchPool } from "../db/client.ts";
 import { configureApiPoolsFromServer, databaseAnswers } from "../db/connection-check.ts";
 import { describeConnectionBudget } from "../db/connection-budget.ts";
-import { dbFailureResponse } from "./db-failure.ts";
+import { dbFailureLogPrefix, dbFailureResponse } from "./db-failure.ts";
 import { assertHandleNamespaceClean, handleNamespaceGuardOutcome } from "../db/handle-namespace.ts";
 import { appendOnlyGuardOutcome, assertAppendOnlyGuardArmed } from "../db/append-only-guard.ts";
 import { buildIdentityJson } from "../ops/build-identity.ts";
@@ -23,9 +23,9 @@ import { getProjectDetail, getProjects, updateProjectOverview } from "./routes/p
 import { handleSwarm } from "./routes/swarm.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
-import { handleAnalytics } from "./routes/analytics.ts";
+import { ANALYTICS_CONCURRENCY, handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
-import { handlePipeline } from "./routes/pipeline.ts";
+import { handlePipeline, pipelineTokenConcurrency } from "./routes/pipeline.ts";
 import { handleReferrals, REFERRALS_PREFIX } from "./routes/referrals.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
 import { corsPreflightResponse, withCors } from "./cors.ts";
@@ -137,9 +137,10 @@ await assertAnalyticsLedgerGuardArmed();
 // routes, timeouts below the 10 s request deadline), batch (analytics-provider
 // bulk work, long timeouts) and the health probe's single connection. An
 // override that does not fit refuses the boot here, naming the budget and each
-// share, before a port is bound.
+// share, before a port is bound. So does a batch pool too small for the caps
+// that draw on it: the analytics limiter and the per-token pipeline gate (issue 1514).
 try {
-  const budget = await configureApiPoolsFromServer();
+  const budget = await configureApiPoolsFromServer({ analytics: ANALYTICS_CONCURRENCY, pipeline: pipelineTokenConcurrency() });
   console.log(`db pools: ${describeConnectionBudget(budget)}`);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
@@ -215,7 +216,7 @@ const server = Bun.serve<SchedulerStreamSocketData, never>({
       // lock. Both carry Retry-After. See classifyDbFailure.
       const failure = dbFailureResponse(err);
       if (failure) {
-        console.error(`api error (${failure.status} ${pathname}):`, err);
+        console.error(dbFailureLogPrefix(failure.status, pathname, err), err);
         return withCors(failure, req, pathname);
       }
       console.error("api error:", err);

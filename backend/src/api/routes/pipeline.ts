@@ -29,6 +29,7 @@ import { classifyDbFailure, sql } from "../../db/client.ts";
 import { createPoolGate, type PoolGate } from "../../db/pool-gate.ts";
 import { DEFAULT_ADMISSION_WAIT_MS } from "../../db/client.ts";
 import type { RegistryDb } from "../../db/registry.ts";
+import { requestWaits } from "../../lib/request-waits.ts";
 import { automationTokenGrant, type AutomationGrant } from "../auth.ts";
 import {
   IDEMPOTENCY_KEY_HEADER,
@@ -126,6 +127,9 @@ export async function handlePipeline(req: Request, url: URL): Promise<Response> 
 
   // Another holder's token is answered exactly as a forged one is, so no
   // token tells a caller anything about the routes it may not use.
+  // This lookup runs on the batch pool before the token's gate below, so no
+  // cap bounds it: the batch share keeps a connection for it (issue 1514,
+  // BATCH_UNCAPPED_RESERVE in db/connection-budget.ts).
   const grant = await automationTokenGrant(req);
   if (!grant || grant.holder !== "pipeline-worker" || !grant.rights.includes(right)) {
     return reply({ status: 401, body: { error: "unauthorized" } });
@@ -134,7 +138,17 @@ export async function handlePipeline(req: Request, url: URL): Promise<Response> 
   const text = await req.text();
   if (Buffer.byteLength(text) > PIPELINE_MAX_BODY_BYTES) return reply(tooLarge);
 
-  const release = await gateFor(grant).acquire();
+  // The token's gate is a concurrency limiter, so its wait is the slow-request
+  // line's limiter wait (issue 1514); a refusal here names the gate
+  // (`pipeline:<instance>/<holder>`) in its db_saturated log.
+  const waits = requestWaits();
+  const queued = performance.now();
+  let release: () => void;
+  try {
+    release = await gateFor(grant).acquire();
+  } finally {
+    if (waits) waits.limiterMs += performance.now() - queued;
+  }
   try {
     if (path === PIPELINE_ROUTES.whoami) return reply({ status: 200, body: { holder: grant.holder, rights: grant.rights } });
     return reply(await dispatchPipeline(path, text, req.headers.get(IDEMPOTENCY_KEY_HEADER), { fenced: true }));

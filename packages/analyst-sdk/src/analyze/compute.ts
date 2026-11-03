@@ -13,6 +13,10 @@
 //   5. Composite = arithmetic mean of all included panel indices
 //   6. Bucket composite by 3y rolling percentile → risk-off / neutral / risk-on,
 //      with 5-day confirmation OR 2σ fast-track smoothing.
+//
+// Accuracy (decision D78): the panel weighted mean, the composite
+// mean and the fast-track σ are compensated (transform/exact.ts).
+import { ddDiv, ddDivD, ddValue, dotDD, meanAndSampleSd, sumDD } from "../transform/exact.ts";
 import {
   INDICATORS,
   PANELS,
@@ -112,16 +116,12 @@ export function computeRegime(
 
   const composite = new Array(dateAxis.length).fill(NaN);
   for (let i = 0; i < dateAxis.length; i++) {
-    let sum = 0;
-    let n = 0;
+    const vs: number[] = [];
     for (const p of panels) {
       const v = panelIndices[p][i];
-      if (Number.isFinite(v)) {
-        sum += v;
-        n++;
-      }
+      if (Number.isFinite(v)) vs.push(v);
     }
-    composite[i] = n > 0 ? sum / n : NaN;
+    composite[i] = vs.length > 0 ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
   }
 
   const compRank = rollingPercentileRank(composite, ROLLING_WINDOW_DAYS);
@@ -202,9 +202,7 @@ export function smoothRegimes(
         if (Number.isFinite(d)) deltas.push(d);
       }
       if (deltas.length >= 30) {
-        const m = deltas.reduce((s, v) => s + v, 0) / deltas.length;
-        const variance = deltas.reduce((s, v) => s + (v - m) ** 2, 0) / (deltas.length - 1);
-        const sigma = Math.sqrt(variance);
+        const sigma = ddValue(meanAndSampleSd(deltas).sd);
         if (sigma > 0 && Math.abs(delta) > FAST_TRACK_SIGMA * sigma) {
           const goingDown = delta < 0;
           if (
@@ -252,16 +250,17 @@ function weightedMeanOnDay(
   indicators: Indicator[],
   dayIdx: number,
 ): number {
-  let num = 0;
-  let den = 0;
+  const ws: number[] = [];
+  const vs: number[] = [];
   for (const ind of indicators) {
     const v = signed[ind.id][dayIdx];
     const w = weights[ind.id];
     if (!Number.isFinite(v) || !Number.isFinite(w)) continue;
-    num += w * v;
-    den += w;
+    ws.push(w);
+    vs.push(v);
   }
-  return den > 0 ? num / den : NaN;
+  const den = sumDD(ws);
+  return den[0] > 0 ? ddValue(ddDiv(dotDD(ws, vs), den)) : NaN;
 }
 
 export function bucketFn(p: number): string | null {

@@ -6,13 +6,16 @@ import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
+import { registryRecordedLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
+import { STORED_UNDER } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { fetchFred } from "../src/analytics/extract/fred.ts";
 import { fetchJson } from "../src/analytics/extract/http.ts";
 import { fetchGeckoTerminalNewPools } from "../src/analytics/extract/geckoterminal.ts";
 import { captureSourceAcquisition, payloadChecksum, type AcquisitionSink } from "../src/analytics/source-ledger.ts";
 import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-store.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
-import { loadInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
+import { loadInventory, collectedByInventory, inventoryCollection, loadResearchSeriesInventory, COLLECTION_START } from "../src/analytics/extract/model-portfolio.ts";
+import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -70,10 +73,18 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
       })),
   ];
   const output = await fetchAll({ indicators, acquisitionSink: sink, requestedByRunId: 42 });
-  expect(Object.keys(output)).toHaveLength(indicators.length);
+  // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series and are not fetched (D74 amendment, issue 1514).
+  const fetchedIndicators = indicators.filter((i) => !(i.id in STORED_UNDER));
+  expect(fetchedIndicators.length).toBe(indicators.length - 2);
+  expect(Object.keys(output)).toHaveLength(fetchedIndicators.length);
 
-  const acquisitions = await sql`SELECT id, provider, requested_by_run_id FROM source_acquisitions`;
-  expect(acquisitions).toHaveLength(indicators.length);
+  const all = await sql`SELECT id, provider, requested_by_run_id, cache_identity FROM source_acquisitions`;
+  // Issue 1514: the ratio legs the registry records are acquisitions of their
+  // own, served from the ratio's fetch, so they carry no fetch evidence.
+  const legs = all.filter((r) => String(r.cache_identity).includes(":ratio-leg:"));
+  expect(legs).toHaveLength(registryRecordedLegs(indicators).size);
+  const acquisitions = all.filter((r) => !legs.includes(r));
+  expect(acquisitions).toHaveLength(fetchedIndicators.length);
   // ENUMERATED, not listed by hand. AC1 is "every source variant enumerated by
   // sources.ts", so the expectation is read out of that switch: adding a
   // provider there and no evidence for it has to fail here, which a literal
@@ -84,7 +95,7 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   const [{ ratioFetches }] = await sql`
     SELECT count(*)::int AS "ratioFetches" FROM source_fetches f
     JOIN source_acquisitions a ON a.id = f.acquisition_id
-    WHERE a.provider = 'yahoo'`;
+    WHERE a.provider = 'yahoo' AND a.cache_identity NOT LIKE '%:ratio-leg:%'`;
   expect(ratioFetches).toBeGreaterThan(acquisitions.filter((r) => r.provider === "yahoo").length);
   const [{ coinmetricsFetches }] = await sql`
     SELECT count(*)::int AS "coinmetricsFetches" FROM source_fetches f
@@ -544,6 +555,16 @@ for (const s of loadInventory().series.filter(collectedByInventory)) {
   mpBodies.push([fragment, await mpGz(`${s.id.replace(":", "-")}.json.gz`)]);
 }
 const mpExpected = JSON.parse(await mpGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+// Issue 1514: the research-series inventory's recorded responses
+// (packages/analyst-sdk/tests/fixtures/extract/research-series/, provenance in
+// packages/analyst-sdk/tests/model-portfolio.test.ts).
+const RS_FIX = new URL("../../packages/analyst-sdk/tests/fixtures/extract/research-series/", import.meta.url);
+const rsGz = async (name: string) => new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await Bun.file(new URL(name, RS_FIX)).arrayBuffer())));
+const RS_NEW = loadResearchSeriesInventory().series.filter(collectedByInventory).filter((s) => !MP_IDS.includes(s.id));
+for (const s of RS_NEW) mpBodies.push([`/v8/finance/chart/${encodeURIComponent(s.symbol)}?`, await rsGz(`${s.id.replace(":", "-")}.json.gz`)]);
+const rsExpected = JSON.parse(await rsGz("expected-points.json.gz")) as Record<string, { date: string; value: number }[]>;
+/** Every key the inventory step collects, in collection order: both inventories, one per storage key. */
+const COLLECTED_IDS = inventoryCollection().map((s) => s.id);
 
 test("issue 1398: a price, then a changed price for the same date, are both recoverable from source_value_versions under the source id, as rm_app within the existing grants", async () => {
   // The write runs as rm_app (the harness's session role), with the grants it
@@ -579,7 +600,7 @@ test("issue 1398: a price, then a changed price for the same date, are both reco
   expect(update).toBe("permission denied for table source_value_versions");
 });
 
-test("issue 1398: collectModelPortfolioInputs records every new inventory series from recorded responses under its source id, and fetches no series another collector holds", async () => {
+test("issues 1398 and 1514: collectModelPortfolioInputs records every inventory series from recorded responses under its source id, and fetches no series another collector holds", async () => {
   process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
   const urls: string[] = [];
   globalThis.fetch = ((input: URL | RequestInfo) => {
@@ -593,15 +614,21 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
   const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
   const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn: (m) => warnings.push(m), error() {} }, sink, 77);
 
-  const ids = MP_IDS;
+  const ids = COLLECTED_IDS;
   expect(ids).toContain("yahoo:GLD");
   expect(ids).toContain("yahoo:USDC-USD");
-  expect(ids.length).toBe(9);
+  // Nine model portfolio series and thirteen research series (yahoo:GLD is in both).
+  expect(MP_IDS.length).toBe(9);
+  expect(RS_NEW.length).toBe(13);
+  expect(ids.length).toBe(22);
   expect(out.map((c) => c.id)).toEqual(ids);
   expect(out.every((c) => c.error === null && c.storageKey === c.id)).toBe(true);
-  expect(urls).toHaveLength(ids.length); // ^GSPC, ETH-USD, BTC-USD and DTB3 are not fetched again
-  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD)\?|fredgraph/.test(u))).toBe(false);
-  for (const id of ids) {
+  // ^GSPC, ETH-USD, BTC-USD, QQQ and DTB3 are not fetched again, and GLD,
+  // listed in both inventories, is fetched once.
+  expect(urls).toHaveLength(ids.length);
+  expect(urls.filter((u) => u.includes("/chart/GLD?"))).toHaveLength(1);
+  expect(urls.some((u) => /chart\/(%5EGSPC|ETH-USD|BTC-USD|QQQ)\?|fredgraph/.test(u))).toBe(false);
+  for (const id of MP_IDS) {
     const rows = await sql`
       SELECT market_date::text AS date, value FROM source_value_versions
       WHERE source_key = ${id} AND acquisition_id IN (SELECT id FROM source_acquisitions WHERE requested_by_run_id = 77)
@@ -609,9 +636,9 @@ test("issue 1398: collectModelPortfolioInputs records every new inventory series
     expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(mpExpected[id]!);
   }
   const acq = await sql`SELECT provider, cache_identity, requested_by_run_id FROM source_acquisitions WHERE requested_by_run_id = 77 ORDER BY provider, cache_identity`;
-  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), "yahoo", "yahoo"]);
+  expect(acq.map((r) => r.provider)).toEqual([...Array(7).fill("defillama-yields"), ...Array(15).fill("yahoo")]);
   // The late Base inception is reported, not repaired.
-  expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start 2018-01-01`))).toBe(true);
+  expect(warnings.some((w) => w.includes(`defillama-yields:${MP_BASE} starts 2024-03-10, after the requested start ${COLLECTION_START}`))).toBe(true);
 
   // A second collection of the same responses adds no version.
   const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n;
@@ -630,7 +657,175 @@ test("issue 1398: one failed model portfolio series is reported by id and drops 
   const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
   const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 79);
   const eth = out.find((c) => c.id === `defillama-yields:${MP_ETH}`)!;
-  expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from 2018-01-01`);
+  expect(eth.error).toBe(`defillama-yields:${MP_ETH}: the provider returned no observations from ${COLLECTION_START}`);
   expect(eth.rows).toBe(0);
-  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(MP_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
+  expect(out.filter((c) => c.error === null).map((c) => c.id)).toEqual(COLLECTED_IDS.filter((id) => id !== `defillama-yields:${MP_ETH}`));
+});
+
+// ── Issue 1514: the 2016 collection floor and the research series ───────────
+const NEW_RESEARCH_KEYS = [
+  "yahoo:GC=F", "yahoo:CL=F", "yahoo:HG=F", "yahoo:SI=F", "yahoo:TLT", "yahoo:VNQ", "yahoo:DBC",
+  "yahoo:MSTR", "yahoo:SOL-USD", "yahoo:BNB-USD", "yahoo:AAVE-USD", "yahoo:HYPE32196-USD", "yahoo:VIRTUAL-USD",
+];
+const unixDay = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / 1000;
+/** A tiny one-row chart for a symbol the recorded inventories do not cover. */
+const tinyChart = () => Response.json({ chart: { result: [{ timestamp: [1704067200], indicators: { adjclose: [{ adjclose: [2] }] } }] } });
+
+/** A fetch that serves the recorded inventory bodies, a one-row chart for any other Yahoo symbol, and fails the rest. */
+function recordedFetch(urls: string[]): typeof fetch {
+  return ((input: URL | RequestInfo) => {
+    const url = String(input);
+    urls.push(url);
+    const hit = mpBodies.find(([f]) => url.includes(f));
+    if (hit) return Promise.resolve(new Response(hit[1], { headers: { "content-type": "application/json" } }));
+    if (url.includes("query2.finance.yahoo.com")) return Promise.resolve(tinyChart());
+    if (url.includes("fredgraph.csv")) return Promise.resolve(new Response("DATE,VALUE\n2024-01-01,1.25\n"));
+    return Promise.reject(new Error(`unrecorded URL ${url}`));
+  }) as typeof fetch;
+}
+
+test("issue 1514: one collection writes the thirteen new research series from recorded responses, and a second adds no version", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  globalThis.fetch = recordedFetch([]);
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  expect(RS_NEW.map((s) => s.storageKey).sort()).toEqual([...NEW_RESEARCH_KEYS].sort());
+  const out = await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 1514);
+  expect(out.filter((c) => c.error !== null)).toEqual([]);
+  // Every version under the key, whichever collection in this file wrote it:
+  // the same responses never add a second version.
+  for (const key of NEW_RESEARCH_KEYS) {
+    const rows = await sql`
+      SELECT market_date::text AS date, value FROM source_value_versions
+      WHERE source_key = ${key} ORDER BY market_date, id`;
+    expect(rsExpected[key]!.length).toBeGreaterThan(600);
+    expect(rows.map((r) => ({ date: r.date, value: Number(r.value) }))).toEqual(rsExpected[key]!);
+  }
+  const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n;
+  await liveDataSource.collectModelPortfolioInputs!({ log() {}, warn() {}, error() {} }, sink, 1515);
+  expect((await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n).toBe(before);
+});
+
+test("issue 1514: the live source requests BTC-USD, QQQ and every inventory Yahoo symbol from 2016-01-01, the 2010 starts stay, and each key is fetched once", async () => {
+  process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
+  const urls: string[] = [];
+  globalThis.fetch = recordedFetch(urls);
+  const { liveDataSource } = await import("../src/analytics/access/data-source.ts");
+  const quiet = { log() {}, warn() {}, error() {} };
+  // The EDGAR sweep is out of this test: an already-passed deadline degrades it at once.
+  await liveDataSource.fetchResearchInputs("2026-10-27", quiet, { persistedMna: [], deadlineAt: Date.now() - 1 }, sink, 1516);
+  await liveDataSource.fetchBacktestExtras(quiet, sink, 1516);
+  await liveDataSource.collectModelPortfolioInputs!(quiet, sink, 1516);
+  const yahoo = urls.filter((u) => u.includes("query2.finance.yahoo.com"));
+  const period1 = new Map<string, number[]>();
+  for (const u of yahoo) {
+    const sym = decodeURIComponent(u.match(/\/chart\/([^?]+)\?/)![1]!);
+    const list = period1.get(sym) ?? [];
+    list.push(Number(u.match(/period1=(\d+)/)![1]));
+    period1.set(sym, list);
+  }
+  const inventoryYahoo = inventoryCollection().filter((s) => s.provider === "yahoo").map((s) => s.symbol);
+  for (const sym of ["BTC-USD", "QQQ", ...inventoryYahoo]) expect({ sym, period1: period1.get(sym) }).toEqual({ sym, period1: [unixDay("2016-01-01")] });
+  for (const sym of ["SPY", "RSP", ...TOP7, "^GSPC", "ETH-USD"]) expect({ sym, period1: period1.get(sym) }).toEqual({ sym, period1: [unixDay("2010-01-01")] });
+  // Every symbol is requested once across the three collectors.
+  for (const [sym, starts] of period1) expect({ sym, n: starts.length }).toEqual({ sym, n: 1 });
+});
+
+// ── Issue 1514: the committed heads come from the rows written and the priors read ──
+// A first submission used to read every value's head a second time after its
+// inserts (committedHeads), one more lateral lookup per value while the
+// transaction held its batch connection and its source-key lock. The heads now
+// come from the rows the insert returned and the priors the tolerance decision
+// already read. They must equal what the ledger holds, for every kind of value.
+
+/** Each value's head as the ledger holds it, read independently of the store. */
+async function ledgerHeads(values: { sourceKey: string; marketDate: string | null; marketInstant: string | null }[]): Promise<{ versionId: string; value: number }[]> {
+  const out: { versionId: string; value: number }[] = [];
+  for (const v of values) {
+    const [row] = v.marketDate !== null
+      ? await sql`SELECT id::text AS id, value FROM source_value_versions WHERE source_key = ${v.sourceKey} AND market_date = ${v.marketDate}::date AND market_instant IS NULL ORDER BY knowledge_time DESC, id DESC LIMIT 1`
+      : await sql`SELECT id::text AS id, value FROM source_value_versions WHERE source_key = ${v.sourceKey} AND market_instant = ${v.marketInstant}::timestamptz AND market_date IS NULL ORDER BY knowledge_time DESC, id DESC LIMIT 1`;
+    out.push({ versionId: String(row!.id), value: Number(row!.value) });
+  }
+  return out;
+}
+
+/** `sql`, with every prior lookup (the store's LEFT JOIN LATERAL reads) inside its transactions counted. */
+function countingPool(): { db: Pick<typeof sql, "begin">; lookups: () => number } {
+  let lookups = 0;
+  const isTemplate = (a: unknown): a is TemplateStringsArray => Array.isArray(a) && "raw" in (a as object);
+  const db = {
+    begin: (fn: (tx: unknown) => Promise<unknown>) => sql.begin((tx) => fn(new Proxy(tx, {
+      apply(target, thisArg, args) {
+        if (isTemplate(args[0]) && args[0].join("?").includes("LEFT JOIN LATERAL")) lookups++;
+        return Reflect.apply(target as unknown as (...a: unknown[]) => unknown, thisArg, args);
+      },
+    }))),
+  } as unknown as Pick<typeof sql, "begin">;
+  return { db, lookups: () => lookups };
+}
+
+function evidence(values: { sourceKey: string; marketDate?: string; marketInstant?: string; value: number }[]): Parameters<typeof saveSourceAcquisition>[0] {
+  return {
+    id: randomUUID(), provider: "fixture", parserVersion: "fixture:1", cacheIdentity: `heads-${randomUUID()}`, requestedByRunId: null,
+    events: [{ type: "started", detail: null }, { type: "succeeded", detail: null }], fetches: [],
+    values: values.map((v) => ({ sourceKey: v.sourceKey, marketDate: v.marketDate ?? null, marketInstant: v.marketInstant ?? null, value: v.value, provenance: "live" })),
+  };
+}
+
+test("issue 1514: the committed heads equal the ledger's for every kind of value, and a submission reads each prior once", async () => {
+  // The ledger before: one dated head, one timestamped head, one Yahoo head.
+  await saveSourceAcquisition(evidence([
+    { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 10 },
+    { sourceKey: "heads:exact", marketDate: "2024-01-02", value: 20 },
+    { sourceKey: "heads:instant", marketInstant: "2024-01-01T12:00:00.000Z", value: 5 },
+    { sourceKey: "research:RSP", marketDate: "2024-01-01", value: 18.719999313354492 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 1 },
+  ]));
+  const before = (await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n as number;
+
+  const { db, lookups } = countingPool();
+  const ev = evidence([
+    { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 10 }, // unchanged: the head is the prior
+    { sourceKey: "heads:exact", marketDate: "2024-01-02", value: 21 }, // revision: the head is the new row
+    { sourceKey: "heads:exact", marketDate: "2024-01-03", value: 30 }, // initial: the head is the new row
+    { sourceKey: "heads:instant", marketInstant: "2024-01-01T12:00:00.000Z", value: 6 }, // a timestamped revision
+    { sourceKey: "heads:instant", marketInstant: "2024-01-02T12:00:00.000Z", value: 7 }, // a timestamped initial
+    { sourceKey: "research:RSP", marketDate: "2024-01-01", value: 18.72 }, // within D56 tolerance: the head keeps its stored value
+  ]);
+  const saved = await saveSourceAcquisition(ev, db);
+  expect(saved.replayed).toBe(false);
+  expect(saved.committed).toEqual(await ledgerHeads(ev.values));
+  expect(saved.committed!.map((c) => c.value)).toEqual([10, 21, 30, 6, 7, 18.719999313354492]);
+  expect((await sql`SELECT count(*)::int AS n FROM source_value_versions`)[0]!.n).toBe(before + 4);
+  // One prior lookup per representation present (dated, timestamped), not two.
+  expect(lookups()).toBe(2);
+
+  // A dated-only acquisition reads its priors in one lookup.
+  const datedOnly = countingPool();
+  const dated = evidence([{ sourceKey: "heads:exact", marketDate: "2024-01-04", value: 40 }, { sourceKey: "heads:exact", marketDate: "2024-01-01", value: 11 }]);
+  const datedSaved = await saveSourceAcquisition(dated, datedOnly.db);
+  expect(datedSaved.committed).toEqual(await ledgerHeads(dated.values));
+  expect(datedOnly.lookups()).toBe(1);
+
+  // A replay reads the heads it never wrote, once, and answers the same heads.
+  const replay = countingPool();
+  const replayed = await saveSourceAcquisition(ev, replay.db);
+  expect(replayed.replayed).toBe(true);
+  expect(replayed.committed).toEqual(await ledgerHeads(ev.values));
+  expect(replay.lookups()).toBe(2);
+
+  // Within-batch duplicates (the per-value path): the first revises the head, the
+  // second re-observes it, and both answer the row the first wrote.
+  const dup = countingPool();
+  const dupEv = evidence([
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 2 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-01", value: 2 },
+    { sourceKey: "heads:dup", marketDate: "2024-01-02", value: 3 },
+  ]);
+  const dupSaved = await saveSourceAcquisition(dupEv, dup.db);
+  const heads = await ledgerHeads(dupEv.values);
+  expect(dupSaved.committed).toEqual(heads);
+  expect(dupSaved.committed!.map((c) => c.value)).toEqual([2, 2, 3]);
+  // One prior lookup per value on this path, as before; never a second pass.
+  expect(dup.lookups()).toBe(3);
 });

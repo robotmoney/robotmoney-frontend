@@ -20,6 +20,7 @@
 // creates, so a fragment that is only ever interpolated into another statement
 // is never gated, and an executed query waits for its permit first.
 import type postgresTypes from "postgres";
+import { requestWaits } from "../lib/request-waits.ts";
 
 /** A query refused because its pool had no free connection within the admission wait. */
 export class DbSaturatedError extends Error {
@@ -124,6 +125,22 @@ function isQuery(value: unknown): value is AnyQuery {
   return value instanceof Promise && typeof (value as Partial<AnyQuery>).handle === "function" && "handler" in value;
 }
 
+/**
+ * `gate.acquire()`, with the time spent waiting added to the running request's
+ * pool wait (issue 1514), so the slow-request line can say how much of a
+ * request was spent waiting for a connection.
+ */
+function acquireTimed(gate: PoolGate): Promise<() => void> {
+  const waits = requestWaits();
+  if (!waits) return gate.acquire();
+  const started = performance.now();
+  const done = () => { waits.poolMs += performance.now() - started; };
+  return gate.acquire().then(
+    (release) => { done(); return release; },
+    (err: unknown) => { done(); throw err; },
+  );
+}
+
 /** Make `query` wait for a permit before it reaches the pool, and give the permit back when it settles. */
 function gateQuery(query: AnyQuery, gate: PoolGate): AnyQuery {
   // A cursor never settles its own promise, so it could not give a permit
@@ -132,7 +149,7 @@ function gateQuery(query: AnyQuery, gate: PoolGate): AnyQuery {
   if (query.cursorFn) return query;
   const run = query.handler;
   query.handler = (q) => {
-    gate.acquire().then(
+    acquireTimed(gate).then(
       (release) => {
         // Promise.prototype.then, not q.then: Query#then would re-enter handle().
         Promise.prototype.then.call(q, release, (err: unknown) => {
@@ -157,7 +174,7 @@ export function gatedPool(raw: postgresTypes.Sql<{}>, gate: PoolGate): postgresT
   const unsafe = (...args: unknown[]) => wrap((raw.unsafe as (...a: unknown[]) => unknown)(...args));
   const file = (...args: unknown[]) => wrap((raw.file as (...a: unknown[]) => unknown)(...args));
   const begin = async (...args: unknown[]) => {
-    const release = await gate.acquire();
+    const release = await acquireTimed(gate);
     try {
       return await (raw.begin as (...a: unknown[]) => Promise<unknown>)(...args);
     } catch (err) {
@@ -168,7 +185,7 @@ export function gatedPool(raw: postgresTypes.Sql<{}>, gate: PoolGate): postgresT
     }
   };
   const reserve = async () => {
-    const release = await gate.acquire();
+    const release = await acquireTimed(gate);
     let reserved: postgresTypes.ReservedSql<{}>;
     try {
       reserved = await raw.reserve();

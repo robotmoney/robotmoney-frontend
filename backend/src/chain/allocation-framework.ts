@@ -4,8 +4,8 @@
 // allocation_framework table (migration 0001), which db/seed.ts seeds once from
 // robotmoney-site/data/swarm/allocation.json and an admin may later rewrite.
 //
-// Replaces the baked bucket percentages in the frontend allocation view (95%
-// Conservative DeFi Yield / 5% Agent Tokens / 0% Protocol / 0% RWA and the
+// Replaces the baked bucket percentages in the frontend allocation view (50%
+// Conservative DeFi Yield / 7% Protocol / 29% RWA / 14% Hard Assets and the
 // per-item legend weights). managed:true — the data is intentionally static
 // until an admin rewrites the row; there is no chain 'stale' concept here.
 import { resolveBaseRpcSource, type BaseRpcSource } from "../config.ts";
@@ -59,13 +59,16 @@ interface FrameworkSeed {
 // and so getAllocationFramework can fall back to it if the row is somehow absent.
 // Do NOT invent weights the swarm data does not carry.
 export const ALLOCATION_FRAMEWORK_SEED: FrameworkSeed = {
-  asof: "2026-06-02",
+  // The day the Hard Assets framework took effect (issue 1496). Sessions with an
+  // asOf before it keep the old bucket list; production's row gets its own asOf
+  // from migration 0129, which runs on the deploy day.
+  asof: "2026-10-30",
   vault_contract: "0x4f835c9f54bcf17daf9040f60cb72951ccbb49dd",
   buckets: [
     {
       id: "conservative_defi_yield",
       name: "Conservative DeFi Yield",
-      target_weight: 0.95,
+      target_weight: 0.5,
       items: [
         { id: "aave", name: "Aave", target_weight: 0.25 },
         { id: "morpho", name: "Morpho", target_weight: 0.25 },
@@ -74,37 +77,25 @@ export const ALLOCATION_FRAMEWORK_SEED: FrameworkSeed = {
       ],
     },
     {
-      id: "agent_tokens",
-      name: "Agent Tokens",
-      target_weight: 0.05,
-      items: [
-        { id: "robotmoney", name: "RobotMoney", target_weight: 0.1429 },
-        { id: "juno", name: "Juno", target_weight: 0.1429 },
-        { id: "woon", name: "Woon", target_weight: 0.1429 },
-        { id: "peaq", name: "Peaq", target_weight: 0.1429 },
-        { id: "zyfai", name: "Zyfai", target_weight: 0.1429 },
-        { id: "giza", name: "Giza", target_weight: 0.1428 },
-        { id: "deus", name: "DEUS", target_weight: 0.1427 },
-      ],
-    },
-    {
       id: "protocol_tokens",
       name: "Protocol Tokens",
-      target_weight: 0.0,
+      target_weight: 0.07,
       items: [
-        { id: "btc", name: "BTC", target_weight: 0.3333 },
-        { id: "eth", name: "ETH", target_weight: 0.3333 },
-        { id: "hype", name: "HYPE", target_weight: 0.3334 },
+        { id: "btc", name: "BTC", target_weight: 0.5 },
+        { id: "eth", name: "ETH", target_weight: 0.5 },
       ],
     },
     {
       id: "real_world_assets",
       name: "Real World Assets",
-      target_weight: 0.0,
-      items: [
-        { id: "spy", name: "SPY", target_weight: 0.5 },
-        { id: "gold", name: "Gold", target_weight: 0.5 },
-      ],
+      target_weight: 0.29,
+      items: [{ id: "spy", name: "SPY", target_weight: 1 }],
+    },
+    {
+      id: "hard_assets",
+      name: "Hard Assets",
+      target_weight: 0.14,
+      items: [{ id: "gold", name: "Gold", target_weight: 1 }],
     },
   ],
 };
@@ -114,6 +105,7 @@ export const ALLOCATION_FRAMEWORK_SEED: FrameworkSeed = {
 const BUCKET_KEYS: Record<string, string> = {
   conservative_defi_yield: "defi-yield",
   agent_tokens: "agent-tokens",
+  hard_assets: "hard-assets",
   protocol_tokens: "protocol-tokens",
   real_world_assets: "rwa",
 };

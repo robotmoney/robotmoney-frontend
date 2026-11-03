@@ -194,12 +194,12 @@ export const LEGACY_JUDGE_MODELS: readonly string[] = ["deepseek-v4-flash"];
 /** True for a pre-0111 id, with or without the provider prefix production used to store. */
 export const isLegacyJudgeModel = (model: string): boolean => LEGACY_JUDGE_MODELS.includes(model.replace(/^opencode\//, ""));
 
-/** R8.q. Judge config: enforce, the pinned model, third parties off. */
+/** R8.q. Judge config: enforce and the pinned model. third_party_enabled is the owner's switch (0048): production runs it on, so its value is reported and never graded (owner, 2026-10-21). */
 export function evalJudgeConfig(r: { mode: string; model: string | null; thirdParty: boolean } | undefined): StandingCheck {
   const title = "judge config";
   if (!r) return mk("R8.q", title, "FAIL", "swarm_judge_config has no row");
   const d = `mode=${r.mode} model=${r.model ?? "NULL"} third_party_enabled=${r.thirdParty}`;
-  if (r.mode !== "enforce" || r.thirdParty || r.model === null) return mk("R8.q", title, "FAIL", d, "expected enforce, the pinned model, third_party_enabled false");
+  if (r.mode !== "enforce" || r.model === null) return mk("R8.q", title, "FAIL", d, "expected enforce and the pinned model");
   if (r.model === PINNED_JUDGE_MODEL) return mk("R8.q", title, "PASS", d);
   if (isLegacyJudgeModel(r.model)) return mk("R8.q", title, "WARN", d, `a pre-0111 model id: valid only until migration 0111 renames it to ${PINNED_JUDGE_MODEL}`);
   return mk("R8.q", title, "FAIL", d, `not the pinned model ${PINNED_JUDGE_MODEL}`);

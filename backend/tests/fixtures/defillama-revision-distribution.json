@@ -1,0 +1,106 @@
+{
+  "issue": 1514,
+  "source": {
+    "backup": "2026-10-28T180400Z",
+    "table": "source_value_versions",
+    "files": [
+      "csv/2026-10-05T205831Z/data/source_value_versions.2026-09-21T015522Z_2026-10-05T183017Z.csv.gz",
+      "csv/2026-10-19T200614Z/data/source_value_versions.2026-10-05T210002Z_2026-10-19T183018Z.csv.gz",
+      "csv/2026-10-27T020813Z/data/source_value_versions.2026-10-19T210002Z_2026-10-27T003016Z.csv.gz",
+      "csv/2026-10-28T180400Z/data/source_value_versions.2026-10-27T030002Z_2026-10-28T180006Z.csv.gz"
+    ],
+    "why_these_files": "csv-backups stores source_value_versions append-only and each backup holds only the rows it added, so the ledger as of this backup is the data files of this backup and of every backup before it, read in order",
+    "command": "ssh rm-frontend-stage-2 'cd ~/csv-backups && zcat csv/2026-10-05T205831Z/data/source_value_versions.2026-09-21T015522Z_2026-10-05T183017Z.csv.gz csv/2026-10-19T200614Z/data/source_value_versions.2026-10-05T210002Z_2026-10-19T183018Z.csv.gz csv/2026-10-27T020813Z/data/source_value_versions.2026-10-19T210002Z_2026-10-27T003016Z.csv.gz csv/2026-10-28T180400Z/data/source_value_versions.2026-10-27T030002Z_2026-10-28T180006Z.csv.gz' | bun run backend/scripts/analytics/measure-tolerance.ts --backup 2026-10-28T180400Z --file <each file> --out backend/tests/fixtures/defillama-revision-distribution.json",
+    "producer": "bun run backend/scripts/analytics/measure-tolerance.ts"
+  },
+  "rule": "half-decade log bins from 1e-9 to 1e-1 of each revision's |next - prior| / max(|next|, |prior|); the noise band is the run of non-empty bins starting at the lowest bin; the tolerance is the upper edge of the first bin above the band that is empty or holds under 0.1 percent of that key's revisions, rounded down to one significant digit; the keys share the larger value; it must be at most 1e-4",
+  "bin_edges": [
+    1e-9,
+    3.1622776601683795e-9,
+    1e-8,
+    3.16227766016838e-8,
+    1e-7,
+    3.162277660168379e-7,
+    0.000001,
+    0.000003162277660168379,
+    0.00001,
+    0.000031622776601683795,
+    0.0001,
+    0.000316227766016838,
+    0.001,
+    0.0031622776601683794,
+    0.01,
+    0.0316227766016838,
+    0.1
+  ],
+  "bin_labels": [
+    "[0, 3.16e-9)",
+    "[3.16e-9, 1.00e-8)",
+    "[1.00e-8, 3.16e-8)",
+    "[3.16e-8, 1.00e-7)",
+    "[1.00e-7, 3.16e-7)",
+    "[3.16e-7, 1.00e-6)",
+    "[1.00e-6, 3.16e-6)",
+    "[3.16e-6, 1.00e-5)",
+    "[1.00e-5, 3.16e-5)",
+    "[3.16e-5, 1.00e-4)",
+    "[1.00e-4, 3.16e-4)",
+    "[3.16e-4, 1.00e-3)",
+    "[1.00e-3, 3.16e-3)",
+    "[3.16e-3, 1.00e-2)",
+    "[1.00e-2, 3.16e-2)",
+    "[3.16e-2, 1.00e-1)"
+  ],
+  "keys": {
+    "raw_indicator_history:DEFI_TVL": {
+      "versions": 84969,
+      "undated": 0,
+      "chain_mismatches": 0,
+      "revisions": 81650,
+      "bins": [
+        7273,
+        531,
+        1253,
+        2313,
+        12151,
+        10648,
+        10227,
+        10129,
+        4444,
+        4751,
+        10533,
+        5486,
+        1510,
+        181,
+        220,
+        0
+      ],
+      "above": 0
+    },
+    "raw_indicator_history:STABLES": {
+      "versions": 7243,
+      "undated": 0,
+      "chain_mismatches": 0,
+      "revisions": 3987,
+      "bins": [
+        29,
+        27,
+        45,
+        14,
+        27,
+        42,
+        395,
+        577,
+        196,
+        406,
+        241,
+        237,
+        940,
+        715,
+        96,
+        0
+      ],
+      "above": 0
+    }
+  }
+}

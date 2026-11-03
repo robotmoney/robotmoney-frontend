@@ -9,13 +9,13 @@
   "tvlUsd": 14000,
   "sharePrice": 1.064,
   "exitFeeBps": null,
-  "recommendedBps": 1500,
+  "recommendedBps": 2000,
   "appliedBps": 1500,
-  "actualBps": 1400,
+  "actualBps": 1538.46,
   "gaps": {
-    "governance": 0,
-    "flow": -100,
-    "total": -100
+    "governance": -500,
+    "flow": 38.46,
+    "total": -461.54
   },
   "network": {
     "chainId": 918453,
@@ -50,8 +50,8 @@
       "symbol": "WBTC",
       "address": null,
       "balance": null,
-      "valueUsd": 6000,
-      "weightBps": 4285.71,
+      "valueUsd": 7300.0,
+      "weightBps": 5214.29,
       "targetBps": null,
       "priceSource": null,
       "note": null
@@ -62,20 +62,8 @@
       "symbol": "WETH",
       "address": null,
       "balance": null,
-      "valueUsd": 5000,
-      "weightBps": 3571.43,
-      "targetBps": null,
-      "priceSource": null,
-      "note": null
-    },
-    {
-      "kind": "token",
-      "label": "HYPE",
-      "symbol": "HYPE",
-      "address": null,
-      "balance": null,
-      "valueUsd": 2600,
-      "weightBps": 1857.14,
+      "valueUsd": 6300.0,
+      "weightBps": 4500.0,
       "targetBps": null,
       "priceSource": null,
       "note": null
@@ -229,7 +217,7 @@
       {
         "sessionId": null,
         "t": "2026-09-16T10:00:00Z",
-        "recommendedBps": 1500,
+        "recommendedBps": 2000,
         "applied": false
       }
     ]

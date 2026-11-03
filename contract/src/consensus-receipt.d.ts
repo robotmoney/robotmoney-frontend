@@ -1,6 +1,6 @@
 /** One bucket's share of the deterministic mean, bps-native. */
 export interface ConsensusReceiptBucketWeight {
-  bucket: "agent_tokens" | "conservative_defi_yield" | "protocol_tokens" | "real_world_assets";
+  bucket: "agent_tokens" | "conservative_defi_yield" | "hard_assets" | "protocol_tokens" | "real_world_assets";
   weight_bps: number;
 }
 
@@ -84,7 +84,13 @@ export const RECEIPT_DOMAIN_SEPARATOR: string;
 export const RECEIPT_SCHEMA_VERSION: string;
 export const RECEIPT_TRAILING_NEWLINE: boolean;
 export const RECEIPT_STANCE_KEYS: readonly string[];
+/** The published spec's bucket list (the pre-Hard-Assets list); past receipts verify against it. */
 export const RECEIPT_CANONICAL_BUCKET_ORDER: readonly string[];
+/** The bucket list of a session on or after the framework asOf (hard_assets replaces agent_tokens). */
+export const RECEIPT_HARD_ASSETS_BUCKET_ORDER: readonly string[];
+/** The one picker: sessionAsOf before frameworkAsOf gets the old list, otherwise the Hard Assets list. */
+export function receiptSessionAsOf(receipt: ConsensusReceipt): string | null;
+export function bucketOrderForAsOf(sessionAsOf: string, frameworkAsOf: string): readonly string[];
 /** A whole allocation is exactly this many basis points. */
 export const BPS_DENOMINATOR: number;
 
@@ -146,6 +152,7 @@ export function validateReceipt(
 export function receiptSemanticErrors(
   receipt: ConsensusReceipt,
   spec?: ConsensusReceiptCanonicalizationSpec,
+  options?: { frameworkAsOf?: string },
 ): string[];
 
 /** One embedded signature's read-time verdict. */

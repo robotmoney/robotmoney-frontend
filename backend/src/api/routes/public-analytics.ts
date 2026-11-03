@@ -602,7 +602,8 @@ async function vintageMembers(url: URL, tx: Tx, vintageId: string, limit: number
   };
 }
 
-const OVERWRITE_TABLES = ["raw_indicator_history", "regime_snapshots", "research_signals"];
+// asset_prices since migration 0128 (API-6): a revised price is a recorded revision too.
+const OVERWRITE_TABLES = ["raw_indicator_history", "regime_snapshots", "research_signals", "asset_prices"];
 
 async function overwriteEvents(url: URL, tx: Tx) {
   const limit = limitParam(url);
@@ -914,7 +915,8 @@ async function awaitRecord(id: string) {
   }
 }
 
-const ARCHIVE_PATH_RE = /^csv\/(\d{4}-\d{2}-\d{2}T000000Z)\/(backup\.json|data\/[a-z_]+\.\d{4}-\d{2}-\d{2}T\d{6}Z_\d{4}-\d{2}-\d{2}T\d{6}Z(?:-\d+)?\.csv\.gz)$/;
+// A backup id of either shape: a day cut, or the legacy junction (issue 1477); isServedBackup decides which exist.
+const ARCHIVE_PATH_RE = /^csv\/(\d{4}-\d{2}-\d{2}T\d{6}Z)\/(backup\.json|data\/[a-z_]+\.\d{4}-\d{2}-\d{2}T\d{6}Z_\d{4}-\d{2}-\d{2}T\d{6}Z(?:-\d+)?\.csv\.gz)$/;
 
 function building(): Response {
   return problem(503, "this backup's record is being prepared; retry after the interval", { "Retry-After": RECORD_RETRY_AFTER });

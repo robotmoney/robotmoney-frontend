@@ -7,7 +7,7 @@
 // back to the home view so internal links never 404 during early development.
 
 import { isProduction, isPrivilegedRoute } from "./analytics-policy.js";
-import { NOT_FOUND_VIEW, routeMetaFor, viewFor } from "./routes.js";
+import { NOT_FOUND_VIEW, RETIRED_SKILL_DOCS, routeMetaFor, viewFor } from "./routes.js";
 import { applyRouteMeta } from "./seo.js";
 import { isCurrentLink, navSectionFor } from "./lib/site-nav.js";
 
@@ -72,18 +72,36 @@ async function render(pathname) {
     location.reload();
     return;
   }
-  // Bare /vault is the four vaults on /allocation. The address moves there,
+  // Bare /vault is the vaults on /model-portfolio. The address moves there,
   // query kept (the vault data switch rides on it), so the page, its canonical
   // and its #vaults section all agree on where the reader is.
   if (pathname === "/vault" || pathname === "/vault/") {
-    history.replaceState(history.state, "", "/allocation" + location.search + "#vaults");
-    pathname = "/allocation";
+    history.replaceState(history.state, "", "/model-portfolio" + location.search + "#vaults");
+    pathname = "/model-portfolio";
+  }
+  // The model portfolio's old address (RM-190), query and fragment kept.
+  if (pathname === "/allocation" || pathname === "/allocation/") {
+    history.replaceState(history.state, "", "/model-portfolio" + location.search + location.hash);
+    pathname = "/model-portfolio";
+  }
+  // rmAGENT closed with the Small Cap Tokens sleeve (RM-190). Its old address
+  // goes to the vaults that remain, the same way.
+  if (pathname === "/vault/rmagent" || pathname === "/vault/rmagent/") {
+    history.replaceState(history.state, "", "/model-portfolio" + location.search + "#vaults");
+    pathname = "/model-portfolio";
   }
   // The protocol wallets' page moved to /treasury (RM-157); its old addresses
   // move there too, query and fragment kept.
   if (pathname === "/performance" || pathname === "/allocation2") {
     history.replaceState(history.state, "", "/treasury" + location.search + location.hash);
     pathname = "/treasury";
+  }
+  // Deposits wait for the vaults to open (RM-190): the deposit page and the
+  // deposit skill's docs move to early access, query kept (a referral rides
+  // on it). Their fragments named sections early access does not have.
+  if (pathname === "/deposit" || pathname === "/deposit/" || RETIRED_SKILL_DOCS.test(pathname)) {
+    history.replaceState(history.state, "", "/early-access" + location.search);
+    pathname = "/early-access";
   }
   const host = viewEl();
   if (!host) return;

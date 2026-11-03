@@ -22,6 +22,9 @@
 //                     large ones, are never read in full
 //   vintage members   analytics_vintage_members' (vintage_id, source_value_version_id)
 //                     unique index, in order, so LIMIT stops the expansion early
+//   archive members   the format 1 archive's members chain step bounds its
+//   chain step        watermark by vintage_id, through a vintage_id index, never
+//                     a walk of the table (issue 1514)
 // The one migration this change DOES ship (0094) is a GRANT, not an index: the
 // api's role could not read analytics_overwrite_events at all.
 //
@@ -43,6 +46,7 @@ interface PlanNode {
   "Node Type": string;
   "Relation Name"?: string;
   "Index Name"?: string;
+  "Index Cond"?: string;
   Plans?: PlanNode[];
 }
 
@@ -189,6 +193,20 @@ test("vintage members: the (vintage_id, source_value_version_id) index supplies 
   expect(types(nodes)).not.toContain("Seq Scan");
   expect(nodes.filter((n) => n["Node Type"] === "Sort")).toEqual([]);
   expect(indexes(nodes).some((i) => i.startsWith("analytics_vintage_members_"))).toBe(true);
+});
+
+test("archive members chain step: the watermark is a vintage_id-bounded index scan, with no Seq Scan on the member table", async () => {
+  // An early backup: nothing before it, its vintages the first ten. The step's
+  // parameters are (after, previous vintages watermark, vintages watermark, after, after).
+  const [{ id }] = await fixtureDb<{ id: string }[]>`SELECT (min(id) + 9)::text AS id FROM analytics_data_vintages`;
+  for (const params of [[0, 0, Number(id), 0, 0], [0, 0, 0, 0, 0]]) {
+    const nodes = await plan("src/analytics/store/public-archive-store:analytics_vintage_members.step", params);
+    expect(nodes.filter((n) => n["Node Type"] === "Seq Scan" && n["Relation Name"] === "analytics_vintage_members")).toEqual([]);
+    const bounded = nodes.filter(
+      (n) => /Index/.test(n["Node Type"]) && n["Index Name"]?.startsWith("analytics_vintage_members_") && /vintage_id/.test(n["Index Cond"] ?? ""),
+    );
+    expect(bounded.length).toBeGreaterThan(0);
+  }
 });
 
 test("overwrite-events pages in NUMERIC id order over 30k rows (ids past 9 and 99 are not sorted as text)", async () => {

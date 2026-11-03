@@ -67,7 +67,7 @@ describe("applying a triage to a gate report", () => {
 });
 
 describe("which steps read a triage", () => {
-  test("only P08-log-baseline, the baseline gate, is a triage step", () => {
-    expect(RELEASE_STEPS.filter((s) => s.triage).map((s) => s.id)).toEqual(["P08-log-baseline"]);
+  test("only the baseline gate is a triage step: Q13-log-baseline on stage, P08-log-baseline on production", () => {
+    expect(RELEASE_STEPS.filter((s) => s.triage).map((s) => s.id)).toEqual(["Q13-log-baseline", "P08-log-baseline"]);
   });
 });

@@ -1,6 +1,6 @@
 // scripts/release/public-analytics-read.ts — read-only access to the public
 // analytics routes (/api/public/analytics/**) for the release checks (issue
-// 1476): the SDK checks of the template's soak (S10 to S12) and the v0.7.0
+// 1476): the SDK checks of the template's soak (Q35 to Q37 (C23 to C25)) and the v0.7.0
 // version checks. Every function takes the fetcher and the sleeper as
 // parameters, so a unit test runs offline against a fake API.
 //
@@ -45,6 +45,19 @@ export async function getWithRetry(net: Net, path: string, init?: RequestInit, t
     res = await net.fetch(`${net.origin}${path}`, init);
   }
   return res;
+}
+
+/**
+ * The response's ETag as the origin set it. A CDN that compresses a response on the fly (Cloudflare
+ * does, for a `Content-Encoding: gzip` answer) weakens a strong validator to `W/"..."` and changes
+ * nothing else, so for an encoded response the check reads the tag without that prefix. An
+ * unencoded response keeps its tag as sent: a weak tag there is the origin's own and still fails.
+ */
+export function originEtag(res: Pick<Response, "headers">): string | null {
+  const etag = res.headers.get("etag");
+  if (etag === null || !etag.startsWith("W/")) return etag;
+  const enc = res.headers.get("content-encoding");
+  return enc !== null && enc.toLowerCase() !== "identity" ? etag.slice(2) : etag;
 }
 
 export interface ReportRow {

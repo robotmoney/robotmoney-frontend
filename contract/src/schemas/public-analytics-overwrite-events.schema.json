@@ -42,7 +42,8 @@
             "enum": [
               "raw_indicator_history",
               "regime_snapshots",
-              "research_signals"
+              "research_signals",
+              "asset_prices"
             ]
           },
           "operation": {
