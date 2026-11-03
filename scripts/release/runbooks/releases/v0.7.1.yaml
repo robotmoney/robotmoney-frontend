@@ -81,10 +81,12 @@ notes: |
   - Q40-research-series (1524 collection floor and new series): every research-series inventory key
     is in source_value_versions from 2016-01-01 or its inception. It runs after Q38, which has seen
     a regime run of this release, and the regime run is the one that collects them.
-  - Q41-public-surface (1546, 1549): the CSP on / names the Google Apps Script and Turnstile
+  - Q41-public-surface (1546, 1549, 1543, 1512, 1466, 1428, 1497): the CSP on / names the Google Apps Script and Turnstile
     sources (the rolling boot reloads nginx.conf into the running website-server, it never rebuilds
     it, so the header proves the reload), and GET /api/swarm/participants/health with no credential
-    answers 401 (v0.7.0 answers 404).
+    answers 401 (v0.7.0 answers 404). It also reads one served file per site PR merged on
+    2026-11-02 (1543 News, 1512 the model portfolio, 1466 the changelog, 1428 early access, 1497
+    Hard Assets on the site) for a text that PR added and v0.7.0's copy lacks (SITE_MARKERS).
   The 1524 batch pool is Q34a's (above). The SDK PRs (1499, 1510, 1525) are Q37-sdk-tests' (the SDK
   package tests at the release commit). Q36-sdk-quickstart replays the newest archived run: this
   release carries D78, so a run this release makes replays its whole row byte for byte, but the
@@ -150,6 +152,11 @@ scope:
   - {pr: 1549, what: "outside seats read their own health (GET /api/swarm/participants/health); admin hears when a seat goes quiet (issue 1495)", check: "Q41-public-surface"}
   - {pr: 1551, what: "an analyst SDK release runbook YAML and runner (analyst-sdk-vA.B.C tag)", none: "release tooling for the SDK's own line (D77): no step of this runbook runs it, and nothing on a target uses it"}
   - {pr: 1553, what: "chore(release): the SDK release runner is a documented script, not a package.json entry", none: "release tooling for the SDK's own line (D77): no step of this runbook runs it"}
+  - {pr: 1543, what: "News under Company, research under Research, and the regime detection paper in the menu (RM-197)", check: "Q41-public-surface"}
+  - {pr: 1512, what: "the allocation page becomes the model portfolio, at /model-portfolio (RM-190)", check: "Q41-public-surface"}
+  - {pr: 1466, what: "the changelog: October and the next release, written as outcomes (RM-191)", check: "Q41-public-surface"}
+  - {pr: 1428, what: "early access: a page to register interest before the vaults open; /deposit and the skill docs move there (RM-189, RM-190)", check: "Q41-public-surface"}
+  - {pr: 1497, what: "the site shows Hard Assets (gold) in place of Small Cap Tokens; Conservative DeFi Yield named again (RM-190)", check: "Q41-public-surface"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).

@@ -13,7 +13,7 @@ import {
 } from "../../release/version-checks/v0.7.1/archive-records.ts";
 import { committedInputs, NEWEST_REGIME_VINTAGE_SQL, routeProblems, vintageProblems, type RegimeVintage } from "../../release/version-checks/v0.7.1/committed-inputs.ts";
 import { captureProblems, FRAMEWORK, FRAMEWORK_MIGRATION, frameworkProblems, MIGRATION, TRIGGERS } from "../../release/version-checks/v0.7.1/migration-ledger.ts";
-import { cspProblems, healthProblems } from "../../release/version-checks/v0.7.1/public-surface.ts";
+import { cspProblems, healthProblems, SITE_MARKERS, siteMarkerProblems } from "../../release/version-checks/v0.7.1/public-surface.ts";
 import { expectedStart, loadSeries, seriesProblems, storageKeyOf, type KeyRow } from "../../release/version-checks/v0.7.1/research-series.ts";
 
 const COMMIT = "a".repeat(40);
@@ -106,6 +106,28 @@ describe("Q41-public-surface/C29-public-surface (1546, 1549)", () => {
     expect(cspProblems(200, null).join()).toContain("no Content-Security-Policy");
     expect(cspProblems(502, shipped).join()).toContain("answered 502");
     expect(healthProblems(404, "{}").join()).toContain("not 401");
+  });
+});
+
+describe("Q41-public-surface/C29-public-surface: the site PRs (1543, 1512, 1466, 1428, 1497)", () => {
+  const served = (path: string) => readFileSync(join(import.meta.dir, "../../../frontend/public", path), "utf8");
+  const atV070 = (path: string) => {
+    const r = Bun.spawnSync(["git", "show", `v0.7.0:frontend/public${path}`], { cwd: join(import.meta.dir, "../../..") });
+    return r.exitCode === 0 ? r.stdout.toString() : null;
+  };
+  test("one marker per site PR, each on a file the site serves", () => {
+    expect(SITE_MARKERS.map((m) => m.pr).sort()).toEqual([1428, 1466, 1497, 1512, 1543]);
+  });
+  test("passes on the release's own files", () => {
+    for (const m of SITE_MARKERS) expect(siteMarkerProblems(m, 200, served(m.path)), m.path).toEqual([]);
+  });
+  test("red: v0.7.0's copy of each file, a 404, the SPA shell", () => {
+    for (const m of SITE_MARKERS) {
+      const old = atV070(m.path);
+      if (old !== null) expect(siteMarkerProblems(m, 200, old).join(), `${m.pr} ${m.path}`).toContain("is still served");
+      expect(siteMarkerProblems(m, 404, "").join()).toContain("answered 404");
+    }
+    expect(siteMarkerProblems(SITE_MARKERS[2]!, 200, served("/index.html")).join()).toContain("is still served");
   });
 });
 
