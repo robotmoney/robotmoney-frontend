@@ -762,6 +762,30 @@ export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: stri
   return fresh[0]?.dir ?? null;
 }
 
+/**
+ * Q02-dump's decision (issue 1564): always a new capture from production's read
+ * replica, never a reuse of a dump already on the host, whatever its age. A
+ * rehearsal starts from the most recent production state; reuse was for rapid
+ * hand turnaround only and let Q13-log-baseline fail on 8 to 31 h old dumps.
+ * The dump list and clock are taken so the rule is visibly input-blind. PURE.
+ */
+export function dumpPlan(_dumps: readonly { dir: string; capturedAt?: string }[], _now: Date): "capture" {
+  return "capture";
+}
+
+/**
+ * `up`'s fresh-dump refusal (SR.0): the reason a manifest's dump is too old to
+ * boot (over `maxDumpAgeHours`) or carries no readable `capturedAt`, else null. PURE.
+ */
+export function dumpAgeRefusal(manifest: { capturedAt?: string }, now: Date): string | null {
+  const age = dumpAgeHours(manifest, now);
+  if (age === null) return "the dump's manifest has no capturedAt";
+  if (age > STAGE_TARGET.maxDumpAgeHours) {
+    return `the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${STAGE_TARGET.maxDumpAgeHours} h. Capture a new one first`;
+  }
+  return null;
+}
+
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */
 export function dumpAgeHours(manifest: { capturedAt?: string }, now: Date): number | null {
   if (!manifest.capturedAt) return null;

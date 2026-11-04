@@ -177,11 +177,13 @@ C01-backup captures production's backup new, from the read replica, as the cutov
 C03-restore-proof restores it into a throwaway container and records the restore time, before the
 first irreversible step (C05-migrate).
 
-**Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
-from the newest production dump already on the capture host if it is at most 24 hours old
-(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
-Step Q02-dump does this; step Q03-stage-up restores the dump it left. Never restore a dump older
-than 24 hours. Never point rehearsal preparation at the production database.
+**Stage's starting dump (owner, 2026-10-08; issue 1564; SR.0).** Step Q02-dump always captures a
+new dump (`bun smoke:capture --out <new directory>`, read-only against production's replica as
+`rm_readonly`, as C01-backup does). It never reuses a dump already on the capture host, whatever
+its age: reuse was for rapid hand turnaround only, and v0.7.1 QA's Q13-log-baseline failed on
+reused dumps 8 to 31 hours old. Step Q03-stage-up restores the newest dump, which is the one Q02
+just captured. `up` still refuses a dump older than 24 hours (`manifest.json` `capturedAt`), so an
+operator-named dump must be fresh too. Never point rehearsal preparation at the production database.
 
 ### 4.4. Stage QA
 
@@ -486,7 +488,7 @@ recorded owner decision.
 | SP.7 | CI green on the commit | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
-| SR.0 | Stage's starting dump at most 24 hours old | Q02-dump, Q03-stage-up |
+| SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
 | SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
