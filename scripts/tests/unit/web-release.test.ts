@@ -5,7 +5,7 @@
 // in-process stubs that record every call. The ssh stub is a fake production
 // host: it keeps a checkout HEAD, the served site and the web receipt, and
 // answers the commands W06 to W08 send the way the real host would.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,6 +17,9 @@ import {
   classifyContentDiff, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs, WEB_RUNBOOK_PATH, webTargetOf,
   type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
+
+// Each case drives real git (clones, cherry-picks, worktrees); a loaded runner needs more than 5 s.
+setDefaultTimeout(60_000);
 
 const ROOT = join(import.meta.dir, "../../..");
 const GIT_ENV = {

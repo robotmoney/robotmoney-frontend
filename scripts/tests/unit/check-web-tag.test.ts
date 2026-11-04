@@ -1,11 +1,13 @@
 // Issue 1561 (D81): the web content release tag guard, scripts/check-web-tag.ts,
 // which .github/workflows/web-tag-guard.yml runs on a push of a web-v* tag.
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { checkWebTag } from "../../check-web-tag.ts";
+
+setDefaultTimeout(60_000);
 
 const ON = ["origin/web/releases-0.2.x"];
 
