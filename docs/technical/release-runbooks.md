@@ -198,6 +198,27 @@ missing from the release YAML's `scope:` is fixed before the stage run, not foun
 Commit any scope or runbook fix to the QA branch first. Every commit after a stage run changes the
 tree that run passed, so the run to count is the one at the final QA tip (§3 step 3).
 
+**The precheck (issue 1563).** Run the release's own version checks against the live stage stack
+before the full run, so a check defect costs minutes, not a 4-hour restart:
+
+```bash
+bun run release:precheck --target stage --release vA.B.C --commit <QA commit, 40-hex>
+```
+
+It selects every QA step of `runbooks/releases/<release>.yaml` (read at the commit) that carries
+`added: <release>`, in runbook order. Template steps (no `added`) never run. It refuses (exit 2) a
+target other than stage, a stage run in flight, and a commit that is not on a QA branch of the
+release line. Target-host steps run on the stage host from a throwaway worktree of the commit
+(`<home>/.local/state/robotmoney-release/stage/precheck-<ts>/checkout`, made from the target
+checkout with `git worktree add --detach`, then `bun install --frozen-lockfile`). Control-host
+steps run from a matching worktree on the control machine. Commands render with the stage target's
+values, `{release}` from `--release` and `{runTs}` as `precheck-<ts>`, against the live instance.
+It prints one line per check and exits 0 only when every check exited with its `expectExit`, else 1.
+Results go to `<journal root>/stage/precheck-<ts>/precheck.json`, one row per step with its exit,
+duration and the check's problems, beside each step's logs. Both worktrees are removed at the end,
+pass or fail. A precheck is a tool, not a gate: it writes no `run.json`, changes no run's state,
+and SP.8 never reads it. Fix what it finds on the QA branch, then start the full run.
+
 **Running it.** A run lasts longer than one tool or terminal session. Start it detached from the
 shell that launches it (`setsid nohup <script> </dev/null &`) and write its output to a log. A
 run started inside a session that ends is killed with it, and the remote step it was driving keeps
