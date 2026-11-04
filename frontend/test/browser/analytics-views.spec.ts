@@ -408,6 +408,17 @@ test("the backtest table gives each strategy's result as a multiple", async ({ p
   await expect(market.locator("tbody tr").first().locator("td").first()).toHaveText(/^\d+\.\d\d×$/);
 });
 
+// Issue 1559: the backtest chart's caption names the start date the payload
+// gives, not the first month-end (the stub's strategies start on 15 May 2018).
+test("the backtest chart's caption names the payload's start date", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const start = (loadRegimeStub().latest as { backtest: Record<string, Record<string, { start_date: string }>> }).backtest.eth!.composite!.start_date;
+  expect(start).toBe("2018-05-15");
+  await expect(page.locator(".rv__fig-d:visible").first()).toContainText("What $1 put into each strategy on May 15, 2018 was worth");
+});
+
 // A link to a panel opens its tab: session pages link their market context
 // rows to #panel-<key>.
 test("a link to a regime panel opens that panel's tab", async ({ page }) => {

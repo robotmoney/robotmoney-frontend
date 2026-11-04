@@ -760,7 +760,8 @@ export function registerRegimeView(Alpine) {
       const [f, t] = dragWindow(grab, at, { from, to, offset: 0, n: this._allDays().length, min: MIN_WINDOW });
       this[which + "Win"] = { from: f, to: t };
     },
-    // One market's curves over the chosen range. The engine keeps one point a
+    // One market's curves over the chosen range. The engine keeps the start
+    // value (1, on the date every line of the market starts) and one point a
     // month (the month-end value), so each line is drawn through those points,
     // on the same calendar-day axis as the history. Short of the whole
     // backtest, each curve is rebased to $1 at its first point in the range,
@@ -794,14 +795,17 @@ export function registerRegimeView(Alpine) {
       const lo = flat.length ? Math.min(...flat) : 0.1, hi = flat.length ? Math.max(...flat) : 10;
       const min = lo * 0.92, max = hi * 1.08;
       const regimes = days.map((d) => byDate.get(d)?.regime ?? null);
-      const m = { days, n: days.length, idx, lines, min, max, rebased, from: idx.length ? days[idx[0]] : null, runs: bandRuns(regimes), ticks: dateTicks(days) };
+      // The whole backtest starts on the date the payload gives (issue 1559);
+      // a shorter range starts at its first point.
+      const start = rebased ? null : strategies[keys[0]]?.start_date;
+      const m = { days, n: days.length, idx, lines, min, max, rebased, from: start || (idx.length ? days[idx[0]] : null), runs: bandRuns(regimes), ticks: dateTicks(days) };
       if (BT_MEMO.size > 24) BT_MEMO.clear();
       BT_MEMO.set(cacheKey, m);
       return m;
     },
     // What the chart shows, in a sentence: the value of $1 over time, from
-    // the backtest's start or, over a shorter range, from that range's first
-    // month-end.
+    // the backtest's start date or, over a shorter range, from that range's
+    // first point.
     btIntro(key) {
       const m = this._bt(key);
       const from = m.from ? this.dateLong(m.from) : "the start";
