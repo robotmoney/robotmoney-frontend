@@ -58,9 +58,14 @@ export function registerHomeView(Alpine) {
   Alpine.data("homeView", () => ({
     ...allocationFramework(),
 
-    /** @type {null | { date: string, receiptHref: string, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string }} */
+    /** @type {null | { date: string, receiptHref: string | null, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string }} */
     model: null,
     modelLoaded: false,
+    // The latest published session, where a reader sees the takes, the
+    // consensus and the receipts: "Check the math" opens it, whoever set the
+    // targets in force.
+    /** @type {string | null} */
+    latestSessionHref: null,
     /** @type {any[]} */
     analysts: [],
     /** @type {any[]} */
@@ -114,6 +119,7 @@ export function registerHomeView(Alpine) {
         ? (sessionSummary.sessionWeights(session) || []).filter((r) => !retiredAndEmpty(r.key, r.pct))
         : [];
       const fromSession = !fw.length && !!session;
+      this.latestSessionHref = session ? sessionTakes().sessionHref(session) : null;
       const fwSession = this.allocationFw?.provenance?.sessionId;
       this.model = rows.length ? {
         date: fromSession ? fmtDate(session.date || session.publishedAt) : (this.allocationFw?.asOf ? `In force since ${fmtDate(this.allocationFw.asOf)}` : ""),
@@ -165,7 +171,10 @@ export function registerHomeView(Alpine) {
     // The framework's sleeves as ring rows, { key, label, pct, colour }, keyed
     // and coloured by the published order so a sleeve wears one hue
     // everywhere (bucketHue).
+    // Only a live read: the archived manifest's June weights are not the
+    // targets in force, so when the API is down the latest session stands in.
     _targetRows() {
+      if (this.allocationFw?.archived) return [];
       const rows = this.allocationFw?.strategy;
       if (!Array.isArray(rows)) return [];
       return rows
