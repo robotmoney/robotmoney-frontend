@@ -273,6 +273,47 @@ Checks that need a seated roster and short epochs run on a twin (`--local dump`,
 `bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
 spends inference credits.
 
+### 4.4.1. Stage run liveness and notification
+
+A stage run never sits dead without a report (issue 1555). The owner gets one of two outcomes: a
+passed run, or a notification within minutes naming the run, the step, the reason and the exact
+command to continue. None of this runs on production.
+
+**Start it under the supervisor.**
+
+```bash
+bun run release:supervise --target stage --go <stage go> [--run <run-ts>]
+```
+
+The supervisor (`scripts/release/supervise.ts`) detaches itself (`setsid`, stdin closed) and writes
+its output to `~/.local/state/robotmoney-release/stage/supervise-<run-ts>.log`. It outlives the shell
+or agent session that started it. Without `--run` it picks the run stamp, and every child it starts
+runs `release:run --target stage --go <go> --run <run-ts>`, so one supervisor writes one run.
+
+- **Pause.** On a child's exit 3 (a watch step's `notBefore`) it reads `pausedUntil` from run.json,
+  sleeps until then, and resumes the same run.
+- **Died.** A child killed by a signal, a child that exits without recording a stop, or a run.json
+  that says `running` with a heartbeat more than 10 minutes old is a died driver. The supervisor
+  sends one `died` notification with the last step and the resume command. It never restarts a
+  died run.
+
+**Every invocation records its stop.** `release:run` on stage writes `stopReason`
+(`{kind, step, detail, resume, at}`) into run.json on every exit: `passed` (0), `failed` (1),
+`refused` (2, including every resume refusal), `paused` (3, with `pausedUntil`). A refusal before
+any journal exists goes to `stage/refused-<ts>.json`. While a step runs, the runner writes
+`heartbeatAt` and `driver: {pid, host}` every 60 s.
+
+**One notification per stop.** `scripts/release/notify.ts` is the only transport. It posts a
+comment on the one open issue labelled `release:<release>` (§6), scrubbed by `scrub.ts`. A new stage
+run refuses (exit 2) unless exactly one open issue carries that label; a resume does not repeat the
+check. When the lookup later finds no single issue, or gh fails, the message goes to stderr and
+run.json records `stopReason.notified: false` with the reason. The exit code never changes.
+
+**Blocked steps.** A failed step whose output holds `HTTP 402` or `Insufficient account funds` is
+recorded with `cause: "blocked"` (the inference account is unfunded). The runner sends one `blocked`
+notification when the step ends, never retries it and never switches model. Funding the account is
+the owner's. The run goes on and collects every error, as §4.4 describes.
+
 ### 4.5. Stage report
 
 The report names the QA commit and tree, the dump identity, the step-list hash, the receipts, the

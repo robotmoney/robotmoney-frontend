@@ -50,6 +50,8 @@ import {
 } from "./journal.ts";
 import { checkAfterPreflight, controlChangedPaths, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, prefixedDeps, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
+import { endNote, labelRefusal, stopRecorder } from "./liveness.ts";
+import { notify } from "./notify.ts";
 import {
   BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
@@ -154,6 +156,14 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
  * refuses. `stepList` replaces it in tests.
  */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[], options: { readonly breaking?: boolean } = {}): Promise<number> {
+  // A stage run records how every invocation stopped and notifies the owner once (issue 1555, ./liveness.ts).
+  const stop = stopRecorder(argv, deps);
+  return stop.finish(await runReleaseOnce(argv, stop.deps, stepList, options, stop));
+}
+
+async function runReleaseOnce(
+  argv: readonly string[], deps: RunnerDeps, stepList: readonly StepTemplate[] | undefined, options: { readonly breaking?: boolean }, stop: ReturnType<typeof stopRecorder>,
+): Promise<number> {
   const args = parseArgs(argv);
   if ("error" in args) {
     deps.error(`[${NAME}] ${args.error}`);
@@ -212,6 +222,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 0;
   }
 
+  if (!args.preflight) stop.watch(target, args.journalRoot ?? journalRoot(deps.home));
   // Rule 1: the one recorded go. It is the only source of the release ref.
   let go: ResolvedGo | undefined;
   if (args.go) {
@@ -326,6 +337,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   const runDir = join(root, target.name, runTs);
+  if (args.run !== undefined) stop.at(runDir);
+  const unlabelled = await labelRefusal(target, runDir, deps);
+  if (unlabelled !== undefined) { deps.error(`[${NAME}] refusing: ${unlabelled}.`); return 2; }
   let journal: RunJournal;
   let resumed = false;
   if (args.run !== undefined) {
@@ -340,6 +354,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       const refusals = checkResume(existing, { target: target.name, commit, stepListHash: hash, goSha256: go.sha256, stepIds: ids, changedPaths }, { from: args.from, only: args.only });
       if (refusals.length > 0) {
         deps.error(`[${NAME}] refusing to resume ${runDir}:\n  - ${refusals.join("\n  - ")}`);
+        const next = args.from === undefined ? undefined : firstNotOk(existing, ids);
+        if (next !== undefined) stop.note({ step: next, resume: resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: next, stageJournal: args.stageJournal }) });
         return 2;
       }
       journal = existing;
@@ -380,6 +396,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   journal.commit = commit;
   journal.goSha256 = go.sha256;
   journal.tree = tree;
+  stop.begin(runDir, journal);
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
@@ -487,6 +504,8 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       writeJournal(runDir, journal);
       deps.log(`\n[${NAME}] ── ${id}${step.irreversible ? " (IRREVERSIBLE)" : ""} on ${step.host}: ${step.description}`);
       const stepDeps = concurrent ? prefixedDeps(deps, id) : deps;
+      // Each running step has its own heartbeat (issue 1555); it stops when the step settles.
+      const beat = stop.heartbeat(journal);
       inflight.set(id, executeStep(step, template.triage, record, started, join(runDir, id), args.triage, stepDeps)
         .catch((error: unknown) => {
           // A step that threw (a receipt copy failed) is failed, never left running: the runner settles it like any other.
@@ -494,6 +513,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
           Object.assign(record, { status: "failed", endedAt: ended.toISOString(), durationMs: ended.getTime() - started.getTime(), error: error instanceof Error ? error.message : String(error) });
           return false;
         })
+        .finally(beat)
         .then((ok) => ({ id, ok, record, irreversible: step.irreversible })));
     }
     if (inflight.size === 0) break;
@@ -511,6 +531,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     inflight.delete(done.id);
     journal.updatedAt = done.record.endedAt!;
     settle(done.id, done.record);
+    if (done.record.cause === "blocked") await stop.blocked(done.id, done.record.error!, resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: done.id, stageJournal: args.stageJournal }));
     if (done.ok) {
       deps.log(`[${NAME}] ${done.id} ok (${Math.round(done.record.durationMs! / 1000)} s, ${done.record.receipts.filter((r) => r.local).length} receipt(s))`);
     } else if (collectAll) {
@@ -546,7 +567,10 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     journal.status = runStatus(journal, ids);
     writeJournal(runDir, journal);
     for (const w of waiting) deps.log(`\n[${NAME}] ${w.id} becomes runnable at ${w.earliest.toISOString()} (${w.afterStep} ended ${w.anchorEnded} + ${w.hours} h).`);
-    deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: waiting[0]!.id, stageJournal: args.stageJournal })}`);
+    const resume = resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: waiting[0]!.id, stageJournal: args.stageJournal });
+    deps.log(`[${NAME}] resume then with:\n  ${resume}`);
+    const until = new Date(Math.min(...waiting.map((w) => w.earliest.getTime()))).toISOString();
+    stop.note({ step: waiting[0]!.id, pausedUntil: until, detail: `${waiting.map((w) => w.id).join(", ")} becomes runnable at ${until}`, resume });
     return 3;
   }
 
@@ -566,6 +590,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const side: Side = target.rmEnv;
   if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s; the website stayed up (${PROBE_GRADE_STEP[side]})`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
+  stop.note(endNote(journal, ids, inOrder(failedSteps), selected.at(-1), (stepId) => resumeCommand({ target: args.target!, go: args.go!, runTs, stepId, stageJournal: args.stageJournal })));
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
 
@@ -622,7 +647,7 @@ const SSH_OPTS = ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"];
 
 /** The real dependencies: ssh with stdin closed and no tty. */
 export function realDeps(): RunnerDeps {
-  return {
+  const deps: RunnerDeps = {
     exec(host, remote, onStdout, onStderr, timeoutMs) {
       return new Promise((done, fail) => {
         const argv = host === CONTROL_HOST ? ["sh", ["-c", remote]] as const : ["ssh", [...SSH_OPTS, host, remote]] as const;
@@ -648,7 +673,9 @@ export function realDeps(): RunnerDeps {
     log: (l) => console.log(l),
     error: (l) => console.error(l),
     home: homedir(),
+    notify: (event) => notify(event, deps),
   };
+  return deps;
 }
 
 if (import.meta.main) {

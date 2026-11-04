@@ -43,6 +43,7 @@
     "release:run": "bun --no-env-file scripts/release/run.ts",
     "release:web": "bun --no-env-file scripts/release/web-release.ts",
     "release:precheck": "bun --no-env-file scripts/release/precheck.ts",
+    "release:supervise": "bun --no-env-file scripts/release/supervise.ts",
     "role-passwords": "bun --no-env-file scripts/release/role-passwords.ts",
     "smoke:capture": "bun run --cwd backend scripts/smoke-twin-capture.ts",
     "credentials": "bun scripts/gitops-credentials.ts",
