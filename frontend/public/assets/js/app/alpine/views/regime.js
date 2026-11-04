@@ -304,8 +304,8 @@ export function registerRegimeView(Alpine) {
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
     // One regime palette, the session page's: green risk-on, slate neutral,
-    // beacon risk-off. It marks a reading as a small round dot or a line,
-    // never as type or a filled area, so the regime card's label stays in the
+    // beacon risk-off. It marks a reading as a small round dot or a line, and a
+    // run behind a chart as a faint wash, never as type, so the regime card's label stays in the
     // text colour beside its dot.
     regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
     // The provenance line in words. The transform is what the percentile ranks

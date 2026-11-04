@@ -213,7 +213,7 @@
                   <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                   <span class="rv__lg-key">
                     <template x-for="r in bgLegend()" :key="r.label">
-                      <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                      <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
                     </template>
                   </span>
                 </li>
@@ -444,7 +444,7 @@
                       <button type="button" class="rv__tgl" :aria-pressed="visible.btBands ? 'true' : 'false'" @click="toggle('btBands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                       <span class="rv__lg-key">
                         <template x-for="r in bgLegend()" :key="r.label">
-                          <span class="rv__legend-item"><span class="rv__legend-swatch" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                          <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
                         </template>
                       </span>
                     </li>
