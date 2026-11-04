@@ -26,13 +26,13 @@
       <canvas class="sa-hero__canvas"></canvas>
     </div>
     <div class="a2-hero__inner">
+      <p class="rr-k sa-hero__meta">Announcement <span aria-hidden="true">·</span> <time datetime="2026-11-06">November 6, 2026</time></p>
       <h1 class="a2-hero__title sa-hero__title">Robot Money launches with support from peaq, ShodAI, DualMint, ZyFAI, Animoca and AllScale</h1>
       <p class="a2-hero__lede">A model portfolio, improved in public by a swarm of AI agents. Join the swarm, or get early access.</p>
       <div class="sa-hero__cta">
         <a class="btn-primary" href="/swarm/apply">Join the swarm <span aria-hidden="true">&rarr;</span></a>
         <a class="rr-btn sa-btn" href="/early-access">Request early access</a>
       </div>
-      <p class="rr-k sa-hero__meta">Announcement <span aria-hidden="true">·</span> <time datetime="2026-11-06">November 6, 2026</time></p>
     </div>
   </header>
 
@@ -89,34 +89,34 @@
                   <tr>
                     <th scope="col">Sleeve</th>
                     <th scope="col" class="sa-num"><span class="sa-reg"><i style="background:#ff7a29" aria-hidden="true"></i>Risk-off</span></th>
-                    <th scope="col" class="sa-num is-today"><span class="sa-reg"><i style="background:#7e889e" aria-hidden="true"></i>Neutral</span><small>Today</small></th>
+                    <th scope="col" class="sa-num is-today"><small>Today</small><span class="sa-reg"><i style="background:#7e889e" aria-hidden="true"></i>Neutral</span></th>
                     <th scope="col" class="sa-num"><span class="sa-reg"><i style="background:#10b981" aria-hidden="true"></i>Risk-on</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#e8a640" data-mark="series" aria-hidden="true"></i>Protocol Tokens</span><small>50% BTC, 50% ETH</small></th>
-                    <td class="sa-num"><b>0%</b><span class="sa-bar"><i style="width:0%;background:#e8a640" data-mark="series"></i></span></td>
-                    <td class="sa-num is-today"><b>7%</b><span class="sa-bar"><i style="width:7%;background:#e8a640" data-mark="series"></i></span></td>
-                    <td class="sa-num"><b>14%</b><span class="sa-bar"><i style="width:14%;background:#e8a640" data-mark="series"></i></span></td>
+                    <th scope="row"><span class="sa-name">Protocol Tokens</span><small>50% BTC, 50% ETH</small></th>
+                    <td class="sa-num"><b>0%</b></td>
+                    <td class="sa-num is-today"><b>7%</b></td>
+                    <td class="sa-num"><b>14%</b></td>
                   </tr>
                   <tr>
-                    <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#7e889e" data-mark="series" aria-hidden="true"></i>Real World Assets</span><small>S&amp;P 500</small></th>
-                    <td class="sa-num"><b>0%</b><span class="sa-bar"><i style="width:0%;background:#7e889e" data-mark="series"></i></span></td>
-                    <td class="sa-num is-today"><b>29%</b><span class="sa-bar"><i style="width:29%;background:#7e889e" data-mark="series"></i></span></td>
-                    <td class="sa-num"><b>58%</b><span class="sa-bar"><i style="width:58%;background:#7e889e" data-mark="series"></i></span></td>
+                    <th scope="row"><span class="sa-name">Real World Assets</span><small>S&amp;P 500</small></th>
+                    <td class="sa-num"><b>0%</b></td>
+                    <td class="sa-num is-today"><b>29%</b></td>
+                    <td class="sa-num"><b>58%</b></td>
                   </tr>
                   <tr>
-                    <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#ff7a29" data-mark="series" aria-hidden="true"></i>Hard Assets</span><small>Gold</small></th>
-                    <td class="sa-num"><b>0%</b><span class="sa-bar"><i style="width:0%;background:#ff7a29" data-mark="series"></i></span></td>
-                    <td class="sa-num is-today"><b>14%</b><span class="sa-bar"><i style="width:14%;background:#ff7a29" data-mark="series"></i></span></td>
-                    <td class="sa-num"><b>27%</b><span class="sa-bar"><i style="width:27%;background:#ff7a29" data-mark="series"></i></span></td>
+                    <th scope="row"><span class="sa-name">Hard Assets</span><small>Gold</small></th>
+                    <td class="sa-num"><b>0%</b></td>
+                    <td class="sa-num is-today"><b>14%</b></td>
+                    <td class="sa-num"><b>27%</b></td>
                   </tr>
                   <tr>
-                    <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#10b981" data-mark="series" aria-hidden="true"></i>Conservative DeFi Yield</span><small>T-bills stand in for it in the backtest</small></th>
-                    <td class="sa-num"><b>100%</b><span class="sa-bar"><i style="width:100%;background:#10b981" data-mark="series"></i></span></td>
-                    <td class="sa-num is-today"><b>50%</b><span class="sa-bar"><i style="width:50%;background:#10b981" data-mark="series"></i></span></td>
-                    <td class="sa-num"><b>0%</b><span class="sa-bar"><i style="width:0%;background:#10b981" data-mark="series"></i></span></td>
+                    <th scope="row"><span class="sa-name">Conservative DeFi Yield</span><small>T-bills stand in for it in the backtest</small></th>
+                    <td class="sa-num"><b>100%</b></td>
+                    <td class="sa-num is-today"><b>50%</b></td>
+                    <td class="sa-num"><b>0%</b></td>
                   </tr>
                 </tbody>
               </table>
@@ -144,33 +144,33 @@
                 </tr>
               </thead>
               <tbody>
-                <tr @pointerenter="focus = 'naive'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#7e889e" data-mark="series" aria-hidden="true"></i>Equal weight</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">Equal weight</span></th>
                   <td data-k="What it does">Puts a third of the risky money in each bucket and estimates nothing. It is the baseline every other approach is compared with.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">Crypto swings about four times as much as the S&amp;P 500, so it ends up carrying most of the risk.</td>
                 </tr>
-                <tr @pointerenter="focus = 'rb60'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#e8a640" data-mark="series" aria-hidden="true"></i>More crypto (risk budget)</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">More crypto (risk budget)</span></th>
                   <td data-k="What it does">Works like equal-risk, but you choose how much of the portfolio&rsquo;s risk comes from BTC and ETH, for example 60% or 95%.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">It needs a declared number and buys more growth with deeper drops, so it suits a view the swarm argues for better than a starting point.</td>
                 </tr>
-                <tr @pointerenter="focus = 'minvar'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#00e5ff" data-mark="series" aria-hidden="true"></i>Minimum variance</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">Minimum variance</span></th>
                   <td data-k="What it does">Builds the mix of the buckets with the smallest swings.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">It holds no BTC or ETH at all, so it is not a crypto-friendly portfolio.</td>
                 </tr>
-                <tr @pointerenter="focus = 'invvol'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#5fb3a1" data-mark="series" aria-hidden="true"></i>Inverse volatility</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">Inverse volatility</span></th>
                   <td data-k="What it does">Gives each bucket weight in proportion to how calm it is, and ignores how the buckets move together.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">It lands very close to equal-risk but skips correlations, which equal-risk uses.</td>
                 </tr>
-                <tr @pointerenter="focus = 'markowitz'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#ff7a29" data-mark="series" aria-hidden="true"></i>Markowitz</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">Markowitz</span></th>
                   <td data-k="What it does">Picks the best mix from an expected return you assume for each asset.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">It leans on a forecast for crypto, the least certain input, and swings with that view.</td>
                 </tr>
-                <tr @pointerenter="focus = 'panel'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#9cffd2" data-mark="series" aria-hidden="true"></i>Regime-driven budgets</span></th>
+                <tr>
+                  <th scope="row"><span class="sa-name">Regime-driven budgets</span></th>
                   <td data-k="What it does">Lets the regime&rsquo;s own indicators set each bucket&rsquo;s share of risk.</td>
                   <td data-k="Why v1 doesn&rsquo;t start here">Our test found those signals don&rsquo;t forecast, so it stays a preview.</td>
                 </tr>
@@ -181,10 +181,10 @@
           <div class="rr-prose">
             <p>v1 starts with equal-risk for four reasons.</p>
             <ul class="sa-list">
-              <li>It needs no forecast, and our research found the regime reads risk and does not predict which asset will do best.</li>
-              <li>It has no hand-set weights, so every number comes from the last year of price moves.</li>
-              <li>It keeps every bucket in play and stops any one of them from dominating the risk, which is the concentration problem treasuries have.</li>
-              <li>And it is a clean, neutral place to start, because the swarm can make the case for something else, for example more crypto through a risk budget, and compare the result with v1.</li>
+              <li><b>No forecast.</b> Our research found the regime reads risk and does not predict which asset will do best.</li>
+              <li><b>No hand-set weights.</b> Every number comes from the last year of price moves.</li>
+              <li><b>No bucket dominates.</b> Every bucket stays in play and none carries most of the risk, which is the concentration problem treasuries have.</li>
+              <li><b>A neutral start.</b> The swarm can make the case for something else, for example more crypto through a risk budget, and compare the result with v1.</li>
             </ul>
           </div>
 
@@ -253,35 +253,35 @@
               </thead>
               <tbody>
                 <tr class="sa-group"><th scope="rowgroup" colspan="8">Regime rule, rebalanced monthly</th></tr>
-                <tr :class="focus && focus !== 'naive' ? 'is-muted' : ''" @pointerenter="focus = 'naive'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#7e889e" data-mark="series" aria-hidden="true"></i>Equal weight</span><small>Naive equal weight, regime rule, monthly</small></th>
                   <td class="sa-num">5.86</td><td class="sa-num">23.6%</td><td class="sa-num">29.3%</td><td class="sa-num">12.1%</td><td class="sa-num">1.26</td><td class="sa-num">&minus;20.4%</td><td class="sa-num">141</td>
                 </tr>
-                <tr class="is-v1" :class="focus && focus !== 'erc' ? 'is-muted' : ''" @pointerenter="focus = 'erc'" @pointerleave="focus = null">
-                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#10b981" data-mark="series" aria-hidden="true"></i>Equal-risk <span class="sa-v1tag">v1</span></span><small>Equal-risk, regime rule, monthly</small></th>
+                <tr class="is-v1">
+                  <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#10b981" data-mark="series" aria-hidden="true"></i>Equal-risk (v1)</span><small>Equal-risk, regime rule, monthly</small></th>
                   <td class="sa-num">3.07</td><td class="sa-num">14.4%</td><td class="sa-num">14.1%</td><td class="sa-num">14.7%</td><td class="sa-num">1.44</td><td class="sa-num">&minus;11.4%</td><td class="sa-num">141</td>
                 </tr>
-                <tr :class="focus && focus !== 'invvol' ? 'is-muted' : ''" @pointerenter="focus = 'invvol'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#5fb3a1" data-mark="series" aria-hidden="true"></i>Inverse volatility</span><small>Inverse-vol, regime rule, monthly</small></th>
                   <td class="sa-num">3.12</td><td class="sa-num">14.6%</td><td class="sa-num">14.7%</td><td class="sa-num">14.2%</td><td class="sa-num">1.45</td><td class="sa-num">&minus;11.3%</td><td class="sa-num">141</td>
                 </tr>
-                <tr :class="focus && focus !== 'minvar' ? 'is-muted' : ''" @pointerenter="focus = 'minvar'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#00e5ff" data-mark="series" aria-hidden="true"></i>Minimum variance</span><small>Minimum-variance, regime rule, monthly</small></th>
                   <td class="sa-num">1.81</td><td class="sa-num">7.4%</td><td class="sa-num">4.8%</td><td class="sa-num">12.7%</td><td class="sa-num">0.82</td><td class="sa-num">&minus;18.8%</td><td class="sa-num">122</td>
                 </tr>
-                <tr :class="focus && focus !== 'rb60' ? 'is-muted' : ''" @pointerenter="focus = 'rb60'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#e8a640" data-mark="series" aria-hidden="true"></i>Risk budget 60%</span><small>Risk budget, protocol 60% of risk, regime rule, monthly</small></th>
                   <td class="sa-num">4.02</td><td class="sa-num">18.1%</td><td class="sa-num">19.9%</td><td class="sa-num">14.2%</td><td class="sa-num">1.41</td><td class="sa-num">&minus;14.7%</td><td class="sa-num">141</td>
                 </tr>
-                <tr :class="focus && focus !== 'rb95' ? 'is-muted' : ''" @pointerenter="focus = 'rb95'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><svg class="sa-sw--dash" width="14" height="8" aria-hidden="true" data-mark="series"><line x1="0" y1="4" x2="14" y2="4" stroke="#e8a640" stroke-width="2" stroke-dasharray="3 2"/></svg>Risk budget 95%</span><small>Risk budget, protocol 95% of risk, regime rule, monthly (the high seat)</small></th>
                   <td class="sa-num">10.62</td><td class="sa-num">32.7%</td><td class="sa-num">44.6%</td><td class="sa-num">10.5%</td><td class="sa-num">1.20</td><td class="sa-num">&minus;37.2%</td><td class="sa-num">141</td>
                 </tr>
-                <tr :class="focus && focus !== 'panel' ? 'is-muted' : ''" @pointerenter="focus = 'panel'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#9cffd2" data-mark="series" aria-hidden="true"></i>Regime-driven budgets</span><small>Preview: panel budgets, regime rule, monthly</small></th>
                   <td class="sa-num">3.71</td><td class="sa-num">17.0%</td><td class="sa-num">17.5%</td><td class="sa-num">15.8%</td><td class="sa-num">1.46</td><td class="sa-num">&minus;12.0%</td><td class="sa-num">141</td>
                 </tr>
-                <tr :class="focus && focus !== 'markowitz' ? 'is-muted' : ''" @pointerenter="focus = 'markowitz'" @pointerleave="focus = null">
+                <tr>
                   <th scope="row"><span class="sa-name"><i class="sa-sw" style="background:#ff7a29" data-mark="series" aria-hidden="true"></i>Markowitz</span><small>Markowitz basket &times; regime rule, protocol view 23%, monthly</small></th>
                   <td class="sa-num">2.63</td><td class="sa-num">14.0%</td><td class="sa-num">13.6%</td><td class="sa-num">14.6%</td><td class="sa-num">1.14</td><td class="sa-num">&minus;13.6%</td><td class="sa-num">127</td>
                 </tr>
@@ -366,9 +366,16 @@
 .sa .a2-hero.is-lit .sa-hero__canvas { opacity: 1; }
 .sa .a2-hero__inner { position: relative; z-index: 2; width: 100%; max-width: 80rem; margin-inline: auto; padding: 2.5rem 1.5rem; }
 .sa-hero__title { margin: 0 0 1.25rem; max-width: 62rem; }
-.sa .a2-hero__lede { margin: 0; max-width: 44rem; font-size: 1.0625rem; line-height: 1.65; }
+/* Legibility over the photograph. The shared veil (components.css) paints
+   under the art on this hero, so it is lifted above it here and deepened to
+   50%: the lede holds 4.5:1 even where a beam crosses it. The lede, the date
+   and the second button then read at full strength. */
+.sa .a2-hero::before { z-index: 1; background: rgba(6, 8, 12, 0.5); }
+.sa .a2-hero__lede { margin: 0; max-width: 40rem; font-size: 1.1875rem; line-height: 1.6; color: var(--color-text) !important; }
 .sa-hero__cta { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 2.25rem; }
-.sa-hero__meta { margin-top: 2.25rem; color: var(--color-text-soft); }
+.sa-hero__meta { margin: 0 0 1.5rem; font-size: 0.75rem; color: var(--color-text); }
+.sa-hero__cta .sa-btn { background: var(--color-void); border-color: var(--color-text-muted); }
+.sa-hero__cta .sa-btn:hover { border-color: var(--color-text); }
 .sa .sa-btn { text-decoration: none; color: var(--color-text); display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0.75rem 1.5rem; font-family: var(--font-mono);
   font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; transition: border-color 160ms var(--ease-out-expo); }
 
@@ -395,9 +402,10 @@
 .sa-lead p:first-child { font-size: 1.1875rem; line-height: 1.65; color: var(--color-text); }
 .sa .rr-sec { padding: 3rem 0; }
 .sa .rr-sec__head { margin-bottom: 1.25rem; }
-.sa-list { margin: 0 0 1rem; padding: 0; list-style: none; }
-.sa-list li { padding: 0.75rem 0; border-top: 1px solid var(--color-border); }
-.sa-list li:last-child { border-bottom: 1px solid var(--color-border); }
+.sa .rr-prose .sa-list { margin: 0.75rem 0 1rem; padding-left: 1.125rem; }
+.sa .rr-prose .sa-list li { margin: 0 0 0.375rem; padding-left: 0.25rem; }
+.sa .rr-prose .sa-list li::marker { color: var(--color-text-muted); }
+.sa-list b { font-weight: 600; color: var(--color-text); }
 
 .sa-fig { margin: 2.25rem 0; }
 .sa .rr-tablewrap { border: 1px solid var(--color-border); }
@@ -406,20 +414,22 @@
 .sa-num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sa .rr-table td.sa-num { font-size: 0.8125rem; color: var(--color-text); }
 .sa-name { display: inline-flex; align-items: center; gap: 0.625rem; }
+/* Headings on the post's tables read at body-caption size, not the
+   dashboards' 10px. */
+.sa .rr-table thead th { font-size: 0.75rem; letter-spacing: 0.06em; }
 .sa-sw { flex: none; display: inline-block; width: 0.5rem; height: 0.5rem; }
 .sa-sw--dash { flex: none; display: block; }
 
-/* v1 weights: a figure over a thin bar of its own share; today's column lit. */
+/* v1 weights: today's column lit, "Today" above its label so the three
+   regimes read on one line. */
 .sa-v1 thead th:not(:first-child) { width: 22%; }
-.sa-v1 thead th.is-today small { display: block; margin-top: 0.25rem; color: var(--color-text); letter-spacing: 0.11em; text-transform: uppercase; }
+.sa-v1 thead th.is-today small { display: block; margin: 0 0 0.375rem; font-size: 0.6875rem; color: var(--color-text); letter-spacing: 0.11em; text-transform: uppercase; }
 .sa-v1 .is-today { background: var(--color-surface); }
 .sa-v1 thead th.is-today { background: var(--color-surface-light); }
 .sa-reg { display: inline-flex; align-items: center; gap: 0.5rem; }
 .sa-reg i { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; }
 .sa-v1 td.sa-num b { display: block; font-weight: 400; font-size: 1.125rem; color: var(--color-text); }
 .sa-v1 td.sa-num:not(.is-today) b { color: var(--color-text-soft); }
-.sa-bar { display: block; height: 3px; margin-top: 0.5rem; background: var(--color-border); }
-.sa-bar i { display: block; height: 100%; margin-left: auto; }
 .sa-v1 tbody th, .sa-v1 tbody td { padding-top: 1rem; padding-bottom: 1rem; }
 
 /* Engines: three columns of reading text. */
@@ -427,8 +437,6 @@
 .sa-engines thead th:not(:first-child) { width: 39%; }
 .sa .rr-table.sa-engines td { font-family: var(--font-sans); font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); vertical-align: top; }
 .sa .sa-engines tbody th { vertical-align: top; font-size: 0.9375rem; }
-.sa-engines tbody tr, .sa-results tbody tr { transition: background-color 160ms var(--ease-out-expo), opacity 160ms var(--ease-out-expo); }
-.sa-engines tbody tr:hover, .sa-results tbody tr:not(.sa-group):not(.sa-held):hover { background: var(--color-surface); }
 
 /* The chart. */
 .sa-chart .rr-area__head { align-items: flex-start; }
@@ -446,14 +454,24 @@
 /* The engine's name stays in view while the figures scroll on a phone. */
 .sa-results thead th:first-child, .sa-results tbody th[scope="row"] { position: sticky; left: 0; z-index: 1; background: var(--color-void); }
 .sa-results thead th:first-child { background: var(--color-surface); }
-.sa-results tr.is-v1 th[scope="row"] { background: var(--color-surface); }
 .sa-results tr.sa-group th { padding-top: 1.25rem; font-family: var(--font-mono); font-size: 0.625rem; font-weight: 400; letter-spacing: 0.11em;
   text-transform: uppercase; color: var(--color-text-muted); background: transparent; }
-.sa-results tr.is-v1 { background: var(--color-surface); }
-.sa-results tr.is-muted { opacity: 0.45; }
+/* Compact rows; the figures a step back so v1's read first. The headings
+   wrap so the figure columns stay narrow and each rule fits on one line.
+   Nothing on this table responds to hover: it is read, not driven. */
+.sa .sa-results tbody tr:hover, .sa .sa-engines tbody tr:hover { background: transparent; }
+.sa-results thead th.sa-num { white-space: normal; vertical-align: bottom; min-width: 4.5rem; }
+.sa-results thead th:first-child { width: 40%; }
+.sa .sa-results th, .sa .sa-results td { padding-top: 0.5rem; padding-bottom: 0.5rem; }
+.sa .sa-results tbody th small { margin-top: 0.125rem; }
+.sa .rr-table.sa-results td.sa-num { color: var(--color-text-soft); }
+/* v1, the engine the model portfolio runs: a lit row between two cyan
+   hairlines (cyan is a line, never a fill), its figures at full strength. */
+.sa .sa-results tr.is-v1 > *, .sa .sa-results tr.is-v1 > th[scope="row"] { background: var(--color-surface-light); border-bottom-color: var(--color-accent); }
+.sa-results tr:has(+ tr.is-v1) > * { border-bottom-color: var(--color-accent); }
+.sa .rr-table.sa-results tr.is-v1 td.sa-num { color: var(--color-text); font-weight: 500; }
+.sa-results tr.is-v1 .sa-name { font-weight: 600; }
 .sa-results tr.sa-held th, .sa-results tr.sa-held td { color: var(--color-text-muted); }
-.sa-v1tag { padding: 0.0625rem 0.375rem; border: 1px solid var(--color-border-light); font-family: var(--font-mono); font-size: 0.625rem;
-  font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); }
 .sa-disclaimer { margin-top: -1rem; }
 
 /* The two ways in. */
@@ -506,9 +524,16 @@
   .sa-lead p:first-child { font-size: 1.0625rem; }
   .sa-chart .rr-area__frame { grid-template-rows: 15rem 1.75rem; }
   .sa-results tbody th { min-width: 11rem; }
+  .sa-results thead th:first-child { width: auto; }
+  /* The weights fit a phone: the regime dots step aside for the labels. */
+  .sa .sa-v1 th, .sa .sa-v1 td { padding-inline: 0.5rem; }
+  .sa .sa-v1 thead th { letter-spacing: 0.02em; }
+  .sa-v1 thead .sa-reg i { display: none; }
+  .sa-v1 td.sa-num b { font-size: 1rem; }
+  .sa-v1 thead th:not(:first-child) { width: auto; }
   .sa-hero__cta .btn-primary, .sa-hero__cta .sa-btn { width: 100%; justify-content: center; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sa-engines tbody tr, .sa-results tbody tr, .sa .sa-toc a { transition: none; }
+  .sa .sa-toc a { transition: none; }
 }
 </style>
