@@ -134,7 +134,7 @@
 .rv__panels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
 .rv__tabs { gap: 0.4rem; }
 .rv__tab-n { color: var(--color-text-muted); margin-left: 0.35rem; }
-.rv__corr-card, .rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
+.rv__bt-card { border: 1px solid var(--color-border); border-radius: var(--radius); overflow: hidden; }
 /* Not `overflow: hidden`, unlike its two siblings: this card is the only one
    holding tooltips, and both kinds are absolutely positioned — the header
    .rm-tip bubbles open UPWARD over the card head, and the last row's .rv__tip
@@ -292,22 +292,6 @@
 .rv__more li { padding: 0.75rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; color: var(--color-text-soft); }
 @media (max-width: 640px) { .rv__mdl > div { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; } }
 
-/* Predictive power: one table, a column group per asset. Each cell is its
-   figure over a signed bar from the centre line, green right and red left,
-   muted under |ρ| 0.15, and a tip in words. */
-.rv__corr-key { margin: 0 0 1.25rem; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
-.rv__corr-key strong { color: var(--color-text); font-weight: 500; }
-.rv__corr-table thead th.rv__corr-group { text-align: left; color: var(--color-text); border-left: 1px solid var(--color-border); }
-.rv__corr-table .rv__corr-start { border-left: 1px solid var(--color-border); }
-.rv__corr-table .rv__corr-idx { position: sticky; left: 0; background: var(--color-void); z-index: 1; }
-.rv__corr-table thead .rv__corr-idx { background: var(--color-surface); }
-.rv__rho .rm-tip { display: block; margin: 0; }
-.rv__corr-table td.rv__rho, .rv__corr-table thead tr:last-child th { text-align: center; }
-.rv__rho-btn { display: block; width: 100%; text-align: center; text-decoration: none !important; cursor: default; }
-.rv__rho-fig { display: block; font-family: var(--font-mono); }
-.rv__rho-bar { position: relative; display: block; width: 44px; height: 3px; margin: 0.35rem auto 0; background: var(--color-border); }
-.rv__rho-bar::after { content: ""; position: absolute; left: 50%; top: -2px; width: 1px; height: 7px; background: var(--color-text-muted); }
-.rv__rho-bar i { position: absolute; top: 0; height: 100%; display: block; }
 /* table shell + cells (.rm-table-scroll / .rm-table / .rm-num / .rm-muted)
    promoted to components.css; regime-only cell styles stay below. */
 .rv__ind-cell { display: flex; flex-direction: column; gap: 0.1rem; }

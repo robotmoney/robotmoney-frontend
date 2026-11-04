@@ -161,9 +161,9 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   // A named indicator from the vendored snapshot renders in the macro panel.
   await expect(page.locator(".rv__ind-name", { hasText: "yield curve" }).first()).toBeVisible();
 
-  // Predictive-power table + all three backtest cards (eth / sp500 / mixed).
-  await expect(page.locator("#predictive-power")).toHaveCount(1);
-  await expect(page.locator("#predictive-power")).toContainText("Predictive power");
+  // No predictive-power table (Lex, 2026-11-04); all three backtest cards
+  // (eth / sp500 / mixed).
+  await expect(page.locator("#predictive-power")).toHaveCount(0);
   // All three markets are in the page, one on show behind the switch.
   await expect(page.locator(".rv__market")).toHaveCount(3);
   await expect(page.locator(".rv__market:visible")).toHaveCount(1);
@@ -377,24 +377,6 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await expect(page.locator("#history-sec .rr-area__tip li")).toHaveCount(4);
   expect(errors).toEqual([]);
-});
-
-// Every predictive-power figure says what it means in words, from its own
-// sign and whether it clears the 0.15 noise line.
-test("each predictive-power figure carries its reading in words", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/regime");
-  const tips = page.locator("#predictive-power .rv__rho .rm-tip__bub");
-  expect(await tips.count()).toBeGreaterThan(10);
-  const texts = await tips.allTextContents();
-  for (const t of texts) expect(t).toMatch(/: (no reading|[−+]?\d\.\d\d)\./);
-  expect(texts.some((t) => t.includes("treated as noise"))).toBe(true);
-  // A forward figure says how far chance alone reaches over its horizon.
-  expect(texts.some((t) => /Chance alone reaches ±0\.\d\d here/.test(t))).toBe(true);
-  // The notes read open under the table, every one of them.
-  await expect(page.locator("#corr-notes")).toBeVisible();
-  await expect(page.locator("#corr-notes")).toContainText("Effective independent observations");
 });
 
 // The history chart draws the index levels, 0 to 1, even when the history
