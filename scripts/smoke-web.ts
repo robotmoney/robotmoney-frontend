@@ -26,7 +26,7 @@ import { homeEnvFilePath, loadEnvFile } from "./lib/env-role.ts";
 import { resolveRmEnv } from "./lib/smoke-env-policy.ts";
 import { buildSmokeLifecycleComposeEnv } from "./lib/smoke-lifecycle-env.ts";
 import { instanceFlag, readStackState, stateRoot, type InstancePaths, type StackStateRecord } from "./lib/smoke-state.ts";
-import { deploySite, resolveWebInstance, rollbackSite, WEB_SOURCE_CONTEXTS, type WebReleaseDeps } from "./lib/website-release.ts";
+import { deploySite, resolveWebInstance, rollbackSite, WEB_CONTENT_PATHS, type WebReleaseDeps } from "./lib/website-release.ts";
 import { resolveBuildIdentityEnv } from "./stack/build-identity.ts";
 import { instanceComposeEnv } from "./stack/config.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
@@ -143,7 +143,7 @@ const deps: WebReleaseDeps = {
     }
     throw new Error(`website-server still serves ${seen}, not ${site.version}-${site.commit}`);
   },
-  sourceIdentity: () => resolveSourceTrees(gitRunner(repoRoot), WEB_SOURCE_CONTEXTS),
+  sourceIdentity: () => resolveSourceTrees(gitRunner(repoRoot), WEB_CONTENT_PATHS),
   log: (line) => console.log(`${TAG} ${line}`),
 };
 

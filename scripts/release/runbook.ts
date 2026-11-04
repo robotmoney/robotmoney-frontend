@@ -22,8 +22,9 @@ import type { NotBeforeTemplate, ReceiptSpec, StepHost, StepPhase, StepTemplate 
 export const RUNBOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), "runbooks");
 
 /**
- * The templates a release may name. `website-only` joins with its template
- * file and the runner mode that runs it (issue 1305, gap Z4).
+ * The templates a release may name. The planned `website-only` template (issue
+ * 1305, gap Z4) is replaced by ./runbooks/web-content.yaml, run by
+ * ./web-release.ts on its own release line (D81); this loader never reads it.
  */
 export const TEMPLATE_NAMES = ["kitchen-sink"] as const;
 export type TemplateName = (typeof TEMPLATE_NAMES)[number];
