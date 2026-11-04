@@ -13,6 +13,8 @@ import {
   parseConnectionLimitsFlag,
   parseProductionLimits,
   doadminPasswordSql,
+  dumpAgeRefusal,
+  dumpPlan,
   envKeyNames,
   fingerprintDiff,
   globalsToRoleSql,
@@ -322,5 +324,30 @@ describe("the stage Postgres's connection limits", () => {
   test("become the Postgres server's settings", () => {
     expect(connectionLimitArgs({ maxConnections: 25, superuserReserved: 3, reserved: 2 }))
       .toEqual(["-c", "max_connections=25", "-c", "superuser_reserved_connections=3", "-c", "reserved_connections=2"]);
+  });
+});
+
+describe("Q02 always captures a fresh dump; up refuses one over 24 h (issue 1564, SR.0)", () => {
+  const now = new Date("2026-11-04T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
+
+  test("dumpPlan captures for an empty list, a 1 h old dump and a 23 h old dump", () => {
+    expect(dumpPlan([], now)).toBe("capture");
+    expect(dumpPlan([{ dir: "/home/x/rm-backup-prod-1h", capturedAt: hoursAgo(1) }], now)).toBe("capture");
+    expect(dumpPlan([{ dir: "/home/x/rm-backup-prod-23h", capturedAt: hoursAgo(23) }], now)).toBe("capture");
+  });
+
+  test("dumpAgeRefusal names 24 h for a 25 h old manifest and passes a 23 h old one", () => {
+    expect(STAGE_TARGET.maxDumpAgeHours).toBe(24);
+    const refusal = dumpAgeRefusal({ capturedAt: hoursAgo(25) }, now);
+    expect(refusal).not.toBeNull();
+    expect(refusal).toContain("24 h");
+    expect(refusal).toContain("25.0 h ago");
+    expect(dumpAgeRefusal({ capturedAt: hoursAgo(23) }, now)).toBeNull();
+  });
+
+  test("dumpAgeRefusal refuses a manifest with no capturedAt or an unreadable one", () => {
+    expect(dumpAgeRefusal({}, now)).toContain("no capturedAt");
+    expect(dumpAgeRefusal({ capturedAt: "not a date" }, now)).toContain("no capturedAt");
   });
 });

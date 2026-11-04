@@ -77,6 +77,8 @@ import {
   grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
+  dumpAgeRefusal,
+  dumpPlan,
   newestFreshDump,
   LEDGER_TABLE_SQL,
   parseKeyValues,
@@ -263,11 +265,10 @@ function readDumpPreflight(dumpDir: string) {
   const manifestPath = join(dumpDir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Refusal(`${manifestPath} is missing; capture with bun smoke:capture`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { capturedAt?: string; role?: string; pgIsInRecovery?: boolean; target?: string };
-  const age = dumpAgeHours(manifest, new Date());
-  if (age === null) throw new Refusal(`${manifestPath} has no capturedAt`);
-  if (age > T.maxDumpAgeHours) {
-    throw new Refusal(`the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${T.maxDumpAgeHours} h. Capture a new one first`);
-  }
+  const now = new Date();
+  const refusal = dumpAgeRefusal(manifest, now);
+  if (refusal) throw new Refusal(`${manifestPath}: ${refusal}`);
+  const age = dumpAgeHours(manifest, now) ?? 0;
   log(`dump ${backup.stamp}: captured ${manifest.capturedAt} (${age.toFixed(1)} h ago) as ${manifest.role} from a replica=${manifest.pgIsInRecovery}`);
   return backup;
 }
@@ -542,21 +543,17 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
 }
 
 /**
- * Q02-dump (SR.0, owner 2026-10-08): the newest production dump on this host that is
- * at most 24 hours old, else a new capture from production's read replica by the
- * capture checkout (the same `bun smoke:capture` C01-backup runs). Never a stale dump.
+ * Q02-dump (SR.0, issue 1564): always a new capture from production's read replica
+ * by the capture checkout (the same `bun smoke:capture` C01-backup runs). It never
+ * reuses a dump already on this host, whatever its age (`dumpPlan`).
  */
 async function remoteDump(): Promise<number> {
-  const fresh = newestFreshDump(listDumps(), new Date());
-  if (fresh) {
-    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old`);
-    return 0;
-  }
+  const plan = dumpPlan(listDumps(), new Date());
   const checkout = CAPTURE_CHECKOUT.checkout;
-  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`no dump is at most ${T.maxDumpAgeHours} h old, and the capture checkout ${checkout} is absent: clone it, then run this again`);
+  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`the capture checkout ${checkout} is absent: clone it, then run this again`);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const out = join(process.env.HOME ?? "", `rm-backup-prod-${stamp}`);
-  log(`no dump is at most ${T.maxDumpAgeHours} h old: capturing ${out} from production's read replica`);
+  log(`${plan}: ${out} from production's read replica (Q02 never reuses a dump)`);
   await stream(["bun", "run", "smoke:capture", "--out", out], "smoke:capture", { cwd: checkout, env: { RM_ENV: "stage" } });
   return 0;
 }
