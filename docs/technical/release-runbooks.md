@@ -340,7 +340,7 @@ soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
 UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
-step) fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label), and C24 asserts only the labels for a run of the old producer.
+step) fills the whole archive, replays the newest archived run, and fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label). Q36 and C24 replay nothing: they are a contract smoke that fetches one backup (issue 1566).
 
 **A boot or a rolling boot is uneventful (issue 1378).** The services hold this
 contract, so a runbook needs no step to drain or clean the queue by hand:
@@ -518,7 +518,7 @@ recorded owner decision.
 | SV.5 | Row counts only grow; the database did not balloon | Q30-compare-baseline, C18-compare-baseline |
 | SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | Q19-env-rewrite, Q31-host-guards, C07-env-rewrite, C19-host-guards |
 | SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version checks (the steps it adds after the template's: Q on stage, C on production) |
-| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | Q35-archive-routes, Q36-sdk-quickstart, Q37-sdk-tests, C23-archive-routes, C24-sdk-quickstart, C25-sdk-tests |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, a minimal contract smoke with the SDK's own format 1 code from a sparse clone of the release commit calls each route the quickstart uses once (the archive listing, the newest backup's record and the files it lists, verified against their sha256_raw, the reports listing, the newest run's report bytes against the listing's checksum, the run's vintages and one vintage's members) and fails naming the first route that does not answer, parse or verify, and the SDK package tests pass. The full-archive replay is the post-seal report, not a step | Q35-archive-routes, Q36-sdk-quickstart, Q37-sdk-tests, C23-archive-routes, C24-sdk-quickstart, C25-sdk-tests |
 | SW.1 | The soak: logs since READY graded | Q32-soak-gate, C20-soak-gate |
 | SW.2 | The standing invariants over the soak (§10) | Q29-soak-record, Q33-soak-checks, C17-soak-record, C21-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
