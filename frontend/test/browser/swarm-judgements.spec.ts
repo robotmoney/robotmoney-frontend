@@ -354,6 +354,8 @@ test("a judge's page: the role, the sessions it judged instead of takes, and its
   await expect(cards.nth(0).locator(".rr-conf")).toHaveText("Disagreements 1");
   await expect(cards.nth(0).locator(".rr-advice__why")).toHaveText("3 takes, below the minimum of 4");
   await expect(cards.nth(0).locator("a.rr-take__act")).toHaveAttribute("href", "/swarm/judgements/41");
+  // Named as a take's receipt is, so it never reads as a second "Read full judgement" (RM-202).
+  await expect(cards.nth(0).locator("a.rr-take__act")).toHaveText("Verification receipt");
   // A call that clears, and no disagreement: the badge alone.
   await expect(cards.nth(1).locator(".rr-take__name")).toHaveText("Woon Treasury");
   await expect(cards.nth(1).locator(".rr-advice-badge--update")).toHaveText("Update");
