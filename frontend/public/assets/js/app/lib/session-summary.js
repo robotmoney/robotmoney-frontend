@@ -133,6 +133,18 @@ export function bucketLabel(idOrName) {
   return String(idOrName || "").replace(/[_-]+/g, " ").trim().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// A constituent's name as a reader knows it. The allocation serves the
+// Real World Assets holding by its ticker, SPY; the site says S&P 500
+// (Philip and Lex, 2026-11-04). Tickers inside research ratios (IWM/SPY,
+// SPY/RSP) are a different thing and keep the ticker.
+/** @type {Record<string, string>} */
+const ASSET_LABELS = { spy: "S&P 500", sp500: "S&P 500" };
+/** @param {unknown} name */
+export function assetLabel(name) {
+  const s = String(name ?? "");
+  return ASSET_LABELS[s.trim().toLowerCase()] || s;
+}
+
 // What each sleeve holds, in one line (lib/sleeve-notes.js): the (i) tip
 // wherever a swarm page names a sleeve, /allocation's sleeve cards and each
 // vault page's lede.

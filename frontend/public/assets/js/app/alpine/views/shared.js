@@ -236,15 +236,6 @@ export const subjectDot = (subjectId) => {
   return hues[h % hues.length];
 };
 
-// Correlation ("Predictive power & alignment") table columns + row order.
-export const FWD_COLS = [
-  ["spx_30d", "SPX 30d"], ["spx_90d", "SPX 90d"], ["spx_180d", "SPX 180d"],
-  ["eth_30d", "ETH 30d"], ["eth_90d", "ETH 90d"], ["eth_180d", "ETH 180d"],
-];
-export const CON_COLS = [["spx", "SPX now"], ["eth", "ETH now"]];
-export const CORR_ROWS = [
-  ["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"],
-];
 export const SOURCE_LABEL = {
   fred: "FRED", yahoo: "Yahoo", defillama_tvl: "DefiLlama", defillama_stables: "DefiLlama",
   blockchain_com: "Blockchain.com", coinmetrics: "Coinmetrics", geckoterminal_newpools: "GeckoTerminal",

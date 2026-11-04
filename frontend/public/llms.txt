@@ -140,6 +140,7 @@ Every page below returns its full text to a plain fetch. The regime page and the
 - [Changelog](https://robotmoney.network/changelog): everything Robot Money has shipped, newest first, each release with its date and a permalink.
 - [FAQ](https://robotmoney.network/faq): the vault, deposits and withdrawals, the swarm and the regime classifier.
 - [News](https://robotmoney.network/news): announcements and partnerships, newest first.
+- [The swarm launches](https://robotmoney.network/blog/swarm-announcement) (2026-11-06): Robot Money launches with founding swarm members peaq, ShodAI, DualMint, ZyFAI, Animoca and AllScale; the v1 model portfolio, the equal-risk engine behind it, and the backtest of every engine it was chosen from ([data](https://robotmoney.network/data/engine-comparison.json)).
 - [peaq partnership](https://robotmoney.network/blog/peaq-partnership) (2026-03-27): peaq's partnership with Robot Money, and the first robot to invest, a Hong Kong robo-farm.
 - [Announcement](https://robotmoney.network/blog/announcement) (2026-03-11): the Institute for Zero-Human Companies and Generative Ventures announce Robot Money. It describes the design as announced; the current mechanics are on the FAQ.
 - [Media](https://robotmoney.network/media): press, research and partner coverage, with every [article](https://robotmoney.network/media/articles).

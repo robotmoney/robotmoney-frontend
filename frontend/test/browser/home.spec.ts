@@ -60,7 +60,31 @@ interface AllocationFramework {
   strategy: { label: string; targetPct: number }[];
   buckets: { key: string; label: string; items: { label: string; targetPct: number }[] }[];
   asOf: string; source: string; managed: boolean;
+  provenance?: { sessionId: string } | null;
 }
+
+// The targets in force as production serves them since RM-190: four sleeves
+// in the published order, seeded (no session wrote them), the Real World
+// Assets holding by its ticker.
+const TARGETS: AllocationFramework = {
+  strategy: [
+    { label: "Conservative DeFi Yield", targetPct: 50 },
+    { label: "Protocol Tokens", targetPct: 7 },
+    { label: "Real World Assets", targetPct: 29 },
+    { label: "Hard Assets", targetPct: 14 },
+  ],
+  buckets: [
+    { key: "defi-yield", label: "Conservative DeFi Yield", items: [{ label: "Aave", targetPct: 50 }, { label: "Morpho", targetPct: 50 }] },
+    { key: "protocol-tokens", label: "Protocol Tokens", items: [{ label: "BTC", targetPct: 50 }, { label: "ETH", targetPct: 50 }] },
+    { key: "rwa", label: "Real World Assets", items: [{ label: "SPY", targetPct: 100 }] },
+    { key: "hard-assets", label: "Hard Assets", items: [{ label: "Gold", targetPct: 100 }] },
+  ],
+  asOf: "2026-11-04", source: "seed", managed: true, provenance: null,
+};
+// A sleeve's hue is its place in the published order (bucketHue), and
+// Small Cap Tokens keeps its slot though closed: the four open sleeves wear
+// CATEGORICAL 0, 2, 3 and 4.
+const TARGET_RGB = [0, 2, 3, 4].map((i) => CATEGORICAL_RGB[i]);
 
 function loadGolden<T>(route: string): T {
   const goldens = JSON.parse(readFileSync(join(repoRoot, "goldens/api-goldens.json"), "utf8")) as {
@@ -261,34 +285,38 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await expectNoBrowserErrors(errors);
 });
 
-test("the ring has four CATEGORICAL arcs, a receipt and the history", async ({ page }) => {
+test("the ring is the targets in force: four CATEGORICAL arcs in the published order, and the session that set them", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubHome(page);
+  await stubHome(page, { framework: { ...TARGETS, provenance: { sessionId: SESSION_ID } } });
   await openHome(page);
 
-  await expect(page.locator(".hm-aside")).toContainText("Sep 1, 2026");
+  await expect(page.locator(".hm-aside")).toContainText("In force since Nov 4, 2026");
   await expect(page.locator(".hm-aside a")).toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
 
   const arcs = page.locator('.hm-ring circle[data-mark="series"]');
   await expect(arcs).toHaveCount(4);
   const strokes = await arcs.evaluateAll((els) => els.map((el) => getComputedStyle(el).stroke));
-  expect(strokes).toEqual(CATEGORICAL_RGB.slice(0, 4));
+  expect(strokes).toEqual(TARGET_RGB);
 
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
   const keys = page.locator(".hm-keys li");
   await expect(keys).toHaveCount(4);
   await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
-  await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("90%", { timeout: 3_000 });
-  await expect(keys.nth(1)).toContainText("Small Cap Tokens");
-  await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("5%");
-  await expect(keys.nth(2)).toContainText("Protocol Tokens");
-  await expect(keys.nth(2).locator(".hm-keys__pct")).toHaveText("3%");
-  await expect(keys.nth(3)).toContainText("Real World Assets");
-  await expect(keys.nth(3).locator(".hm-keys__pct")).toHaveText("2%");
+  await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("50%", { timeout: 3_000 });
+  await expect(keys.nth(1)).toContainText("Protocol Tokens");
+  await expect(keys.nth(1)).toContainText("BTC, ETH");
+  await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("7%");
+  await expect(keys.nth(2)).toContainText("Real World Assets");
+  await expect(keys.nth(2)).toContainText("S&P 500");
+  await expect(keys.nth(2)).not.toContainText("SPY");
+  await expect(keys.nth(2).locator(".hm-keys__pct")).toHaveText("29%");
+  await expect(keys.nth(3)).toContainText("Hard Assets");
+  await expect(keys.nth(3)).toContainText("Gold");
+  await expect(keys.nth(3).locator(".hm-keys__pct")).toHaveText("14%");
 
   const swatches = await keys.locator("i[data-mark=series]").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
-  expect(swatches).toEqual(CATEGORICAL_RGB.slice(0, 4));
+  expect(swatches).toEqual(TARGET_RGB);
 
   await keys.locator(".hm-keys__row").first().hover();
   const tok = page.locator(".hm-ring__tok");
@@ -315,17 +343,48 @@ test("the ring has four CATEGORICAL arcs, a receipt and the history", async ({ p
   await expectNoBrowserErrors(errors);
 });
 
-test("no published recommendation: a bare ring and No recommendation yet", async ({ page }) => {
+test("seeded targets, as production has them: no receipt beside the date, and Check the math opens the latest session", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubHome(page, { sessions: [] });
+  await stubHome(page, { framework: TARGETS });
+  await openHome(page);
+
+  await expect(page.locator(".hm-aside")).toContainText("In force since Nov 4, 2026");
+  await expect(page.locator(".hm-aside a")).toHaveCount(0);
+  await expect(page.locator('.hm-ring circle[data-mark="series"]')).toHaveCount(4);
+  await expect(page.locator("#made a").filter({ hasText: "Check the math" }))
+    .toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("targets unreadable: the latest recommendation stands in, dated and with its receipt", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubHome(page, { framework: null });
+  await openHome(page);
+
+  await expect(page.locator(".hm-aside")).toContainText("Sep 1, 2026");
+  await expect(page.locator(".hm-aside a")).toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
+  await page.locator(".hm-model").scrollIntoViewIfNeeded();
+  const keys = page.locator(".hm-keys li");
+  await expect(keys).toHaveCount(4);
+  await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("90%", { timeout: 3_000 });
+
+  await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
+});
+
+test("neither targets nor a published recommendation: a bare ring and No recommendation yet", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubHome(page, { sessions: [], framework: null });
   await openHome(page);
 
   await expect(page.locator(".hm-ring__empty")).toHaveText("No recommendation yet");
   await expect(page.locator('.hm-ring circle[data-mark="series"]')).toHaveCount(0);
   await expect(page.locator(".hm-keys")).toBeHidden();
   await expect(page.locator(".hm-ring .sv__wdonut circle")).toHaveCount(1);
+  await expect(page.locator("#made a").filter({ hasText: "Check the math" }))
+    .toHaveAttribute("href", "/swarm/subjects/robotmoney-allocation");
 
-  await expectNoBrowserErrors(errors);
+  await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
 });
 
 test("members API down: Roster unavailable, and the copy still reads", async ({ page }) => {
@@ -373,11 +432,11 @@ test("the roster lists the analysts, then the judges under their own label", asy
 });
 
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
-  await stubHome(page);
+  await stubHome(page, { framework: TARGETS });
   await openHome(page);
   await expect(page.locator(".hm-keys li").first()).toBeVisible();
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
-  await expect(page.locator(".hm-keys__pct").first()).toHaveText("90%");
+  await expect(page.locator(".hm-keys__pct").first()).toHaveText("50%");
 
   const findings = await page.evaluate((CATEGORICAL: string[]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];

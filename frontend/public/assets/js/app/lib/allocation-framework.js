@@ -109,7 +109,9 @@ async function archivedFramework() {
       label: b.name || b.id || "",
       items: (b.items || []).map((/** @type {any} */ it) => ({ label: it.name || it.id || "", targetPct: itemPct(it.target_weight) })),
     }));
-    return strategy.length ? { asOf: raw.asof || raw.asOf || null, strategy, buckets, provenance: null } : null;
+    // `archived` tells a reader this is the shipped June manifest, not a live
+    // read: fine for names, never to be printed as the targets in force.
+    return strategy.length ? { asOf: raw.asof || raw.asOf || null, strategy, buckets, provenance: null, archived: true } : null;
   } catch (_) {
     return null;
   }

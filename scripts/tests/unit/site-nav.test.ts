@@ -51,6 +51,7 @@ describe("navSectionFor", () => {
     ["/news", "company"],
     ["/blog/peaq-partnership", "company"],
     ["/blog/announcement", "company"],
+    ["/blog/swarm-announcement", "company"],
     ["/research/late-cycle-signals", "research"],
     ["/smart-contract-risks", "research"],
     ["/media/articles", "company"],

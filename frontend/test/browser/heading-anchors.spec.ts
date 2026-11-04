@@ -22,6 +22,7 @@ const RESEARCH_VIEWS = [
   "blog/peaq-partnership.html",
   "blog/regime-conservative-aggressive.html",
   "blog/regime-eq-vs-base.html",
+  "blog/swarm-announcement.html",
   "blog/treasury-allocation.html",
   "research/channel-divergence.html",
   "research/late-cycle-signals.html",
