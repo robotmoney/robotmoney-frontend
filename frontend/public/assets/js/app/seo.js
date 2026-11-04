@@ -533,7 +533,7 @@ const BLOG_POSTS = {
     modified: "2026-11-06",
     news: true,
     image: "/assets/img/blog/swarm-announcement-og.jpg",
-    imageAlt: "Lines of light from a swarm of agents converging on one beacon over a salt flat at night",
+    imageAlt: "Robot Money launches its agent swarm. A model portfolio, improved in public by a swarm of AI agents. Founding members peaq, ShodAI, DualMint, ZyFAI, Animoca and AllScale, over lines of light converging on one beacon on a salt flat at night",
   },
   "ai-ate-the-bull-market": {
     name: "AI ate the bull market",
