@@ -419,6 +419,31 @@ added to a template reaches them in the same pull request. The step-list hash SP
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
 is irreversible; a step a tool cannot perform is a `gap`.
 
+**Concurrent steps: `after` (issue 1557).** A step may declare `after: [<earlier step ids>]`. The
+runner starts it as soon as its `notBefore` is met and every step it names is done (ok, skipped or
+accepted), alongside any long waiter still running. A step without `after` waits for every earlier
+step, so a runbook that declares none runs one step at a time, in order, as before, and its
+step-list hash is unchanged (the hash includes `after` only on a step that carries it). The loader
+(`scripts/release/runbook.ts`) refuses an `after` that names an unknown id, a later id, the step
+itself or a step of another phase; an `after` on an irreversible step; an `after` list that lets a
+step start before an earlier irreversible step ends; and one that does not wait for the step its
+`notBefore` counts from. A QA step and its production twin carry the same list, with the phase
+prefixes stripped. Real ordering stays expressible: a check that reads what another builds names it
+(archive-routes after archive-records). The template's read-only SDK checks (Q35 to Q37, C23 to
+C25) wait only for READY from release v0.7.3 on (`afterSince: v0.7.3`); a runbook of an earlier
+release keeps them as it ran, without `after`.
+
+The runner stays the only writer of `run.json`; a running step returns its record to it. On stage, a
+failed step is recorded, the steps whose `after` names it (directly or through another) are recorded
+failed, not run, and the runner waits for every running step to settle before it exits 1 with every
+failure listed in runbook order. On production, the first failure stops new starts; the runner waits
+for the steps in flight to settle and exits 1 with the resume command for the first failed step in
+runbook order. When nothing is runnable and nothing is in flight but a step waits on a future
+`notBefore`, the runner exits 3 as before. `--run` and `--from` select the same steps they always
+did. `run.json`, receipts and the printed plan list the steps in runbook order whatever order they
+finished in, and while a run has steps with `after` each output line a step streams starts with its
+step id. The preflight (`--preflight`) stays sequential.
+
 ## 6. The tracking issue
 
 Each release has one GitHub tracking issue labelled `release:vX.Y.Z`. It states the objective: the

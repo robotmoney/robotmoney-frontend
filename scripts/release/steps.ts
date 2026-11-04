@@ -157,6 +157,21 @@ export interface StepTemplate {
    * repeats it. Only a step a release's runbook adds carries it.
    */
   readonly gateAbsent?: string;
+  /**
+   * The earlier steps of its own phase this step waits for (issue 1557). The
+   * runner starts it as soon as its notBefore is met and every step named here
+   * is done (ok, skipped or accepted), alongside any long waiter still running.
+   * Absent: the step waits for every earlier step, as every step did before.
+   * ./runbook.ts refuses an after list that lets a step start before an
+   * earlier irreversible step ends, and an after on an irreversible step.
+   */
+  readonly after?: readonly string[];
+  /**
+   * The first release whose runbook must carry this template step's `after`
+   * (`vA.B.C`). An earlier release's runbook keeps the step as it ran, with no
+   * after (./runbook.ts checkAddOnly). Like `since`, the hash never sees it.
+   */
+  readonly afterSince?: string;
 }
 
 /** The repository every checkout fetches from; P01-checkout and P04-capture-checkout clone a missing checkout from it. */
@@ -264,6 +279,8 @@ export interface RenderedStep {
   readonly onlyFor?: "prod" | "stage";
   readonly notBefore?: NotBefore;
   readonly maxMillis: number;
+  /** The steps it waits for, when it names them (issue 1557). */
+  readonly after?: readonly string[];
 }
 
 /** The rolling cutover steps (by name) a release that declares `breaking:` does not run: the migrate under the running release and the one-at-a-time boot. Their breaking replacements are the `breakingOnly` steps. */
@@ -279,6 +296,7 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
     irreversible: step.irreversible, expectExit: step.expectExit,
     receipts: step.receipts.map((r) => ({ ...r, dir: fill(r.dir, values) })),
     onlyFor: step.onlyFor, notBefore: notBeforeOf(step, target), maxMillis: maxMillisOf(step),
+    ...(step.after !== undefined ? { after: step.after } : {}),
   };
   if (step.host === "control") {
     // The control machine: its own checkout and its own environment (the git
@@ -326,6 +344,8 @@ export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): st
     onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
     // Only a step that carries it: every earlier release's list hashes as it did.
     ...(s.breakingOnly === true ? { breakingOnly: true } : {}),
+    // The same for after (issue 1557): a list that declares none hashes as it did before the key existed.
+    ...(s.after !== undefined ? { after: s.after } : {}),
   }));
   // The base environment is part of every remote command, so it is part of the list.
   const base = { envClear: true, env: BASE_ENV, runDir: RUN_DIR, captureRunDir: CAPTURE_RUN_DIR };
