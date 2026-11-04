@@ -8,7 +8,7 @@ import { join } from "node:path";
 import {
   DEFAULT_TEMPLATE, checkAddOnly, loadReleaseRunbook, loadTemplate, parseReleaseRunbook, parseTemplate, releaseBefore, releaseRunbookNames,
   releaseRunbookPath, templatePath, type ReleaseRunbook, type RunbookStep,
-  scopeProblems,
+  scopeProblems, parseStep, twinProblems,
 } from "../../release/runbook.ts";
 import { prsOf, scopeCoverage } from "../../release/scope.ts";
 import { RELEASE_STEPS, renderStep, stepListHash, templateValues } from "../../release/steps.ts";
@@ -338,5 +338,106 @@ describe("the template's analytics load step", () => {
     const without = template.steps.filter((s) => s.id !== LOAD);
     expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain(`template step ${LOAD} is missing`);
     expect(checkAddOnly(template, runbook(template.steps, "v0.7.1"))).toEqual([]);
+  });
+});
+
+// ── after: a step that waits only for the steps it names (issue 1557) ──
+describe("a step's after list", () => {
+  const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+  /** The template text with one more line in the step `id`, right after its id line. */
+  const withLine = (src: string, id: string, line: string) => {
+    const head = `  - id: "${id}"\n`;
+    expect(src).toContain(head);
+    return src.replace(head, `${head}${line}\n`);
+  };
+  /** The template text with step `id`'s after list replaced. */
+  const setAfter = (src: string, id: string, after: string) => src.replace(new RegExp(`(  - id: "${id}"[\\s\\S]*?    after: )\\[[^\\]]*\\]`), `$1${after}`);
+  const SDK = ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"];
+
+  test("parseStep accepts after as a list of step ids, and refuses anything else", () => {
+    const raw = { ...template.steps.find((s) => s.id === "Q36-sdk-quickstart")! };
+    const ok = parseStep({ ...raw, after: ["Q23-ready", "Q35-archive-routes"] }, "t");
+    expect("step" in ok && ok.step.after).toEqual(["Q23-ready", "Q35-archive-routes"]);
+    for (const bad of [[], "Q23-ready", [1], [""]]) {
+      const r = parseStep({ ...raw, after: bad }, "t");
+      expect("errors" in r && r.errors.join(), JSON.stringify(bad)).toContain("t Q36-sdk-quickstart: after is a non-empty list of earlier step ids");
+    }
+    const irr = parseStep({ ...template.steps.find((s) => s.id === "Q18-migrate")!, after: ["Q17-probe-start"] }, "t");
+    expect("errors" in irr && irr.errors.join()).toContain("t Q18-migrate: an irreversible step carries no after");
+    const since = parseStep({ ...raw, after: undefined, afterSince: "v0.7.3" }, "t");
+    expect("errors" in since && since.errors.join()).toContain("afterSince goes with after");
+  });
+
+  test("the template's read-only SDK checks wait only for READY, from release v0.7.3 on", () => {
+    for (const id of SDK) {
+      const s = template.steps.find((x) => x.id === id)!;
+      expect(s.after, id).toEqual([id.startsWith("Q") ? "Q23-ready" : "C11-ready"]);
+      expect(s.afterSince, id).toBe("v0.7.3");
+      expect(s.irreversible, id).toBe(false);
+    }
+    // Every other template step waits for every earlier one, as before.
+    expect(template.steps.filter((s) => s.after !== undefined).map((s) => s.id)).toEqual(SDK);
+  });
+
+  test("red: an after naming an unknown id, a later id, the step itself, or another phase's step refuses, naming the step", () => {
+    const at = "template kitchen-sink";
+    expect(() => parseTemplate(setAfter(text, "Q36-sdk-quickstart", '["Q99-nope"]'), "kitchen-sink")).toThrow(`${at} Q36-sdk-quickstart: after names Q99-nope, which is no step of this list`);
+    expect(() => parseTemplate(setAfter(text, "Q35-archive-routes", '["Q36-sdk-quickstart"]'), "kitchen-sink")).toThrow(`${at} Q35-archive-routes: after names Q36-sdk-quickstart, which comes later`);
+    expect(() => parseTemplate(setAfter(text, "Q36-sdk-quickstart", '["Q36-sdk-quickstart"]'), "kitchen-sink")).toThrow(`${at} Q36-sdk-quickstart: after names the step itself`);
+    expect(() => parseTemplate(setAfter(text, "C24-sdk-quickstart", '["Q23-ready"]'), "kitchen-sink")).toThrow(`${at} C24-sdk-quickstart: after names Q23-ready, a qa step; it names steps of its own phase (cutover)`);
+    expect(() => parseTemplate(withLine(text, "Q18-migrate", '    after: ["Q17-probe-start"]'), "kitchen-sink")).toThrow(`${at} Q18-migrate: an irreversible step carries no after`);
+  });
+
+  test("red: an after list that lets a step start before an earlier irreversible step ends refuses, naming both", () => {
+    // Q24-site after Q17-probe-start could start while Q18-migrate (irreversible) runs.
+    expect(() => parseTemplate(withLine(text, "Q24-site", '    after: ["Q17-probe-start"]'), "kitchen-sink"))
+      .toThrow("template kitchen-sink Q24-site: its after list lets it start before the irreversible step Q18-migrate, Q18c-migrate-breaking ends");
+    // Naming a step past the irreversible ones is safe: that step waited for them.
+    expect(() => parseTemplate(setAfter(setAfter(text, "Q36-sdk-quickstart", '["Q35-archive-routes"]'), "C24-sdk-quickstart", '["C23-archive-routes"]'), "kitchen-sink")).not.toThrow();
+    // A notBefore anchor the after list does not wait for refuses too.
+    expect(() => parseTemplate(setAfter(text, "Q36-sdk-quickstart", '["Q22-rolling-boot"]'), "kitchen-sink")).toThrow("Q36-sdk-quickstart: its notBefore counts from Q23-ready, which its after list does not wait for");
+  });
+
+  test("twinProblems passes twins whose after lists match once the phase prefixes are stripped, and refuses when they differ", () => {
+    expect(twinProblems(template.steps, "t")).toEqual([]);
+    const differ = template.steps.map((s) => (s.id === "Q36-sdk-quickstart" ? { ...s, after: ["Q35-archive-routes"] } : s));
+    expect(twinProblems(differ, "t")).toEqual(["t: Q36-sdk-quickstart and C24-sdk-quickstart differ; a QA step and its production twin run the same commands"]);
+    const both = differ.map((s) => (s.id === "C24-sdk-quickstart" ? { ...s, after: ["C23-archive-routes"] } : s));
+    expect(twinProblems(both, "t")).toEqual([]);
+    const dropped = template.steps.map((s) => (s.id === "C25-sdk-tests" ? { ...s, after: undefined } : s));
+    expect(twinProblems(dropped, "t").join()).toContain("Q37-sdk-tests and C25-sdk-tests differ");
+  });
+
+  test("add-only under afterSince: a release before v0.7.3 keeps the steps as it ran, a later one carries the after lists", () => {
+    const noAfter = template.steps.map((s) => (s.after === undefined ? s : (({ after: _a, ...rest }) => rest)(s) as RunbookStep));
+    for (const release of ["v0.6.2", "v0.7.0", "v0.7.1", "v0.7.2"]) {
+      const kept = noAfter.filter((s) => s.since === undefined || !releaseBefore(release, s.since));
+      expect(checkAddOnly(template, runbook(kept, release)), release).toEqual([]);
+    }
+    // A release before afterSince may also adopt them early.
+    expect(checkAddOnly(template, runbook(template.steps, "v0.7.2"))).toEqual([]);
+    // From v0.7.3 on, a copy without them edits the template.
+    expect(checkAddOnly(template, runbook(noAfter, "v0.7.3")).join()).toContain("Q35-archive-routes differs from the template's step");
+    expect(checkAddOnly(template, runbook(template.steps, "v0.7.3"))).toEqual([]);
+    // The committed runbooks of releases that ran carry no after and still load.
+    for (const release of releaseRunbookNames()) {
+      const rb = loadReleaseRunbook(release);
+      expect(rb.steps.filter((s) => s.after !== undefined).map((s) => s.id), release).toEqual([]);
+    }
+  });
+
+  test("stepListHash: a list with no after hashes as before the key existed (pinned); adding after changes it", () => {
+    // Pinned before issue 1557: the v0.6.2 and v0.7.0 runbooks, which declare no after.
+    expect(stepListHash(loadReleaseRunbook("v0.6.2").steps)).toBe("063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925");
+    expect(stepListHash(loadReleaseRunbook("v0.7.0").steps)).toBe("1728492c5abbb19728e64bddbb22e7cd791ac99888f4c9f1454a0f2d1807234f");
+    // The template without its after lists hashes as the template did before them.
+    const noAfter = template.steps.map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
+    expect(stepListHash(noAfter)).toBe("d57de38d4dd3b30c97b76870fb60e05d4eb30a27d30bdda9a1f19d2703e079c3");
+    // red: one after changes it, and afterSince alone never does.
+    const v070 = loadReleaseRunbook("v0.7.0").steps;
+    const one = v070.map((s) => (s.id === "Q37-sdk-tests" ? { ...s, after: ["Q23-ready"] } : s));
+    expect(stepListHash(one)).not.toBe(stepListHash(v070));
+    expect(stepListHash(template.steps)).not.toBe(stepListHash(noAfter));
+    expect(stepListHash(v070.map((s) => (s.id === "Q37-sdk-tests" ? { ...s, afterSince: "v9.9.9" } : s)))).toBe(stepListHash(v070));
   });
 });

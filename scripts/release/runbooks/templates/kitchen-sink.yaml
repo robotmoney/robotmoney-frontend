@@ -529,6 +529,8 @@ steps:
     maxMinutes: 320
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
   # control machine, read-only against the target, after the soak like the rest of the checks.
+  # From release v0.7.3 (afterSince) they wait only for READY (after, issue 1557), so they run
+  # alongside the soak checks and the analytics load watch instead of queueing behind them.
   - id: "Q35-archive-routes"
     standing: ["SV.8"]
     host: "control"
@@ -542,6 +544,8 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    after: ["Q23-ready"]
+    afterSince: "v0.7.3"
   - id: "Q36-sdk-quickstart"
     standing: ["SV.8"]
     host: "control"
@@ -555,6 +559,8 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    after: ["Q23-ready"]
+    afterSince: "v0.7.3"
     maxMinutes: 90
   - id: "Q37-sdk-tests"
     standing: ["SV.8"]
@@ -569,6 +575,8 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    after: ["Q23-ready"]
+    afterSince: "v0.7.3"
     maxMinutes: 30
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
@@ -1027,6 +1035,8 @@ steps:
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    after: ["C11-ready"]
+    afterSince: "v0.7.3"
   - id: "C24-sdk-quickstart"
     standing: ["SV.8"]
     host: "control"
@@ -1040,6 +1050,8 @@ steps:
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    after: ["C11-ready"]
+    afterSince: "v0.7.3"
     maxMinutes: 90
   - id: "C25-sdk-tests"
     standing: ["SV.8"]
@@ -1054,4 +1066,6 @@ steps:
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    after: ["C11-ready"]
+    afterSince: "v0.7.3"
     maxMinutes: 30

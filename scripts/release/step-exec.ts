@@ -171,3 +171,13 @@ export function triageStep(stepDir: string, triagePath: string | undefined, deps
     record: { file: path, sha256: createHash("sha256").update(text).digest("hex"), used: result.used.map((e) => ({ ...e })) },
   };
 }
+
+/**
+ * The deps one step runs with while other steps may run alongside it (issue
+ * 1557): every line it logs, streamed output included, starts with `[<step id>] `,
+ * so concurrent output stays readable. Everything else is the runner's own.
+ */
+export function prefixedDeps(deps: RunnerDeps, id: string): RunnerDeps {
+  const tag = (line: string) => line.split("\n").map((l) => `[${id}] ${l}`).join("\n");
+  return { ...deps, log: (l) => deps.log(tag(l)), error: (l) => deps.error(tag(l)) };
+}

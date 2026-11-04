@@ -1987,3 +1987,198 @@ describe("preflight", () => {
     expect(ciProblems([])).toEqual(["no check run on the commit: CI never ran there"]);
   });
 });
+
+// ── concurrent steps: after lists (issue 1557) ────────────────────────────────
+describe("the scheduler runs a step with after alongside a long waiting one (issue 1557)", () => {
+  const step = (id: string, phase: "qa" | "cutover", extra: Partial<StepTemplate> = {}): StepTemplate => ({
+    id, standing: [], description: id, host: "target", phase, cmds: [["echo", id]], expectExit: 0, receipts: [], irreversible: false,
+    onlyFor: phase === "qa" ? "stage" : "prod", ...extra,
+  });
+  /** Stage: READY, a long waiter with no after, two checks that wait only for READY, one that waits for the first check, and one with no after. */
+  const QA_LIST: StepTemplate[] = [
+    step("Q23-ready", "qa"),
+    step("Q34a-long", "qa"),
+    step("Q35-quick", "qa", { after: ["Q23-ready"] }),
+    step("Q35b-twin", "qa", { after: ["Q23-ready"] }),
+    step("Q36-chain", "qa", { after: ["Q35-quick"] }),
+    step("Q37-seq", "qa"),
+  ];
+  const ids = QA_LIST.map((s) => s.id);
+
+  /**
+   * fakeDeps with a clock that ticks one second per read, and an exec that holds `long` open
+   * until `releaseAfter` has ended (or, with no releaseAfter, until the next macrotask).
+   */
+  function heldDeps(opts: { long: string; releaseAfter?: string; fail?: Set<string>; out?: string; start?: string }) {
+    const base = fakeDeps({ fail: opts.fail, out: opts.out });
+    let t = Date.parse(opts.start ?? "2026-10-08T12:00:00Z");
+    base.deps.now = () => new Date((t += 1000));
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    const exec = base.deps.exec;
+    // The start order: an id is recorded when its exec is called, before any hold.
+    const ran: string[] = [];
+    base.deps.exec = async (h, r, o, e, ms) => {
+      const id = /\.step-([A-Za-z0-9.-]+)/.exec(r)![1]!;
+      ran.push(id);
+      if (id === opts.long) {
+        if (opts.releaseAfter === undefined) setTimeout(() => release!(), 0);
+        await held;
+      }
+      const code = await exec(h, r, o, e, ms);
+      if (id === opts.releaseAfter) setTimeout(() => release!(), 0);
+      return code;
+    };
+    return { ...base, ran };
+  }
+  const readRun = (root: string, target: "stage" | "prod") => {
+    const dir = join(root, target);
+    const run = readdirSync(dir).filter((n) => /^\d{8}T\d{6}Z$/.test(n)).sort().at(-1)!;
+    return JSON.parse(readFileSync(join(dir, run, "run.json"), "utf8")) as RunJournal;
+  };
+
+  test("a step with after: [READY] starts before the long step ends; a step after it starts only once it ended; one with no after waits for all", async () => {
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q36-chain" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(0);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long", "Q35-quick", "Q35b-twin", "Q36-chain", "Q37-seq"]);
+    const j = readRun(f.journalRoot, "stage");
+    const at = (id: string, k: "startedAt" | "endedAt") => Date.parse(j.steps[id]![k]!);
+    expect(at("Q35-quick", "startedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(at("Q36-chain", "startedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(at("Q36-chain", "startedAt")).toBeGreaterThanOrEqual(at("Q35-quick", "endedAt"));
+    expect(at("Q37-seq", "startedAt")).toBeGreaterThanOrEqual(at("Q34a-long", "endedAt"));
+    // Both READY-only checks started in the same pass and ended in the same tick: both are in the final run.json.
+    expect(j.steps["Q35-quick"]!.status).toBe("ok");
+    expect(j.steps["Q35b-twin"]!.status).toBe("ok");
+    // run.json lists its steps in runbook order, whatever order they finished in.
+    expect(Object.keys(j.steps)).toEqual(ids);
+    expect(at("Q36-chain", "endedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(j.status).toBe("passed");
+    // The printed plan lists the steps in runbook order and names each after list.
+    const plan = a.logs.find((l) => l.startsWith("release:run plan"))!;
+    expect([...plan.matchAll(/^  \[([^\]]+)\]/gm)].map((m) => m[1])).toEqual(ids);
+    expect(plan).toContain("[Q36-chain] after Q35-quick on rm-frontend-stage-2");
+  });
+
+  test("a step list with no after runs one step at a time, in order, with the same run.json and output as the sequential runner", async () => {
+    const SEQ = QA_LIST.map(({ after: _a, ...s }) => s);
+    const f = fixture();
+    const a = fakeDeps({ out: "line one\nline two\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SEQ)).toBe(0);
+    expect(a.ran).toEqual(ids);
+    const j = readRun(f.journalRoot, "stage");
+    const at = "2026-10-08T12:00:00.000Z";
+    expect(j.steps).toEqual(Object.fromEntries(ids.map((id) => [id, { id, status: "ok", exit: 0, expectExit: 0, startedAt: at, receipts: [], attempt: 1, endedAt: at, durationMs: 0 }])));
+    expect(Object.keys(j.steps)).toEqual(ids);
+    // No step-id prefix on a list that runs one step at a time: the output is the sequential runner's.
+    const lines = a.logs.join("\n").split("\n");
+    expect(lines.filter((l) => l.startsWith("line "))).toEqual(ids.flatMap(() => ["line one", "line two"]));
+    expect(lines.some((l) => /^\[Q\d/.test(l))).toBe(false);
+    // The lines a step prints, in order: header, output, ok.
+    const q35 = lines.findIndex((l) => l.includes("── Q35-quick"));
+    expect(lines.slice(q35, q35 + 4)).toEqual(["[release:run] ── Q35-quick on rm-frontend-stage-2: Q35-quick", "line one", "line two", "[release:run] Q35-quick ok (0 s, 0 receipt(s))"]);
+  });
+
+  test("every streamed line of a step that runs alongside another carries that step's id", async () => {
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q36-chain", out: "hello\nworld\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(0);
+    const streamed = a.logs.join("\n").split("\n").filter((l) => /hello|world/.test(l));
+    expect(streamed.length).toBe(ids.length * 2);
+    for (const l of streamed) expect(l).toMatch(/^\[(Q[0-9a-z]+-[a-z]+)\] (hello|world)$/);
+    for (const id of ids) expect(streamed.filter((l) => l.startsWith(`[${id}] `)), id).toEqual([`[${id}] hello`, `[${id}] world`]);
+  });
+
+  test("only runRelease writes run.json during a run: a running step returns its record to it", () => {
+    const stepExec = readFileSync(join(repoRoot, "scripts", "release", "step-exec.ts"), "utf8");
+    expect(stepExec).not.toContain("writeJournal");
+    const run = readFileSync(join(repoRoot, "scripts", "release", "run.ts"), "utf8");
+    const start = run.indexOf("export async function runRelease(");
+    const end = run.indexOf("\nexport ", start + 1);
+    const total = run.match(/writeJournal\(/g)!.length;
+    expect(run.slice(start, end).match(/writeJournal\(/g)!.length).toBe(total);
+  });
+
+  test("stage: a failure while another step runs leaves it to finish, records its dependents not run, and lists every failure in runbook order", async () => {
+    const f = fixture();
+    // Q35-quick fails at once; Q34a-long fails later, once Q36 is settled.
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q35b-twin", fail: new Set(["Q35-quick", "Q34a-long"]) });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(1);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long", "Q35-quick", "Q35b-twin", "Q37-seq"]);
+    const j = readRun(f.journalRoot, "stage");
+    for (const id of ids) expect(j.steps[id]?.endedAt, id).toBeDefined();
+    expect(j.steps["Q36-chain"]!.status).toBe("failed");
+    expect(j.steps["Q36-chain"]!.error).toBe("not run: Q35-quick did not pass, and this step runs after it");
+    expect(j.steps["Q37-seq"]!.status).toBe("ok");
+    expect(j.status).toBe("failed");
+    const out = a.logs.join("\n");
+    expect(out).toContain("3 step(s) failed in this run, all of them listed here");
+    const listed = a.logs.filter((l) => /^ {2}- Q/.test(l)).map((l) => l.slice(4, l.indexOf(":")));
+    expect(listed).toEqual(["Q34a-long", "Q35-quick", "Q36-chain"]);
+    expect(out).toContain("--from Q34a-long");
+  });
+
+  test("production: after a concurrent step fails no further step starts, in-flight steps settle, and the resume names the first failed step in runbook order", async () => {
+    const PROD_LIST: StepTemplate[] = [
+      step("C11-ready", "cutover"),
+      step("C22-long", "cutover"),
+      step("C23-quick", "cutover", { after: ["C11-ready"] }),
+      step("C24-dep", "cutover", { after: ["C23-quick"] }),
+      step("C25-seq", "cutover"),
+    ];
+    const stageDir = await passedStage(PROD_LIST);
+    const p = fixture("prod");
+    const preDir = await greenPreflight(p, PROD_LIST, stageDir);
+    // C23-quick fails first; C22-long, already in flight, settles (and fails) afterwards.
+    const a = heldDeps({ long: "C22-long", releaseAfter: "C23-quick", fail: new Set(["C23-quick", "C22-long"]) });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], a.deps, PROD_LIST)).toBe(1);
+    expect(a.ran).toEqual(["C11-ready", "C22-long", "C23-quick"]);
+    const j = readRun(p.journalRoot, "prod");
+    expect(j.steps["C22-long"]!.status).toBe("failed");
+    expect(j.steps["C22-long"]!.endedAt).toBeDefined();
+    expect(Date.parse(j.steps["C22-long"]!.endedAt!)).toBeGreaterThan(Date.parse(j.steps["C23-quick"]!.endedAt!));
+    expect(j.steps["C24-dep"]).toBeUndefined();
+    expect(j.steps["C25-seq"]).toBeUndefined();
+    const out = a.logs.join("\n");
+    expect(out).toContain("C23-quick FAILED");
+    expect(out).toContain("waiting for C22-long to settle");
+    const resume = a.logs.filter((l) => l.includes("--from "));
+    expect(resume).toHaveLength(1);
+    expect(resume[0]).toContain("--from C22-long");
+  });
+
+  test("a step waiting on a future notBefore: the runner settles what runs, starts nothing early, exits 3, and --run / --from resume the same step set", async () => {
+    const LIST: StepTemplate[] = [
+      step("Q23-ready", "qa"),
+      step("Q34a-long", "qa"),
+      step("Q35-quick", "qa", { after: ["Q23-ready"], notBefore: { afterStep: "Q23-ready", hours: 1 } }),
+      step("Q37-seq", "qa"),
+    ];
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, LIST)).toBe(3);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long"]);
+    const j = readRun(f.journalRoot, "stage");
+    expect(j.steps["Q34a-long"]!.status).toBe("ok");
+    expect(j.steps["Q34a-long"]!.endedAt).toBeDefined();
+    expect(j.steps["Q35-quick"]).toBeUndefined();
+    const out = a.logs.join("\n");
+    expect(out).toContain(`Q35-quick becomes runnable at ${new Date(Date.parse(j.steps["Q23-ready"]!.endedAt!) + 3_600_000).toISOString()}`);
+    expect(out).toContain(`--run ${j.runTs} --from Q35-quick`);
+    // red control: still early, a resume starts nothing.
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs], early.deps, LIST)).toBe(3);
+    expect(early.ran).toEqual([]);
+    // Once due: --run resumes at the first step not done, the same set selectSteps gives.
+    const later = fakeDeps();
+    later.deps.now = () => new Date("2026-10-08T13:00:10Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs], later.deps, LIST)).toBe(0);
+    expect(later.ran).toEqual(selectSteps(LIST.map((s) => s.id), { from: "Q35-quick" }));
+    // --from selects exactly what it did before the scheduler.
+    const again = fakeDeps();
+    again.deps.now = () => new Date("2026-10-08T13:00:20Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs, "--from", "Q37-seq"], again.deps, LIST)).toBe(0);
+    expect(again.ran).toEqual(["Q37-seq"]);
+  });
+});

@@ -181,11 +181,23 @@ export function readJournal(path: string): RunJournal | undefined {
   }
 }
 
-/** Write `<dir>/run.json` atomically, mode 0600. */
+/**
+ * PURE. The journal's steps in runbook order (stepIds), whatever order they
+ * finished in (issue 1557: concurrent steps end in any order); a record for an
+ * id the list lacks keeps its place after them.
+ */
+export function stepsInRunbookOrder(journal: Pick<RunJournal, "steps" | "stepIds">): Record<string, StepRecord> {
+  const out: Record<string, StepRecord> = {};
+  for (const id of journal.stepIds ?? []) if (journal.steps[id] !== undefined) out[id] = journal.steps[id]!;
+  for (const [id, rec] of Object.entries(journal.steps)) if (!(id in out)) out[id] = rec;
+  return out;
+}
+
+/** Write `<dir>/run.json` atomically, mode 0600, its steps in runbook order. */
 export function writeJournal(dir: string, journal: RunJournal): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `.run.json.${process.pid}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(journal, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(tmp, `${JSON.stringify({ ...journal, steps: stepsInRunbookOrder(journal) }, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, join(dir, "run.json"));
 }
 
