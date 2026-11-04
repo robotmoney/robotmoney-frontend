@@ -18,7 +18,7 @@ import { operatorName } from "../lib/operator.js";
 import { memberStatusLine } from "../lib/member-status.js";
 import { memberReferralCode } from "../lib/referral.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
-import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER, RETIRED_BUCKETS } from "../lib/session-summary.js";
+import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER, RETIRED_BUCKETS, assetLabel } from "../lib/session-summary.js";
 import * as weightChange from "../lib/weight-change.js";
 import { sessionTakes } from "../lib/session-takes.js";
 import { allocationFramework } from "../lib/allocation-framework.js";
@@ -4328,7 +4328,7 @@ export function withinBucketsFor(rec, brief, framework, sleeveWeight) {
       const items = b.items.map((it, j) => {
         const at = policy.findIndex((/** @type {any} */ p) => normKeyOf(p.id) === normKeyOf(it.name) || normKeyOf(p.name) === normKeyOf(it.name));
         const order = at >= 0 ? at : policy.length + j;
-        return { ...it, label: at >= 0 ? policy[at].name : it.name, order, colour: CATEGORICAL[order % CATEGORICAL.length] };
+        return { ...it, label: assetLabel(at >= 0 ? policy[at].name : it.name), order, colour: CATEGORICAL[order % CATEGORICAL.length] };
       }).sort((x, y) => x.order - y.order);
       const w = sleeveWeight.get(normKeyOf(b.bucket));
       return { ...b, label: bucketLabel(b.bucket), hue: bucketHue(b.bucket, i), weight: w == null ? null : w * 100, items, rank: bucketRank(b.bucket) };
@@ -4390,7 +4390,7 @@ function bookExplorerRows(snapshot, actions, colourOf, usd) {
 export function explorerAssets(sleeve, pct) {
   return (sleeve?.items || []).map((/** @type {any} */ it) => ({
     key: it.name,
-    label: it.label || it.name,
+    label: assetLabel(it.label || it.name),
     colour: it.colour,
     ofSleeve: it.weight * 100,
     ofAllocation: pct == null ? null : it.weight * pct,

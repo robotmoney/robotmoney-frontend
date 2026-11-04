@@ -48,12 +48,17 @@ const EXPECTED: Record<string, string> = {
   "/blog/peaq-partnership": "BlogPosting",
   "/blog/regime-conservative-aggressive": "BlogPosting",
   "/blog/regime-eq-vs-base": "BlogPosting",
+  "/blog/swarm-announcement": "BlogPosting",
   "/blog/treasury-allocation": "BlogPosting",
   "/news": "CollectionPage",
 };
 // Announcements and partnerships (RM-197): listed on /news, not the research
 // index, and their breadcrumb's middle step is News.
-const NEWS = new Set(["/news", "/blog/announcement", "/blog/peaq-partnership"]);
+const NEWS = new Set(["/news", "/blog/announcement", "/blog/peaq-partnership", "/blog/swarm-announcement"]);
+// The launch post is dated after the shared research revision and carries its
+// own share card.
+const LAUNCH = "/blog/swarm-announcement";
+const LAUNCH_DATE = "2026-11-06";
 const RESEARCH = Object.keys(EXPECTED);
 const ARTICLE_TYPES = new Set(["TechArticle", "BlogPosting", "Article"]);
 
@@ -235,10 +240,10 @@ describe.each(RESEARCH)("%s", (route) => {
       expect(node.author["@id"]).toBe(ORG_ID);
       expect(node.publisher["@id"]).toBe(ORG_ID);
       expect(node.mainEntityOfPage["@id"]).toBe(ORIGIN + route);
-      expect(node.image).toBe(ORIGIN + "/assets/og-image.png");
-      expect(node.dateModified).toBe(REVISED);
+      expect(node.image).toBe(ORIGIN + (route === LAUNCH ? "/assets/img/blog/swarm-announcement-og.jpg" : "/assets/og-image.png"));
+      expect(node.dateModified).toBe(route === LAUNCH ? LAUNCH_DATE : REVISED);
       if (EXPECTED[route] === "BlogPosting") expect(node.datePublished).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      if (node.datePublished) expect(node.datePublished <= REVISED).toBe(true);
+      if (node.datePublished) expect(node.datePublished <= node.dateModified).toBe(true);
     });
   }
 
@@ -259,8 +264,8 @@ describe.each(RESEARCH)("%s", (route) => {
     expect(out).toContain(`<meta property="og:type" content="${want}" />`);
   });
 
-  test(`sitemap.xml lists it with lastmod ${REVISED}`, () => {
-    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${REVISED}</lastmod>`);
+  test("sitemap.xml lists it with its last revision", () => {
+    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${route === LAUNCH ? LAUNCH_DATE : REVISED}</lastmod>`);
   });
 });
 
@@ -313,7 +318,7 @@ describe("structured data details", () => {
     const page = graphOf(routeStructuredData("/news")).find((n) => n["@type"] === "CollectionPage")!;
     const listed = page.mainEntity.itemListElement.map((e: Json) => e.url);
     expect(listed).toEqual(newsIndex().map((e) => ORIGIN + e.path));
-    expect(listed).toEqual([ORIGIN + "/blog/peaq-partnership", ORIGIN + "/blog/announcement"]);
+    expect(listed).toEqual([ORIGIN + "/blog/swarm-announcement", ORIGIN + "/blog/peaq-partnership", ORIGIN + "/blog/announcement"]);
     for (const e of researchIndex()) expect(NEWS.has(e.path), e.path).toBe(false);
   });
 

@@ -7,7 +7,7 @@
 // once and writes the day's reading into two places:
 //
 //   - the page's "Data for machine readers" <noscript> block: the reading, the
-//     26 indicators and the correlation table, as text and tables;
+//     26 indicators, as text and a table;
 //   - the route's schema.org Dataset: the date and each headline figure.
 //
 // It is as fresh as the last prerender, and it says its date. The prerender
@@ -70,7 +70,7 @@ export function lastValue(ind: Latest): string {
 const panelsOf = (latest: Latest): string[] =>
   Array.isArray(latest.panels) && latest.panels.length ? latest.panels : ["macro", "onchain", ...(latest.factorIndex != null ? ["factor"] : [])];
 
-/** The reading, the indicators and the correlations, for the <noscript> block. */
+/** The reading and the indicators, for the <noscript> block. */
 export function regimeSnapshotHtml(latest: Latest | null | undefined): string {
   if (!latest || !latest.date) return "";
   const { lo, hi } = cuts(latest);
@@ -94,23 +94,6 @@ export function regimeSnapshotHtml(latest: Latest | null | undefined): string {
     out.push("</tbody></table>");
   }
 
-  const c = latest.correlations;
-  if (c && (c.forward || c.concurrent)) {
-    const rows = [["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]]
-      .filter(([k]) => (c.forward && c.forward[k]) || (c.concurrent && c.concurrent[k]));
-    const cols: [string, string, (k: string) => any][] = [];
-    for (const [a, name] of [["spx", "S&P 500"], ["eth", "ETH"]]) {
-      if (c.concurrent) cols.push([`${a}-now`, `${name}, today`, (k) => c.concurrent?.[k]?.[a]]);
-      if (c.forward) for (const h of [30, 90, 180]) cols.push([`${a}-${h}`, `${name}, next ${h} days`, (k) => c.forward?.[k]?.[`${a}_${h}d`]]);
-    }
-    out.push("<h3>Predictive power and alignment</h3>");
-    out.push("<p>Spearman rank correlation, from −1 to +1. Today: between the index and the price now. Next 30, 90 and 180 days: between the index and the return that followed. Under 0.15 either way is treated as noise.</p>");
-    out.push(`<table><thead><tr><th>Index</th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join("")}</tr></thead><tbody>`);
-    for (const [k, label] of rows) {
-      out.push(`<tr><td>${esc(label)}</td>${cols.map(([, , get]) => { const cell = get(k); return `<td>${cell && typeof cell.rho === "number" ? esc(signed(cell.rho, 2)) : "none"}</td>`; }).join("")}</tr>`);
-    }
-    out.push("</tbody></table>");
-  }
   return out.join("\n        ");
 }
 

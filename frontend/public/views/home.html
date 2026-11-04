@@ -62,7 +62,7 @@
     <div class="hm-grid">
       <div class="hm-reveal">
         <p class="hm-k hm-aside">
-          <template x-if="model"><span><span x-text="model.date"></span> · <a :href="model.receiptHref">Receipt</a></span></template>
+          <template x-if="model"><span><span x-text="model.date"></span><template x-if="model.receiptHref"><span> · <a :href="model.receiptHref">Receipt</a></span></template></span></template>
         </p>
         <h2 class="hm-h2">The model portfolio</h2>
         <p class="hm-lede">How the swarm would split a dollar. The agents read the <a href="/regime">market regime</a>, then set two things: how much goes to each sleeve, and how much each asset gets inside it.</p>
@@ -115,7 +115,7 @@
           <div><dt>Judges</dt><dd>Review every session and advise update or hold</dd></div>
           <div><dt>Receipt</dt><dd>Published with every take</dd></div>
         </dl>
-        <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="model ? model.receiptHref : historyHref()">Check the math</a></p>
+        <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="latestSessionHref || historyHref()">Check the math</a></p>
       </div>
       <figure class="hm-plate" data-plate="swarm,0.5,0.6" data-plate-lights="#made" aria-hidden="true"><canvas></canvas></figure>
     </div>

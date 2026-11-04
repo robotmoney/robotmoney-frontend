@@ -15,7 +15,7 @@ import { api, ROUTES } from "../../lib/api.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { isJudge } from "../../lib/judgements.js";
-import { sessionSummary, retiredAndEmpty } from "../../lib/session-summary.js";
+import { sessionSummary, retiredAndEmpty, assetLabel, bucketLabel, bucketHue, bucketRank, BUCKET_ORDER } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
 import { memberAvatarSrc } from "../../lib/member-logos.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
@@ -58,9 +58,14 @@ export function registerHomeView(Alpine) {
   Alpine.data("homeView", () => ({
     ...allocationFramework(),
 
-    /** @type {null | { date: string, receiptHref: string, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string }} */
+    /** @type {null | { date: string, receiptHref: string | null, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string }} */
     model: null,
     modelLoaded: false,
+    // The latest published session, where a reader sees the takes, the
+    // consensus and the receipts: "Check the math" opens it, whoever set the
+    // targets in force.
+    /** @type {string | null} */
+    latestSessionHref: null,
     /** @type {any[]} */
     analysts: [],
     /** @type {any[]} */
@@ -104,14 +109,21 @@ export function registerHomeView(Alpine) {
       if (this._destroyed) return;
 
       const session = rec.status === "fulfilled" ? rec.value?.session : null;
-      // The portfolio as it stands, so a closed sleeve the recommendation
-      // gives 0% is not one of its rows. The session's own page keeps it.
-      const rows = session
+      // The targets in force, as the model portfolio page reads them
+      // (RM-115): the framework's sleeves in its published order. The latest
+      // session's weights stand in only when the framework cannot be read,
+      // leaving out a closed sleeve it gives 0%; the session's own page keeps
+      // it.
+      const fw = this._targetRows();
+      const rows = fw.length ? fw : session
         ? (sessionSummary.sessionWeights(session) || []).filter((r) => !retiredAndEmpty(r.key, r.pct))
         : [];
+      const fromSession = !fw.length && !!session;
+      this.latestSessionHref = session ? sessionTakes().sessionHref(session) : null;
+      const fwSession = this.allocationFw?.provenance?.sessionId;
       this.model = rows.length ? {
-        date: fmtDate(session.date || session.publishedAt),
-        receiptHref: sessionTakes().sessionHref(session),
+        date: fromSession ? fmtDate(session.date || session.publishedAt) : (this.allocationFw?.asOf ? `In force since ${fmtDate(this.allocationFw.asOf)}` : ""),
+        receiptHref: fromSession ? sessionTakes().sessionHref(session) : fwSession ? `/swarm/sessions/${fwSession}` : null,
         rows: rows.map((r) => ({ ...r, assets: this._assetsFor(r.key) })),
         ringHtml: sessionSummary.ringSvg(rows),
       } : null;
@@ -156,10 +168,25 @@ export function registerHomeView(Alpine) {
     },
     /** @param {string | null | undefined} key */
     vaultSymbol(key) { return vaultForBucket(key)?.symbol ?? ""; },
+    // The framework's sleeves as ring rows, { key, label, pct, colour }, keyed
+    // and coloured by the published order so a sleeve wears one hue
+    // everywhere (bucketHue).
+    // Only a live read: the archived manifest's June weights are not the
+    // targets in force, so when the API is down the latest session stands in.
+    _targetRows() {
+      if (this.allocationFw?.archived) return [];
+      const rows = this.allocationFw?.strategy;
+      if (!Array.isArray(rows)) return [];
+      return rows
+        .filter((/** @type {any} */ r) => r?.label && Number.isFinite(Number(r.targetPct)))
+        .map((/** @type {any} */ r) => ({ key: BUCKET_ORDER[bucketRank(r.label)] || r.label, label: bucketLabel(r.label), pct: Number(r.targetPct), colour: bucketHue(r.label) }));
+    },
+    // A sleeve's assets, matched by the sleeve rather than by its vault: Hard
+    // Assets has no vault yet and still names gold.
     /** @param {string} bucket */
     _assetsFor(bucket) {
-      const b = (this.allocationFw?.buckets || []).find((/** @type {any} */ x) => vaultForBucket(x?.key ?? x?.label)?.bucket === bucket);
-      return (b?.items || []).map((/** @type {any} */ i) => i?.label).filter(Boolean).join(", ");
+      const b = (this.allocationFw?.buckets || []).find((/** @type {any} */ x) => bucketRank(x?.label ?? x?.key) === bucketRank(bucket));
+      return (b?.items || []).map((/** @type {any} */ i) => assetLabel(i?.label)).filter(Boolean).join(", ");
     },
     // The lanes' names: every asset the framework holds, less the Real World
     // Assets sleeve, whose tokens are usually KYC-gated, because the caption
