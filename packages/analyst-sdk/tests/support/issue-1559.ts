@@ -63,8 +63,10 @@ export function apply1559(original: BacktestPayload, evidence?: DailyEvidence): 
       const returns = all.slice(at + 1).map((p, i) => ({ date: p.date, value: p.value / all[at + i]!.value - 1 }));
       if (m.transitions !== 0) throw new Error(`issue-1559 rule: baseline ${market}.${name} has trades`);
       const stats = periodStats(values, start, m.end_date, { returns, trades: [], splitDate: BACKTEST_IN_SAMPLE_END });
-      if (!m._daily) delete stats._daily;
-      out[market]![name] = stats;
+      // Keep the original's key order (a stored row is key-sorted JSON).
+      const ordered = {} as Record<string, unknown>;
+      for (const k of Object.keys(m)) ordered[k] = (stats as unknown as Record<string, unknown>)[k];
+      out[market]![name] = ordered as unknown as BacktestMetrics;
     }
   }
   return out;
