@@ -16,6 +16,7 @@ import { registerResearchView } from "./views/research.js";
 import { registerTreasuryView } from "./views/treasury.js";
 import { registerFeeChart } from "./views/fee-chart.js";
 import { registerBlogCharts } from "./views/blog-charts.js";
+import { registerSwarmAnnouncement } from "./views/swarm-announcement.js";
 import { registerBuybackSummary } from "./views/buyback-summary.js";
 import { registerAllocationView } from "./views/allocation.js";
 import { registerVaultView } from "./views/vault.js";
@@ -54,6 +55,7 @@ export function registerViews(Alpine) {
   registerTreasuryView(Alpine);
   registerFeeChart(Alpine);
   registerBlogCharts(Alpine);
+  registerSwarmAnnouncement(Alpine);
   registerBuybackSummary(Alpine);
   registerAllocationView(Alpine);
   registerVaultView(Alpine);
