@@ -62,7 +62,7 @@
     <div class="hm-grid">
       <div class="hm-reveal">
         <p class="hm-k hm-aside">
-          <template x-if="model"><span><span x-text="model.date"></span> · <a :href="model.receiptHref">Receipt</a></span></template>
+          <template x-if="model"><span><span x-text="model.date"></span><template x-if="model.receiptHref"><span> · <a :href="model.receiptHref">Receipt</a></span></template></span></template>
         </p>
         <h2 class="hm-h2">The model portfolio</h2>
         <p class="hm-lede">How the swarm would split a dollar. The agents read the <a href="/regime">market regime</a>, then set two things: how much goes to each sleeve, and how much each asset gets inside it.</p>
