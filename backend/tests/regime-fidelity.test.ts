@@ -75,6 +75,7 @@ import {
   sharedAnalysisBytes,
 } from "../../packages/analyst-sdk/tests/support/originals.ts";
 import { expectSameUpToRounding } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
+import { apply1559ToText, type DailyEvidence } from "../../packages/analyst-sdk/tests/support/issue-1559.ts";
 import {
   loadRawIndicatorHistory,
   loadRegimeHistory,
@@ -342,6 +343,9 @@ test("regime fidelity (TRACKING): full history tracks the frozen regime-history.
 // their last bits, so the originals are matched value by value: identical
 // structure, field order, labels, nulls and integers, no number moved by more
 // than rounding (packages/analyst-sdk/tests/support/numeric-diff.ts).
+// Issue 1559 starts every line of a market on the strategies' start, so each
+// original is compared with that rule applied to the variant's original daily
+// values (packages/analyst-sdk/tests/support/issue-1559.ts).
 describe("issue 1421: backend report bytes equal the original captured bytes", () => {
   useCleanDatabasePerTest(import.meta.file);
   for (const v of VARIANTS) {
@@ -364,13 +368,15 @@ describe("issue 1421: backend report bytes equal the original captured bytes", (
         SELECT report_bytes FROM analytics_report_snapshots WHERE run_id = ${runId}::bigint`;
       const storedRows = new TextDecoder().decode(artifact!.payload_bytes);
       const storedReport = new TextDecoder().decode(report!.report_bytes);
-      expectSameUpToRounding(storedRows, readOriginal(originalFile.backendRows(v)), `${v} stored regime_snapshots`);
-      expectSameUpToRounding(storedReport, readOriginal(originalFile.backendReport(v)), `${v} stored report`);
+      const evidence = JSON.parse(readOriginal(originalFile.daily(v))) as DailyEvidence;
+      const original = (file: string) => apply1559ToText(readOriginal(file), evidence);
+      expectSameUpToRounding(storedRows, original(originalFile.backendRows(v)), `${v} stored regime_snapshots`);
+      expectSameUpToRounding(storedReport, original(originalFile.backendReport(v)), `${v} stored report`);
 
       const rows = submitted[0]!.regimeSnapshots!;
       const last = rows[rows.length - 1]!;
       expect(last.date).toBe(inputs.asof);
-      expectSameUpToRounding(sharedAnalysisBytes({ correlations: last.correlations, backtest: last.backtest }), readOriginal(originalFile.sharedAnalysis(v)), `${v} shared artifact`);
+      expectSameUpToRounding(sharedAnalysisBytes({ correlations: last.correlations, backtest: last.backtest }), original(originalFile.sharedAnalysis(v)), `${v} shared artifact`);
       if (v === "zero-volatility") {
         const sharpes = Object.values(last.backtest as BacktestPayload).flatMap((p) => Object.values(p).map((m) => m.sharpe));
         expect(new Set(sharpes)).toEqual(new Set([0]));

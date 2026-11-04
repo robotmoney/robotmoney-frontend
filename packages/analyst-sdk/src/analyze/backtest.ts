@@ -10,16 +10,19 @@
 // T-bill yield on the cash leg. Rebalance only on bucket transitions; transaction
 // cost = one-sided turnover × 10 bps. Strategies tested per portfolio: composite,
 // each panel regime, macro_inverted, conservative, aggressive. Baselines: HODL +
-// 100% stables. Month-end downsampled equity_curve; the per-day `_daily` series is
-// stripped from the snapshot payload (stripDailyFromSnapshot).
+// 100% stables. Within a market every strategy and baseline starts on the first
+// day all the strategies can trade (issue 1559). equity_curve is the start value
+// then month-end values; the per-day `_daily` series is stripped from the
+// snapshot payload (stripDailyFromSnapshot).
 //
 // Issue 1404 exposes the same calculation for supplied portfolios:
 // simulatePortfolio (any assets, schedule, cash rate, costBps), periodStats (the
 // established statistics over a supplied range, from the simulation's pre-cost
 // returns and boundary evidence) and scheduleFromLabels (the label-to-weight
 // mapping). computeBacktest is those three over the reference portfolios; its
-// output is byte-identical to the pre-refactor code (tests/backtest.test.ts
-// against tests/reference/backtest-pre-refactor.ts). Spec: analytics
+// output matches the pre-refactor code with the issue 1559 start rule applied
+// (tests/backtest.test.ts against tests/reference/backtest-pre-refactor.ts and
+// tests/support/issue-1559.ts). Spec: analytics
 // requirements section 5 (docs/technical/analytics-requirements.md).
 //
 // Accuracy (decision D78): equity compounds as an unrounded
@@ -500,9 +503,12 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
       ? annualizedGrowth(ddDiv([oosEquityEnd, 0], [oosEquityStart, 0]), yearsOos)
       : null;
 
+  // The curve opens with the window's first value (1 at a simulation's start),
+  // then each month's last value (issue 1559).
   const monthEnd = new Map<string, Point>();
   for (const pt of window) monthEnd.set(pt.date.slice(0, 7), pt);
   const downsampled = [...monthEnd.values()].sort((a, b) => a.date.localeCompare(b.date));
+  if (window.length && downsampled[0] !== window[0]) downsampled.unshift(window[0]!);
 
   return {
     final_value: nullIfNaN(equity),
@@ -557,17 +563,28 @@ export function computeBacktest(
 
   const out: BacktestPayload = {};
   for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
-    if (firstIndexWithAllAssets(spec.risky, assetSeries, dateAxis.length) < 0) continue;
+    const pricedIdx = firstIndexWithAllAssets(spec.risky, assetSeries, dateAxis.length);
+    if (pricedIdx < 0) continue;
     const prices: Record<string, Point[]> = {};
     for (const a of spec.risky) prices[a] = priceSeries[a]!;
-    const run = (schedule: Schedule) => fullStats(simulatePortfolio(dateAxis, schedule, prices, extras.tbill3m));
+    // Every line of a market starts on one date: the first day all the
+    // strategies can trade (issue 1559). Before it, every schedule is empty, so
+    // the comparison lines cover the strategies' window.
+    const schedules: Record<string, Schedule> = {};
+    for (const [name, regimeSeries] of Object.entries(strategies)) schedules[name] = scheduleFromLabels(regimeSeries, spec.weights);
+    let startIdx = -1;
+    for (const schedule of Object.values(schedules)) {
+      const first = schedule.findIndex((w, i) => i >= pricedIdx && w != null);
+      if (first > startIdx) startIdx = first;
+    }
+    schedules[spec.hodl.key] = dateAxis.map(() => spec.hodl.weights);
+    schedules.stables_only = dateAxis.map(() => ({ cash: 1 }));
 
     const port: Record<string, BacktestMetrics> = {};
-    for (const [name, regimeSeries] of Object.entries(strategies)) {
-      port[name] = run(scheduleFromLabels(regimeSeries, spec.weights));
+    for (const [name, schedule] of Object.entries(schedules)) {
+      const fromStart = startIdx < 0 ? schedule : schedule.map((w, i) => (i < startIdx ? null : w));
+      port[name] = fullStats(simulatePortfolio(dateAxis, fromStart, prices, extras.tbill3m));
     }
-    port[spec.hodl.key] = run(dateAxis.map(() => spec.hodl.weights));
-    port.stables_only = run(dateAxis.map(() => ({ cash: 1 })));
     out[pKey] = port;
   }
 

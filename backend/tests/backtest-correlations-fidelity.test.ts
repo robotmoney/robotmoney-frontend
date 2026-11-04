@@ -43,6 +43,14 @@
 // cross-implementation check — verified 0 mismatches (correlationLeaves=48,
 // backtestLeaves=4992) over the BTC_MVRV-inclusive floor, not merely a guard
 // against the replay diverging between call sites.
+//
+// Issue 1559: every line of a market now starts on the strategies' first
+// labelled date. The JS reference, the committed snapshot and the 1421
+// originals all predate it, so each is compared with that rule applied
+// (packages/analyst-sdk/tests/support/issue-1559.ts). The baselines are
+// re-windowed from the ORIGINAL JS's own daily values (baselines do not depend
+// on the regime labels), or from the originals' daily files.
+import { createRequire } from "node:module";
 import { describe, test, expect } from "bun:test";
 import { PANELS } from "../src/analytics/analyze/indicators.ts";
 import { cutAtAsof, prepareRegimeInputs } from "../src/analytics/prepare.ts";
@@ -56,6 +64,7 @@ import {
 } from "../../packages/analyst-sdk/tests/support/originals.ts";
 import { AN_SKIPPED_DAY, anPins, anScenario } from "../../packages/analyst-sdk/tests/support/an-scenario.ts";
 import { expectSameUpToRounding } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
+import { apply1559, apply1559ToDaily, apply1559ToText, type DailyEvidence } from "../../packages/analyst-sdk/tests/support/issue-1559.ts";
 import {
   loadRawIndicatorHistory,
   loadJsonGz,
@@ -105,6 +114,20 @@ async function replay() {
 }
 
 interface Extras { spx: any[]; eth: any[]; tbill3m: any[]; }
+
+// The ORIGINAL JS (vendored verbatim), run unstripped: its daily values are the
+// evidence the issue 1559 rule re-windows the baselines from.
+const originalJs = createRequire(import.meta.url)("../scripts/vendor/regime-reference-js/backtest-correlations.js") as {
+  computeBacktest: (dateAxis: string[], result: unknown, extras: Extras) => Record<string, Record<string, { _daily: { date: string; value: number }[] }>>;
+};
+function originalJsEvidence(dateAxis: string[], result: unknown, extras: Extras): DailyEvidence {
+  const out: DailyEvidence = {};
+  for (const [pf, strategies] of Object.entries(originalJs.computeBacktest(dateAxis, result, extras))) {
+    out[pf] = {};
+    for (const [name, m] of Object.entries(strategies)) out[pf]![name] = m._daily.map((p) => [p.date, p.value]);
+  }
+  return out;
+}
 interface Reference {
   meta: { asof: string; extras: { spx: number; eth: number; tbill3m: number } };
   correlations: any;
@@ -149,7 +172,7 @@ test("backtest+correlations fidelity (STRICT): TS port reproduces the ORIGINAL J
   const cCount = { n: 0 };
   assertDeepClose(corr, ref.correlations, "corr", 1e-9, cCount);
   const bCount = { n: 0 };
-  assertDeepClose(bt, ref.backtest, "backtest", 1e-9, bCount);
+  assertDeepClose(bt, apply1559(ref.backtest, originalJsEvidence(dateAxis, result, extras)), "backtest", 1e-9, bCount);
 
   // Prove the assertion actually EXECUTED over a large surface, not a lone leaf.
   console.log(
@@ -197,6 +220,7 @@ test("backtest+correlations TRACKING: metrics track the committed snapshot withi
 
   const corr = computeCorrelations(dateAxis, result, extras as CorrelationExtras);
   const bt = stripDailyFromSnapshot(computeBacktest(dateAxis, result, extras as BacktestExtras));
+  const snapBacktest = apply1559(snap.backtest, originalJsEvidence(dateAxis, result, extras));
 
   // Concurrent correlations depend only on the (index level, log-price) pairs, so
   // the regime-label vintage drift does NOT touch them — they track tightly.
@@ -218,10 +242,10 @@ test("backtest+correlations TRACKING: metrics track the committed snapshot withi
   // flipping a couple transitions). Bound the drift generously but finitely — a
   // methodology regression would blow far past it.
   let btCompared = 0;
-  for (const pf of Object.keys(snap.backtest)) {
-    for (const strat of Object.keys(snap.backtest[pf])) {
+  for (const pf of Object.keys(snapBacktest)) {
+    for (const strat of Object.keys(snapBacktest[pf]!)) {
       const g = bt[pf][strat];
-      const e = snap.backtest[pf][strat];
+      const e = snapBacktest[pf]![strat]!;
       // start/end dates are vintage-invariant (asset coverage, not regime).
       expect(g.start_date, `${pf}.${strat} start`).toBe(e.start_date);
       expect(g.end_date, `${pf}.${strat} end`).toBe(e.end_date);
@@ -260,24 +284,28 @@ describe("issue 1421: backend backtest and correlations against the original byt
       const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };
       const full = computeBacktest(dateAxis, r2, extras);
       const shared = sharedAnalysisBytes({ correlations: computeCorrelations(dateAxis, r2, extras), backtest: stripDailyFromSnapshot(full) });
-      expectSameUpToRounding(shared, readOriginal(originalFile.sharedAnalysis(v)), `${v} shared artifact`);
-      expectSameUpToRounding(dailyEvidenceBytes(full), readOriginal(originalFile.daily(v)), `${v} daily values`);
+      const evidence = JSON.parse(readOriginal(originalFile.daily(v))) as DailyEvidence;
+      const originalShared = readOriginal(originalFile.sharedAnalysis(v));
+      expectSameUpToRounding(shared, apply1559ToText(originalShared, evidence), `${v} shared artifact`);
+      expectSameUpToRounding(dailyEvidenceBytes(full), JSON.stringify(apply1559ToDaily(evidence, JSON.parse(originalShared).backtest)), `${v} daily values`);
     }, 120_000);
   }
 
   test("AN-5/6/9/10/14: every named pin equals its original value through the backend shim", () => {
-    const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: unknown };
+    const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: any };
+    const expected = apply1559(original.backtest);
+    const expectedPins = anPins(expected) as Record<string, unknown>;
     const s = anScenario();
     const bt = computeBacktest(s.dateAxis, s.result, s.extras);
     const pins = anPins(bt);
     expect(Object.keys(pins)).toEqual(Object.keys(original.pins));
     for (const [name, value] of Object.entries(pins)) {
-      expectSameUpToRounding(JSON.stringify(value), JSON.stringify(original.pins[name]), name);
+      expectSameUpToRounding(JSON.stringify(value), JSON.stringify(expectedPins[name]), name);
     }
-    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2), "AN scenario backtest");
+    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(expected, null, 2), "AN scenario backtest");
     // The behaviours themselves, not only the numbers.
     expect(bt.mixed!.blend_hodl!.transitions).toBe(0); // AN-5
-    expect([bt.eth!.composite!.start_date, bt.eth!.eth_hodl!.start_date]).toEqual(["2024-01-27", "2024-01-25"]); // AN-6
+    expect([bt.eth!.composite!.start_date, bt.eth!.eth_hodl!.start_date]).toEqual(["2024-01-27", "2024-01-27"]); // AN-6 (issue 1559)
     expect(bt.eth!.composite!._daily!.map((p) => p.date)).not.toContain(AN_SKIPPED_DAY); // AN-9
     expect(bt.eth!.composite!.cagr_out_sample).not.toBeNull(); // AN-10
     expect(bt.eth!.composite!.transitions).toBeGreaterThan(0); // AN-14: costs charged, Sharpe pre-cost
@@ -293,6 +321,7 @@ test("backtest generalized path (backend shim): simulatePortfolio + periodStats 
   const extras = await loadJsonGz<Extras>("regime-extras.json.gz");
   const ref = await loadJsonGz<Reference>("regime-backtest-correlations-reference.json.gz");
   const shared = computeBacktest(dateAxis, result, extras as BacktestExtras);
+  const reference = apply1559(ref.backtest, originalJsEvidence(dateAxis, result, extras));
   const price: Record<string, any[]> = { eth: extras.eth, sp500: extras.spx };
   let compared = 0;
   for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
@@ -302,18 +331,21 @@ test("backtest generalized path (backend shim): simulatePortfolio + periodStats 
       const sim = simulatePortfolio(dateAxis, schedule, prices, extras.tbill3m);
       return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
     };
+    // Issue 1559: the baselines start with the strategies (their shared start here).
+    const start = dateAxis.indexOf(shared[pKey]!.composite!.start_date);
+    const fromStart = (w: any) => dateAxis.map((_, i) => (i < start ? null : w));
     const cases: [string, any][] = [
       ["composite", scheduleFromLabels(result.regime, spec.weights)],
       ["macro", scheduleFromLabels(result.panelRegimes.macro!, spec.weights)],
-      [spec.hodl.key, dateAxis.map(() => spec.hodl.weights)],
-      ["stables_only", dateAxis.map(() => ({ cash: 1 }))],
+      [spec.hodl.key, fromStart(spec.hodl.weights)],
+      ["stables_only", fromStart({ cash: 1 })],
     ];
     for (const [name, schedule] of cases) {
       const got = run(schedule);
       expect(JSON.stringify(got), `${pKey}.${name}`).toBe(JSON.stringify(shared[pKey]![name]));
       const { _daily, ...stripped } = got;
       void _daily;
-      assertDeepClose(stripped, ref.backtest[pKey][name], `${pKey}.${name}`, 1e-9, { n: 0 });
+      assertDeepClose(stripped, reference[pKey]![name], `${pKey}.${name}`, 1e-9, { n: 0 });
       compared++;
     }
   }
