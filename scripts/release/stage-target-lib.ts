@@ -754,12 +754,30 @@ export function shellQuote(word: string): string {
  * null (SR.0, owner 2026-10-08). A dump with no readable `capturedAt`, or one
  * dated in the future, never qualifies. PURE.
  */
-export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date): string | null {
+export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date, capturedAfter?: Date | "never"): string | null {
+  if (capturedAfter === "never") return null;
   const fresh = dumps
     .map((d) => ({ dir: d.dir, at: Date.parse(d.capturedAt ?? ""), age: dumpAgeHours({ capturedAt: d.capturedAt }, now) }))
     .filter((d) => d.age !== null && d.age >= 0 && d.age <= STAGE_TARGET.maxDumpAgeHours)
+    .filter((d) => capturedAfter === undefined || d.at > capturedAfter.getTime())
     .sort((a, b) => b.at - a.at);
   return fresh[0]?.dir ?? null;
+}
+
+/**
+ * PURE. When production's schema last changed: the creation time of the newest version tag
+ * (`vA.B.C`, never an rc) on the commit production runs. C06-version-tag creates that tag only
+ * after C05-migrate finished, so a dump captured before it can predate the cutover's migrations
+ * (v0.7.2's first stage run reused v0.7.1's C01 backup, 9 minutes before the tag, and the
+ * v0.7.1 boot refused its two missing migrations). "never" when no version tag names the
+ * commit: nothing proves any dump's schema, so Q02 captures a new one.
+ */
+export function schemaSettledAt(tags: readonly { name: string; createdAt: string }[]): Date | "never" {
+  const times = tags
+    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t.name))
+    .map((t) => Date.parse(t.createdAt))
+    .filter((t) => !Number.isNaN(t));
+  return times.length ? new Date(Math.max(...times)) : "never";
 }
 
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */

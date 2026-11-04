@@ -3,7 +3,7 @@
 # for production, each production step with a stage twin. A release only ADDS:
 # every template step stays, unchanged and in order, and each step this
 # release adds carries `added: v0.7.2` (scripts/release/runbook.ts checks it).
-# Q38-regime-bands and C26-regime-bands (added: v0.7.2) are this release's only added checks.
+# Added (added: v0.7.2): Q38-regime-bands/C26-regime-bands, and v0.7.1's Q34b/C22a-archive-records carried again.
 # The policy is docs/technical/release-runbooks.md.
 release: v0.7.2
 template: kitchen-sink
@@ -22,10 +22,18 @@ notes: |
   visual snapshot), so no pending migration exists and nothing is breaking. The rolling upgrade
   applies unchanged, and no `breaking:` list is declared.
 
-  Dropped checks. v0.7.1's own checks (Q34b, Q38 to Q41, C22a, C26 to C29) are not carried. A
-  release carries the template plus its own checks, and a template step only changes by a template
-  edit. Those checks verified v0.7.1's changes on v0.7.1's runs. The owner decides whether any of
-  them joins the template.
+  Carried check. Q34b-archive-records and C22a-archive-records are v0.7.1's archive check, added
+  again here (added: v0.7.2) because it guards the archive 503 that broke v0.7.0's cutover (issue
+  1508). It runs after Q34a and before Q35, as in v0.7.1. Its file re-exports v0.7.1's.
+
+  Dropped checks. v0.7.1's other own checks (Q38 to Q41, C26 to C29) are not carried: they proved
+  v0.7.1's changes landed. Q38 and C26 now name the regime-bands check, so a v0.7.1 journal's Q38
+  is a different check.
+
+  Q02-dump fix (this QA branch). The first stage run (20261104T180635Z) reused v0.7.1's C01 backup,
+  captured 9 minutes before the v0.7.1 tag, so its ledger lacked 0128 and 0129 and Q03-stage-up's
+  v0.7.1 boot refused it. Q02 now reuses only a dump captured after the version tag on production's
+  commit (stage-target-lib.ts schemaSettledAt), else it captures a new one.
 
   Added checks. Q38-regime-bands and its production twin C26-regime-bands read the served
   shared.js module for the risk-off band line PR 1560 added. Each is read-only: one GET of the
@@ -553,6 +561,21 @@ steps:
     maxMinutes: 320
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
   # control machine, read-only against the target, after the soak like the rest of the checks.
+  - id: "Q34b-archive-records"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.2"
+    description: "Archive records within budget (1524, issue 1508; 1526, D80): the first backups listing after the boot (it runs the junction check) and every archive request answer under 5 s; the records of the first backup, the legacy junction 2026-10-28T180400Z and the newest backup build and answer 200 with format 1 and X-Content-SHA256 equal to their bytes' hash. Runs before archive-routes, so its records are built when that step asks"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "archive-records", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-archive-records.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 75
   - id: "Q35-archive-routes"
     standing: ["SV.8"]
     host: "control"
@@ -1052,6 +1075,21 @@ steps:
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
   # control machine, read-only against the target, after the soak like the rest of the checks.
+  - id: "C22a-archive-records"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.2"
+    description: "Archive records within budget (1524, issue 1508; 1526, D80): the first backups listing after the boot (it runs the junction check) and every archive request answer under 5 s; the records of the first backup, the legacy junction 2026-10-28T180400Z and the newest backup build and answer 200 with format 1 and X-Content-SHA256 equal to their bytes' hash. Runs before archive-routes, so its records are built when that step asks"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "archive-records", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-archive-records.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    maxMinutes: 75
   - id: "C23-archive-routes"
     standing: ["SV.8"]
     host: "control"

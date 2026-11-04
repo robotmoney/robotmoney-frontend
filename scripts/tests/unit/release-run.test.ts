@@ -35,7 +35,7 @@ import { checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type 
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
-import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
+import { newestFreshDump, schemaSettledAt, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
@@ -1262,6 +1262,29 @@ describe("stage's starting dump (SR.0): the newest one at most 24 h old", () => 
     expect(newestFreshDump([d("edge", "2026-10-14T20:00:00Z")], now)).toBe("edge");
     expect(newestFreshDump([d("old", "2026-10-14T19:59:59Z")], now)).toBeNull();
     expect(newestFreshDump([d("future", "2026-10-15T21:00:00Z")], now)).toBeNull();
+  });
+  test("red: a fresh dump captured before production's schema settled is not reused (v0.7.2's first stage run)", () => {
+    // v0.7.1's C01 backup (21:18) predates the v0.7.1 tag (21:27, after C05-migrate): its ledger lacks 0128 and 0129.
+    const now2 = new Date("2026-11-04T18:00:00Z");
+    const backup = d("rm-backup-prod-20261103T210036Z", "2026-11-03T21:18:10.317Z");
+    expect(newestFreshDump([backup], now2)).toBe(backup.dir);
+    expect(newestFreshDump([backup], now2, new Date("2026-11-03T21:27:39Z"))).toBeNull();
+    expect(newestFreshDump([backup, d("after", "2026-11-03T22:00:00Z")], now2, new Date("2026-11-03T21:27:39Z"))).toBe("after");
+    expect(newestFreshDump([backup], now2, "never")).toBeNull();
+  });
+});
+
+describe("schemaSettledAt: the version tag on production's commit bounds a reusable dump", () => {
+  test("the newest vA.B.C tag's time; an rc tag never counts", () => {
+    expect(schemaSettledAt([
+      { name: "v0.7.1-rc.0", createdAt: "2026-11-03T20:30:00+00:00" },
+      { name: "v0.7.1", createdAt: "2026-11-03T21:27:39+00:00" },
+    ])).toEqual(new Date("2026-11-03T21:27:39Z"));
+  });
+  test("red: no version tag, or only an rc, means no dump is reused", () => {
+    expect(schemaSettledAt([])).toBe("never");
+    expect(schemaSettledAt([{ name: "v0.7.2-rc.0", createdAt: "2026-11-04T10:00:00+00:00" }])).toBe("never");
+    expect(schemaSettledAt([{ name: "v0.7.1", createdAt: "not a date" }])).toBe("never");
   });
 });
 

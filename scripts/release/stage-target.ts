@@ -78,6 +78,7 @@ import {
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
   newestFreshDump,
+  schemaSettledAt,
   LEDGER_TABLE_SQL,
   parseKeyValues,
   parseRunningVersion,
@@ -549,12 +550,20 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
  * at most 24 hours old, else a new capture from production's read replica by the
  * capture checkout (the same `bun smoke:capture` C01-backup runs). Never a stale dump.
  */
-async function remoteDump(): Promise<number> {
-  const fresh = newestFreshDump(listDumps(), new Date());
+async function remoteDump(args: string[]): Promise<number> {
+  const i = args.indexOf("--captured-after");
+  const raw = i >= 0 ? args[i + 1] : undefined;
+  if (!raw) throw new Refusal("dump needs --captured-after <iso time | never> (the control side passes it)");
+  const after = raw === "never" ? "never" as const : new Date(raw);
+  if (after !== "never" && Number.isNaN(after.getTime())) throw new Refusal(`--captured-after ${raw} is not a time`);
+  const fresh = newestFreshDump(listDumps(), new Date(), after);
   if (fresh) {
-    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old`);
+    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old and captured after production's schema settled (${raw})`);
     return 0;
   }
+  log(after === "never"
+    ? "no version tag names production's commit, so no dump proves production's schema"
+    : `no dump at most ${T.maxDumpAgeHours} h old was captured after production's schema settled (${raw})`);
   const checkout = CAPTURE_CHECKOUT.checkout;
   if (!existsSync(join(checkout, ".git"))) throw new Refusal(`no dump is at most ${T.maxDumpAgeHours} h old, and the capture checkout ${checkout} is absent: clone it, then run this again`);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
@@ -750,6 +759,19 @@ function remoteDoadmin(): number {
 
 const SSH = ["ssh", "-o", "BatchMode=yes", T.host];
 
+/** On the control machine: when production's schema settled (schemaSettledAt), from origin's tags on the commit production runs. */
+async function controlSchemaSettledAt(): Promise<string> {
+  const running = await readRunningVersion();
+  must(["git", "fetch", "-q", "--tags", "origin"], "git fetch --tags");
+  const r = Bun.spawnSync(["git", "for-each-ref", "--points-at", running.commit, "--format=%(refname:short) %(creatordate:iso-strict)", "refs/tags"], { stdout: "pipe", stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`git for-each-ref failed: ${r.stderr.toString()}`);
+  const tags = r.stdout.toString().split("\n").filter(Boolean).map((l) => { const [name = "", createdAt = ""] = l.split(" "); return { name, createdAt }; });
+  const at = schemaSettledAt(tags);
+  const out = at === "never" ? "never" : at.toISOString();
+  log(`production's schema settled: ${out} (version tags on ${running.commit.slice(0, 8)}: ${tags.map((t) => t.name).join(", ") || "none"})`);
+  return out;
+}
+
 async function control(command: string, args: string[]): Promise<number> {
   const built = await Bun.build({ entrypoints: [import.meta.path], target: "bun" });
   if (!built.success || !built.outputs[0]) {
@@ -776,7 +798,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     if (first === "remote") {
       const [command, ...args] = rest;
-      if (command === "dump") return await remoteDump();
+      if (command === "dump") return await remoteDump(args);
       if (command === "up") return await remoteUp(args);
       if (command === "down") return await remoteDown();
       if (command === "status") return await remoteStatus();
@@ -784,7 +806,8 @@ async function main(argv: string[]): Promise<number> {
       console.error(USAGE);
       return 2;
     }
-    if (first === "dump" || first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
+    if (first === "dump") return await control(first, [...rest, "--captured-after", await controlSchemaSettledAt()]);
+    if (first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
     console.error(USAGE);
     return 2;
   } catch (e) {
