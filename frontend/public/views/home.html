@@ -115,7 +115,7 @@
           <div><dt>Judges</dt><dd>Review every session and advise update or hold</dd></div>
           <div><dt>Receipt</dt><dd>Published with every take</dd></div>
         </dl>
-        <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="model ? model.receiptHref : historyHref()">Check the math</a></p>
+        <p class="hm-more"><a href="/swarm/subjects/robotmoney-allocation" :href="latestSessionHref || historyHref()">Check the math</a></p>
       </div>
       <figure class="hm-plate" data-plate="swarm,0.5,0.6" data-plate-lights="#made" aria-hidden="true"><canvas></canvas></figure>
     </div>
