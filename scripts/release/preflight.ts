@@ -40,7 +40,7 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { originProblems, type ResolvedGo } from "./go.ts";
-import { checkStageJournal, readJournal, RUN_TS_RE, type StepRecord } from "./journal.ts";
+import { checkStageJournal, earlierCommitPaths, readJournal, RUN_TS_RE, type ChangedPaths, type StepRecord } from "./journal.ts";
 import { executeStep, readRecovery, type RunnerDeps } from "./step-exec.ts";
 import { skipReason } from "./run.ts";
 import { CONTROL_HOST, CONTROL_REPO, READY_PENDING, renderStep, shellQuote, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
@@ -164,16 +164,35 @@ export function runsInFlight(root: string, target: string): { runTs: string; upd
   return names.map((n) => readJournal(join(dir, n))).filter((j) => j?.status === "running").map((j) => ({ runTs: j!.runTs, updatedAt: j!.updatedAt }));
 }
 
-/** The passed stage journals under `root` for this step list and tree, newest first. */
-export function passedStageJournals(root: string, hash: string, tree: string, ids: readonly string[]): string[] {
+/**
+ * The passed stage journals under `root` for this step list and tree, newest
+ * first. `commit` is this run's: a journal's earlier commits (issue 1565) are
+ * diffed against it.
+ */
+export async function passedStageJournals(root: string, hash: string, tree: string, ids: readonly string[], commit: string, diff: ChangedPaths): Promise<string[]> {
   const dir = join(root, "stage");
   let names: string[];
   try { names = readdirSync(dir).filter((n) => RUN_TS_RE.test(n)).sort().reverse(); } catch { return []; }
-  return names.map((n) => join(dir, n)).filter((p) => checkStageJournal(readJournal(p), { stepListHash: hash, tree, stepIds: ids }).length === 0);
+  const out: string[] = [];
+  for (const p of names.map((n) => join(dir, n))) {
+    const j = readJournal(p);
+    if (checkStageJournal(j, { stepListHash: hash, tree, stepIds: ids, earlierPaths: await earlierCommitPaths(j, commit, diff) }).length === 0) out.push(p);
+  }
+  return out;
 }
 
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 const inRepo = (cmd: string) => `cd ${shellQuote(CONTROL_REPO)} && ${cmd}`;
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+/** `git diff --name-only <from> <to>` in the control checkout (issue 1565); undefined when either is no commit id or git fails. */
+export function controlChangedPaths(deps: Pick<RunnerDeps, "collect">): ChangedPaths {
+  return async (from, to) => {
+    if (!SHA_RE.test(from) || !SHA_RE.test(to)) return undefined;
+    const r = await deps.collect(CONTROL_HOST, inRepo(`git diff --name-only ${from} ${to}`));
+    return r.code === 0 ? lines(r.stdout) : undefined;
+  };
+}
 
 export interface PreflightInput {
   readonly target: ReleaseTarget;
@@ -232,12 +251,12 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
       const tree = (await deps.collect(CONTROL_HOST, inRepo(`git rev-parse ${commit}^{tree}`))).stdout.trim();
       if (input.stageJournal) {
         const sj = readJournal(input.stageJournal);
-        const refusals = checkStageJournal(sj, { stepListHash: hash, tree, stepIds: ids });
+        const refusals = checkStageJournal(sj, { stepListHash: hash, tree, stepIds: ids, earlierPaths: await earlierCommitPaths(sj, commit, controlChangedPaths(deps)) });
         add("P.stage", refusals.length === 0 ? "green" : "red", refusals.length === 0
           ? `${input.stageJournal} passed on this tree and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}`
           : refusals.join("; "));
       } else {
-        const passed = passedStageJournals(input.root, hash, tree, ids);
+        const passed = await passedStageJournals(input.root, hash, tree, ids, commit, controlChangedPaths(deps));
         const dt = passed.length > 0 ? readJournal(passed[0]!)?.cutoverSeconds : undefined;
         add("P.stage", passed.length > 0 ? "green" : "red", passed.length > 0
           ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}`
