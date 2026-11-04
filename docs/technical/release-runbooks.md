@@ -160,7 +160,10 @@ The tracking issue itself stays open until §4.9.
 tag, CI on its commit (`P.ci`), a passed stage run of the same tree and step list (`P.stage`), the
 recovery decision (`P.recovery`) and that no run is in flight. It then runs the preflight steps on
 the hosts. P01-checkout to P06-capture-install put the release and capture checkouts at the rc and
-install them frozen. P02-host-identity proves the host, `~/.env` and the rm_owner login. P07-state-baseline
+install them frozen. P02-host-identity proves the host, `~/.env` and the rm_owner login. P02-host-identity
+and P05-capture-identity (and Q07/Q10 on stage) also refuse a host whose Bun is older than the
+oldest Bun that reads every committed `bun.lock` (`scripts/release/host-tools.ts`), before any
+install step runs; `host-identity.json` records each tool's version and that minimum. P07-state-baseline
 records production's state through `rm_readonly`: the ledger and its reconciliation with
 `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
 flight and the database size. It refuses any pending migration that is not `compat: additive`
@@ -278,8 +281,12 @@ on `releases-A.B.x`, and stops at the first failed step. With the go, run the pr
 within 60 minutes:
 
 ```bash
-bun run release:run --target prod --go <go> --after-preflight <the preflight's journal>
+bun run release:run --target prod --go <go> --stage-journal <the passed stage run's journal dir> --after-preflight <the preflight's journal>
 ```
+
+The preflight's `P.stage` line names the passed stage run to pass as `--stage-journal`. The runner
+does not find it by itself (SP.8, [D70](../decisions.md#d70)): the operator names the stage run
+that earned the rc.
 
 The cutover backs up and proves the restore (C01-backup to C03-restore-proof), then never takes the
 website down:

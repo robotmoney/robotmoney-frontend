@@ -13,6 +13,7 @@
 //   bun run release:run --target prod  --go <go file> --stage-journal <dir> --run <run-ts> --from <step>
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
 //   bun run release:run --target <t> --go <go file> --after-preflight <preflight dir>   (continue from a green preflight, within 1 h)
+//   bun run release:run --target prod --go <go file> --stage-journal <stage run dir> --after-preflight <preflight dir>   (the production cutover: SP.8)
 //   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
 //   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
 //
