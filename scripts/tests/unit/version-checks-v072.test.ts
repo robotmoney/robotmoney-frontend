@@ -18,3 +18,15 @@ describe("v0.7.2 regime-bands check (PR 1560)", () => {
     expect(regimeBandProblems(404, REGIME_BANDS_MARKER)).toEqual([`GET ${REGIME_BANDS_PATH} answered 404, not 200`]);
   });
 });
+
+import { SWARM_POST_MARKER, SWARM_POST_PATH, swarmPostProblems } from "../../release/version-checks/v0.7.2/swarm-post.ts";
+
+describe("v0.7.2 swarm-post check (PR 1558)", () => {
+  test("the served post with its headline passes", () => {
+    expect(swarmPostProblems(200, `<h1>${SWARM_POST_MARKER}, ShodAI</h1>`)).toEqual([]);
+  });
+  test("red: a 404, or a page without the headline, fails", () => {
+    expect(swarmPostProblems(404, "")).toEqual([`GET ${SWARM_POST_PATH} answered 404, not 200`]);
+    expect(swarmPostProblems(200, "<html>shell</html>")[0]).toContain("PR 1558");
+  });
+});

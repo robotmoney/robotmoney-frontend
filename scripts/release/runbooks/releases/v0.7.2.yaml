@@ -39,7 +39,15 @@ notes: |
   shared.js module for the risk-off band line PR 1560 added. Each is read-only: one GET of the
   static file on the public origin.
 
-  Exceptions: none.
+  PR 1558 (owner, 2026-11-04). The swarm launch post joined the scope mid-session: main was merged
+  into the QA branch (86b7610a), so this release carries 1558 and 1560. Q39-swarm-post and
+  C27-swarm-post read the post's served view for its headline. 1558 also removes the regime page's
+  predictive-power table; it changes only static site files and scripts/lib/regime-snapshot.ts.
+
+  Exceptions. Owner, 2026-11-04: Q34a-analytics-load is stopped at its wait for the next scheduled
+  run and accepted under issue 1555 (a step's time limit is the maximum window, not a fixed wait).
+  1558 and 1560 change no analytics or api code. The earlier run 20261104T190630Z watched the
+  21:00Z analytics run with no errors in the producer or worker logs before it was stopped.
 recovery: |
   No migration runs and no schema changes in this release, so the schema stays the v0.7.1 schema.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed. Fix on a
@@ -51,6 +59,7 @@ recovery: |
     checkout is safe for the same reason.
 scope:
   - {pr: 1560, what: "feat(regime): risk-on and risk-off bands in the regime colours (RM-200)", check: "Q38-regime-bands"}
+  - {pr: 1558, what: "feat(blog): the swarm launch post at /blog/swarm-announcement, with launch review fixes (the regime page drops its predictive-power table)", check: "Q39-swarm-post"}
 steps:
   # ── QA: stage only, as often as needed. Every step here runs on the stage target and
   # on no other: stage's preparation (Q01 to Q05), then the whole upgrade (checkout, install,
@@ -633,6 +642,20 @@ steps:
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+  - id: "Q39-swarm-post"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "qa"
+    added: "v0.7.2"
+    description: "Swarm launch post (PR 1558): GET /views/blog/swarm-announcement.html answers 200 with the post's headline, so the public origin serves the v0.7.2 site with the post. A missing file answers 404, never the SPA shell."
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "swarm-post", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-swarm-post.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   - id: "P01-checkout"
     standing: ["SP.1"]
     host: "target"
@@ -1142,6 +1165,22 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-regime-bands.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+
+
+  - id: "C27-swarm-post"
+    standing: ["SV.7"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.7.2"
+    description: "Swarm launch post (PR 1558): GET /views/blog/swarm-announcement.html answers 200 with the post's headline, so the public origin serves the v0.7.2 site with the post. A missing file answers 404, never the SPA shell."
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "swarm-post", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-swarm-post.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
