@@ -27,17 +27,17 @@
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
 import { CHECK_ONLY_PATHS, checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
 import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
-import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
+import { checkAfterPreflight, ciProblems, controlChangedPaths, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
 import { cutoverSeconds, skipReason } from "../../release/run.ts";
@@ -2238,7 +2238,7 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     // The fix: a new QA commit that changes only a check; its own go.
     const go2 = join(f.dir, "go2.txt");
     writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
-    const answers = { [`git diff --name-only ${SHA} ${C2}`]: { code: 0, stdout: `${CHECK_ONLY.join("\n")}\n` }, [`${C2}^{tree}`]: { code: 0, stdout: `${C2_TREE}\n` } };
+    const answers = { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `${CHECK_ONLY.join("\n")}\n` }, [`${C2}^{tree}`]: { code: 0, stdout: `${C2_TREE}\n` } };
     // A step's maxMinutes is not in the step list hash: that change is check-only too.
     const TINY2 = TINY.map((s) => (s.id === "T2" ? { ...s, maxMinutes: 5 } : s));
     const second = fakeDeps({ receipt: "{}", answers });
@@ -2271,11 +2271,57 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     const before = readFileSync(join(runDir, "run.json"), "utf8");
     const go2 = join(f.dir, "go2.txt");
     writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
-    const r = fakeDeps({ receipt: "{}", answers: { [`git diff --name-only ${SHA} ${C2}`]: { code: 0, stdout: "scripts/release/sdk-lib.ts\nbackend/src/index.ts\n" } } });
+    const r = fakeDeps({ receipt: "{}", answers: { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: "scripts/release/sdk-lib.ts\nbackend/src/index.ts\n" } } });
     expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], r.deps, TINY)).toBe(2);
     expect(r.ran).toEqual([]);
     expect(r.logs.join("\n")).toContain("not check-only: backend/src/index.ts");
     expect(readFileSync(join(runDir, "run.json"), "utf8")).toBe(before);
+  });
+
+  test("red: a resume whose diff deletes a product path beside a scripts/tests change refuses, naming the deleted path", async () => {
+    const f = fixture();
+    await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY);
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    // A deletion lists only the old path; it is a product path, so the resume refuses.
+    const r = fakeDeps({ receipt: "{}", answers: { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `backend/src/routes.js\n${A_TEST}\n` } } });
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], r.deps, TINY)).toBe(2);
+    expect(r.ran).toEqual([]);
+    expect(r.logs.join("\n")).toContain("not check-only: backend/src/routes.js");
+  });
+
+  test("controlChangedPaths runs real git: a rename from backend/ into scripts/tests/ lists both paths and is refused", async () => {
+    mkdirSync(join(process.env.HOME ?? tmpdir(), "tmp"), { recursive: true });
+    const repo = mkdtempSync(join(process.env.HOME ?? tmpdir(), "tmp", "release-1565-git-"));
+    const git = (...a: string[]) => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo, encoding: "utf8" });
+      if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git("init", "-q");
+    mkdirSync(join(repo, "backend", "src"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "moved.ts"), "export const x = 1;\n".repeat(20));
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const c1 = git("rev-parse", "HEAD");
+    mkdirSync(join(repo, "scripts", "tests", "unit"), { recursive: true });
+    git("mv", "backend/src/moved.ts", "scripts/tests/unit/moved.ts");
+    git("commit", "-q", "-m", "two");
+    const c2 = git("rev-parse", "HEAD");
+    // The control machine's command, run in the throwaway repo in place of the control checkout.
+    const diff = controlChangedPaths({
+      async collect(_host, remote) {
+        const r = spawnSync("sh", ["-c", remote.replace(`cd '${CONTROL_REPO}'`, `cd '${repo}'`).replace(`cd ${CONTROL_REPO}`, `cd '${repo}'`)], { encoding: "utf8" });
+        return { code: r.status ?? 1, stdout: r.stdout ?? "" };
+      },
+    });
+    const paths = await diff(c1, c2);
+    expect([...(paths ?? [])].sort()).toEqual(["backend/src/moved.ts", "scripts/tests/unit/moved.ts"]);
+    expect(checkResume(journal({ commit: c1 }), exp({ commit: c2, changedPaths: paths }), {}).join()).toContain("not check-only: backend/src/moved.ts");
+    // A commit git does not know gives no list, and a non-sha is never passed to git.
+    expect(await diff(c1, "d".repeat(40))).toBeUndefined();
+    expect(await diff(c1, "HEAD; rm -rf /")).toBeUndefined();
+    rmSync(repo, { recursive: true, force: true });
   });
 
   test("SP.8: checkStageJournal refuses an earlier commit that differs from production in a product path, and passes one that differs only in a test", () => {
@@ -2302,7 +2348,7 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY);
     const go2 = join(s.dir, "go2.txt");
     writeFileSync(go2, `commit: ${SHA}\noperator: lucas\ndate: 2026-10-15\n`);
-    const diffKey = `git diff --name-only ${OTHER_SHA} ${SHA}`;
+    const diffKey = `git diff --no-renames --name-only ${OTHER_SHA} ${SHA}`;
     const checkOnly = { [diffKey]: { code: 0, stdout: `${A_TEST}\n` } };
     expect(await runRelease(["--target", s.targetFile, "--go", go2, "--journal-root", s.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], fakeDeps({ receipt: "{}", answers: checkOnly }).deps, TINY)).toBe(0);
     const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");

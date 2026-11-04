@@ -185,11 +185,11 @@ const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 const inRepo = (cmd: string) => `cd ${shellQuote(CONTROL_REPO)} && ${cmd}`;
 const SHA_RE = /^[0-9a-f]{40}$/;
 
-/** `git diff --name-only <from> <to>` in the control checkout (issue 1565); undefined when either is no commit id or git fails. */
+/** `git diff --no-renames --name-only <from> <to>` in the control checkout (issue 1565): a rename lists both its old and new path. undefined when either is no commit id or git fails. */
 export function controlChangedPaths(deps: Pick<RunnerDeps, "collect">): ChangedPaths {
   return async (from, to) => {
     if (!SHA_RE.test(from) || !SHA_RE.test(to)) return undefined;
-    const r = await deps.collect(CONTROL_HOST, inRepo(`git diff --name-only ${from} ${to}`));
+    const r = await deps.collect(CONTROL_HOST, inRepo(`git diff --no-renames --name-only ${from} ${to}`));
     return r.code === 0 ? lines(r.stdout) : undefined;
   };
 }
