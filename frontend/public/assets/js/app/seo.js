@@ -520,8 +520,21 @@ const SECTIONS = [
 // h1, which the BlogPosting carries (schema.org caps it at 110 characters);
 // `published` is the date on the post's row in the blog index, or on /news for
 // a post marked `news`.
-/** @type {Record<string, { name: string; headline: string; description: string; published: string; news?: boolean }>} */
+// `modified` is for a post dated after RESEARCH_REVISED, since dateModified
+// cannot precede datePublished; sitemap.xml's lastmod for it matches. `image`
+// and `imageAlt` are its own share card, as META's are.
+/** @type {Record<string, { name: string; headline: string; description: string; published: string; modified?: string; news?: boolean; image?: string; imageAlt?: string }>} */
 const BLOG_POSTS = {
+  "swarm-announcement": {
+    name: "Robot Money launches its agent swarm",
+    headline: "Robot Money launches with support from peaq, ShodAI, DualMint, ZyFAI, Animoca and AllScale",
+    description: "Robot Money launches with peaq, ShodAI, DualMint, ZyFAI, Animoca and AllScale: a model portfolio improved in public by a swarm of AI agents.",
+    published: "2026-11-06",
+    modified: "2026-11-06",
+    news: true,
+    image: "/assets/img/blog/swarm-announcement-og.jpg",
+    imageAlt: "Lines of light from a swarm of agents converging on one beacon over a salt flat at night",
+  },
   "ai-ate-the-bull-market": {
     name: "AI ate the bull market",
     headline: "AI ate the bull market",
@@ -578,6 +591,7 @@ const BLOG_DATA = {
   "regime-eq-vs-base": "/data/regime-eq-comparison.json",
   "honest-backtesting-weights": "/data/weighting-comparison.json",
   "regime-conservative-aggressive": "/data/regime-conservative-aggressive.json",
+  "swarm-announcement": "/data/engine-comparison.json",
 };
 
 /** @type {Record<string, RouteMeta>} */
@@ -591,8 +605,9 @@ const POST_META = Object.fromEntries(
       description: p.description,
       type: "BlogPosting",
       published: p.published,
-      modified: RESEARCH_REVISED,
+      modified: p.modified || RESEARCH_REVISED,
       ...(p.news ? { news: true } : {}),
+      ...(p.image ? { image: p.image, imageAlt: p.imageAlt } : {}),
       ...(BLOG_DATA[slug] ? { downloads: [{ path: BLOG_DATA[slug], title: "The backtest behind this post, as JSON", type: "application/json" }] } : {}),
     },
   ]),

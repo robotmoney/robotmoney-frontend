@@ -72,7 +72,8 @@ export const CATEGORICAL = [
 // One regime palette, site-wide. A regime reading keeps these hues wherever it
 // appears: the session page's market-context dots, /regime and the blog's band
 // charts. Stance runs green to beacon; neutral is slate. Beacon is a POINT
-// colour (a dot, a line, a strip of 12px or less), never a filled area.
+// colour (a dot, a line, a strip of 12px or less), never a filled area, save
+// the faint wash behind a regime band (REGIME_BAND, views/shared.js; RM-200).
 export const REGIME = { risk_on: "#10b981", neutral: "#7e889e", risk_off: "#ff7a29" };
 
 /** @param {string} key risk_on | neutral | risk_off. Unknown keys read as neutral. */

@@ -167,7 +167,9 @@
 }
 
 /* ── The model portfolio: the ring and its legend ── */
-.hm-model { display: grid; grid-template-columns: minmax(0, 22rem) minmax(14rem, 1fr); gap: clamp(1.5rem, 4vw, 3.5rem); align-items: center; margin: 0; }
+/* The legend column holds the longest sleeve name, Conservative DeFi Yield, on
+   one line beside its figure; the ring gives up the width. */
+.hm-model { display: grid; grid-template-columns: minmax(0, 20rem) minmax(19rem, 1fr); gap: clamp(1.5rem, 4vw, 3.5rem); align-items: center; margin: 0; }
 .hm-ring { position: relative; width: 100%; max-width: 22rem; }
 .hm-ring .sv__wdonut {
   display: block; width: 100%; height: auto; aspect-ratio: 1;
@@ -209,7 +211,7 @@
 .hm-keys__row.is-dim { opacity: 0.4; }
 .hm-keys__row:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 2px; }
 .hm-keys i { grid-area: sw; align-self: center; width: 0.625rem; height: 0.625rem; background: var(--c); }
-.hm-keys b { grid-area: name; font-size: 1.0625rem; font-weight: 600; }
+.hm-keys b { grid-area: name; font-size: 1.0625rem; font-weight: 600; white-space: nowrap; }
 .hm-keys__pct { grid-area: pct; font-family: var(--font-mono); font-size: 1.5rem; font-weight: 500; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .hm-keys small { grid-area: assets; font-size: 0.8125rem; color: var(--color-text-muted); }
 @media (max-width: 720px) { .hm-model { grid-template-columns: 1fr; } .hm-ring { max-width: 18rem; } }

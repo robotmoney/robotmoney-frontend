@@ -15,9 +15,6 @@ import {
   BACKTESTS,
   ASSET_COLOR,
   ASSET_LABEL,
-  FWD_COLS,
-  CON_COLS,
-  CORR_ROWS,
   SOURCE_LABEL,
   REGIME_BG_LEGEND,
   REGIME_BAND_BG,
@@ -304,8 +301,8 @@ export function registerRegimeView(Alpine) {
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
     // One regime palette, the session page's: green risk-on, slate neutral,
-    // beacon risk-off. It marks a reading as a small round dot or a line,
-    // never as type or a filled area, so the regime card's label stays in the
+    // beacon risk-off. It marks a reading as a small round dot or a line, and a
+    // run behind a chart as a faint wash, never as type, so the regime card's label stays in the
     // text colour beside its dot.
     regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
     // The provenance line in words. The transform is what the percentile ranks
@@ -461,92 +458,12 @@ export function registerRegimeView(Alpine) {
         + '</svg>';
     },
 
-    // ── correlations ("Predictive power & alignment") ───────────────────────
-    fwdCols() { return FWD_COLS; },
-    conCols() { return CON_COLS; },
-    hasForward() { return !!this.latest?.correlations?.forward; },
-    hasConcurrent() { return !!this.latest?.correlations?.concurrent; },
-    corrRows() {
-      const c = this.latest?.correlations;
-      if (!c) return [];
-      return CORR_ROWS.filter(([k]) => (c.forward && c.forward[k]) || (c.concurrent && c.concurrent[k]));
-    },
-    // The one predictive-power table: per asset, today's alignment and then the
-    // 30, 90 and 180 day forward correlations, each column only where the
-    // snapshot carries it.
-    corrAssets() { return [["spx", "S&P 500"], ["eth", "ETH"]]; },
-    corrHorizons() {
-      const h = [];
-      if (this.hasConcurrent()) h.push(["now", "Today"]);
-      if (this.hasForward()) h.push(["30d", "30 days"], ["90d", "90 days"], ["180d", "180 days"]);
-      return h;
-    },
-    corrColumns() {
-      const hs = this.corrHorizons();
-      return this.corrAssets().flatMap(([asset]) => hs.map(([h, label], i) => ({ id: asset + h, asset, h, label, first: i === 0 })));
-    },
-    // What one figure says, in words, from the figure itself: its sign, and
-    // whether it clears the 0.15 noise line. Strength past that is not graded,
-    // since the method draws no line there.
-    rhoSentence(idx, asset, h) {
-      const cell = this.corrCell(idx, asset, h);
-      const row = (CORR_ROWS.find(([k]) => k === idx) || [idx, idx])[1];
-      const name = asset === "spx" ? "S&P 500" : "ETH";
-      const when = h === "now" ? "today" : `next ${parseInt(h, 10)} days`;
-      if (!cell || cell.rho == null) return `${row} vs ${name}, ${when}: no reading.`;
-      const r = cell.rho;
-      const n = cell.n != null ? ` Across ${Number(cell.n).toLocaleString("en-US")} days.` : "";
-      const head = `${row} vs ${name}, ${when}: ${this.rhoText(cell)}.`;
-      // How far chance alone reaches: overlapping windows leave about n / h
-      // separate stretches, and ±2 / √(that) is roughly where chance runs out.
-      const days = h === "now" ? null : parseInt(h, 10);
-      const stretches = days && cell.n ? Math.max(1, Math.round(cell.n / days)) : null;
-      const chance = stretches ? `Chance alone reaches ±${(2 / Math.sqrt(stretches)).toFixed(2)} here (${stretches} separate stretches).` : "";
-      if (Math.abs(r) < 0.15) return `${head} Under 0.15 either way: treated as noise.${chance ? " " + chance : n}`;
-      const hi = `high ${row.toLowerCase()} readings`;
-      const says = h === "now"
-        ? (r > 0 ? `The index has run high when ${name} is high.` : `The index has run high when ${name} is low.`)
-        : (r > 0 ? `${hi[0].toUpperCase() + hi.slice(1)} came before stronger ${name} returns.` : `${hi[0].toUpperCase() + hi.slice(1)} came before weaker ${name} returns.`);
-      return h === "now" ? `${head} ${says} Two trending levels move together easily.` : `${head} ${says} ${chance}`;
-    },
     // An indicator with no weight and no history to draw is a placeholder:
     // its 50th is a default, not a reading (new DEX pools, which accumulates
     // its own history forward).
     isPlaceholder(ind) {
       const pts = Array.isArray(ind?.sparkline) ? ind.sparkline.filter((v) => typeof v === "number").length : 0;
       return ind?.panel_weight === 0 && pts < 2;
-    },
-    corrCell(idx, asset, h) { return h === "now" ? this.conCell(idx, asset) : this.fwdCell(idx, asset + "_" + h); },
-    // The cell's signed bar: from the centre line, right for a positive ρ and
-    // left for a negative one, half the track at |ρ| = 1.
-    rhoBarStyle(cell) {
-      if (!cell || cell.rho == null) return "width:0";
-      const w = Math.min(1, Math.abs(cell.rho)) * 50;
-      return `width:${w.toFixed(1)}%;left:${cell.rho < 0 ? 50 - w : 50}%;background:${this.rhoColor(cell)}`;
-    },
-    fwdCell(idx, col) { return this.latest?.correlations?.forward?.[idx]?.[col]; },
-    conCell(idx, col) { return this.latest?.correlations?.concurrent?.[idx]?.[col]; },
-    rhoText(cell) { if (!cell || cell.rho == null) return "—"; return signedFig(cell.rho, 2, "", true); },
-    // A signed figure, coloured like a delta with its sign glyph first: green
-    // for ρ ≥ +0.15, red for ρ ≤ −0.15, muted under 0.15 (noise). The key is in
-    // the note under the tables. It used to be cyan, which never marks a figure.
-    rhoColor(cell) {
-      if (!cell || cell.rho == null) return PALETTE.textMuted;
-      const r = cell.rho;
-      if (Math.abs(r) < 0.15) return PALETTE.textMuted;
-      return r > 0 ? SERIES.emerald : PALETTE.warn;
-    },
-    rhoTitle(cell) { return cell && cell.n != null ? "n = " + cell.n + " paired observations" : ""; },
-    // The span the correlations are measured over: n paired observations, one
-    // per calendar day (the history is forward-filled across weekends), so
-    // n / 365.25 years. n / 252 treated them as trading days and printed
-    // "~12.1y" over 8.4 years of data.
-    corrSampleMeta() {
-      const c = this.latest?.correlations;
-      const days = c?.forward?.composite?.spx_30d?.n ?? c?.concurrent?.composite?.spx?.n ?? 0;
-      if (!isFinite(days) || days <= 0) return "Spearman ρ";
-      const trailing = days >= 365 ? "~" + (days / 365.25).toFixed(1) + "y" : "~" + Math.max(1, Math.round(days / 30.44)) + "mo";
-      return "Spearman ρ · trailing " + trailing;
     },
 
     // ── backtests ───────────────────────────────────────────────────────────

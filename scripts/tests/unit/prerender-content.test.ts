@@ -144,14 +144,14 @@ describe("research pages ship their structured data", () => {
 
   // The regime's live reading reaches a reader that runs no JavaScript: in the
   // machine-readers block as text and tables, and on the Dataset as values.
-  test("/regime carries the day's reading, its indicators and its correlations", () => {
+  test("/regime carries the day's reading and its indicators", () => {
     const html = htmlFor("/regime");
     const latest = REGIME_GOLDEN.latest;
     const noscript = html.slice(html.indexOf('<section id="agent-data">'));
     expect(noscript).toContain("The regime on ");
     expect(noscript).toContain(`Composite ${latest.composite.toFixed(2)}`);
     expect((noscript.match(/regime\/indicators#/g) || []).length).toBe(latest.indicators.length);
-    expect(noscript).toContain("Predictive power and alignment");
+    expect(noscript).not.toContain("Predictive power and alignment");
     const doc = JSON.parse(ld(html)[0]!);
     const ds = doc["@graph"].find((n: { "@type"?: string }) => n["@type"] === "Dataset");
     expect(ds.dateModified).toBe(latest.date);

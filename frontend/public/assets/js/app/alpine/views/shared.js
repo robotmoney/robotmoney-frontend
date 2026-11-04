@@ -10,20 +10,19 @@
 // the old monolithic views.js (review-maintainability finding 025). The regime
 // page, the blog's backtest charts and the swarm views import from here; any
 // other chart view should too, rather than re-declaring a series colour.
-import { PALETTE, SERIES, CATEGORICAL, rgba } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, CATEGORICAL, REGIME, rgba } from "../../lib/chart-theme.js";
 
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
-// Background regime bands painted behind the line datasets, one treatment per
-// state: risk-on a light wash, neutral a fainter one, risk-off a diagonal
-// hatch. They are drawn in the text colour, not in a hue, because every hue
-// the palette has is already a series on these charts (the regime hues too:
-// emerald, slate and beacon are strategy lines), and a band in a series
-// colour reads as that series. Cyan is a line and beacon is a point, so
-// neither may be a full-height area anyway.
+// Background regime bands painted behind the line datasets, in the regime's
+// own hues so a run reads without the legend: risk-on a faint green wash,
+// risk-off a faint beacon wash under a light hatch (the hatch keeps it
+// readable in greyscale), neutral clear. Three greys were tried first and Lex
+// could not tell them apart (RM-200). The washes stay faint because the lines
+// over them are green and warm too. This is the one place beacon fills an area.
 export const REGIME_BAND = {
-  risk_on: { fill: rgba(PALETTE.text, 0.09) },
-  neutral: { fill: rgba(PALETTE.text, 0.03) },
-  risk_off: { hatch: rgba(PALETTE.text, 0.16) },
+  risk_on: { fill: rgba(REGIME.risk_on, 0.13) },
+  neutral: null,
+  risk_off: { fill: rgba(REGIME.risk_off, 0.11), hatch: rgba(PALETTE.text, 0.22) },
 };
 const HATCH_GAP = 6;
 export const regimeBandsPlugin = {
@@ -237,15 +236,6 @@ export const subjectDot = (subjectId) => {
   return hues[h % hues.length];
 };
 
-// Correlation ("Predictive power & alignment") table columns + row order.
-export const FWD_COLS = [
-  ["spx_30d", "SPX 30d"], ["spx_90d", "SPX 90d"], ["spx_180d", "SPX 180d"],
-  ["eth_30d", "ETH 30d"], ["eth_90d", "ETH 90d"], ["eth_180d", "ETH 180d"],
-];
-export const CON_COLS = [["spx", "SPX now"], ["eth", "ETH now"]];
-export const CORR_ROWS = [
-  ["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"],
-];
 export const SOURCE_LABEL = {
   fred: "FRED", yahoo: "Yahoo", defillama_tvl: "DefiLlama", defillama_stables: "DefiLlama",
   blockchain_com: "Blockchain.com", coinmetrics: "Coinmetrics", geckoterminal_newpools: "GeckoTerminal",
@@ -264,16 +254,18 @@ const HATCH_SWATCH = `url("data:image/svg+xml,${encodeURIComponent(
 // under the lines. The hatch is a 6px tile, so it keeps its angle and pitch
 // however the plot stretches.
 const HATCH_TILE = `url("data:image/svg+xml,${encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M-1 1l2-2M0 6L6 0M5 7l2-2' stroke='rgba(242,244,249,0.16)' stroke-width='1'/></svg>",
+  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M-1 1l2-2M0 6L6 0M5 7l2-2' stroke='rgba(242,244,249,0.22)' stroke-width='1'/></svg>",
 )}")`;
+// A CSS background takes its colour as the last layer, under the hatch.
 export const REGIME_BAND_BG = {
-  risk_on: rgba(PALETTE.text, 0.09),
-  neutral: rgba(PALETTE.text, 0.03),
-  risk_off: HATCH_TILE,
+  risk_on: rgba(REGIME.risk_on, 0.13),
+  neutral: "transparent",
+  risk_off: `${HATCH_TILE}, ${rgba(REGIME.risk_off, 0.11)}`,
 };
 
+// Neutral is clear in the plot, so its swatch is an outline.
 export const REGIME_BG_LEGEND = [
-  { label: "risk-off", bg: HATCH_SWATCH },
-  { label: "neutral", bg: rgba(PALETTE.text, 0.1) },
-  { label: "risk-on", bg: rgba(PALETTE.text, 0.34) },
+  { label: "risk-off", bg: `${HATCH_SWATCH}, ${rgba(REGIME.risk_off, 0.4)}` },
+  { label: "neutral", bg: "transparent", outline: true },
+  { label: "risk-on", bg: rgba(REGIME.risk_on, 0.45) },
 ];
