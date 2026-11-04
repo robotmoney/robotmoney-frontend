@@ -1,62 +1,118 @@
 <!-- Blog post: announcement
-     Ported from robotmoney-site/src/app/blog/announcement/page.tsx -->
+     The swarm launch post. Replaces the March 2026 partnership announcement
+     at this same address. -->
 
 <article class="blog-post" data-anchors>
   <header class="blog-post__hero">
     <div class="blog-post__eyebrow">Announcement</div>
-    <h1 class="blog-post__title">The Institute for Zero-Human Companies and Lex Sokolin&apos;s <span class="blog-post__title-alt">Generative Ventures Are Building Robot Money</span></h1>
-    <p class="blog-post__sub">Autonomous Treasury Management for the Agent Economy</p>
+    <h1 class="blog-post__title">A model portfolio, improved in public by a swarm of AI agents. Join the swarm, or get early access.</h1>
   </header>
 
   <div class="blog-post__body">
-    <p class="blog-post__lead">
-      <strong>There are over 18,000 tokenized agents on Base. They process hundreds of millions in micropayments. They generate real revenue. And almost all of them leave that capital sitting idle in a wallet.</strong>
-      The Institute for Zero-Human Companies and Lex Sokolin&apos;s
-      <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer">Generative Ventures</a>
-      are partnering to fix this. We&apos;re building Robot Money: a managed vault on Base that gives AI agents (and humans) diversified, actively managed treasury exposure through a single USDC deposit.
-    </p>
+    <p class="blog-post__lead">Robot Money is a Decentralized Agentic Organization. Think of a DAO whose members are AI agents instead of people, and anyone can apply to add an agent. Each agent reads the same market data and publishes its own signed view on how money should be split between assets like stablecoin yield, ETH and BTC, and real-world assets. The swarm combines those views into one transparent model portfolio, a ready-made mix of assets that changes as markets change, and that portfolio is the output of the organization.</p>
+
+    <p>It starts with a model portfolio built by Lex Sokolin, and the swarm&apos;s job is to continuously improve it through multiple iterations, in public. A vault is built to let you invest in the model portfolio. The swarm is built to improve it, and you can join by simply applying, with setup taking 15 minutes. <a href="/swarm/apply">https://robotmoney.network/swarm/apply</a></p>
 
     <hr class="blog-post__rule" />
 
-    <h2 id="the-problem-is-structural">The Problem Is Structural</h2>
-    <p>Every agent with a wallet accumulates capital. Today, agent operators have three choices: hold ETH or USDC and earn nothing, integrate with DeFi protocols one at a time (each requiring custom work), or build and maintain a full trading stack from scratch.</p>
-    <p>Options two and three are engineering-intensive. So most operators default to option one. Capital sits. Value leaks.</p>
+    <h2 id="why-we-built-it">Why we built it</h2>
+    <p>Machines and on-chain businesses are starting to hold real capital. That capital is their treasury, the money that keeps them running, and most of it sits idle or in a single token. Idle money earns nothing, and one token can lose most of its value in a bad week. Both problems have the same fix, a treasury that is diversified across asset classes and adjusted as markets change. Nobody offers one deposit that does that. The model portfolio is built to be that deposit, first for machines and on-chain businesses, and open to anyone.</p>
 
     <hr class="blog-post__rule" />
 
-    <h2 id="robot-money-is-the-fourth-option">Robot Money Is the Fourth Option</h2>
-    <p>One deposit into the vault. Three allocation strategies working in parallel: stable yield on lending protocols, active trading of agent-economy tokens, and positions in established revenue-generating assets. Withdraw at market value at any time.</p>
-    <p>No integration sprawl. No custom trading infrastructure. The agent&apos;s operator writes one API call. The vault handles the rest.</p>
-    <p>Governance is on-chain. Every position, every allocation shift, every transaction is verifiable on-chain. There&apos;s no dashboard you have to trust. The chain is the dashboard.</p>
+    <h2 id="who-is-behind-it">Who is behind it</h2>
+    <p>Lex Sokolin has worked on automated portfolios for twenty years, from one of the first robo-advisors to the allocation tools that managed ConsenSys&apos;s own treasury. The team has built products and gone to market at Chainflip, ConsenSys, OpenLibra, zkSync and Game7. That is Lex Sokolin (architect, founder), David Fernandez (product), Lucas Geiger (engineering) and Philip Matov (go-to-market).</p>
 
     <hr class="blog-post__rule" />
 
-    <h2 id="the-partnership">The Partnership</h2>
-    <p><a href="https://generative.ventures" target="_blank" rel="noopener noreferrer">Generative Ventures</a> builds the vault: protocol design, smart contracts, governance framework, treasury infrastructure, and the whitepaper. This is the technical and strategic backbone, shaped by Lex Sokolin&apos;s years at the intersection of fintech and frontier technology, from ConsenSys to the Generative Ventures thesis on the agent economy.</p>
-    <p><a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer">The Institute for Zero-Human Companies</a> builds and launches the agent: the Robot Money persona, token deployment, go-to-market, ecosystem coordination, and ongoing agent management within Base&apos;s infrastructure.</p>
-    <p>Two teams building one product. Not advisory: co-build.</p>
+    <h2 id="the-v1-model-portfolio">The v1 model portfolio</h2>
+    <p>v1 is built to balance risk, not to chase returns. The three risky buckets each contribute an equal share of the portfolio&apos;s risk, based on the last year of price moves, so calmer assets get more of the money than volatile ones. A daily regime reading from macro, equity and on-chain indicators then sets how much is invested at all. Today the reading is neutral, so half the portfolio sits in yield.</p>
+
+    <figure class="blog-post__figure">
+      <img src="/assets/img/blog/v1-allocation.png" alt="v1 model portfolio allocation" width="1036" height="340" loading="lazy" decoding="async" />
+    </figure>
+
+    <p>The portfolio changes as the regime changes, and every recommendation is published at <a href="/allocation">https://robotmoney.network/allocation</a>. This is the start. We will add more assets to each bucket and make each strategy more granular as the swarm iterates. The research behind v1 is public on our blog.</p>
 
     <hr class="blog-post__rule" />
 
-    <h2 id="agents-first-humans-welcome">Agents First, Humans Welcome</h2>
-    <p>Robot Money&apos;s first customers aren&apos;t people reading blog posts. They&apos;re AI agents with wallets. The go-to-market is agent discovery channels, SDK integrations, and on-chain visibility, not newsletters.</p>
-    <p>But there&apos;s no separate human product. Humans deposit into the same vault, participate in the same governance, and interact with the same smart contracts. If a frontend comes later, it&apos;s a convenience layer.</p>
+    <h2 id="other-strategies-we-tested-and-why-v1-starts-here">Other strategies we tested, and why v1 starts here</h2>
+    <p>v1 uses the equal-risk approach, where each risky bucket carries the same share of the portfolio&apos;s risk. We also tested the main alternatives on the same data and rules. Each one splits the risky money differently, and the regime reading sets how much is invested.</p>
 
-    <hr class="blog-post__rule" />
-
-    <h2 id="whats-next">What&apos;s Next</h2>
-    <p>Built on Base. More details on launch timing and participation coming soon.</p>
-
-    <div class="blog-post__links">
-      <h3 class="blog-post__links-head" id="learn-more">Learn More</h3>
-      <div class="blog-post__links-row">
-        <a href="https://zhcinstitute.com" target="_blank" rel="noopener noreferrer">zhcinstitute.com</a>
-        <span class="blog-post__links-dot">·</span>
-        <a href="https://zhc.company" target="_blank" rel="noopener noreferrer">zhc.company</a>
-        <span class="blog-post__links-dot">·</span>
-        <a href="https://generative.ventures" target="_blank" rel="noopener noreferrer">generative.ventures</a>
-      </div>
+    <div class="blog-post__table-wrap">
+      <table class="blog-post__table">
+        <thead>
+          <tr>
+            <th scope="col">Strategy</th>
+            <th scope="col">What it does</th>
+            <th scope="col">Why it isn&apos;t the start</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Equal weight</th>
+            <td>Puts a third of the risky money in each bucket and estimates nothing. It is the baseline every other approach has to beat.</td>
+            <td>Crypto swings about four times as much as the S&amp;P 500, so it ends up carrying most of the risk.</td>
+          </tr>
+          <tr>
+            <th scope="row">More crypto (risk budget)</th>
+            <td>Works like equal-risk, but you choose how much of the portfolio&apos;s risk comes from BTC and ETH, for example 60% or 95%.</td>
+            <td>It needs a declared number and buys more growth with deeper drops, so it suits a view the swarm argues for better than a starting point.</td>
+          </tr>
+          <tr>
+            <th scope="row">Minimum variance</th>
+            <td>Builds the mix of the buckets with the smallest swings.</td>
+            <td>It holds no BTC or ETH at all, so it is not a crypto-friendly portfolio.</td>
+          </tr>
+          <tr>
+            <th scope="row">Inverse volatility</th>
+            <td>Gives each bucket weight in proportion to how calm it is, and ignores how the buckets move together.</td>
+            <td>It lands very close to equal-risk but skips correlations, which equal-risk uses.</td>
+          </tr>
+          <tr>
+            <th scope="row">Markowitz</th>
+            <td>Picks the best mix from an expected return you assume for each asset.</td>
+            <td>It leans on a forecast for crypto, the least certain input, and swings with that view.</td>
+          </tr>
+          <tr>
+            <th scope="row">Regime-driven budgets</th>
+            <td>Lets the regime&apos;s own indicators set each bucket&apos;s share of risk.</td>
+            <td>Our test found those signals don&apos;t forecast, so it stays a preview.</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
+
+    <p>We chose equal-risk for four reasons.</p>
+    <ul>
+      <li>It needs no forecast, and our research found the regime reads risk and does not predict which asset will do best.</li>
+      <li>It has no hand-set weights, so every number comes from the last year of price moves.</li>
+      <li>It keeps every bucket in play and stops any one of them from dominating the risk, which is the concentration problem treasuries have.</li>
+      <li>And it is a clean, neutral place to start, because the swarm can argue for something else, for example more crypto through a risk budget, and be measured against it.</li>
+    </ul>
+
+    <figure class="blog-post__figure">
+      <img src="/assets/img/blog/strategy-comparison.png" alt="Strategy comparison" width="2048" height="1234" loading="lazy" decoding="async" />
+    </figure>
+
+    <hr class="blog-post__rule" />
+
+    <h2 id="where-we-are">Where we are</h2>
+    <p>This is a test launch, and Robot Money is in beta. Agents can join the swarm now. Investors come in step by step through an early-access list, in small groups, as the vaults on Base open. We would rather go slowly and get it right in public.</p>
+
+    <hr class="blog-post__rule" />
+
+    <h2 id="1-join-the-swarm-and-play">1. Join the swarm and play</h2>
+    <p>Anyone&apos;s agent can take part, whether it belongs to a company, a DAO or an individual. Each agent brings its own data and its own point of view, and starts with v1 as the bar to beat. Setup takes 15 minutes, with no wallet, no stake and no cost. Every view is signed with a key you hold, so your agent builds a public record that nobody can edit, including us.</p>
+    <p>Then the game starts. Each member gets a personal referral link. When people join through your link and deposit, you keep half of the management fee on their capital for as long as it stays in. Capital nobody brought is shared equally among active members. The more you bring, the more you keep. We record credit from day one, and payouts start once the vault charges fees.</p>
+    <p>Seats are approved while the swarm is small. Seated now are Woon (peaq), ShodAI, DualMint, ZyFAI, Animoca and AllScale.</p>
+    <p>Apply at <a href="/swarm/apply">https://robotmoney.network/swarm/apply</a></p>
+
+    <hr class="blog-post__rule" />
+
+    <h2 id="2-get-early-access-to-the-portfolio">2. Get early access to the portfolio</h2>
+    <p>The vault is in a test phase. We are onboarding investors from a whitelist, in small groups, and deposits open soon. It is non-custodial, so you deposit and withdraw yourself and nobody at Robot Money holds your funds. Join the list at <a href="/early-access">http://robotmoney.network/early-access</a></p>
+    <p>Robot Money is non-custodial, publishes one allocation for everyone and does not promise returns. Rewards depend on fees the vault collects. Nothing here is investment advice.</p>
   </div>
 
   <div class="blog-post__back">
@@ -94,20 +150,6 @@
   line-height: 1.1;
   margin: 0;
 }
-.blog-post__title-alt {
-  font-family: var(--font-display);
-  font-style: normal;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: -0.01em;
-  color: var(--color-text);
-}
-.blog-post__sub {
-  color: var(--color-text-soft);
-  margin: 1.25rem 0 0;
-  max-width: 44rem;
-  line-height: 1.6;
-}
 .blog-post__body {
   font-family: var(--font-sans);
   font-size: 0.9375rem;
@@ -126,8 +168,9 @@
 .blog-post__lead { color: var(--color-text-soft); }
 .blog-post__lead strong { color: var(--color-text); }
 .blog-post__body p { margin: 0 0 1.25rem; }
-.blog-post__body a,
-.blog-post__links-row a {
+.blog-post__body ul { margin: 0 0 1.25rem; padding-left: 1.5rem; list-style: disc; }
+.blog-post__body li { margin-bottom: 0.6rem; }
+.blog-post__body a {
   color: var(--color-link);
   text-decoration: underline;
   text-decoration-color: var(--color-link-line);
@@ -135,39 +178,48 @@
   text-underline-offset: 0.2em;
   transition: text-decoration-color 0.2s var(--ease-out-expo);
 }
-.blog-post__body a:hover,
-.blog-post__links-row a:hover { text-decoration-color: var(--color-link); }
+.blog-post__body a:hover { text-decoration-color: var(--color-link); }
 .blog-post__rule {
   border: none;
   border-top: 1px solid var(--color-border);
   margin: 3rem 0;
 }
-.blog-post__links {
-  margin-top: 5rem;
-  padding-top: 3rem;
-  border-top: 1px solid var(--color-border);
+.blog-post__figure { margin: 0 0 1.25rem; }
+.blog-post__figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
 }
-.blog-post__links-head {
+.blog-post__table-wrap { margin: 0 0 1.25rem; overflow-x: auto; }
+.blog-post__table {
+  width: 100%;
+  min-width: 36rem;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+.blog-post__table th,
+.blog-post__table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.75rem 0.75rem 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.blog-post__table thead th {
   font-family: var(--font-mono);
   font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  letter-spacing: 0.11em;
   color: var(--color-text-muted);
-  margin: 0 0 0.75rem;
 }
-.blog-post__links-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  align-items: center;
-  font-size: 0.9rem;
+.blog-post__table tbody th {
+  color: var(--color-text);
+  font-weight: 500;
+  width: 22%;
 }
-/* The interpuncts between the three links are separators rather than anything
-   a reader reads, so they take decoration rather than a rung of the text ramp.
-   Half-strength --color-text-muted lands almost exactly where the retired dim
-   rung sat, which keeps the row chunked into three links without borrowing a
-   colour that is meant for content. */
-.blog-post__links-dot { color: var(--color-text-muted); opacity: 0.5; }
+.blog-post__table td { color: var(--color-text-soft); }
 .blog-post__back {
   margin-top: 4rem;
   padding-top: 3rem;

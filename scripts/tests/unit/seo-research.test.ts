@@ -236,9 +236,11 @@ describe.each(RESEARCH)("%s", (route) => {
       expect(node.publisher["@id"]).toBe(ORG_ID);
       expect(node.mainEntityOfPage["@id"]).toBe(ORIGIN + route);
       expect(node.image).toBe(ORIGIN + "/assets/og-image.png");
-      expect(node.dateModified).toBe(REVISED);
+      // The launch announcement is dated after the shared research revision.
+      const revised = route === "/blog/announcement" ? "2026-11-05" : REVISED;
+      expect(node.dateModified).toBe(revised);
       if (EXPECTED[route] === "BlogPosting") expect(node.datePublished).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      if (node.datePublished) expect(node.datePublished <= REVISED).toBe(true);
+      if (node.datePublished) expect(node.datePublished <= node.dateModified).toBe(true);
     });
   }
 
@@ -259,8 +261,9 @@ describe.each(RESEARCH)("%s", (route) => {
     expect(out).toContain(`<meta property="og:type" content="${want}" />`);
   });
 
-  test(`sitemap.xml lists it with lastmod ${REVISED}`, () => {
-    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${REVISED}</lastmod>`);
+  test("sitemap.xml lists it with its last revision", () => {
+    const lastmod = route === "/blog/announcement" ? "2026-11-05" : REVISED;
+    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${lastmod}</lastmod>`);
   });
 });
 
@@ -313,7 +316,7 @@ describe("structured data details", () => {
     const page = graphOf(routeStructuredData("/news")).find((n) => n["@type"] === "CollectionPage")!;
     const listed = page.mainEntity.itemListElement.map((e: Json) => e.url);
     expect(listed).toEqual(newsIndex().map((e) => ORIGIN + e.path));
-    expect(listed).toEqual([ORIGIN + "/blog/peaq-partnership", ORIGIN + "/blog/announcement"]);
+    expect(listed).toEqual([ORIGIN + "/blog/announcement", ORIGIN + "/blog/peaq-partnership"]);
     for (const e of researchIndex()) expect(NEWS.has(e.path), e.path).toBe(false);
   });
 

@@ -520,7 +520,7 @@ const SECTIONS = [
 // h1, which the BlogPosting carries (schema.org caps it at 110 characters);
 // `published` is the date on the post's row in the blog index, or on /news for
 // a post marked `news`.
-/** @type {Record<string, { name: string; headline: string; description: string; published: string; news?: boolean }>} */
+/** @type {Record<string, { name: string; headline: string; description: string; published: string; modified?: string; news?: boolean }>} */
 const BLOG_POSTS = {
   "ai-ate-the-bull-market": {
     name: "AI ate the bull market",
@@ -560,10 +560,13 @@ const BLOG_POSTS = {
     news: true,
   },
   "announcement": {
-    name: "ZHC and Generative Ventures Build Robot Money",
-    headline: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures Are Building Robot Money",
-    description: "The Institute for Zero-Human Companies and Lex Sokolin's Generative Ventures are building Robot Money: a managed USDC vault on Base for AI agents and humans.",
-    published: "2026-03-11",
+    name: "A model portfolio, improved in public",
+    headline: "A model portfolio, improved in public by a swarm of AI agents. Join the swarm, or get early access.",
+    description: "Robot Money is a Decentralized Agentic Organization. Think of a DAO whose members are AI agents instead of people, and anyone can apply to add an agent.",
+    published: "2026-11-05",
+    // Launch day, after the shared research revision. dateModified has to be
+    // at least datePublished, and sitemap.xml's lastmod for this URL matches.
+    modified: "2026-11-05",
     news: true,
   },
 };
@@ -591,7 +594,7 @@ const POST_META = Object.fromEntries(
       description: p.description,
       type: "BlogPosting",
       published: p.published,
-      modified: RESEARCH_REVISED,
+      modified: p.modified || RESEARCH_REVISED,
       ...(p.news ? { news: true } : {}),
       ...(BLOG_DATA[slug] ? { downloads: [{ path: BLOG_DATA[slug], title: "The backtest behind this post, as JSON", type: "application/json" }] } : {}),
     },
