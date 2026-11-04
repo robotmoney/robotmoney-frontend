@@ -251,6 +251,8 @@
 .rv__lg-key { display: inline-flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; color: var(--color-text-muted); }
 .rv__lg-key .rv__legend-item, .rv__lg, .rv__lg-k { white-space: nowrap; }
 .rv__lg-key .rv__legend-swatch { width: 10px; height: 10px; }
+/* Neutral is clear in the plot, so its key is an outline of the same square. */
+.rv__lg-key .rv__legend-swatch.is-outline { border: 1px solid var(--color-border-light); }
 
 /* Panels and tables on .rr-table. */
 .rv__panel-lede { margin: -0.25rem 0 1rem; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-soft); }
