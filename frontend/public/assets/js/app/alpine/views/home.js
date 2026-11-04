@@ -15,7 +15,7 @@ import { api, ROUTES } from "../../lib/api.js";
 import { ALLOCATION_SUBJECT_ID } from "../../lib/allocation-subject.js";
 import { allocationFramework } from "../../lib/allocation-framework.js";
 import { isJudge } from "../../lib/judgements.js";
-import { sessionSummary, retiredAndEmpty } from "../../lib/session-summary.js";
+import { sessionSummary, retiredAndEmpty, assetLabel } from "../../lib/session-summary.js";
 import { sessionTakes } from "../../lib/session-takes.js";
 import { memberAvatarSrc } from "../../lib/member-logos.js";
 import { memberAvatarMarkup } from "../../lib/member-mark.js";
@@ -159,7 +159,7 @@ export function registerHomeView(Alpine) {
     /** @param {string} bucket */
     _assetsFor(bucket) {
       const b = (this.allocationFw?.buckets || []).find((/** @type {any} */ x) => vaultForBucket(x?.key ?? x?.label)?.bucket === bucket);
-      return (b?.items || []).map((/** @type {any} */ i) => i?.label).filter(Boolean).join(", ");
+      return (b?.items || []).map((/** @type {any} */ i) => assetLabel(i?.label)).filter(Boolean).join(", ");
     },
     // The lanes' names: every asset the framework holds, less the Real World
     // Assets sleeve, whose tokens are usually KYC-gated, because the caption

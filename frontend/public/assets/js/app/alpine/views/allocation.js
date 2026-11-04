@@ -57,7 +57,7 @@ import {
   vaultForBucket,
 } from "../../lib/vault-data.js";
 import * as weightChange from "../../lib/weight-change.js";
-import { sessionSummary, bucketShort, bucketLabel, bucketHue, retiredAndEmpty } from "../../lib/session-summary.js";
+import { sessionSummary, bucketShort, bucketLabel, bucketHue, retiredAndEmpty, assetLabel } from "../../lib/session-summary.js";
 
 const shortAddress = (a) => {
   const s = String(a || "");
@@ -255,7 +255,7 @@ export function registerAllocationView(Alpine) {
     constituents(sleeveKey) {
       const bucket = (this.allocationFw?.buckets || []).find((b) => b.key === sleeveKey);
       if (!bucket) return [];
-      return (bucket.items || []).map((item) => ({ label: item.label, target: Number(item.targetPct ?? 0) }));
+      return (bucket.items || []).map((item) => ({ label: assetLabel(item.label), target: Number(item.targetPct ?? 0) }));
     },
 
     // A move in points, glyph first so it reads without colour: one implementation
