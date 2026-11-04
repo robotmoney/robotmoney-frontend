@@ -265,6 +265,22 @@ pushed commit (`git status --porcelain` empty). Fix on the QA branch (§2), rede
 stage, and rerun. The same loop applies when an rc fails in production before the cutover (§3
 step 7).
 
+**Resume in place (stage only).** A fix that changes only check code need not restart the stage
+run from Q01. `release:run --target stage --go <new go> --run <run-ts> [--from <step>]` with a go
+naming the new QA commit is admitted when, on the control machine, `git diff --name-only` from the
+journal's last commit to the new one lists only `CHECK_ONLY_PATHS` (`scripts/release/journal.ts`):
+`scripts/release/version-checks/**`, `scripts/release/runbooks/**`,
+`scripts/release/version-check.ts`, `scripts/release/analytics-load-check.ts`,
+`scripts/release/sdk-check.ts`, `scripts/release/sdk-lib.ts`,
+`scripts/release/public-analytics-read.ts`, `scripts/release/replay-row.ts` and
+`scripts/tests/**`. The step-list hash must be unchanged and the new commit must pass the origin
+check. A step's `maxMinutes` is not in the hash, so changing it is check-only; a `cmds` or
+`description` edit still starts a new run. Any other path, the runner itself included, is refused.
+`run.json` lists every commit the run ran at in `commits` (`{commit, tree, goSha256, fromStep,
+at}`), and each step record names the `commit` it ran at; steps already ok keep their records.
+SP.8 then also requires every earlier commit in `commits` to differ from the production commit only
+in `CHECK_ONLY_PATHS`. Production never resumes at a new commit.
+
 ### 4.7. Production execution: a rolling upgrade
 
 The owner writes the go once a stage run of the same step list passed on the same tree (SP.8) and
@@ -486,7 +502,7 @@ recorded owner decision.
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
 | SP.6 | Product baseline: row counts and database size | Q12-state-baseline, P07-state-baseline |
 | SP.7 | CI green on the commit | preflight `P.ci` |
-| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
+| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, every earlier stage commit check-only apart (§4.6) | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
 | SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |

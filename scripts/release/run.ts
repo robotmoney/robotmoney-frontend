@@ -31,7 +31,8 @@
 // the same step list at the same commit (SP.8); then run the steps in order,
 // journal each one locally (./journal.ts), copy its receipts back, and stop at
 // the first step whose exit differs from the expected one, printing the exact
-// resume command. A step that declares `after` (issue 1557) starts as soon as
+// resume command. A stage run resumes in place at a new QA commit whose diff
+// touches only check code (journal.ts CHECK_ONLY_PATHS, issue 1565). A step that declares `after` (issue 1557) starts as soon as
 // the steps it names are done, alongside a long waiter; one that declares none
 // waits for every earlier step, as before.
 //
@@ -44,10 +45,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { goRef, originProblems, validateGo, type GoRecord, type ResolvedGo } from "./go.ts";
 import {
-  acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
+  acceptCommand, acceptStep, checkResume, checkStageJournal, earlierCommitPaths, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
   selectSteps, stepDone, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
-import { checkAfterPreflight, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
+import { checkAfterPreflight, controlChangedPaths, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, prefixedDeps, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import {
   BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
@@ -314,7 +315,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let stageRecord: RunJournal["stageJournal"];
   if (target.rmEnv === "prod") {
     const stage = args.stageJournal ? readJournal(resolve(args.stageJournal)) : undefined;
-    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids });
+    // Issue 1565: a stage run resumed in place ran earlier steps at earlier commits; each is diffed against this one.
+    const earlierPaths = await earlierCommitPaths(stage, commit, controlChangedPaths(deps));
+    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids, earlierPaths });
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
@@ -324,6 +327,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
 
   const runDir = join(root, target.name, runTs);
   let journal: RunJournal;
+  let resumed = false;
   if (args.run !== undefined) {
     const existing = readJournal(runDir);
     if (existing === undefined && args.from !== undefined) {
@@ -331,12 +335,15 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 2;
     }
     if (existing !== undefined) {
-      const refusals = checkResume(existing, { target: target.name, commit, stepListHash: hash, goSha256: go.sha256, stepIds: ids }, { from: args.from, only: args.only });
+      // Issue 1565: a stage resume at a new commit lists the paths between the two on the control machine.
+      const changedPaths = existing.commit !== commit && target.rmEnv === "stage" ? await controlChangedPaths(deps)(existing.commit, commit) : undefined;
+      const refusals = checkResume(existing, { target: target.name, commit, stepListHash: hash, goSha256: go.sha256, stepIds: ids, changedPaths }, { from: args.from, only: args.only });
       if (refusals.length > 0) {
         deps.error(`[${NAME}] refusing to resume ${runDir}:\n  - ${refusals.join("\n  - ")}`);
         return 2;
       }
       journal = existing;
+      resumed = true;
       if (args.from === undefined && args.only === undefined) {
         const next = firstNotOk(journal, ids);
         selected = next === undefined ? [] : ids.slice(ids.indexOf(next));
@@ -363,6 +370,15 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
+  // Issue 1565: every commit the run ran at. A journal from before the list seeds it with its own commit;
+  // a resume in place appends the new one and runs on under its commit, tree and go.
+  journal.commits ??= resumed ? [{ commit: journal.commit, tree: journal.tree ?? "", goSha256: journal.goSha256, fromStep: ids[0]!, at: journal.startedAt }] : [];
+  if (journal.commits.at(-1)?.commit !== commit) {
+    if (journal.commits.length > 0) deps.log(`[${NAME}] resuming in place at ${commit}: the change from ${journal.commit} is check code only; the steps already done keep their records`);
+    journal.commits.push({ commit, tree, goSha256: go.sha256, fromStep: selected[0] ?? ids[0]!, at: deps.now().toISOString() });
+  }
+  journal.commit = commit;
+  journal.goSha256 = go.sha256;
   journal.tree = tree;
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
@@ -398,7 +414,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     const now = deps.now().toISOString();
     settle(id, {
       id, status: "failed", exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now, durationMs: 0, receipts: [],
-      attempt: (journal.steps[id]?.attempt ?? 0) + 1, error: `not run: ${why}`,
+      attempt: (journal.steps[id]?.attempt ?? 0) + 1, error: `not run: ${why}`, commit,
     });
     deps.error(`[${NAME}] ${id} NOT RUN: ${journal.steps[id]!.error}`);
     failedSteps.push(id);
@@ -421,7 +437,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
         const now = deps.now().toISOString();
         settle(id, {
           id, status: "skipped", skipped: skip, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
-          durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
+          durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1, commit,
         });
         deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
         continue;
@@ -463,7 +479,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       const started = deps.now();
       const record: StepRecord = {
         id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
-        receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
+        receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1, commit,
       };
       journal.steps[id] = { ...record, receipts: [] };
       journal.status = "running";
