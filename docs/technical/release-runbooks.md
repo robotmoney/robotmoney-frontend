@@ -13,7 +13,8 @@
 > [6. Tracking issue](#6-the-tracking-issue) · [7. Backporting](#7-backporting) ·
 > [8. Compatibility](#8-compatibility-contract) · [9. Standing checks](#9-standing-check-ids) ·
 > [10. Standing invariants](#10-the-standing-invariants-sw2) ·
-> [11. Analyst SDK releases](#11-analyst-sdk-releases)
+> [11. Analyst SDK releases](#11-analyst-sdk-releases) ·
+> [12. Web content releases](#12-web-content-releases)
 
 This is not the process for ordinary feature work, which is PR review against `main`
 ([CONTRIBUTING.md](../../CONTRIBUTING.md)). It covers packaging a release, rehearsing it on stage
@@ -385,8 +386,9 @@ exists on the release branch.
 There are two kinds of file, and the runner runs only the second:
 
 - **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
-  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default. A
-  `website-only` template joins with its runner mode.
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default and
+  the only template. A content-only website release has no template here: it runs on its own
+  release line (§12).
 - **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
@@ -615,3 +617,75 @@ git clone --branch analyst-sdk-vA.B.C --depth 1 --filter=blob:none --sparse http
 cd robotmoney-frontend
 git sparse-checkout set packages/analyst-sdk
 ```
+
+## 12. Web content releases
+
+A copy, image or style edit to the web client ships on its own release line (accepted in
+[D81](../decisions.md#d81), refining [D54](../decisions.md#d54) and [D70](../decisions.md#d70)).
+Sections 2 to 10 govern platform releases. None of them applies to a web content release. It has
+no QA branch, no stage run (owner, 2026-11-04), no rc tag, no backup, no migration and no rolling
+boot. It changes only what `website-server` serves, through `bun smoke:web` (D54). The platform tag
+production runs does not advance.
+
+**Eligibility.** A release is content-only when its tree differs from the commit production's API
+runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS`
+(`scripts/lib/website-release.ts`): `frontend/` and the scripts `scripts/static-assembly.sh` runs,
+with every relative import they reach. The site build scripts count as content (owner,
+2026-11-04). The same list is `bun smoke:web`'s source identity. Any other path, such as
+`backend/`, `contract/`, `website-server/nginx.conf`, `bun.lock` or `docker-compose.yml`, makes the
+release a platform release: the runner lists every such path and names `bun run release:run`.
+
+**Runner.** The executable form of this section is `scripts/release/runbooks/web-content.yaml`, run by
+`bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]`
+(steps in `scripts/release/web-release-lib.ts`, issue 1561). Each `--commit` names a `main` commit to
+ship, cherry-picked in the given order. `--target` names the platform target file
+(`scripts/release/targets/<name>.json`, default `prod`) for the host, home, instance and public
+origin. No target key is added. `--target stage` exists for optional use only. The steps run in
+order:
+
+- **W01-preflight** (read only). Each named commit is on `origin/main` and its own diff is
+  content-only. The runner reads production's API commit and cherry-picks the commits (`-x`) in a
+  scratch worktree onto `web/releases-A.B.x`, or onto the base when the branch is absent. A
+  conflict stops the run. The version is `--version`, else `frontend/package.json` at the last named
+  commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
+  tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
+  commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS`. A tag that W08
+  rolled back is refused (below). The operator must hold the admin permission on the repository.
+- **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
+  fast-forward. A missing branch is created at the base: the platform tag production runs, or the
+  last web tag on top of it, so content already shipped stays shipped. No pull request, never a
+  force push.
+- **W03-gate.** The `web-client.yml` push run on the branch at the commit (job `web-client`) concludes
+  success. `web-client.yml` carries `web/releases-*` in its push branches for this.
+- **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
+  `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
+- **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
+- **W06-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
+  fetch the tags, detach at the tag and run `bun install --frozen-lockfile`. It is the runner's own
+  checkout, never the platform release checkout.
+- **W07-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
+  body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
+  database row, runs no migration and restarts no backend service.
+- **W08-live-check.** `{publicOrigin}/version.json` reports the tag's version and commit, every
+  sitemap route answers 200, and the `api` and worker container ids and `/api/version` are
+  unchanged. On a failure the runner runs `bun run smoke:web --rollback` and exits non-zero.
+- **W09-release** (irreversible). The GitHub release for the tag lists the main commits and the
+  changed content paths. It is never marked latest: the platform's release keeps that.
+
+The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
+reports the steps already done and continues at the first one that is not. `--dry-run` runs the
+preflight and every step's read-only done check, and writes nothing to `origin`, GitHub or the host.
+
+**Branch.** A web content release ships from `web/releases-A.B.x`, where A.B comes from
+`frontend/package.json`'s own semver. The `web/` prefix keeps it off the platform's `releases-*`
+glob. Changes reach it from `main` only, by the runner's cherry-picks. Feature PRs never target it.
+
+**Tag.** A release is the tag `web-vA.B.C`, only on a commit of `web/releases-A.B.x`. Its version
+equals `version` in `frontend/package.json` at that commit and is above every other `web-v*` tag.
+The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-web-tag.ts` on a push of
+a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
+
+**Rollback.** A tag is never moved, deleted or cut again. When W08 rolls the site back, the host's
+web receipt records it, and a rerun of the same version stops at W01. The fix ships as
+`web-vA.B.(C+1)`.

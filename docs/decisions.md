@@ -4149,9 +4149,9 @@ a Docker socket.
 
 ## D54 — The static website is its own release unit (Lucas, 2026-09-24)
 
-**Status.** Accepted 2026-09-24; the version contract and the checks are
-implemented, and the deploy tooling (`bun smoke:web`, the compatibility refusal
-in `bun smoke`) is not yet built. The owner approved workstream W7 on issue
+**Status.** Accepted 2026-09-24; the version contract, the checks and the
+deploy tooling (`bun smoke:web`, the compatibility refusal in `bun smoke`) are
+built. [D81](#d81) gives the site its own release line around `bun smoke:web`. The owner approved workstream W7 on issue
 #1026. [`smoke-production-spec.md`](technical/smoke-production-spec.md) §13
 carries the rules below as deployment behavior.
 
@@ -6340,3 +6340,21 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 **Why.** Before this, format 1 had two independent writers. csvb named a backup by its replica snapshot time. The archive store re-implemented csvb's encoding and naming and cut one backup per UTC day. The two chains never met, so the default fill (clone the repo, then fetch the increment from the API) could not join. One module, one cut rule and one junction make the two fills produce the same local copy.
 
 **Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo is a data-repo change made after this ships. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).
+
+---
+
+<a id="d81"></a>
+## D81 — A content-only web change ships on its own release line: `web/releases-A.B.x`, `web-vA.B.C` tags and `bun run release:web` (refines D54 and D70; owner, 2026-11-04)
+
+**Status:** Accepted 2026-11-04. Specified in `docs/technical/release-runbooks.md` section 12. Built by issue 1561: `scripts/release/runbooks/web-content.yaml`, `scripts/release/web-release.ts` and `web-release-lib.ts`, the tag guard (`.github/workflows/web-tag-guard.yml`, logic in `scripts/check-web-tag.ts`) and the `web/releases-*` push trigger in `web-client.yml`.
+
+**Decision.**
+
+1. **Eligibility.** A release is content-only when its tree differs from the commit production's API runs only inside `WEB_CONTENT_PATHS` (`scripts/lib/website-release.ts`): `frontend/` and the site build scripts with every relative import they reach. The site build scripts count as content. Any other path makes it a platform release, shipped by `bun run release:run`.
+2. **No stage pass.** A web content release needs no stage rehearsal, no QA branch and no rc tag. The platform tag production runs does not advance.
+3. **Branch.** It ships from `web/releases-A.B.x`, A.B from `frontend/package.json`. The runner cherry-picks the main commits the operator names (`--commit`, repeatable, in order) onto it and pushes it as a fast-forward with no pull request. A missing branch is created at the platform tag production runs, or at the last web tag on top of it.
+4. **Tag.** A release is the annotated tag `web-vA.B.C`, cut before the deploy. Its version equals `frontend/package.json`'s and is above every other web tag. It is never moved or deleted, even when the deploy rolls back: the fix ships as `web-vA.B.(C+1)`.
+5. **Deploy.** The runner deploys from its own host checkout (`{home}/rm-web`) with `bun smoke:web`. It writes no database row, runs no migration and restarts no `api` or worker container. A live check of `/version.json`, every sitemap route, the container ids and `/api/version` follows; a failure runs `bun smoke:web --rollback`.
+6. **Version.** `/version.json` keeps reporting the web client's version and commit.
+
+**Why.** A copy, image or style edit shipped only through the full platform runbook: QA branch, lockfile refresh, stage dump and rehearsal, rc tag, preflight, backup, migrate, rolling boot and soak. None of that guards a change that touches no backend path. D54 already made the site its own release unit and built `bun smoke:web`; this gives it a release line with a deterministic eligibility check, its own tag namespace and a short runner.

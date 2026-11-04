@@ -1,0 +1,36 @@
+# Guard for the web content release line's tags (issue 1561; D81; runbook
+# section 12). Separate file, like analyst-sdk-tag-guard.yml, because it runs
+# ONLY on a push of a `web-v*` tag: never on a PR, never on a merge to main.
+#
+# It refuses a tag whose version differs from frontend/package.json at the
+# tagged commit, is not above every other `web-v*` tag, or whose commit is not
+# on an `origin/web/releases-*` branch. The check logic lives in
+# scripts/check-web-tag.ts (unit tested); this file only fetches full history
+# and calls it. `bun run release:web` (W05-tag-guard) waits for this run.
+#
+# Not part of the nightly-mirrors-merge-set invariant: no `push: branches` and no
+# `schedule:`. CI taxonomy: a release check, not a test, so CI_CLASS: ignore.
+name: web-tag-guard
+env:
+  CI_CLASS: ignore
+on:
+  push:
+    tags: ["web-v*"]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, every tag and all remote branches: the checks need
+          # the other web-v* tags and origin/web/releases-*.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+          no-cache: true
+      - name: Verify tag version, order and release-branch reachability
+        run: bun scripts/check-web-tag.ts "$GITHUB_REF_NAME" "$GITHUB_SHA"
