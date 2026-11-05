@@ -243,8 +243,11 @@ file passed with `--triage <file>` (`scripts/release/triage.ts`).
 `Q34-collect-logs`. It is a stage-only step (`stageOnly: true`): it has no production twin, and the
 runner accepts it without one. It runs `scripts/release/analytics-load-check.ts` on the stage host.
 The check starts no analytics run. It waits for the next scheduled run, the next 3-hour boundary
-in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and watches a 120-minute window. Then it
-reads the api container's log and `/health` `db_pool` for that window. It prints one row per route:
+in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and follows the analytics-producer's log
+from it. The window closes 5 minutes after the tick's `[analytics] regime asof` line, or at the
+120-minute cap when that line never comes; a window closed at the cap with no such line fails
+("the tick logged no regime asof line", issue 1567). Then it reads the api container's log and
+`/health` `db_pool` for that window. It prints one row per route:
 the request count, p50, p95 and max duration, the limiter wait, the pool wait, the handler time,
 and the 503 `db_saturated` count with the gate that refused. It exits 1 on any request of 5 s or
 more, or any `db_saturated` answer. The api logs only slow requests and refusals, so the rows
@@ -265,6 +268,10 @@ stage Postgres with production's `max_connections`, `superuser_reserved_connecti
 reads `/api/version`, and records them in the target's `stage-target.json`. `up` refuses when
 `/health` does not carry them. `--connection-limits <max>/<superuser_reserved>/<reserved>` sets
 them by hand.
+
+**A time limit is a cap (issue 1567).** A step's `maxMinutes`, or a check's window, is a cap and
+never a fixed wait. A check exits as soon as its assertions are proven: Q34a-analytics-load closes
+its window at the tick's `regime asof` line plus 5 minutes, with its 120-minute window as the cap. Only a check whose assertions are still unproven runs to its cap.
 
 **Bounded runs.** The runner has no stop-after option. To run part of the QA, run the steps one at a
 time with `--only <step> --run <ts>`. A bounded run is never a pass.

@@ -3,7 +3,7 @@
 // (batch pool saturation), run ON THE TARGET HOST by the stage-only step
 // Q34a-analytics-load.
 //
-//   bun scripts/release/analytics-load-check.ts --instance <name> [--window-minutes 120] [--receipt-dir <dir>]
+//   bun scripts/release/analytics-load-check.ts --instance <name> [--window-minutes 120 (the cap)] [--receipt-dir <dir>]
 //   bun scripts/release/analytics-load-check.ts --instance <name> --since <iso> --until <iso> [--receipt-dir <dir>]
 //   bun scripts/release/analytics-load-check.ts --log <api log file> [--receipt-dir <dir>]
 //
@@ -15,10 +15,14 @@
 //
 // WHAT IT READS. It starts no analytics run (no unscheduled run anywhere). It
 // waits for the next scheduled run, the next 3-hour boundary in UTC (research
-// `0 */3 * * *`, regime `30 */3 * * *`), and watches that run's window. Then it
-// reads the api container's log for the window and the api's /health `db_pool`
-// telemetry at the window's start and end. `--since/--until` grades a window
-// that has passed; `--log` grades a saved api log.
+// `0 */3 * * *`, regime `30 */3 * * *`), and follows the analytics-producer's
+// log from it. The window closes 5 minutes after the tick's `[analytics] regime
+// asof` line (backend/src/analytics/index.ts), or at the 120-minute cap when
+// that line never comes, which fails (issue 1567: a window is a cap, never a
+// fixed wait). Then it reads the api container's log for the window and the
+// api's /health `db_pool` telemetry at the window's start and end.
+// `--since/--until` grades a window that has passed; `--log` grades a saved api
+// log.
 //
 // WHAT IT PRINTS. One row per route the api logged: its request count, p50, p95
 // and max duration, the time split into limiter wait, pool admission wait and
@@ -42,8 +46,12 @@ import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts"
 export const SLOW_MS = 5_000;
 /** The analytics producer's schedules repeat every 3 hours, on the hour in UTC (research at :00, regime at :30). */
 export const SCHEDULE_PERIOD_HOURS = 3;
-/** How long after the boundary the window stays open: both runs of the tick, well before the next one. */
+/** The cap on the window after the boundary: both runs of the tick, well before the next one. */
 export const DEFAULT_WINDOW_MINUTES = 120;
+/** How long the window stays open after the tick's `regime asof` line (issue 1567). */
+export const REGIME_MARGIN_MINUTES = 5;
+/** The problem a window closed at the cap reports when the tick never logged its regime run's end. */
+export const NO_REGIME_ASOF = "the tick logged no regime asof line";
 
 /** One request the api logged as slow (or as cut off at the limit). */
 export interface LoggedRequest {
@@ -164,8 +172,12 @@ export interface LoadReport {
   readonly problems: readonly string[];
 }
 
-/** PURE. The per-route table and the verdict. */
-export function summarize(parsed: ParsedApiLog, pools: { start: DbPoolSnapshot | null; end: DbPoolSnapshot | null } = { start: null, end: null }): LoadReport {
+/** PURE. The per-route table and the verdict. `tick` is the followed run's regime line (default mode only); its absence fails. */
+export function summarize(
+  parsed: ParsedApiLog,
+  pools: { start: DbPoolSnapshot | null; end: DbPoolSnapshot | null } = { start: null, end: null },
+  tick: { readonly regimeAt: string | null } | null = null,
+): LoadReport {
   const routes = new Set([...parsed.requests.map((r) => r.path), ...parsed.saturated.map((s) => s.path)]);
   const rows: RouteRow[] = [...routes].sort().map((route) => {
     const reqs = parsed.requests.filter((r) => r.path === route);
@@ -195,6 +207,7 @@ export function summarize(parsed: ParsedApiLog, pools: { start: DbPoolSnapshot |
     ? { request: pools.end.request.refused_total - pools.start.request.refused_total, batch: pools.end.batch.refused_total - pools.start.batch.refused_total }
     : null;
   const problems: string[] = [];
+  if (tick && tick.regimeAt === null) problems.push(NO_REGIME_ASOF);
   if (slow.length > 0) problems.push(`${slow.length} request(s) took ${SLOW_MS / 1000} s or more (max ${(Math.max(...slow.map((r) => r.ms)) / 1000).toFixed(1)} s)`);
   if (parsed.saturated.length > 0) problems.push(`${parsed.saturated.length} request(s) answered 503 db_saturated`);
   if (poolRefusals && poolRefusals.request + poolRefusals.batch > 0) {
@@ -241,6 +254,53 @@ export function nextScheduledRun(now: Date): Date {
   return t;
 }
 
+const REGIME_ASOF = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s.*\[analytics\] regime asof /;
+
+/**
+ * PURE. When the default window closes: `REGIME_MARGIN_MINUTES` after the earliest
+ * `[analytics] regime asof` line at or after `boundary` in the producer's log
+ * (`docker logs --timestamps`), or at `boundary + capMinutes` when there is none
+ * (or it comes so late the margin passes the cap). `regimeAt` is that line's
+ * timestamp, null when the log has none.
+ */
+export function windowEnd(boundary: Date, producerLog: string, capMinutes: number = DEFAULT_WINDOW_MINUTES): { end: Date; regimeAt: string | null } {
+  const cap = boundary.getTime() + capMinutes * 60_000;
+  let regimeAt: string | null = null;
+  for (const line of producerLog.split("\n")) {
+    const at = REGIME_ASOF.exec(line)?.[1];
+    if (at === undefined || Date.parse(at) < boundary.getTime()) continue;
+    if (regimeAt === null || Date.parse(at) < Date.parse(regimeAt)) regimeAt = at;
+  }
+  return regimeAt === null
+    ? { end: new Date(cap), regimeAt: null }
+    : { end: new Date(Math.min(cap, Date.parse(regimeAt) + REGIME_MARGIN_MINUTES * 60_000)), regimeAt };
+}
+
+/** Follows the producer's log from `boundary` until the window closes (its regime line plus the margin, or the cap). */
+async function followTick(container: string, boundary: Date, capMinutes: number): Promise<{ end: Date; regimeAt: string | null }> {
+  const proc = Bun.spawn(["docker", "logs", "--follow", "--timestamps", "--since", boundary.toISOString(), container], { stdout: "pipe", stderr: "pipe" });
+  // stdout and stderr each in its own buffer, so their lines never interleave mid-line.
+  const texts = ["", ""];
+  let found = false;
+  const read = async (stream: ReadableStream<Uint8Array>, i: number) => {
+    const decoder = new TextDecoder();
+    for await (const chunk of stream) {
+      texts[i] += decoder.decode(chunk, { stream: true });
+      if (windowEnd(boundary, texts[i]!, capMinutes).regimeAt !== null) {
+        found = true;
+        return;
+      }
+    }
+  };
+  const cap = new Date(boundary.getTime() + capMinutes * 60_000);
+  await Promise.race([read(proc.stdout, 0), read(proc.stderr, 1), Bun.sleep(Math.max(0, cap.getTime() - Date.now()))]);
+  proc.kill();
+  const result = windowEnd(boundary, texts.join("\n"), capMinutes);
+  if (found) console.log(`[analytics-load-check] the tick logged regime asof at ${result.regimeAt}; the window closes at ${result.end.toISOString()}`);
+  await Bun.sleep(Math.max(0, result.end.getTime() - Date.now()));
+  return result;
+}
+
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
   return at >= 0 ? process.argv[at + 1] : undefined;
@@ -256,8 +316,8 @@ async function dbPool(apiPort: number): Promise<DbPoolSnapshot | null> {
   }
 }
 
-function apiContainer(project: string): string | null {
-  const ps = spawnSync("docker", ["ps", "--format", "{{.Names}}", "--filter", `label=com.docker.compose.project=${project}`, "--filter", "label=com.docker.compose.service=api"], { encoding: "utf8" });
+function serviceContainer(project: string, service: string): string | null {
+  const ps = spawnSync("docker", ["ps", "--format", "{{.Names}}", "--filter", `label=com.docker.compose.project=${project}`, "--filter", `label=com.docker.compose.service=${service}`], { encoding: "utf8" });
   return ps.status === 0 ? (ps.stdout.split("\n").map((l) => l.trim()).find(Boolean) ?? null) : null;
 }
 
@@ -267,6 +327,7 @@ async function main(): Promise<number> {
   let text: string;
   let window: { since: string; until: string } | null = null;
   let pools: { start: DbPoolSnapshot | null; end: DbPoolSnapshot | null } = { start: null, end: null };
+  let tick: { regimeAt: string | null } | null = null;
 
   if (logFile) {
     text = readFileSync(logFile, "utf8");
@@ -281,7 +342,7 @@ async function main(): Promise<number> {
       console.error(`[analytics-load-check] instance ${instance} has no stack record`);
       return 1;
     }
-    const container = apiContainer(record.project);
+    const container = serviceContainer(record.project, "api");
     if (!container) {
       console.error(`[analytics-load-check] compose project ${record.project} has no running api container`);
       return 1;
@@ -300,12 +361,18 @@ async function main(): Promise<number> {
         console.error("[analytics-load-check] --window-minutes is a positive number");
         return 2;
       }
+      const producer = serviceContainer(record.project, "analytics-producer");
+      if (!producer) {
+        console.error(`[analytics-load-check] compose project ${record.project} has no running analytics-producer container`);
+        return 1;
+      }
       const start = nextScheduledRun(new Date());
-      const end = new Date(start.getTime() + minutes * 60_000);
-      console.log(`[analytics-load-check] waiting for the scheduled run at ${start.toISOString()}; the window closes at ${end.toISOString()}`);
+      const cap = new Date(start.getTime() + minutes * 60_000);
+      console.log(`[analytics-load-check] waiting for the scheduled run at ${start.toISOString()}; the window closes ${REGIME_MARGIN_MINUTES} minutes after its regime asof line, at ${cap.toISOString()} at the latest`);
       await Bun.sleep(Math.max(0, start.getTime() - Date.now()));
       const startPools = await dbPool(record.apiPort);
-      await Bun.sleep(Math.max(0, end.getTime() - Date.now()));
+      const { end, regimeAt } = await followTick(producer, start, minutes);
+      tick = { regimeAt };
       pools = { start: startPools, end: await dbPool(record.apiPort) };
       window = { since: start.toISOString(), until: end.toISOString() };
     }
@@ -317,7 +384,7 @@ async function main(): Promise<number> {
     text = Buffer.concat([logs.stdout, logs.stderr]).toString("utf8");
   }
 
-  const report = summarize(parseApiLog(text), pools);
+  const report = summarize(parseApiLog(text), pools, tick);
   const rendered = renderReport(report, window);
   process.stdout.write(rendered);
   if (receiptDir) {
