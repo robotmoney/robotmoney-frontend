@@ -7,6 +7,7 @@
 // the admin surface reads.
 import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
+import { jobCountsByStatus } from "./job-counts.ts";
 import { getNextSwarmSession } from "../swarm/domain.ts";
 import { describeJudgeRefusal, latestRefusals, refusalsForSession } from "../swarm/judge-refusals.ts";
 import { dormancyThresholdSessions, quietSeats } from "../swarm/dormancy.ts";
@@ -151,16 +152,6 @@ export interface RosterSeedHealth {
 // through GET /api/admin/overview.
 const ADMIN_ROUTE = "src/api/routes/admin";
 
-const jobsByStatus = registerQuery({
-  role: "rm_app",
-  object: "jobs",
-  privileges: ["SELECT"],
-  site: "src/admin/overview:getOverviewProjection.queueCounts",
-  purpose: "Count jobs by status for the overview's queue panel.",
-  callers: [ADMIN_ROUTE],
-  probe: { statement: "SELECT status, count(*)::int AS n FROM jobs GROUP BY status" },
-});
-
 const lastJobOfKind = registerQuery({
   role: "rm_app",
   object: "jobs",
@@ -256,10 +247,9 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
   const alerts: Alert[] = [];
 
   // ── Queue counts ───────────────────────────────────────────────────────
-  const statusRows = await on(sql, jobsByStatus)<{ status: string; n: number }>`
-    SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
-  const queueCounts: Record<string, number> = {};
-  for (const r of statusRows) queueCounts[r.status] = r.n;
+  // Exact on a small table; on a large one, live statuses exact and the rest
+  // estimated, with no heap scan (./job-counts.ts, issue 1581).
+  const queueCounts = await jobCountsByStatus(sql);
 
   // ── Production-kind health ────────────────────────────────────────────
   const production: ProductionKindHealth[] = [];

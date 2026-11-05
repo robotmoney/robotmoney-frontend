@@ -16,6 +16,8 @@ import {
   PASSWORD_ROLES,
   PASSWORD_SET_SQL,
   RolePasswordRefused,
+  provisionQueryStats,
+  QueryStatsRefused,
   rolePasswordsWith,
   scrub,
   type PasswordRole,
@@ -191,6 +193,9 @@ describe("the statements, read from source", () => {
       "admin:setOwnerPassword",
       "admin:setAppPassword",
       "admin:setReadonlyPassword",
+      "admin:readStatsState",
+      "admin:createStatsExtension",
+      "admin:grantReadonlyStats",
       "db:proveOwner",
       "db:proveApp",
       "db:proveReadonly",
@@ -208,6 +213,9 @@ describe("the statements, read from source", () => {
       ["setOwnerPassword", "doadmin", "ownerPasswordSet"],
       ["setAppPassword", "doadmin", "appPasswordSet"],
       ["setReadonlyPassword", "doadmin", "readonlyPasswordSet"],
+      ["readStatsState", "doadmin", "statsState"],
+      ["createStatsExtension", "doadmin", "statsExtensionCreate"],
+      ["grantReadonlyStats", "doadmin", "readonlyStatsGrant"],
       ["proveOwnerLogin", "rm_owner", "connectionCheck"],
       ["proveAppLogin", "rm_app", "connectionCheck"],
       ["proveReadonlyLogin", "rm_readonly", "connectionCheck"],
@@ -280,5 +288,52 @@ describe("scrub", () => {
 
   test("red control: an empty secret list leaves the text alone", () => {
     expect(scrub("nothing secret", [""])).toBe("nothing secret");
+  });
+});
+
+// Issue 1581: the statistics step after the passwords, over a seam.
+describe("provisionQueryStats", () => {
+  function statsSeam(start: { extension: boolean; readonlyStats: boolean }, effective = true) {
+    const state = { ...start };
+    const calls: string[] = [];
+    return {
+      calls,
+      seam: {
+        async readState() {
+          calls.push("read");
+          return { ...state };
+        },
+        async createExtension() {
+          calls.push("create");
+          if (effective) state.extension = true;
+        },
+        async grantReadonly() {
+          calls.push("grant");
+          if (effective) state.readonlyStats = true;
+        },
+        async assertLockHeld() {
+          calls.push("lock");
+        },
+      },
+    };
+  }
+
+  test("a bare target: create, grant, each behind the lock, then read again", async () => {
+    const s = statsSeam({ extension: false, readonlyStats: false });
+    expect(await provisionQueryStats(s.seam)).toEqual({ extension: "created", readonlyStats: "granted" });
+    expect(s.calls).toEqual(["read", "lock", "create", "lock", "grant", "read"]);
+  });
+
+  test("a provisioned target: two reads, no DDL", async () => {
+    const s = statsSeam({ extension: true, readonlyStats: true });
+    expect(await provisionQueryStats(s.seam)).toEqual({ extension: "kept", readonlyStats: "kept" });
+    expect(s.calls).toEqual(["read", "read"]);
+  });
+
+  test("a target still missing either after the DDL refuses, naming it", async () => {
+    const s = statsSeam({ extension: false, readonlyStats: false }, false);
+    const error = await provisionQueryStats(s.seam).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(QueryStatsRefused);
+    expect((error as Error).message).toContain("pg_stat_statements is not installed and rm_readonly does not hold pg_read_all_stats");
   });
 });

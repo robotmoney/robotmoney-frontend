@@ -194,3 +194,27 @@ test("bad shapes: non-numeric id → 400; unknown numeric id → 404", async () 
 test("a path this handler does not own returns null (index.ts falls through to 404)", async () => {
   expect(await call(req("GET", "/api/admin/nope"))).toBeNull();
 });
+
+// Issue 1581 adds jobs_live_kind_locked_idx and keeps the admin counts exact:
+// the overview's queueCounts and the jobs summary equal a direct GROUP BY over
+// every row, live and terminal, as they did before.
+test("the overview's queue counts and the jobs summary are the exact counts of every status and kind (issue 1581)", async () => {
+  await fixtureDb`
+    INSERT INTO jobs (kind, status, locked_at, locked_by)
+    SELECT ${KIND}, s, CASE s WHEN 'running' THEN now() END, CASE s WHEN 'running' THEN 'w-1581' END
+      FROM unnest(ARRAY['pending', 'running', 'succeeded', 'failed', 'dead', 'cancelled']) s`;
+  const exact = async (column: "status" | "kind") =>
+    Object.fromEntries(
+      ((await fixtureDb.unsafe(`SELECT ${column} AS k, count(*)::int AS n FROM jobs GROUP BY 1`)) as unknown as { k: string; n: number }[]).map(
+        (r) => [r.k, r.n],
+      ),
+    );
+  const overview = await call(req("GET", "/api/admin/overview", OPERATOR));
+  expect(overview?.status).toBe(200);
+  expect((overview?.body as { queueCounts: Record<string, number> }).queueCounts).toEqual(await exact("status"));
+  const jobs = await call(req("GET", "/api/admin/jobs", OPERATOR));
+  const summary = (jobs?.body as { summary: { byStatus: Record<string, number>; byKind: Record<string, number> } }).summary;
+  expect(summary.byStatus).toEqual(await exact("status"));
+  expect(summary.byKind).toEqual(await exact("kind"));
+  for (const s of ["pending", "running", "succeeded", "failed", "dead", "cancelled"]) expect(summary.byStatus[s], s).toBeGreaterThanOrEqual(1);
+});

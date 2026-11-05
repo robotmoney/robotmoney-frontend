@@ -529,6 +529,9 @@ beforeAll(async () => {
     for (const role of ["rm_owner", "rm_app", "rm_worker", "rm_readonly"]) {
       await superuser.unsafe(`GRANT ${role} TO ${DOADMIN_STANDIN} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
     }
+    // And ADMIN on pg_read_all_stats, which production's doadmin reaches
+    // through doadmin_group -> _doadmin_managed (issue 1581).
+    await superuser.unsafe(`GRANT pg_read_all_stats TO ${DOADMIN_STANDIN} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`);
     // A blank database owned by rm_owner (since Postgres 15 only the database
     // owner may CREATE in `public`), copied from template0 so nothing the
     // suite's migration-built template holds comes with it.
@@ -542,6 +545,12 @@ beforeAll(async () => {
 
   owner = harnessConnection(database);
   await bootstrapBlankDatabase(owner, await loadSnapshot());
+  // pg_stat_statements is provider-managed too (the snapshot's exclusions):
+  // untrusted, so on this cluster only the superuser may create it, where
+  // production's doadmin may. Installed here, the stand-in's guarded CREATE is
+  // the no-op a provisioned target sees; tests/role-passwords.test.ts proves
+  // the create itself.
+  await adminExec("CREATE EXTENSION IF NOT EXISTS pg_stat_statements", database);
   // The scratch role reaches `public` and the sequences a serial INSERT
   // draws on, and no relation at all until a case grants it one.
   await owner.unsafe(`GRANT USAGE ON SCHEMA public TO ${SCRATCH}`);
@@ -762,7 +771,7 @@ describe("every registered query runs as its declared role on a disposable datab
     // grant itself, so it stays in.)
     const own: Record<string, string> = { rm_app: "appPasswordSet", rm_readonly: "readonlyPasswordSet" };
     for (const role of ROLES) {
-      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "readonlyPasswordSet"] as const) {
+      for (const shape of ["ownerLoginEnable", "ownerPasswordSet", "appPasswordSet", "readonlyPasswordSet", "readonlyStatsGrant"] as const) {
         if (own[role] === shape) continue;
         const outcome = await runProbe(login(role), { statement: provisioningProbeText(shape) });
         expect(outcome.ok ? "ran" : outcome.code, `${role} ${shape}`).toBe("42501");

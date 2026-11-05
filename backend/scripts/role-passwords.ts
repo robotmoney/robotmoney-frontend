@@ -37,8 +37,18 @@
 // changed. Then a kept rm_owner that is NOLOGIN gets LOGIN. Then each role to
 // set or rotate is set, persisted and proven, one at a time.
 //
+// QUERY STATISTICS (issue 1581), after the passwords. On the target database
+// it creates `pg_stat_statements` when it is missing, and grants rm_readonly
+// `pg_read_all_stats` (WITH INHERIT TRUE: rm_readonly is NOINHERIT) when it
+// lacks it, so an operator can rank production's queries as rm_readonly. Both
+// are doadmin's to do: the extension is untrusted and rm_owner holds no admin
+// option on pg_read_all_stats, so no migration can (migration 0130 tries the
+// extension and moves on). Each is read first and done only when missing, then
+// read again; a target still missing either refuses, naming it.
+//
 // A rerun finds every line it wrote, so it reports all `kept` and runs no
-// ALTER: the command is idempotent. No password and no verifier is ever
+// ALTER, and finds the statistics in place and runs no DDL: the command is
+// idempotent. No password and no verifier is ever
 // printed, logged, receipted or passed in argv. Every error leaving this
 // module is scrubbed of every password it saw. The caller (scripts/prod-init.ts)
 // holds the §2 target lock, passed here to be proven held before each ALTER.
@@ -102,6 +112,30 @@ const setReadonlyPassword = registerStatement({
   callers: [MODULE],
 });
 
+const readStatsState = registerStatement({
+  role: "doadmin",
+  shape: "statsState",
+  site: "scripts/role-passwords:readStatsState",
+  purpose: "Reads whether pg_stat_statements is installed and rm_readonly holds pg_read_all_stats, before and after provisioning them (issue 1581).",
+  callers: [MODULE],
+});
+
+const createStatsExtension = registerStatement({
+  role: "doadmin",
+  shape: "statsExtensionCreate",
+  site: "scripts/role-passwords:createStatsExtension",
+  purpose: "Installs pg_stat_statements, which rm_owner may not, so operators can rank queries by time (issue 1581, D61).",
+  callers: [MODULE],
+});
+
+const grantReadonlyStats = registerStatement({
+  role: "doadmin",
+  shape: "readonlyStatsGrant",
+  site: "scripts/role-passwords:grantReadonlyStats",
+  purpose: "Lets rm_readonly read every role's rows in pg_stat_statements and pg_stat_activity; rm_owner holds no admin option on the role (issue 1581, D61).",
+  callers: [MODULE],
+});
+
 const proveOwner = registerStatement({
   role: "rm_owner",
   shape: "connectionCheck",
@@ -156,6 +190,48 @@ export interface RolePasswordsResult {
   readonly roles: Readonly<Partial<Record<PasswordRole, RoleOutcome>>>;
   /** rm_owner's `rolcanlogin` before anything ran; null when rm_owner was not in the set. */
   readonly ownerLoginBefore: boolean | null;
+  /** Query statistics (issue 1581), as the real command leaves them. Absent from the seam-only decision. */
+  readonly stats?: QueryStatsOutcome;
+}
+
+/** What the statistics step found and did. */
+export interface QueryStatsOutcome {
+  readonly extension: "kept" | "created";
+  readonly readonlyStats: "kept" | "granted";
+}
+
+/** The statistics step's effects. Tests hand in fakes. */
+export interface QueryStatsSeam {
+  readState(): Promise<{ extension: boolean; readonlyStats: boolean }>;
+  createExtension(): Promise<void>;
+  grantReadonly(): Promise<void>;
+  assertLockHeld(): Promise<void>;
+}
+
+/** A target the statistics step could not bring into place. */
+export class QueryStatsRefused extends Error {}
+
+/**
+ * The statistics step, over a seam: create what is missing, then read again.
+ * A rerun on a provisioned target reads twice and changes nothing.
+ */
+export async function provisionQueryStats(seam: QueryStatsSeam): Promise<QueryStatsOutcome> {
+  const before = await seam.readState();
+  if (!before.extension) {
+    await seam.assertLockHeld();
+    await seam.createExtension();
+  }
+  if (!before.readonlyStats) {
+    await seam.assertLockHeld();
+    await seam.grantReadonly();
+  }
+  const after = await seam.readState();
+  const missing = [
+    ...(after.extension ? [] : ["pg_stat_statements is not installed"]),
+    ...(after.readonlyStats ? [] : ["rm_readonly does not hold pg_read_all_stats"]),
+  ];
+  if (missing.length > 0) throw new QueryStatsRefused(`The role passwords are done, but ${missing.join(" and ")} after provisioning (issue 1581).`);
+  return { extension: before.extension ? "kept" : "created", readonlyStats: before.readonlyStats ? "kept" : "granted" };
 }
 
 /** The effects the decision needs. Tests hand in fakes. */
@@ -294,7 +370,7 @@ export async function rolePasswords(options: RolePasswordsOptions): Promise<Role
     return password;
   };
   try {
-    return await rolePasswordsWith(
+    const passwords = await rolePasswordsWith(
       {
         async readLoginState() {
           const rows = await onStatement(admin, readLoginState)<{ rolname: string; rolcanlogin: boolean }>`SELECT rolname, rolcanlogin FROM pg_roles WHERE rolname IN ('rm_owner', 'rm_app', 'rm_worker', 'rm_readonly') ORDER BY rolname`;
@@ -339,8 +415,32 @@ export async function rolePasswords(options: RolePasswordsOptions): Promise<Role
       { roles: options.roles, rotate: options.rotate },
       generate,
     );
+    const stats = await provisionQueryStats({
+      async readState() {
+        const [row] = await onStatement(admin, readStatsState)<{ extension: boolean; readonly_stats: boolean }>`SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS extension, pg_has_role('rm_readonly', 'pg_read_all_stats', 'USAGE') AS readonly_stats`;
+        return { extension: row?.extension === true, readonlyStats: row?.readonly_stats === true };
+      },
+      async createExtension() {
+        try {
+          await onStatement(admin, createStatsExtension)`CREATE EXTENSION IF NOT EXISTS pg_stat_statements`;
+        } catch (error) {
+          throw new QueryStatsRefused(
+            `The role passwords are done, but doadmin could not create pg_stat_statements (${(error as Error).message}). ` +
+              "Install it as the provider's admin, then rerun role-passwords (issue 1581).",
+          );
+        }
+      },
+      async grantReadonly() {
+        await onStatement(admin, grantReadonlyStats)`GRANT pg_read_all_stats TO rm_readonly WITH INHERIT TRUE`;
+      },
+      async assertLockHeld() {
+        if (options.lock) await assertStillHeld(options.lock, "role-passwords");
+      },
+    });
+    return { ...passwords, stats };
   } catch (error) {
     const message = scrub(error instanceof Error ? error.message : String(error), secrets);
+    if (error instanceof QueryStatsRefused) throw new QueryStatsRefused(message);
     throw error instanceof RolePasswordRefused ? new RolePasswordRefused(message) : new Error(message);
   } finally {
     await admin.end({ timeout: 5 }).catch(() => undefined);

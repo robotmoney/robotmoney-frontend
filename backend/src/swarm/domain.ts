@@ -705,7 +705,7 @@ const SESSIONS_PAGE_PROBE = {
   statement: `SELECT *, generated_at::text AS cursor_generated_at,
       (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at,
       (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
-      (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
+      (SELECT b.allocation FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions
     WHERE ($1::text IS NULL OR state = $2)
       AND ($3::text IS NULL OR subject_id = $4)
@@ -816,7 +816,7 @@ export async function listSessions(opts: ListSessionsOptions = {}) {
     SELECT *, generated_at::text AS cursor_generated_at,
       (SELECT min(rv.created_at) FROM swarm_brief_revisions rv WHERE rv.session_id = swarm_sessions.id) AS opened_at,
       (SELECT count(*)::int FROM swarm_recommendations r WHERE r.session_id = swarm_sessions.id AND r.final) AS take_count,
-      (SELECT b.body->'allocation' FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
+      (SELECT b.allocation FROM swarm_briefs b WHERE b.session_id = swarm_sessions.id) AS reference_allocation
     FROM swarm_sessions
     WHERE (${state}::text IS NULL OR state = ${state})
       AND (${subject}::text IS NULL OR subject_id = ${subject})

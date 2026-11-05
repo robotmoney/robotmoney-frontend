@@ -284,6 +284,9 @@ const OWNER_SITES: ReadonlyMap<string, number> = new Map([
   ["scripts/prune.ts declaration swarm_stream_events", 1],
   ["scripts/prune.ts statement admin_session", 2],
   ["scripts/prune.ts declaration admin_session", 1],
+  // The jobs entries (issue 1581): one chunked DELETE, its probe and its declaration.
+  ["scripts/prune.ts statement jobs", 2],
+  ["scripts/prune.ts declaration jobs", 1],
   // The v0.5.2 ledger repair (issue 1065), ported from the shipped release: two
   // TRUNCATEs inside its transaction, after SET LOCAL ROLE rm_owner. It is run
   // once by the operator and is imported by nothing (proved below).
@@ -449,6 +452,7 @@ describe("the rm_owner sites are reachable only from rm_owner entries", () => {
       .sort((a, b) => a.site.localeCompare(b.site));
     expect(deleting).toEqual([
       { role: "rm_owner", object: "admin_session", site: "scripts/prune:pruneExpiredSessions" },
+      { role: "rm_owner", object: "jobs", site: "scripts/prune:pruneJobs" },
       { role: "rm_owner", object: "swarm_stream_events", site: "scripts/prune:pruneStreamEvents" },
       { role: "rm_owner", object: "raw_indicator_history", site: "src/analytics/store/seed-provenance:verifySeedProvenance.clean" },
       { role: "rm_owner", object: "job_schedules", site: "src/db/seed:seedJobSchedules.deleteAnalyticsRun" },
