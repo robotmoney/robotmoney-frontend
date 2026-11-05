@@ -2450,7 +2450,8 @@ CREATE TABLE public.swarm_briefs (
     body jsonb,
     created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_briefs_created_at_not_null NOT NULL,
     session_id uuid,
-    report_snapshot_id bigint
+    report_snapshot_id bigint,
+    allocation jsonb GENERATED ALWAYS AS ((body -> 'allocation'::text)) STORED
 );
 
 
@@ -4938,6 +4939,13 @@ CREATE INDEX audit_log_at_idx ON public.audit_log USING btree (at DESC);
 
 
 --
+-- Name: audit_log_job_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX audit_log_job_idx ON public.audit_log USING btree (job_id) WHERE (job_id IS NOT NULL);
+
+
+--
 -- Name: audit_log_request_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5019,6 +5027,13 @@ CREATE UNIQUE INDEX job_schedules_kind_cron_idx ON public.job_schedules USING bt
 --
 
 CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) WHERE (dedupe_key IS NOT NULL);
+
+
+--
+-- Name: jobs_live_kind_locked_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX jobs_live_kind_locked_idx ON public.jobs USING btree (kind, locked_at) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
 
 
 --
@@ -5319,6 +5334,13 @@ CREATE INDEX swarm_recommendations_session_member_latest_idx ON public.swarm_rec
 --
 
 CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision);
+
+
+--
+-- Name: swarm_session_events_job_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX swarm_session_events_job_idx ON public.swarm_session_events USING btree (job_id) WHERE (job_id IS NOT NULL);
 
 
 --

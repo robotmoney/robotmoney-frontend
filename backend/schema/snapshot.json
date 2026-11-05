@@ -130,7 +130,8 @@
     "0126_pipeline_worker_token_and_receipts.sql",
     "0127_rm_worker_retired.sql",
     "0128_asset_prices_overwrite_events.sql",
-    "0129_allocation_framework_hard_assets.sql"
+    "0129_allocation_framework_hard_assets.sql",
+    "0130_jobs_live_index_brief_allocation_stats.sql"
   ],
   "exclusions": {
     "roles": [
@@ -138,11 +139,12 @@
       "postgres"
     ],
     "extensions": [
+      "pg_stat_statements",
       "pgcrypto",
       "plpgsql"
     ]
   },
-  "contentHash": "a5913f6d1678712c9e7af80ce33edeca92a42d42aeeac33bf59d642491503a1d",
+  "contentHash": "a6c82e55920a012aed6b833b89678433acc31137eabcb317bcd9e6bbc6ae2673",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2364,6 +2366,11 @@
     "column public.swarm_brief_revisions.session_id": {
       "type": "uuid",
       "notnull": "yes"
+    },
+    "column public.swarm_briefs.allocation": {
+      "type": "jsonb",
+      "notnull": "no",
+      "generated": "stored: (body -> 'allocation'::text)"
     },
     "column public.swarm_briefs.body": {
       "type": "jsonb",
@@ -5237,6 +5244,9 @@
     "index public.audit_log_at_idx": {
       "definition": "CREATE INDEX audit_log_at_idx ON public.audit_log USING btree (at DESC)"
     },
+    "index public.audit_log_job_idx": {
+      "definition": "CREATE INDEX audit_log_job_idx ON public.audit_log USING btree (job_id) WHERE (job_id IS NOT NULL)"
+    },
     "index public.audit_log_pkey": {
       "definition": "CREATE UNIQUE INDEX audit_log_pkey ON public.audit_log USING btree (id)"
     },
@@ -5332,6 +5342,9 @@
     },
     "index public.jobs_dedupe_key_idx": {
       "definition": "CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) WHERE (dedupe_key IS NOT NULL)"
+    },
+    "index public.jobs_live_kind_locked_idx": {
+      "definition": "CREATE INDEX jobs_live_kind_locked_idx ON public.jobs USING btree (kind, locked_at) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]))"
     },
     "index public.jobs_pending_run_after_idx": {
       "definition": "CREATE INDEX jobs_pending_run_after_idx ON public.jobs USING btree (run_after) WHERE (status = 'pending'::text)"
@@ -5593,6 +5606,9 @@
     },
     "index public.swarm_recommendations_session_member_revision_key": {
       "definition": "CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision)"
+    },
+    "index public.swarm_session_events_job_idx": {
+      "definition": "CREATE INDEX swarm_session_events_job_idx ON public.swarm_session_events USING btree (job_id) WHERE (job_id IS NOT NULL)"
     },
     "index public.swarm_session_events_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_session_events_pkey ON public.swarm_session_events USING btree (id)"

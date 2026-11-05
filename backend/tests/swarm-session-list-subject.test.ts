@@ -7,6 +7,7 @@
 // #965: a subject may convene more than once a day, so a brief's recent refs
 // carry the session id and come back newest first within a day.
 import { test, expect } from "bun:test";
+import { randomBytes } from "node:crypto";
 import * as ic from "../src/swarm/domain.ts";
 import { sql } from "../src/db/client.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
@@ -206,4 +207,107 @@ test("openedAt is the first brief revision's time, not the row's creation time, 
   await ic.publishBrief(session.id, 60).catch(() => null);
   const again = (await ic.listSessions({ subject: subj })).sessions.find((s: any) => s.id === session.id) as any;
   expect(again.openedAt).toBe(paged.openedAt);
+});
+
+// ── The allocation column (issue 1581) ──────────────────────────────────────
+// Each brief body is about 240 KB on production, so reading
+// `body->'allocation'` per row detoasted the whole body to return a few
+// weights. Migration 0130 stores `allocation` as a generated column, and the
+// page reads it. The old read is kept here as the reference the new one must
+// equal, row for row.
+const OLD_PAGE_SQL = (registeredPageProbe: string) =>
+  registeredPageProbe.replace("(SELECT b.allocation FROM swarm_briefs b", "(SELECT b.body->'allocation' FROM swarm_briefs b");
+
+interface PlanNode {
+  "Node Type": string;
+  "Relation Name"?: string;
+  Output?: string[];
+  "Shared Hit Blocks"?: number;
+  "Shared Read Blocks"?: number;
+  Plans?: PlanNode[];
+}
+const flatten = (n: PlanNode, out: PlanNode[] = []): PlanNode[] => {
+  out.push(n);
+  for (const c of n.Plans ?? []) flatten(c, out);
+  return out;
+};
+
+/** A published session whose brief carries a ~240 KB body beside its allocation, as production's do. */
+async function heavyBrief(subject: string, minutesAgo: number) {
+  const s = await published(subject, `heavy ${minutesAgo}`, minutesAgo, null);
+  // Random text, so compression cannot shrink it below the TOAST threshold.
+  const prose = randomBytes(180_000).toString("base64");
+  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body)
+            VALUES (${s.id}, ${s.date}, ${subject}, ${sql.json(JSON.parse(JSON.stringify({ allocation: TARGETS, prose })))})`;
+  return s;
+}
+
+async function pageProbe(): Promise<string> {
+  const { registeredSites } = await import("../src/db/registry.ts");
+  const site = registeredSites().find((d) => d.site === "src/swarm/domain:listSessions.page.briefs");
+  if (!site?.probe) throw new Error("no registered probe for the sessions page briefs read");
+  return site.probe.statement;
+}
+
+test("every brief's allocation column equals body->'allocation', for a body with one, without one, and with none", async () => {
+  const subject = rid("alloccol");
+  await ic.ensureSubject(subject, "Allocation");
+  await published(subject, "with targets", 3);
+  const bare = await published(subject, "bare brief", 2, null);
+  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body) VALUES (${bare.id}, ${bare.date}, ${subject}, ${sql.json({ prose: "no targets" })})`;
+  const nullBody = await published(subject, "null body", 1, null);
+  await sql`INSERT INTO swarm_briefs (session_id, date, subject_id, body) VALUES (${nullBody.id}, ${nullBody.date}, ${subject}, NULL)`;
+  const [{ mismatched, total }] = await sql<{ mismatched: number; total: number }[]>`
+    SELECT count(*) FILTER (WHERE allocation IS DISTINCT FROM body->'allocation')::int AS mismatched, count(*)::int AS total FROM swarm_briefs`;
+  expect({ mismatched, total: total >= 3 }).toEqual({ mismatched: 0, total: true });
+  // A rewrite of the body moves the column with it: no writer can disagree.
+  await sql`UPDATE swarm_briefs SET body = jsonb_set(body, '{allocation,asof}', '"2026-07-01"') WHERE session_id = (SELECT id FROM swarm_sessions WHERE subject_id = ${subject} AND swarm_recommendation->>'rationale' = 'with targets')`;
+  const [{ asof }] = await sql<{ asof: string }[]>`
+    SELECT b.allocation->>'asof' AS asof FROM swarm_briefs b JOIN swarm_sessions s ON s.id = b.session_id
+     WHERE s.subject_id = ${subject} AND s.swarm_recommendation->>'rationale' = 'with targets'`;
+  expect(asof).toBe("2026-07-01");
+});
+
+test("the page reads swarm_briefs.allocation, never the 240 KB body, and answers exactly as the body read did", async () => {
+  const subject = rid("heavy");
+  await ic.ensureSubject(subject, "Allocation");
+  for (let i = 0; i < 6; i++) await heavyBrief(subject, 60 - i);
+  await sql.unsafe("ANALYZE swarm_briefs");
+  const probe = await pageProbe();
+  expect(probe).toContain("SELECT b.allocation FROM swarm_briefs b");
+  const old = OLD_PAGE_SQL(probe);
+  expect(old).not.toBe(probe);
+  const params = [null, null, subject, subject, null, null, null, null, null, null, 7];
+
+  // The response: the rows the new read returns equal the old read's, column
+  // for column, so the page built from them is byte-identical.
+  const rowsNew = await sql.unsafe(probe, params as never[]);
+  const rowsOld = await sql.unsafe(old, params as never[]);
+  expect(rowsNew.length).toBe(6);
+  expect(JSON.stringify(rowsNew)).toBe(JSON.stringify(rowsOld));
+  const page = await ic.listSessions({ subject, limit: 6 });
+  expect(page.sessions.every((s: any) => s.referenceAllocation?.asof === "2026-06-02")).toBe(true);
+
+  // The plan: EXPLAIN (ANALYZE, BUFFERS) of the page query. The brief read
+  // outputs the column, never the body, and reads a few pages where the old
+  // read pulled every body's TOAST chunks.
+  const plan = async (text: string) => {
+    const [row] = (await sql.unsafe(`EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) ${text}`, params as never[])) as unknown as {
+      "QUERY PLAN": { Plan: PlanNode }[];
+    }[];
+    const nodes = flatten(row!["QUERY PLAN"][0]!.Plan);
+    const briefs = nodes.filter((n) => n["Relation Name"] === "swarm_briefs");
+    const blocks = (n: PlanNode) => (n["Shared Hit Blocks"] ?? 0) + (n["Shared Read Blocks"] ?? 0);
+    return { outputs: briefs.flatMap((n) => n.Output ?? []), briefBlocks: briefs.reduce((t, n) => t + blocks(n), 0), root: blocks(nodes[0]!) };
+  };
+  const now = await plan(probe);
+  const before = await plan(old);
+  expect(now.outputs.length).toBeGreaterThan(0);
+  expect(now.outputs.some((o) => /\bb\.allocation\b/.test(o))).toBe(true);
+  expect(now.outputs.some((o) => /\bb\.body\b/.test(o))).toBe(false);
+  // Red control: the old read names the body and reads its TOAST pages, so
+  // the same measure would have caught it. Six ~240 KB bodies are well over
+  // a hundred 8 KB pages; the column read stays a handful.
+  expect(before.outputs.some((o) => /\bb\.body\b/.test(o))).toBe(true);
+  expect(before.root - now.root).toBeGreaterThan(100);
 });

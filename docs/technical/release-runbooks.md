@@ -238,7 +238,12 @@ line kills your own shell.
 Q01-lockfile to Q05-scope prepare the target (production never runs them, and the step-list hash is
 the same for both targets, SP.8). Q04-role-passwords sets the role passwords through the stage
 database: its doadmin is a disposable stage credential, passed on a pipe and stored in no file, so
-the D61 rule on doadmin, which is production's, is kept. Q06-checkout to Q34-collect-logs then run
+the D61 rule on doadmin, which is production's, is kept. The same run creates `pg_stat_statements`
+and grants `rm_readonly` `pg_read_all_stats` when either is missing (issue 1581): on production the
+admin's pre-release `bun run role-passwords --doadmin-stdin` does it, because the extension is
+untrusted and `rm_owner` holds no admin option on that role, so no migration can. Stage's `up`
+starts Postgres with `shared_preload_libraries=pg_stat_statements` and installs the extension as the
+container superuser, as the managed cluster's provider would. Q06-checkout to Q34-collect-logs then run
 the upgrade and the soak as production will run C01-backup to C22-collect-logs, and the release's
 version checks follow. The run goes on past a failed step and ends with every failure listed (§4).
 After fixes, rerun the whole QA at the new QA tip: the run that counts passes every Q step at the
@@ -411,7 +416,13 @@ line prints one.
 comparison and the host guards. Then the 30-minute soak (owner, 2026-10-14): C20-soak-gate grades logs since
 READY, C21-soak-checks runs the standing invariants against the READY baseline, and
 C22-collect-logs copies every container's logs and `docker inspect` into the journal. Q35 to Q37 and C23 to C25 (SV.8,
-from v0.7.0) run the analyst SDK against the target from the control machine, read-only. Sessions are deferred in the
+from v0.7.0) run the analyst SDK against the target from the control machine, read-only. From release v0.7.4,
+Q37a-db-stats and C25a-db-stats (`scripts/release/db-stats-check.ts`, issue 1581) exit non-zero unless `pg_extension`
+lists `pg_stat_statements` and `rm_readonly` reads other roles' rows in `pg_stat_statements` and `pg_stat_activity`
+with no query text hidden. Q37b-jobs-plans (`scripts/release/jobs-query-plans.ts`, stage only) runs `EXPLAIN
+(ANALYZE, BUFFERS)` of the jobs-table reads on production's dump as `rm_readonly` and exits non-zero unless the reaper,
+the enqueue live guard, livePayloadField and the backlog sweep use `jobs_live_kind_locked_idx` with no Seq Scan on
+`jobs` and run under 10 ms, and the admin job counts run under 50 ms. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a

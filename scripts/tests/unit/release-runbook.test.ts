@@ -17,6 +17,8 @@ import { loadTarget } from "../../release/target.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const template = loadTemplate();
+/** The template's steps a release binds: those with no `since`, or a `since` at or before it. */
+const boundBy = (release: string): RunbookStep[] => template.steps.filter((s) => s.since === undefined || !releaseBefore(release, s.since));
 const added = (id: string, release = "v9.9.9"): RunbookStep => ({
   id, added: release, standing: [], description: `check ${id}`, host: "target", phase: "cutover", irreversible: false, expectExit: 0, receipts: [],
   cmds: [["bun", "scripts/release/schedule-parity.ts", "--instance", "{instance}"]],
@@ -337,7 +339,7 @@ describe("the template's analytics load step", () => {
     expect(loadReleaseRunbook("v0.7.0").steps.some((s) => s.id === LOAD)).toBe(false);
     const without = template.steps.filter((s) => s.id !== LOAD);
     expect(checkAddOnly(template, runbook(without, "v0.7.1")).join()).toContain(`template step ${LOAD} is missing`);
-    expect(checkAddOnly(template, runbook(template.steps, "v0.7.1"))).toEqual([]);
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.1"), "v0.7.1"))).toEqual([]);
   });
 });
 
@@ -409,16 +411,16 @@ describe("a step's after list", () => {
   });
 
   test("add-only under afterSince: a release before v0.7.3 keeps the steps as it ran, a later one carries the after lists", () => {
-    const noAfter = template.steps.map((s) => (s.after === undefined ? s : (({ after: _a, ...rest }) => rest)(s) as RunbookStep));
+    const noAfter = boundBy("v0.7.3").map((s) => (s.after === undefined ? s : (({ after: _a, ...rest }) => rest)(s) as RunbookStep));
     for (const release of ["v0.6.2", "v0.7.0", "v0.7.1", "v0.7.2"]) {
       const kept = noAfter.filter((s) => s.since === undefined || !releaseBefore(release, s.since));
       expect(checkAddOnly(template, runbook(kept, release)), release).toEqual([]);
     }
     // A release before afterSince may also adopt them early.
-    expect(checkAddOnly(template, runbook(template.steps, "v0.7.2"))).toEqual([]);
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.2"), "v0.7.2"))).toEqual([]);
     // From v0.7.3 on, a copy without them edits the template.
     expect(checkAddOnly(template, runbook(noAfter, "v0.7.3")).join()).toContain("Q35-archive-routes differs from the template's step");
-    expect(checkAddOnly(template, runbook(template.steps, "v0.7.3"))).toEqual([]);
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.3"), "v0.7.3"))).toEqual([]);
     // The committed runbooks of releases that ran carry no after and still load.
     for (const release of releaseRunbookNames()) {
       const rb = loadReleaseRunbook(release);
@@ -430,8 +432,9 @@ describe("a step's after list", () => {
     // Pinned before issue 1557: the v0.6.2 and v0.7.0 runbooks, which declare no after.
     expect(stepListHash(loadReleaseRunbook("v0.6.2").steps)).toBe("063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925");
     expect(stepListHash(loadReleaseRunbook("v0.7.0").steps)).toBe("1728492c5abbb19728e64bddbb22e7cd791ac99888f4c9f1454a0f2d1807234f");
-    // The template without its after lists hashes as the template did before them.
-    const noAfter = template.steps.map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
+    // The template without its after lists hashes as the template did before
+    // them (and before the v0.7.4 steps of issue 1581, which bind later releases only).
+    const noAfter = boundBy("v0.7.3").map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
     expect(stepListHash(noAfter)).toBe("d57de38d4dd3b30c97b76870fb60e05d4eb30a27d30bdda9a1f19d2703e079c3");
     // red: one after changes it, and afterSince alone never does.
     const v070 = loadReleaseRunbook("v0.7.0").steps;
@@ -439,5 +442,32 @@ describe("a step's after list", () => {
     expect(stepListHash(one)).not.toBe(stepListHash(v070));
     expect(stepListHash(template.steps)).not.toBe(stepListHash(noAfter));
     expect(stepListHash(v070.map((s) => (s.id === "Q37-sdk-tests" ? { ...s, afterSince: "v9.9.9" } : s)))).toBe(stepListHash(v070));
+  });
+});
+
+// Issue 1581: query statistics after every deploy, and the jobs-table plans on
+// production's dump, from release v0.7.4 on.
+describe("the template's database statistics and jobs-plan steps (issue 1581)", () => {
+  const ids = ["Q37a-db-stats", "Q37b-jobs-plans", "C25a-db-stats"];
+
+  test("they bind v0.7.4 on, and an earlier release keeps its runbook as it ran", () => {
+    for (const id of ids) expect(template.steps.find((s) => s.id === id)?.since, id).toBe("v0.7.4");
+    expect(boundBy("v0.7.3").some((s) => ids.includes(s.id))).toBe(false);
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.3"), "v0.7.3"))).toEqual([]);
+    // A v0.7.4 runbook without them drops template steps; with them it only adds.
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.3"), "v0.7.4")).join()).toContain("template step Q37a-db-stats is missing");
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.4"), "v0.7.4"))).toEqual([]);
+  });
+
+  test("the postflight runs the stats check on stage and on production alike; the plan check is stage only", () => {
+    const qa = template.steps.find((s) => s.id === "Q37a-db-stats")!;
+    const prod = template.steps.find((s) => s.id === "C25a-db-stats")!;
+    expect(qa.cmds).toEqual(prod.cmds);
+    expect(qa.cmds[0]!.slice(0, 2)).toEqual(["bun", "scripts/release/db-stats-check.ts"]);
+    expect([qa.onlyFor, prod.onlyFor, qa.expectExit, prod.expectExit]).toEqual(["stage", "prod", 0, 0]);
+    const plans = template.steps.find((s) => s.id === "Q37b-jobs-plans")! as RunbookStep & { stageOnly?: boolean };
+    expect(plans.stageOnly).toBe(true);
+    expect(plans.cmds[0]!.slice(0, 2)).toEqual(["bun", "scripts/release/jobs-query-plans.ts"]);
+    expect(twinProblems(template.steps, "t")).toEqual([]);
   });
 });
