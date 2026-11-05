@@ -37,7 +37,7 @@ import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STE
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
 import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
-import { checkAfterPreflight, ciProblems, controlChangedPaths, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
+import { checkAfterPreflight, ciProblems, controlChangedPaths, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runPreflight, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
 import { TIMED_OUT } from "../../release/step-exec.ts";
 import { cutoverSeconds, skipReason } from "../../release/run.ts";
@@ -1702,6 +1702,72 @@ describe("preflight", () => {
     expect(status(r, "P.ci")).toBe("red");
     expect(status(r, "P.origin")).toBe("red");
     expect(status(r, "P.commit")).toBe("red");
+  });
+
+  // Issue 1568: the rc squash (OTHER_SHA here) has the QA commit's tree, and its push reruns CI.
+  // Production's P.ci then reads the stage journal's commit (SHA), whose CI already passed.
+  const PENDING_CI = REQUIRED_CI.map((n) => `${n}\tin_progress\tnull`).join("\n");
+  const rcAtOtherSha = (extra: Record<string, { code: number; stdout: string }> = {}) => {
+    const a = fakeDeps({ answers: {
+      "git rev-parse HEAD": { code: 0, stdout: `${OTHER_SHA}\n` },
+      [`commits/${OTHER_SHA}/check-runs`]: { code: 0, stdout: `${PENDING_CI}\n` },
+      [`commits/${SHA}/check-runs`]: { code: 0, stdout: `${GREEN_CI}\n` },
+      ...extra,
+    } });
+    const ghReads: string[] = [];
+    const collect = a.deps.collect;
+    a.deps.collect = async (host, remote) => {
+      if (remote.includes("gh api")) ghReads.push(/commits\/([0-9a-f]{40})\/check-runs/.exec(remote)![1]!);
+      return collect(host, remote);
+    };
+    return { ...a, ghReads };
+  };
+
+  test("prod: pending CI on the rc commit, green CI on the stage commit with the same tree: P.ci green, naming the stage commit", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha();
+    expect(await preflight(f, a.deps)).toBe(0);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("green");
+    expect(ci.detail).toBe(`CI green on ${SHA} (same tree ${TREE})`);
+    expect(status(report(f), "P.stage")).toBe("green");
+    expect(a.ghReads).toEqual([OTHER_SHA, SHA]);
+  });
+
+  test("prod: the same case with the stage commit on another tree: P.ci red, and that commit's CI is never read", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha({ [`${SHA}^{tree}`]: { code: 0, stdout: `${"8".repeat(40)}\n` } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("red");
+    expect(ci.detail).toContain("e2e is in_progress");
+    expect(ci.detail).toContain(`has tree ${"8".repeat(40)}, not ${TREE}`);
+    expect(a.ghReads).toEqual([OTHER_SHA]);
+  });
+
+  test("prod: red CI on both commits keeps P.ci red with both commits' problems", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha({ [`commits/${SHA}/check-runs`]: { code: 0, stdout: GREEN_CI.replace("e2e\tcompleted\tsuccess", "e2e\tcompleted\tfailure") } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("red");
+    expect(ci.detail).toContain(`${OTHER_SHA.slice(0, 12)}: `);
+    expect(ci.detail).toContain(`${SHA.slice(0, 12)}: e2e concluded failure`);
+  });
+
+  test("stage: pending CI on the commit is P.ci red, and no second commit's check runs are read", async () => {
+    const s = fixture("stage");
+    const stageDir = await passedStage(LANES, s.journalRoot);
+    const a = rcAtOtherSha();
+    const code = await runPreflight({
+      target: loadTarget(s.targetFile), go: undefined, goPath: undefined, stageJournal: stageDir, triage: undefined,
+      steps: LANES, ids: LANES.map((x) => x.id), hash: stepListHash(LANES), root: s.journalRoot, runTs: "20261008T130000Z", renderPlan: () => "",
+    }, a.deps);
+    expect(code).toBe(2);
+    const r = JSON.parse(readFileSync(join(s.journalRoot, "stage", "preflight-20261008T130000Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
+    expect(status(r, "P.ci")).toBe("red");
+    expect(r.checks.find((c) => c.id === "P.stage")).toBeUndefined();
+    expect(a.ghReads).toEqual([OTHER_SHA]);
   });
 
   test("red: a live release checkout blocks its steps on that host", async () => {
