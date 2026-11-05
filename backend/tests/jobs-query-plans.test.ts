@@ -4,8 +4,10 @@
 // disk reads. The reaper, the enqueue live-job guard, livePayloadField and the
 // worker-start backlog sweep each scanned every row, and the admin counts
 // grouped every row. Migration 0130 adds jobs_live_kind_locked_idx (kind,
-// locked_at) WHERE status IN ('pending','running'). The admin counts keep
-// their heap scan and are held to the issue's 50 ms budget at this size.
+// locked_at) WHERE status IN ('pending','running'). The admin counts stop
+// scanning the heap (src/admin/job-counts.ts): at this size the live statuses
+// are exact through that index and the rest come from planner statistics, so
+// they meet the issue's 50 ms budget with the exact branch's scan never run.
 //
 // The table is loaded to production's size and shape (310k rows, 85% the two
 // wallet samplers, almost every row terminal, a few dozen live), then VACUUMed
@@ -25,6 +27,7 @@ import { registeredSites } from "../src/db/registry.ts";
 import "../src/pipeline/queue-store.ts";
 import "../src/api/routes/admin.ts";
 import "../src/admin/overview.ts";
+import { EXACT_COUNT_MAX_ROWS, jobCountsByKind, jobCountsByStatus } from "../src/admin/job-counts.ts";
 import { JOBS_PLAN_READS, LIVE_INDEX, checkJobsPlans, explainText, flatten, planProblems, type ExplainResult } from "../../scripts/release/jobs-query-plans.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
@@ -116,12 +119,43 @@ describe("the real statements plan on the live-row index at 310k rows (issue 158
 });
 
 describe("the admin counts at 310k rows (issue 1581)", () => {
-  for (const site of ["src/api/routes/admin:listJobs.byStatus", "src/api/routes/admin:listJobs.byKind", "src/admin/overview:getOverviewProjection.queueCounts"]) {
-    test(`${site}: under 50 ms`, async () => {
-      const result = await explain(probeOf(site).statement);
+  const SITES = ["src/admin/job-counts:jobCountsByStatus", "src/admin/job-counts:jobCountsByKind"];
+  for (const site of SITES) {
+    test(`${site}: under 50 ms, and the jobs heap is never scanned`, async () => {
+      const probe = probeOf(site);
+      expect(probe.params).toEqual([EXACT_COUNT_MAX_ROWS]);
+      const result = await explain(probe.statement, probe.params);
       expect(planProblems({ name: site, index: null, maxMs: 50, seqScanAllowed: true }, result)).toEqual([]);
+      // The exact branch's scan is in the plan, guarded, and ran zero times.
+      const scans = flatten(result.Plan).filter((n) => n["Node Type"] === "Seq Scan" && n["Relation Name"] === "jobs");
+      expect(scans.every((n) => n["Actual Loops"] === 0)).toBe(true);
     });
   }
+
+  test("the rehearsal script sends the same two statements", () => {
+    const forms = JOBS_PLAN_READS.filter((r) => r.name.startsWith("admin counts")).map((r) => r.statement);
+    expect(forms).toEqual(SITES.map((site) => probeOf(site).statement.replace("$1", String(EXACT_COUNT_MAX_ROWS))));
+  });
+
+  test("live statuses are exact; terminal statuses and kinds are estimates within 10% of the truth", async () => {
+    const exact = async (column: "status" | "kind") =>
+      Object.fromEntries(
+        ((await fixtureDb.unsafe(`SELECT ${column} AS k, count(*)::int AS n FROM jobs GROUP BY 1`)) as unknown as { k: string; n: number }[]).map((r) => [r.k, r.n]),
+      );
+    const { sql } = await import("../src/db/client.ts");
+    const byStatus = await jobCountsByStatus(sql);
+    const truth = await exact("status");
+    expect(byStatus.pending).toBe(truth.pending);
+    expect(byStatus.running).toBe(truth.running);
+    for (const status of ["succeeded", "cancelled", "dead", "failed"]) {
+      expect(Math.abs(byStatus[status]! - truth[status]!) / truth[status]!, status).toBeLessThan(0.1);
+    }
+    const byKind = await jobCountsByKind(sql);
+    const kinds = await exact("kind");
+    for (const kind of ["wallet.sample_balances", "wallet.sample_sleeves", "kind.3"]) {
+      expect(Math.abs(byKind[kind]! - kinds[kind]!) / kinds[kind]!, kind).toBeLessThan(0.1);
+    }
+  });
 });
 
 describe("the stage rehearsal script's read forms (scripts/release/jobs-query-plans.ts)", () => {

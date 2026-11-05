@@ -19,12 +19,15 @@
 --   1. jobs_live_kind_locked_idx: (kind, locked_at) over the live rows only
 --      ('pending', 'running'). Every live-row query above plans on it. It
 --      stays small whatever the table's size: a row leaves it when it settles.
---      The admin `GROUP BY status` / `GROUP BY kind` counts keep their exact
---      answer and their heap scan: no index serves them (an index-only scan
---      of a (status, kind) index loses to the heap scan whenever the
---      visibility map lags, and that index also became the enqueue guard's
---      plan). They are made cheap by bounding the table instead: `bun run
---      prune` now removes old finished jobs (backend/scripts/prune.ts).
+--      The admin `GROUP BY status` / `GROUP BY kind` counts get no index of
+--      their own (an index-only scan of a (status, kind) index loses to the
+--      heap scan whenever the visibility map lags, and that index also
+--      became the enqueue guard's plan). On a large table they stop reading
+--      the heap: the live statuses come exactly through this index, the rest
+--      from planner statistics (backend/src/admin/job-counts.ts). So
+--      jobs.status and jobs.kind get a statistics target of 1000: ANALYZE
+--      then samples up to 300k rows, all of a production-size table, and a
+--      status as rare as 0.1% is estimated within a few percent.
 --   2. audit_log_job_idx and swarm_session_events_job_idx: the two
 --      `job_id REFERENCES jobs ON DELETE SET NULL` edges that had no index.
 --      `bun run prune` (backend/scripts/prune.ts) now deletes old finished
@@ -47,7 +50,7 @@
 --      grant to rm_readonly is not here at all: rm_owner holds no admin
 --      option on that role, so only the doadmin tool can give it.
 --
--- ADDITIVE. Indexes, one generated column and an optional extension. An older
+-- ADDITIVE. Indexes, two statistics targets, one generated column and an optional extension. An older
 -- image never names the new column (every swarm_briefs INSERT lists its
 -- columns) and reads the same rows through the same statements. No row is
 -- removed and no grant changes.
@@ -56,6 +59,9 @@
 -- nothing.
 CREATE INDEX IF NOT EXISTS jobs_live_kind_locked_idx
   ON jobs (kind, locked_at) WHERE status IN ('pending', 'running');
+
+ALTER TABLE jobs ALTER COLUMN status SET STATISTICS 1000;
+ALTER TABLE jobs ALTER COLUMN kind SET STATISTICS 1000;
 
 CREATE INDEX IF NOT EXISTS audit_log_job_idx ON audit_log (job_id) WHERE job_id IS NOT NULL;
 

@@ -84,10 +84,15 @@ describe("jobs-query-plans: the index, no Seq Scan on jobs, and the budget", () 
     ]);
   });
 
-  test("the admin counts are judged on time only", () => {
-    expect(planProblems(counts, plan([{ type: "HashAggregate" }, { type: "Seq Scan", relation: "jobs" }], 20))).toEqual([]);
-    expect(planProblems(counts, plan([{ type: "HashAggregate" }, { type: "Seq Scan", relation: "jobs" }], 280))).toEqual([
-      "admin counts by status: ran in 280.00 ms, the budget is under 50 ms",
+  test("the admin counts: a guarded heap scan that never ran passes; one that ran, or a slow count, refuses", () => {
+    const guarded = (loops: number, ms: number): ExplainResult => ({
+      Plan: { "Node Type": "Append", Plans: [{ "Node Type": "Seq Scan", "Relation Name": "jobs", "Actual Loops": loops }] },
+      "Execution Time": ms,
+    });
+    expect(planProblems(counts, guarded(0, 2))).toEqual([]);
+    expect(planProblems(counts, guarded(1, 278))).toEqual([
+      "admin counts by status: a Seq Scan on jobs",
+      "admin counts by status: ran in 278.00 ms, the budget is under 50 ms",
     ]);
   });
 

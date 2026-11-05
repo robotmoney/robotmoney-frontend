@@ -3598,6 +3598,14 @@ ALTER TABLE ONLY public.jobs ALTER COLUMN id SET DEFAULT nextval('public.jobs_id
 
 
 --
+-- Name: jobs status, kind; Type: STATISTICS TARGET (issue 1581, migration 0130); Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.jobs ALTER COLUMN status SET STATISTICS 1000;
+ALTER TABLE ONLY public.jobs ALTER COLUMN kind SET STATISTICS 1000;
+
+
+--
 -- Name: prices id; Type: DEFAULT; Schema: public; Owner: -
 --
 

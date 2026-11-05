@@ -12,7 +12,9 @@
 // `jobs_live_kind_locked_idx` (kind, locked_at) WHERE status IN ('pending',
 // 'running'). This check proves, on production's real data, that each of
 // those reads plans on that index and runs inside its budget, and that the
-// admin counts (still a heap scan, kept exact) run inside theirs.
+// admin counts (backend/src/admin/job-counts.ts: live statuses exact through
+// that index, the rest from planner statistics) run inside theirs without
+// scanning the heap.
 //
 // WHAT IT RUNS. `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` of each read in
 // JOBS_PLAN_READS, as rm_readonly on the proven read-only session
@@ -25,7 +27,7 @@
 //
 // It exits 0 only when every live-row read uses jobs_live_kind_locked_idx
 // with no Seq Scan on jobs and runs under 10 ms, and each admin count runs
-// under 50 ms. Each time is the best of three runs after one warm-up run. It writes jobs-query-plans.json to --receipt-dir.
+// under 50 ms with no Seq Scan on jobs executed. Each time is the best of three runs after one warm-up run. It writes jobs-query-plans.json to --receipt-dir.
 // Reads only.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -41,7 +43,7 @@ export interface JobsPlanRead {
   /** The index the plan must use; null when only the time is judged. */
   readonly index: string | null;
   readonly maxMs: number;
-  /** The admin counts read every row by design: a Seq Scan is allowed, the time is judged. */
+  /** The admin counts: a Seq Scan on jobs may be in the plan behind a one-time filter, but must never run. */
   readonly seqScanAllowed?: boolean;
 }
 
@@ -93,8 +95,39 @@ export const JOBS_PLAN_READS: readonly JobsPlanRead[] = Object.freeze([
     index: LIVE_INDEX,
     maxMs: 10,
   },
-  { name: "admin counts by status", statement: "SELECT status, count(*)::int AS n FROM jobs GROUP BY status", index: null, maxMs: 50, seqScanAllowed: true },
-  { name: "admin counts by kind", statement: "SELECT kind, count(*)::int AS n FROM jobs GROUP BY kind", index: null, maxMs: 50, seqScanAllowed: true },
+  // The admin counts as backend/src/admin/job-counts.ts sends them (its probes
+  // with $1 = EXACT_COUNT_MAX_ROWS; backend/tests/jobs-query-plans.test.ts holds
+  // the two texts equal). On a production-size table the exact branch's heap
+  // scan is in the plan but never runs: a Seq Scan node that executes fails.
+  { name: "admin counts by status", statement: `WITH est AS (
+      SELECT GREATEST(c.reltuples, 0)::float8 AS total, c.reltuples >= 0 AS analyzed
+        FROM pg_catalog.pg_class c WHERE c.oid = 'public.jobs'::regclass
+    ), mcv AS (
+      SELECT v.value, v.freq::float8 AS freq
+        FROM pg_catalog.pg_stats s, unnest(s.most_common_vals::text::text[], s.most_common_freqs) AS v(value, freq)
+       WHERE s.schemaname = 'public' AND s.tablename = 'jobs' AND s.attname = 'status'
+    ), mode AS (
+      SELECT (SELECT analyzed AND total >= 50000 FROM est) AND EXISTS (SELECT 1 FROM mcv) AS estimate
+    )
+    SELECT status, count(*)::int AS n FROM jobs WHERE NOT (SELECT estimate FROM mode) GROUP BY status
+    UNION ALL
+    SELECT status, count(*)::int FROM jobs WHERE (SELECT estimate FROM mode) AND status IN ('pending', 'running') GROUP BY status
+    UNION ALL
+    SELECT m.value, round(m.freq * e.total)::int FROM mcv m, est e
+     WHERE (SELECT estimate FROM mode) AND m.value NOT IN ('pending', 'running')`, index: null, maxMs: 50, seqScanAllowed: true },
+  { name: "admin counts by kind", statement: `WITH est AS (
+      SELECT GREATEST(c.reltuples, 0)::float8 AS total, c.reltuples >= 0 AS analyzed
+        FROM pg_catalog.pg_class c WHERE c.oid = 'public.jobs'::regclass
+    ), mcv AS (
+      SELECT v.value, v.freq::float8 AS freq
+        FROM pg_catalog.pg_stats s, unnest(s.most_common_vals::text::text[], s.most_common_freqs) AS v(value, freq)
+       WHERE s.schemaname = 'public' AND s.tablename = 'jobs' AND s.attname = 'kind'
+    ), mode AS (
+      SELECT (SELECT analyzed AND total >= 50000 FROM est) AND EXISTS (SELECT 1 FROM mcv) AS estimate
+    )
+    SELECT kind, count(*)::int AS n FROM jobs WHERE NOT (SELECT estimate FROM mode) GROUP BY kind
+    UNION ALL
+    SELECT m.value, round(m.freq * e.total)::int FROM mcv m, est e WHERE (SELECT estimate FROM mode)`, index: null, maxMs: 50, seqScanAllowed: true },
 ]);
 
 /** The parts of an EXPLAIN (FORMAT JSON) node the judge reads. */
@@ -102,6 +135,8 @@ export interface PlanNode {
   readonly "Node Type": string;
   readonly "Relation Name"?: string;
   readonly "Index Name"?: string;
+  /** EXPLAIN ANALYZE: how many times the node ran; 0 for a branch a one-time filter skipped. */
+  readonly "Actual Loops"?: number;
   readonly Plans?: readonly PlanNode[];
 }
 
@@ -121,7 +156,10 @@ export function flatten(node: PlanNode, out: PlanNode[] = []): PlanNode[] {
 export function planProblems(read: Pick<JobsPlanRead, "name" | "index" | "maxMs" | "seqScanAllowed">, result: ExplainResult): string[] {
   const nodes = flatten(result.Plan);
   const out: string[] = [];
-  if (read.seqScanAllowed !== true && nodes.some((n) => n["Node Type"] === "Seq Scan" && n["Relation Name"] === "jobs")) out.push(`${read.name}: a Seq Scan on jobs`);
+  const scans = nodes.filter((n) => n["Node Type"] === "Seq Scan" && n["Relation Name"] === "jobs");
+  // A guarded scan (the admin counts' exact branch) may sit in the plan, but never run.
+  const ran = read.seqScanAllowed === true ? scans.filter((n) => n["Actual Loops"] !== 0) : scans;
+  if (ran.length > 0) out.push(`${read.name}: a Seq Scan on jobs`);
   if (read.index !== null && !nodes.some((n) => n["Index Name"] === read.index)) {
     out.push(`${read.name}: the plan does not use ${read.index}`);
   }

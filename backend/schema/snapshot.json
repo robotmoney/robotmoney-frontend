@@ -144,7 +144,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "a6c82e55920a012aed6b833b89678433acc31137eabcb317bcd9e6bbc6ae2673",
+  "contentHash": "df293c77067f7f073d9f570cd938d42b22265c58030c754ba7d488e983e6d169",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

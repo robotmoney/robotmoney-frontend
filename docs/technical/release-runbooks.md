@@ -422,7 +422,7 @@ lists `pg_stat_statements` and `rm_readonly` reads other roles' rows in `pg_stat
 with no query text hidden. Q37b-jobs-plans (`scripts/release/jobs-query-plans.ts`, stage only) runs `EXPLAIN
 (ANALYZE, BUFFERS)` of the jobs-table reads on production's dump as `rm_readonly` and exits non-zero unless the reaper,
 the enqueue live guard, livePayloadField and the backlog sweep use `jobs_live_kind_locked_idx` with no Seq Scan on
-`jobs` and run under 10 ms, and the admin job counts run under 50 ms. Sessions are deferred in the
+`jobs` and run under 10 ms, and the admin job counts run under 50 ms with no heap scan of `jobs` executed. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
