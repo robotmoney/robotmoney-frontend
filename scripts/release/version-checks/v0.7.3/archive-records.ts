@@ -3,3 +3,4 @@
 // It is not a template step yet, so each release that wants it adds it. Logic and docs:
 // ../v0.7.1/archive-records.ts.
 export * from "../v0.7.1/archive-records.ts";
+export { default } from "../v0.7.1/archive-records.ts";

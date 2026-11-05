@@ -26,3 +26,14 @@ describe("v0.7.3 backtest-start check (PR 1562)", () => {
     expect(backtestStartProblems(200, JSON.stringify({ latest: {} }))).toEqual([`GET ${BACKTEST_PATH} carries no backtest in latest`]);
   });
 });
+
+describe("every v0.7.3 version check loads as version-check.ts runs it", () => {
+  // Q34b's first v0.7.3 stage run (20261105T155709Z) refused "mod.default is not a function": the
+  // carried file re-exported the named exports only, and `export *` never carries a default.
+  for (const name of ["archive-records", "backtest-start"]) {
+    test(name, async () => {
+      const mod = await import(`../../release/version-checks/v0.7.3/${name}.ts`);
+      expect(typeof mod.default).toBe("function");
+    });
+  }
+});
