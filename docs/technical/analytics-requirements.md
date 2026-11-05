@@ -178,7 +178,7 @@ The backend and SDK run one shared backtest calculation. Generalizing the API pr
 - **Trading costs.** A change in target weights at the close deducts one-sided turnover times the cost rate. Turnover is the sum of absolute target-weight changes, halved. Unchanged target weights incur no cost. Preserve the established operation order.
 - **Cash.** Uses the previous calendar day's annual yield in percent, converted with `(1 + yield / 100) ** (1 / 365) - 1`. Missing earlier yields earn zero.
 - **Prices.** Gaps are forward-filled using the existing rules. The existing treatment of invalid or nonpositive prices is preserved.
-- **Start.** Values start at 1. Reference baselines begin on their first priced date; strategies begin on their first applicable labelled date. Preserve each path's original dates and normalization.
+- **Start.** Values start at 1. Strategies begin on their first applicable labelled date. Within a reference portfolio every strategy and baseline begins on one date, the latest of the strategies' first labelled dates, so every line covers the same window (issue 1559). Before issue 1559 the baselines began on their first priced date.
 
 ### 5.3 Simulator
 
@@ -215,6 +215,7 @@ The book also rebalances when the target changes. A rebalance with turnover abov
 - Maximum drawdown uses the established net values and peak calculation.
 - In-sample and out-of-sample statistics preserve the existing boundary conventions. Out-of-sample growth uses the first value after the split date and elapsed time from the split date.
 - Empty, short and non-finite cases preserve existing zero/null behavior; the refactor does not standardize them to new defaults.
+- The equity curve is the window's first value (1 at a simulation's start), then each month's last value.
 
 Windows and market phases are supplied date ranges. Additional statistics must not alter existing fields. Full-range values and every existing split statistic must exactly reproduce the established output through both backend and SDK entry points.
 
@@ -222,7 +223,7 @@ Windows and market phases are supplied date ranges. Additional statistics must n
 
 The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existing regime weight tables and baselines, plus the all-cash baseline. Single-asset hold baselines retain their existing behavior. The mixed baseline retains the `blend_hodl` key and its existing fixed-target daily calculation without charging for daily resets; its descriptive meaning is constant mix.
 
-`scheduleFromLabels(labels, table)` preserves the established label-to-weight mapping, including missing labels. Running those schedules through `simulatePortfolio` and `periodStats` gives the same daily values, statistics and serialized reference report as `computeBacktest`. Baselines and strategies retain their original respective start dates.
+`scheduleFromLabels(labels, table)` preserves the established label-to-weight mapping, including missing labels. Running those schedules through `simulatePortfolio` and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
 
 ### 5.6 Consumers
 

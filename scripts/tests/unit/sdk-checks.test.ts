@@ -116,7 +116,141 @@ function recordingWithArtifact(row: Record<string, unknown>, legacyBuild = false
   return dir;
 }
 
-describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
+/**
+ * An in-process fake of the routes the Q36/C24 contract smoke calls: a listing of `backups` sealed days whose
+ * newest record lists two data files and a revision file (gzip of known content), a reports listing with one
+ * run, its bytes, and the run's vintage with members. Options plant one failure each. Every request is kept;
+ * an include=members request without tool_id is answered 400, as the route does, and counted.
+ */
+function contractNet(o: { backups?: number; corruptPath?: string; tamperReport?: boolean; members?: number; reports?: boolean } = {}) {
+  const API = "/api/public/analytics";
+  const ids = Array.from({ length: o.backups ?? 44 }, (_, i) => `${new Date(Date.UTC(2026, 8, 20 + i)).toISOString().slice(0, 10)}T000000Z`);
+  const newest = ids.at(-1)!;
+  const contents: Record<string, string> = {
+    [`csv/${newest}/data/source_value_versions.2026-11-01T010000Z_2026-11-01T020000Z.csv.gz`]: "id,value\n101,1\n102,2\n",
+    [`csv/${newest}/data/analytics_ledger_runs.2026-11-01T053000Z_2026-11-01T053000Z.csv.gz`]: "id,run_key\n7,k\n",
+    [`csv/${newest}/revisions/analytics_ledger_methodology_versions.csv.gz`]: "op,id\nupsert,1\n",
+  };
+  const file = (path: string) => ({ path, rows: 2, bytes_raw: Buffer.byteLength(contents[path]!), sha256_raw: sha256Hex(contents[path]!) });
+  const [svv, runs, rev] = Object.keys(contents);
+  const record = {
+    format: 1, backup: newest, source: "api",
+    // The newest backup continues each chain from the day before: the smoke parses it without the earlier days.
+    append_only: { source_value_versions: { watermark_before: "100", watermark_after: "102", files: [file(svv!)] }, analytics_ledger_runs: { watermark_before: "6", watermark_after: "7", files: [file(runs!)] } },
+    revisions: { analytics_ledger_methodology_versions: { key: ["id"], file: file(rev!) } },
+  };
+  const reportBytes = new TextEncoder().encode('{"asof":"2026-11-01","toolId":"regime","results":{}}');
+  const requests: string[] = [];
+  let refusedMembers = 0;
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const fetchImpl = async (url: string): Promise<Response> => {
+    const u = new URL(url);
+    requests.push(u.pathname + u.search);
+    const p = u.pathname;
+    if (p === `${API}/archive/backups`) return json({ schemaVersion: 1, limit: 1000, format: 1, backups: ids.map((b) => ({ backup: b, record: `csv/${b}/backup.json` })), nextCursor: null });
+    if (p.startsWith(`${API}/archive/`)) {
+      const rel = p.slice(`${API}/archive/`.length);
+      if (rel === `csv/${newest}/backup.json`) return json(record);
+      if (rel in contents) {
+        const body = rel === o.corruptPath ? `I${contents[rel]!.slice(1)}` : contents[rel]!; // same length, other bytes
+        return new Response(gzipSync(body), { status: 200, headers: { "Content-Type": "application/gzip" } });
+      }
+      return json({ error: "not found" }, 404);
+    }
+    if (p === `${API}/reports`) {
+      const run = u.searchParams.get("run");
+      if (run === null) return json({ schemaVersion: 1, limit: 1000, reports: o.reports === false ? [] : [{ report_id: 3, run_key: RUN_KEY, asof: "2026-11-01", checksum: sha256Hex(reportBytes), byte_length: reportBytes.length }], nextCursor: null });
+      return new Response(o.tamperReport ? new TextEncoder().encode("{}") : reportBytes, { status: 200 });
+    }
+    if (p === `${API}/vintages`) {
+      const runKey = u.searchParams.get("run_key");
+      const toolId = u.searchParams.get("tool_id");
+      if (u.searchParams.get("include") === "members") {
+        if (runKey === null || toolId === null) { refusedMembers++; return json({ error: "include=members needs run_key and tool_id, so exactly one vintage is named" }, 400); }
+        const rows = Array.from({ length: o.members ?? 3 }, (_, i) => ({ source_key: "raw_indicator_history:T10Y2Y", source_value_version_id: 101 + i }));
+        return json({ schemaVersion: 1, limit: 100, vintages: [{ id: 7, run_key: runKey, tool_id: toolId, members: { rows, nextCursor: null } }], nextCursor: null });
+      }
+      return json({ schemaVersion: 1, limit: 100, vintages: [{ id: 7, run_key: runKey, tool_id: "regime", member_count: 3 }], nextCursor: null });
+    }
+    return json({ error: "not found" }, 404);
+  };
+  return { net: { origin: "http://fake.invalid", fetch: fetchImpl, sleep: async () => {} }, requests, refused: () => refusedMembers, newest, ids, paths: Object.keys(contents) };
+}
+
+describe("Q36-sdk-quickstart/C24-sdk-quickstart: a minimal contract smoke", () => {
+  const API = "/api/public/analytics";
+
+  test("against a 44-backup listing it makes the seven calls in order: one record and only its files, one report, two vintages calls", async () => {
+    const f = contractNet();
+    const r = await quickstartCheck(localDeps(f.net), COMMIT);
+    expect(r.problems).toEqual([]);
+    expect(f.ids.length).toBe(44);
+    expect(f.requests).toEqual([
+      `${API}/archive/backups?limit=1000`,
+      `${API}/archive/csv/${f.newest}/backup.json`,
+      ...f.paths.map((p) => `${API}/archive/${p}`),
+      `${API}/reports?limit=1000`,
+      `${API}/reports?run=${RUN_KEY}`,
+      `${API}/vintages?run_key=${RUN_KEY}`,
+      `${API}/vintages?run_key=${RUN_KEY}&tool_id=regime&include=members`,
+    ]);
+    // exactly one backup record of the 44, and no replay
+    expect(f.requests.filter((q) => q.endsWith("/backup.json"))).toEqual([`${API}/archive/csv/${f.newest}/backup.json`]);
+    expect(r.found).toMatchObject({ backup: f.newest, files: 3, run_key: RUN_KEY, tool_id: "regime", members: 3 });
+    expect(r.notes?.join()).toContain("--check post-seal");
+  });
+
+  test("the route refuses include=members without tool_id: the smoke never sends such a request", async () => {
+    const f = contractNet();
+    expect((await quickstartCheck(localDeps(f.net), COMMIT)).problems).toEqual([]);
+    expect(f.refused()).toBe(0);
+    expect(f.requests.filter((q) => q.includes("include=members") && !q.includes("tool_id="))).toEqual([]);
+  });
+
+  test("RED CONTROL: a listed file whose bytes do not match its sha256_raw fails, naming that path", async () => {
+    const bad = contractNet().paths[1]!;
+    const r = await quickstartCheck(localDeps(contractNet({ corruptPath: bad }).net), COMMIT);
+    expect(r.problems.length).toBe(1);
+    expect(r.problems[0]).toContain(`GET ${API}/archive/${bad} does not verify`);
+    expect(r.problems[0]).toContain("does not match the record's");
+  });
+
+  test("RED CONTROL: report bytes whose sha256 differs from the listing's checksum fail, naming the reports route", async () => {
+    const f = contractNet({ tamperReport: true });
+    const r = await quickstartCheck(localDeps(f.net), COMMIT);
+    expect(r.problems.length).toBe(1);
+    expect(r.problems[0]).toContain(`GET ${API}/reports?run=${RUN_KEY}`);
+    expect(r.problems[0]).toContain("is not the listing's checksum");
+    expect(f.requests.some((q) => q.startsWith(`${API}/vintages`))).toBe(false);
+  });
+
+  test("RED CONTROL: a vintage with no members fails, naming the vintages route", async () => {
+    const r = await quickstartCheck(localDeps(contractNet({ members: 0 }).net), COMMIT);
+    expect(r.problems).toEqual([`GET ${API}/vintages?run_key=${RUN_KEY}&tool_id=regime&include=members lists no member for the vintage`]);
+  });
+
+  test("red: a target with no published run fails with the no-published-run message, never skips", async () => {
+    const r = await quickstartCheck(localDeps(contractNet({ reports: false }).net), COMMIT);
+    expect(r.problems).toEqual([noRunMessage("the SDK quickstart")]);
+    expect(r.problems[0]).toContain("no published run");
+  });
+
+  test("passes against the committed recording of the real archive routes (a chain that starts mid-copy)", async () => {
+    const net = fakeNet({ reports: [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }] });
+    const r = await quickstartCheck(localDeps(net), COMMIT);
+    // fakeNet's vintages carry no tool_id: the smoke stops there, after the archive and reports verified.
+    expect(r.problems).toEqual([`GET ${API}/vintages?run_key=${RUN_KEY}: the vintage names no tool_id`]);
+    expect(r.found.backup).toBe("2001-01-03T000000Z");
+    expect(net.requests.filter((q) => q.endsWith("/backup.json"))).toEqual([`${API}/archive/csv/2001-01-03T000000Z/backup.json`]);
+  });
+
+  test("red: a 404 archive listing names the archive route", async () => {
+    const r = await quickstartCheck(localDeps(fakeNet({ archiveStatus: 404 })), COMMIT);
+    expect(r.problems).toEqual([`GET ${API}/archive/backups?limit=1000 answered 404, not 200`]);
+  });
+});
+
+describe("post-seal: the full-archive replay (bun scripts/release/sdk-check.ts --check post-seal)", () => {
   let replayed: Record<string, unknown>;
   const withApi = async (recording: string, reports: boolean, body: (net: SdkDeps["net"]) => Promise<void>) => {
     const api = fakeServer({ recording, reports: reports ? [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }] : [] });
@@ -140,91 +274,61 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart", () => {
     expect("regime" in replayed && "backtest" in replayed).toBe(true);
   });
 
-  test("passes: the SDK's as-of row equals the published as-of row, and both hashes are reported", async () => {
-    await withApi(recordingWithArtifact(replayed), true, async (net) => {
-      const r = await quickstartCheck(localDeps(net), COMMIT);
-      expect(r.problems).toEqual([]);
-      expect(r.found.sdkRowSha256).toBe(r.found.publishedRowSha256);
-      expect(String(r.found.sdkRowSha256)).toMatch(/^[0-9a-f]{64}$/);
-    });
-  });
-
-  test("tier 1, a run of the old producer: the labels are asserted, the rest is info, and the deferral is printed", async () => {
-    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }, true), true, async (net) => {
-      const r = await quickstartCheck(localDeps(net), COMMIT);
-      expect(r.problems).toEqual([]);
-      expect(r.found.tier).toBe("label");
-      expect(r.found.differingFields).toContain("composite");
-      expect(r.notes?.join()).toContain("FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT");
-    });
-  });
-
-  test("RED CONTROL: a label that differs fails in either tier", async () => {
-    for (const legacy of [true, false]) {
-      await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-regime" }, legacy), true, async (net) => {
-        const r = await quickstartCheck(localDeps(net), COMMIT);
-        expect(r.problems.join()).toContain("differs from the published one in regime");
-      });
-    }
-  });
-
-  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
-    const api = fakeServer({ recording: recordingWithArtifact(replayed), reports: [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }] });
-    try {
-      const r = await quickstartCheck(localDeps({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) }), COMMIT);
-      expect(r.problems.join()).toContain("no sealed backup holds a published run yet");
-    } finally {
-      api.server.stop(true);
-    }
-  });
-
-  test("post-seal: a run of the old producer fails naming the sealed days; a fixed run's whole row must match", async () => {
+  test("a run of the old producer fails naming the sealed days; a fixed run's whole row must match, and both hashes are reported", async () => {
     await withApi(recordingWithArtifact(replayed, true), true, async (net) => {
       const r = await postSealCheck(localDeps(net), COMMIT);
       expect(r.problems.join()).toContain("old producer");
       expect(r.problems.join()).toContain("sealed backups run through");
     });
     await withApi(recordingWithArtifact(replayed), true, async (net) => {
-      expect((await postSealCheck(localDeps(net), COMMIT)).problems).toEqual([]);
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.problems).toEqual([]);
+      expect(r.found.sdkRowSha256).toBe(r.found.publishedRowSha256);
+      expect(String(r.found.sdkRowSha256)).toMatch(/^[0-9a-f]{64}$/);
     });
     await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
       const r = await postSealCheck(localDeps(net), COMMIT);
       expect(r.found.tier).toBe("full");
       expect(r.problems.join()).toContain("differs from the published one in composite");
+      expect(r.problems.join()).toContain("sha256 published");
     });
   });
 
-  test("red: a published row with one field changed fails and names the field and both hashes", async () => {
-    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
-      const r = await quickstartCheck(localDeps(net), COMMIT);
-      expect(r.problems.join()).toContain("differs from the published one in composite");
-      expect(r.problems.join()).toContain("sha256 published");
+  test("RED CONTROL: a label that differs fails", async () => {
+    await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-regime" }), true, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("differs from the published one in regime");
     });
-    await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-label" }), true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("regime");
-    });
+  });
+
+  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
+    const api = fakeServer({ recording: recordingWithArtifact(replayed), reports: [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }] });
+    try {
+      const r = await postSealCheck(localDeps({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) }), COMMIT);
+      expect(r.problems.join()).toContain("no sealed backup holds a published run yet");
+    } finally {
+      api.server.stop(true);
+    }
   });
 
   test("red: a published artifact with no row for the as-of day fails; a copy with no artifact at all fails", async () => {
     await withApi(recordingWithArtifact({ ...replayed, date: "2001-01-01" }), true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no as-of row for 2026-08-15");
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no as-of row for 2026-08-15");
     });
     await withApi(RECORDING, true, async (net) => {
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no regime_snapshots artifact");
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no regime_snapshots artifact");
     });
   });
 
   test("red: a target with no published run fails with a message that says so, never skips", async () => {
-    const r = await quickstartCheck(localDeps(fakeNet({ reports: [] })), COMMIT);
-    expect(r.problems).toEqual([noRunMessage("the SDK quickstart")]);
-    expect(r.problems[0]).toContain("no published run");
+    const r = await postSealCheck(localDeps(fakeNet({ reports: [] })), COMMIT);
+    expect(r.problems).toEqual([noRunMessage("the post-seal check")]);
   });
 
   test("red: a fill that fails (the API answers 404 for the archive) fails the check", async () => {
     const api = fakeServer({ reports: [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }], archiveStatus: 404 });
     try {
       const net = { ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) };
-      expect((await quickstartCheck(localDeps(net), COMMIT)).problems.join()).toContain("fill api-copy exited");
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("fill api-copy exited");
     } finally {
       api.server.stop(true);
     }

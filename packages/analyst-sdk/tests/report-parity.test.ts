@@ -11,6 +11,9 @@
 // identical structure, field order, labels, nulls and integers, and no number
 // moved by more than rounding. The in-process and CLI outputs still agree byte
 // for byte with each other. The originals themselves are never regenerated.
+// Issue 1559 starts every line of a market on the strategies' start, so each
+// original is compared with that rule applied (support/issue-1559.ts), using
+// the variant's original daily values to re-window the baselines.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +23,7 @@ import { buildReport, EXTRA_IDS, runRegime, type RunResult } from "../src/run.ts
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { cutAtAsof } from "../src/prepare.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
+import { apply1559ToDaily, apply1559ToText, type DailyEvidence } from "./support/issue-1559.ts";
 import {
   VARIANTS,
   bytesEqual,
@@ -60,9 +64,11 @@ for (const v of VARIANTS) {
   };
 }
 
-// The original, matched up to rounding (D78): no structural or discrete difference.
-function expectOriginal(got: string, file: string) {
-  expectSameUpToRounding(got, readOriginal(file), file);
+// The original with the issue 1559 rule applied, matched up to rounding (D78):
+// no structural or discrete difference.
+function expectOriginal(got: string, file: string, v: Variant) {
+  const evidence = JSON.parse(readOriginal(originalFile.daily(v))) as DailyEvidence;
+  expectSameUpToRounding(got, apply1559ToText(readOriginal(file), evidence), file);
 }
 
 function expectBytes(got: string, want: string, label: string) {
@@ -83,7 +89,7 @@ for (const v of VARIANTS) {
     test("shared correlations/backtest artifact equals the original up to rounding", () => {
       expect(c.run.correlations).toBeDefined();
       expect(c.run.backtest).toBeDefined();
-      expectOriginal(sharedAnalysisBytes({ correlations: c.run.correlations, backtest: c.run.backtest }), originalFile.sharedAnalysis(v));
+      expectOriginal(sharedAnalysisBytes({ correlations: c.run.correlations, backtest: c.run.backtest }), originalFile.sharedAnalysis(v), v);
     });
 
     test("daily portfolio values of every portfolio and strategy equal the original up to rounding", () => {
@@ -94,16 +100,18 @@ for (const v of VARIANTS) {
         tbill3m: cutAtAsof(c.history[EXTRA_IDS.tbill3m] ?? [], asof),
       });
       expect(Object.keys(bt)).toEqual(["eth", "sp500", "mixed"]);
-      expectOriginal(dailyEvidenceBytes(bt), originalFile.daily(v));
+      const original = JSON.parse(readOriginal(originalFile.sharedAnalysis(v))) as { backtest: Parameters<typeof apply1559ToDaily>[1] };
+      const evidence = JSON.parse(readOriginal(originalFile.daily(v))) as DailyEvidence;
+      expectSameUpToRounding(dailyEvidenceBytes(bt), JSON.stringify(apply1559ToDaily(evidence, original.backtest)), originalFile.daily(v));
     });
 
     test("default report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
-      expectOriginal(c.defaultEnvelope, originalFile.sdkReport(v));
+      expectOriginal(c.defaultEnvelope, originalFile.sdkReport(v), v);
       expectBytes(cli([c.csvPath]), c.defaultEnvelope, `${v} CLI`);
     });
 
     test("--full --factor report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
-      expectOriginal(c.fullFactorEnvelope, originalFile.sdkReportFull(v));
+      expectOriginal(c.fullFactorEnvelope, originalFile.sdkReportFull(v), v);
       expectBytes(cli([c.csvPath, "--full", "--factor"]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
     });
   });

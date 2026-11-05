@@ -10,6 +10,9 @@
 // (compensated arithmetic) the frozen original keeps the old plain-loop
 // arithmetic, so it agrees with them up to rounding: same structure, labels,
 // nulls and integers, no number moved by more than rounding.
+// Issue 1559 starts every line of a market on the strategies' first labelled
+// date; the frozen original predates it, so it is compared with that rule
+// applied (support/issue-1559.ts).
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -32,6 +35,7 @@ import type { RegimeComputeResult } from "../src/analyze/compute.ts";
 import { buildReport, parseRawHistory, runRegime, toHistory } from "../src/index.ts";
 import type { Point } from "../src/types.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
+import { apply1559 } from "./support/issue-1559.ts";
 import { exactCompound, exactDot, exactProduct, exactSharpe, onePlus, Q } from "./support/exact-reference.ts";
 
 setDefaultTimeout(120_000);
@@ -58,8 +62,15 @@ function generalized(dateAxis: string[], result: RegimeComputeResult, extras: Ba
     if (!ref[pKey]) continue;
     const prices: Record<string, Point[]> = {};
     for (const a of spec.risky) prices[a] = price[a]!;
+    // Issue 1559: every schedule is empty before the latest first labelled
+    // date (on or after the first priced date) of the market's strategies.
+    const priced = dateAxis.findIndex((_, i) => spec.risky.every((a) => price[a]!.some((p) => p.date <= dateAxis[i]! && Number.isFinite(p.value))));
+    const strategySchedules = Object.keys(ref[pKey]!)
+      .filter((name) => name !== spec.hodl.key && name !== "stables_only")
+      .map((name) => scheduleFromLabels(labels[name]!, spec.weights));
+    const start = Math.max(-1, ...strategySchedules.map((s) => s.findIndex((w, i) => i >= priced && w != null)));
     const run = (s: Schedule) => {
-      const sim = simulatePortfolio(dateAxis, s, prices, extras.tbill3m);
+      const sim = simulatePortfolio(dateAxis, start < 0 ? s : s.map((w, i) => (i < start ? null : w)), prices, extras.tbill3m);
       return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
     };
     const port: Record<string, unknown> = {};
@@ -75,9 +86,9 @@ function generalized(dateAxis: string[], result: RegimeComputeResult, extras: Ba
 }
 
 function threeWay(dateAxis: string[], result: RegimeComputeResult, extras: BacktestExtras) {
-  const original = JSON.stringify(originalBacktest(dateAxis, result, extras));
+  const original = JSON.stringify(apply1559(originalBacktest(dateAxis, result, extras)));
   const shared = JSON.stringify(computeBacktest(dateAxis, result, extras));
-  expectSameUpToRounding(shared, original, "shared vs frozen original");
+  expectSameUpToRounding(shared, original, "shared vs frozen original (issue 1559 rule)");
   // The generalized path runs the same arithmetic as the shared one: byte for byte.
   const { out } = generalized(dateAxis, result, extras);
   const sharedObj = JSON.parse(shared) as Record<string, Record<string, unknown>>;
@@ -264,18 +275,15 @@ describe("parity: original, shared and generalized paths", () => {
   const wave = (i: number, base: number, amp: number, per: number) => base + amp * Math.sin(i / per);
   const labelsAt = (i: number) => (i % 97 < 30 ? "risk_on" : i % 97 < 60 ? "neutral" : "risk_off");
 
-  test("blend_hodl is a fixed-target daily calculation with no reset cost; distinct starts per path", () => {
+  test("blend_hodl is a fixed-target daily calculation with no reset cost; one start per market", () => {
     const eth = pts(axis, axis.map((_, i) => (i < 40 ? undefined : wave(i, 2000, 300, 17))));
     const spx = pts(axis, axis.map((_, i) => (i < 10 ? undefined : wave(i, 4000, 200, 23))));
     const tbill = pts(axis, axis.map((_, i) => (i % 5 === 0 ? 4 + (i % 3) * 0.1 : undefined)));
     const regime = axis.map((_, i) => (i < 60 ? null : labelsAt(i)));
     const out = threeWay(axis, fakeResult(axis, regime), { spx, eth, tbill3m: tbill });
-    // Baselines start at the first priced date of the portfolio's assets;
-    // strategies at their first labelled date.
-    expect(out.sp500!.sp500_hodl!.start_date).toBe(axis[10]);
-    expect(out.eth!.eth_hodl!.start_date).toBe(axis[40]);
-    expect(out.mixed!.blend_hodl!.start_date).toBe(axis[40]);
-    expect(out.mixed!.composite!.start_date).toBe(axis[60]);
+    // Issue 1559: baselines start with the strategies, on the first labelled date.
+    for (const market of Object.values(out)) for (const m of Object.values(market)) expect(m.start_date).toBe(axis[60]);
+    expect(out.mixed!.blend_hodl!.equity_curve[0]).toEqual({ date: axis[60]!, value: 1 });
     expect(out.mixed!.blend_hodl!.transitions).toBe(0);
   });
 

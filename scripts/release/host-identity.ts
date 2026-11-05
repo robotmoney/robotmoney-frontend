@@ -6,7 +6,10 @@
 // Proves the checkout this runs from is the release: HEAD equals --commit and
 // `git status --porcelain` is empty (policy 4.6: a host runs a clean checkout
 // of a pushed commit). Checks that bun, docker and git are on PATH; no release
-// step uses tmux, so a host without it passes. With
+// step uses tmux, so a host without it passes. Checks that this host's Bun
+// reads every committed bun.lock (./host-tools.ts hostToolProblems, issue
+// 1528), with or without --confirm-target, so every identity step fails before
+// its install step does. With
 // --confirm-target, resolves `host:port/database` from `$HOME/.env` and
 // refuses unless it equals the flag: the run's confirmTarget is the database
 // this host actually names, before any write is attempted. Then it checks the
@@ -30,13 +33,15 @@
 // modules with no package import (the registry imports `postgres` as a type
 // only; proveOwnerLogin connects through Bun's built-in client).
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { proveOwnerLogin } from "../../backend/scripts/owner-login-check.ts";
 import { homeEnvFilePath, loadEnvFile, urlForRole } from "../lib/env-role.ts";
 import { openReadOnly } from "./db-read.ts";
 import { confirmTargetOf, preCutoverKeyProblems } from "./env-keys.ts";
+import { bunRequirement, hostToolProblems, type Lockfile } from "./host-tools.ts";
+import { lockfilePaths } from "./lockfile.ts";
 import { preconditionProblems } from "./precondition.ts";
 
 function flag(name: string): string | undefined {
@@ -66,6 +71,12 @@ async function main(): Promise<number> {
     if (r.status !== 0) problems.push(`${tool} is not on PATH for a non-interactive ssh command`);
     else tools[tool] = r.stdout.trim();
   }
+  // The checkout's own lockfiles; a missing one is skipped.
+  const lockfiles: Lockfile[] = lockfilePaths().map((path) => {
+    try { return { path, text: readFileSync(join(process.cwd(), path), "utf8") }; } catch { return { path, text: undefined }; }
+  });
+  const bunNeeds = bunRequirement(lockfiles);
+  if (tools.bun !== undefined) problems.push(...hostToolProblems({ bunVersion: tools.bun, lockfiles }));
   // The runner starts every command under `env -i` with one fixed PATH (steps.ts REMOTE_PATH); record where each tool resolved.
   const toolPaths = sh("sh", ["-c", "for t in bun docker git; do printf '%s=%s\\n' \"$t\" \"$(command -v $t)\"; done"]).stdout.trim().split("\n");
   const inherited = Object.keys(process.env).filter((k) => k.startsWith("DATABASE_"));
@@ -122,7 +133,7 @@ async function main(): Promise<number> {
     commit: head,
     expectedCommit: commit,
     clean: porcelain.status === 0 && porcelain.stdout.trim() === "",
-    tools,
+    tools: { ...tools, bunMinimum: bunNeeds.minimum, bunMinimumFrom: bunNeeds.from },
     path: process.env.PATH ?? null,
     toolPaths,
     inheritedDatabaseEnv: inherited,

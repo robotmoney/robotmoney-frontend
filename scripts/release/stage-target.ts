@@ -77,8 +77,9 @@ import {
   grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
+  dumpAgeRefusal,
+  dumpPlan,
   newestFreshDump,
-  schemaSettledAt,
   LEDGER_TABLE_SQL,
   parseKeyValues,
   parseRunningVersion,
@@ -267,11 +268,10 @@ function readDumpPreflight(dumpDir: string) {
   const manifestPath = join(dumpDir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Refusal(`${manifestPath} is missing; capture with bun smoke:capture`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { capturedAt?: string; role?: string; pgIsInRecovery?: boolean; target?: string };
-  const age = dumpAgeHours(manifest, new Date());
-  if (age === null) throw new Refusal(`${manifestPath} has no capturedAt`);
-  if (age > T.maxDumpAgeHours) {
-    throw new Refusal(`the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${T.maxDumpAgeHours} h. Capture a new one first`);
-  }
+  const now = new Date();
+  const refusal = dumpAgeRefusal(manifest, now);
+  if (refusal) throw new Refusal(`${manifestPath}: ${refusal}`);
+  const age = dumpAgeHours(manifest, now) ?? 0;
   log(`dump ${backup.stamp}: captured ${manifest.capturedAt} (${age.toFixed(1)} h ago) as ${manifest.role} from a replica=${manifest.pgIsInRecovery}`);
   return backup;
 }
@@ -546,29 +546,17 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
 }
 
 /**
- * Q02-dump (SR.0, owner 2026-10-08): the newest production dump on this host that is
- * at most 24 hours old, else a new capture from production's read replica by the
- * capture checkout (the same `bun smoke:capture` C01-backup runs). Never a stale dump.
+ * Q02-dump (SR.0, issue 1564): always a new capture from production's read replica
+ * by the capture checkout (the same `bun smoke:capture` C01-backup runs). It never
+ * reuses a dump already on this host, whatever its age (`dumpPlan`).
  */
-async function remoteDump(args: string[]): Promise<number> {
-  const i = args.indexOf("--captured-after");
-  const raw = i >= 0 ? args[i + 1] : undefined;
-  if (!raw) throw new Refusal("dump needs --captured-after <iso time | never> (the control side passes it)");
-  const after = raw === "never" ? "never" as const : new Date(raw);
-  if (after !== "never" && Number.isNaN(after.getTime())) throw new Refusal(`--captured-after ${raw} is not a time`);
-  const fresh = newestFreshDump(listDumps(), new Date(), after);
-  if (fresh) {
-    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old and captured after production's schema settled (${raw})`);
-    return 0;
-  }
-  log(after === "never"
-    ? "no version tag names production's commit, so no dump proves production's schema"
-    : `no dump at most ${T.maxDumpAgeHours} h old was captured after production's schema settled (${raw})`);
+async function remoteDump(): Promise<number> {
+  const plan = dumpPlan(listDumps(), new Date());
   const checkout = CAPTURE_CHECKOUT.checkout;
-  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`no dump is at most ${T.maxDumpAgeHours} h old, and the capture checkout ${checkout} is absent: clone it, then run this again`);
+  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`the capture checkout ${checkout} is absent: clone it, then run this again`);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const out = join(process.env.HOME ?? "", `rm-backup-prod-${stamp}`);
-  log(`no dump is at most ${T.maxDumpAgeHours} h old: capturing ${out} from production's read replica`);
+  log(`${plan}: ${out} from production's read replica (Q02 never reuses a dump)`);
   await stream(["bun", "run", "smoke:capture", "--out", out], "smoke:capture", { cwd: checkout, env: { RM_ENV: "stage" } });
   return 0;
 }
@@ -759,19 +747,6 @@ function remoteDoadmin(): number {
 
 const SSH = ["ssh", "-o", "BatchMode=yes", T.host];
 
-/** On the control machine: when production's schema settled (schemaSettledAt), from origin's tags on the commit production runs. */
-async function controlSchemaSettledAt(): Promise<string> {
-  const running = await readRunningVersion();
-  must(["git", "fetch", "-q", "--tags", "origin"], "git fetch --tags");
-  const r = Bun.spawnSync(["git", "for-each-ref", "--points-at", running.commit, "--format=%(refname:short) %(creatordate:iso-strict)", "refs/tags"], { stdout: "pipe", stderr: "pipe" });
-  if (r.exitCode !== 0) throw new Error(`git for-each-ref failed: ${r.stderr.toString()}`);
-  const tags = r.stdout.toString().split("\n").filter(Boolean).map((l) => { const [name = "", createdAt = ""] = l.split(" "); return { name, createdAt }; });
-  const at = schemaSettledAt(tags);
-  const out = at === "never" ? "never" : at.toISOString();
-  log(`production's schema settled: ${out} (version tags on ${running.commit.slice(0, 8)}: ${tags.map((t) => t.name).join(", ") || "none"})`);
-  return out;
-}
-
 async function control(command: string, args: string[]): Promise<number> {
   const built = await Bun.build({ entrypoints: [import.meta.path], target: "bun" });
   if (!built.success || !built.outputs[0]) {
@@ -798,7 +773,7 @@ async function main(argv: string[]): Promise<number> {
   try {
     if (first === "remote") {
       const [command, ...args] = rest;
-      if (command === "dump") return await remoteDump(args);
+      if (command === "dump") return await remoteDump();
       if (command === "up") return await remoteUp(args);
       if (command === "down") return await remoteDown();
       if (command === "status") return await remoteStatus();
@@ -806,8 +781,7 @@ async function main(argv: string[]): Promise<number> {
       console.error(USAGE);
       return 2;
     }
-    if (first === "dump") return await control(first, [...rest, "--captured-after", await controlSchemaSettledAt()]);
-    if (first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
+    if (first === "dump" || first === "up" || first === "down" || first === "status" || first === "doadmin") return await control(first, rest);
     console.error(USAGE);
     return 2;
   } catch (e) {

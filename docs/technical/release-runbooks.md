@@ -13,7 +13,8 @@
 > [6. Tracking issue](#6-the-tracking-issue) · [7. Backporting](#7-backporting) ·
 > [8. Compatibility](#8-compatibility-contract) · [9. Standing checks](#9-standing-check-ids) ·
 > [10. Standing invariants](#10-the-standing-invariants-sw2) ·
-> [11. Analyst SDK releases](#11-analyst-sdk-releases)
+> [11. Analyst SDK releases](#11-analyst-sdk-releases) ·
+> [12. Web content releases](#12-web-content-releases)
 
 This is not the process for ordinary feature work, which is PR review against `main`
 ([CONTRIBUTING.md](../../CONTRIBUTING.md)). It covers packaging a release, rehearsing it on stage
@@ -160,12 +161,22 @@ The tracking issue itself stays open until §4.9.
 tag, CI on its commit (`P.ci`), a passed stage run of the same tree and step list (`P.stage`), the
 recovery decision (`P.recovery`) and that no run is in flight. It then runs the preflight steps on
 the hosts. P01-checkout to P06-capture-install put the release and capture checkouts at the rc and
-install them frozen. P02-host-identity proves the host, `~/.env` and the rm_owner login. P07-state-baseline
+install them frozen. P02-host-identity proves the host, `~/.env` and the rm_owner login. P02-host-identity
+and P05-capture-identity (and Q07/Q10 on stage) also refuse a host whose Bun is older than the
+oldest Bun that reads every committed `bun.lock` (`scripts/release/host-tools.ts`), before any
+install step runs; `host-identity.json` records each tool's version and that minimum. P07-state-baseline
 records production's state through `rm_readonly`: the ledger and its reconciliation with
 `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
 flight and the database size. It refuses any pending migration that is not `compat: additive`
 (§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
 owner (`--triage <file>`).
+
+`P.ci` reads the rc commit's check runs first. The rc squash has the QA commit's tree, and its push
+to the release branch starts CI again. When the rc commit's CI is not green yet, `P.ci` reads the
+check runs of the stage journal's commit (`--stage-journal`, or the passed stage run `P.stage`
+found) if `git rev-parse <commit>^{tree}` gives the same tree for both. Green CI there makes `P.ci`
+green, and its detail names that commit and the tree. Any other tree, or red CI on both, keeps
+`P.ci` red with both commits' problems.
 
 ### 4.3. Backup, restore proof and dumps
 
@@ -173,11 +184,13 @@ C01-backup captures production's backup new, from the read replica, as the cutov
 C03-restore-proof restores it into a throwaway container and records the restore time, before the
 first irreversible step (C05-migrate).
 
-**Stage's starting dump (owner, 2026-10-08; SR.0).** Unless the operator names a dump, stage starts
-from the newest production dump already on the capture host if it is at most 24 hours old
-(`manifest.json` `capturedAt`), else a new capture (`bun smoke:capture --out <new directory>`).
-Step Q02-dump does this; step Q03-stage-up restores the dump it left. Never restore a dump older
-than 24 hours. Never point rehearsal preparation at the production database.
+**Stage's starting dump (owner, 2026-10-08; issue 1564; SR.0).** Step Q02-dump always captures a
+new dump (`bun smoke:capture --out <new directory>`, read-only against production's replica as
+`rm_readonly`, as C01-backup does). It never reuses a dump already on the capture host, whatever
+its age: reuse was for rapid hand turnaround only, and v0.7.1 QA's Q13-log-baseline failed on
+reused dumps 8 to 31 hours old. Step Q03-stage-up restores the newest dump, which is the one Q02
+just captured. `up` still refuses a dump older than 24 hours (`manifest.json` `capturedAt`), so an
+operator-named dump must be fresh too. Never point rehearsal preparation at the production database.
 
 ### 4.4. Stage QA
 
@@ -193,6 +206,27 @@ missing from the release YAML's `scope:` is fixed before the stage run, not foun
 `bun scripts/release/scope.ts --release vA.B.C --commit <QA commit> --origin <production origin>`.
 Commit any scope or runbook fix to the QA branch first. Every commit after a stage run changes the
 tree that run passed, so the run to count is the one at the final QA tip (§3 step 3).
+
+**The precheck (issue 1563).** Run the release's own version checks against the live stage stack
+before the full run, so a check defect costs minutes, not a 4-hour restart:
+
+```bash
+bun run release:precheck --target stage --release vA.B.C --commit <QA commit, 40-hex>
+```
+
+It selects every QA step of `runbooks/releases/<release>.yaml` (read at the commit) that carries
+`added: <release>`, in runbook order. Template steps (no `added`) never run. It refuses (exit 2) a
+target other than stage, a stage run in flight, and a commit that is not on a QA branch of the
+release line. Target-host steps run on the stage host from a throwaway worktree of the commit
+(`<home>/.local/state/robotmoney-release/stage/precheck-<ts>/checkout`, made from the target
+checkout with `git worktree add --detach`, then `bun install --frozen-lockfile`). Control-host
+steps run from a matching worktree on the control machine. Commands render with the stage target's
+values, `{release}` from `--release` and `{runTs}` as `precheck-<ts>`, against the live instance.
+It prints one line per check and exits 0 only when every check exited with its `expectExit`, else 1.
+Results go to `<journal root>/stage/precheck-<ts>/precheck.json`, one row per step with its exit,
+duration and the check's problems, beside each step's logs. Both worktrees are removed at the end,
+pass or fail. A precheck is a tool, not a gate: it writes no `run.json`, changes no run's state,
+and SP.8 never reads it. Fix what it finds on the QA branch, then start the full run.
 
 **Running it.** A run lasts longer than one tool or terminal session. Start it detached from the
 shell that launches it (`setsid nohup <script> </dev/null &`) and write its output to a log. A
@@ -216,8 +250,11 @@ file passed with `--triage <file>` (`scripts/release/triage.ts`).
 `Q34-collect-logs`. It is a stage-only step (`stageOnly: true`): it has no production twin, and the
 runner accepts it without one. It runs `scripts/release/analytics-load-check.ts` on the stage host.
 The check starts no analytics run. It waits for the next scheduled run, the next 3-hour boundary
-in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and watches a 120-minute window. Then it
-reads the api container's log and `/health` `db_pool` for that window. It prints one row per route:
+in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and follows the analytics-producer's log
+from it. The window closes 5 minutes after the tick's `[analytics] regime asof` line, or at the
+120-minute cap when that line never comes; a window closed at the cap with no such line fails
+("the tick logged no regime asof line", issue 1567). Then it reads the api container's log and
+`/health` `db_pool` for that window. It prints one row per route:
 the request count, p50, p95 and max duration, the limiter wait, the pool wait, the handler time,
 and the 503 `db_saturated` count with the gate that refused. It exits 1 on any request of 5 s or
 more, or any `db_saturated` answer. The api logs only slow requests and refusals, so the rows
@@ -239,12 +276,57 @@ reads `/api/version`, and records them in the target's `stage-target.json`. `up`
 `/health` does not carry them. `--connection-limits <max>/<superuser_reserved>/<reserved>` sets
 them by hand.
 
+**A time limit is a cap (issue 1567).** A step's `maxMinutes`, or a check's window, is a cap and
+never a fixed wait. A check exits as soon as its assertions are proven: Q34a-analytics-load closes
+its window at the tick's `regime asof` line plus 5 minutes, with its 120-minute window as the cap. Only a check whose assertions are still unproven runs to its cap.
+
 **Bounded runs.** The runner has no stop-after option. To run part of the QA, run the steps one at a
 time with `--only <step> --run <ts>`. A bounded run is never a pass.
 
 Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
 `bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
 spends inference credits.
+
+### 4.4.1. Stage run liveness and notification
+
+A stage run never sits dead without a report (issue 1555). The owner gets one of two outcomes: a
+passed run, or a notification within minutes naming the run, the step, the reason and the exact
+command to continue. None of this runs on production.
+
+**Start it under the supervisor.**
+
+```bash
+bun run release:supervise --target stage --go <stage go> [--run <run-ts>]
+```
+
+The supervisor (`scripts/release/supervise.ts`) detaches itself (`setsid`, stdin closed) and writes
+its output to `~/.local/state/robotmoney-release/stage/supervise-<run-ts>.log`. It outlives the shell
+or agent session that started it. Without `--run` it picks the run stamp, and every child it starts
+runs `release:run --target stage --go <go> --run <run-ts>`, so one supervisor writes one run.
+
+- **Pause.** On a child's exit 3 (a watch step's `notBefore`) it reads `pausedUntil` from run.json,
+  sleeps until then, and resumes the same run.
+- **Died.** A child killed by a signal, a child that exits without recording a stop, or a run.json
+  that says `running` with a heartbeat more than 10 minutes old is a died driver. The supervisor
+  sends one `died` notification with the last step and the resume command. It never restarts a
+  died run.
+
+**Every invocation records its stop.** `release:run` on stage writes `stopReason`
+(`{kind, step, detail, resume, at}`) into run.json on every exit: `passed` (0), `failed` (1),
+`refused` (2, including every resume refusal), `paused` (3, with `pausedUntil`). A refusal before
+any journal exists goes to `stage/refused-<ts>.json`. While a step runs, the runner writes
+`heartbeatAt` and `driver: {pid, host}` every 60 s.
+
+**One notification per stop.** `scripts/release/notify.ts` is the only transport. It posts a
+comment on the one open issue labelled `release:<release>` (§6), scrubbed by `scrub.ts`. A new stage
+run refuses (exit 2) unless exactly one open issue carries that label; a resume does not repeat the
+check. When the lookup later finds no single issue, or gh fails, the message goes to stderr and
+run.json records `stopReason.notified: false` with the reason. The exit code never changes.
+
+**Blocked steps.** A failed step whose output holds `HTTP 402` or `Insufficient account funds` is
+recorded with `cause: "blocked"` (the inference account is unfunded). The runner sends one `blocked`
+notification when the step ends, never retries it and never switches model. Funding the account is
+the owner's. The run goes on and collects every error, as §4.4 describes.
 
 ### 4.5. Stage report
 
@@ -258,6 +340,22 @@ A fix is developed in a development worktree, never on a host. A host runs a cle
 pushed commit (`git status --porcelain` empty). Fix on the QA branch (§2), redeploy its tip to
 stage, and rerun. The same loop applies when an rc fails in production before the cutover (§3
 step 7).
+
+**Resume in place (stage only).** A fix that changes only check code need not restart the stage
+run from Q01. `release:run --target stage --go <new go> --run <run-ts> [--from <step>]` with a go
+naming the new QA commit is admitted when, on the control machine, `git diff --name-only` from the
+journal's last commit to the new one lists only `CHECK_ONLY_PATHS` (`scripts/release/journal.ts`):
+`scripts/release/version-checks/**`, `scripts/release/runbooks/**`,
+`scripts/release/version-check.ts`, `scripts/release/analytics-load-check.ts`,
+`scripts/release/sdk-check.ts`, `scripts/release/sdk-lib.ts`,
+`scripts/release/public-analytics-read.ts`, `scripts/release/replay-row.ts` and
+`scripts/tests/**`. The step-list hash must be unchanged and the new commit must pass the origin
+check. A step's `maxMinutes` is not in the hash, so changing it is check-only; a `cmds` or
+`description` edit still starts a new run. Any other path, the runner itself included, is refused.
+`run.json` lists every commit the run ran at in `commits` (`{commit, tree, goSha256, fromStep,
+at}`), and each step record names the `commit` it ran at; steps already ok keep their records.
+SP.8 then also requires every earlier commit in `commits` to differ from the production commit only
+in `CHECK_ONLY_PATHS`. Production never resumes at a new commit.
 
 ### 4.7. Production execution: a rolling upgrade
 
@@ -278,8 +376,12 @@ on `releases-A.B.x`, and stops at the first failed step. With the go, run the pr
 within 60 minutes:
 
 ```bash
-bun run release:run --target prod --go <go> --after-preflight <the preflight's journal>
+bun run release:run --target prod --go <go> --stage-journal <the passed stage run's journal dir> --after-preflight <the preflight's journal>
 ```
+
+The preflight's `P.stage` line names the passed stage run to pass as `--stage-journal`. The runner
+does not find it by itself (SP.8, [D70](../decisions.md#d70)): the operator names the stage run
+that earned the rc.
 
 The cutover backs up and proves the restore (C01-backup to C03-restore-proof), then never takes the
 website down:
@@ -314,7 +416,7 @@ soak. They are graded afterwards as a report, once 37 h have passed:
 `bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
 UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
-step) fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label), and C24 asserts only the labels for a run of the old producer.
+step) fills the whole archive, replays the newest archived run, and fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label). Q36 and C24 replay nothing: they are a contract smoke that fetches one backup (issue 1566).
 
 **A boot or a rolling boot is uneventful (issue 1378).** The services hold this
 contract, so a runbook needs no step to drain or clean the queue by hand:
@@ -378,8 +480,9 @@ exists on the release branch.
 There are two kinds of file, and the runner runs only the second:
 
 - **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
-  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default. A
-  `website-only` template joins with its runner mode.
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default and
+  the only template. A content-only website release has no template here: it runs on its own
+  release line (§12).
 - **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
@@ -411,6 +514,31 @@ step, and a unit test holds every in-flight release runbook to the current templ
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
 is irreversible; a step a tool cannot perform is a `gap`.
+
+**Concurrent steps: `after` (issue 1557).** A step may declare `after: [<earlier step ids>]`. The
+runner starts it as soon as its `notBefore` is met and every step it names is done (ok, skipped or
+accepted), alongside any long waiter still running. A step without `after` waits for every earlier
+step, so a runbook that declares none runs one step at a time, in order, as before, and its
+step-list hash is unchanged (the hash includes `after` only on a step that carries it). The loader
+(`scripts/release/runbook.ts`) refuses an `after` that names an unknown id, a later id, the step
+itself or a step of another phase; an `after` on an irreversible step; an `after` list that lets a
+step start before an earlier irreversible step ends; and one that does not wait for the step its
+`notBefore` counts from. A QA step and its production twin carry the same list, with the phase
+prefixes stripped. Real ordering stays expressible: a check that reads what another builds names it
+(archive-routes after archive-records). The template's read-only SDK checks (Q35 to Q37, C23 to
+C25) wait only for READY from release v0.7.3 on (`afterSince: v0.7.3`); a runbook of an earlier
+release keeps them as it ran, without `after`.
+
+The runner stays the only writer of `run.json`; a running step returns its record to it. On stage, a
+failed step is recorded, the steps whose `after` names it (directly or through another) are recorded
+failed, not run, and the runner waits for every running step to settle before it exits 1 with every
+failure listed in runbook order. On production, the first failure stops new starts; the runner waits
+for the steps in flight to settle and exits 1 with the resume command for the first failed step in
+runbook order. When nothing is runnable and nothing is in flight but a step waits on a future
+`notBefore`, the runner exits 3 as before. `--run` and `--from` select the same steps they always
+did. `run.json`, receipts and the printed plan list the steps in runbook order whatever order they
+finished in, and while a run has steps with `after` each output line a step streams starts with its
+step id. The preflight (`--preflight`) stays sequential.
 
 ## 6. The tracking issue
 
@@ -449,10 +577,10 @@ recorded owner decision.
 | SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | Q22-rolling-boot, C10-rolling-boot |
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
 | SP.6 | Product baseline: row counts and database size | Q12-state-baseline, P07-state-baseline |
-| SP.7 | CI green on the commit | preflight `P.ci` |
-| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok | preflight `P.stage` |
+| SP.7 | CI green on the commit, or on the stage commit with the same tree (§4.2) | preflight `P.ci` |
+| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, every earlier stage commit check-only apart (§4.6) | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
-| SR.0 | Stage's starting dump at most 24 hours old | Q02-dump, Q03-stage-up |
+| SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
 | SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |
@@ -466,7 +594,7 @@ recorded owner decision.
 | SV.5 | Row counts only grow; the database did not balloon | Q30-compare-baseline, C18-compare-baseline |
 | SV.6 | `~/.env` allowlist, no Docker socket mount, token files 0600 | Q19-env-rewrite, Q31-host-guards, C07-env-rewrite, C19-host-guards |
 | SV.7 | Each change the release ships is in place: a feature landed, a bug fixed, a feature retired | the release's version checks (the steps it adds after the template's: Q on stage, C on production) |
-| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, the README quickstart from a sparse clone of the release commit reruns the latest published run and its as-of row equals the published run's as-of row, and the SDK package tests pass | Q35-archive-routes, Q36-sdk-quickstart, Q37-sdk-tests, C23-archive-routes, C24-sdk-quickstart, C25-sdk-tests |
+| SV.8 | The analyst SDK works against the release: the archive routes answer format 1, a minimal contract smoke with the SDK's own format 1 code from a sparse clone of the release commit calls each route the quickstart uses once (the archive listing, the newest backup's record and the files it lists, verified against their sha256_raw, the reports listing, the newest run's report bytes against the listing's checksum, the run's vintages and one vintage's members) and fails naming the first route that does not answer, parse or verify, and the SDK package tests pass. The full-archive replay is the post-seal report, not a step | Q35-archive-routes, Q36-sdk-quickstart, Q37-sdk-tests, C23-archive-routes, C24-sdk-quickstart, C25-sdk-tests |
 | SW.1 | The soak: logs since READY graded | Q32-soak-gate, C20-soak-gate |
 | SW.2 | The standing invariants over the soak (§10) | Q29-soak-record, Q33-soak-checks, C17-soak-record, C21-soak-checks |
 | SW.3 | The version tag at the cutover's start | C06-version-tag |
@@ -583,3 +711,75 @@ git clone --branch analyst-sdk-vA.B.C --depth 1 --filter=blob:none --sparse http
 cd robotmoney-frontend
 git sparse-checkout set packages/analyst-sdk
 ```
+
+## 12. Web content releases
+
+A copy, image or style edit to the web client ships on its own release line (accepted in
+[D81](../decisions.md#d81), refining [D54](../decisions.md#d54) and [D70](../decisions.md#d70)).
+Sections 2 to 10 govern platform releases. None of them applies to a web content release. It has
+no QA branch, no stage run (owner, 2026-11-04), no rc tag, no backup, no migration and no rolling
+boot. It changes only what `website-server` serves, through `bun smoke:web` (D54). The platform tag
+production runs does not advance.
+
+**Eligibility.** A release is content-only when its tree differs from the commit production's API
+runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS`
+(`scripts/lib/website-release.ts`): `frontend/` and the scripts `scripts/static-assembly.sh` runs,
+with every relative import they reach. The site build scripts count as content (owner,
+2026-11-04). The same list is `bun smoke:web`'s source identity. Any other path, such as
+`backend/`, `contract/`, `website-server/nginx.conf`, `bun.lock` or `docker-compose.yml`, makes the
+release a platform release: the runner lists every such path and names `bun run release:run`.
+
+**Runner.** The executable form of this section is `scripts/release/runbooks/web-content.yaml`, run by
+`bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]`
+(steps in `scripts/release/web-release-lib.ts`, issue 1561). Each `--commit` names a `main` commit to
+ship, cherry-picked in the given order. `--target` names the platform target file
+(`scripts/release/targets/<name>.json`, default `prod`) for the host, home, instance and public
+origin. No target key is added. `--target stage` exists for optional use only. The steps run in
+order:
+
+- **W01-preflight** (read only). Each named commit is on `origin/main` and its own diff is
+  content-only. The runner reads production's API commit and cherry-picks the commits (`-x`) in a
+  scratch worktree onto `web/releases-A.B.x`, or onto the base when the branch is absent. A
+  conflict stops the run. The version is `--version`, else `frontend/package.json` at the last named
+  commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
+  tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
+  commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS`. A tag that W08
+  rolled back is refused (below). The operator must hold the admin permission on the repository.
+- **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
+  fast-forward. A missing branch is created at the base: the platform tag production runs, or the
+  last web tag on top of it, so content already shipped stays shipped. No pull request, never a
+  force push.
+- **W03-gate.** The `web-client.yml` push run on the branch at the commit (job `web-client`) concludes
+  success. `web-client.yml` carries `web/releases-*` in its push branches for this.
+- **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
+  `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
+- **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
+- **W06-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
+  fetch the tags, detach at the tag and run `bun install --frozen-lockfile`. It is the runner's own
+  checkout, never the platform release checkout.
+- **W07-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
+  body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
+  database row, runs no migration and restarts no backend service.
+- **W08-live-check.** `{publicOrigin}/version.json` reports the tag's version and commit, every
+  sitemap route answers 200, and the `api` and worker container ids and `/api/version` are
+  unchanged. On a failure the runner runs `bun run smoke:web --rollback` and exits non-zero.
+- **W09-release** (irreversible). The GitHub release for the tag lists the main commits and the
+  changed content paths. It is never marked latest: the platform's release keeps that.
+
+The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
+reports the steps already done and continues at the first one that is not. `--dry-run` runs the
+preflight and every step's read-only done check, and writes nothing to `origin`, GitHub or the host.
+
+**Branch.** A web content release ships from `web/releases-A.B.x`, where A.B comes from
+`frontend/package.json`'s own semver. The `web/` prefix keeps it off the platform's `releases-*`
+glob. Changes reach it from `main` only, by the runner's cherry-picks. Feature PRs never target it.
+
+**Tag.** A release is the tag `web-vA.B.C`, only on a commit of `web/releases-A.B.x`. Its version
+equals `version` in `frontend/package.json` at that commit and is above every other `web-v*` tag.
+The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-web-tag.ts` on a push of
+a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
+
+**Rollback.** A tag is never moved, deleted or cut again. When W08 rolls the site back, the host's
+web receipt records it, and a rerun of the same version stops at W01. The fix ships as
+`web-vA.B.(C+1)`.

@@ -6,7 +6,7 @@
 // still produces exactly those bytes.
 //
 //   AN-5  blend_hodl applies fixed target weights daily, never charged for the reset.
-//   AN-6  strategies start at the first labelled date; baselines at the first priced date.
+//   AN-6  strategies start at the first labelled date; since issue 1559 the baselines start there too.
 //   AN-9  an unlabelled day is skipped, including its market move.
 //   AN-10 out-of-sample CAGR starts from the first point after the split, duration from the split.
 //   AN-14 Sharpe uses pre-cost daily returns; net values include the rebalance cost.

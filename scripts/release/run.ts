@@ -13,6 +13,7 @@
 //   bun run release:run --target prod  --go <go file> --stage-journal <dir> --run <run-ts> --from <step>
 //   bun run release:run --target stage --go <go file> --only <step> [--run <run-ts>]
 //   bun run release:run --target <t> --go <go file> --after-preflight <preflight dir>   (continue from a green preflight, within 1 h)
+//   bun run release:run --target prod --go <go file> --stage-journal <stage run dir> --after-preflight <preflight dir>   (the production cutover: SP.8)
 //   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
 //   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
 //
@@ -30,7 +31,10 @@
 // the same step list at the same commit (SP.8); then run the steps in order,
 // journal each one locally (./journal.ts), copy its receipts back, and stop at
 // the first step whose exit differs from the expected one, printing the exact
-// resume command.
+// resume command. A stage run resumes in place at a new QA commit whose diff
+// touches only check code (journal.ts CHECK_ONLY_PATHS, issue 1565). A step that declares `after` (issue 1557) starts as soon as
+// the steps it names are done, alongside a long waiter; one that declares none
+// waits for every earlier step, as before.
 //
 // It never prints a secret value. Output and receipts pass through
 // ./scrub.ts before they reach the console or the journal.
@@ -41,11 +45,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { goRef, originProblems, validateGo, type GoRecord, type ResolvedGo } from "./go.ts";
 import {
-  acceptCommand, acceptStep, checkResume, checkStageJournal, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
-  selectSteps, writeJournal, type RunJournal, type StepRecord,
+  acceptCommand, acceptStep, checkResume, checkStageJournal, earlierCommitPaths, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
+  selectSteps, stepDone, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
-import { checkAfterPreflight, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
-import { executeStep, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
+import { checkAfterPreflight, controlChangedPaths, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
+import { executeStep, prefixedDeps, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
+import { endNote, labelRefusal, stopRecorder } from "./liveness.ts";
+import { notify } from "./notify.ts";
 import {
   BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
@@ -135,7 +141,8 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
   for (const s of steps) {
     const skip = s.onlyFor !== undefined && s.onlyFor !== target.rmEnv ? ` SKIPPED (only ${s.onlyFor})` : "";
     const wait = s.notBefore ? ` not before ${s.notBefore.afterStep} + ${s.notBefore.hours} h` : "";
-    lines.push(`  [${s.id}]${s.irreversible ? " IRREVERSIBLE" : ""}${skip}${wait} on ${s.host}: ${s.description}`);
+    const after = s.after ? ` after ${s.after.join(", ")}` : "";
+    lines.push(`  [${s.id}]${s.irreversible ? " IRREVERSIBLE" : ""}${skip}${wait}${after} on ${s.host}: ${s.description}`);
     if (s.standing.length > 0) lines.push(`      standing: ${s.standing.join(", ")}`);
     lines.push(s.host === CONTROL_HOST ? `      $ sh -c ${shellQuote(s.remote)}` : `      $ ssh -T ${s.host} ${shellQuote(s.remote)}`);
   }
@@ -149,6 +156,14 @@ export function renderPlan(target: ReleaseTarget, commit: string, hash: string, 
  * refuses. `stepList` replaces it in tests.
  */
 export async function runRelease(argv: readonly string[], deps: RunnerDeps, stepList?: readonly StepTemplate[], options: { readonly breaking?: boolean } = {}): Promise<number> {
+  // A stage run records how every invocation stopped and notifies the owner once (issue 1555, ./liveness.ts).
+  const stop = stopRecorder(argv, deps);
+  return stop.finish(await runReleaseOnce(argv, stop.deps, stepList, options, stop));
+}
+
+async function runReleaseOnce(
+  argv: readonly string[], deps: RunnerDeps, stepList: readonly StepTemplate[] | undefined, options: { readonly breaking?: boolean }, stop: ReturnType<typeof stopRecorder>,
+): Promise<number> {
   const args = parseArgs(argv);
   if ("error" in args) {
     deps.error(`[${NAME}] ${args.error}`);
@@ -207,6 +222,7 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
     return 0;
   }
 
+  if (!args.preflight) stop.watch(target, args.journalRoot ?? journalRoot(deps.home));
   // Rule 1: the one recorded go. It is the only source of the release ref.
   let go: ResolvedGo | undefined;
   if (args.go) {
@@ -310,7 +326,9 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   let stageRecord: RunJournal["stageJournal"];
   if (target.rmEnv === "prod") {
     const stage = args.stageJournal ? readJournal(resolve(args.stageJournal)) : undefined;
-    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids });
+    // Issue 1565: a stage run resumed in place ran earlier steps at earlier commits; each is diffed against this one.
+    const earlierPaths = await earlierCommitPaths(stage, commit, controlChangedPaths(deps));
+    const refusals = checkStageJournal(stage, { stepListHash: hash, tree, stepIds: ids, earlierPaths });
     if (refusals.length > 0) {
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
@@ -319,7 +337,11 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
 
   const runDir = join(root, target.name, runTs);
+  if (args.run !== undefined) stop.at(runDir);
+  const unlabelled = await labelRefusal(target, runDir, deps);
+  if (unlabelled !== undefined) { deps.error(`[${NAME}] refusing: ${unlabelled}.`); return 2; }
   let journal: RunJournal;
+  let resumed = false;
   if (args.run !== undefined) {
     const existing = readJournal(runDir);
     if (existing === undefined && args.from !== undefined) {
@@ -327,12 +349,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
       return 2;
     }
     if (existing !== undefined) {
-      const refusals = checkResume(existing, { target: target.name, commit, stepListHash: hash, goSha256: go.sha256, stepIds: ids }, { from: args.from, only: args.only });
+      // Issue 1565: a stage resume at a new commit lists the paths between the two on the control machine.
+      const changedPaths = existing.commit !== commit && target.rmEnv === "stage" ? await controlChangedPaths(deps)(existing.commit, commit) : undefined;
+      const refusals = checkResume(existing, { target: target.name, commit, stepListHash: hash, goSha256: go.sha256, stepIds: ids, changedPaths }, { from: args.from, only: args.only });
       if (refusals.length > 0) {
         deps.error(`[${NAME}] refusing to resume ${runDir}:\n  - ${refusals.join("\n  - ")}`);
+        const next = args.from === undefined ? undefined : firstNotOk(existing, ids);
+        if (next !== undefined) stop.note({ step: next, resume: resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: next, stageJournal: args.stageJournal }) });
         return 2;
       }
       journal = existing;
+      resumed = true;
       if (args.from === undefined && args.only === undefined) {
         const next = firstNotOk(journal, ids);
         selected = next === undefined ? [] : ids.slice(ids.indexOf(next));
@@ -359,7 +386,17 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   }
   if (stageRecord) journal.stageJournal = stageRecord;
   journal.recovery = recovery;
+  // Issue 1565: every commit the run ran at. A journal from before the list seeds it with its own commit;
+  // a resume in place appends the new one and runs on under its commit, tree and go.
+  journal.commits ??= resumed ? [{ commit: journal.commit, tree: journal.tree ?? "", goSha256: journal.goSha256, fromStep: ids[0]!, at: journal.startedAt }] : [];
+  if (journal.commits.at(-1)?.commit !== commit) {
+    if (journal.commits.length > 0) deps.log(`[${NAME}] resuming in place at ${commit}: the change from ${journal.commit} is check code only; the steps already done keep their records`);
+    journal.commits.push({ commit, tree, goSha256: go.sha256, fromStep: selected[0] ?? ids[0]!, at: deps.now().toISOString() });
+  }
+  journal.commit = commit;
+  journal.goSha256 = go.sha256;
   journal.tree = tree;
+  stop.begin(runDir, journal);
   writeJournal(runDir, journal);
   deps.log(`\n[${NAME}] go ${go.sha256.slice(0, 12)} for ${go.release} ${go.ref}${go.tag ? ` (${commit})` : ""} on ${go.target}; journal ${runDir}`);
 
@@ -371,108 +408,189 @@ export async function runRelease(argv: readonly string[], deps: RunnerDeps, step
   const collectAll = target.rmEnv === "stage";
   const failedSteps: string[] = [];
 
-  for (const id of selected) {
-    if (carried.has(id)) continue;
-    const template = steps[ids.indexOf(id)]!;
-    const stepDir = join(runDir, id);
-    mkdirSync(stepDir, { recursive: true, mode: 0o700 });
+  // The scheduler (issue 1557). A step with no `after` starts once every earlier selected step has settled, so a list
+  // that declares none runs one step at a time, in order, exactly as before. A step with `after` starts once the steps
+  // it names are done and its notBefore is met, alongside whatever still runs. Only this loop writes run.json: a running
+  // step returns its record here.
+  const todo = selected.filter((id) => !carried.has(id));
+  const inTodo = new Set(todo);
+  const pending = new Set(todo);
+  const inflight = new Map<string, Promise<{ id: string; ok: boolean; record: StepRecord; irreversible: boolean }>>();
+  const concurrent = todo.some((id) => steps[ids.indexOf(id)]!.after !== undefined);
+  const unsettled = (id: string) => pending.has(id) || inflight.has(id);
+  const prodFailed: string[] = [];
+  let refusal: string | undefined;
+  let waiting: { id: string; earliest: Date; afterStep: string; anchorEnded: string; hours: number }[] = [];
+  const settle = (id: string, rec: StepRecord) => {
+    journal.steps[id] = rec;
+    writeFileSync(join(runDir, id, "result.json"), `${JSON.stringify(rec, null, 2)}\n`, { mode: 0o600 });
+    journal.status = runStatus(journal, ids);
+    writeJournal(runDir, journal);
+  };
+  const notRun = (id: string, template: StepTemplate, why: string) => {
+    const now = deps.now().toISOString();
+    settle(id, {
+      id, status: "failed", exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now, durationMs: 0, receipts: [],
+      attempt: (journal.steps[id]?.attempt ?? 0) + 1, error: `not run: ${why}`, commit,
+    });
+    deps.error(`[${NAME}] ${id} NOT RUN: ${journal.steps[id]!.error}`);
+    failedSteps.push(id);
+  };
 
-    // A prod-only step (the release tags) is recorded skipped on any other policy.
-    const skip = skipReason(template, target, breaking);
-    if (skip !== undefined) {
-      const now = deps.now().toISOString();
-      journal.steps[id] = {
-        id, status: "skipped", skipped: skip, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
-        durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
-      };
-      writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(journal.steps[id], null, 2)}\n`, { mode: 0o600 });
-      journal.status = runStatus(journal, ids);
-      writeJournal(runDir, journal);
-      deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
-      continue;
-    }
+  for (;;) {
+    waiting = [];
+    // One pass in runbook order: a step settled here (skipped, not run) opens the gates of the later ones in the same pass.
+    for (const [k, id] of todo.entries()) {
+      if (prodFailed.length > 0 || refusal !== undefined) break;
+      if (!pending.has(id)) continue;
+      const template = steps[ids.indexOf(id)]!;
+      if (template.after === undefined ? todo.slice(0, k).some(unsettled) : template.after.some((a) => inTodo.has(a) && unsettled(a))) continue;
+      mkdirSync(join(runDir, id), { recursive: true, mode: 0o700 });
 
-    // A watch step waits for its window after READY (the target's watchHours).
-    const notBefore = notBeforeOf(template, target);
-    if (notBefore !== undefined) {
-      const anchor = journal.steps[notBefore.afterStep];
-      if (anchor?.status !== "ok" || !anchor.endedAt) {
-        if (collectAll && anchor?.status === "failed") {
-          // Its anchor failed, so the window it waits for never opens: record it failed, not run, and go on.
-          const now = deps.now().toISOString();
-          journal.steps[id] = {
-            id, status: "failed", exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now, durationMs: 0, receipts: [],
-            attempt: (journal.steps[id]?.attempt ?? 0) + 1, error: `not run: ${notBefore.afterStep} did not pass, so there is no READY to wait from`,
-          };
-          writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(journal.steps[id], null, 2)}\n`, { mode: 0o600 });
-          journal.status = runStatus(journal, ids);
-          writeJournal(runDir, journal);
-          deps.error(`[${NAME}] ${id} NOT RUN: ${journal.steps[id]!.error}`);
-          failedSteps.push(id);
+      // A prod-only step (the release tags) is recorded skipped on any other policy.
+      const skip = skipReason(template, target, breaking);
+      if (skip !== undefined) {
+        pending.delete(id);
+        const now = deps.now().toISOString();
+        settle(id, {
+          id, status: "skipped", skipped: skip, exit: null, expectExit: template.expectExit, startedAt: now, endedAt: now,
+          durationMs: 0, receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1, commit,
+        });
+        deps.log(`\n[${NAME}] ── ${id} skipped: ${skip}${template.onlyFor ? ` (runs only for ${template.onlyFor})` : ""}`);
+        continue;
+      }
+
+      // A step whose named step failed in this run never starts: the state it reads is not there (stage; production stops instead).
+      const failedDep = template.after?.find((a) => inTodo.has(a) && !stepDone(journal.steps[a]?.status));
+      if (failedDep !== undefined) {
+        pending.delete(id);
+        notRun(id, template, `${failedDep} did not pass, and this step runs after it`);
+        continue;
+      }
+
+      // A watch step waits for its window after READY (the target's watchHours).
+      const notBefore = notBeforeOf(template, target);
+      if (notBefore !== undefined) {
+        const anchor = journal.steps[notBefore.afterStep];
+        if (anchor?.status !== "ok" || !anchor.endedAt) {
+          if (collectAll && anchor?.status === "failed") {
+            // Its anchor failed, so the window it waits for never opens: record it failed, not run, and go on.
+            pending.delete(id);
+            notRun(id, template, `${notBefore.afterStep} did not pass, so there is no READY to wait from`);
+            continue;
+          }
+          refusal = `${id} runs only after ${notBefore.afterStep} passed in this run; it has not.`;
+          break;
+        }
+        const earliest = new Date(Date.parse(anchor.endedAt) + notBefore.hours * 3_600_000);
+        if (deps.now().getTime() < earliest.getTime()) {
+          waiting.push({ id, earliest, afterStep: notBefore.afterStep, anchorEnded: anchor.endedAt, hours: notBefore.hours });
           continue;
         }
-        deps.error(`[${NAME}] ${id} runs only after ${notBefore.afterStep} passed in this run; it has not.`);
-        return 2;
       }
-      const earliest = new Date(Date.parse(anchor.endedAt) + notBefore.hours * 3_600_000);
-      if (deps.now().getTime() < earliest.getTime()) {
-        journal.status = runStatus(journal, ids);
-        writeJournal(runDir, journal);
-        deps.log(`\n[${NAME}] ${id} becomes runnable at ${earliest.toISOString()} (${notBefore.afterStep} ended ${anchor.endedAt} + ${notBefore.hours} h).`);
-        deps.log(`[${NAME}] resume then with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
-        return 3;
-      }
-    }
 
-    const readyStep = journal.steps[READY_STEP[target.rmEnv]];
-    const readyIso = readyStep?.status === "ok" ? readyStep.endedAt : undefined;
-    const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
-    const started = deps.now();
-    const record: StepRecord = {
-      id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
-      receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1,
-    };
-    journal.steps[id] = record;
-    journal.status = "running";
-    journal.updatedAt = started.toISOString();
-    writeJournal(runDir, journal);
-    deps.log(`\n[${NAME}] ── ${id}${step.irreversible ? " (IRREVERSIBLE)" : ""} on ${step.host}: ${step.description}`);
-
-    const ok = await executeStep(step, template.triage, record, started, stepDir, args.triage, deps);
-    writeFileSync(join(stepDir, "result.json"), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    journal.status = runStatus(journal, ids);
-    journal.updatedAt = record.endedAt!;
-    writeJournal(runDir, journal);
-
-    if (!ok && collectAll) {
-      failedSteps.push(id);
-      deps.error(`[${NAME}] ${id} FAILED: ${record.error}. QA goes on: it collects every error.`);
-      continue;
+      pending.delete(id);
+      const readyStep = journal.steps[READY_STEP[target.rmEnv]];
+      const readyIso = readyStep?.status === "ok" ? readyStep.endedAt : undefined;
+      const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
+      const started = deps.now();
+      const record: StepRecord = {
+        id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),
+        receipts: [], attempt: (journal.steps[id]?.attempt ?? 0) + 1, commit,
+      };
+      journal.steps[id] = { ...record, receipts: [] };
+      journal.status = "running";
+      journal.updatedAt = started.toISOString();
+      writeJournal(runDir, journal);
+      deps.log(`\n[${NAME}] ── ${id}${step.irreversible ? " (IRREVERSIBLE)" : ""} on ${step.host}: ${step.description}`);
+      const stepDeps = concurrent ? prefixedDeps(deps, id) : deps;
+      // Each running step has its own heartbeat (issue 1555); it stops when the step settles.
+      const beat = stop.heartbeat(journal);
+      inflight.set(id, executeStep(step, template.triage, record, started, join(runDir, id), args.triage, stepDeps)
+        .catch((error: unknown) => {
+          // A step that threw (a receipt copy failed) is failed, never left running: the runner settles it like any other.
+          const ended = deps.now();
+          Object.assign(record, { status: "failed", endedAt: ended.toISOString(), durationMs: ended.getTime() - started.getTime(), error: error instanceof Error ? error.message : String(error) });
+          return false;
+        })
+        .finally(beat)
+        .then((ok) => ({ id, ok, record, irreversible: step.irreversible })));
     }
-    if (!ok) {
-      deps.error(`[${NAME}] ${id} FAILED: ${record.error}. Nothing after it ran.`);
-      if (step.irreversible) deps.error(`[${NAME}] ${id} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
-      deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: id, stageJournal: args.stageJournal })}`);
-      if (!step.irreversible) deps.error(`[${NAME}] or record the owner's acceptance of this failure, then resume at the next step:\n  ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
-      return 1;
+    if (inflight.size === 0) break;
+
+    // Wait for the next step to end, or for the earliest waiter's notBefore (polled at most a minute apart).
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const wakeMs = waiting.length === 0 || prodFailed.length > 0 || refusal !== undefined ? undefined
+      : Math.min(60_000, Math.max(0, Math.min(...waiting.map((w) => w.earliest.getTime())) - deps.now().getTime()));
+    const done = await Promise.race([
+      ...inflight.values(),
+      ...(wakeMs === undefined ? [] : [new Promise<undefined>((r) => { timer = setTimeout(() => r(undefined), wakeMs); })]),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (done === undefined) continue;
+    inflight.delete(done.id);
+    journal.updatedAt = done.record.endedAt!;
+    settle(done.id, done.record);
+    if (done.record.cause === "blocked") await stop.blocked(done.id, done.record.error!, resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: done.id, stageJournal: args.stageJournal }));
+    if (done.ok) {
+      deps.log(`[${NAME}] ${done.id} ok (${Math.round(done.record.durationMs! / 1000)} s, ${done.record.receipts.filter((r) => r.local).length} receipt(s))`);
+    } else if (collectAll) {
+      failedSteps.push(done.id);
+      deps.error(`[${NAME}] ${done.id} FAILED: ${done.record.error}. QA goes on: it collects every error.`);
+    } else {
+      // Production: the first failure stops new starts; the steps in flight settle before the runner exits.
+      prodFailed.push(done.id);
+      if (inflight.size > 0) deps.error(`[${NAME}] ${done.id} FAILED: ${done.record.error}. No step starts after it; waiting for ${[...inflight.keys()].join(", ")} to settle.`);
     }
-    deps.log(`[${NAME}] ${id} ok (${Math.round(record.durationMs! / 1000)} s, ${record.receipts.filter((r) => r.local).length} receipt(s))`);
+  }
+  const inOrder = (list: readonly string[]) => [...list].sort((a, b) => ids.indexOf(a) - ids.indexOf(b));
+
+  // Exit point: production stopped at a failure (every started step has settled). Resume at the first failed step in runbook order.
+  if (prodFailed.length > 0) {
+    const first = inOrder(prodFailed)[0]!;
+    const firstIrreversible = steps[ids.indexOf(first)]!.irreversible;
+    for (const id of inOrder(prodFailed)) deps.error(`[${NAME}] ${id} FAILED: ${journal.steps[id]?.error ?? "failed"}. Nothing after it ran.`);
+    if (firstIrreversible) deps.error(`[${NAME}] ${first} is irreversible: read runbook section 8 (recovery matrix) before any retry.`);
+    deps.error(`[${NAME}] resume with:\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: first, stageJournal: args.stageJournal })}`);
+    if (!firstIrreversible) deps.error(`[${NAME}] or record the owner's acceptance of this failure, then resume at the next step:\n  ${acceptCommand({ target: args.target!, runTs, stepId: first })}`);
+    return 1;
   }
 
+  // Exit point: a watch step's anchor never passed in this run (every started step has settled).
+  if (refusal !== undefined) {
+    deps.error(`[${NAME}] ${refusal}`);
+    return 2;
+  }
+
+  // Exit point: nothing runnable and nothing in flight, but a step waits on a future notBefore. Resume then.
+  if (waiting.length > 0) {
+    journal.status = runStatus(journal, ids);
+    writeJournal(runDir, journal);
+    for (const w of waiting) deps.log(`\n[${NAME}] ${w.id} becomes runnable at ${w.earliest.toISOString()} (${w.afterStep} ended ${w.anchorEnded} + ${w.hours} h).`);
+    const resume = resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: waiting[0]!.id, stageJournal: args.stageJournal });
+    deps.log(`[${NAME}] resume then with:\n  ${resume}`);
+    const until = new Date(Math.min(...waiting.map((w) => w.earliest.getTime()))).toISOString();
+    stop.note({ step: waiting[0]!.id, pausedUntil: until, detail: `${waiting.map((w) => w.id).join(", ")} becomes runnable at ${until}`, resume });
+    return 3;
+  }
+
+  // Exit point: the run ended (stage collects every failure and lists them here, in runbook order).
   journal.status = runStatus(journal, ids);
   if (failedSteps.length > 0) {
-    deps.error(`\n[${NAME}] ${failedSteps.length} step(s) failed in this run, all of them listed here:`);
-    for (const id of failedSteps) {
+    const failed = inOrder(failedSteps);
+    deps.error(`\n[${NAME}] ${failed.length} step(s) failed in this run, all of them listed here:`);
+    for (const id of failed) {
       deps.error(`  - ${id}: ${journal.steps[id]?.error ?? "failed"}`);
       if (!steps[ids.indexOf(id)]!.irreversible) deps.error(`    or record the owner's acceptance of it:\n      ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
     }
-    deps.error(`[${NAME}] after the fixes, rerun the whole QA at the new QA tip. To retry only these: resume with\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: failedSteps[0]!, stageJournal: args.stageJournal })}`);
+    deps.error(`[${NAME}] after the fixes, rerun the whole QA at the new QA tip. To retry only these: resume with\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: failed[0]!, stageJournal: args.stageJournal })}`);
   }
   journal.cutoverSeconds = cutoverSeconds(journal, target.rmEnv);
   writeJournal(runDir, journal);
   const side: Side = target.rmEnv;
   if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s; the website stayed up (${PROBE_GRADE_STEP[side]})`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
+  stop.note(endNote(journal, ids, inOrder(failedSteps), selected.at(-1), (stepId) => resumeCommand({ target: args.target!, go: args.go!, runTs, stepId, stageJournal: args.stageJournal })));
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
 }
 
@@ -529,7 +647,7 @@ const SSH_OPTS = ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"];
 
 /** The real dependencies: ssh with stdin closed and no tty. */
 export function realDeps(): RunnerDeps {
-  return {
+  const deps: RunnerDeps = {
     exec(host, remote, onStdout, onStderr, timeoutMs) {
       return new Promise((done, fail) => {
         const argv = host === CONTROL_HOST ? ["sh", ["-c", remote]] as const : ["ssh", [...SSH_OPTS, host, remote]] as const;
@@ -555,7 +673,9 @@ export function realDeps(): RunnerDeps {
     log: (l) => console.log(l),
     error: (l) => console.error(l),
     home: homedir(),
+    notify: (event) => notify(event, deps),
   };
+  return deps;
 }
 
 if (import.meta.main) {

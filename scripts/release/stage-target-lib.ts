@@ -754,30 +754,36 @@ export function shellQuote(word: string): string {
  * null (SR.0, owner 2026-10-08). A dump with no readable `capturedAt`, or one
  * dated in the future, never qualifies. PURE.
  */
-export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date, capturedAfter?: Date | "never"): string | null {
-  if (capturedAfter === "never") return null;
+export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: string }[], now: Date): string | null {
   const fresh = dumps
     .map((d) => ({ dir: d.dir, at: Date.parse(d.capturedAt ?? ""), age: dumpAgeHours({ capturedAt: d.capturedAt }, now) }))
     .filter((d) => d.age !== null && d.age >= 0 && d.age <= STAGE_TARGET.maxDumpAgeHours)
-    .filter((d) => capturedAfter === undefined || d.at > capturedAfter.getTime())
     .sort((a, b) => b.at - a.at);
   return fresh[0]?.dir ?? null;
 }
 
 /**
- * PURE. When production's schema last changed: the creation time of the newest version tag
- * (`vA.B.C`, never an rc) on the commit production runs. C06-version-tag creates that tag only
- * after C05-migrate finished, so a dump captured before it can predate the cutover's migrations
- * (v0.7.2's first stage run reused v0.7.1's C01 backup, 9 minutes before the tag, and the
- * v0.7.1 boot refused its two missing migrations). "never" when no version tag names the
- * commit: nothing proves any dump's schema, so Q02 captures a new one.
+ * Q02-dump's decision (issue 1564): always a new capture from production's read
+ * replica, never a reuse of a dump already on the host, whatever its age. A
+ * rehearsal starts from the most recent production state; reuse was for rapid
+ * hand turnaround only and let Q13-log-baseline fail on 8 to 31 h old dumps.
+ * The dump list and clock are taken so the rule is visibly input-blind. PURE.
  */
-export function schemaSettledAt(tags: readonly { name: string; createdAt: string }[]): Date | "never" {
-  const times = tags
-    .filter((t) => /^v\d+\.\d+\.\d+$/.test(t.name))
-    .map((t) => Date.parse(t.createdAt))
-    .filter((t) => !Number.isNaN(t));
-  return times.length ? new Date(Math.max(...times)) : "never";
+export function dumpPlan(_dumps: readonly { dir: string; capturedAt?: string }[], _now: Date): "capture" {
+  return "capture";
+}
+
+/**
+ * `up`'s fresh-dump refusal (SR.0): the reason a manifest's dump is too old to
+ * boot (over `maxDumpAgeHours`) or carries no readable `capturedAt`, else null. PURE.
+ */
+export function dumpAgeRefusal(manifest: { capturedAt?: string }, now: Date): string | null {
+  const age = dumpAgeHours(manifest, now);
+  if (age === null) return "the dump's manifest has no capturedAt";
+  if (age > STAGE_TARGET.maxDumpAgeHours) {
+    return `the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${STAGE_TARGET.maxDumpAgeHours} h. Capture a new one first`;
+  }
+  return null;
 }
 
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */

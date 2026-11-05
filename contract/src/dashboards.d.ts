@@ -235,7 +235,8 @@ export interface RegimeIndicator {
   sparkline: (number | null)[];
 }
 
-// One dated equity point on a backtest strategy's month-end curve.
+// One dated equity point on a backtest strategy's curve: the start date at 1,
+// then the month-end values.
 export interface BacktestEquityPoint {
   date: string;
   value: number;
