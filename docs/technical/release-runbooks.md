@@ -171,6 +171,13 @@ flight and the database size. It refuses any pending migration that is not `comp
 (§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
 owner (`--triage <file>`).
 
+`P.ci` reads the rc commit's check runs first. The rc squash has the QA commit's tree, and its push
+to the release branch starts CI again. When the rc commit's CI is not green yet, `P.ci` reads the
+check runs of the stage journal's commit (`--stage-journal`, or the passed stage run `P.stage`
+found) if `git rev-parse <commit>^{tree}` gives the same tree for both. Green CI there makes `P.ci`
+green, and its detail names that commit and the tree. Any other tree, or red CI on both, keeps
+`P.ci` red with both commits' problems.
+
 ### 4.3. Backup, restore proof and dumps
 
 C01-backup captures production's backup new, from the read replica, as the cutover's first step.
@@ -529,7 +536,7 @@ recorded owner decision.
 | SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | Q22-rolling-boot, C10-rolling-boot |
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
 | SP.6 | Product baseline: row counts and database size | Q12-state-baseline, P07-state-baseline |
-| SP.7 | CI green on the commit | preflight `P.ci` |
+| SP.7 | CI green on the commit, or on the stage commit with the same tree (§4.2) | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, every earlier stage commit check-only apart (§4.6) | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
 | SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
