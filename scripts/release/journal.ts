@@ -57,6 +57,25 @@ export interface StepRecord {
   accepted?: { reason: string; issue: number; at: string };
   /** The commit this step ran at (issue 1565): a stage run resumed in place runs later steps at a later commit. */
   commit?: string;
+  /** `blocked`: the step failed on a human-only cause (an unfunded inference account, HTTP 402); never retried (issue 1555). */
+  cause?: "blocked";
+}
+
+/** How one invocation of a stage run ended (issue 1555): passed 0, failed 1, refused 2, paused 3. */
+export type StopKind = "passed" | "failed" | "refused" | "paused";
+
+/** The stop reason a stage run records on every exit, and whether the owner was notified of it. */
+export interface StopReason {
+  kind: StopKind;
+  /** The step the run stopped at, when there is one. */
+  step?: string;
+  detail: string;
+  /** The exact command that continues the run. */
+  resume: string;
+  at: string;
+  /** false when the notifier could not post (no single labelled issue, or gh failed); the message went to stderr. */
+  notified?: boolean;
+  notifiedReason?: string;
 }
 
 /** One commit a run ran at, from the step it started at (issue 1565). */
@@ -141,6 +160,14 @@ export interface RunJournal {
   cutoverSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };
+  /** Stage only (issue 1555): how the last invocation stopped. Cleared when an invocation starts. */
+  stopReason?: StopReason;
+  /** Stage only: when a paused run (exit 3) becomes runnable; the supervisor sleeps until then. */
+  pausedUntil?: string;
+  /** Stage only: written every 60 s while a step runs, so a dead driver is seen. */
+  heartbeatAt?: string;
+  /** Stage only: the driver process writing the heartbeat. */
+  driver?: { pid: number; host: string };
 }
 
 /** `~/.local/state/robotmoney-release`, on the control machine. */

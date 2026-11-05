@@ -106,6 +106,8 @@ function fake(opts: { failing?: string[]; inFlight?: { runTs: string; updatedAt:
     log: () => {},
     error: () => {},
     home,
+    // The precheck sends no notification (issue 1555's notifier is release:run's); a call fails the test.
+    notify: async () => { throw new Error("the precheck must not notify"); },
     runsInFlight: () => opts.inFlight ?? [],
   };
   return { deps, events, remotes, home };

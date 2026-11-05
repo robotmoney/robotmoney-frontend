@@ -12,6 +12,7 @@ import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { recoveryOf, releaseRunbookPath } from "./runbook.ts";
 import type { ReceiptRecord, StepRecord } from "./journal.ts";
+import type { NotifyResult, StopEvent } from "./notify.ts";
 import { forbiddenReceiptPath, lineScrubber, scrubSecrets } from "./scrub.ts";
 import { shellQuote, type RenderedStep } from "./steps.ts";
 import { applyTriage, failedFindings, parseTriage } from "./triage.ts";
@@ -31,6 +32,19 @@ export interface RunnerDeps {
   log(line: string): void;
   error(line: string): void;
   home: string;
+  /** Post one owner notification (./notify.ts). Stage only; never throws, never changes an exit code. */
+  notify(event: StopEvent): Promise<NotifyResult>;
+  /** Call `fn` every `ms` until the returned stop is called (the heartbeat). setInterval when absent. */
+  every?(ms: number, fn: () => void): () => void;
+}
+
+/**
+ * A human-only cause in a failed step's output, or undefined. HTTP 402 /
+ * "Insufficient account funds" is the inference account running dry: funding
+ * it is the owner's, so the step is never retried and no model is swapped in.
+ */
+export function classifyBlocked(output: string): string | undefined {
+  return /\bHTTP 402\b|Insufficient account funds/i.test(output) ? "inference account unfunded (HTTP 402); the owner funds it, the runner never retries or switches model" : undefined;
 }
 
 /** Receipt paths a step's output names (`receipt: /path`, `receipt → /path`, `report: /path`). */
@@ -139,6 +153,8 @@ export async function executeStep(
     }
     if (!ok && exit === step.expectExit) record.error = `required receipt missing: ${pulled.missingRequired.join(", ")}`;
     if (!ok && exit !== step.expectExit) record.error ??= `exit ${exit}, expected ${step.expectExit}`;
+    const blocked = ok ? undefined : classifyBlocked(`${stdoutText}\n${stderrText}`);
+    if (blocked !== undefined) { record.cause = "blocked"; record.error = `blocked: ${blocked} (${record.error})`; }
     record.status = ok ? "ok" : "failed";
   return ok;
 }

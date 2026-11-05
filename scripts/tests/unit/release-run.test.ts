@@ -39,7 +39,8 @@ import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
 import { checkAfterPreflight, ciProblems, controlChangedPaths, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runPreflight, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
-import { TIMED_OUT } from "../../release/step-exec.ts";
+import { classifyBlocked, TIMED_OUT } from "../../release/step-exec.ts";
+import type { StopEvent } from "../../release/notify.ts";
 import { cutoverSeconds, skipReason } from "../../release/run.ts";
 import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
@@ -652,11 +653,14 @@ const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "docker ps -q": { code: 0, stdout: "0\n" },
   // Stage's P.lockfile: a fresh resolve gives the committed lockfiles.
   "lockfile.ts check": { code: 0, stdout: "fresh\n" },
+  // A new stage run's tracking issue (issue 1555): exactly one open issue carries release:<release>.
+  "gh issue list --label": { code: 0, stdout: '[{"number":4242}]\n' },
 };
 
 function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }>; recovery?: string | null } = {}) {
   const ran: string[] = [];
   const logs: string[] = [];
+  const notified: StopEvent[] = [];
   const deps: RunnerDeps = {
     async exec(_host, remote, onStdout) {
       const id = (/\.step-([A-Za-z0-9.-]+)/.exec(remote) ?? /echo ([A-Za-z0-9.-]+)$/.exec(remote))![1]!;
@@ -685,8 +689,9 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
     log: (l) => logs.push(l),
     error: (l) => logs.push(l),
     home: "/nonexistent",
+    async notify(e) { notified.push(e); return { notified: true, issue: 4242 }; },
   };
-  return { deps, ran, logs };
+  return { deps, ran, logs, notified };
 }
 
 /**
@@ -1362,6 +1367,173 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, WATCHED)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("SC.1");
+  });
+});
+
+// ── stage run liveness (issue 1555): a stop reason and one notification per invocation ──
+describe("stage run liveness (issue 1555)", () => {
+  const RUN = "20261008T120000Z";
+  const runJson = (f: ReturnType<typeof fixture>) => JSON.parse(readFileSync(join(f.journalRoot, "stage", RUN, "run.json"), "utf8")) as RunJournal;
+
+  test("a failed stage run records stopReason failed and notifies once with the run, the step, the kind and the resume command", async () => {
+    const f = fixture();
+    const a = fakeDeps({ fail: new Set(["T2"]), receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(1);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "failed", step: "T2", notified: true });
+    expect(j.stopReason!.resume).toContain(`--run ${RUN} --from T2`);
+    expect(a.notified).toHaveLength(1);
+    expect(a.notified[0]).toMatchObject({ runTs: RUN, step: "T2", kind: "failed", resume: j.stopReason!.resume, release: RELEASE, target: "stage" });
+  });
+
+  test("a checkResume refusal records stopReason refused in run.json and notifies once, naming the first step that is not ok", async () => {
+    const f = fixture();
+    await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T1"]), receipt: "{}" }).deps, TINY);
+    const r = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", RUN, "--from", "T3"], r.deps, TINY)).toBe(2);
+    expect(r.ran).toEqual([]);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "refused", step: "T1" });
+    expect(j.stopReason!.detail).toContain("--from T3 skips steps that are not ok: T1");
+    expect(r.notified).toHaveLength(1);
+    expect(r.notified[0]).toMatchObject({ runTs: RUN, step: "T1", kind: "refused" });
+    expect(r.notified[0]!.resume).toContain(`--run ${RUN} --from T1`);
+  });
+
+  test("a notBefore pause records stopReason paused and pausedUntil = the anchor's endedAt + the step's hours; a resume clears them", async () => {
+    const f = fixture("stage");
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, WATCHED)).toBe(3);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "paused", step: "Q32-soak-gate" });
+    expect(j.pausedUntil).toBe(new Date(Date.parse(j.steps["Q23-ready"]!.endedAt!) + 6 * 3_600_000).toISOString());
+    expect(j.pausedUntil).toBe("2026-10-08T18:00:00.000Z");
+    expect(early.notified).toHaveLength(1);
+    expect(early.notified[0]).toMatchObject({ runTs: RUN, step: "Q32-soak-gate", kind: "paused" });
+    expect(early.notified[0]!.resume).toContain(`--run ${RUN} --from Q32-soak-gate`);
+    // The resume does not repeat the label check: no labelled issue now, and the run still goes on.
+    const later = fakeDeps({ answers: { "gh issue list --label": { code: 0, stdout: "[]" } } });
+    later.deps.now = () => new Date("2026-10-08T18:00:01Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", RUN], later.deps, WATCHED)).toBe(0);
+    const j2 = runJson(f);
+    expect(j2.pausedUntil).toBeUndefined();
+    expect(j2.stopReason).toMatchObject({ kind: "passed" });
+    expect(later.notified.map((e) => e.kind)).toEqual(["passed"]);
+  });
+
+  test("a passed stage run records stopReason passed and notifies once with its last step and the rc command", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(runJson(f).stopReason).toMatchObject({ kind: "passed", step: "T3" });
+    expect(a.notified).toHaveLength(1);
+    expect(a.notified[0]).toMatchObject({ runTs: RUN, step: "T3", kind: "passed" });
+    expect(a.notified[0]!.resume).toContain(`tag.ts rc --release ${RELEASE} --commit ${SHA}`);
+  });
+
+  test("a notifier that cannot post records notified false with the reason; the exit code does not change", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    a.deps.notify = async () => ({ notified: false, reason: "gh issue list exited 1" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(runJson(f).stopReason).toMatchObject({ kind: "passed", notified: false, notifiedReason: "gh issue list exited 1" });
+    const b = fakeDeps({ receipt: "{}" });
+    b.deps.notify = async () => { throw new Error("boom"); };
+    const g = fixture();
+    expect(await runRelease(["--target", g.targetFile, "--go", g.goFile, "--journal-root", g.journalRoot], b.deps, TINY)).toBe(0);
+    expect(runJson(g).stopReason).toMatchObject({ kind: "passed", notified: false });
+  });
+
+  test("HTTP 402 / 'Insufficient account funds' marks the step blocked: one blocked notification when it ends, exec once, the run goes on", async () => {
+    expect(classifyBlocked("error: Insufficient account funds [server_error, HTTP 402]")).toContain("unfunded");
+    expect(classifyBlocked("HTTP 402 Payment Required")).toBeDefined();
+    // red controls: other failures are not blocked.
+    expect(classifyBlocked("HTTP 429 Too Many Requests")).toBeUndefined();
+    expect(classifyBlocked("exit 1, HTTP 4020 bytes")).toBeUndefined();
+    const f = fixture();
+    const a = fakeDeps({ fail: new Set(["T1"]), receipt: "{}", out: "eval: Insufficient account funds [server_error, HTTP 402]\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(1);
+    expect(a.ran.filter((id) => id === "T1")).toHaveLength(1);
+    expect(a.ran).toEqual(["T1", "T2", "T3"]);
+    const j = runJson(f);
+    expect(j.steps.T1!.cause).toBe("blocked");
+    expect(j.steps.T1!.error).toContain("blocked: inference account unfunded");
+    // red control: the steps that passed with the same output are not blocked.
+    expect(j.steps.T2!.cause).toBeUndefined();
+    const blocked = a.notified.filter((e) => e.kind === "blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatchObject({ runTs: RUN, step: "T1" });
+    expect(blocked[0]!.resume).toContain("--from T1");
+    // The blocked notification comes when T1 ends, before the run's own stop.
+    expect(a.notified.map((e) => e.kind)).toEqual(["blocked", "failed"]);
+  });
+
+  test("on a fake clock advanced 3 minutes during one step, heartbeatAt is written every 60 s with the driver", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    let clock = Date.parse("2026-10-08T12:00:00Z");
+    a.deps.now = () => new Date(clock);
+    const beats: { ms: number; fn: () => void }[] = [];
+    let stopped = 0;
+    a.deps.every = (ms, fn) => { beats.push({ ms, fn }); return () => { stopped++; }; };
+    const seen: (string | undefined)[] = [];
+    const exec = a.deps.exec;
+    a.deps.exec = async (h, r, o, e, t) => {
+      if (r.includes(".step-T2")) {
+        for (let i = 0; i < 3; i++) {
+          clock += 60_000;
+          beats.at(-1)!.fn();
+          seen.push(runJson(f).heartbeatAt);
+        }
+      }
+      return exec(h, r, o, e, t);
+    };
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(beats.every((b) => b.ms === 60_000)).toBe(true);
+    expect(stopped).toBe(beats.length);
+    expect(new Set(seen).size).toBeGreaterThanOrEqual(2);
+    expect(seen).toEqual(["2026-10-08T12:01:00.000Z", "2026-10-08T12:02:00.000Z", "2026-10-08T12:03:00.000Z"]);
+    expect(runJson(f).driver?.pid).toBe(process.pid);
+  });
+
+  test("a new stage run refuses (exit 2) before any step unless exactly one open issue carries release:<release>; one lets it start", async () => {
+    for (const answer of [{ code: 0, stdout: "[]" }, { code: 0, stdout: '[{"number":1},{"number":2}]' }, { code: 1, stdout: "" }]) {
+      const f = fixture();
+      const seen: string[] = [];
+      const a = fakeDeps({ answers: { "gh issue list --label": answer } });
+      const collect = a.deps.collect;
+      a.deps.collect = async (h, r) => { seen.push(r); return collect(h, r); };
+      expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
+      expect(a.ran).toEqual([]);
+      expect(seen.join("\n")).toContain(`gh issue list --label release:${RELEASE} --state open --json number`);
+      expect(a.logs.join("\n")).toContain(`release:${RELEASE}`);
+      expect(a.logs.join("\n")).toContain("policy section 6");
+      // No journal exists, so the refusal is written to refused-<ts>.json, and notified once.
+      expect(existsSync(join(f.journalRoot, "stage", RUN))).toBe(false);
+      const refused = JSON.parse(readFileSync(join(f.journalRoot, "stage", `refused-${RUN}.json`), "utf8"));
+      expect(refused).toMatchObject({ kind: "refused" });
+      expect(a.notified).toHaveLength(1);
+      expect(a.notified[0]).toMatchObject({ kind: "refused" });
+    }
+    const f = fixture();
+    const one = fakeDeps({ receipt: "{}", answers: { "gh issue list --label": { code: 0, stdout: '[{"number":1555}]' } } });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], one.deps, TINY)).toBe(0);
+    expect(one.ran).toEqual(["T1", "T2", "T3"]);
+  });
+
+  test("production gets no notifier, heartbeat or stop reason", async () => {
+    const p = fixture("prod");
+    const stageDir = await passedStage(TINY);
+    const preDir = await greenPreflight(p, TINY, stageDir);
+    const run = fakeDeps({ receipt: "{}" });
+    let beats = 0;
+    run.deps.every = () => { beats++; return () => {}; };
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], run.deps, TINY)).toBe(0);
+    expect(run.notified).toEqual([]);
+    expect(beats).toBe(0);
+    const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", RUN, "run.json"), "utf8")) as RunJournal;
+    expect(j.stopReason).toBeUndefined();
+    expect(j.heartbeatAt).toBeUndefined();
   });
 });
 
@@ -2341,7 +2513,15 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], r.deps, TINY)).toBe(2);
     expect(r.ran).toEqual([]);
     expect(r.logs.join("\n")).toContain("not check-only: backend/src/index.ts");
-    expect(readFileSync(join(runDir, "run.json"), "utf8")).toBe(before);
+    // The journal's records are as they were; only this invocation's stop reason is added (issue 1555).
+    const after = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(after.stopReason).toMatchObject({ kind: "refused", step: "T2" });
+    expect(after.stopReason!.detail).toContain("not check-only: backend/src/index.ts");
+    expect(r.notified).toHaveLength(1);
+    expect(r.notified[0]).toMatchObject({ kind: "refused", runTs: "20261008T120000Z", step: "T2" });
+    const { stopReason: _new, ...restAfter } = after;
+    const { stopReason: _old, ...restBefore } = JSON.parse(before) as RunJournal;
+    expect(restAfter).toEqual(restBefore);
   });
 
   test("red: a resume whose diff deletes a product path beside a scripts/tests change refuses, naming the deleted path", async () => {
