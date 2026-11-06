@@ -84,6 +84,22 @@ describe("bun run role-passwords", () => {
     expect(sshArgv(STAGE, { target: "stage", doadminStdin: false }).slice(0, 5)).toEqual(["ssh", "-T", "-o", "BatchMode=yes", "rm-frontend-stage-2"]);
   });
 
+  test("a fresh clone detaches at the control machine's commit, never staying on main (v0.7.3's second stage run)", () => {
+    const sha = "94717268a7a1001248f68fe45697ee8e20f11a81";
+    const env = `env -i HOME=${STAGE.home} PATH=/root/.bun/bin:/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 RM_ENV=stage`;
+    const remote = remoteCommand(STAGE, { target: "stage", doadminStdin: true }, sha);
+    expect(remote.startsWith(
+      `{ test -e ${STAGE.checkout}/.git || { ${env} git clone --quiet git@github.com:robotmoney/robotmoney-frontend.git ${STAGE.checkout} && ${env} git -C ${STAGE.checkout} checkout --quiet --detach ${sha}; }; } && cd ${STAGE.checkout} && `,
+    )).toBe(true);
+  });
+
+  test("runWrapper passes the control checkout's HEAD to the remote command", async () => {
+    const d = deps(pipe(`${SECRET}\n`, false));
+    d.deps.headCommit = () => "94717268a7a1001248f68fe45697ee8e20f11a81";
+    expect(await runWrapper(["--target", "stage", "--doadmin-stdin"], d.deps)).toBe(0);
+    expect(d.runs[0]!.argv.at(-1)).toContain("checkout --quiet --detach 94717268a7a1001248f68fe45697ee8e20f11a81");
+  });
+
   test("the real CLI, with a recording `ssh` on PATH: ssh's stdin is the password, its argv and every output are clean", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rm-role-passwords-ssh-"));
     try {
