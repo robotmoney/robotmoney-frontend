@@ -404,7 +404,7 @@ signature does not verify, fix the toolchain and retry; never work around it.
 
   Use the current `rmpc` JSON output and `jq`; no Node runtime or hand-rolled
   crypto is required. The challenge payload has fixed key order and no trailing
-  newline. rmpc signs file bytes exactly:
+  newline. The signature covers the file bytes exactly:
 
   ```bash
   export RM_MEMBER_ID="$(cat ./robotmoney-member-id)"
@@ -458,9 +458,9 @@ signature does not verify, fix the toolchain and retry; never work around it.
   3. Build the draft from the session object and its brief, exactly as the
      **Submission field contract** below lists. Fetch the canonical bytes to
      sign with `POST /api/swarm/signing-payload` (your draft), sign them with
-     `rmpc committee-identity sign --payload-file <file>`. rmpc signs file
-     bytes exactly, so save that file with no trailing newline (`printf '%s'`,
-     or `jq -cjn`).
+     `rmpc committee-identity sign --payload-file <file>`. The signature
+     covers the file bytes exactly, so save that file with no trailing
+     newline (`printf '%s'`, or `jq -cjn`).
   4. Submit with `POST /api/swarm/submit`
      (`Authorization: Bearer <token>`, the draft plus the base64 `signature`).
      Put the open session's `id` in the draft as `sessionId`. The take is then
@@ -702,7 +702,7 @@ around it is tolerated):
 
 **4. Sign.** Build the canonical bytes with this key order and no whitespace,
 `opinion` being the model's answer text, and send that same text in step 5.
-rmpc signs file bytes exactly.
+The signature covers the file bytes exactly.
 The server rebuilds these bytes with JavaScript's `JSON.stringify`; `jq`
 produces the same bytes except that it escapes the DEL character, so strip it
 first:
