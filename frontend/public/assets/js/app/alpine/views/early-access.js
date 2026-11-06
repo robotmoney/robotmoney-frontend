@@ -23,6 +23,8 @@ export const EARLY_ACCESS_URL = "https://script.google.com/macros/s/AKfycbxzDpdB
 // secret lives in the Apps Script's properties, which checks each token before
 // it writes a row. Empty means off: no script is loaded and no token is sent.
 export const TURNSTILE_SITE_KEY = "";
+// Clears the fixed site nav; matches .ea__done-h's scroll-margin-top (6rem).
+const DONE_SCROLL_MARGIN_PX = 96;
 const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=rmTurnstileReady";
 // How long a send waits for a token before asking the visitor to finish the check.
 const CHALLENGE_WAIT_MS = 8000;
@@ -187,12 +189,29 @@ export function registerEarlyAccessForm(Alpine) {
         this.sentHandle = normalizeHandle(this.draft.handle);
         this.sent = true;
         clearReferral();
+        this.$nextTick(() => this.showDone());
       } catch {
         this.failed = true;
       } finally {
         this.sending = false;
         if (!this.sent) this.resetChallenge();
       }
+    },
+    // The send button sits at the foot of a tall form, so once the form gives
+    // way the confirmation is above the fold. Bring it in and focus it. x-show
+    // reveals it after $nextTick has run, so wait a frame until it renders.
+    showDone(frames = 10) {
+      const done = this.$refs.done;
+      if (!done) return;
+      if (!done.getClientRects().length) {
+        if (frames) requestAnimationFrame(() => this.showDone(frames - 1));
+        return;
+      }
+      if (done.getBoundingClientRect().top < DONE_SCROLL_MARGIN_PX) {
+        const reduce = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        done.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+      }
+      done.focus({ preventScroll: true });
     },
   }));
 }

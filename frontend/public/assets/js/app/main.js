@@ -8,6 +8,7 @@ import { registerStaticViews } from "./alpine/static-views.js";
 import { registerDashUi } from "./alpine/dash-ui.js";
 import { registerSiteNav } from "./alpine/site-nav.js";
 import { registerSelect } from "./alpine/select.js";
+import { registerRegimeDial } from "./alpine/regime-dial.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
 import { initHeadingAnchors } from "./lib/heading-anchors.js";
@@ -56,6 +57,7 @@ document.addEventListener("alpine:init", () => {
 
   registerSiteNav(Alpine);
   registerSelect(Alpine);
+  registerRegimeDial(Alpine);
   registerViews(Alpine);
   registerHeroes(Alpine);
   registerStaticViews(Alpine);
