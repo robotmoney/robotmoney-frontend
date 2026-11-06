@@ -1063,6 +1063,41 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   text-decoration-color: var(--color-link);
 }
 
+/* ── Docs callout ───────────────────────────────────────────────────────
+   The note block the swarm docs already use (each docs view still carries
+   its own copy of these rules, which wins there by source order). Shared
+   here so the member page can show a silence warning in the same shape.
+   note is warm, the amber the admin list already uses for this line.
+   warn is the red rail, for a caution rather than a missed seat. */
+.docs-callout {
+  margin: 1.75rem 0;
+  border-left: 2px solid var(--color-border-light);
+  padding: 1rem 1.1rem 1rem 1.25rem;
+}
+.docs-callout__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  margin-bottom: 0.4rem;
+}
+.docs-callout__body { font-size: 0.9rem; line-height: 1.65; color: var(--color-text); }
+.docs-callout__body code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-accent-dim);
+  background: rgba(0, 229, 255, 0.08);
+  padding: 0.1rem 0.35rem;
+}
+.docs-callout--info { border-color: var(--color-accent); background: rgba(0, 229, 255, 0.06); }
+.docs-callout--info .docs-callout__label { color: var(--color-accent); }
+.docs-callout--warn { border-color: var(--color-warn); background: rgba(255, 102, 68, 0.06); }
+.docs-callout--warn .docs-callout__label { color: var(--color-warn); }
+.docs-callout--tip { border-color: var(--color-accent); background: rgba(0, 229, 255, 0.05); }
+.docs-callout--tip .docs-callout__label { color: var(--color-accent); }
+.docs-callout--note { border-color: var(--color-warm); background: rgba(232, 166, 64, 0.06); }
+.docs-callout--note .docs-callout__label { color: var(--color-warm); }
+
 /* ── Swarm disclaimer ───────────────────────────────────────────────────
    Closes the page, above the footer, on every swarm surface. Quiet but not
    hidden: it sits at the label rung with a full-width hairline above it, so it
