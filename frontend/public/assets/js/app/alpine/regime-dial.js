@@ -27,14 +27,17 @@
 // out, so it never empties mid-fade.
 import { DIAL_KEYS, DIAL_LABEL_AT, ordinalParts, regimeDialAt, regimeDialSvg, regimeDialTip, regimeDialTipAt } from "../lib/regime-dial.js";
 
-/** @typedef {import("../lib/regime-dial.js").DialKey} DialKey */
+// The lib's two types, restated: the asset stamper reads a JSDoc type import
+// as a module specifier, so one here would break the static build.
+/** @typedef {"risk_off" | "neutral" | "risk_on"} DialKey */
+/** @typedef {{ percentile: number | null | undefined, riskOff: number, riskOn: number, regime?: string | null }} DialModel */
 
 const OPEN_DELAY_MS = 70;
 const CLOSE_DELAY_MS = 120;
 let seq = 0;
 
 export function registerRegimeDial(Alpine) {
-  Alpine.data("rmRegimeDial", (/** @type {() => import("../lib/regime-dial.js").DialModel} */ read) => ({
+  Alpine.data("rmRegimeDial", (/** @type {() => DialModel} */ read) => ({
     keys: DIAL_KEYS,
     tipId: `rm-dial-tip-${++seq}`,
     // What the pointer or focus is on, and what a tap pinned open.
