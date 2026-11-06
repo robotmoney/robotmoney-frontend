@@ -71,7 +71,7 @@ export function parseWrapperArgs(argv: readonly string[]): WrapperArgs | { error
 }
 
 /** The remote shell command: names and flags only, never a secret. */
-export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string {
+export function remoteCommand(target: ReleaseTarget, args: WrapperArgs, commit?: string): string {
   const env = [`HOME=${shellQuote(target.home)}`, ...Object.entries(BASE_ENV).map(([k, v]) => `${k}=${shellQuote(v)}`), `RM_ENV=${shellQuote(target.rmEnv)}`];
   const envCmd = (argv: readonly string[]) => `env -i ${env.join(" ")} ${argv.map(shellQuote).join(" ")}`;
   const argv = [
@@ -84,7 +84,13 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
   ];
   const checkout = shellQuote(target.checkout);
   return [
-    `{ test -e ${shellQuote(`${target.checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])}; }`,
+    // A fresh clone sits on the default branch (main), whose prod-init can be newer than the
+    // release's: v0.7.3's second stage run cloned main at Q04 and ran 1581's pg_stat_statements
+    // step, which the stage doadmin may not run. So a clone detaches at the control machine's
+    // commit, the release commit the runner runs from. An existing checkout is left as it is.
+    commit
+      ? `{ test -e ${shellQuote(`${target.checkout}/.git`)} || { ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])} && ${envCmd(["git", "-C", target.checkout, "checkout", "--quiet", "--detach", commit])}; }; }`
+      : `{ test -e ${shellQuote(`${target.checkout}/.git`)} || ${envCmd(["git", "clone", "--quiet", RELEASE_REPO_URL, target.checkout])}; }`,
     `cd ${checkout}`,
     `{ test -e node_modules -a -e backend/node_modules || { ${envCmd(["bun", "install", "--frozen-lockfile"])} && ${envCmd(["bun", "install", "--frozen-lockfile", "--cwd", "backend"])}; }; }`,
     envCmd(argv),
@@ -92,8 +98,8 @@ export function remoteCommand(target: ReleaseTarget, args: WrapperArgs): string 
 }
 
 /** The ssh argv: the host and the remote command. */
-export function sshArgv(target: ReleaseTarget, args: WrapperArgs): string[] {
-  return ["ssh", "-T", "-o", "BatchMode=yes", target.host, remoteCommand(target, args)];
+export function sshArgv(target: ReleaseTarget, args: WrapperArgs, commit?: string): string[] {
+  return ["ssh", "-T", "-o", "BatchMode=yes", target.host, remoteCommand(target, args, commit)];
 }
 
 export interface WrapperDeps {
@@ -103,6 +109,8 @@ export interface WrapperDeps {
   /** Run argv with `input` as its whole stdin, output passed through; resolve to the exit code. */
   run(argv: readonly string[], input: string): Promise<number>;
   log(line: string): void;
+  /** The control checkout's HEAD commit, which a fresh target clone detaches at. */
+  headCommit?(): string | undefined;
 }
 
 export async function runWrapper(argv: readonly string[], deps: WrapperDeps): Promise<number> {
@@ -126,7 +134,7 @@ export async function runWrapper(argv: readonly string[], deps: WrapperDeps): Pr
     deps.log(`role-passwords: ${(error as Error).message}`);
     return 2;
   }
-  return deps.run(sshArgv(target, args), `${password}\n`);
+  return deps.run(sshArgv(target, args, deps.headCommit?.()), `${password}\n`);
 }
 
 if (import.meta.main) {
@@ -141,6 +149,11 @@ if (import.meta.main) {
       return await child.exited;
     },
     log: (line) => console.error(line),
+    headCommit() {
+      const r = Bun.spawnSync(["git", "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+      const sha = r.stdout.toString().trim();
+      return r.exitCode === 0 && /^[0-9a-f]{40}$/.test(sha) ? sha : undefined;
+    },
   });
   process.exit(code);
 }
