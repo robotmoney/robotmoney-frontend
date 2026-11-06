@@ -39,6 +39,14 @@ notes: |
   first run before Q38 starts. On production the next run can fall hours after the soak, and
   production runs the tree stage passed (SP.8). If Q34a is stopped early and accepted, Q38 fails
   on v0.7.2's backtest and needs the next run.
+  rc.1 (qa/0.7.x-2026-11-06). v0.7.3-rc.0's production preflight stopped at P.ci: the backend
+  workflow failed six times on its tree in admin-surface.test.ts's overview test, which ran on the
+  shared test database and read two job_schedules rows other files left enabled (issue 1587). The
+  test now takes its own clean database. Nothing reached production; this tree runs a new stage run.
+  The second stage run (20261106T004003Z) failed Q01-lockfile (Playwright 1.65.0 resolved since)
+  and Q04-role-passwords: Q03 had removed the stage checkout, role-passwords cloned main, and main's
+  prod-init (PR 1582, issue 1581) asks doadmin for pg_stat_statements. A fresh clone now detaches at
+  the control machine's commit. Both fixes ride qa/0.7.x-2026-11-06; a third stage run follows.
 recovery: |
   No migration runs and no schema changes in this release, so the schema stays the v0.7.2 schema.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed. Fix on a
