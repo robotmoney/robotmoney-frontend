@@ -6,7 +6,8 @@ import { scrollToFragment } from "../../router.js";
 import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
 import { sessionBrief } from "../../lib/session-brief.js";
-import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, REGIME, rgba } from "../../lib/chart-theme.js";
+import { regimeDialValid } from "../../lib/regime-dial.js";
 import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks, dragWindow } from "../../lib/line-chart.js";
 import {
   alignToDates,
@@ -44,6 +45,20 @@ const FIRST_PAINT_DAYS = 400;
 // seven, counted back from the latest, so today is always a point). A day is
 // under half a pixel wide at that span. The regime bands stay day by day.
 const WEEKLY_AFTER_DAYS = 400;
+// The composite read against its median (0.50), as a baseline chart: the line
+// and a flat fill take the risk-on green above it and the risk-off beacon
+// below, faint enough that the regime bands still read through.
+const COMPOSITE_AREA = {
+  base: 0.5,
+  above: { line: REGIME.risk_on, fill: rgba(REGIME.risk_on, 0.16) },
+  below: { line: REGIME.risk_off, fill: rgba(REGIME.risk_off, 0.14) },
+};
+// The panels' lines on the history, kept off the reading's colours: green and
+// beacon are the composite's two sides and slate the neutral band, so no
+// panel may wear them. Cyan (Beam) and the light text are the two hues left;
+// equity factor, context outside the composite, takes slate, which on this
+// chart only ever names a band that is drawn clear.
+const HISTORY_LINE = { macro: PALETTE.accent, onchain: PALETTE.text, factor: SERIES.slate };
 const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]];
 
 // Chart models are memoised outside Alpine data: one per history and range
@@ -107,7 +122,8 @@ export function registerRegimeView(Alpine) {
     // regime bands + the S&P 500 / ETH price overlays toggle.
     visible: { spx: false, eth: false, bands: true, btBands: true },
     // Each index line on the history chart, on or off from its chip.
-    series: { composite: true, macro: true, onchain: true, factor: true },
+    // The composite alone to start; each panel's line is a click away.
+    series: { composite: true, macro: false, onchain: false, factor: false },
     range: "1y",
     ranges: RANGES,
     // True once the whole history and the backtests have landed.
@@ -305,6 +321,12 @@ export function registerRegimeView(Alpine) {
     // run behind a chart as a faint wash, never as type, so the regime card's label stays in the
     // text colour beside its dot.
     regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
+    // The top-line dial's reading (alpine/regime-dial.js); null without a
+    // percentile or cuts, and the plain readout stands in.
+    dialModel() {
+      const m = { percentile: this.latest?.compositePercentile, riskOff: +this.bucketPct("risk_off") / 100, riskOn: +this.bucketPct("risk_on") / 100, regime: this.latest?.regime };
+      return regimeDialValid(m) ? m : null;
+    },
     // The provenance line in words. The transform is what the percentile ranks
     // (the raw level, or its change); the sign is which way is risk-on.
     transformLabel(t) {
@@ -543,7 +565,7 @@ export function registerRegimeView(Alpine) {
     bandBg(state) { return REGIME_BAND_BG[state] || "transparent"; },
     historySeries() {
       const hasFactor = this.history.some((h) => (h.factorPercentile ?? h.factor_percentile) != null);
-      return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: STRATEGY_STYLE[key].color }));
+      return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: HISTORY_LINE[key] ?? STRATEGY_STYLE[key].color }));
     },
     toggleSeries(key) { this.series[key] = !this.series[key]; },
     setRange(id) { this.range = id; this.histWin = null; this.histAt = null; },
@@ -631,10 +653,12 @@ export function registerRegimeView(Alpine) {
       if (this.historyEmpty()) return "";
       const m = this._hist();
       const lines = this._histLines();
-      // Each line is placed by its own scale and drawn on a unit one.
+      // Each line is placed by its own scale and drawn on a unit one; the
+      // composite reads against its median (COMPOSITE_AREA).
       return lineChartSvg({
         n: m.n, y: (v) => v, grid: this.historyPct() ? [+this.bucketPct("risk_off") / 100, 0.5, +this.bucketPct("risk_on") / 100] : [0.25, 0.5, 0.75],
-        series: lines.map((l) => ({ token: l.token, color: l.color, width: l.width, dash: l.dash, muted: !!this.histFocus && this.histFocus !== l.token, points: m.idx.map((i, k) => ({ i, v: l.values[k] == null ? null : l.y(l.values[k]) })) })),
+        series: lines.map((l) => ({ token: l.token, color: l.color, width: l.width, dash: l.dash, muted: !!this.histFocus && this.histFocus !== l.token,
+          area: l.token === "composite" ? COMPOSITE_AREA : null, points: m.idx.map((i, k) => ({ i, v: l.values[k] == null ? null : l.y(l.values[k]) })) })),
       });
     },
     historyBands() { return this.visible.bands ? this._hist().runs : []; },
@@ -657,7 +681,7 @@ export function registerRegimeView(Alpine) {
     historyLegend() {
       const m = this._hist();
       const lastOf = (arr) => { for (let k = arr.length - 1; k >= 0; k--) if (arr[k] != null) return arr[k]; return null; };
-      const rows = this.historySeries().map((s) => { const v = lastOf(m.values[s.key]); return { ...s, on: !!this.series[s.key], value: v == null ? "—" : this._histFmt(v) }; });
+      const rows = this.historySeries().map((s) => { const v = lastOf(m.values[s.key]); return { ...s, on: !!this.series[s.key], split: s.key === "composite", value: v == null ? "—" : this._histFmt(v) }; });
       for (const k of ["spx", "eth"]) {
         if (!(this.latest?.extras?.[k] || []).length) continue;
         const v = lastOf(m.values[k]);
@@ -665,6 +689,13 @@ export function registerRegimeView(Alpine) {
       }
       return rows;
     },
+    // The composite is drawn in the colour of its side of the median, so its
+    // reading in the tip takes that colour; every other line keeps its own.
+    _sideColor(l, v) {
+      if (l.token !== "composite" || v == null) return l.color;
+      return v >= COMPOSITE_AREA.base ? COMPOSITE_AREA.above.line : COMPOSITE_AREA.below.line;
+    },
+    splitKey() { return [COMPOSITE_AREA.above.line, COMPOSITE_AREA.below.line]; },
     legendToggle(row) { if (row.price) this.toggle(row.key); else this.toggleSeries(row.key); },
     historyMove(ev) { const m = this._hist(); if (m.n) this.histAt = nearestSample(m.idx, m.n, ev); },
     historyKey(ev) { this.histAt = stepAt(ev, this.histAt, this._hist().idx.length); },
@@ -674,7 +705,7 @@ export function registerRegimeView(Alpine) {
       if (k == null || m.idx[k] == null) return null;
       const i = m.idx[k];
       const r = this.history.find((h) => h.date === m.days[i]);
-      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: l.color, value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
+      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: this._sideColor(l, l.values[k]), value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
       return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
     },
 

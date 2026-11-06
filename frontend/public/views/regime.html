@@ -85,12 +85,47 @@
           </div>
           <div class="rr-split rr-split--rule rv__today">
             <div>
-              <p class="rv__today-k">Top-line regime</p>
-              <p class="rr-stat__v rv__today-v"><i class="rv__regime-dot" :style="`background:${regimeColor(latest.regime)}`" aria-hidden="true"></i><span x-text="regimeLabel(latest.regime)"></span></p>
-              <p class="rr-stat__sub">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b> · <span x-text="ordinalPct(latest.compositePercentile)"></span> percentile over 3 years</p>
-              <!-- How the reading is made, in the open: the thresholds from the
-                   snapshot (bucketPct), the smoothing from the method. -->
-              <p class="rv__today-copy">The composite averages the macro and on-chain panels, then ranks the result against its own last three years. Below the <span x-text="ordinalPct(bucketPct('risk_off') / 100)"></span> percentile it reads risk-off, above the <span x-text="ordinalPct(bucketPct('risk_on') / 100)"></span> risk-on, and neutral in between. The label changes after five trading days in a new band, or at once on a one-day move beyond 2σ.</p>
+              <!-- Headed like Market context beside it, so the halves read as a pair. -->
+              <div class="rr-context__head">
+                <h3 class="rr-subhead__h">Top-line regime</h3>
+              </div>
+              <!-- The dial: where today's composite sits between risk-off and
+                   risk-on, the regime named in its middle. Each state explains
+                   itself on hover, focus or tap: where the composite has to sit
+                   to read it, and for today's, how the label moves. Without a
+                   percentile or thresholds it gives way to the plain readout. -->
+              <template x-if="dialModel()">
+                <div class="rm-dial" x-data="rmRegimeDial(() => dialModel())"
+                     @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null"
+                     @keydown.escape="point = null; pinned = null">
+                  <div class="rm-dial__arc" x-ref="arc">
+                    <div class="rm-dial__svg" x-html="svg()"></div>
+                    <!-- The reading in the bowl: the percentile the dot marks,
+                         with the regime it reads as under it. -->
+                    <p class="rm-dial__v">
+                      <b class="rm-dial__n"><span x-text="reading().n"></span><small x-text="reading().suffix"></small></b>
+                      <span class="rm-dial__name" x-text="regimeLabel(latest.regime)"></span>
+                    </p>
+                    <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">
+                      <p class="rm-dial__tip-h" x-text="tip(at).title"></p>
+                      <p x-text="tip(at).body"></p>
+                      <p class="rm-dial__tip-now" x-show="tip(at).now" x-text="tip(at).now"></p>
+                    </div>
+                  </div>
+                  <template x-for="k in keys" :key="k">
+                    <button type="button" class="rm-dial__k" :class="{ 'is-on': lit() === k }" :style="labelAt(k)" :data-at="k"
+                            :aria-describedby="shown() === k ? tipId : null" :aria-expanded="shown() === k ? 'true' : 'false'"
+                            @mouseenter="point = k" @focus="point = k" @blur="point = null" @click="pin(k)" x-text="tip(k).title"></button>
+                  </template>
+                </div>
+              </template>
+              <template x-if="!dialModel()">
+                <p class="rr-stat__v rv__today-v"><i class="rv__regime-dot" :style="`background:${regimeColor(latest.regime)}`" aria-hidden="true"></i><span x-text="regimeLabel(latest.regime)"></span></p>
+              </template>
+              <!-- With the dial, its bowl carries the percentile, so this line says what
+                   is ranked; without it, the line carries both. -->
+              <p class="rr-stat__sub" x-show="dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b>, ranked against its last 3 years</p>
+              <p class="rr-stat__sub" x-show="!dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b> · <span x-text="ordinalPct(latest.compositePercentile)"></span> percentile over 3 years</p>
             </div>
             <!-- The session page's Market context component: each reading on
                  its own three-year percentile track, the cuts where the reading
@@ -153,12 +188,23 @@
           </template>
           <template x-if="!historyEmpty()">
             <figure class="rr-area rv__fig" :data-days="historyDays()">
+              <!-- The bands' key above the plot, the lines' legend below it. -->
+              <ul class="rr-area__legend rv__legend-list rv__legend-top">
+                <li class="rv__lg-bands" :class="{ 'is-off': !visible.bands }">
+                  <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
+                  <span class="rv__lg-key">
+                    <template x-for="r in bgLegend()" :key="r.label">
+                      <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                    </template>
+                  </span>
+                </li>
+              </ul>
               <div class="rr-area__frame">
                 <div class="rr-area__y" aria-hidden="true">
                   <template x-for="t in historyYTicks()" :key="t.key"><span :class="{ 'is-cut': t.cut }" :style="`top:${t.top}%`" x-text="t.label"></span></template>
                 </div>
                 <div class="rr-area__plot" tabindex="0" role="img" :aria-label="historyLabel()"
-                     @pointermove="historyMove($event)" @pointerdown="historyMove($event)" @pointerleave="histAt = null" @keydown="historyKey($event)" @blur="histAt = null">
+                     @pointermove="historyMove($event)" @pointerdown="historyMove($event)" @pointerleave="if ($event.pointerType === 'mouse') histAt = null" @keydown="historyKey($event)" @blur="histAt = null">
                   <div class="rv__bands" aria-hidden="true">
                     <template x-for="b in historyBands()" :key="b.key"><i :data-state="b.state" :data-from="b.from" :data-to="b.to" :style="`left:${b.left}%;width:${b.width}%;background:${bandBg(b.state)}`"></i></template>
                   </div>
@@ -167,7 +213,7 @@
                     <div class="rr-area__cross" :style="`left:${historyPoint().left}%`"></div>
                   </template>
                   <template x-if="historyPoint()">
-                    <div class="rr-area__tip" :class="historyPoint().left > 62 ? 'is-left' : ''" :style="`left:${historyPoint().left}%`">
+                    <div class="rr-area__tip" :class="{ 'is-left': historyPoint().left > 62, 'is-past-mid': historyPoint().left > 50 }" :style="`left:${historyPoint().left}%`">
                       <p class="rr-area__tip-h"><b x-text="historyPoint().date"></b><span class="rv__tip-reg" x-show="historyPoint().regime"><i :style="`background:${historyPoint().regimeColor}`" aria-hidden="true"></i><span x-text="historyPoint().regime"></span></span></p>
                       <ul>
                         <template x-for="it in historyPoint().items" :key="it.token">
@@ -203,20 +249,14 @@
                 <template x-for="l in historyLegend()" :key="l.key">
                   <li :class="{ 'is-muted': histFocus && histFocus !== l.key, 'is-off': !l.on }" @pointerenter="histFocus = l.on ? l.key : null" @pointerleave="histFocus = null">
                     <button type="button" class="rv__lg" :aria-pressed="l.on ? 'true' : 'false'" @click="legendToggle(l); histFocus = null" @focus="histFocus = l.on ? l.key : null" @blur="histFocus = null">
-                      <template x-if="!l.dash"><i :style="`background:${l.color}`" data-mark="series" aria-hidden="true"></i></template>
+                      <!-- The composite changes colour at its median, so its key is both halves. -->
+                      <template x-if="l.split"><span class="rv__lg-split" aria-hidden="true"><i data-mark="series" :style="`background:${splitKey()[0]}`"></i><i data-mark="series" :style="`background:${splitKey()[1]}`"></i></span></template>
+                      <template x-if="!l.dash && !l.split"><i :style="`background:${l.color}`" data-mark="series" aria-hidden="true"></i></template>
                       <template x-if="l.dash"><span class="rv__lg-dash" x-html="dashKey(l.color, l.dash)"></span></template>
                       <span x-text="l.label"></span><b x-text="l.value"></b>
                     </button>
                   </li>
                 </template>
-                <li class="rv__lg-bands" :class="{ 'is-off': !visible.bands }">
-                  <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
-                  <span class="rv__lg-key">
-                    <template x-for="r in bgLegend()" :key="r.label">
-                      <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
-                    </template>
-                  </span>
-                </li>
               </ul>
             </figure>
           </template>
@@ -332,12 +372,22 @@
                       </template>
                     </div>
                   </figcaption>
+                  <ul class="rr-area__legend rv__legend-list rv__legend-top">
+                    <li class="rv__lg-bands" :class="{ 'is-off': !visible.btBands }">
+                      <button type="button" class="rv__tgl" :aria-pressed="visible.btBands ? 'true' : 'false'" @click="toggle('btBands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
+                      <span class="rv__lg-key">
+                        <template x-for="r in bgLegend()" :key="r.label">
+                          <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                        </template>
+                      </span>
+                    </li>
+                  </ul>
                   <div class="rr-area__frame">
                     <div class="rr-area__y" aria-hidden="true">
                       <template x-for="t in btYTicks(bt.key)" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
                     </div>
                     <div class="rr-area__plot" tabindex="0" role="img" :aria-label="btLabel(bt.key)"
-                         @pointermove="btMove(bt.key, $event)" @pointerdown="btMove(bt.key, $event)" @pointerleave="btAt = null" @keydown="btKey(bt.key, $event)" @blur="btAt = null">
+                         @pointermove="btMove(bt.key, $event)" @pointerdown="btMove(bt.key, $event)" @pointerleave="if ($event.pointerType === 'mouse') btAt = null" @keydown="btKey(bt.key, $event)" @blur="btAt = null">
                       <div class="rv__bands" aria-hidden="true">
                         <template x-for="b in btBands(bt.key)" :key="b.key"><i :data-state="b.state" :data-from="b.from" :data-to="b.to" :style="`left:${b.left}%;width:${b.width}%;background:${bandBg(b.state)}`"></i></template>
                       </div>
@@ -346,7 +396,7 @@
                         <div class="rr-area__cross" :style="`left:${btPoint(bt.key).left}%`"></div>
                       </template>
                       <template x-if="btPoint(bt.key)">
-                        <div class="rr-area__tip" :class="btPoint(bt.key).left > 62 ? 'is-left' : ''" :style="`left:${btPoint(bt.key).left}%`">
+                        <div class="rr-area__tip" :class="{ 'is-left': btPoint(bt.key).left > 62, 'is-past-mid': btPoint(bt.key).left > 50 }" :style="`left:${btPoint(bt.key).left}%`">
                           <p class="rr-area__tip-h"><b x-text="btPoint(bt.key).date"></b><span class="rv__tip-reg" x-show="btPoint(bt.key).regime"><i :style="`background:${btPoint(bt.key).regimeColor}`" aria-hidden="true"></i><span x-text="btPoint(bt.key).regime"></span></span></p>
                           <ul>
                             <template x-for="it in btPoint(bt.key).items" :key="it.token">
@@ -388,14 +438,6 @@
                         </button>
                       </li>
                     </template>
-                    <li class="rv__lg-bands" :class="{ 'is-off': !visible.btBands }">
-                      <button type="button" class="rv__tgl" :aria-pressed="visible.btBands ? 'true' : 'false'" @click="toggle('btBands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
-                      <span class="rv__lg-key">
-                        <template x-for="r in bgLegend()" :key="r.label">
-                          <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
-                        </template>
-                      </span>
-                    </li>
                   </ul>
                 </figure>
               </template>
@@ -437,7 +479,7 @@
               </div>
               <div class="rv__howto">
                 <h4 class="rr-subhead__h rr-subhead__h--minor">How to read this</h4>
-                <p>The out-of-sample window starts Feb 1, 2024. Risky legs earn each asset's spot return; the cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps, charged only when the bucket changes. The chart background is shaded by the composite regime: a light wash for risk-on, a faint one for neutral, hatching for risk-off.</p>
+                <p>The out-of-sample window starts Feb 1, 2024. Risky legs earn each asset's spot return; the cash leg earns the daily-compounded DTB3 (3-month T-bill) yield. Transaction cost = ½ × Σ|Δw| × 10 bps, charged only when the bucket changes. The chart background is shaded by the composite regime: a green wash for risk-on, a warm one for risk-off, and neutral left clear.</p>
                 <p><strong>Reading this honestly:</strong> a strategy that beats the HODL baseline on Sharpe or max drawdown but loses on CAGR is managing risk, not finding alpha. One that beats it on CAGR is either catching real signal or overfit, and the in-sample and out-of-sample split tells them apart: a big gap means overfit, a consistent result means plausible signal. None of this controls for path dependence across the single 8-year window.</p>
               </div>
             </div>

@@ -180,13 +180,20 @@
    characters in three, and the copy written to that. */
 .rv .rm-tip__bub { width: min(24rem, 80vw); max-width: min(24rem, calc(100vw - 2rem)); }
 /* Today: the reading as the figure, the panel indices on a track beside it. */
-.rv__today-k { display: flex; align-items: center; margin: 0 0 0.75rem; font-family: var(--font-mono); font-size: 0.625rem;
-  text-transform: uppercase; letter-spacing: 0.11em; color: var(--color-text-muted); }
 .rv__today-v { display: flex; align-items: center; gap: 0.75rem; font-family: var(--font-display); font-weight: 700; text-transform: uppercase; }
 .rv__today-v .rv__regime-dot { width: 0.625rem; height: 0.625rem; }
+/* The top line's dial (.rm-dial, components.css), set into the panel. */
+.rv__today .rm-dial { margin: 0.25rem 0 0.75rem; }
 .rv__today .rr-stat__sub b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text); }
-.rv__context .rr-context__head { margin-bottom: 0.5rem; }
-.rv__today-copy { margin: 1.5rem 0 0; font-size: 0.875rem; line-height: 1.65; color: var(--color-text-soft); }
+/* Both halves open on the same heading, set the same distance above. */
+.rv__today .rr-context__head { margin-bottom: 0.5rem; }
+/* Side by side, the two halves end on one line: Market context spreads its
+   rows down the dial's height and sets its note level with the left's copy. */
+@media (min-width: 861px) {
+  .rv__context { display: flex; flex-direction: column; }
+  .rv__context .sig { flex: 1; align-content: space-between; }
+  .rv__context > .rr-note { margin-bottom: 0; }
+}
 
 /* The range navigator: the whole history in miniature under a chart, the
    window on show between two handles. Aligned with the plot, past the y axis. */
@@ -224,11 +231,16 @@
    tapping it opens the tip. Header tips are the (i) icon. */
 .rv__cellbtn { text-decoration: none !important; font-family: var(--font-mono); cursor: default; }
 
-/* The chart's bands: HTML strips under the lines, so the hatch tile keeps its
-   angle however the plot stretches. */
+/* The chart's bands: HTML strips under the lines, one per run. */
 .rv__bands { position: absolute; inset: 0; pointer-events: none; }
 .rv__bands i { position: absolute; top: 0; bottom: 0; display: block; }
 .rv__fig .rr-area__tip { min-width: 13rem; }
+/* On a phone the plot is too narrow for the tip beside the crosshair, so it
+   pins to the top corner away from it and takes only the width it needs. */
+@media (max-width: 640px) {
+  .rv__fig .rr-area__tip, .rv__fig .rr-area__tip.is-left { left: auto !important; right: 0; min-width: 0; width: max-content; max-width: 70%; transform: none; }
+  .rv__fig .rr-area__tip.is-past-mid { left: 0 !important; right: auto; }
+}
 .rv__fig .rr-area__y .is-cut { color: var(--color-text-soft); }
 .rv__tip-reg { display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-sans); color: var(--color-text-soft); }
 .rv__tip-reg i { width: 7px; height: 7px; border-radius: 50%; }
@@ -241,7 +253,17 @@
 .rv__lg i { width: 0.4375rem; height: 0.4375rem; flex: none; }
 .rv__lg b { font-weight: 400; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 .rv__lg-dash { display: inline-flex; }
+/* The composite's key: its two colours, the same square split down the middle. */
+.rv__lg-split { display: inline-flex; flex: none; }
+.rv__lg .rv__lg-split i { width: 0.21875rem; height: 0.4375rem; }
 .rv__lg-bands { margin-left: auto; gap: 0.75rem !important; }
+/* The bands' key, above the plot: right-aligned, clear of the top tick. */
+.rr-area__legend.rv__legend-top { justify-content: flex-end; margin: 0 0 1.25rem 2.75rem; }
+/* On a phone it wraps, so it starts at the plot's edge and wraps from there. */
+@media (max-width: 640px) {
+  .rr-area__legend.rv__legend-top { justify-content: flex-start; }
+  .rv__legend-top .rv__lg-bands { margin-left: 0; flex-wrap: wrap; }
+}
 /* The bands' switch: a square that fills when on, a toggle rather than a link. */
 .rv__tgl { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
 .rv__tgl-box { width: 0.625rem; height: 0.625rem; border: 1px solid var(--color-text-muted); flex: none; transition: background 160ms var(--ease-out-expo), border-color 160ms var(--ease-out-expo); }
