@@ -315,6 +315,27 @@ $$;
 
 
 --
+-- Name: rm_swarm_briefs_allocation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_swarm_briefs_allocation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  NEW.allocation := NEW.body -> 'allocation';
+  RETURN NEW;
+END
+$$;
+
+
+--
+-- Name: FUNCTION rm_swarm_briefs_allocation(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.rm_swarm_briefs_allocation() IS 'Keeps swarm_briefs.allocation equal to body -> ''allocation'' on every write (migration 0130, issue 1584).';
+
+
+--
 -- Name: rm_text_array_is_canonical_set(text[]); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2451,7 +2472,7 @@ CREATE TABLE public.swarm_briefs (
     created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_briefs_created_at_not_null NOT NULL,
     session_id uuid,
     report_snapshot_id bigint,
-    allocation jsonb GENERATED ALWAYS AS ((body -> 'allocation'::text)) STORED
+    allocation jsonb
 );
 
 
@@ -5094,6 +5115,13 @@ CREATE UNIQUE INDEX openclaw_agents_project_name_idx ON public.openclaw_agents U
 
 
 --
+-- Name: pipeline_ingest_receipts_job_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX pipeline_ingest_receipts_job_idx ON public.pipeline_ingest_receipts USING btree (job_id) WHERE (job_id IS NOT NULL);
+
+
+--
 -- Name: prices_ts_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5979,6 +6007,15 @@ ALTER TABLE public.swarm_brief_revisions ENABLE ALWAYS TRIGGER swarm_brief_revis
 CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_briefs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.swarm_briefs ENABLE ALWAYS TRIGGER swarm_briefs_append_only;
+
+
+--
+-- Name: swarm_briefs swarm_briefs_allocation; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER swarm_briefs_allocation BEFORE INSERT OR UPDATE ON public.swarm_briefs FOR EACH ROW EXECUTE FUNCTION public.rm_swarm_briefs_allocation();
+
+ALTER TABLE public.swarm_briefs ENABLE ALWAYS TRIGGER swarm_briefs_allocation;
 
 
 --

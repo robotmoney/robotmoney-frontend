@@ -166,6 +166,7 @@ const NOT_IN_PRODUCTION = [
   "0128_asset_prices_overwrite_events.sql",
   "0129_allocation_framework_hard_assets.sql",
   "0130_jobs_live_index_brief_allocation_stats.sql",
+  "0131_swarm_briefs_allocation_backfill.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
