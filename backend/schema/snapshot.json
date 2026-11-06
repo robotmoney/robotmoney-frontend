@@ -131,7 +131,8 @@
     "0127_rm_worker_retired.sql",
     "0128_asset_prices_overwrite_events.sql",
     "0129_allocation_framework_hard_assets.sql",
-    "0130_jobs_live_index_brief_allocation_stats.sql"
+    "0130_jobs_live_index_brief_allocation_stats.sql",
+    "0131_swarm_briefs_allocation_backfill.sql"
   ],
   "exclusions": {
     "roles": [
@@ -144,7 +145,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "df293c77067f7f073d9f570cd938d42b22265c58030c754ba7d488e983e6d169",
+  "contentHash": "e57a3f71f78c250b1a1d56e15d15411da6211f6ce646975e983898fbad164fdd",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2369,8 +2370,7 @@
     },
     "column public.swarm_briefs.allocation": {
       "type": "jsonb",
-      "notnull": "no",
-      "generated": "stored: (body -> 'allocation'::text)"
+      "notnull": "no"
     },
     "column public.swarm_briefs.body": {
       "type": "jsonb",
@@ -5048,6 +5048,10 @@
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_stream_head_forward_only()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.seq < OLD.seq THEN\n    RAISE EXCEPTION 'swarm_stream_head only moves forward: % -> % refused', OLD.seq, NEW.seq\n      USING ERRCODE = 'check_violation';\n  END IF;\n  RETURN NEW;\nEND\n$function$\n"
     },
+    "function public.rm_swarm_briefs_allocation()": {
+      "owner": "rm_owner",
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_swarm_briefs_allocation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.allocation := NEW.body -> 'allocation';\n  RETURN NEW;\nEND\n$function$\n"
+    },
     "function public.rm_text_array_is_canonical_set(text[])": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_text_array_is_canonical_set(input_values text[])\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT NOT EXISTS (\n           SELECT 1 FROM unnest(input_values) AS value\n            WHERE value IS NULL OR btrim(value) = ''\n         )\n     AND cardinality(input_values) = (\n           SELECT count(DISTINCT value COLLATE \"C\") FROM unnest(input_values) AS value\n         )\n     AND input_values = COALESCE(\n           (SELECT array_agg(value ORDER BY value COLLATE \"C\")\n              FROM unnest(input_values) AS value),\n           '{}'::text[]\n         );\n$function$\n"
@@ -5378,6 +5382,9 @@
     },
     "index public.openclaw_agents_project_name_idx": {
       "definition": "CREATE UNIQUE INDEX openclaw_agents_project_name_idx ON public.openclaw_agents USING btree (project_id, name)"
+    },
+    "index public.pipeline_ingest_receipts_job_idx": {
+      "definition": "CREATE INDEX pipeline_ingest_receipts_job_idx ON public.pipeline_ingest_receipts USING btree (job_id) WHERE (job_id IS NOT NULL)"
     },
     "index public.pipeline_ingest_receipts_pkey": {
       "definition": "CREATE UNIQUE INDEX pipeline_ingest_receipts_pkey ON public.pipeline_ingest_receipts USING btree (idempotency_key)"
@@ -6672,6 +6679,10 @@
     },
     "trigger public.swarm_brief_revisions.swarm_brief_revisions_immutable_row": {
       "definition": "CREATE TRIGGER swarm_brief_revisions_immutable_row BEFORE DELETE OR UPDATE ON public.swarm_brief_revisions FOR EACH ROW EXECUTE FUNCTION public.rm_analytics_output_ledger_immutable()",
+      "fires": "always"
+    },
+    "trigger public.swarm_briefs.swarm_briefs_allocation": {
+      "definition": "CREATE TRIGGER swarm_briefs_allocation BEFORE INSERT OR UPDATE ON public.swarm_briefs FOR EACH ROW EXECUTE FUNCTION public.rm_swarm_briefs_allocation()",
       "fires": "always"
     },
     "trigger public.swarm_briefs.swarm_briefs_append_only": {

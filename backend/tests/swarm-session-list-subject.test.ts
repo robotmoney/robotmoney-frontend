@@ -212,8 +212,8 @@ test("openedAt is the first brief revision's time, not the row's creation time, 
 // ── The allocation column (issue 1581) ──────────────────────────────────────
 // Each brief body is about 240 KB on production, so reading
 // `body->'allocation'` per row detoasted the whole body to return a few
-// weights. Migration 0130 stores `allocation` as a generated column, and the
-// page reads it. The old read is kept here as the reference the new one must
+// weights. Migration 0130 stores `allocation` in a column its trigger keeps
+// equal to the body (0131 fills the older rows), and the page reads it. The old read is kept here as the reference the new one must
 // equal, row for row.
 const OLD_PAGE_SQL = (registeredPageProbe: string) =>
   registeredPageProbe.replace("(SELECT b.allocation FROM swarm_briefs b", "(SELECT b.body->'allocation' FROM swarm_briefs b");
