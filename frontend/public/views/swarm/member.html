@@ -38,13 +38,28 @@
           </div>
         </header>
 
+        <!-- Silence past the threshold (issue 1269), both wordings: a judge
+             with no on-time answer, and an analyst who stopped filing. The
+             same docs callout the swarm docs use, warm (note) to match the
+             amber badge the admin list already gives this line. Directly
+             under the name, and absent while the seat is answering on time.
+             A notice, not an action: the seat stays active. -->
+        <template x-if="statusCallout(member)">
+          <aside class="docs-callout docs-callout--note" role="status" data-testid="member-status-line">
+            <div class="docs-callout__label" x-text="statusCallout(member).label"></div>
+            <div class="docs-callout__body">
+              <span x-text="statusCallout(member).body"></span>
+              <a class="rr-lnk" :href="statusCallout(member).href" x-text="statusCallout(member).link"></a>
+            </div>
+          </aside>
+        </template>
+
         <!-- Whether it holds a seat now and since when, then the record in
              figures, then who runs it. -->
         <div class="rr-meta" x-show="member.status === 'active' || member.operator || recordStats().takes || judgements.length">
           <template x-if="member.status === 'active'">
             <span class="rr-meta__i"><i class="rm-pulse" aria-hidden="true"></i>Active<template x-if="member.activatedAt"><span> since <b x-text="formatDate(member.activatedAt, 'short')"></b></span></template></span>
           </template>
-          <template x-if="statusLine(member)"><span class="rr-meta__i" data-testid="member-status-line" x-text="statusLine(member)"></span></template>
           <template x-if="recordStats().takes"><span class="rr-meta__i">Takes filed <b x-text="takesCapped() ? `${recordStats().takes}+` : recordStats().takes"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Sessions judged <b x-text="judgementsCapped() ? `${judgeStats().sessions}+` : judgeStats().sessions"></b></span></template>
           <template x-if="judgements.length"><span class="rr-meta__i">Holds advised <b x-text="judgeStats().holds"></b></span></template>
@@ -385,7 +400,12 @@
   <style>
     /* Page-local: the filed-at date and its tooltip, the record's controls and
        the active mark. Everything else is the research record's (.rr-*) and
-       the shared take card's. */
+       the shared take card's. The silence notice is the shared docs callout
+       (components.css). The header's padding already separates it from the
+       name, so the callout's own top margin would only push it down. */
+    .rr-head + .docs-callout { margin-top: 0; }
+    /* Own line, so the doc link is not read as the end of the sentence. */
+    .docs-callout__body .rr-lnk { display: table; margin-top: 0.65rem; }
     .mp-take__date { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.04em;
                      font-variant-numeric: tabular-nums; color: var(--color-text-muted); }
     .mp-when { position: relative; display: inline-flex; cursor: default; }
