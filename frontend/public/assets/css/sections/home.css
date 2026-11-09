@@ -343,3 +343,33 @@
   .hm-ring.is-hot .sv__wdonut { transform: none; }
   .hm-hero__stage canvas, .hm-strip > div::before, .hm-strip dt, .hm-crew__name::after, .hm-reveal { transition: none !important; }
 }
+
+/* ── The market regime the portfolio is read against (alpine/views/home-regime.js).
+   Under the portfolio on the grid's own two columns: the dial with the regime
+   beside it, the last year under the ring. The block's height is held on it, so
+   the page does not jump when the read lands. ───────────────────────────── */
+.hm-reg { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: clamp(2rem, 5vw, 5rem); align-items: start;
+  min-height: 17.3125rem; margin-top: clamp(3.5rem, 7vw, 5.5rem); padding-top: clamp(2rem, 4vw, 3rem); border-top: 1px solid var(--hm-line); }
+.hm-reg__h { margin: 0; }
+.hm-reg__pair { display: grid; grid-template-columns: 14rem minmax(0, 1fr); gap: 1.75rem; align-items: center; margin-top: 0.5rem; }
+.hm-reg__now { display: flex; align-items: center; gap: 0.625rem; margin: 0; font-family: var(--font-display); font-stretch: var(--font-display-stretch);
+  font-weight: 800; font-size: 2.25rem; line-height: 1; text-transform: uppercase; letter-spacing: 0.005em; }
+.hm-reg__now i { width: 0.625rem; height: 0.625rem; border-radius: 50%; flex: none; }
+.hm-reg__since { margin: 0.75rem 0 0; font-size: 0.9375rem; line-height: 1.55; color: var(--color-text-soft); text-wrap: pretty; }
+.hm-reg__facts .hm-more { margin-top: 0.875rem; }
+/* The chart's title and key, over the plot. */
+.hm-reg__cap { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 0.375rem 1.5rem; margin: 0 0 1rem 2.75rem; }
+.hm-reg__key { font-family: var(--font-mono); font-size: 0.6875rem; }
+.hm-reg__chart .rr-area__frame { grid-template-rows: 9.5rem 1.75rem; }
+.hm-reg__chart .rr-empty--chart { min-height: 11.25rem; margin-left: 2.75rem; }
+/* The latest reading: the dial's dot, on the line. */
+.hm-reg__last { position: absolute; width: 0.5625rem; height: 0.5625rem; border: 2px solid var(--color-void); border-radius: 50%; box-sizing: content-box;
+  background: var(--color-text); transform: translate(-50%, -50%); pointer-events: none; }
+/* One column before the left one gets too narrow for the pair. */
+@media (max-width: 1240px) { .hm-reg { grid-template-columns: minmax(0, 1fr); min-height: 29rem; } }
+@media (max-width: 560px) {
+  .hm-reg { min-height: 44.5rem; }
+  .hm-reg__pair { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .hm-reg .rm-dial--sm { width: min(100%, 21rem); }
+  .hm-reg__cap, .hm-reg__chart .rr-empty--chart { margin-left: 0; }
+}

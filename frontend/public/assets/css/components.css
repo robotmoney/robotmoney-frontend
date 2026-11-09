@@ -1356,3 +1356,9 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
   .rm-dial__svg path, .rm-dial__k { transition: none; }
   .rm-dial__tip, .rm-dial__tip.is-open { translate: none; transition: opacity 1ms, visibility 0s; }
 }
+/* A smaller dial, set beside other figures. Its tip stays on screen from the
+   page edge whichever segment it opens at. */
+.rm-dial--sm { width: min(100%, 14rem); }
+.rm-dial--sm .rm-dial__n { font-size: 2.25rem; }
+.rm-dial--sm .rm-dial__name { font-size: 0.6875rem; }
+.rm-dial--sm .rm-dial__tip { width: min(12.5rem, 92%); }

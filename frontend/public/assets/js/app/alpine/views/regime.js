@@ -6,9 +6,9 @@ import { scrollToFragment } from "../../router.js";
 import { enhanceHeadings } from "../../lib/heading-anchors.js";
 import { fmtUsdCompact } from "../lib/dash-format.js";
 import { sessionBrief } from "../../lib/session-brief.js";
-import { PALETTE, SERIES, REGIME, rgba } from "../../lib/chart-theme.js";
+import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
 import { regimeDialValid } from "../../lib/regime-dial.js";
-import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, logTicks, dragWindow } from "../../lib/line-chart.js";
+import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, stepAt, logTicks, dragWindow } from "../../lib/line-chart.js";
 import {
   alignToDates,
   STRATEGY_STYLE,
@@ -18,6 +18,7 @@ import {
   ASSET_LABEL,
   SOURCE_LABEL,
   REGIME_BG_LEGEND,
+  COMPOSITE_AREA,
   REGIME_BAND_BG,
 } from "./shared.js";
 
@@ -45,14 +46,6 @@ const FIRST_PAINT_DAYS = 400;
 // seven, counted back from the latest, so today is always a point). A day is
 // under half a pixel wide at that span. The regime bands stay day by day.
 const WEEKLY_AFTER_DAYS = 400;
-// The composite read against its median (0.50), as a baseline chart: the line
-// and a flat fill take the risk-on green above it and the risk-off beacon
-// below, faint enough that the regime bands still read through.
-const COMPOSITE_AREA = {
-  base: 0.5,
-  above: { line: REGIME.risk_on, fill: rgba(REGIME.risk_on, 0.16) },
-  below: { line: REGIME.risk_off, fill: rgba(REGIME.risk_off, 0.14) },
-};
 // The panels' lines on the history, kept off the reading's colours: green and
 // beacon are the composite's two sides and slate the neutral band, so no
 // panel may wear them. Cyan (Beam) and the light text are the two hues left;
@@ -66,31 +59,9 @@ const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchai
 // data they would be read back through Alpine's proxies on every render.
 const HIST_MEMO = { key: null, m: null };
 const DAYS_MEMO = { key: null, days: [] };
-// The history chart's scale. Off: the composite and panel index levels, 0 to
-// 1, as the page has always drawn them. On: each as a percentile of its last
-// three years, the scale the composite's 33rd / 67th cuts apply to, so lines,
-// bands and thresholds read on one axis. Held off until Lex has seen it
-// (2026-09-25); flipping it back is this one line.
-const HISTORY_ON_PERCENTILES = false;
 // The narrowest window the navigator allows, in days.
 const MIN_WINDOW = 14;
 const BT_MEMO = new Map();
-
-// Arrow keys step the crosshair through the drawn readings; Home and End jump
-// to the ends; Escape clears it.
-function stepAt(ev, at, count) {
-  if (!count) return at;
-  const last = count - 1;
-  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-    ev.preventDefault();
-    const from = at ?? (ev.key === "ArrowRight" ? -1 : last + 1);
-    return Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
-  }
-  if (ev.key === "Home") { ev.preventDefault(); return 0; }
-  if (ev.key === "End") { ev.preventDefault(); return last; }
-  if (ev.key === "Escape") return null;
-  return at;
-}
 
 // The summary cards' panel tips (panelTip below). `reads` is each panel's own
 // description on the indicators page; `count` is that page's count, used only
@@ -608,7 +579,7 @@ export function registerRegimeView(Alpine) {
       const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
       // Each line is a percentile of its own last three years: the scale the
       // regime is read on (the composite's cuts) and the one Market context
-      // draws. The index levels themselves are in each row's tip up top.
+      // draws. The index levels stay in the tips, for reference.
       // A history without percentiles (an older snapshot, the eq fixture)
       // draws the index levels instead, on their own 0 to 1 axis.
       const usePct = this.historyPct();
@@ -629,7 +600,7 @@ export function registerRegimeView(Alpine) {
     // Percentiles when the history carries them for most days.
     historyPct() {
       const h = this.history;
-      if (!HISTORY_ON_PERCENTILES || !h.length) return false;
+      if (!h.length) return false;
       return h.filter((r) => (r.compositePercentile ?? r.composite_percentile) != null).length >= h.length / 2;
     },
     _histFmt(v) { return this.historyPct() ? this.ordinalPct(v) : (+v).toFixed(2); },
@@ -699,13 +670,20 @@ export function registerRegimeView(Alpine) {
     legendToggle(row) { if (row.price) this.toggle(row.key); else this.toggleSeries(row.key); },
     historyMove(ev) { const m = this._hist(); if (m.n) this.histAt = nearestSample(m.idx, m.n, ev); },
     historyKey(ev) { this.histAt = stepAt(ev, this.histAt, this._hist().idx.length); },
+    // The level behind a percentile, for the tip: the raw composite or the
+    // panel's index. The line is the percentile; this is there for reference.
+    _histLevel(r, token) {
+      if (!r || !this.historyPct()) return null;
+      const v = token === "composite" ? r.composite : HISTORY_SERIES.some(([k]) => k === token) ? this._idx(r, token) : null;
+      return v == null ? null : (+v).toFixed(2);
+    },
     historyPoint() {
       const m = this._hist();
       const k = this.histAt;
       if (k == null || m.idx[k] == null) return null;
       const i = m.idx[k];
       const r = this.history.find((h) => h.date === m.days[i]);
-      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: this._sideColor(l, l.values[k]), value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
+      const items = this._histLines().map((l) => ({ token: l.token, label: [this.historyLegend().find((x) => x.key === l.token)?.label || l.token, this._histLevel(r, l.token)].filter(Boolean).join(" "), color: this._sideColor(l, l.values[k]), value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
       return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
     },
 

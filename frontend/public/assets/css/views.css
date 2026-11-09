@@ -264,6 +264,7 @@
 .rv__lg-bands { margin-left: auto; gap: 0.75rem !important; }
 /* The bands' key, above the plot: right-aligned, clear of the top tick. */
 .rr-area__legend.rv__legend-top { justify-content: flex-end; margin: 0 0 1.25rem 2.75rem; }
+.rv__legend-top .rv__legend-axis { color: var(--color-text-muted); }
 /* On a phone it wraps, so it starts at the plot's edge and wraps from there. */
 @media (max-width: 640px) {
   .rr-area__legend.rv__legend-top { justify-content: flex-start; }

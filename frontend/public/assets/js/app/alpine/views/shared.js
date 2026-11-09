@@ -240,3 +240,12 @@ export const REGIME_BG_LEGEND = [
   { label: "neutral", bg: "transparent", outline: true },
   { label: "risk-on", bg: rgba(REGIME.risk_on, 0.45) },
 ];
+
+// The composite read against its median (0.50), as a baseline chart: the line
+// and a flat fill take the risk-on green above it and the risk-off beacon
+// below, faint enough that the regime bands still read through.
+export const COMPOSITE_AREA = {
+  base: 0.5,
+  above: { line: REGIME.risk_on, fill: rgba(REGIME.risk_on, 0.16) },
+  below: { line: REGIME.risk_off, fill: rgba(REGIME.risk_off, 0.14) },
+};
