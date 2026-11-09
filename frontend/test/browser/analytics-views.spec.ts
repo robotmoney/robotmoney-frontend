@@ -398,10 +398,10 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   expect(errors).toEqual([]);
 });
 
-// The history chart draws the index levels, 0 to 1, even when the history
-// carries percentiles: the percentile scale (HISTORY_ON_PERCENTILES in
-// regime.js) is held back until the brand owner has seen it.
-test("the regime history draws the index levels, 0 to 1, while the percentile scale is held back", async ({ page }) => {
+// The history chart reads in percentiles when the history carries them: the
+// scale the regime is cut on, so the lines, the bands and the dial agree. The
+// raw composite stays in the tip, for reference.
+test("the regime history draws percentiles, with the raw level in its tip", async ({ page }) => {
   await stubEnvironment(page);
   const dto = loadRegimeStub();
   for (const r of dto.history) {
@@ -413,8 +413,30 @@ test("the regime history draws the index levels, 0 to 1, while the percentile sc
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
   await page.goto("/");
   await navigate(page, "/regime");
+  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["100", "67th", "50th", "33rd", "0"]);
+  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText("50th");
+  await expect(page.locator("#history-sec .rv__legend-axis")).toHaveText("Percentile of its last 3 years");
+
+  const plot = page.locator("#history-sec .rr-area__plot");
+  const row = page.locator("#history-sec .rr-area__tip li").first();
+  await expect(async () => {
+    await plot.scrollIntoViewIfNeeded();
+    const at = (await plot.boundingBox())!;
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+    await expect(row).toContainText(/Composite \d\.\d\d/, { timeout: 500 });
+  }).toPass({ timeout: 5000 });
+  await expect(row.locator("b")).toHaveText("50th");
+});
+
+// An older snapshot carries no percentiles, so its history has no percentile to
+// draw: it falls back to the index levels on their own 0 to 1 axis, and says so.
+test("a history without percentiles draws the index levels, 0 to 1", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
   await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["1.00", "0.75", "0.50", "0.25", "0.00"]);
   await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d\.\d\d$/);
+  await expect(page.locator("#history-sec .rv__legend-axis")).toBeHidden();
 });
 
 // The backtest table's first figure is a multiple, not dollars.

@@ -1032,6 +1032,10 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(vote.locator('.rr-vote__dot[aria-label*=", constructive,"]')).toHaveCount(3);
   // Turnout and the mean are stated once each: the takes in the facts row, the mean on the chart's rule.
   await expect(page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Takes/ }).locator("b")).toHaveText("5");
+  // The percentile leads, as on the regime page; the raw composite is beside it.
+  const composite = page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Composite/ });
+  await expect(composite.locator("b")).toHaveText("83rd percentile");
+  await expect(composite).toContainText("· 0.598");
   await expect(vote.locator(".rr-vote__mean span")).toHaveText("Mean 64%");
   await expect(vote.locator(".rr-vote__plot")).toHaveAttribute("aria-label", /Mean confidence 64%\./);
   await expect(tally).not.toContainText(/Took part|Mean confidence/);

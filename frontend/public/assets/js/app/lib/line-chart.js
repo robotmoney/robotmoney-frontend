@@ -190,6 +190,25 @@ export function nearestSample(idx, n, ev) {
 }
 
 /**
+ * Arrow keys step the crosshair through the drawn readings; Home and End jump
+ * to the ends; Escape clears it.
+ * @param {KeyboardEvent} ev @param {number | null} at @param {number} count
+ */
+export function stepAt(ev, at, count) {
+  if (!count) return at;
+  const last = count - 1;
+  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+    ev.preventDefault();
+    const from = at ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+    return Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+  }
+  if (ev.key === "Home") { ev.preventDefault(); return 0; }
+  if (ev.key === "End") { ev.preventDefault(); return last; }
+  if (ev.key === "Escape") return null;
+  return at;
+}
+
+/**
  * Round ticks on a log axis between min and max: 0.1, 0.3, 1, 3, 10 and so
  * on, filled in with 0.2, 0.5, 2, 5 when the span is short.
  * @param {number} min @param {number} max

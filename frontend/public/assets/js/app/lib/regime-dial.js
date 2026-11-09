@@ -18,6 +18,9 @@ import { REGIME } from "./chart-theme.js";
 // each cut, as a fraction of the half turn.
 export const DIAL_VIEW = { w: 200, h: 104 };
 const CX = 100, CY = 96, R = 88, GAP = 0.012;
+// How near a segment's end the dot strands a sliver: its radius and halo plus
+// a margin, as a fraction of the half turn.
+const DOT_END_ZONE = 12 / (Math.PI * R);
 /** @type {DialKey[]} */
 export const DIAL_KEYS = ["risk_off", "neutral", "risk_on"];
 
@@ -43,9 +46,17 @@ export function regimeDialSvg(m) {
     return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${R} ${R} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
   };
   const lit = m.focus || keyOf(m.regime);
+  const dot = Math.max(0, Math.min(1, +(m.percentile ?? 0)));
   const spans = /** @type {[DialKey, number, number][]} */ ([["risk_off", 0, m.riskOff - GAP], ["neutral", m.riskOff + GAP, m.riskOn - GAP], ["risk_on", m.riskOn + GAP, 1]]);
-  const segs = spans.map(([key, a, b]) => `<path d="${arc(a, b)}" fill="none" stroke="${REGIME[key]}" stroke-width="7"${key === lit ? ' class="is-on"' : ""}/>`).join("");
-  const [x, y] = at(Math.max(0, Math.min(1, +(m.percentile ?? 0))));
+  const segs = spans.map(([key, a0, b0]) => {
+    // The dot's halo cuts the arc, so a dot this near a segment's end would
+    // strand a sliver past it: the segment ends at the dot instead.
+    const inside = dot >= a0 && dot <= b0;
+    const a = inside && dot - a0 < DOT_END_ZONE ? dot : a0;
+    const b = inside && b0 - dot < DOT_END_ZONE ? dot : b0;
+    return `<path d="${arc(a, b)}" fill="none" stroke="${REGIME[key]}" stroke-width="7"${key === lit ? ' class="is-on"' : ""}/>`;
+  }).join("");
+  const [x, y] = at(dot);
   return `<svg viewBox="0 0 ${DIAL_VIEW.w} ${DIAL_VIEW.h}" aria-hidden="true" focusable="false">${segs}`
     + `<circle class="rm-dial__dot" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="5.5"/></svg>`;
 }

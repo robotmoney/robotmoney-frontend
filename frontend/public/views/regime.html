@@ -188,8 +188,9 @@
           </template>
           <template x-if="!historyEmpty()">
             <figure class="rr-area rv__fig" :data-days="historyDays()">
-              <!-- The bands' key above the plot, the lines' legend below it. -->
+              <!-- The scale and the bands' key above the plot, the lines' legend below it. -->
               <ul class="rr-area__legend rv__legend-list rv__legend-top">
+                <li class="rv__legend-axis" x-show="historyPct()">Percentile of its last 3 years</li>
                 <li class="rv__lg-bands" :class="{ 'is-off': !visible.bands }">
                   <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                   <span class="rv__lg-key">
