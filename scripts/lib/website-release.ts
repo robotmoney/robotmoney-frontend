@@ -32,7 +32,7 @@
 //
 // THE PLAN ID is a content hash, like `bun smoke`'s (§1.2), over the instance,
 // the action and the site's source identity: the Git tree hash of every input
-// the assembly reads (WEB_SOURCE_CONTEXTS), from the working tree, so a dirty
+// the assembly reads (WEB_CONTENT_PATHS), from the working tree, so a dirty
 // edit moves it. A rollback hashes the site ids it moves between. No secret
 // reaches the plan, the journal or the receipt: none is read.
 //
@@ -50,11 +50,16 @@ import { acquireDeploymentLock, instancePaths, PRODUCTION_INSTANCE, type Instanc
 import type { StackEnvironment } from "../stack/naming.ts";
 
 /**
- * Every repository path the assembled site is built from: the client itself and
- * the scripts static-assembly.sh runs. Their Git tree hashes are the site's
- * source identity, hashed into the plan id.
+ * Every repository path the assembled site is built from: the client itself,
+ * the scripts static-assembly.sh runs, and every relative import they reach
+ * (scripts/tests/unit/web-content-paths.test.ts walks that graph). Their Git
+ * tree hashes are the site's source identity, hashed into the plan id. The
+ * same list is the web content release line's eligibility rule (D81,
+ * scripts/release/web-release-lib.ts classifyContentDiff): a release whose
+ * tree differs from production's API commit only inside these paths may ship
+ * through `bun run release:web`.
  */
-export const WEB_SOURCE_CONTEXTS = [
+export const WEB_CONTENT_PATHS = [
   "frontend",
   "scripts/static-assembly.sh",
   "scripts/prerender.ts",
@@ -63,6 +68,10 @@ export const WEB_SOURCE_CONTEXTS = [
   "scripts/web-client",
   "scripts/static-manifest.ts",
   "scripts/lib/static-manifest.ts",
+  "scripts/stamp-assets.ts",
+  "scripts/lib/stamp-assets.ts",
+  "scripts/lib/regime-snapshot.ts",
+  "scripts/lib/contract-freshness.ts",
 ] as const;
 
 /** The prefix of the temporary directory a deploy assembles into, inside the web directory. */

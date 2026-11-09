@@ -27,19 +27,20 @@
 // Nothing here opens an ssh connection: the runner's exec is injected.
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
-import { checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
+import { CHECK_ONLY_PATHS, checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
 import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
-import { checkAfterPreflight, ciProblems, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
+import { checkAfterPreflight, ciProblems, controlChangedPaths, laneOf, preflightOrder, preflightSteps, REQUIRED_CI, runPreflight, runsInFlight, type PreflightReport } from "../../release/preflight.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
-import { TIMED_OUT } from "../../release/step-exec.ts";
+import { classifyBlocked, TIMED_OUT } from "../../release/step-exec.ts";
+import type { StopEvent } from "../../release/notify.ts";
 import { cutoverSeconds, skipReason } from "../../release/run.ts";
 import { DEFAULT_MAX_MINUTES, maxMillisOf } from "../../release/steps.ts";
 import { partitionEnv } from "../../release/env-rewrite.ts";
@@ -47,7 +48,7 @@ import { compareBaseline } from "../../release/compare-baseline.ts";
 import { exposesPostgresUrl, keysOutsideAllowlist, othersCanTraverse, scanForPostgresUrls, socketMounts, tokenFileProblems } from "../../release/host-guards.ts";
 import type { StackStateRecord } from "../../lib/smoke-state.ts";
 import { ledgerNotInRepo, ledgerProblems, parseRunningVersion, reconcileLedger, repoMigrations, runningPinRef } from "../../release/ledger.ts";
-import { checkAddOnly, loadTemplate, releaseBefore, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
+import { checkAddOnly, loadTemplate, parseReleaseRunbook, releaseBefore, templatePath, type ReleaseRunbook, type RunbookStep } from "../../release/runbook.ts";
 import { nextRcTag, rcStageProblems, rcTagsAt } from "../../release/tag.ts";
 import { epochProblems, inFlightCloseProblems, inFlightProblems, inFlightProblemsFor, parseSessionsFlag, paritySweep, paritySweepScheduleProblems, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { baselineProblems, WOULD_CLEAR_SQL } from "../../release/baseline.ts";
@@ -353,7 +354,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
-    expect(ids.slice(-6)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]);
+    expect(ids.slice(-7)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats"]);
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"], ["Q35-archive-routes", "Q23-ready", "watchHours"], ["Q36-sdk-quickstart", "Q23-ready", "watchHours"], ["Q37-sdk-tests", "Q23-ready", "watchHours"], ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"], ["C23-archive-routes", "C11-ready", "watchHours"], ["C24-sdk-quickstart", "C11-ready", "watchHours"], ["C25-sdk-tests", "C11-ready", "watchHours"]]);
     // red control: C20-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!.cmds[0]!;
@@ -652,11 +653,14 @@ const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "docker ps -q": { code: 0, stdout: "0\n" },
   // Stage's P.lockfile: a fresh resolve gives the committed lockfiles.
   "lockfile.ts check": { code: 0, stdout: "fresh\n" },
+  // A new stage run's tracking issue (issue 1555): exactly one open issue carries release:<release>.
+  "gh issue list --label": { code: 0, stdout: '[{"number":4242}]\n' },
 };
 
 function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }>; recovery?: string | null } = {}) {
   const ran: string[] = [];
   const logs: string[] = [];
+  const notified: StopEvent[] = [];
   const deps: RunnerDeps = {
     async exec(_host, remote, onStdout) {
       const id = (/\.step-([A-Za-z0-9.-]+)/.exec(remote) ?? /echo ([A-Za-z0-9.-]+)$/.exec(remote))![1]!;
@@ -685,8 +689,9 @@ function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; an
     log: (l) => logs.push(l),
     error: (l) => logs.push(l),
     home: "/nonexistent",
+    async notify(e) { notified.push(e); return { notified: true, issue: 4242 }; },
   };
-  return { deps, ran, logs };
+  return { deps, ran, logs, notified };
 }
 
 /**
@@ -1211,12 +1216,14 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
       "Q34a-analytics-load",
       // The analyst SDK checks (since v0.7.0), on the control machine: read-only against the target, after the soak.
       "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests",
+      // Query statistics and the jobs-table plans (issue 1581, since v0.7.4); the plans are stage only.
+      "Q37a-db-stats", "Q37b-jobs-plans",
     ]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline"]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "cutover").map((s) => s.id)).toEqual([
       "C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C06-version-tag", "C07-env-rewrite", "C08-set-identity", "C09-tokens", "C10-rolling-boot", "C10a-full-boot", "C11-ready", "C12-site", "C12a-maintenance-off", "C13-probe-grade",
       "C14-verify-version", "C15-verify-product", "C16-log-verdict", "C17-soak-record", "C18-compare-baseline", "C19-host-guards", "C20-soak-gate", "C21-soak-checks", "C22-collect-logs",
-      "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests",
+      "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats",
     ]);
     // The backup and its restore proof are the cutover's first steps, before the first irreversible one.
     const ids = stepIds();
@@ -1362,6 +1369,173 @@ describe("watch steps, prod-only steps and the recovery decision", () => {
     expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, WATCHED)).toBe(2);
     expect(a.ran).toEqual([]);
     expect(a.logs.join("\n")).toContain("SC.1");
+  });
+});
+
+// ── stage run liveness (issue 1555): a stop reason and one notification per invocation ──
+describe("stage run liveness (issue 1555)", () => {
+  const RUN = "20261008T120000Z";
+  const runJson = (f: ReturnType<typeof fixture>) => JSON.parse(readFileSync(join(f.journalRoot, "stage", RUN, "run.json"), "utf8")) as RunJournal;
+
+  test("a failed stage run records stopReason failed and notifies once with the run, the step, the kind and the resume command", async () => {
+    const f = fixture();
+    const a = fakeDeps({ fail: new Set(["T2"]), receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(1);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "failed", step: "T2", notified: true });
+    expect(j.stopReason!.resume).toContain(`--run ${RUN} --from T2`);
+    expect(a.notified).toHaveLength(1);
+    expect(a.notified[0]).toMatchObject({ runTs: RUN, step: "T2", kind: "failed", resume: j.stopReason!.resume, release: RELEASE, target: "stage" });
+  });
+
+  test("a checkResume refusal records stopReason refused in run.json and notifies once, naming the first step that is not ok", async () => {
+    const f = fixture();
+    await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T1"]), receipt: "{}" }).deps, TINY);
+    const r = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", RUN, "--from", "T3"], r.deps, TINY)).toBe(2);
+    expect(r.ran).toEqual([]);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "refused", step: "T1" });
+    expect(j.stopReason!.detail).toContain("--from T3 skips steps that are not ok: T1");
+    expect(r.notified).toHaveLength(1);
+    expect(r.notified[0]).toMatchObject({ runTs: RUN, step: "T1", kind: "refused" });
+    expect(r.notified[0]!.resume).toContain(`--run ${RUN} --from T1`);
+  });
+
+  test("a notBefore pause records stopReason paused and pausedUntil = the anchor's endedAt + the step's hours; a resume clears them", async () => {
+    const f = fixture("stage");
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], early.deps, WATCHED)).toBe(3);
+    const j = runJson(f);
+    expect(j.stopReason).toMatchObject({ kind: "paused", step: "Q32-soak-gate" });
+    expect(j.pausedUntil).toBe(new Date(Date.parse(j.steps["Q23-ready"]!.endedAt!) + 6 * 3_600_000).toISOString());
+    expect(j.pausedUntil).toBe("2026-10-08T18:00:00.000Z");
+    expect(early.notified).toHaveLength(1);
+    expect(early.notified[0]).toMatchObject({ runTs: RUN, step: "Q32-soak-gate", kind: "paused" });
+    expect(early.notified[0]!.resume).toContain(`--run ${RUN} --from Q32-soak-gate`);
+    // The resume does not repeat the label check: no labelled issue now, and the run still goes on.
+    const later = fakeDeps({ answers: { "gh issue list --label": { code: 0, stdout: "[]" } } });
+    later.deps.now = () => new Date("2026-10-08T18:00:01Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", RUN], later.deps, WATCHED)).toBe(0);
+    const j2 = runJson(f);
+    expect(j2.pausedUntil).toBeUndefined();
+    expect(j2.stopReason).toMatchObject({ kind: "passed" });
+    expect(later.notified.map((e) => e.kind)).toEqual(["passed"]);
+  });
+
+  test("a passed stage run records stopReason passed and notifies once with its last step and the rc command", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(runJson(f).stopReason).toMatchObject({ kind: "passed", step: "T3" });
+    expect(a.notified).toHaveLength(1);
+    expect(a.notified[0]).toMatchObject({ runTs: RUN, step: "T3", kind: "passed" });
+    expect(a.notified[0]!.resume).toContain(`tag.ts rc --release ${RELEASE} --commit ${SHA}`);
+  });
+
+  test("a notifier that cannot post records notified false with the reason; the exit code does not change", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    a.deps.notify = async () => ({ notified: false, reason: "gh issue list exited 1" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(runJson(f).stopReason).toMatchObject({ kind: "passed", notified: false, notifiedReason: "gh issue list exited 1" });
+    const b = fakeDeps({ receipt: "{}" });
+    b.deps.notify = async () => { throw new Error("boom"); };
+    const g = fixture();
+    expect(await runRelease(["--target", g.targetFile, "--go", g.goFile, "--journal-root", g.journalRoot], b.deps, TINY)).toBe(0);
+    expect(runJson(g).stopReason).toMatchObject({ kind: "passed", notified: false });
+  });
+
+  test("HTTP 402 / 'Insufficient account funds' marks the step blocked: one blocked notification when it ends, exec once, the run goes on", async () => {
+    expect(classifyBlocked("error: Insufficient account funds [server_error, HTTP 402]")).toContain("unfunded");
+    expect(classifyBlocked("HTTP 402 Payment Required")).toBeDefined();
+    // red controls: other failures are not blocked.
+    expect(classifyBlocked("HTTP 429 Too Many Requests")).toBeUndefined();
+    expect(classifyBlocked("exit 1, HTTP 4020 bytes")).toBeUndefined();
+    const f = fixture();
+    const a = fakeDeps({ fail: new Set(["T1"]), receipt: "{}", out: "eval: Insufficient account funds [server_error, HTTP 402]\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(1);
+    expect(a.ran.filter((id) => id === "T1")).toHaveLength(1);
+    expect(a.ran).toEqual(["T1", "T2", "T3"]);
+    const j = runJson(f);
+    expect(j.steps.T1!.cause).toBe("blocked");
+    expect(j.steps.T1!.error).toContain("blocked: inference account unfunded");
+    // red control: the steps that passed with the same output are not blocked.
+    expect(j.steps.T2!.cause).toBeUndefined();
+    const blocked = a.notified.filter((e) => e.kind === "blocked");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatchObject({ runTs: RUN, step: "T1" });
+    expect(blocked[0]!.resume).toContain("--from T1");
+    // The blocked notification comes when T1 ends, before the run's own stop.
+    expect(a.notified.map((e) => e.kind)).toEqual(["blocked", "failed"]);
+  });
+
+  test("on a fake clock advanced 3 minutes during one step, heartbeatAt is written every 60 s with the driver", async () => {
+    const f = fixture();
+    const a = fakeDeps({ receipt: "{}" });
+    let clock = Date.parse("2026-10-08T12:00:00Z");
+    a.deps.now = () => new Date(clock);
+    const beats: { ms: number; fn: () => void }[] = [];
+    let stopped = 0;
+    a.deps.every = (ms, fn) => { beats.push({ ms, fn }); return () => { stopped++; }; };
+    const seen: (string | undefined)[] = [];
+    const exec = a.deps.exec;
+    a.deps.exec = async (h, r, o, e, t) => {
+      if (r.includes(".step-T2")) {
+        for (let i = 0; i < 3; i++) {
+          clock += 60_000;
+          beats.at(-1)!.fn();
+          seen.push(runJson(f).heartbeatAt);
+        }
+      }
+      return exec(h, r, o, e, t);
+    };
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(0);
+    expect(beats.every((b) => b.ms === 60_000)).toBe(true);
+    expect(stopped).toBe(beats.length);
+    expect(new Set(seen).size).toBeGreaterThanOrEqual(2);
+    expect(seen).toEqual(["2026-10-08T12:01:00.000Z", "2026-10-08T12:02:00.000Z", "2026-10-08T12:03:00.000Z"]);
+    expect(runJson(f).driver?.pid).toBe(process.pid);
+  });
+
+  test("a new stage run refuses (exit 2) before any step unless exactly one open issue carries release:<release>; one lets it start", async () => {
+    for (const answer of [{ code: 0, stdout: "[]" }, { code: 0, stdout: '[{"number":1},{"number":2}]' }, { code: 1, stdout: "" }]) {
+      const f = fixture();
+      const seen: string[] = [];
+      const a = fakeDeps({ answers: { "gh issue list --label": answer } });
+      const collect = a.deps.collect;
+      a.deps.collect = async (h, r) => { seen.push(r); return collect(h, r); };
+      expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, TINY)).toBe(2);
+      expect(a.ran).toEqual([]);
+      expect(seen.join("\n")).toContain(`gh issue list --label release:${RELEASE} --state open --json number`);
+      expect(a.logs.join("\n")).toContain(`release:${RELEASE}`);
+      expect(a.logs.join("\n")).toContain("policy section 6");
+      // No journal exists, so the refusal is written to refused-<ts>.json, and notified once.
+      expect(existsSync(join(f.journalRoot, "stage", RUN))).toBe(false);
+      const refused = JSON.parse(readFileSync(join(f.journalRoot, "stage", `refused-${RUN}.json`), "utf8"));
+      expect(refused).toMatchObject({ kind: "refused" });
+      expect(a.notified).toHaveLength(1);
+      expect(a.notified[0]).toMatchObject({ kind: "refused" });
+    }
+    const f = fixture();
+    const one = fakeDeps({ receipt: "{}", answers: { "gh issue list --label": { code: 0, stdout: '[{"number":1555}]' } } });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], one.deps, TINY)).toBe(0);
+    expect(one.ran).toEqual(["T1", "T2", "T3"]);
+  });
+
+  test("production gets no notifier, heartbeat or stop reason", async () => {
+    const p = fixture("prod");
+    const stageDir = await passedStage(TINY);
+    const preDir = await greenPreflight(p, TINY, stageDir);
+    const run = fakeDeps({ receipt: "{}" });
+    let beats = 0;
+    run.deps.every = () => { beats++; return () => {}; };
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], run.deps, TINY)).toBe(0);
+    expect(run.notified).toEqual([]);
+    expect(beats).toBe(0);
+    const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", RUN, "run.json"), "utf8")) as RunJournal;
+    expect(j.stopReason).toBeUndefined();
+    expect(j.heartbeatAt).toBeUndefined();
   });
 });
 
@@ -1704,6 +1878,72 @@ describe("preflight", () => {
     expect(status(r, "P.commit")).toBe("red");
   });
 
+  // Issue 1568: the rc squash (OTHER_SHA here) has the QA commit's tree, and its push reruns CI.
+  // Production's P.ci then reads the stage journal's commit (SHA), whose CI already passed.
+  const PENDING_CI = REQUIRED_CI.map((n) => `${n}\tin_progress\tnull`).join("\n");
+  const rcAtOtherSha = (extra: Record<string, { code: number; stdout: string }> = {}) => {
+    const a = fakeDeps({ answers: {
+      "git rev-parse HEAD": { code: 0, stdout: `${OTHER_SHA}\n` },
+      [`commits/${OTHER_SHA}/check-runs`]: { code: 0, stdout: `${PENDING_CI}\n` },
+      [`commits/${SHA}/check-runs`]: { code: 0, stdout: `${GREEN_CI}\n` },
+      ...extra,
+    } });
+    const ghReads: string[] = [];
+    const collect = a.deps.collect;
+    a.deps.collect = async (host, remote) => {
+      if (remote.includes("gh api")) ghReads.push(/commits\/([0-9a-f]{40})\/check-runs/.exec(remote)![1]!);
+      return collect(host, remote);
+    };
+    return { ...a, ghReads };
+  };
+
+  test("prod: pending CI on the rc commit, green CI on the stage commit with the same tree: P.ci green, naming the stage commit", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha();
+    expect(await preflight(f, a.deps)).toBe(0);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("green");
+    expect(ci.detail).toBe(`CI green on ${SHA} (same tree ${TREE})`);
+    expect(status(report(f), "P.stage")).toBe("green");
+    expect(a.ghReads).toEqual([OTHER_SHA, SHA]);
+  });
+
+  test("prod: the same case with the stage commit on another tree: P.ci red, and that commit's CI is never read", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha({ [`${SHA}^{tree}`]: { code: 0, stdout: `${"8".repeat(40)}\n` } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("red");
+    expect(ci.detail).toContain("e2e is in_progress");
+    expect(ci.detail).toContain(`has tree ${"8".repeat(40)}, not ${TREE}`);
+    expect(a.ghReads).toEqual([OTHER_SHA]);
+  });
+
+  test("prod: red CI on both commits keeps P.ci red with both commits' problems", async () => {
+    const f = await prodWithStage();
+    const a = rcAtOtherSha({ [`commits/${SHA}/check-runs`]: { code: 0, stdout: GREEN_CI.replace("e2e\tcompleted\tsuccess", "e2e\tcompleted\tfailure") } });
+    expect(await preflight(f, a.deps)).toBe(2);
+    const ci = report(f).checks.find((c) => c.id === "P.ci")!;
+    expect(ci.status).toBe("red");
+    expect(ci.detail).toContain(`${OTHER_SHA.slice(0, 12)}: `);
+    expect(ci.detail).toContain(`${SHA.slice(0, 12)}: e2e concluded failure`);
+  });
+
+  test("stage: pending CI on the commit is P.ci red, and no second commit's check runs are read", async () => {
+    const s = fixture("stage");
+    const stageDir = await passedStage(LANES, s.journalRoot);
+    const a = rcAtOtherSha();
+    const code = await runPreflight({
+      target: loadTarget(s.targetFile), go: undefined, goPath: undefined, stageJournal: stageDir, triage: undefined,
+      steps: LANES, ids: LANES.map((x) => x.id), hash: stepListHash(LANES), root: s.journalRoot, runTs: "20261008T130000Z", renderPlan: () => "",
+    }, a.deps);
+    expect(code).toBe(2);
+    const r = JSON.parse(readFileSync(join(s.journalRoot, "stage", "preflight-20261008T130000Z", "preflight.json"), "utf8")) as ReturnType<typeof report>;
+    expect(status(r, "P.ci")).toBe("red");
+    expect(r.checks.find((c) => c.id === "P.stage")).toBeUndefined();
+    expect(a.ghReads).toEqual([OTHER_SHA]);
+  });
+
   test("red: a live release checkout blocks its steps on that host", async () => {
     const f = await prodWithStage();
     const a = fakeDeps({ answers: { "docker ps -q": { code: 0, stdout: "3\n" } } });
@@ -1985,5 +2225,422 @@ describe("preflight", () => {
     expect(ciProblems([...green, "unit\tcompleted\tfailure"]).join()).toContain("unit concluded failure");
     expect(ciProblems([...green, "backend\tin_progress\t"]).join()).toContain("backend is in_progress");
     expect(ciProblems([])).toEqual(["no check run on the commit: CI never ran there"]);
+  });
+});
+
+// ── concurrent steps: after lists (issue 1557) ────────────────────────────────
+describe("the scheduler runs a step with after alongside a long waiting one (issue 1557)", () => {
+  const step = (id: string, phase: "qa" | "cutover", extra: Partial<StepTemplate> = {}): StepTemplate => ({
+    id, standing: [], description: id, host: "target", phase, cmds: [["echo", id]], expectExit: 0, receipts: [], irreversible: false,
+    onlyFor: phase === "qa" ? "stage" : "prod", ...extra,
+  });
+  /** Stage: READY, a long waiter with no after, two checks that wait only for READY, one that waits for the first check, and one with no after. */
+  const QA_LIST: StepTemplate[] = [
+    step("Q23-ready", "qa"),
+    step("Q34a-long", "qa"),
+    step("Q35-quick", "qa", { after: ["Q23-ready"] }),
+    step("Q35b-twin", "qa", { after: ["Q23-ready"] }),
+    step("Q36-chain", "qa", { after: ["Q35-quick"] }),
+    step("Q37-seq", "qa"),
+  ];
+  const ids = QA_LIST.map((s) => s.id);
+
+  /**
+   * fakeDeps with a clock that ticks one second per read, and an exec that holds `long` open
+   * until `releaseAfter` has ended (or, with no releaseAfter, until the next macrotask).
+   */
+  function heldDeps(opts: { long: string; releaseAfter?: string; fail?: Set<string>; out?: string; start?: string }) {
+    const base = fakeDeps({ fail: opts.fail, out: opts.out });
+    let t = Date.parse(opts.start ?? "2026-10-08T12:00:00Z");
+    base.deps.now = () => new Date((t += 1000));
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((r) => { release = r; });
+    const exec = base.deps.exec;
+    // The start order: an id is recorded when its exec is called, before any hold.
+    const ran: string[] = [];
+    base.deps.exec = async (h, r, o, e, ms) => {
+      const id = /\.step-([A-Za-z0-9.-]+)/.exec(r)![1]!;
+      ran.push(id);
+      if (id === opts.long) {
+        if (opts.releaseAfter === undefined) setTimeout(() => release!(), 0);
+        await held;
+      }
+      const code = await exec(h, r, o, e, ms);
+      if (id === opts.releaseAfter) setTimeout(() => release!(), 0);
+      return code;
+    };
+    return { ...base, ran };
+  }
+  const readRun = (root: string, target: "stage" | "prod") => {
+    const dir = join(root, target);
+    const run = readdirSync(dir).filter((n) => /^\d{8}T\d{6}Z$/.test(n)).sort().at(-1)!;
+    return JSON.parse(readFileSync(join(dir, run, "run.json"), "utf8")) as RunJournal;
+  };
+
+  test("a step with after: [READY] starts before the long step ends; a step after it starts only once it ended; one with no after waits for all", async () => {
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q36-chain" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(0);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long", "Q35-quick", "Q35b-twin", "Q36-chain", "Q37-seq"]);
+    const j = readRun(f.journalRoot, "stage");
+    const at = (id: string, k: "startedAt" | "endedAt") => Date.parse(j.steps[id]![k]!);
+    expect(at("Q35-quick", "startedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(at("Q36-chain", "startedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(at("Q36-chain", "startedAt")).toBeGreaterThanOrEqual(at("Q35-quick", "endedAt"));
+    expect(at("Q37-seq", "startedAt")).toBeGreaterThanOrEqual(at("Q34a-long", "endedAt"));
+    // Both READY-only checks started in the same pass and ended in the same tick: both are in the final run.json.
+    expect(j.steps["Q35-quick"]!.status).toBe("ok");
+    expect(j.steps["Q35b-twin"]!.status).toBe("ok");
+    // run.json lists its steps in runbook order, whatever order they finished in.
+    expect(Object.keys(j.steps)).toEqual(ids);
+    expect(at("Q36-chain", "endedAt")).toBeLessThan(at("Q34a-long", "endedAt"));
+    expect(j.status).toBe("passed");
+    // The printed plan lists the steps in runbook order and names each after list.
+    const plan = a.logs.find((l) => l.startsWith("release:run plan"))!;
+    expect([...plan.matchAll(/^  \[([^\]]+)\]/gm)].map((m) => m[1])).toEqual(ids);
+    expect(plan).toContain("[Q36-chain] after Q35-quick on rm-frontend-stage-2");
+  });
+
+  test("a step list with no after runs one step at a time, in order, with the same run.json and output as the sequential runner", async () => {
+    const SEQ = QA_LIST.map(({ after: _a, ...s }) => s);
+    const f = fixture();
+    const a = fakeDeps({ out: "line one\nline two\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, SEQ)).toBe(0);
+    expect(a.ran).toEqual(ids);
+    const j = readRun(f.journalRoot, "stage");
+    const at = "2026-10-08T12:00:00.000Z";
+    expect(j.steps).toEqual(Object.fromEntries(ids.map((id) => [id, { id, status: "ok", exit: 0, expectExit: 0, startedAt: at, receipts: [], attempt: 1, endedAt: at, durationMs: 0, commit: SHA }])));
+    expect(Object.keys(j.steps)).toEqual(ids);
+    // No step-id prefix on a list that runs one step at a time: the output is the sequential runner's.
+    const lines = a.logs.join("\n").split("\n");
+    expect(lines.filter((l) => l.startsWith("line "))).toEqual(ids.flatMap(() => ["line one", "line two"]));
+    expect(lines.some((l) => /^\[Q\d/.test(l))).toBe(false);
+    // The lines a step prints, in order: header, output, ok.
+    const q35 = lines.findIndex((l) => l.includes("── Q35-quick"));
+    expect(lines.slice(q35, q35 + 4)).toEqual(["[release:run] ── Q35-quick on rm-frontend-stage-2: Q35-quick", "line one", "line two", "[release:run] Q35-quick ok (0 s, 0 receipt(s))"]);
+  });
+
+  test("every streamed line of a step that runs alongside another carries that step's id", async () => {
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q36-chain", out: "hello\nworld\n" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(0);
+    const streamed = a.logs.join("\n").split("\n").filter((l) => /hello|world/.test(l));
+    expect(streamed.length).toBe(ids.length * 2);
+    for (const l of streamed) expect(l).toMatch(/^\[(Q[0-9a-z]+-[a-z]+)\] (hello|world)$/);
+    for (const id of ids) expect(streamed.filter((l) => l.startsWith(`[${id}] `)), id).toEqual([`[${id}] hello`, `[${id}] world`]);
+  });
+
+  test("only runRelease writes run.json during a run: a running step returns its record to it", () => {
+    const stepExec = readFileSync(join(repoRoot, "scripts", "release", "step-exec.ts"), "utf8");
+    expect(stepExec).not.toContain("writeJournal");
+    const run = readFileSync(join(repoRoot, "scripts", "release", "run.ts"), "utf8");
+    const start = run.indexOf("export async function runRelease(");
+    const end = run.indexOf("\nexport ", start + 1);
+    const total = run.match(/writeJournal\(/g)!.length;
+    expect(run.slice(start, end).match(/writeJournal\(/g)!.length).toBe(total);
+  });
+
+  test("stage: a failure while another step runs leaves it to finish, records its dependents not run, and lists every failure in runbook order", async () => {
+    const f = fixture();
+    // Q35-quick fails at once; Q34a-long fails later, once Q36 is settled.
+    const a = heldDeps({ long: "Q34a-long", releaseAfter: "Q35b-twin", fail: new Set(["Q35-quick", "Q34a-long"]) });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, QA_LIST)).toBe(1);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long", "Q35-quick", "Q35b-twin", "Q37-seq"]);
+    const j = readRun(f.journalRoot, "stage");
+    for (const id of ids) expect(j.steps[id]?.endedAt, id).toBeDefined();
+    expect(j.steps["Q36-chain"]!.status).toBe("failed");
+    expect(j.steps["Q36-chain"]!.error).toBe("not run: Q35-quick did not pass, and this step runs after it");
+    expect(j.steps["Q37-seq"]!.status).toBe("ok");
+    expect(j.status).toBe("failed");
+    const out = a.logs.join("\n");
+    expect(out).toContain("3 step(s) failed in this run, all of them listed here");
+    const listed = a.logs.filter((l) => /^ {2}- Q/.test(l)).map((l) => l.slice(4, l.indexOf(":")));
+    expect(listed).toEqual(["Q34a-long", "Q35-quick", "Q36-chain"]);
+    expect(out).toContain("--from Q34a-long");
+  });
+
+  test("production: after a concurrent step fails no further step starts, in-flight steps settle, and the resume names the first failed step in runbook order", async () => {
+    const PROD_LIST: StepTemplate[] = [
+      step("C11-ready", "cutover"),
+      step("C22-long", "cutover"),
+      step("C23-quick", "cutover", { after: ["C11-ready"] }),
+      step("C24-dep", "cutover", { after: ["C23-quick"] }),
+      step("C25-seq", "cutover"),
+    ];
+    const stageDir = await passedStage(PROD_LIST);
+    const p = fixture("prod");
+    const preDir = await greenPreflight(p, PROD_LIST, stageDir);
+    // C23-quick fails first; C22-long, already in flight, settles (and fails) afterwards.
+    const a = heldDeps({ long: "C22-long", releaseAfter: "C23-quick", fail: new Set(["C23-quick", "C22-long"]) });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], a.deps, PROD_LIST)).toBe(1);
+    expect(a.ran).toEqual(["C11-ready", "C22-long", "C23-quick"]);
+    const j = readRun(p.journalRoot, "prod");
+    expect(j.steps["C22-long"]!.status).toBe("failed");
+    expect(j.steps["C22-long"]!.endedAt).toBeDefined();
+    expect(Date.parse(j.steps["C22-long"]!.endedAt!)).toBeGreaterThan(Date.parse(j.steps["C23-quick"]!.endedAt!));
+    expect(j.steps["C24-dep"]).toBeUndefined();
+    expect(j.steps["C25-seq"]).toBeUndefined();
+    const out = a.logs.join("\n");
+    expect(out).toContain("C23-quick FAILED");
+    expect(out).toContain("waiting for C22-long to settle");
+    const resume = a.logs.filter((l) => l.includes("--from "));
+    expect(resume).toHaveLength(1);
+    expect(resume[0]).toContain("--from C22-long");
+  });
+
+  test("a step waiting on a future notBefore: the runner settles what runs, starts nothing early, exits 3, and --run / --from resume the same step set", async () => {
+    const LIST: StepTemplate[] = [
+      step("Q23-ready", "qa"),
+      step("Q34a-long", "qa"),
+      step("Q35-quick", "qa", { after: ["Q23-ready"], notBefore: { afterStep: "Q23-ready", hours: 1 } }),
+      step("Q37-seq", "qa"),
+    ];
+    const f = fixture();
+    const a = heldDeps({ long: "Q34a-long" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], a.deps, LIST)).toBe(3);
+    expect(a.ran).toEqual(["Q23-ready", "Q34a-long"]);
+    const j = readRun(f.journalRoot, "stage");
+    expect(j.steps["Q34a-long"]!.status).toBe("ok");
+    expect(j.steps["Q34a-long"]!.endedAt).toBeDefined();
+    expect(j.steps["Q35-quick"]).toBeUndefined();
+    const out = a.logs.join("\n");
+    expect(out).toContain(`Q35-quick becomes runnable at ${new Date(Date.parse(j.steps["Q23-ready"]!.endedAt!) + 3_600_000).toISOString()}`);
+    expect(out).toContain(`--run ${j.runTs} --from Q35-quick`);
+    // red control: still early, a resume starts nothing.
+    const early = fakeDeps();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs], early.deps, LIST)).toBe(3);
+    expect(early.ran).toEqual([]);
+    // Once due: --run resumes at the first step not done, the same set selectSteps gives.
+    const later = fakeDeps();
+    later.deps.now = () => new Date("2026-10-08T13:00:10Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs], later.deps, LIST)).toBe(0);
+    expect(later.ran).toEqual(selectSteps(LIST.map((s) => s.id), { from: "Q35-quick" }));
+    // --from selects exactly what it did before the scheduler.
+    const again = fakeDeps();
+    again.deps.now = () => new Date("2026-10-08T13:00:20Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot, "--run", j.runTs, "--from", "Q37-seq"], again.deps, LIST)).toBe(0);
+    expect(again.ran).toEqual(["Q37-seq"]);
+  });
+});
+
+// ── issue 1565: a stage run resumes in place at a commit that changes only check code ──
+describe("resume in place at a check-only commit (issue 1565)", () => {
+  const C2 = "c".repeat(40);
+  const C2_TREE = "9".repeat(40);
+  /** A test path no file backs (built from parts so the path-citation check does not read it as a citation). */
+  const A_TEST = ["scripts", "tests", "unit", "a.test.ts"].join("/");
+  const CHECK_ONLY = ["scripts/release/version-checks/v0.0.1/x.ts", "scripts/release/runbooks/releases/v0.0.1.yaml", "scripts/release/sdk-lib.ts"];
+  const exp = (patch: Partial<Parameters<typeof checkResume>[1]> = {}) =>
+    ({ target: "stage", commit: C2, stepListHash: stepListHash(), goSha256: "g2", stepIds: stepIds(), changedPaths: CHECK_ONLY, ...patch });
+
+  test("CHECK_ONLY_PATHS is exactly the issue's set: check code, never the runner or a product path", () => {
+    expect([...CHECK_ONLY_PATHS]).toEqual([
+      "scripts/release/version-checks/**", "scripts/release/runbooks/**", "scripts/release/version-check.ts", "scripts/release/analytics-load-check.ts",
+      "scripts/release/sdk-check.ts", "scripts/release/sdk-lib.ts", "scripts/release/public-analytics-read.ts", "scripts/release/replay-row.ts", "scripts/tests/**",
+    ]);
+  });
+
+  test("checkResume on a stage journal admits commit C2 with a different go when every changed path is check-only", () => {
+    expect(checkResume(journal(), exp(), {})).toEqual([]);
+    // The same commit still needs the same go.
+    expect(checkResume(journal(), exp({ commit: SHA }), {}).join()).toContain("different go file");
+    // A changed step list still starts a new run.
+    expect(checkResume(journal(), exp({ stepListHash: "f".repeat(64) }), {}).join()).toContain("different step list");
+    // git could not list the paths: refused.
+    expect(checkResume(journal(), exp({ changedPaths: undefined }), {}).join()).toContain("git could not list the paths");
+  });
+
+  test("red: checkResume refuses C2 when a changed path is product or runner code, naming the path", () => {
+    for (const bad of ["backend/src/index.ts", "scripts/release/run.ts"]) {
+      const out = checkResume(journal(), exp({ changedPaths: [...CHECK_ONLY, bad] }), {}).join();
+      expect(out, bad).toContain(`not check-only: ${bad}`);
+    }
+    // A path that only starts like a check-only file is not one.
+    expect(checkResume(journal(), exp({ changedPaths: ["scripts/release/sdk-lib.ts.bak"] }), {}).join()).toContain("sdk-lib.ts.bak");
+  });
+
+  test("red: checkResume on a prod journal refuses any different commit, even with check-only paths", () => {
+    const out = checkResume(journal({ target: "prod", rmEnv: "prod" }), exp({ target: "prod" }), {});
+    expect(out.join()).toContain(`the journal ran commit ${SHA}; this run is ${C2}`);
+    expect(out.join()).toContain("different go file");
+  });
+
+  test("a resumed fake run at C2 appends one commits entry; the steps it runs record C2, earlier ok steps keep C1", async () => {
+    const f = fixture();
+    const first = fakeDeps({ fail: new Set(["T2"]), receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], first.deps, TINY)).toBe(1);
+    const runDir = join(f.journalRoot, "stage", "20261008T120000Z");
+    const j1 = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(j1.commits).toHaveLength(1);
+    expect(j1.commits![0]).toMatchObject({ commit: SHA, tree: TREE, goSha256: j1.goSha256, fromStep: "T1" });
+    expect(Object.values(j1.steps).map((r) => r.commit)).toEqual([SHA, SHA, SHA]);
+
+    // The fix: a new QA commit that changes only a check; its own go.
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    const answers = { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `${CHECK_ONLY.join("\n")}\n` }, [`${C2}^{tree}`]: { code: 0, stdout: `${C2_TREE}\n` } };
+    // A step's maxMinutes is not in the step list hash: that change is check-only too.
+    const TINY2 = TINY.map((s) => (s.id === "T2" ? { ...s, maxMinutes: 5 } : s));
+    const second = fakeDeps({ receipt: "{}", answers });
+    second.deps.now = () => new Date("2026-10-08T14:00:00Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], second.deps, TINY2)).toBe(0);
+    expect(second.ran).toEqual(["T2", "T3"]);
+    expect(second.logs.join("\n")).toContain(`resuming in place at ${C2}`);
+    const j2 = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(j2.status).toBe("passed");
+    expect(j2.commit).toBe(C2);
+    expect(j2.tree).toBe(C2_TREE);
+    expect(j2.goSha256).not.toBe(j1.goSha256);
+    expect(j2.commits).toHaveLength(2);
+    expect(j2.commits![0]).toEqual(j1.commits![0]!);
+    expect(j2.commits![1]).toEqual({ commit: C2, tree: C2_TREE, goSha256: j2.goSha256, fromStep: "T2", at: "2026-10-08T14:00:00.000Z" });
+    expect(j2.steps.T1).toEqual(j1.steps.T1!);
+    expect(j2.steps.T2!.commit).toBe(C2);
+    expect(j2.steps.T3!.commit).toBe(C2);
+
+    // A further resume at C2 under its go appends nothing.
+    const third = fakeDeps({ receipt: "{}", answers });
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--only", "T3"], third.deps, TINY2)).toBe(0);
+    expect((JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal).commits).toHaveLength(2);
+  });
+
+  test("red: a resume at a commit that changes a product path refuses, runs nothing and leaves the journal as it was", async () => {
+    const f = fixture();
+    await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY);
+    const runDir = join(f.journalRoot, "stage", "20261008T120000Z");
+    const before = readFileSync(join(runDir, "run.json"), "utf8");
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    const r = fakeDeps({ receipt: "{}", answers: { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: "scripts/release/sdk-lib.ts\nbackend/src/index.ts\n" } } });
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], r.deps, TINY)).toBe(2);
+    expect(r.ran).toEqual([]);
+    expect(r.logs.join("\n")).toContain("not check-only: backend/src/index.ts");
+    // The journal's records are as they were; only this invocation's stop reason is added (issue 1555).
+    const after = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(after.stopReason).toMatchObject({ kind: "refused", step: "T2" });
+    expect(after.stopReason!.detail).toContain("not check-only: backend/src/index.ts");
+    expect(r.notified).toHaveLength(1);
+    expect(r.notified[0]).toMatchObject({ kind: "refused", runTs: "20261008T120000Z", step: "T2" });
+    const { stopReason: _new, ...restAfter } = after;
+    const { stopReason: _old, ...restBefore } = JSON.parse(before) as RunJournal;
+    expect(restAfter).toEqual(restBefore);
+  });
+
+  test("red: a resume whose diff deletes a product path beside a scripts/tests change refuses, naming the deleted path", async () => {
+    const f = fixture();
+    await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY);
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    // A deletion lists only the old path; it is a product path, so the resume refuses.
+    const r = fakeDeps({ receipt: "{}", answers: { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `backend/src/routes.js\n${A_TEST}\n` } } });
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], r.deps, TINY)).toBe(2);
+    expect(r.ran).toEqual([]);
+    expect(r.logs.join("\n")).toContain("not check-only: backend/src/routes.js");
+  });
+
+  test("controlChangedPaths runs real git: a rename from backend/ into scripts/tests/ lists both paths and is refused", async () => {
+    mkdirSync(join(process.env.HOME ?? tmpdir(), "tmp"), { recursive: true });
+    const repo = mkdtempSync(join(process.env.HOME ?? tmpdir(), "tmp", "release-1565-git-"));
+    const git = (...a: string[]) => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...a], { cwd: repo, encoding: "utf8" });
+      if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git("init", "-q");
+    mkdirSync(join(repo, "backend", "src"), { recursive: true });
+    writeFileSync(join(repo, "backend", "src", "moved.ts"), "export const x = 1;\n".repeat(20));
+    git("add", "-A");
+    git("commit", "-q", "-m", "one");
+    const c1 = git("rev-parse", "HEAD");
+    mkdirSync(join(repo, "scripts", "tests", "unit"), { recursive: true });
+    git("mv", "backend/src/moved.ts", "scripts/tests/unit/moved.ts");
+    git("commit", "-q", "-m", "two");
+    const c2 = git("rev-parse", "HEAD");
+    // The control machine's command, run in the throwaway repo in place of the control checkout.
+    const diff = controlChangedPaths({
+      async collect(_host, remote) {
+        const r = spawnSync("sh", ["-c", remote.replace(`cd '${CONTROL_REPO}'`, `cd '${repo}'`).replace(`cd ${CONTROL_REPO}`, `cd '${repo}'`)], { encoding: "utf8" });
+        return { code: r.status ?? 1, stdout: r.stdout ?? "" };
+      },
+    });
+    const paths = await diff(c1, c2);
+    expect([...(paths ?? [])].sort()).toEqual(["backend/src/moved.ts", "scripts/tests/unit/moved.ts"]);
+    expect(checkResume(journal({ commit: c1 }), exp({ commit: c2, changedPaths: paths }), {}).join()).toContain("not check-only: backend/src/moved.ts");
+    // A commit git does not know gives no list, and a non-sha is never passed to git.
+    expect(await diff(c1, "d".repeat(40))).toBeUndefined();
+    expect(await diff(c1, "HEAD; rm -rf /")).toBeUndefined();
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test("SP.8: checkStageJournal refuses an earlier commit that differs from production in a product path, and passes one that differs only in a test", () => {
+    const j = journal({
+      commit: C2, tree: TREE,
+      commits: [
+        { commit: OTHER_SHA, tree: OTHER_TREE, goSha256: "g1", fromStep: stepIds()[0]!, at: "" },
+        { commit: C2, tree: TREE, goSha256: "g2", fromStep: "C05-migrate", at: "" },
+      ],
+    });
+    const expected = { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() };
+    expect(checkStageJournal(j, { ...expected, earlierPaths: { [OTHER_SHA]: ["frontend/public/index.html"] } }).join()).toContain("outside the check-only paths: frontend/public/index.html");
+    expect(checkStageJournal(j, { ...expected, earlierPaths: { [OTHER_SHA]: [A_TEST] } })).toEqual([]);
+    // An earlier commit git could not diff refuses.
+    expect(checkStageJournal(j, expected).join()).toContain("git could not diff");
+    // The last tree still must equal production's.
+    expect(checkStageJournal({ ...j, tree: OTHER_TREE }, { ...expected, earlierPaths: { [OTHER_SHA]: [] } }).join()).toContain("tree");
+  });
+
+  test("SP.8 end to end: the preflight's P.stage and the cutover diff each earlier stage commit against the production commit", async () => {
+    // Stage ran C1 = OTHER_SHA, then resumed in place at SHA (the commit production's rc resolves to).
+    const s = fixture();
+    writeFileSync(s.goFile, `commit: ${OTHER_SHA}\noperator: lucas\ndate: 2026-10-14\n`);
+    await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], fakeDeps({ fail: new Set(["T2"]), receipt: "{}" }).deps, TINY);
+    const go2 = join(s.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${SHA}\noperator: lucas\ndate: 2026-10-15\n`);
+    const diffKey = `git diff --no-renames --name-only ${OTHER_SHA} ${SHA}`;
+    const checkOnly = { [diffKey]: { code: 0, stdout: `${A_TEST}\n` } };
+    expect(await runRelease(["--target", s.targetFile, "--go", go2, "--journal-root", s.journalRoot, "--run", "20261008T120000Z", "--from", "T2"], fakeDeps({ receipt: "{}", answers: checkOnly }).deps, TINY)).toBe(0);
+    const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");
+
+    const p = fixture("prod");
+    const preArgs = ["--target", p.targetFile, "--preflight", "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir];
+    const red = fakeDeps({ receipt: "{}", answers: { [diffKey]: { code: 0, stdout: "frontend/public/index.html\n" } } });
+    expect(await runRelease(preArgs, red.deps, TINY)).toBe(2);
+    expect(red.logs.join("\n")).toMatch(/RED\s+P\.stage.*outside the check-only paths: frontend\/public\/index.html/);
+    // Without --stage-journal the preflight searches the stage journals by the same rule.
+    const search = fakeDeps({ receipt: "{}", answers: { [diffKey]: { code: 0, stdout: "frontend/public/index.html\n" } } });
+    const searchArgs = ["--target", p.targetFile, "--preflight", "--go", p.goFile, "--journal-root", s.journalRoot];
+    expect(await runRelease(searchArgs, search.deps, TINY)).toBe(2);
+    expect(search.logs.join("\n")).toMatch(/RED\s+P\.stage\s+no passed stage run/);
+    const found = fakeDeps({ receipt: "{}", answers: checkOnly });
+    found.deps.now = () => new Date("2026-10-08T12:30:00Z");
+    expect(await runRelease(searchArgs, found.deps, TINY)).toBe(0);
+
+    const green = fakeDeps({ receipt: "{}", answers: checkOnly });
+    expect(await runRelease(preArgs, green.deps, TINY)).toBe(0);
+    const preDir = join(p.journalRoot, "prod", "preflight-20261008T120000Z");
+    // The cutover checks SP.8 again, with the same diff.
+    const cutArgs = ["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir];
+    const refused = fakeDeps({ receipt: "{}", answers: { [diffKey]: { code: 0, stdout: "backend/src/index.ts\n" } } });
+    expect(await runRelease(cutArgs, refused.deps, TINY)).toBe(2);
+    expect(refused.ran).toEqual([]);
+    expect(refused.logs.join("\n")).toContain("outside the check-only paths: backend/src/index.ts");
+    const cut = fakeDeps({ receipt: "{}", answers: checkOnly });
+    expect(await runRelease(cutArgs, cut.deps, TINY)).toBe(0);
+    expect(cut.ran).toEqual(["T2", "T3"]);
+  });
+
+  test("a new commit that changes only a step's maxMinutes in a fixture release runbook keeps the stepListHash and resumes in place", () => {
+    const body = readFileSync(templatePath("kitchen-sink"), "utf8");
+    const steps = body.slice(body.indexOf("\nsteps:") + 1);
+    expect(steps).toContain("maxMinutes: 30");
+    const text1 = `release: v0.0.1\nrecovery: fix forward\nscope:\n  - {pr: 1, what: a test change, none: a test}\n${steps}`;
+    const text2 = text1.replace("maxMinutes: 30", "maxMinutes: 45");
+    const r1 = parseReleaseRunbook(text1, "v0.0.1");
+    const r2 = parseReleaseRunbook(text2, "v0.0.1");
+    const changed = r2.steps.find((s, i) => s.maxMinutes !== r1.steps[i]!.maxMinutes);
+    expect(changed?.maxMinutes).toBe(45);
+    expect(stepListHash(r2.steps)).toBe(stepListHash(r1.steps));
+    const j = journal({ stepListHash: stepListHash(r1.steps), stepIds: stepIds(r1.steps) });
+    expect(checkResume(j, exp({ stepListHash: stepListHash(r2.steps), stepIds: stepIds(r2.steps), changedPaths: ["scripts/release/runbooks/releases/v0.0.1.yaml"] }), {})).toEqual([]);
   });
 });

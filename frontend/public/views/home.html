@@ -58,7 +58,7 @@
   </section>
 
   <!-- ── The model portfolio ── -->
-  <section class="hm-sec" id="model">
+  <section class="hm-sec" id="model" x-data="homeRegime()">
     <div class="hm-grid">
       <div class="hm-reveal">
         <p class="hm-k hm-aside">
@@ -99,6 +99,78 @@
             </li>
           </template>
         </ul>
+      </figure>
+    </div>
+    <!-- The market regime it is read against (home-regime.js): the dial with the
+         regime beside it, then the last year on the site's chart. On the grid's
+         own two columns, so the chart starts under the ring. -->
+    <div class="hm-reg hm-reveal">
+      <div class="hm-reg__read">
+        <h3 class="hm-k hm-reg__h">The market regime</h3>
+        <template x-if="regimeReady()">
+          <div class="hm-reg__pair">
+            <div class="rm-dial rm-dial--sm" x-data="rmRegimeDial(() => dialModel())"
+                 @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null" @keydown.escape="point = null; pinned = null">
+              <div class="rm-dial__arc" x-ref="arc">
+                <div class="rm-dial__svg" x-html="svg()"></div>
+                <p class="rm-dial__v"><b class="rm-dial__n"><span x-text="reading().n"></span><small x-text="reading().suffix"></small></b><span class="rm-dial__name">Percentile</span></p>
+                <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">
+                  <p class="rm-dial__tip-h" x-text="tip(at).title"></p>
+                  <p x-text="tip(at).body"></p>
+                  <p class="rm-dial__tip-now" x-show="tip(at).now" x-text="tip(at).now"></p>
+                </div>
+              </div>
+              <template x-for="k in keys" :key="k">
+                <button type="button" class="rm-dial__k" :class="{ 'is-on': lit() === k }" :style="labelAt(k)" :data-at="k"
+                        :aria-describedby="shown() === k ? tipId : null" :aria-expanded="shown() === k ? 'true' : 'false'"
+                        @mouseenter="point = k" @focus="point = k" @blur="point = null" @click="pin(k)" x-text="tip(k).title"></button>
+              </template>
+            </div>
+            <div class="hm-reg__facts">
+              <p class="hm-reg__now"><i :style="`background:${regimeColour()}`" aria-hidden="true"></i><span x-text="regimeLabel()"></span></p>
+              <p class="hm-reg__since" x-text="regimeSentence()"></p>
+              <p class="hm-more"><a href="/regime">See the market regime</a></p>
+            </div>
+          </div>
+        </template>
+      </div>
+      <figure class="rr-area rv__fig hm-reg__chart">
+        <figcaption class="hm-reg__cap">
+          <span class="hm-k">Composite percentile, last 12 months</span>
+          <span class="rv__lg-key hm-reg__key" x-show="yearReady()">
+            <template x-for="r in bgLegend()" :key="r.label">
+              <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+            </template>
+          </span>
+        </figcaption>
+        <template x-if="yearReady()">
+          <div class="rr-area__frame">
+            <div class="rr-area__y" aria-hidden="true">
+              <template x-for="t in yearYTicks()" :key="t.key"><span :class="{ 'is-cut': t.cut }" :style="`top:${t.top}%`" x-text="t.label"></span></template>
+            </div>
+            <div class="rr-area__plot" tabindex="0" role="img" :aria-label="yearLabel()"
+                 @pointermove="yearMove($event)" @pointerdown="yearMove($event)" @pointerleave="if ($event.pointerType === 'mouse') yearAt = null" @keydown="yearKey($event)" @blur="yearAt = null">
+              <div class="rv__bands" aria-hidden="true">
+                <template x-for="b in yearBands()" :key="b.key"><i :style="`left:${b.left}%;width:${b.width}%;background:${b.bg}`"></i></template>
+              </div>
+              <div class="rr-area__svg" x-html="yearSvg()"></div>
+              <template x-if="yearLast()"><i class="hm-reg__last" :style="`left:${yearLast().left}%;top:${yearLast().top}%`" aria-hidden="true"></i></template>
+              <template x-if="yearPoint()"><div class="rr-area__cross" :style="`left:${yearPoint().left}%`"></div></template>
+              <template x-if="yearPoint()">
+                <div class="rr-area__tip" :class="{ 'is-left': yearPoint().left > 62, 'is-past-mid': yearPoint().left > 50 }" :style="`left:${yearPoint().left}%`">
+                  <p class="rr-area__tip-h"><b x-text="yearPoint().date"></b><span class="rv__tip-reg" x-show="yearPoint().regime"><i :style="`background:${yearPoint().regimeColor}`" aria-hidden="true"></i><span x-text="yearPoint().regime"></span></span></p>
+                  <ul><li><i :style="`background:${yearPoint().color}`" data-mark="series"></i><span x-text="yearPoint().label"></span><b x-text="yearPoint().value"></b></li></ul>
+                </div>
+              </template>
+            </div>
+            <div class="rr-area__x" aria-hidden="true">
+              <template x-for="t in yearXTicks()" :key="t.key"><span :class="t.cls" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+            </div>
+          </div>
+        </template>
+        <template x-if="regimeLoaded && !yearReady()">
+          <div class="rr-empty rr-empty--chart rm-nodata"><p class="rm-nodata__h" x-text="regimeFailed ? 'No data available' : 'Not enough data yet'"></p></div>
+        </template>
       </figure>
     </div>
   </section>

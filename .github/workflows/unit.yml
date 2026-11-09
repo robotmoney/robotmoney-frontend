@@ -155,6 +155,12 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/sdk-release.test.ts:42
+      - name: Web content release tests ran (issue 1561)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/web-release.test.ts:31
+          scripts/tests/unit/check-web-tag.test.ts:9
+          scripts/tests/unit/web-content-paths.test.ts:3
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

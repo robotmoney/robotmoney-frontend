@@ -6,42 +6,57 @@
 // asserts the same pins through the backend shim. Since decision D78
 // (compensated arithmetic) the originals match up to rounding: same structure
 // and labels, no number moved by more than rounding (support/numeric-diff.ts).
+// Issue 1559 replaced AN-6: every line of a market now starts on the
+// strategies' first labelled date. The original is compared with that rule
+// applied (support/issue-1559.ts), and the pins are read from it.
 import { describe, expect, test } from "bun:test";
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { AN_SCENARIO_DAYS, AN_SKIPPED_DAY, anPins, anScenario } from "./support/an-scenario.ts";
 import { originalFile, readOriginal } from "./support/originals.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
+import { apply1559 } from "./support/issue-1559.ts";
+import type { BacktestPayload } from "../src/analyze/backtest.ts";
 
-const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: unknown };
+const original = JSON.parse(readOriginal(originalFile.anBehaviours)) as { pins: Record<string, unknown>; backtest: BacktestPayload };
+const expected = apply1559(original.backtest);
+const expectedPins = anPins(expected) as Record<string, unknown>;
+// The pins issue 1559 moves: the baselines' daily values, starts and growth.
+const MOVED_BY_1559 = new Set(["AN-5 blend_hodl daily values (mixed)", "AN-6 baseline start (eth_hodl)", "AN-6 baseline start (stables_only)", "AN-10 cagr_out_sample (mixed blend_hodl)"]);
 const s = anScenario();
 const bt = computeBacktest(s.dateAxis, s.result, s.extras);
 const pins = anPins(bt);
 
 describe("AN behaviours against the named original values", () => {
-  test("the whole unstripped backtest of the scenario equals the original up to rounding", () => {
-    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(original.backtest, null, 2), "AN scenario backtest");
+  test("the whole unstripped backtest of the scenario equals the original, under the issue 1559 rule, up to rounding", () => {
+    expectSameUpToRounding(JSON.stringify(bt, null, 2), JSON.stringify(expected, null, 2), "AN scenario backtest");
   });
 
   for (const name of Object.keys(pins) as (keyof typeof pins)[]) {
     test(`${name} equals its original value up to rounding`, () => {
       expect(name in original.pins).toBe(true);
-      expectSameUpToRounding(JSON.stringify(pins[name]), JSON.stringify(original.pins[name]), name);
+      // A pin issue 1559 does not move is still the captured original.
+      if (!MOVED_BY_1559.has(name)) expectSameUpToRounding(JSON.stringify(expectedPins[name]), JSON.stringify(original.pins[name]), `${name} (original)`);
+      expectSameUpToRounding(JSON.stringify(pins[name]), JSON.stringify(expectedPins[name]), name);
     });
   }
 
-  test("AN-5: blend_hodl runs every priced day at fixed 50/50 weights and is never charged for the daily reset", () => {
+  test("AN-5: blend_hodl runs every day from the start at fixed 50/50 weights and is never charged for the daily reset", () => {
     const daily = bt.mixed!.blend_hodl!._daily!;
-    expect(daily.map((p) => p.date)).toEqual(AN_SCENARIO_DAYS);
+    expect(daily.map((p) => p.date)).toEqual(AN_SCENARIO_DAYS.slice(2));
     expect(bt.mixed!.blend_hodl!.transitions).toBe(0);
-    // Day 2's value is exactly one daily-reset step: 0.5·ΔETH + 0.5·ΔSPX, no cost.
+    // The day after the start is exactly one daily-reset step: 0.5·ΔETH + 0.5·ΔSPX, no cost.
     const e = s.extras.eth, x = s.extras.spx;
-    expect(daily[1]!.value).toBe(1 * (1 + (0.5 * (e[1]!.value / e[0]!.value - 1) + 0.5 * (x[1]!.value / x[0]!.value - 1))));
+    expect(daily[0]!.value).toBe(1);
+    expect(daily[1]!.value).toBe(1 * (1 + (0.5 * (e[3]!.value / e[2]!.value - 1) + 0.5 * (x[3]!.value / x[2]!.value - 1))));
   });
 
-  test("AN-6: strategies start at the first labelled date, baselines at the first priced date", () => {
-    expect(bt.eth!.composite!.start_date).toBe("2024-01-27");
-    expect(bt.eth!.eth_hodl!.start_date).toBe(AN_SCENARIO_DAYS[0]);
-    expect(bt.eth!.stables_only!.start_date).toBe(AN_SCENARIO_DAYS[0]);
+  test("AN-6 (issue 1559): every strategy and baseline of a market starts on the first labelled date, at 1", () => {
+    for (const market of Object.values(bt)) {
+      for (const m of Object.values(market)) {
+        expect(m.start_date).toBe("2024-01-27");
+        expect(m.equity_curve[0]).toEqual({ date: "2024-01-27", value: 1 });
+      }
+    }
   });
 
   test("AN-9: the unlabelled day is skipped, including its market move", () => {

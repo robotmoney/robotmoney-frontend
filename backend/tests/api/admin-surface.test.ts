@@ -18,6 +18,12 @@ import { openEpoch } from "../../src/swarm/domain.ts";
 import { ensureProseSubject } from "../support/prose-subject.ts";
 import { withFrozenClock } from "../support/fixed-clock.ts";
 import { provisionOperatorToken } from "../support/automation-auth.ts";
+import { useCleanDatabase } from "../support/clean-db.ts";
+
+// Its own clean database (issue 1587): on the shared one, rows other files leave enabled in
+// job_schedules (regime.classify and research.refresh, ids 35 and 36 in CI) reached the overview's
+// enabledAnalyticsSchedules and failed the "no consumer analytics schedule" assertion.
+useCleanDatabase(import.meta.file);
 
 // Store-issued, like the real credential (smoke spec §3, D52 (1)); there is no
 // env token and no insecure mode to fall back on.

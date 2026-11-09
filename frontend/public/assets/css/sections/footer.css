@@ -104,8 +104,9 @@
   text-decoration: underline;
   text-decoration-color: var(--color-link);
 }
-/* Listed, not linked yet (the leaderboard). */
-.footer__link--soon { display: flex; align-items: center; gap: 0.5rem; cursor: default; }
+/* Listed, not linked yet (the leaderboard). The chip wraps under the name
+   when the column is narrower than both, as on a 320px phone. */
+.footer__link--soon { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; cursor: default; }
 .footer__link--soon:hover { color: var(--color-text-muted); text-decoration: none; }
 
 /* Bottom bar inner:

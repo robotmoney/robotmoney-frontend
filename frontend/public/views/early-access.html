@@ -159,7 +159,7 @@
         </form>
 
         <div class="ea__done" x-show="sent" x-cloak role="status">
-          <h2 class="ea__done-h">You're on the list</h2>
+          <h2 class="ea__done-h" x-ref="done" tabindex="-1">You're on the list</h2>
           <p class="ea__done-p">We'll message <b x-text="sentHandle"></b> when your group opens. For news before then, follow <a href="https://x.com/RobotMoneyAgent" target="_blank" rel="noopener noreferrer">@RobotMoneyAgent</a> on X.</p>
         </div>
       </div>
@@ -258,6 +258,12 @@
 .ea__submit:disabled { opacity: 0.6; cursor: default; }
 
 .ea__done { padding: 2rem 0; }
+/* Arrives where the form was: a short rise in as x-show reveals it. */
+.ea__done { animation: ea-done-in 320ms ease-out both; }
+@keyframes ea-done-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .ea__done { animation: none; } }
+.ea__done-h { scroll-margin-top: 6rem; }
+.ea__done-h:focus { outline: none; }
 .ea__done-h { margin: 0 0 0.75rem; font-family: var(--font-display); font-stretch: var(--font-display-stretch);
   font-weight: 700; text-transform: uppercase; font-size: 1.75rem; line-height: 1.1; }
 .ea__done-p { margin: 0; font-size: 0.9375rem; line-height: 1.7; color: var(--color-text-soft); }

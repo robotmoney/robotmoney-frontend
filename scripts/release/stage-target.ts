@@ -64,6 +64,8 @@ import {
   bindDatabase,
   composeStageHomeEnv,
   connectionLimitArgs,
+  PROVIDER_SERVER_ARGS,
+  STATS_EXTENSION_SQL,
   parseConnectionLimitsFlag,
   parseProductionLimits,
   type ConnectionLimits,
@@ -77,6 +79,8 @@ import {
   grantsReconcileScript,
   GENERATED_PASSWORD_ROLES,
   globalsToRoleSql,
+  dumpAgeRefusal,
+  dumpPlan,
   newestFreshDump,
   LEDGER_TABLE_SQL,
   parseKeyValues,
@@ -250,10 +254,13 @@ async function readRunningVersion(): Promise<RunningVersion> {
   return v;
 }
 
+/** The stage user's Bun (~/.bun/bin) comes first: a non-login ssh PATH finds /usr/local/bin's older Bun, which cannot read a v2 bun.lock. */
+const HOST_PATH = "/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 async function bunInstall(dir: string, cwds: string[]): Promise<void> {
   for (const cwd of cwds) {
     log(`bun install in ${join(dir, cwd)}`);
-    await stream(["bun", "install", "--frozen-lockfile"], `bun install (${cwd})`, { cwd: join(dir, cwd) });
+    await stream(["bun", "install", "--frozen-lockfile"], `bun install (${cwd})`, { cwd: join(dir, cwd), env: { PATH: HOST_PATH } });
   }
 }
 
@@ -263,11 +270,10 @@ function readDumpPreflight(dumpDir: string) {
   const manifestPath = join(dumpDir, "manifest.json");
   if (!existsSync(manifestPath)) throw new Refusal(`${manifestPath} is missing; capture with bun smoke:capture`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { capturedAt?: string; role?: string; pgIsInRecovery?: boolean; target?: string };
-  const age = dumpAgeHours(manifest, new Date());
-  if (age === null) throw new Refusal(`${manifestPath} has no capturedAt`);
-  if (age > T.maxDumpAgeHours) {
-    throw new Refusal(`the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${T.maxDumpAgeHours} h. Capture a new one first`);
-  }
+  const now = new Date();
+  const refusal = dumpAgeRefusal(manifest, now);
+  if (refusal) throw new Refusal(`${manifestPath}: ${refusal}`);
+  const age = dumpAgeHours(manifest, now) ?? 0;
   log(`dump ${backup.stamp}: captured ${manifest.capturedAt} (${age.toFixed(1)} h ago) as ${manifest.role} from a replica=${manifest.pgIsInRecovery}`);
   return backup;
 }
@@ -307,7 +313,7 @@ function startPostgres(limits: ConnectionLimits): void {
       "docker", "run", "-d", "--name", T.pgContainer, "--restart", "unless-stopped",
       "--env-file", envFile, "--label", T.label,
       "-p", `${T.pgBindHost}:${T.pgPort}:5432`, ...SHM_FLAGS,
-      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE, ...connectionLimitArgs(limits),
+      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE, ...connectionLimitArgs(limits), ...PROVIDER_SERVER_ARGS,
     ], "docker run");
   } finally {
     rmSync(envFile, { force: true });
@@ -473,6 +479,9 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, runni
   const enrolled = parseKeyValues(psql(ENROLL_REHEARSAL_SQL, { tuples: true }));
   if (enrolled.identity_kind !== "rehearsal") throw new Error(`the identity row reads ${enrolled.identity_kind} after the enrollment`);
   log("deployment_identity enrolled rehearsal");
+  // After the grants comparison, which leaves extension members out either way.
+  psql(STATS_EXTENSION_SQL);
+  log("pg_stat_statements installed as the provider would (issue 1581)");
   psql("ANALYZE;");
   return { passwords, plan: planned };
 }
@@ -489,7 +498,7 @@ async function startStack(): Promise<void> {
   const receipts = join(T.home, ".local", "state", "robotmoney-release", "stage-target-up");
   mkdirSync(receipts, { recursive: true });
   const confirm = `${T.pgBindHost}:${T.pgPort}/${T.database}`;
-  const env = ["env", "-i", `HOME=${T.home}`, "PATH=/home/stage-server/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
+  const env = ["env", "-i", `HOME=${T.home}`, `PATH=${HOST_PATH}`, "LANG=C.UTF-8", "RM_ENV=stage", "PROJECTS_SOURCE=live"];
   const steps: [string, string[]][] = [
     ["credentials", ["bun", "scripts/release/credentials-init.ts", "--receipt-dir", receipts]],
     ["env rewrite", ["bun", "scripts/release/env-rewrite.ts", "--run", new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"), "--receipt-dir", receipts]],
@@ -542,21 +551,17 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
 }
 
 /**
- * Q02-dump (SR.0, owner 2026-10-08): the newest production dump on this host that is
- * at most 24 hours old, else a new capture from production's read replica by the
- * capture checkout (the same `bun smoke:capture` C01-backup runs). Never a stale dump.
+ * Q02-dump (SR.0, issue 1564): always a new capture from production's read replica
+ * by the capture checkout (the same `bun smoke:capture` C01-backup runs). It never
+ * reuses a dump already on this host, whatever its age (`dumpPlan`).
  */
 async function remoteDump(): Promise<number> {
-  const fresh = newestFreshDump(listDumps(), new Date());
-  if (fresh) {
-    log(`reusing ${fresh}: the newest dump, at most ${T.maxDumpAgeHours} h old`);
-    return 0;
-  }
+  const plan = dumpPlan(listDumps(), new Date());
   const checkout = CAPTURE_CHECKOUT.checkout;
-  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`no dump is at most ${T.maxDumpAgeHours} h old, and the capture checkout ${checkout} is absent: clone it, then run this again`);
+  if (!existsSync(join(checkout, ".git"))) throw new Refusal(`the capture checkout ${checkout} is absent: clone it, then run this again`);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const out = join(process.env.HOME ?? "", `rm-backup-prod-${stamp}`);
-  log(`no dump is at most ${T.maxDumpAgeHours} h old: capturing ${out} from production's read replica`);
+  log(`${plan}: ${out} from production's read replica (Q02 never reuses a dump)`);
   await stream(["bun", "run", "smoke:capture", "--out", out], "smoke:capture", { cwd: checkout, env: { RM_ENV: "stage" } });
   return 0;
 }

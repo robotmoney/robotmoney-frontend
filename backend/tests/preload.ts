@@ -188,6 +188,11 @@ const up = Bun.spawnSync([
   // test cannot exist — and it must FAIL rather than skip if it is missing,
   // which is what that file asserts first.
   "-c", "wal_level=logical",
+  // Production's managed cluster preloads pg_stat_statements (issue 1581), so
+  // the view answers once the extension exists. tests/role-passwords.test.ts
+  // proves rm_readonly reads every role's rows in it, which needs the library
+  // loaded; it is not settable at runtime either.
+  "-c", "shared_preload_libraries=pg_stat_statements",
 ]);
 if (up.exitCode !== 0) {
   throw new Error(`tests require Docker+Postgres but the container failed to start:\n${up.stderr.toString()}`);

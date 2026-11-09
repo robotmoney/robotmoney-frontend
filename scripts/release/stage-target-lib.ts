@@ -122,6 +122,23 @@ export function connectionLimitArgs(l: ConnectionLimits): string[] {
   return ["-c", `max_connections=${l.maxConnections}`, "-c", `superuser_reserved_connections=${l.superuserReserved}`, "-c", `reserved_connections=${l.reserved}`];
 }
 
+/**
+ * The server settings stage takes from the managed cluster beyond its limits:
+ * production preloads pg_stat_statements, so the view answers once the
+ * extension exists (issue 1581). Arguments after the image, like the limits.
+ */
+export const PROVIDER_SERVER_ARGS: readonly string[] = Object.freeze(["-c", "shared_preload_libraries=pg_stat_statements"]);
+
+/**
+ * The provider's half of query statistics on stage (issue 1581). Production's
+ * doadmin installs pg_stat_statements through role-passwords; stage's doadmin
+ * is not the provider and may not create an untrusted extension, so `up`
+ * installs it as the container superuser after the restore, while production's
+ * own dump does not carry it yet. A dump that carries it restores it, and this
+ * does nothing.
+ */
+export const STATS_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;";
+
 /** What production reports about the stack it runs, read by `up` from `/api/version`. */
 export interface RunningVersion {
   readonly commit: string;
@@ -760,6 +777,30 @@ export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: stri
     .filter((d) => d.age !== null && d.age >= 0 && d.age <= STAGE_TARGET.maxDumpAgeHours)
     .sort((a, b) => b.at - a.at);
   return fresh[0]?.dir ?? null;
+}
+
+/**
+ * Q02-dump's decision (issue 1564): always a new capture from production's read
+ * replica, never a reuse of a dump already on the host, whatever its age. A
+ * rehearsal starts from the most recent production state; reuse was for rapid
+ * hand turnaround only and let Q13-log-baseline fail on 8 to 31 h old dumps.
+ * The dump list and clock are taken so the rule is visibly input-blind. PURE.
+ */
+export function dumpPlan(_dumps: readonly { dir: string; capturedAt?: string }[], _now: Date): "capture" {
+  return "capture";
+}
+
+/**
+ * `up`'s fresh-dump refusal (SR.0): the reason a manifest's dump is too old to
+ * boot (over `maxDumpAgeHours`) or carries no readable `capturedAt`, else null. PURE.
+ */
+export function dumpAgeRefusal(manifest: { capturedAt?: string }, now: Date): string | null {
+  const age = dumpAgeHours(manifest, now);
+  if (age === null) return "the dump's manifest has no capturedAt";
+  if (age > STAGE_TARGET.maxDumpAgeHours) {
+    return `the dump was captured ${age.toFixed(1)} h ago; the fresh-dump rule allows ${STAGE_TARGET.maxDumpAgeHours} h. Capture a new one first`;
+  }
+  return null;
 }
 
 /** Ages a dump manifest's `capturedAt` in hours, or null if it has none. */

@@ -244,13 +244,18 @@ describe("regime replay of a committed sample of published production runs (issu
       // recorded replaySha256 pinned the pre-D78 arithmetic; it is no longer
       // reproducible and a re-recorded sample (scripts/published-replay-sample.ts)
       // would pin the new one.
-      expect({ run: run.runKey, beyondRounding: outcome.beyondRounding }).toEqual({ run: run.runKey, beyondRounding: run.replayDiffering });
+      // Every sampled run was published before issue 1559, which starts the
+      // baselines of each market with its strategies: the backtest now differs
+      // beyond rounding in every one of them, recorded or not.
+      expect(outcome.beyondRounding).toContain("backtest");
+      const beyond = outcome.beyondRounding.filter((f) => f !== "backtest" || run.replayDiffering.includes("backtest"));
+      expect({ run: run.runKey, beyondRounding: beyond }).toEqual({ run: run.runKey, beyondRounding: run.replayDiffering });
       if (run.replayFirstDiff === null) {
-        expect(outcome.beyondRounding).toEqual([]);
+        expect(beyond).toEqual([]);
       } else {
         const recorded = run.replayFirstDiff;
         expect(outcome.differing).toContain(recorded.field);
-        const firstMaterial = outcome.beyondRounding[0]!;
+        const firstMaterial = beyond[0]!;
         expect(firstMaterial).toBe(recorded.field);
         expect(numericDiff(recorded.replay, replayedField(outcome, recorded.field)).differences).toEqual([]);
         expect(publishedField(run.publishedAsofRow, recorded.field)).toBe(recorded.published);

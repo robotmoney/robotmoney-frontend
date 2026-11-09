@@ -153,7 +153,25 @@ export async function latestRun(net: Net, what: string): Promise<{ run: { run_ke
  * 1e-6 (regime-engine.md 8.1.1) and its replay is not exactly equal; a run with a commit identity replays
  * every field exactly. (The merge instant of the fix is no marker: production ran the old build after it.)
  */
-export const isFixedProducer = (buildIdentity: string): boolean => buildIdentity !== "" && !buildIdentity.startsWith("pkg:");
+export const isFixedProducer = (buildIdentity: string): boolean =>
+  buildIdentity !== "" && !buildIdentity.startsWith("pkg:") && !PRE_D78_RELEASE_COMMITS.has(buildIdentity);
+
+/**
+ * The image commits of every release before v0.7.1 (v0.6.0 to v0.7.0, and their rc tags, which name the
+ * same commits). D78's exact arithmetic (PR 1499) first ships in v0.7.1, and the SDK replays with it.
+ * A run these builds made published numbers that differ from the SDK's replay in the last bits, so it
+ * counts with the old producer: its labels must be equal, its whole row is not asserted. Without
+ * this, Q36/C24 at the v0.7.1 stage run and cutover (when the newest sealed run is a v0.7.0 run) refuse
+ * a mismatch that v0.7.1 exists to end.
+ */
+export const PRE_D78_RELEASE_COMMITS: ReadonlySet<string> = new Set([
+  "e96d4598678346260282e37ffd5a10df286186ba", // v0.6.0
+  "bca5186eeac13163c25a22c268bca87078d9fb93", // v0.6.1
+  "1acd5cb7faa42c5d9fcc6e7d5bfcc78dcff588a3", // v0.6.2
+  "b5c576f8aa00203643d15057e99ba26a4244b35d", // v0.6.3
+  "7869097abb4eaf758aea5a5649ab7218a1399e52", // v0.6.4
+  "8c2690bac11440a8d8ef86733a567066afaea116", // v0.7.0
+]);
 
 export interface ArchivedRun {
   readonly created: string;
@@ -185,41 +203,151 @@ export function newestArchivedReport(reports: readonly ReportRow[], archived: Re
   return latestReport(reports.filter((r) => archived.has(r.run_key)));
 }
 
+type Format1 = typeof import("../../packages/analyst-sdk/src/archive/format1.ts");
+
+/** The record of the newest backup a listing names, or why the listing does not name one. */
+function newestListed(body: unknown): { backup: string; record: string } | string {
+  const b = body as { format?: unknown; backups?: { backup?: unknown; record?: unknown }[]; nextCursor?: unknown } | null;
+  if (b?.format !== 1) return `carries format ${JSON.stringify(b?.format)}, not 1`;
+  if (!Array.isArray(b.backups) || b.backups.length === 0) return "lists no sealed backup";
+  if (b.nextCursor !== null && b.nextCursor !== undefined) return "lists more than 1000 backups: the newest is not on the first page";
+  const newest = [...b.backups].sort((x, y) => String(x.backup).localeCompare(String(y.backup))).at(-1)!;
+  const { backup, record } = newest;
+  if (typeof backup !== "string" || typeof record !== "string" || record !== `csv/${backup}/backup.json` || !/^[A-Za-z0-9._-]+$/.test(backup)) {
+    return `names a newest backup that is not csv/<backup id>/backup.json (${JSON.stringify(newest)})`;
+  }
+  return { backup, record };
+}
+
 /**
- * Q36/C24: the SDK quickstart from a sparse clone of the release commit against the
- * target. `fill`, then `bun run inputs --archive <copy> --run <latest run>`,
- * then `bun run regime <inputs.csv> --replay --asof <date>` (it must run), then
- * scripts/release/replay-row.ts: the SDK's as-of row for the run is compared,
- * field by field and by the sha256 of its canonical JSON, with the as-of row of
- * the run's published `regime_snapshots` artifact (the comparison of PR 1448).
- * The published report (`/reports?run=`) is {asof, toolId, results}, which the
- * CLI never prints, so it is not compared byte for byte.
+ * PURE. One backup record parsed by the SDK's own format 1 reader (selectBackups). The
+ * reader checks that a copy's watermark chain starts at none; the smoke fetches only the newest backup, so
+ * the record's chain start is cleared before the reader sees it. Every other check of the reader applies.
+ */
+export function parseOneRecord(f1: Format1, backup: string, recordText: string): ReturnType<Format1["selectBackups"]>[number] {
+  let text = recordText;
+  try {
+    const rec = JSON.parse(recordText) as { append_only?: unknown };
+    if (rec && typeof rec.append_only === "object" && rec.append_only !== null) {
+      for (const t of Object.values(rec.append_only as Record<string, { watermark_before?: unknown } | null>)) if (t && typeof t === "object") t.watermark_before = null;
+      text = JSON.stringify(rec);
+    }
+  } catch { /* the reader names the parse error */ }
+  return f1.selectBackups({ [backup]: text })[0]!;
+}
+
+/**
+ * Q36/C24: a minimal contract smoke of the SDK against the target's advertised public routes (owner,
+ * 2026-11-03: the SDK must minimally work with the APIs we advertise; issue 1566). It parses and verifies
+ * with the SDK's own format 1 code (packages/analyst-sdk/src/archive/format1.ts) from a sparse clone of the
+ * release commit, and calls each route the quickstart uses once, in order:
+ *   1. archive/backups (the listing, format 1);
+ *   2. the newest backup's backup.json, parsed as a format 1 record (selectBackups);
+ *   3. every file that record lists, inflated within its bytes_raw (inflateBounded) and checked against its
+ *      sha256_raw (verifyFile);
+ *   4. reports (the listing), newest published run picked;
+ *   5. reports?run=<run>, whose bytes hash to the listing's checksum;
+ *   6. vintages?run_key=<run>, at least one vintage, its tool_id taken;
+ *   7. vintages?run_key=<run>&tool_id=<tool_id>&include=members, at least one member (the route refuses
+ *      include=members without both keys).
+ * The first route that fails to answer, parse or verify is the one problem. It fetches one backup, never
+ * the whole archive, and runs no replay: the full-archive replay is the post-seal report (postSealCheck).
+ * A target with no published run fails.
  */
 export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
-  return replayNewestArchivedRun(deps, commit, "cutover");
+  const found: Record<string, unknown> = { commit };
+  const fail = (problem: string): CheckResult => ({ found, problems: [problem] });
+  const sdk = await deps.prepareSdk(commit, deps.scratch());
+  if ("problem" in sdk) return fail(sdk.problem);
+  const f1 = (await import(join(sdk.sdkDir, "src", "archive", "format1.ts"))) as Format1;
+  const json = async (path: string): Promise<{ status: number; body: unknown }> => {
+    const res = await getWithRetry(deps.net, path, undefined, 15); // a sealed backup's record answers 503 + Retry-After until it is built
+    let body: unknown;
+    try { body = res.status === 200 ? await res.json() : null; } catch { body = undefined; }
+    return { status: res.status, body };
+  };
+  const bad = (path: string, r: { status: number; body: unknown }): string | null =>
+    r.status !== 200 ? `GET ${path} answered ${r.status}, not 200` : r.body === undefined ? `GET ${path} is not JSON` : null;
+
+  // 1. The backup listing.
+  const listPath = `${PUBLIC_API}/archive/backups?limit=1000`;
+  const list = await json(listPath);
+  const listBad = bad(listPath, list);
+  if (listBad) return fail(listBad);
+  const newest = newestListed(list.body);
+  if (typeof newest === "string") return fail(`GET ${listPath} ${newest}`);
+  found.backup = newest.backup;
+
+  // 2. The newest backup's record, as format 1.
+  const recPath = `${PUBLIC_API}/archive/${newest.record}`;
+  const recRes = await getWithRetry(deps.net, recPath, undefined, 15);
+  if (recRes.status !== 200) return fail(`GET ${recPath} answered ${recRes.status}, not 200`);
+  let record: ReturnType<Format1["selectBackups"]>[number];
+  try { record = parseOneRecord(f1, newest.backup, await recRes.text()); } catch (e) { return fail(`GET ${recPath} is not a format 1 record: ${(e as Error).message}`); }
+
+  // 3. Every file the record lists, inflated within bytes_raw and hashed against sha256_raw.
+  const files = f1.listedFiles([record]);
+  for (const f of files) {
+    const path = `${PUBLIC_API}/archive/${f.path}`;
+    const res = await getWithRetry(deps.net, path, undefined, 15);
+    if (res.status !== 200) return fail(`GET ${path} answered ${res.status}, not 200`);
+    try {
+      const raw = f1.inflateBounded(new Uint8Array(await res.arrayBuffer()), f.bytes_raw, f.path);
+      f1.verifyFile(f, { sha256_raw: sha256Hex(raw) });
+    } catch (e) {
+      return fail(`GET ${path} does not verify: ${(e as Error).message}`);
+    }
+  }
+  found.files = files.length;
+
+  // 4. The reports listing, newest published run.
+  const listed = await listReports(deps.net);
+  if (listed.problems.length > 0) return fail(listed.problems.join("; "));
+  const run = latestReport(listed.reports);
+  if (run === undefined) return fail(noRunMessage("the SDK quickstart"));
+  Object.assign(found, { run_key: run.run_key, asof: run.asof });
+
+  // 5. The run's report bytes hash to the listing's checksum.
+  const reportPath = `${PUBLIC_API}/reports?run=${encodeURIComponent(run.run_key)}`;
+  const report = await getWithRetry(deps.net, reportPath);
+  if (report.status !== 200) return fail(`GET ${reportPath} answered ${report.status}, not 200`);
+  const reportSha = sha256Hex(new Uint8Array(await report.arrayBuffer()));
+  if (reportSha !== run.checksum) return fail(`GET ${reportPath}: the body's sha256 ${reportSha} is not the listing's checksum ${run.checksum}`);
+
+  // 6. The run's vintage, and its tool.
+  const vPath = `${PUBLIC_API}/vintages?run_key=${encodeURIComponent(run.run_key)}`;
+  const v = await json(vPath);
+  const vBad = bad(vPath, v);
+  if (vBad) return fail(vBad);
+  const vintage = (v.body as { vintages?: { tool_id?: unknown }[] } | null)?.vintages?.[0];
+  if (vintage === undefined) return fail(`GET ${vPath} lists no vintage for run ${run.run_key}`);
+  if (typeof vintage.tool_id !== "string" || vintage.tool_id === "") return fail(`GET ${vPath}: the vintage names no tool_id`);
+  found.tool_id = vintage.tool_id;
+
+  // 7. That vintage's members: the run's committed inputs.
+  const mPath = `${PUBLIC_API}/vintages?run_key=${encodeURIComponent(run.run_key)}&tool_id=${encodeURIComponent(vintage.tool_id)}&include=members`;
+  const m = await json(mPath);
+  const mBad = bad(mPath, m);
+  if (mBad) return fail(mBad);
+  const rows = (m.body as { vintages?: { members?: { rows?: unknown[] } }[] } | null)?.vintages?.[0]?.members?.rows;
+  if (!Array.isArray(rows) || rows.length === 0) return fail(`GET ${mPath} lists no member for the vintage`);
+  found.members = rows.length;
+  return { found, problems: [], notes: ["a contract smoke of the advertised routes: the full-archive replay is not run here; it is the post-seal report (bun scripts/release/sdk-check.ts --check post-seal)"] };
 }
 
 /**
  * The post-seal check, run on its own after the UTC day a fixed-release run ran in is sealed (never a
- * cutover step): the same replay, but the newest archived run must have been made at or after the fix,
- * and its whole as-of row must be equal.
+ * cutover step): the README quickstart's `fill` of the whole archive, `bun run inputs --run <run>`, `bun run
+ * regime --replay`, then scripts/release/replay-row.ts. The newest archived published run must have been
+ * made at or after the fix, and its whole as-of row must equal the as-of row of the run's published
+ * regime_snapshots artifact (the comparison of PR 1448), else the check fails naming the missing sealed day.
  */
 export async function postSealCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
-  return replayNewestArchivedRun(deps, commit, "post-seal");
-}
-
-/**
- * Two tiers. Cutover: the newest archived published run is replayed; its as-of LABELS must equal the
- * published ones exactly; its whole row must too if the run was made at or after issue 1421's fix, else the
- * differences are recorded as info and the whole-row check is deferred to the post-seal report. Post-seal:
- * the newest archived run must be post-fix, else the check fails naming the missing sealed day.
- */
-async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cutover" | "post-seal"): Promise<CheckResult> {
-  const found: Record<string, unknown> = { commit, mode };
+  const found: Record<string, unknown> = { commit, mode: "post-seal" };
   const listed = await listReports(deps.net);
   if (listed.problems.length > 0) return { found, problems: [listed.problems.join("; ")] };
   const newest = latestReport(listed.reports);
-  if (newest === undefined) return { found, problems: [noRunMessage(mode === "cutover" ? "the SDK quickstart" : "the post-seal check")] };
+  if (newest === undefined) return { found, problems: [noRunMessage("the post-seal check")] };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
@@ -233,16 +361,16 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cut
   const { created, buildIdentity } = archived.get(run_key)!;
   const fixed = isFixedProducer(buildIdentity);
   Object.assign(found, { run_key, asof, created, buildIdentity, fixedProducer: fixed });
-  if (mode === "post-seal" && !fixed) {
+  if (!fixed) {
     const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
-    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
+    return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix or before v0.7.1's D78 arithmetic): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
   }
   const out = join(sdk.sdkDir, "api-fill");
   const inputs = await deps.run(["bun", "run", "inputs", "--archive", "api-copy", "--run", run_key, "--out", out], { cwd: sdk.sdkDir });
   if (inputs.code !== 0) return { found, problems: [`bun run inputs --run ${run_key} exited ${inputs.code}: ${tail(inputs.stderr)}`] };
   const regime = await deps.run(["bun", "run", "regime", join(out, "inputs.csv"), "--replay", "--asof", asof], { cwd: sdk.sdkDir });
   if (regime.code !== 0) return { found, problems: [`bun run regime --replay --asof ${asof} exited ${regime.code}: ${tail(regime.stderr)}`] };
-  const tier = fixed ? "full" : "label";
+  const tier = "full";
   const cmp = await deps.run(
     ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv"), "--tier", tier],
     { cwd: sdk.sdkDir },
@@ -253,11 +381,7 @@ async function replayNewestArchivedRun(deps: SdkDeps, commit: string, mode: "cut
   if (!(cmp.code === 0 && body.problems?.length === 0)) {
     return { found, problems: body.problems?.length ? body.problems : [`the as-of row comparison exited ${cmp.code}: ${tail(cmp.stderr || text(cmp.stdout))}`] };
   }
-  const notes: string[] = [];
-  if (tier === "label") {
-    notes.push(`as-of labels equal; the full row is not asserted: run ${run_key} was made ${created} by the old producer (build identity ${buildIdentity}), before issue 1421's fix, so its numbers differ from the published ones by input-data tolerance (regime-engine.md 8.1.1)${body.differing?.length ? `: differing fields ${body.differing.join(", ")}` : ""}. FULL-ROW CHECK DEFERRED TO THE POST-SEAL REPORT (bun scripts/release/sdk-check.ts --check post-seal)`);
-  }
-  return { found, problems: [], notes };
+  return { found, problems: [] };
 }
 
 /** Q37/C25: the SDK package's own tests pass at the release commit. */

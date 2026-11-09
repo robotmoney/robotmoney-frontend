@@ -47,7 +47,9 @@ env:
   CI_CLASS: feature-correctness
 on:
   push:
-    branches: [main, "releases-*", "qa/**"]
+    # web/releases-* (D81): `bun run release:web` W03-gate waits for this
+    # workflow's push run at the web content release commit.
+    branches: [main, "releases-*", "qa/**", "web/releases-*"]
   # NIGHTLY MIRROR of the merge-to-main set (issue #373): every workflow that
   # runs on `push: branches: [main]` also runs on a nightly schedule, and
   # nothing else does. Cron minutes are staggered across the mirrors; this

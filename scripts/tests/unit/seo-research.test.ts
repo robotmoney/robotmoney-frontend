@@ -58,7 +58,7 @@ const NEWS = new Set(["/news", "/blog/announcement", "/blog/peaq-partnership", "
 // The launch post is dated after the shared research revision and carries its
 // own share card.
 const LAUNCH = "/blog/swarm-announcement";
-const LAUNCH_DATE = "2026-11-06";
+const LAUNCH_DATE = "2026-11-10";
 const RESEARCH = Object.keys(EXPECTED);
 const ARTICLE_TYPES = new Set(["TechArticle", "BlogPosting", "Article"]);
 

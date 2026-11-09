@@ -26,16 +26,31 @@
 //               days ago but REVOKED (a tombstone, kept); expired 2 days ago
 //               (inside the window, kept); live (kept);
 //   passkeys    revoked 30 days ago (a tombstone; not a prune target, kept);
-//   audit_log   every row (history; not a prune target, kept).
+//   audit_log   every row (history; not a prune target, kept);
+//   jobs        (issue 1581) 10,001 succeeded and one cancelled 31 days old
+//               (pruned, in chunks of 5,000); one succeeded 29 days old (kept);
+//               dead and failed 91 days old (pruned) and 89 days old (kept);
+//               an old succeeded job audit_log names, one analytics_runs names
+//               and one swarm_session_events names (kept, provenance intact);
+//               (issue 1584) one research_pipeline_runs names, one
+//               analytics_ledger_runs names and one pipeline_ingest_receipts
+//               names (kept: none of them may name a deleted job);
+//               pending and running rows of any age (kept).
+//   job_runs    (issue 1584) one run for every planted job. A pruned job's run
+//               goes with it; a kept job's stays. The old-succeeded jobs and
+//               the three provenance-named jobs share one scope, so the admin
+//               runs feed's scope filter is checked against the kind filter.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { handleAdmin } from "../src/api/routes/admin.ts";
 import { hashKey } from "../src/lib/keys.ts";
 import * as domain from "../src/swarm/domain.ts";
 import {
+  JOBS_PRUNE_CHUNK,
   PRUNE_TARGETS,
   PruneJournal,
   PruneRefused,
@@ -46,6 +61,7 @@ import {
 } from "../scripts/prune.ts";
 import { adminConnection, ROLE_PASSWORD, restoreRoleBaselineAfterAll } from "./support/cluster.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { provisionOperatorToken } from "./support/automation-auth.ts";
 import { activeSubject } from "./support/epoch-fixtures.ts";
 import { holdTargetLock } from "./support/target-lock.ts";
 
@@ -131,12 +147,14 @@ const SESSIONS = {
 };
 const REVOKED_PASSKEY = `prune-revoked-passkey-${randomBytes(4).toString("hex")}`;
 let events = { old: [] as number[], recent: 0, fresh: 0 };
+const PRUNE_SCOPE = `prune-scope-${randomBytes(4).toString("hex")}`;
 
 interface State {
   readonly eventSeqs: number[];
   readonly sessions: string[];
   readonly passkeys: string[];
   readonly auditRows: number;
+  readonly jobs: string[];
 }
 
 async function state(): Promise<State> {
@@ -146,7 +164,13 @@ async function state(): Promise<State> {
   const sessions = ((await sql`SELECT token FROM admin_session ORDER BY token`) as unknown as { token: string }[]).map((r) => r.token);
   const passkeys = ((await sql`SELECT id FROM admin_passkey ORDER BY id`) as unknown as { id: string }[]).map((r) => r.id);
   const [{ n }] = (await sql`SELECT count(*)::int AS n FROM audit_log`) as unknown as { n: number }[];
-  return { eventSeqs, sessions, passkeys, auditRows: n };
+  // The planted jobs by label; the bulk rows by count (they are 10,001 of one label).
+  const jobs = ((await sql`
+    SELECT payload->>'plant' AS label, count(*)::int AS n FROM jobs WHERE payload ? 'plant' GROUP BY 1 ORDER BY 1`) as unknown as {
+    label: string;
+    n: number;
+  }[]).map((r) => `${r.label}:${r.n}`).sort();
+  return { eventSeqs, sessions, passkeys, auditRows: n, jobs };
 }
 
 beforeAll(async () => {
@@ -201,6 +225,51 @@ beforeAll(async () => {
     INSERT INTO admin_passkey (id, public_key, counter, transports, revoked_at)
     VALUES (${REVOKED_PASSKEY}, ${Buffer.from([1])}, 0, '{}', now() - interval '30 days')`;
   await sql`INSERT INTO audit_log (actor, action, scope) VALUES ('admin', 'prune_test_marker', ${sql.json({})})`;
+
+  // Jobs (issue 1581), aged by updated_at, the time a job last changed state.
+  await sql.begin(async (tx) => {
+    await tx.unsafe("SET LOCAL ROLE rm_owner");
+    const plant = (label: string, status: string, days: number, count = 1) => tx`
+      INSERT INTO jobs (kind, payload, status, locked_at, locked_by, created_at, updated_at)
+      SELECT 'prune.test', jsonb_build_object('plant', ${label}::text), ${status},
+             CASE WHEN ${status} = 'running' THEN now() END, CASE WHEN ${status} = 'running' THEN 'w-prune' END,
+             now() - make_interval(days => ${days}), now() - make_interval(days => ${days})
+        FROM generate_series(1, ${count})`;
+    await plant("old-succeeded", "succeeded", 31, 2 * JOBS_PRUNE_CHUNK + 1);
+    await plant("old-cancelled", "cancelled", 31);
+    await plant("recent-succeeded", "succeeded", 29);
+    await plant("old-dead", "dead", 91);
+    await plant("old-failed", "failed", 91);
+    await plant("recent-dead", "dead", 89);
+    await plant("recent-failed", "failed", 89);
+    await plant("old-pending", "pending", 400);
+    await plant("old-running", "running", 400);
+    for (const label of ["audited", "analysed", "evented"]) await plant(label, "succeeded", 400);
+    await tx`INSERT INTO audit_log (actor, action, scope, job_id)
+             SELECT 'admin', 'prune_test_job', '{}'::jsonb, id FROM jobs WHERE payload->>'plant' = 'audited'`;
+    await tx`INSERT INTO analytics_runs (job_id, job_kind, attempt, asof, source_mode, created_by)
+             SELECT id, 'prune.test', 1, CURRENT_DATE, 'hermetic', 'prune-test' FROM jobs WHERE payload->>'plant' = 'analysed'`;
+    await tx`INSERT INTO swarm_session_events (to_state, action, actor, job_id)
+             SELECT 'collecting', 'prune_test', 'system', id FROM jobs WHERE payload->>'plant' = 'evented'`;
+    // The key-less job_id columns (issue 1584).
+    for (const label of ["researched", "ledgered", "received"]) await plant(label, "succeeded", 400);
+    await tx`INSERT INTO research_pipeline_runs (job_id, kind, asof, source, status, started_at)
+             SELECT id, 'prune.test', CURRENT_DATE, 'prune-test', 'succeeded', now() FROM jobs WHERE payload->>'plant' = 'researched'`;
+    const [methodology] = (await tx`
+      INSERT INTO analytics_ledger_methodology_versions (tool_id, version_label, config, config_digest)
+      VALUES ('prune-test', 'v-test', '{}'::jsonb, ${"7".repeat(64)}) RETURNING id`) as unknown as { id: string }[];
+    await tx`INSERT INTO analytics_ledger_runs (run_key, asof, tool_id, source_label, methodology_version_id, build_identity, job_id)
+             SELECT gen_random_uuid()::text, CURRENT_DATE, 'prune-test', 'fixture', ${methodology!.id}::bigint, 'prune-build', id
+               FROM jobs WHERE payload->>'plant' = 'ledgered'`;
+    await tx`INSERT INTO pipeline_ingest_receipts (idempotency_key, operation, body_sha256, response, job_id)
+             SELECT 'prune-test-' || id, 'prune.test', ${"8".repeat(64)}, '{}'::jsonb, id FROM jobs WHERE payload->>'plant' = 'received'`;
+    // One run per planted job, and one scope over the old-succeeded jobs and
+    // the three provenance-named ones.
+    await tx`UPDATE jobs SET scope_type = 'prune', scope_id = ${PRUNE_SCOPE}
+              WHERE payload->>'plant' IN ('old-succeeded', 'researched', 'ledgered', 'received')`;
+    await tx`INSERT INTO job_runs (job_id, kind, status, started_at, finished_at)
+             SELECT id, kind, 'succeeded', updated_at, updated_at FROM jobs WHERE payload ? 'plant'`;
+  });
 }, 120_000);
 
 afterAll(async () => {
@@ -214,11 +283,24 @@ afterAll(async () => {
 });
 
 describe("the closed list (D55 (12))", () => {
-  test("prunes exactly the event log and expired, never-revoked sessions — nothing else", () => {
-    expect(PRUNE_TARGETS.map((t) => [t.table, t.predicate])).toEqual([
-      ["swarm_stream_events", "committed_at < <cutoff>"],
-      ["admin_session", "revoked_at IS NULL AND expires_at < <cutoff>"],
+  test("prunes exactly the event log, expired never-revoked sessions and old finished jobs — nothing else", () => {
+    expect(PRUNE_TARGETS.map((t) => [t.table, t.predicate, t.minDays ?? null])).toEqual([
+      ["swarm_stream_events", "committed_at < <cutoff>", null],
+      ["admin_session", "revoked_at IS NULL AND expires_at < <cutoff>", null],
+      [
+        "jobs",
+        "status IN ('succeeded', 'cancelled') AND updated_at < <cutoff> AND no audit_log, analytics_runs, swarm_session_events, " +
+          "research_pipeline_runs, analytics_ledger_runs or pipeline_ingest_receipts row names it; its job_runs rows go with it",
+        30,
+      ],
+      [
+        "jobs",
+        "status IN ('dead', 'failed') AND updated_at < <cutoff> AND no audit_log, analytics_runs, swarm_session_events, " +
+          "research_pipeline_runs, analytics_ledger_runs or pipeline_ingest_receipts row names it; its job_runs rows go with it",
+        90,
+      ],
     ]);
+    expect(JOBS_PRUNE_CHUNK).toBe(5000);
   });
 });
 
@@ -368,6 +450,8 @@ describe("the fence: a competing lock holder blocks the prune", () => {
     expect(tables.map((t) => [t.table, t.rows])).toEqual([
       ["swarm_stream_events", 0],
       ["admin_session", 0],
+      ["jobs", 0],
+      ["jobs", 0],
     ]);
   }, 60_000);
 });
@@ -397,6 +481,53 @@ describe("the run: ~/.env's rm_owner, --confirm-target, fenced prune, receipt (D
     expect(after.auditRows).toBe(before.auditRows);
     // The counter row is never pruned.
     expect(await domain.streamHeadSequence()).toBe(events.fresh);
+    // Jobs (issue 1581): only finished rows past their floor, and none that
+    // history names; every pending and running row stays, whatever its age.
+    expect(before.jobs).toEqual([
+      "analysed:1", "audited:1", "evented:1", "ledgered:1", "old-cancelled:1", "old-dead:1", "old-failed:1", "old-pending:1", "old-running:1",
+      `old-succeeded:${2 * JOBS_PRUNE_CHUNK + 1}`, "received:1", "recent-dead:1", "recent-failed:1", "recent-succeeded:1", "researched:1",
+    ]);
+    expect(after.jobs).toEqual([
+      "analysed:1", "audited:1", "evented:1", "ledgered:1", "old-pending:1", "old-running:1", "received:1",
+      "recent-dead:1", "recent-failed:1", "recent-succeeded:1", "researched:1",
+    ]);
+    // The provenance on the history rows is intact: each still names its job.
+    const [links] = (await sql`
+      SELECT (SELECT count(*)::int FROM audit_log a JOIN jobs j ON j.id = a.job_id WHERE j.payload->>'plant' = 'audited') AS audit,
+             (SELECT count(*)::int FROM analytics_runs r JOIN jobs j ON j.id = r.job_id WHERE j.payload->>'plant' = 'analysed') AS runs,
+             (SELECT count(*)::int FROM swarm_session_events e JOIN jobs j ON j.id = e.job_id WHERE j.payload->>'plant' = 'evented') AS events`) as unknown as {
+      audit: number; runs: number; events: number;
+    }[];
+    expect(links).toEqual({ audit: 1, runs: 1, events: 1 });
+
+    // Issue 1584: nothing names a deleted job. A pruned job's run went with it;
+    // every kept job still has its run; the three key-less provenance columns
+    // still name live jobs.
+    const [dangling] = (await sql`
+      SELECT (SELECT count(*)::int FROM job_runs x WHERE x.job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = x.job_id)) AS job_runs,
+             (SELECT count(*)::int FROM research_pipeline_runs x WHERE x.job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = x.job_id)) AS research,
+             (SELECT count(*)::int FROM analytics_ledger_runs x WHERE x.job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = x.job_id)) AS ledger,
+             (SELECT count(*)::int FROM pipeline_ingest_receipts x WHERE x.job_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id = x.job_id)) AS receipts,
+             (SELECT count(*)::int FROM job_runs x JOIN jobs j ON j.id = x.job_id WHERE j.payload ? 'plant') AS kept_runs`) as unknown as {
+      job_runs: number; research: number; ledger: number; receipts: number; kept_runs: number;
+    }[];
+    expect(dangling).toEqual({ job_runs: 0, research: 0, ledger: 0, receipts: 0, kept_runs: 11 });
+    // The admin runs feed: the scope filter (a LEFT JOIN to jobs) finds every
+    // run of the scope that the kind filter finds, old ones included.
+    const operator = await provisionOperatorToken();
+    const feed = async (query: string): Promise<number[]> => {
+      const r = new Request(`http://x/api/admin/runs?${query}&limit=100`, { headers: { "X-Admin-Token": operator } });
+      const res = await handleAdmin(r, new URL(r.url));
+      expect(res?.status).toBe(200);
+      return ((res!.body as { runs: { job_id: number }[] }).runs).map((run) => Number(run.job_id)).sort((a, b) => a - b);
+    };
+    const scopedJobs = ((await sql`
+      SELECT id FROM jobs WHERE scope_type = 'prune' AND scope_id = ${PRUNE_SCOPE} ORDER BY id`) as unknown as { id: string }[]).map((r) => Number(r.id));
+    expect(scopedJobs.length).toBe(3);
+    expect(await feed(`scopeType=prune&scopeId=${PRUNE_SCOPE}`)).toEqual(scopedJobs);
+    const byKind = await feed("kind=prune.test");
+    expect(byKind.filter((id) => scopedJobs.includes(id))).toEqual(scopedJobs);
+    expect(byKind.length).toBe(11);
 
     const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as PruneReceipt;
     expect({ kind: receipt.kind, env: receipt.env, windowDays: receipt.windowDays }).toEqual({
@@ -405,13 +536,23 @@ describe("the run: ~/.env's rm_owner, --confirm-target, fenced prune, receipt (D
       windowDays: 7,
     });
     expect(receipt.targetLock).toContain("prune");
-    expect(receipt.tables.map((t) => ({ table: t.table, predicate: t.predicate, windowDays: t.windowDays, rows: t.rows }))).toEqual([
-      { table: "swarm_stream_events", predicate: "committed_at < <cutoff>", windowDays: 7, rows: events.old.length },
-      { table: "admin_session", predicate: "revoked_at IS NULL AND expires_at < <cutoff>", windowDays: 7, rows: 1 },
+    expect(
+      receipt.tables.map((t) => ({ table: t.table, windowDays: t.windowDays, rows: t.rows, chunks: t.chunks ?? null, jobRuns: t.jobRuns ?? null })),
+    ).toEqual([
+      { table: "swarm_stream_events", windowDays: 7, rows: events.old.length, chunks: null, jobRuns: null },
+      { table: "admin_session", windowDays: 7, rows: 1, chunks: null, jobRuns: null },
+      // Bounded chunks: 10,002 rows went as three chunks, none over the chunk
+      // size, each its own transaction (tests/prune-jobs-chunk-commit.test.ts);
+      // each job's run went with it.
+      { table: "jobs", windowDays: 30, rows: 2 * JOBS_PRUNE_CHUNK + 2, chunks: [JOBS_PRUNE_CHUNK, JOBS_PRUNE_CHUNK, 2], jobRuns: 2 * JOBS_PRUNE_CHUNK + 2 },
+      { table: "jobs", windowDays: 90, rows: 2, chunks: [2], jobRuns: 2 },
     ]);
-    // The cutoff is the database's now() minus 7 days, the same for both.
-    const cutoff = Date.parse(receipt.tables[0]!.cutoff);
-    expect(Math.abs(Date.now() - 7 * 86_400_000 - cutoff)).toBeLessThan(120_000);
+    expect(receipt.tables.map((t) => t.predicate)).toEqual(PRUNE_TARGETS.map((t) => t.predicate));
+    for (const t of receipt.tables) for (const c of t.chunks ?? []) expect(c).toBeLessThanOrEqual(JOBS_PRUNE_CHUNK);
+    // The cutoff is the database's now() minus each entry's window.
+    receipt.tables.forEach((t) => {
+      expect(Math.abs(Date.now() - t.windowDays * 86_400_000 - Date.parse(t.cutoff)), t.table).toBeLessThan(120_000);
+    });
     expect(receipt.tables[1]!.cutoff).toBe(receipt.tables[0]!.cutoff);
 
     // The journal beside it: every phase committed, the receipt named.

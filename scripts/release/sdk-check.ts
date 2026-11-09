@@ -7,16 +7,17 @@
 //   bun scripts/release/sdk-check.ts --check package-tests   --origin <url> --commit <sha>
 //
 // Q35-archive-routes/C23-archive-routes: the public archive routes answer 200 with format 1.
-// Q36-sdk-quickstart/C24-sdk-quickstart: the SDK from a sparse clone of the release commit runs the
-//   README quickstart against the target, and its as-of row for the latest run equals
-//   the as-of row of the run's published regime_snapshots artifact (field by field and
-//   by sha256; scripts/release/replay-row.ts). A target with no published run FAILS.
-//   Two tiers: the newest archived run's as-of LABELS must equal the published ones; its whole row must too if
-//   the run was made by the fixed producer (an image-commit build identity), else the differences are info and the step prints that the
-//   full-row check is deferred to the post-seal report.
+// Q36-sdk-quickstart/C24-sdk-quickstart: a minimal contract smoke (issue 1566). With the SDK's own format 1
+//   code from a sparse clone of the release commit, one call per route the quickstart uses: the archive
+//   listing, the newest backup's record (parsed as format 1), each file it lists (inflated within bytes_raw,
+//   checked against sha256_raw), the reports listing, the newest run's report bytes (sha256 = the listing's
+//   checksum), the run's vintages (one tool_id) and that vintage's members. It exits 1 naming the first route
+//   that fails. It fetches one backup and replays nothing. A target with no published run FAILS.
 // post-seal (not a cutover step; run on its own after the day a fixed-release run ran in is sealed):
 //   bun scripts/release/sdk-check.ts --check post-seal --target stage|prod [--commit <sha>]
-//   the newest archived run must be from the fixed producer and its whole row must equal the published one.
+//   the full-archive replay: the README quickstart fills the whole archive, reruns the newest archived run,
+//   and its as-of row must equal the as-of row of the run's published regime_snapshots artifact (field by field
+//   and by sha256; scripts/release/replay-row.ts). The run must be from the fixed producer.
 // Q37-sdk-tests/C25-sdk-tests: the SDK package's tests pass at the release commit.
 //
 // The clone comes from this checkout's `origin` (override: --repo-url). Exit 0

@@ -13,6 +13,12 @@
 // the SAME step list (same hash) at the SAME commit, and passed every step.
 // That is D61 rule 2 as a check: the production run is the run stage rehearsed.
 //
+// Resume in place (issue 1565). A stage run may resume at a new QA commit whose
+// diff from the journal's commit touches only CHECK_ONLY_PATHS: the check code,
+// not the product it checks. The journal lists every commit it ran at
+// (`commits`), and each step records its own. SP.8 then requires every earlier
+// commit to differ from the production commit only in those paths.
+//
 // Pure apart from readJournal/writeJournal, so each refusal is a unit test.
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -49,6 +55,80 @@ export interface StepRecord {
   triage?: { file: string; sha256: string; used: { check: string; fragment: string; reason: string }[] };
   /** The owner's recorded acceptance of this step's failure (`--accept`): why, the issue, and when. */
   accepted?: { reason: string; issue: number; at: string };
+  /** The commit this step ran at (issue 1565): a stage run resumed in place runs later steps at a later commit. */
+  commit?: string;
+  /** `blocked`: the step failed on a human-only cause (an unfunded inference account, HTTP 402); never retried (issue 1555). */
+  cause?: "blocked";
+}
+
+/** How one invocation of a stage run ended (issue 1555): passed 0, failed 1, refused 2, paused 3. */
+export type StopKind = "passed" | "failed" | "refused" | "paused";
+
+/** The stop reason a stage run records on every exit, and whether the owner was notified of it. */
+export interface StopReason {
+  kind: StopKind;
+  /** The step the run stopped at, when there is one. */
+  step?: string;
+  detail: string;
+  /** The exact command that continues the run. */
+  resume: string;
+  at: string;
+  /** false when the notifier could not post (no single labelled issue, or gh failed); the message went to stderr. */
+  notified?: boolean;
+  notifiedReason?: string;
+}
+
+/** One commit a run ran at, from the step it started at (issue 1565). */
+export interface CommitRecord {
+  readonly commit: string;
+  readonly tree: string;
+  readonly goSha256: string;
+  readonly fromStep: string;
+  readonly at: string;
+}
+
+/**
+ * The paths a stage resume in place may change (issue 1565): check code, not
+ * product. `dir/**` matches every file under dir; any other entry is one file.
+ * Nothing else is check-only: not the runner (run.ts, journal.ts, steps.ts,
+ * step-exec.ts), not any product path.
+ */
+export const CHECK_ONLY_PATHS: readonly string[] = Object.freeze([
+  "scripts/release/version-checks/**",
+  "scripts/release/runbooks/**",
+  "scripts/release/version-check.ts",
+  "scripts/release/analytics-load-check.ts",
+  "scripts/release/sdk-check.ts",
+  "scripts/release/sdk-lib.ts",
+  "scripts/release/public-analytics-read.ts",
+  "scripts/release/replay-row.ts",
+  "scripts/tests/**",
+]);
+
+/** PURE. Is this repo path check-only? */
+export function isCheckOnlyPath(path: string): boolean {
+  return CHECK_ONLY_PATHS.some((p) => (p.endsWith("/**") ? path.startsWith(p.slice(0, -2)) : path === p));
+}
+
+/** PURE. The changed paths that are not check-only. */
+export function notCheckOnly(paths: readonly string[]): string[] {
+  return paths.filter((p) => !isCheckOnlyPath(p));
+}
+
+/** `git diff --name-only <from> <to>` on the control machine, or undefined when git cannot. */
+export type ChangedPaths = (from: string, to: string) => Promise<readonly string[] | undefined>;
+
+/** The commits a stage journal ran at before its last one, in order: what SP.8 diffs against the production commit. */
+export function earlierCommits(journal: Pick<RunJournal, "commit" | "commits">): string[] {
+  return [...new Set((journal.commits ?? []).map((c) => c.commit).filter((c) => c !== journal.commit))];
+}
+
+/** Each earlier commit's changed paths against `to`, for checkStageJournal. */
+export async function earlierCommitPaths(journal: RunJournal | undefined, to: string, diff: ChangedPaths): Promise<Record<string, readonly string[] | undefined>> {
+  const out: Record<string, readonly string[] | undefined> = {};
+  if (journal === undefined) return out;
+  for (const c of earlierCommits(journal)) out[c] = await diff(c, to);
+  return out;
 }
 
 export interface RunJournal {
@@ -56,14 +136,17 @@ export interface RunJournal {
   readonly target: string;
   readonly rmEnv: "stage" | "prod";
   readonly release: string;
-  readonly commit: string;
+  /** The commit the run runs at now: its last `commits` entry once it resumed in place. */
+  commit: string;
   /** The commit's tree (`git rev-parse <commit>^{tree}`): what SP.8 compares, because stage runs the QA commit and production the squash commit (D70). */
   tree?: string;
   /** The rc tag the go named (a production run, D64); the commit is its resolution. */
   readonly tag?: string;
   readonly stepListHash: string;
   readonly stepIds: readonly string[];
-  readonly goSha256: string;
+  goSha256: string;
+  /** Every commit the run ran at, in order (issue 1565); a run that never resumed in place lists one. */
+  commits?: CommitRecord[];
   readonly runTs: string;
   readonly startedAt: string;
   updatedAt: string;
@@ -77,6 +160,14 @@ export interface RunJournal {
   cutoverSeconds?: number;
   /** The preflight this run continued from (`--after-preflight`), when it did. */
   afterPreflight?: { path: string; runTs: string };
+  /** Stage only (issue 1555): how the last invocation stopped. Cleared when an invocation starts. */
+  stopReason?: StopReason;
+  /** Stage only: when a paused run (exit 3) becomes runnable; the supervisor sleeps until then. */
+  pausedUntil?: string;
+  /** Stage only: written every 60 s while a step runs, so a dead driver is seen. */
+  heartbeatAt?: string;
+  /** Stage only: the driver process writing the heartbeat. */
+  driver?: { pid: number; host: string };
 }
 
 /** `~/.local/state/robotmoney-release`, on the control machine. */
@@ -104,7 +195,11 @@ export function runStatus(journal: Pick<RunJournal, "steps">, ids: readonly stri
  */
 export function checkStageJournal(
   journal: RunJournal | undefined,
-  expected: { stepListHash: string; tree: string; stepIds: readonly string[] },
+  expected: {
+    stepListHash: string; tree: string; stepIds: readonly string[];
+    /** Each earlier commit's changed paths against this run's commit (earlierCommitPaths); undefined when git could not diff. */
+    earlierPaths?: Readonly<Record<string, readonly string[] | undefined>>;
+  },
 ): string[] {
   if (journal === undefined) return ["SP.8: no stage run journal was found; production runs only what stage passed (pass --stage-journal <run dir>)"];
   const out: string[] = [];
@@ -115,6 +210,12 @@ export function checkStageJournal(
   // D70: stage ran the QA commit, production runs the squash commit; the tree is what they share.
   if (journal.tree === undefined) out.push(`SP.8: the stage run (commit ${journal.commit}) records no tree; rerun stage with this runner`);
   else if (journal.tree !== expected.tree) out.push(`SP.8: the stage run's tree is ${journal.tree.slice(0, 12)} (commit ${journal.commit.slice(0, 12)}); this run's tree is ${expected.tree.slice(0, 12)}`);
+  // Issue 1565: a stage run resumed in place ran its earlier steps at earlier commits; each may differ from this one only in check code.
+  for (const c of earlierCommits(journal)) {
+    const paths = expected.earlierPaths?.[c];
+    if (paths === undefined) out.push(`SP.8: the stage run also ran commit ${c.slice(0, 12)}, which git could not diff against this run's commit`);
+    else if (notCheckOnly(paths).length > 0) out.push(`SP.8: the stage run's earlier commit ${c.slice(0, 12)} differs from this run's commit outside the check-only paths: ${notCheckOnly(paths).join(", ")}`);
+  }
   const status = runStatus(journal, expected.stepIds);
   if (status !== "passed") {
     const notOk = expected.stepIds.filter((id) => !stepDone(journal.steps[id]?.status));
@@ -144,18 +245,29 @@ export function selectSteps(ids: readonly string[], opts: { from?: string; only?
 /**
  * May this run continue in an existing journal? A resume runs the same list,
  * at the same commit, for the same target, under the same go, and starts no
- * later than the first step that is not ok.
+ * later than the first step that is not ok. A stage run may also resume in
+ * place at a new commit, with a new go, when `changedPaths` (the journal's
+ * commit to this one) are all check-only (issue 1565). Production never does.
  */
 export function checkResume(
   journal: RunJournal,
-  expected: { target: string; commit: string; stepListHash: string; goSha256: string; stepIds: readonly string[] },
+  expected: { target: string; commit: string; stepListHash: string; goSha256: string; stepIds: readonly string[]; changedPaths?: readonly string[] },
   opts: { from?: string; only?: string },
 ): string[] {
   const out: string[] = [];
   if (journal.target !== expected.target) out.push(`the journal is for target ${journal.target}, not ${expected.target}`);
-  if (journal.commit !== expected.commit) out.push(`the journal ran commit ${journal.commit}; this run is ${expected.commit}`);
+  const inPlace = journal.commit !== expected.commit;
+  if (inPlace) {
+    if (journal.rmEnv !== "stage") out.push(`the journal ran commit ${journal.commit}; this run is ${expected.commit}`);
+    else if (expected.changedPaths === undefined) out.push(`the journal ran commit ${journal.commit}; this run is ${expected.commit}, and git could not list the paths between them`);
+    else {
+      const product = notCheckOnly(expected.changedPaths);
+      if (product.length > 0) out.push(`the journal ran commit ${journal.commit}; this run is ${expected.commit}, which changes paths that are not check-only: ${product.join(", ")}`);
+    }
+  }
   if (journal.stepListHash !== expected.stepListHash) out.push("the journal ran a different step list; start a new run");
-  if (journal.goSha256 !== expected.goSha256) out.push("the journal ran under a different go file; a resume presents the same go");
+  // A resume in place presents the new commit's go; any other resume presents the same go.
+  if ((!inPlace || journal.rmEnv !== "stage") && journal.goSha256 !== expected.goSha256) out.push("the journal ran under a different go file; a resume presents the same go");
   const start = opts.only ?? opts.from;
   if (start !== undefined) {
     const at = expected.stepIds.indexOf(start);
@@ -181,11 +293,23 @@ export function readJournal(path: string): RunJournal | undefined {
   }
 }
 
-/** Write `<dir>/run.json` atomically, mode 0600. */
+/**
+ * PURE. The journal's steps in runbook order (stepIds), whatever order they
+ * finished in (issue 1557: concurrent steps end in any order); a record for an
+ * id the list lacks keeps its place after them.
+ */
+export function stepsInRunbookOrder(journal: Pick<RunJournal, "steps" | "stepIds">): Record<string, StepRecord> {
+  const out: Record<string, StepRecord> = {};
+  for (const id of journal.stepIds ?? []) if (journal.steps[id] !== undefined) out[id] = journal.steps[id]!;
+  for (const [id, rec] of Object.entries(journal.steps)) if (!(id in out)) out[id] = rec;
+  return out;
+}
+
+/** Write `<dir>/run.json` atomically, mode 0600, its steps in runbook order. */
 export function writeJournal(dir: string, journal: RunJournal): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = join(dir, `.run.json.${process.pid}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(journal, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(tmp, `${JSON.stringify({ ...journal, steps: stepsInRunbookOrder(journal) }, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, join(dir, "run.json"));
 }
 

@@ -15,16 +15,15 @@ import { PALETTE, SERIES, CATEGORICAL, REGIME, rgba } from "../../lib/chart-them
 // ── Shared regime-dashboard chart helpers ───────────────────────────────────
 // Background regime bands painted behind the line datasets, in the regime's
 // own hues so a run reads without the legend: risk-on a faint green wash,
-// risk-off a faint beacon wash under a light hatch (the hatch keeps it
-// readable in greyscale), neutral clear. Three greys were tried first and Lex
-// could not tell them apart (RM-200). The washes stay faint because the lines
+// risk-off a faint beacon wash, neutral clear. Three greys were tried first
+// and Lex could not tell them apart, then a hatch over risk-off he found
+// noise (RM-200). The washes stay faint because the lines
 // over them are green and warm too. This is the one place beacon fills an area.
 export const REGIME_BAND = {
   risk_on: { fill: rgba(REGIME.risk_on, 0.13) },
   neutral: null,
-  risk_off: { fill: rgba(REGIME.risk_off, 0.11), hatch: rgba(PALETTE.text, 0.22) },
+  risk_off: { fill: rgba(REGIME.risk_off, 0.11) },
 };
-const HATCH_GAP = 6;
 export const regimeBandsPlugin = {
   id: "regimeBands",
   beforeDatasetsDraw(chart, _args, opts) {
@@ -47,24 +46,6 @@ export const regimeBandsPlugin = {
         if (band.fill) {
           ctx.fillStyle = band.fill;
           ctx.fillRect(x0, top, x1 - x0, bottom - top);
-        }
-        if (band.hatch) {
-          // Lines of x + y = k ("/"), with k on one grid for the whole chart,
-          // so two neighbouring risk-off spans hatch as one surface.
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(x0, top, x1 - x0, bottom - top);
-          ctx.clip();
-          ctx.strokeStyle = band.hatch;
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          const k0 = Math.floor((x0 + top) / HATCH_GAP) * HATCH_GAP;
-          for (let k = k0; k <= x1 + bottom; k += HATCH_GAP) {
-            ctx.moveTo(k - top, top);
-            ctx.lineTo(k - bottom, bottom);
-          }
-          ctx.stroke();
-          ctx.restore();
         }
       }
       i = j + 1;
@@ -243,29 +224,28 @@ export const SOURCE_LABEL = {
 
 // The inline regime-band legend swatches, shown next to "Full history" and each
 // equity-curve chart: one per state, in REGIME_BAND's treatments, a little
-// stronger so a 10px square still reads. `bg` is a CSS background value; the
-// hatch is an SVG image rather than a repeating gradient, which the covenant
-// scan would flag.
-const HATCH_SWATCH = `url("data:image/svg+xml,${encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><path d='M3-1L-9 11M7-1L-5 11M11-1L-1 11M15-1L3 11M19-1L7 11' stroke='rgba(242,244,249,0.6)' stroke-width='1'/></svg>",
-)}")`;
+// stronger so a 10px square still reads. `bg` is a CSS background value.
 // The same three treatments as CSS backgrounds, for the bands behind the
 // site's own charts (lib/line-chart.js), where each run is a strip of HTML
-// under the lines. The hatch is a 6px tile, so it keeps its angle and pitch
-// however the plot stretches.
-const HATCH_TILE = `url("data:image/svg+xml,${encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M-1 1l2-2M0 6L6 0M5 7l2-2' stroke='rgba(242,244,249,0.22)' stroke-width='1'/></svg>",
-)}")`;
-// A CSS background takes its colour as the last layer, under the hatch.
+// under the lines.
 export const REGIME_BAND_BG = {
   risk_on: rgba(REGIME.risk_on, 0.13),
   neutral: "transparent",
-  risk_off: `${HATCH_TILE}, ${rgba(REGIME.risk_off, 0.11)}`,
+  risk_off: rgba(REGIME.risk_off, 0.11),
 };
 
 // Neutral is clear in the plot, so its swatch is an outline.
 export const REGIME_BG_LEGEND = [
-  { label: "risk-off", bg: `${HATCH_SWATCH}, ${rgba(REGIME.risk_off, 0.4)}` },
+  { label: "risk-off", bg: rgba(REGIME.risk_off, 0.4) },
   { label: "neutral", bg: "transparent", outline: true },
   { label: "risk-on", bg: rgba(REGIME.risk_on, 0.45) },
 ];
+
+// The composite read against its median (0.50), as a baseline chart: the line
+// and a flat fill take the risk-on green above it and the risk-off beacon
+// below, faint enough that the regime bands still read through.
+export const COMPOSITE_AREA = {
+  base: 0.5,
+  above: { line: REGIME.risk_on, fill: rgba(REGIME.risk_on, 0.16) },
+  below: { line: REGIME.risk_off, fill: rgba(REGIME.risk_off, 0.14) },
+};

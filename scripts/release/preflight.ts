@@ -14,7 +14,10 @@
 //                  control checkout's clean HEAD, so the printed step list is that commit's
 //     P.origin     the commit is on releases-A.B.x (D70)
 //     P.ci         CI on the commit: every check run completed and green, and each
-//                  required workflow present (standing SP.7)
+//                  required workflow present (standing SP.7). When the commit's CI is
+//                  not green, the stage journal's commit stands in for it if its tree
+//                  is the commit's tree (issue 1568): the rc squash reruns CI it
+//                  already passed. The detail names the commit whose CI was used
 //     P.stage      a passed stage journal of this step list on this commit's tree
 //                  exists (SP.8, D70). Its path is what --stage-journal takes
 //     P.live       the release checkout on each host is not the one a running
@@ -40,7 +43,7 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { originProblems, type ResolvedGo } from "./go.ts";
-import { checkStageJournal, readJournal, RUN_TS_RE, type StepRecord } from "./journal.ts";
+import { checkStageJournal, earlierCommitPaths, readJournal, RUN_TS_RE, type ChangedPaths, type StepRecord } from "./journal.ts";
 import { executeStep, readRecovery, type RunnerDeps } from "./step-exec.ts";
 import { skipReason } from "./run.ts";
 import { CONTROL_HOST, CONTROL_REPO, READY_PENDING, renderStep, shellQuote, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
@@ -164,16 +167,48 @@ export function runsInFlight(root: string, target: string): { runTs: string; upd
   return names.map((n) => readJournal(join(dir, n))).filter((j) => j?.status === "running").map((j) => ({ runTs: j!.runTs, updatedAt: j!.updatedAt }));
 }
 
-/** The passed stage journals under `root` for this step list and tree, newest first. */
-export function passedStageJournals(root: string, hash: string, tree: string, ids: readonly string[]): string[] {
+/**
+ * The passed stage journals under `root` for this step list and tree, newest
+ * first. `commit` is this run's: a journal's earlier commits (issue 1565) are
+ * diffed against it.
+ */
+export async function passedStageJournals(root: string, hash: string, tree: string, ids: readonly string[], commit: string, diff: ChangedPaths): Promise<string[]> {
   const dir = join(root, "stage");
   let names: string[];
   try { names = readdirSync(dir).filter((n) => RUN_TS_RE.test(n)).sort().reverse(); } catch { return []; }
-  return names.map((n) => join(dir, n)).filter((p) => checkStageJournal(readJournal(p), { stepListHash: hash, tree, stepIds: ids }).length === 0);
+  const out: string[] = [];
+  for (const p of names.map((n) => join(dir, n))) {
+    const j = readJournal(p);
+    if (checkStageJournal(j, { stepListHash: hash, tree, stepIds: ids, earlierPaths: await earlierCommitPaths(j, commit, diff) }).length === 0) out.push(p);
+  }
+  return out;
 }
 
 const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 const inRepo = (cmd: string) => `cd ${shellQuote(CONTROL_REPO)} && ${cmd}`;
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+/** `git diff --no-renames --name-only <from> <to>` in the control checkout (issue 1565): a rename lists both its old and new path. undefined when either is no commit id or git fails. */
+export function controlChangedPaths(deps: Pick<RunnerDeps, "collect">): ChangedPaths {
+  return async (from, to) => {
+    if (!SHA_RE.test(from) || !SHA_RE.test(to)) return undefined;
+    const r = await deps.collect(CONTROL_HOST, inRepo(`git diff --no-renames --name-only ${from} ${to}`));
+    return r.code === 0 ? lines(r.stdout) : undefined;
+  };
+}
+
+/** The commit's check runs as `name\tstatus\tconclusion` lines; undefined when gh fails. */
+async function checkRuns(deps: Pick<RunnerDeps, "collect">, commit: string): Promise<string[] | undefined> {
+  const r = await deps.collect(CONTROL_HOST, inRepo(`gh api ${shellQuote(`repos/{owner}/{repo}/commits/${commit}/check-runs?per_page=100`)} --paginate --jq '.check_runs[] | "\\(.name)\\t\\(.status)\\t\\(.conclusion)"'`));
+  return r.code === 0 ? lines(r.stdout) : undefined;
+}
+
+/** `git rev-parse <commit>^{tree}` in the control checkout; undefined when git fails. */
+async function treeOf(deps: Pick<RunnerDeps, "collect">, commit: string): Promise<string | undefined> {
+  const r = await deps.collect(CONTROL_HOST, inRepo(`git rev-parse ${commit}^{tree}`));
+  const t = r.stdout.trim();
+  return r.code === 0 && t !== "" ? t : undefined;
+}
 
 export interface PreflightInput {
   readonly target: ReleaseTarget;
@@ -222,28 +257,47 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     const branches = await deps.collect(CONTROL_HOST, inRepo(`git fetch -q origin && git branch -r --contains ${commit}`));
     const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
     add("P.origin", origin.length === 0 ? "green" : "red", origin.length === 0 ? `on ${lines(branches.stdout).join(", ")}` : origin.join("; "));
-    const ci = await deps.collect(CONTROL_HOST, inRepo(`gh api ${shellQuote(`repos/{owner}/{repo}/commits/${commit}/check-runs?per_page=100`)} --paginate --jq '.check_runs[] | "\\(.name)\\t\\(.status)\\t\\(.conclusion)"'`));
-    if (ci.code !== 0) add("P.ci", "red", "gh could not read the commit's check runs");
-    else {
-      const problems = ciProblems(lines(ci.stdout));
-      add("P.ci", problems.length === 0 ? "green" : "red", problems.length === 0 ? `${lines(ci.stdout).length} check runs green, ${REQUIRED_CI.join(", ")} present` : problems.join("; "));
-    }
+    // P.stage's lookup runs before P.ci: production's P.ci falls back to the stage journal's commit (issue 1568).
+    let stage: { journal: string | undefined; status: CheckStatus; detail: string } | undefined;
+    let tree: string | undefined;
     if (target.rmEnv === "prod") {
-      const tree = (await deps.collect(CONTROL_HOST, inRepo(`git rev-parse ${commit}^{tree}`))).stdout.trim();
+      tree = await treeOf(deps, commit);
+      const t = tree ?? "";
       if (input.stageJournal) {
         const sj = readJournal(input.stageJournal);
-        const refusals = checkStageJournal(sj, { stepListHash: hash, tree, stepIds: ids });
-        add("P.stage", refusals.length === 0 ? "green" : "red", refusals.length === 0
+        const refusals = checkStageJournal(sj, { stepListHash: hash, tree: t, stepIds: ids, earlierPaths: await earlierCommitPaths(sj, commit, controlChangedPaths(deps)) });
+        stage = { journal: input.stageJournal, status: refusals.length === 0 ? "green" : "red", detail: refusals.length === 0
           ? `${input.stageJournal} passed on this tree and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}`
-          : refusals.join("; "));
+          : refusals.join("; ") };
       } else {
-        const passed = passedStageJournals(input.root, hash, tree, ids);
+        const passed = await passedStageJournals(input.root, hash, t, ids, commit, controlChangedPaths(deps));
         const dt = passed.length > 0 ? readJournal(passed[0]!)?.cutoverSeconds : undefined;
-        add("P.stage", passed.length > 0 ? "green" : "red", passed.length > 0
+        stage = { journal: passed[0], status: passed.length > 0 ? "green" : "red", detail: passed.length > 0
           ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}`
-          : `no passed stage run of step list ${hash.slice(0, 12)} on tree ${tree.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)`);
+          : `no passed stage run of step list ${hash.slice(0, 12)} on tree ${t.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)` };
       }
     }
+    const runs = await checkRuns(deps, commit);
+    const problems = runs === undefined ? ["gh could not read the commit's check runs"] : ciProblems(runs);
+    if (problems.length === 0) add("P.ci", "green", `${runs!.length} check runs green, ${REQUIRED_CI.join(", ")} present`);
+    else if (stage?.journal === undefined) add("P.ci", "red", problems.join("; "));
+    else {
+      // Production only: the stage journal's commit, when its tree is the rc commit's, carries the same CI (issue 1568).
+      const sc = readJournal(stage.journal)?.commit ?? "";
+      const own = `${commit.slice(0, 12)}: ${problems.join("; ")}`;
+      if (!SHA_RE.test(sc) || sc === commit) add("P.ci", "red", problems.join("; "));
+      else {
+        const st = await treeOf(deps, sc);
+        if (st === undefined || st !== tree) add("P.ci", "red", `${own}; the stage commit ${sc.slice(0, 12)} has tree ${st ?? "(unreadable)"}, not ${tree ?? "(unreadable)"}`);
+        else {
+          const sRuns = await checkRuns(deps, sc);
+          const sProblems = sRuns === undefined ? ["gh could not read the commit's check runs"] : ciProblems(sRuns);
+          if (sProblems.length === 0) add("P.ci", "green", `CI green on ${sc} (same tree ${tree})`);
+          else add("P.ci", "red", `${own}; ${sc.slice(0, 12)}: ${sProblems.join("; ")}`);
+        }
+      }
+    }
+    if (stage) add("P.stage", stage.status, stage.detail);
   }
 
   // No run of this target may be in flight: its steps use the same checkouts and containers.

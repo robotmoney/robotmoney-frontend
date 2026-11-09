@@ -56,6 +56,22 @@ const CATEGORICAL_RGB = [
 
 const SESSION_ID = "8f0d6c21-4a5e-4a1c-9f2b-7c1de2a44b10";
 
+// A year and a bit of the regime, on a slow wave, ending ten days into a
+// risk-off run at the 3rd percentile.
+function regimeSnapshots(days = 400) {
+  const end = Date.parse("2026-11-09T00:00:00Z");
+  const history = Array.from({ length: days }, (_, i) => {
+    const compositePercentile = i >= days - 10 ? 0.03 : 0.5 + 0.35 * Math.sin(i / 30);
+    return {
+      date: new Date(end - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10),
+      composite: 0.3 + compositePercentile * 0.4,
+      compositePercentile,
+      regime: compositePercentile < 0.33 ? "risk_off" : compositePercentile > 0.67 ? "risk_on" : "neutral",
+    };
+  });
+  return { latest: { ...history[days - 1], bucketThresholds: { risk_off: 0.33, risk_on: 0.67 } }, history };
+}
+
 interface AllocationFramework {
   strategy: { label: string; targetPct: number }[];
   buckets: { key: string; label: string; items: { label: string; targetPct: number }[] }[];
@@ -127,10 +143,12 @@ async function stubHome(
     sessions,
     members,
     framework,
+    regime,
   }: {
     sessions?: unknown[] | null;
     members?: unknown | null;
     framework?: AllocationFramework | null;
+    regime?: unknown | null;
   } = {},
 ) {
   await mockVendorScripts(page);
@@ -150,6 +168,10 @@ async function stubHome(
     (framework === null
       ? route.fulfill({ status: 503, body: "down" })
       : route.fulfill(json(framework ?? loadGolden<AllocationFramework>("/api/dashboards/allocation")))));
+  await page.route("**/api/dashboards/regime-snapshots*", (route) =>
+    (regime === null
+      ? route.fulfill({ status: 503, body: "down" })
+      : route.fulfill(json(regime ?? regimeSnapshots()))));
   await page.route("**/api/swarm/sessions**", (route) => {
     if (sessions === null) return route.fulfill({ status: 503, body: "down" });
     const rows = sessions ?? [weightsSession()];
@@ -431,12 +453,83 @@ test("the roster lists the analysts, then the judges under their own label", asy
   await expectNoBrowserErrors(errors);
 });
 
+// The market regime under the portfolio: the dial with the regime beside it,
+// and the last year on a chart with both axes labelled, in percentiles.
+test("the market regime reads under the portfolio, and is fetched only as the section nears", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubHome(page);
+  let reads = 0;
+  page.on("request", (r) => { if (r.url().includes("/api/dashboards/regime-snapshots")) reads += 1; });
+  await openHome(page);
+  expect(reads).toBe(0);
+
+  const block = page.locator(".hm-reg");
+  await block.scrollIntoViewIfNeeded();
+  await expect(block.locator(".rm-dial__n")).toHaveText("3rd");
+  expect(reads).toBe(1);
+  await expect(block.locator(".rm-dial__name")).toHaveText("Percentile");
+  await expect(block.locator(".hm-reg__now")).toHaveText("Risk-off");
+  // The raw composite is the supporting number beside the percentile.
+  await expect(block.locator(".hm-reg__since")).toHaveText(
+    "Since Oct 31, 2026. The composite of macro and on-chain conditions reads 0.31, ranked against its last three years.");
+  await expect(block.getByRole("link", { name: "See the market regime" })).toHaveAttribute("href", "/regime");
+
+  await expect(block.locator(".hm-reg__cap .hm-k")).toHaveText("Composite percentile, last 12 months");
+  await expect(block.locator(".rr-area__y span")).toHaveText(["100", "67th", "50th", "33rd", "0"]);
+  await expect(block.locator(".rr-area__x span").first()).toHaveText(/^[A-Z][a-z]{2}( '\d\d)?$/);
+  await expect(block.locator(".rv__bands i").first()).toBeAttached();
+  await expect(block.locator(".hm-reg__last")).toBeVisible();
+
+  const plot = block.locator(".rr-area__plot");
+  const row = block.locator(".rr-area__tip li");
+  await expect(async () => {
+    await plot.scrollIntoViewIfNeeded();
+    const at = (await plot.boundingBox())!;
+    await page.mouse.move(at.x + at.width - 2, at.y + at.height / 2);
+    await expect(row).toContainText("Composite 0.31", { timeout: 500 });
+  }).toPass({ timeout: 5000 });
+  await expect(row.locator("b")).toHaveText("3rd");
+  await page.mouse.move(0, 0);
+  await expect(block.locator(".rr-area__tip")).toHaveCount(0);
+
+  // The chart answers the keyboard, and Escape lets go.
+  await plot.focus();
+  await page.keyboard.press("End");
+  await expect(row.locator("b")).toHaveText("3rd");
+  await page.keyboard.press("Escape");
+  await expect(block.locator(".rr-area__tip")).toHaveCount(0);
+
+  await expectNoBrowserErrors(errors);
+});
+
+test("the regime read fails: the chart says so, and the portfolio still reads", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubHome(page, { regime: null });
+  await openHome(page);
+  await page.locator(".hm-reg").scrollIntoViewIfNeeded();
+  await expect(page.locator(".hm-reg .rm-nodata__h")).toHaveText("No data available");
+  await expect(page.locator(".hm-reg .rm-dial")).toHaveCount(0);
+  await expect(page.locator(".hm-reg__key")).toBeHidden();
+  await expect(page.locator(".hm-keys li").first()).toBeVisible();
+  await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
+});
+
+test("too little regime history: the dial still reads, and the chart says why it is empty", async ({ page }) => {
+  await stubHome(page, { regime: regimeSnapshots(1) });
+  await openHome(page);
+  await page.locator(".hm-reg").scrollIntoViewIfNeeded();
+  await expect(page.locator(".hm-reg .rm-nodata__h")).toHaveText("Not enough data yet");
+  await expect(page.locator(".hm-reg .rm-dial__n")).toHaveText("3rd");
+});
+
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
   await stubHome(page, { framework: TARGETS });
   await openHome(page);
   await expect(page.locator(".hm-keys li").first()).toBeVisible();
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
   await expect(page.locator(".hm-keys__pct").first()).toHaveText("50%");
+  await page.locator(".hm-reg").scrollIntoViewIfNeeded();
+  await expect(page.locator(".hm-reg .rr-area__plot")).toBeVisible();
 
   const findings = await page.evaluate((CATEGORICAL: string[]) => {
     const CYAN = ["rgb(0, 229, 255)", "rgb(0, 184, 212)"];
@@ -505,6 +598,8 @@ test("a 390-wide phone has no horizontal overflow", async ({ page }) => {
   await stubHome(page);
   await openHome(page);
   await expect(page.locator(".hm-crew li").first()).toBeVisible();
+  await page.locator(".hm-reg").scrollIntoViewIfNeeded();
+  await expect(page.locator(".hm-reg .rr-area__plot")).toBeVisible();
 
   const box = await page.evaluate(() => ({
     clientW: document.documentElement.clientWidth,

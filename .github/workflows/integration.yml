@@ -152,3 +152,12 @@ jobs:
           test -f "$f" || { echo "::error::$f is missing"; exit 1; }
           grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::$f did not run in the integration suite"; exit 1; }
+      # Issue 1561: the web content release's host steps (W06-W08) run against a
+      # real booted stack. Its absence or exclusion is a red job, not a green one.
+      - name: Web content release proof ran (issue 1561)
+        shell: bash
+        run: |
+          f=scripts/tests/integration/web-content-release.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }

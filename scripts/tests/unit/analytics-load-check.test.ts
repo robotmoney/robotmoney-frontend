@@ -2,7 +2,7 @@
 // issue 1514 (scripts/release/analytics-load-check.ts): its log parser, its
 // per-route table and its verdict, on fixture api logs.
 import { describe, expect, test } from "bun:test";
-import { nextScheduledRun, parseApiLog, percentile, renderReport, summarize, type DbPoolSnapshot } from "../../release/analytics-load-check.ts";
+import { NO_REGIME_ASOF, nextScheduledRun, parseApiLog, percentile, renderReport, summarize, windowEnd, type DbPoolSnapshot } from "../../release/analytics-load-check.ts";
 
 const T = (s: string) => `2026-10-28T06:${s}.000000000Z`;
 const ua = "ua=Bun/1.3.14";
@@ -123,5 +123,52 @@ describe("the window", () => {
     expect(percentile([1, 2, 3, 4], 50)).toBe(2);
     expect(percentile([1, 2, 3, 4], 95)).toBe(4);
     expect(percentile([], 50)).toBe(0);
+  });
+});
+
+describe("the window closes at the tick's regime asof line plus 5 minutes (issue 1567)", () => {
+  const boundary = new Date("2026-11-03T18:00:00.000Z");
+  /** The analytics-producer's log for the 18:00Z tick of run 20261103T161034Z, with `docker logs --timestamps`. */
+  const PRODUCER = [
+    "2026-11-03T17:30:30.100000000Z [analytics] regime asof 2026-11-03: composite=0.41 regime=neutral (812 rows)",
+    "2026-11-03T18:00:00.200000000Z [analytics-producer] research run started",
+    "2026-11-03T18:00:08.400000000Z [analytics-producer] research run finished",
+    "2026-11-03T18:30:01.000000000Z [analytics-producer] regime run started",
+    "2026-11-03T18:30:31.000000000Z [analytics] regime asof 2026-11-03: composite=0.42 regime=neutral (813 rows)",
+  ].join("\n");
+
+  test("windowEnd is the regime asof line at 18:30:31Z plus 5 minutes, ignoring the previous tick's line", () => {
+    expect(windowEnd(boundary, PRODUCER)).toEqual({ end: new Date("2026-11-03T18:35:31.000Z"), regimeAt: "2026-11-03T18:30:31.000000000Z" });
+  });
+
+  test("windowEnd never runs past the cap", () => {
+    const late = "2026-11-03T19:58:00.000000000Z [analytics] regime asof 2026-11-03: composite=0.42 regime=neutral (813 rows)";
+    expect(windowEnd(boundary, late).end.toISOString()).toBe("2026-11-03T20:00:00.000Z");
+  });
+
+  test("with no regime asof line the window is the 120-minute cap, and the graded result fails naming the missing line", () => {
+    const empty = PRODUCER.split("\n").slice(0, 4).join("\n");
+    const w = windowEnd(boundary, empty);
+    expect(w).toEqual({ end: new Date("2026-11-03T20:00:00.000Z"), regimeAt: null });
+    const report = summarize(parseApiLog(CLEAN), { start: pool(0), end: pool(0) }, { regimeAt: w.regimeAt });
+    expect(report.ok).toBe(false);
+    expect(report.problems).toEqual([NO_REGIME_ASOF]);
+    expect(renderReport(report, null)).toContain("FAIL: the tick logged no regime asof line");
+  });
+
+  test("a window closed early passes when clean, and still fails on one 5000 ms request and on one db_saturated answer", () => {
+    const tick = { regimeAt: windowEnd(boundary, PRODUCER).regimeAt };
+    expect(summarize(parseApiLog(CLEAN), { start: pool(0), end: pool(0) }, tick).ok).toBe(true);
+    const slow = summarize(parseApiLog([CLEAN, FIVE_SECONDS].join("\n")), { start: pool(0), end: pool(0) }, tick);
+    expect(slow.ok).toBe(false);
+    expect(slow.slow).toBe(1);
+    const saturated = summarize(parseApiLog([CLEAN, CLAIM_SATURATED_NEW].join("\n")), { start: pool(0), end: pool(0) }, tick);
+    expect(saturated.ok).toBe(false);
+    expect(saturated.saturated).toBe(1);
+  });
+
+  test("--since/--until and --log grade without a tick, so no regime asof line is required", () => {
+    expect(summarize(parseApiLog(CLEAN)).ok).toBe(true);
+    expect(summarize(parseApiLog(CLEAN), { start: pool(0), end: pool(0) }, null).problems).toEqual([]);
   });
 });

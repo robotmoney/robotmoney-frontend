@@ -8,6 +8,8 @@
 //                              the home ring can never disagree with theirs
 //   the allocation framework   each sleeve's assets, and the hero's lane names
 //   the swarm roster           analysts and judges, and the seats left
+//   the regime snapshots       the block under the ring (home-regime.js), read
+//                              only as that section nears the viewport
 //
 // The page's words are static HTML (the prerender inlines them for readers
 // that run no JavaScript); only figures, names and links are bound here.
@@ -26,6 +28,7 @@ import { runHero } from "../../home/loop.js";
 import { runRotator } from "../../home/rotator.js";
 import { mountPlate } from "../../home/plate.js";
 import { STILL_AT } from "../../home/story.js";
+import { registerHomeRegime } from "./home-regime.js";
 
 const PLATE_SRC = "/assets/img/home/plate.jpg";
 /** @param {string} name */
@@ -55,6 +58,7 @@ let enterStart = null;
 
 /** @param {import("alpinejs").Alpine} Alpine */
 export function registerHomeView(Alpine) {
+  registerHomeRegime(Alpine);
   Alpine.data("homeView", () => ({
     ...allocationFramework(),
 

@@ -22,8 +22,9 @@ import type { NotBeforeTemplate, ReceiptSpec, StepHost, StepPhase, StepTemplate 
 export const RUNBOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), "runbooks");
 
 /**
- * The templates a release may name. `website-only` joins with its template
- * file and the runner mode that runs it (issue 1305, gap Z4).
+ * The templates a release may name. The planned `website-only` template (issue
+ * 1305, gap Z4) is replaced by ./runbooks/web-content.yaml, run by
+ * ./web-release.ts on its own release line (D81); this loader never reads it.
  */
 export const TEMPLATE_NAMES = ["kitchen-sink"] as const;
 export type TemplateName = (typeof TEMPLATE_NAMES)[number];
@@ -98,6 +99,7 @@ export function scopeProblems(scope: unknown, steps: readonly Pick<RunbookStep, 
 const STEP_KEYS = new Set([
   "id", "standing", "description", "host", "phase", "cmds", "env", "bootEnv", "expectExit", "receipts", "irreversible",
   "onlyFor", "notBefore", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly", "breakingOnly",
+  "after", "afterSince",
 ]);
 const HOSTS: readonly StepHost[] = ["target", "capture", "control"];
 /** The three phases, in the order they run (owner, 2026-10-16): QA is every stage step, preflight and cutover are production's. */
@@ -157,6 +159,10 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   }
   if (raw.breakingOnly !== undefined && typeof raw.breakingOnly !== "boolean") errors.push(`${at}: breakingOnly is a boolean`);
   if (raw.since !== undefined && typeof raw.since === "string" && !/^v\d+\.\d+\.\d+$/.test(raw.since)) errors.push(`${at}: since is a release name (vA.B.C)`);
+  if (raw.after !== undefined && !(isStringArray(raw.after) && raw.after.length > 0 && raw.after.every((a) => a !== ""))) errors.push(`${at}: after is a non-empty list of earlier step ids`);
+  if (raw.after !== undefined && raw.irreversible === true) errors.push(`${at}: an irreversible step carries no after; it waits for every earlier step`);
+  if (raw.afterSince !== undefined && !(typeof raw.afterSince === "string" && /^v\d+\.\d+\.\d+$/.test(raw.afterSince))) errors.push(`${at}: afterSince is a release name (vA.B.C)`);
+  if (raw.afterSince !== undefined && raw.after === undefined) errors.push(`${at}: afterSince goes with after`);
   if (errors.length > 0) return { errors };
 
   // Fixed key order inside receipts and notBefore: the hash sees them as the code wrote them before the YAML did.
@@ -166,7 +172,7 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
     receipts: (raw.receipts as ReceiptSpec[]).map((r) => ({ dir: r.dir, pattern: r.pattern, required: r.required })),
     irreversible: raw.irreversible,
   };
-  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly", "breakingOnly"] as const) {
+  for (const k of ["env", "bootEnv", "onlyFor", "triage", "maxMinutes", "cloneFrom", "gateAbsent", "added", "since", "stageOnly", "breakingOnly", "after", "afterSince"] as const) {
     if (raw[k] !== undefined) step[k] = raw[k];
   }
   if (nb !== undefined) step.notBefore = { afterStep: (nb as NotBeforeTemplate).afterStep, hours: (nb as NotBeforeTemplate).hours };
@@ -238,7 +244,57 @@ function parseSteps(raw: unknown, where: string, errors: string[]): RunbookStep[
   for (let i = 1; i < steps.length; i++) {
     if (PHASES.indexOf(steps[i]!.phase) < PHASES.indexOf(steps[i - 1]!.phase)) errors.push(`${where}: ${steps[i]!.id} (${steps[i]!.phase}) comes after ${steps[i - 1]!.id} (${steps[i - 1]!.phase}); the phases run ${PHASES.join(", ")}`);
   }
+  if (dup === undefined) errors.push(...afterProblems(steps, where));
   return steps;
+}
+
+/**
+ * PURE. The steps that have surely ended before each step starts (issue 1557):
+ * every earlier step for a step with no `after`; for one with `after`, the
+ * steps it names and, through them, what they wait for. Unknown ids are left out.
+ */
+export function endedBefore(steps: readonly Pick<StepTemplate, "id" | "after">[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  steps.forEach((s, i) => {
+    const before = new Set<string>();
+    if (s.after === undefined) for (const e of steps.slice(0, i)) before.add(e.id);
+    else for (const a of s.after) {
+      if (!out.has(a)) continue;
+      before.add(a);
+      for (const x of out.get(a)!) before.add(x);
+    }
+    out.set(s.id, before);
+  });
+  return out;
+}
+
+/**
+ * PURE. Why a step list's after lists are not safe (issue 1557): each names
+ * earlier steps of the step's own phase, never the step itself, and never lets
+ * a step start before an earlier irreversible step ends.
+ */
+export function afterProblems(steps: readonly RunbookStep[], where: string): string[] {
+  const out: string[] = [];
+  const index = new Map(steps.map((s, i) => [s.id, i]));
+  steps.forEach((s, i) => {
+    for (const a of s.after ?? []) {
+      const at = index.get(a);
+      if (a === s.id) out.push(`${where} ${s.id}: after names the step itself`);
+      else if (at === undefined) out.push(`${where} ${s.id}: after names ${a}, which is no step of this list`);
+      else if (at > i) out.push(`${where} ${s.id}: after names ${a}, which comes later; a step waits only for earlier steps`);
+      else if (steps[at]!.phase !== s.phase) out.push(`${where} ${s.id}: after names ${a}, a ${steps[at]!.phase} step; it names steps of its own phase (${s.phase})`);
+    }
+  });
+  if (out.length > 0) return out;
+  const before = endedBefore(steps);
+  steps.forEach((s, i) => {
+    if (s.after === undefined) return;
+    const open = steps.slice(0, i).filter((e) => e.irreversible && !before.get(s.id)!.has(e.id)).map((e) => e.id);
+    if (open.length > 0) out.push(`${where} ${s.id}: its after list lets it start before the irreversible step ${open.join(", ")} ends; name a step that waits for it`);
+    const anchor = s.notBefore?.afterStep;
+    if (anchor !== undefined && !before.get(s.id)!.has(anchor)) out.push(`${where} ${s.id}: its notBefore counts from ${anchor}, which its after list does not wait for`);
+  });
+  return out;
 }
 
 const isTemplateName = (v: unknown): v is TemplateName => TEMPLATE_NAMES.includes(v as TemplateName);
@@ -319,9 +375,12 @@ export function checkAddOnly(fullTemplate: Template, runbook: ReleaseRunbook): s
       else if (t > next) for (const missed of template.steps.slice(next, t)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
       if (t >= next) next = t + 1;
       if (step.added !== undefined) out.push(`${where}: ${step.id} is a template step, so it carries no added`);
-      const { added: _added, since: _since, ...body } = step;
-      const { since: _tsince, ...templateBody } = template.steps[t]!;
-      if (stable(body) !== stable(templateBody)) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
+      const { added: _added, since: _since, afterSince: _afterSince, ...body } = step;
+      const { since: _tsince, afterSince: tAfterSince, ...templateFull } = template.steps[t]!;
+      // A template step's after binds the releases from its afterSince on; an earlier release's runbook may keep the step as it ran, without it.
+      const { after: _tafter, ...templateNoAfter } = templateFull;
+      const early = tAfterSince !== undefined && releaseBefore(runbook.release, tAfterSince);
+      if (stable(body) !== stable(templateFull) && !(early && stable(body) === stable(templateNoAfter))) out.push(`${where}: ${step.id} differs from the template's step (a release never edits a template step; add a step instead)`);
     } else if (step.added !== runbook.release) {
       out.push(`${where}: ${step.id} is not a template step, so it carries added: ${runbook.release}`);
     }

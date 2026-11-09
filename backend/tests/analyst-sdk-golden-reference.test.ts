@@ -8,6 +8,9 @@
 // and asserts the golden's composite, percentiles, panel indices, labels,
 // per-indicator rank/signed/weight, correlations and backtest equal it (<1e-9).
 // A planted-violation control proves the comparison can fail.
+// Issue 1559 starts every line of a market on the strategies' start; the
+// original JS predates it, so its backtest is compared with that rule applied
+// (packages/analyst-sdk/tests/support/issue-1559.ts) to its own daily values.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -26,6 +29,7 @@ const { applyTransform } = require(join(VENDOR, "lib", "transforms.js"));
 const { buildDateAxis, alignDailyForwardFill, alignDailyZeroFill } = require(join(VENDOR, "lib", "utils.js"));
 const { computeRegime } = require(join(VENDOR, "compute.js"));
 const { computeCorrelations, computeBacktest, stripDailyFromSnapshot } = require(join(VENDOR, "backtest-correlations.js"));
+const { apply1559 } = await import("../../packages/analyst-sdk/tests/support/issue-1559.ts");
 
 type Row = { date: string; value: number };
 
@@ -65,7 +69,7 @@ function runReference() {
   const result = computeRegime(transformed, dateAxis);
   const extras = { spx: raw.SPX ?? [], eth: raw.ETH ?? [], tbill3m: raw.TBILL3M ?? [] };
   const correlations = computeCorrelations(dateAxis, result, extras);
-  const backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, result, extras));
+  const backtest = stripDailyFromSnapshot(apply1559(computeBacktest(dateAxis, result, extras)));
   return { dateAxis, result, correlations, backtest, nExtras: [extras.spx.length, extras.eth.length, extras.tbill3m.length] };
 }
 
@@ -183,10 +187,12 @@ describe("analyst-sdk golden equals the original JS reference", () => {
 // fixtures equals the pre-change golden bytes, with globalThis.fetch throwing,
 // whether the input names each stream by its input id or by its storage key.
 // The golden's sha256 is pinned, so a regenerated golden fails here. It was
-// regenerated once on purpose, by decision D78 (compensated
-// arithmetic; was 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce).
+// regenerated on purpose by decision D78 (compensated arithmetic; was
+// 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce) and by
+// issue 1559 (one start date per market; was
+// 08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba).
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
-  const GOLDEN_SHA256 = "08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba";
+  const GOLDEN_SHA256 = "3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");

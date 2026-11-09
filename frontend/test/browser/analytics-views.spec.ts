@@ -135,7 +135,8 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   // for the eq snapshot). The regime card shows the composite level in its foot.
   // Today: the top-line regime with the composite under it, and one index row
   // per panel (3 for the eq snapshot).
-  await expect(page.locator("#composite .rv__today-v")).toBeVisible();
+  // The top line is the dial: the composite's percentile in its bowl.
+  await expect(page.locator("#composite .rm-dial__n")).toBeVisible();
   await expect(page.locator("#composite")).toContainText(latest.composite!.toFixed(2));
   // The session page's Market context: the composite, then one row per panel.
   await expect(page.locator("#composite .sig__row")).toHaveCount(4);
@@ -173,7 +174,10 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
 
   // The charts draw on the site's own chart: the history and the market on show.
   await expect(page.locator(".rr-area__plot:visible")).toHaveCount(2);
-  expect(await page.locator("#history-sec .rr-area__svg polyline").count()).toBeGreaterThanOrEqual(4);
+  // The composite alone to start, read against its median: a line on each side
+  // of it and the fill between.
+  expect(await page.locator('#history-sec .rr-area__plot .rr-area__svg polyline[data-token="composite"]').count()).toBeGreaterThanOrEqual(2);
+  expect(await page.locator('#history-sec .rr-area__plot .rr-area__svg polygon[data-token="composite"]').count()).toBeGreaterThanOrEqual(1);
 });
 
 // The panel row's three ways out to more detail. Each one was inert before:
@@ -240,7 +244,8 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
 
   // THREE panel index summary cards (macro + on-chain + equity factor) — plus the
   // top-line regime card = 4 total, exactly the happy-path count despite null panels.
-  await expect(page.locator("#composite .rv__today-v")).toBeVisible();
+  // The top line is the dial: the composite's percentile in its bowl.
+  await expect(page.locator("#composite .rm-dial__n")).toBeVisible();
   const indexCards = page.locator("#composite .sig__row:not(#index-composite)");
   await expect(indexCards).toHaveCount(3);
   await expect(page.locator("#index-factor")).toBeVisible();
@@ -276,6 +281,8 @@ test("regime history chart occupies proportional horizontal space across a gap a
   await page.goto("/");
   await navigate(page, "/regime");
   await expect(page.locator("#history-sec .rr-area__plot")).toBeVisible();
+  // The composite shows alone by default; switch on the two panels it is made of.
+  for (const name of ["Macro", "On-chain"]) await page.locator("#history-sec .rv__lg", { hasText: name }).click();
   // The whole history, where the hole is. It is past a year, so the lines
   // take one reading a week; the axis is still one unit per calendar day.
   await page.locator("#history-sec .rm-chip", { hasText: /^All$/ }).click();
@@ -329,7 +336,9 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   const state = () => fig.evaluate((f) => ({
     days: Number((f as HTMLElement).dataset.days),
     bands: f.querySelectorAll(".rv__bands i").length,
-    composite: [...f.querySelectorAll('.rr-area__svg polyline[data-token="composite"]')].reduce((n, l) => n + (l.getAttribute("points") || "").trim().split(/\s+/).length, 0),
+    // The composite is drawn once per side of its median, the same points
+    // clipped two ways, so its runs count once each.
+    composite: [...new Set([...f.querySelectorAll('.rr-area__svg polyline[data-token="composite"]')].map((l) => l.getAttribute("points") || ""))].reduce((n, p) => n + p.trim().split(/\s+/).length, 0),
     macro: f.querySelectorAll('.rr-area__svg polyline[data-token="macro"]').length,
   }));
 
@@ -346,12 +355,15 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   await page.locator("#history-sec").getByRole("button", { name: "Regime bands" }).click();
   expect((await state()).bands).toBeGreaterThan(0);
 
+  // The panels start switched off, the composite alone; a click brings one in.
   const macro = page.locator("#history-sec .rv__lg", { hasText: "Macro" });
-  await macro.click();
   expect((await state()).macro).toBe(0);
   await expect(macro).toHaveAttribute("aria-pressed", "false");
   await macro.click();
   expect((await state()).macro).toBeGreaterThan(0);
+  await expect(macro).toHaveAttribute("aria-pressed", "true");
+  await macro.click();
+  expect((await state()).macro).toBe(0);
 
   // Past a year the lines are weekly and the bands stay daily.
   await page.locator("#history-sec .rm-chip", { hasText: /^3Y$/ }).click();
@@ -373,16 +385,23 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
 
   // The crosshair reads the day under the pointer.
   const plot = page.locator("#history-sec .rr-area__plot");
-  const box = (await plot.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await expect(page.locator("#history-sec .rr-area__tip li")).toHaveCount(4);
+  // A cursor keeps moving, so the check moves it until the tip reads. One row
+  // per line on show: the composite alone, as it opens.
+  let nudge = 0;
+  await expect(async () => {
+    // Measured each time: the plot may sit below the fold and scroll in.
+    await plot.scrollIntoViewIfNeeded();
+    const at = (await plot.boundingBox())!;
+    await page.mouse.move(at.x + at.width / 2 + (nudge++ % 2 ? 3 : -3), at.y + at.height / 2);
+    await expect(page.locator("#history-sec .rr-area__tip li")).toHaveCount(1, { timeout: 500 });
+  }).toPass({ timeout: 5000 });
   expect(errors).toEqual([]);
 });
 
-// The history chart draws the index levels, 0 to 1, even when the history
-// carries percentiles: the percentile scale (HISTORY_ON_PERCENTILES in
-// regime.js) is held back until the brand owner has seen it.
-test("the regime history draws the index levels, 0 to 1, while the percentile scale is held back", async ({ page }) => {
+// The history chart reads in percentiles when the history carries them: the
+// scale the regime is cut on, so the lines, the bands and the dial agree. The
+// raw composite stays in the tip, for reference.
+test("the regime history draws percentiles, with the raw level in its tip", async ({ page }) => {
   await stubEnvironment(page);
   const dto = loadRegimeStub();
   for (const r of dto.history) {
@@ -394,8 +413,30 @@ test("the regime history draws the index levels, 0 to 1, while the percentile sc
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
   await page.goto("/");
   await navigate(page, "/regime");
+  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["100", "67th", "50th", "33rd", "0"]);
+  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText("50th");
+  await expect(page.locator("#history-sec .rv__legend-axis")).toHaveText("Percentile of its last 3 years");
+
+  const plot = page.locator("#history-sec .rr-area__plot");
+  const row = page.locator("#history-sec .rr-area__tip li").first();
+  await expect(async () => {
+    await plot.scrollIntoViewIfNeeded();
+    const at = (await plot.boundingBox())!;
+    await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+    await expect(row).toContainText(/Composite \d\.\d\d/, { timeout: 500 });
+  }).toPass({ timeout: 5000 });
+  await expect(row.locator("b")).toHaveText("50th");
+});
+
+// An older snapshot carries no percentiles, so its history has no percentile to
+// draw: it falls back to the index levels on their own 0 to 1 axis, and says so.
+test("a history without percentiles draws the index levels, 0 to 1", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
   await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["1.00", "0.75", "0.50", "0.25", "0.00"]);
   await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d\.\d\d$/);
+  await expect(page.locator("#history-sec .rv__legend-axis")).toBeHidden();
 });
 
 // The backtest table's first figure is a multiple, not dollars.
@@ -406,6 +447,17 @@ test("the backtest table gives each strategy's result as a multiple", async ({ p
   const market = page.locator(".rv__market:visible");
   await expect(market.locator("thead th").nth(1)).toContainText("Multiple");
   await expect(market.locator("tbody tr").first().locator("td").first()).toHaveText(/^\d+\.\d\d×$/);
+});
+
+// Issue 1559: the backtest chart's caption names the start date the payload
+// gives, not the first month-end (the stub's strategies start on 15 May 2018).
+test("the backtest chart's caption names the payload's start date", async ({ page }) => {
+  await stubEnvironment(page);
+  await page.goto("/");
+  await navigate(page, "/regime");
+  const start = (loadRegimeStub().latest as { backtest: Record<string, Record<string, { start_date: string }>> }).backtest.eth!.composite!.start_date;
+  expect(start).toBe("2018-05-15");
+  await expect(page.locator(".rv__fig-d:visible").first()).toContainText("What $1 put into each strategy on May 15, 2018 was worth");
 });
 
 // A link to a panel opens its tab: session pages link their market context

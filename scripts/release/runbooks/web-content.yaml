@@ -1,0 +1,53 @@
+# scripts/release/runbooks/web-content.yaml — the web content release runbook (D81,
+# docs/technical/release-runbooks.md §12). `bun run release:web --commit <main sha>...`
+# runs it (loader and steps in ./../web-release-lib.ts).
+#
+# It is not a platform runbook: no Q/P/C phases, no go file, no stage rehearsal
+# (owner, 2026-11-04). It reads the platform target file for where the site is
+# served and sits outside templates/ and releases/, so scripts/release/runbook.ts
+# never reads it and the kitchen-sink step-list hash is unchanged.
+#
+# Each step names a `kind`. The nine kinds run once each, in this order.
+# `irreversible` marks a step that writes to GitHub or switches what production
+# serves. The loader refuses an unknown key or kind, a duplicate id, and a kind
+# missing, repeated or out of order.
+runbook: web-content
+steps:
+  - id: "W01-preflight"
+    kind: "preflight"
+    description: "Each --commit is on origin/main and content-only; production's API commit is read from {publicOrigin}/api/version; the commits are cherry-picked onto web/releases-A.B.x (or the API commit) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS; a rolled-back tag is refused; the operator is a repository admin"
+    irreversible: false
+  - id: "W02-branch"
+    kind: "branch"
+    description: "Push the cherry-picked commit to web/releases-A.B.x: create it at production's API commit, or fast-forward it; never force-push, no pull request"
+    irreversible: true
+  - id: "W03-gate"
+    kind: "gate"
+    description: "The push run of web-client.yml (job web-client) on the release branch at the commit concluded success"
+    irreversible: false
+    maxMinutes: 60
+  - id: "W04-tag"
+    kind: "tag"
+    description: "checkWebTag passes, then the annotated tag web-vA.B.C on the commit is created and pushed; it is never moved or deleted"
+    irreversible: true
+  - id: "W05-tag-guard"
+    kind: "tag-guard"
+    description: "The web-tag-guard run for the tag concluded success at the commit"
+    irreversible: false
+    maxMinutes: 20
+  - id: "W06-checkout"
+    kind: "checkout"
+    description: "Over ssh: clone {home}/rm-web when missing, fetch the tags, detach at the tag and run bun install --frozen-lockfile"
+    irreversible: false
+  - id: "W07-deploy"
+    kind: "deploy"
+    description: "Record the api and worker container ids and /api/version, then bun run smoke:web --instance {instance} from {home}/rm-web: no database write, no migration, no backend restart"
+    irreversible: true
+  - id: "W08-live-check"
+    kind: "live-check"
+    description: "{publicOrigin}/version.json reports the tag's version and commit, every sitemap route answers 200, and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback and fail"
+    irreversible: false
+  - id: "W09-release"
+    kind: "release"
+    description: "The GitHub release for the tag, listing the main commits and the changed content paths; never marked latest"
+    irreversible: true
