@@ -481,7 +481,7 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, runni
   log("deployment_identity enrolled rehearsal");
   // After the grants comparison, which leaves extension members out either way.
   psql(STATS_EXTENSION_SQL);
-  log("pg_stat_statements installed as the provider would (issue 1581)");
+  log("pg_stat_statements installed, its members owned by doadmin as the provider's would be (issue 1581)");
   psql("ANALYZE;");
   return { passwords, plan: planned };
 }
