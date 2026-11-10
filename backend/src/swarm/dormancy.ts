@@ -128,7 +128,8 @@ export interface SeatSilence {
   oldestMissAt: Date | null;
 }
 
-async function readSeatSilence(memberId: string | null, tx: DbHandle): Promise<SeatSilence[]> {
+/** Exported for backend/tests/swarm-dormancy-no-jit.test.ts (issue 1579), which plans this query; callers use the readers below. */
+export async function readSeatSilence(memberId: string | null, tx: DbHandle): Promise<SeatSilence[]> {
   const handles = IN_HOUSE_SEAT_HANDLES.join(",");
   const rows = await on(tx, silentMembers, silentBaseline, silentEvents, silentSessionsTable, silentTakes, silentSeats, silentJudgements, silentConfig)<{
     member_id: string;
