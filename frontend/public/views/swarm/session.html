@@ -61,7 +61,9 @@
             </span>
           </template>
           <template x-if="session.regimeSummary">
-            <span class="rr-meta__i">Composite <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></span>
+            <!-- The percentile leads, as on the regime page; the raw composite is the
+                 reference beside it. An old reading without a percentile shows the raw one. -->
+            <span class="rr-meta__i">Composite <b x-text="session.regimeSummary?.compositePercentile != null ? `${ordinal(session.regimeSummary.compositePercentile)} percentile` : fmtNum(session.regimeSummary?.composite, 3)"></b><span x-show="session.regimeSummary?.compositePercentile != null && session.regimeSummary?.composite != null" x-text="`· ${fmtNum(session.regimeSummary?.composite, 3)}`"></span></span>
           </template>
           <template x-if="session.regimeSummary?.regime">
             <span class="rr-meta__i">Regime

@@ -50,16 +50,21 @@ export function yScale({ min, max, log = false }) {
   return (/** @type {number} */ v) => (v - min) / (max - min || 1);
 }
 
+/** @typedef {{ line: string, fill: string }} Side One side of an area's base: its line colour and its fill. */
+
 /**
  * The lines, each broken wherever a reading is missing, never bridged.
  * `points` are { i: day index, v: value or null }. A muted line recedes; a
- * dashed one keeps its dash at screen size.
- * @param {{ n: number, y: (v: number) => number, grid?: number[], series: { token: string, color: string, width?: number, dash?: number[] | null, muted?: boolean, points: { i: number, v: number | null }[] }[] }} m
+ * dashed one keeps its dash at screen size. A line with an `area` reads
+ * against `area.base` (a dotted rule): each side takes its own line colour and
+ * a flat fill between the line and the base, under every line.
+ * @param {{ n: number, y: (v: number) => number, grid?: number[], series: { token: string, color: string, width?: number, dash?: number[] | null, muted?: boolean, area?: { base: number, above: Side, below: Side } | null, points: { i: number, v: number | null }[] }[] }} m
  */
 export function lineChartSvg({ n, y, grid = [], series }) {
   const x = (/** @type {number} */ i) => (1000 * i / Math.max(1, n - 1)).toFixed(1);
   const yy = (/** @type {number} */ v) => (100 - Math.max(0, Math.min(1, y(v))) * 100).toFixed(2);
   const lines = [];
+  const areas = [];
   for (const s of series) {
     const runs = [];
     let run = [];
@@ -70,15 +75,37 @@ export function lineChartSvg({ n, y, grid = [], series }) {
     if (run.length) runs.push(run);
     const dash = s.dash && s.dash.length ? ` stroke-dasharray="${s.dash.join(" ")}"` : "";
     const cls = s.muted ? ` class="is-muted"` : "";
+    const width = s.width || 1.5;
+    const polyline = (/** @type {string} */ pts, /** @type {string} */ stroke, clip = "") => `<polyline data-token="${esc(s.token)}"${cls} points="${pts}" fill="none" stroke="${stroke}" stroke-width="${width}"${dash}`
+      + ` stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"${clip}/>`;
+    // Each side of the base is a clip: the fills and the line are drawn once
+    // per side, so the colour changes exactly where the line crosses.
+    let sides = null;
+    if (s.area) {
+      const b = +yy(s.area.base);
+      const up = `rm-area-${++areaSeq}`, down = `rm-area-${++areaSeq}`;
+      areas.push(`<clipPath id="${up}"><rect x="-10" y="-10" width="1020" height="${(b + 10).toFixed(2)}"/></clipPath>`
+        + `<clipPath id="${down}"><rect x="-10" y="${b.toFixed(2)}" width="1020" height="${(110 - b).toFixed(2)}"/></clipPath>`);
+      sides = [[s.area.above, up], [s.area.below, down]];
+      for (const r of runs) {
+        if (r.length < 2) continue;
+        const x0 = r[0].split(",")[0], x1 = r[r.length - 1].split(",")[0];
+        const pts = `${x0},${b.toFixed(2)} ${r.join(" ")} ${x1},${b.toFixed(2)}`;
+        for (const [side, id] of sides) areas.push(`<polygon data-token="${esc(s.token)}"${cls} points="${pts}" fill="${side.fill}" stroke="none" clip-path="url(#${id})"/>`);
+      }
+      areas.push(`<line x1="0" x2="1000" y1="${b.toFixed(2)}" y2="${b.toFixed(2)}" stroke="rgba(237,239,241,0.45)" stroke-width="1" stroke-dasharray="1 3" vector-effect="non-scaling-stroke"/>`);
+    }
     for (const r of runs) {
       const pts = r.length === 1 ? `${r[0]} ${r[0]}` : r.join(" ");
-      lines.push(`<polyline data-token="${esc(s.token)}"${cls} points="${pts}" fill="none" stroke="${s.color}" stroke-width="${s.width || 1.5}"${dash}`
-        + ` stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`);
+      if (sides) for (const [side, id] of sides) lines.push(polyline(pts, side.line, ` clip-path="url(#${id})"`));
+      else lines.push(polyline(pts, s.color));
     }
   }
   const g = grid.map((f) => `<line x1="0" x2="1000" y1="${(100 - f * 100).toFixed(2)}" y2="${(100 - f * 100).toFixed(2)}" stroke="rgba(237,239,241,0.08)" stroke-width="1" vector-effect="non-scaling-stroke"/>`).join("");
-  return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="overflow:visible" aria-hidden="true" focusable="false">${g}${lines.join("")}</svg>`;
+  return `<svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="overflow:visible" aria-hidden="true" focusable="false">${g}${areas.join("")}${lines.join("")}</svg>`;
 }
+// Clip ids are document-wide, and a page draws several charts.
+let areaSeq = 0;
 
 /**
  * Runs of one state across the days, for the bands drawn behind the lines,
@@ -160,6 +187,25 @@ export function nearestSample(idx, n, ev) {
   let best = 0;
   for (let k = 1; k < idx.length; k++) if (Math.abs(idx[k] - at) < Math.abs(idx[best] - at)) best = k;
   return best;
+}
+
+/**
+ * Arrow keys step the crosshair through the drawn readings; Home and End jump
+ * to the ends; Escape clears it.
+ * @param {KeyboardEvent} ev @param {number | null} at @param {number} count
+ */
+export function stepAt(ev, at, count) {
+  if (!count) return at;
+  const last = count - 1;
+  if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+    ev.preventDefault();
+    const from = at ?? (ev.key === "ArrowRight" ? -1 : last + 1);
+    return Math.max(0, Math.min(last, from + (ev.key === "ArrowRight" ? 1 : -1)));
+  }
+  if (ev.key === "Home") { ev.preventDefault(); return 0; }
+  if (ev.key === "End") { ev.preventDefault(); return last; }
+  if (ev.key === "Escape") return null;
+  return at;
 }
 
 /**

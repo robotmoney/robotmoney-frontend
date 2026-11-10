@@ -431,7 +431,8 @@ export async function runProdInit(argv: readonly string[], deps: ProdInitDeps): 
             deps.log(`${role}: ${outcome}`);
           },
         });
-        detail = { roles: result.roles, ownerLoginBefore: result.ownerLoginBefore };
+        detail = { roles: result.roles, ownerLoginBefore: result.ownerLoginBefore, ...(result.stats ? { stats: result.stats } : {}) };
+        if (result.stats) deps.log(`pg_stat_statements: ${result.stats.extension}; rm_readonly pg_read_all_stats: ${result.stats.readonlyStats}`);
         break;
       }
       case "set-identity": {

@@ -122,6 +122,23 @@ export function connectionLimitArgs(l: ConnectionLimits): string[] {
   return ["-c", `max_connections=${l.maxConnections}`, "-c", `superuser_reserved_connections=${l.superuserReserved}`, "-c", `reserved_connections=${l.reserved}`];
 }
 
+/**
+ * The server settings stage takes from the managed cluster beyond its limits:
+ * production preloads pg_stat_statements, so the view answers once the
+ * extension exists (issue 1581). Arguments after the image, like the limits.
+ */
+export const PROVIDER_SERVER_ARGS: readonly string[] = Object.freeze(["-c", "shared_preload_libraries=pg_stat_statements"]);
+
+/**
+ * The provider's half of query statistics on stage (issue 1581). Production's
+ * doadmin installs pg_stat_statements through role-passwords; stage's doadmin
+ * is not the provider and may not create an untrusted extension, so `up`
+ * installs it as the container superuser after the restore, while production's
+ * own dump does not carry it yet. A dump that carries it restores it, and this
+ * does nothing.
+ */
+export const STATS_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;";
+
 /** What production reports about the stack it runs, read by `up` from `/api/version`. */
 export interface RunningVersion {
   readonly commit: string;

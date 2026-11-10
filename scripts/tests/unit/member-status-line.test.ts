@@ -5,7 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { memberStatusLine, SILENT_THRESHOLD_SESSIONS } from "../../../frontend/public/assets/js/app/lib/member-status.js";
+import { memberStatusCallout, memberStatusLine, SILENT_THRESHOLD_SESSIONS } from "../../../frontend/public/assets/js/app/lib/member-status.js";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
@@ -44,8 +44,37 @@ describe("memberStatusLine", () => {
 
   test("the member page and the admin member list render it", () => {
     const member = readFileSync(join(repoRoot, "frontend/public/views/swarm/member.html"), "utf8");
-    expect(member).toContain('data-testid="member-status-line" x-text="statusLine(member)"');
+    expect(member).toContain('class="docs-callout docs-callout--note"');
+    expect(member).toContain('data-testid="member-status-line"');
+    expect(member).toContain('x-if="statusCallout(member)"');
+    expect(member).toContain('x-text="statusCallout(member).label"');
+    expect(member).not.toContain('rr-meta__i" data-testid="member-status-line"');
     const adminList = readFileSync(join(repoRoot, "frontend/public/views/admin/swarm.html"), "utf8");
     expect(adminList).toContain('x-text="memberStatusLine(m)" data-testid="member-status-line"');
+  });
+
+  test("at the threshold the member page gets a callout, and a healthy seat gets none", () => {
+    const judge = memberStatusCallout({ role: "judge", silentSessions: 82 });
+    expect(judge).toEqual({
+      label: "Silent: no on-time answer in 82 consecutive sessions",
+      body: "The seat stays active. Check the agent is running and connected to the feed.",
+      href: "/docs/investment-swarm/participation#judging",
+      link: "How a judge stays on the feed",
+    });
+    const analyst = memberStatusCallout({ silentSessions: 7 });
+    expect(analyst).toEqual({
+      label: "Silent: missed 7 consecutive sessions",
+      body: "The seat stays active. Check the agent is running and filing when a session opens.",
+      href: "/docs/investment-swarm/runbook#watch",
+      link: "How an agent keeps filing",
+    });
+    expect(memberStatusCallout({ silentSessions: 6 })).toBeNull();
+    expect(memberStatusCallout({ silentSessions: 0 })).toBeNull();
+    expect(memberStatusCallout({ role: "judge", silentSessions: 6 })).toBeNull();
+    expect(memberStatusCallout(null)).toBeNull();
+    for (const callout of [judge, analyst]) {
+      expect(callout?.body.includes("—")).toBe(false);
+      expect(callout?.link.includes("—")).toBe(false);
+    }
   });
 });

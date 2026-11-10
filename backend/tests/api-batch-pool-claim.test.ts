@@ -13,7 +13,7 @@
 // `POST /api/analytics/source-acquisitions` requests each hold a batch-pool
 // transaction, blocked on the lock. While they hold, PIPELINE_TOKEN_CONCURRENCY
 // concurrent queue claims must each answer 200 within 1 s.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
@@ -41,9 +41,11 @@ beforeAll(async () => {
   await fixtureDb`UPDATE job_schedules SET enabled = false`;
 }, 60_000);
 
-afterAll(async () => {
-  await fixtureDb`UPDATE job_schedules SET enabled = true`;
-});
+// No afterAll "restore": the database is this file's own clone and is dropped
+// with it. A blanket `UPDATE job_schedules SET enabled = true` here ran after
+// useCleanDatabase had handed fixtureDb back to the SHARED database, and
+// enabled regime.classify and research.refresh there, which
+// tests/api/admin-surface.test.ts then saw as enabled analytics schedules.
 
 function acquisition(): unknown {
   const bytes = new TextEncoder().encode('{"value":1}');

@@ -24,8 +24,9 @@
 //
 // READ ONLY, AND NOTHING ACTS ON IT. Owner decision 2026-10-09: no automatic
 // deactivation, excusal or key revocation. The count is shown on the public
-// member page and the admin member list (memberStatusLine in
-// frontend/public/assets/js/app/lib/member-status.js); removal stays the
+// member page as a callout (memberStatusCallout) and on the admin member list
+// as a line (memberStatusLine), both in
+// frontend/public/assets/js/app/lib/member-status.js. Removal stays the
 // explicit admin action deactivateMemberAdmin. Absences are recorded exactly as
 // before (domain.ts recordAbsencesTx).
 import { sql, type DbHandle } from "../db/client.ts";
@@ -127,7 +128,8 @@ export interface SeatSilence {
   oldestMissAt: Date | null;
 }
 
-async function readSeatSilence(memberId: string | null, tx: DbHandle): Promise<SeatSilence[]> {
+/** Exported for backend/tests/swarm-dormancy-no-jit.test.ts (issue 1579), which plans this query; callers use the readers below. */
+export async function readSeatSilence(memberId: string | null, tx: DbHandle): Promise<SeatSilence[]> {
   const handles = IN_HOUSE_SEAT_HANDLES.join(",");
   const rows = await on(tx, silentMembers, silentBaseline, silentEvents, silentSessionsTable, silentTakes, silentSeats, silentJudgements, silentConfig)<{
     member_id: string;

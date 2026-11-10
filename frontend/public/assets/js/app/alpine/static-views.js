@@ -15,7 +15,7 @@ import { memberAvatarSrc } from "../lib/member-logos.js";
 import { sessionPhase } from "../lib/session-phase.js";
 import { STANCE_COLORS, stanceClass, stanceStyle } from "../lib/stance.js";
 import { operatorName } from "../lib/operator.js";
-import { memberStatusLine } from "../lib/member-status.js";
+import { memberStatusCallout } from "../lib/member-status.js";
 import { memberReferralCode } from "../lib/referral.js";
 import { timeAgo, timeLeft, absoluteUtc } from "../lib/relative-time.js";
 import { sessionSummary, weightEntries, bucketHue, bucketLabel, bucketRank, bookSleeveShares, weightsOutcomeLine, bucketShort, BUCKET_ORDER, RETIRED_BUCKETS, assetLabel } from "../lib/session-summary.js";
@@ -3145,9 +3145,9 @@ export function registerStaticViews(Alpine) {
     },
     isJudge(m) { return isJudge(m); },
     roleLabel(m) { return roleLabel(m); },
-    // A seat silent for the threshold's sessions says so (issue 1269). A
-    // line, never an action: the member stays seated.
-    statusLine(m) { return memberStatusLine(m); },
+    // A seat silent past the threshold (issue 1269). A callout, never an
+    // action: the member stays seated. Null while it is answering on time.
+    statusCallout(m) { return memberStatusCallout(m); },
     // ── A judge's record ────────────────────────────────────────────────────
     judgementHref(j) { return judgementHref(j); },
     // A record card's call (the badge) and, for a hold, why.

@@ -64,6 +64,8 @@ import {
   bindDatabase,
   composeStageHomeEnv,
   connectionLimitArgs,
+  PROVIDER_SERVER_ARGS,
+  STATS_EXTENSION_SQL,
   parseConnectionLimitsFlag,
   parseProductionLimits,
   type ConnectionLimits,
@@ -311,7 +313,7 @@ function startPostgres(limits: ConnectionLimits): void {
       "docker", "run", "-d", "--name", T.pgContainer, "--restart", "unless-stopped",
       "--env-file", envFile, "--label", T.label,
       "-p", `${T.pgBindHost}:${T.pgPort}:5432`, ...SHM_FLAGS,
-      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE, ...connectionLimitArgs(limits),
+      "-v", `${T.pgVolume}:/var/lib/postgresql`, POSTGRES_IMAGE, ...connectionLimitArgs(limits), ...PROVIDER_SERVER_ARGS,
     ], "docker run");
   } finally {
     rmSync(envFile, { force: true });
@@ -477,6 +479,9 @@ async function buildDatabase(backup: ReturnType<typeof readDumpPreflight>, runni
   const enrolled = parseKeyValues(psql(ENROLL_REHEARSAL_SQL, { tuples: true }));
   if (enrolled.identity_kind !== "rehearsal") throw new Error(`the identity row reads ${enrolled.identity_kind} after the enrollment`);
   log("deployment_identity enrolled rehearsal");
+  // After the grants comparison, which leaves extension members out either way.
+  psql(STATS_EXTENSION_SQL);
+  log("pg_stat_statements installed as the provider would (issue 1581)");
   psql("ANALYZE;");
   return { passwords, plan: planned };
 }
