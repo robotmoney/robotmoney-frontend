@@ -390,6 +390,14 @@
     "reason": "The analytics producer gave up while the api was saturated by analytics-ledger writes (issue 1035); it restarts under its supervisor and resumes."
   },
   {
+    "id": "known-swarm-seat-silence-jit-statement-timeout",
+    "match": "api error \\(5\\d\\d (/api/swarm/members/[^\\s/)]+|/api/swarm/admin/members|/api/admin/overview)\\): PostgresError: canceling statement due to statement timeout",
+    "class": "known-issue",
+    "issue": "1579",
+    "fixedIn": "0.7.4",
+    "reason": "The readSeatSilence query behind the member page, the admin member list and the admin overview JIT-compiled for 1-3 s a call (an unanalyzed 1-row swarm_dormancy_baseline pushed its plan cost past the JIT thresholds), and every house agent's session-start fetch at once passed the request pool's statement timeout. Fixed by jit=off on every app pool (issue 1579)."
+  },
+  {
     "id": "known-api-statement-timeout-under-load",
     "match": "PostgresError: canceling statement due to statement timeout",
     "class": "known-issue",

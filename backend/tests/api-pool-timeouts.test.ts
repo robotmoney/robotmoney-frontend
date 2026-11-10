@@ -5,7 +5,7 @@
 // client sees a 502. The batch pool keeps the long bulk timeouts.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { config } from "../src/config.ts";
-import { createApiPools, type ApiPools } from "../src/db/client.ts";
+import { createApiPools, sql, type ApiPools } from "../src/db/client.ts";
 import { deriveConnectionBudget } from "../src/db/connection-budget.ts";
 import { dbFailureResponse } from "../src/api/db-failure.ts";
 import { bootApi, type ApiProcess } from "./support/automation-auth.ts";
@@ -38,6 +38,14 @@ describe("the request and batch pools, as the api builds them", () => {
     expect(batch!.statement_timeout).toBe("5min");
     const [lock] = await pools.request<{ lock_timeout: string }[]>`SHOW lock_timeout`;
     expect(lock!.lock_timeout).toBe("1s");
+  });
+
+  // Issue 1579: JIT compiled the readSeatSilence plan for 1-3 s a call; no app session JITs.
+  test("SHOW jit is off on the request, batch and probe pools and on the general pool behind sql", async () => {
+    for (const [name, pool] of [["request", pools.request], ["batch", pools.batch], ["probe", pools.probe], ["general", sql]] as const) {
+      const [row] = await pool<{ jit: string }[]>`SHOW jit`;
+      expect({ name, jit: row!.jit }).toEqual({ name, jit: "off" });
+    }
   });
 
   test("a request-path pg_sleep(8) answers 503 db_timeout in under 6s", async () => {
