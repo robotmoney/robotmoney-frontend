@@ -51,6 +51,14 @@ notes: |
   and batch pools the same way) and on a plain connection as the control; the pool must answer off.
   Both are reads with production twins. The template's since-v0.7.4 steps Q37a/C25a-db-stats and
   Q37b-jobs-plans (stage only) bind this release and prove PRs 1582 and 1586.
+
+  Stage fix (first stage run, 20261110T065336Z). Q03-stage-up installed pg_stat_statements as the
+  container superuser, so v0.7.3's check 3a refused its members (v0.7.3's manifest neither lists the
+  extension nor names that owner) and the v0.7.3 stack never booted; Q05, Q12 and Q13 failed after
+  it. `up` now gives the members to doadmin, the provider role production's install runs as. Whether
+  production's members end up with doadmin is issue 1583's open question: if they do not, a v0.7.3
+  restart after role-passwords refuses, and the production preflight's check 3a shows it before the
+  cutover.
 recovery: |
   Migrations 0130 and 0131 are additive. v0.7.3 runs correctly on the new schema: every
   swarm_briefs INSERT in v0.7.3 names its columns (backend/src/swarm/domain.ts, epoch.ts) and never

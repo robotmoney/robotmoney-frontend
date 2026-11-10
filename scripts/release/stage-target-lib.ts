@@ -134,10 +134,33 @@ export const PROVIDER_SERVER_ARGS: readonly string[] = Object.freeze(["-c", "sha
  * doadmin installs pg_stat_statements through role-passwords; stage's doadmin
  * is not the provider and may not create an untrusted extension, so `up`
  * installs it as the container superuser after the restore, while production's
- * own dump does not carry it yet. A dump that carries it restores it, and this
- * does nothing.
+ * own dump does not carry it yet. A dump that carries it restores it, and the
+ * CREATE does nothing.
+ *
+ * The extension's members then go to doadmin, the provider role production's
+ * own install runs as (v0.7.4 stage run, 2026-11-10). Left with the container
+ * superuser, they fail the running release's check 3a: a manifest from before
+ * issue 1581 does not exclude pg_stat_statements, and it skips an undeclared
+ * object only when a listed provider role (doadmin, postgres) owns it. The
+ * previous release's stack then refuses to boot at Q03, which production never
+ * sees. Whether production's members really end up with doadmin is issue
+ * 1583's question; its production preflight answers it.
  */
-export const STATS_EXTENSION_SQL = "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;";
+export const STATS_EXTENSION_SQL = `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+DO $$
+DECLARE m record;
+BEGIN
+  FOR m IN
+    SELECT d.classid, d.objid FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid
+     WHERE d.refclassid = 'pg_extension'::regclass AND d.deptype = 'e' AND e.extname = 'pg_stat_statements'
+  LOOP
+    IF m.classid = 'pg_proc'::regclass THEN
+      EXECUTE format('ALTER FUNCTION %s OWNER TO doadmin', m.objid::regprocedure);
+    ELSIF m.classid = 'pg_class'::regclass THEN
+      EXECUTE format('ALTER TABLE %s OWNER TO doadmin', m.objid::regclass);
+    END IF;
+  END LOOP;
+END $$;`;
 
 /** What production reports about the stack it runs, read by `up` from `/api/version`. */
 export interface RunningVersion {
