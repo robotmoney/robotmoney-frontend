@@ -73,13 +73,15 @@ export function assertRequestTimeouts(t: PoolTimeouts): void {
   }
 }
 
-// ── No JIT on any app session (issue 1579) ─────────────────────────────────
+// ── No JIT on the app's pools (issue 1579) ─────────────────────────────────
 // Every app query is OLTP-sized, so JIT compilation never pays for itself. It
 // did cost: an unanalyzed 1-row table (swarm_dormancy_baseline) pushed the
 // readSeatSilence plan past jit_inline/optimize_above_cost, and each member
 // page compiled 68 functions for 1-3 s (0.8 ms without JIT), which crossed the
 // request pool's statement timeout when every house agent asked at once.
-// A startup parameter, like the timeouts, so no session can miss it.
+// A startup parameter, like the timeouts, so every session the app's pools open
+// (general, request, batch, health probe) runs with jit off. Short-lived
+// guard, check, lock and preflight clients built elsewhere are out of scope.
 export const NO_JIT = { jit: "off" } as const;
 
 function makePool(url: string, max: number, t: PoolTimeouts): postgresTypes.Sql<{}> {

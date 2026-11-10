@@ -35,14 +35,28 @@ describe("a statement timeout on a readSeatSilence route classifies to issue 157
     }
   }
 
-  test("the rule has no fixedIn until the release cut sets it, so after a release it is a warning, not a failure", () => {
+  test("the rule is fixed in 0.7.4, so a recurrence after v0.7.4 or later fails the post-release gate", () => {
     const rule = committed.find((r) => r.id === "known-swarm-seat-silence-jit-statement-timeout")!;
     expect(rule.class).toBe("known-issue");
-    expect(rule.fixedIn).toBeUndefined();
-    const v = inventoryVerdict(groupsOf([timeout(503, "/api/admin/overview")]), "post-release", "v0.7.4");
-    expect(v.unclassifiedErrors).toBe(0);
-    expect(v.failures).toEqual([]);
-    expect(v.warnings.join("\n")).toContain("1579");
+    expect(rule.fixedIn).toBe("0.7.4");
+    for (const release of ["v0.7.4", "0.7.5", "v0.8.0"]) {
+      const v = inventoryVerdict(groupsOf([timeout(503, "/api/admin/overview")]), "post-release", release);
+      expect(v.unclassifiedErrors).toBe(0);
+      expect(v.failures.join("\n")).toContain("known-swarm-seat-silence-jit-statement-timeout");
+      expect(v.failures.join("\n")).toContain("still present after the release that fixes it");
+    }
+    // No release tag (the twin gate): every known issue fails after the release.
+    expect(inventoryVerdict(groupsOf([timeout(503, "/api/admin/overview")]), "post-release").failures).toHaveLength(1);
+  });
+
+  test("RED CONTROL: before 0.7.4 a recurrence is a warning, and the baseline only warns", () => {
+    const groups = groupsOf([timeout(503, "/api/swarm/admin/members")]);
+    const before = inventoryVerdict(groups, "post-release", "v0.7.3");
+    expect(before.failures).toEqual([]);
+    expect(before.warnings.join("\n")).toContain("not fixed by v0.7.3 or earlier");
+    const baseline = inventoryVerdict(groups, "baseline", "v0.7.4");
+    expect(baseline.failures).toEqual([]);
+    expect(baseline.warnings.join("\n")).toContain("1579");
   });
 
   test("it is ordered ahead of known-api-statement-timeout-under-load", () => {
