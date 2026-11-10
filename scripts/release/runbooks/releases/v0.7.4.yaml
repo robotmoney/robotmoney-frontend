@@ -3,88 +3,71 @@
 # for production, each production step with a stage twin. A release only ADDS:
 # every template step stays, unchanged and in order, and each step this
 # release adds carries `added: v0.7.4` (scripts/release/runbook.ts checks it).
-# Added (added: v0.7.4): Q38/C26-public-surface and Q39/C27-no-jit, and v0.7.1's
-# Q34b/C22a-archive-records carried again.
+# Added (added: v0.7.4): Q38/C26-public-surface, and v0.7.1's Q34b/C22a-archive-records carried again.
 # The policy is docs/technical/release-runbooks.md.
 release: v0.7.4
 template: kitchen-sink
 notes: |
   Identity. From v0.7.3 (tag v0.7.3 at fe89c5ac, the squash of qa/0.7.x-2026-11-06 at a9da340c on
-  releases-0.7.x) to v0.7.4 at the commit the rc tag names, in a new checkout (/root/rm-074). The
-  target files' `release` reads v0.7.4 and prod's `checkout` names the new folder.
+  releases-0.7.x) to v0.7.4-rc.1 at the commit the rc tag names, in a new checkout (/root/rm-074).
+  The target files' `release` reads v0.7.4 and prod's `checkout` names the new folder.
 
-  Scope. releases-0.7.x took main by route (a) at 69a24f4b (merge of main at bfa6bbe2, PR 1595)
-  before the QA branch qa/0.7.x-2026-11-10 was cut. The merge had no conflict: the release line's
-  own content (issue 1514's v0.7.1 perf code in run-ledger.ts, regime-store.ts and
-  run-ledger-store.ts; the release runbooks, version checks and target files) is kept, and main's
-  side is taken everywhere else. The range v0.7.3..QA commit carries PRs 1582, 1586, 1588, 1589,
-  1590, 1592, 1593, 1594 and 1595 (scope below).
+  Owner rescope (lucky-tensor, 2026-11-10). v0.7.4 ships only the web client changes. All database
+  and backend work moves to v0.8.0. v0.7.4-rc.0 (2ca01233, the squash of qa/0.7.x-2026-11-10 at
+  68cced9e, stage run 20261110T073335Z) carried that work; it is superseded and never ran on
+  production. Tags never move, so the web-only candidate is v0.7.4-rc.1, from the QA branch
+  qa/0.7.x-2026-11-10-2 cut at 2ca01233. The platform/web tag split this exposed is research issue
+  1598.
 
-  Migrations: 0130_jobs_live_index_brief_allocation_stats.sql and
-  0131_swarm_briefs_allocation_backfill.sql, both `compat: additive`. Nothing is breaking and no
-  `breaking:` list is declared; the rolling upgrade applies. 0130 adds three job_id indexes, the
-  partial index jobs_live_kind_locked_idx, statistics targets on jobs.status and jobs.kind, the
-  nullable column swarm_briefs.allocation with its BEFORE INSERT OR UPDATE trigger, and (when the
-  role may) pg_stat_statements. 0131 fills allocation for existing briefs. Both set
-  lock_timeout = 2s: a lock wait past it fails the file whole (55P03) and the migrate is run again.
+  Scope. releases-0.7.x took main by route (a) at 69a24f4b (merge of main at bfa6bbe2) before
+  qa/0.7.x-2026-11-10 was cut. qa/0.7.x-2026-11-10-2 reverts what moves to v0.8.0: PR 1582 (jobs
+  indexes, migration 0130, admin job counts, prune, swarm_briefs.allocation, pg_stat_statements in
+  role-passwords, db-stats-check.ts, jobs-query-plans.ts, the template's Q37a/Q37b/C25a steps and
+  stage-target's pg_stat_statements install), PR 1586 (migration 0131 and its follow-ups), PR 1595
+  (jit=off on the app pools) and the rc.0 QA fix 68cced9e (stage gives pg_stat_statements' members
+  to doadmin; moot here once 1582's stage install is gone; it still reaches main by the §7
+  backport). Their commits stay in the range v0.7.3..QA commit by ancestry, so the scope lists them
+  with `none:` (reverted, not shipped). The kitchen-sink template is v0.7.3's again.
 
-  Before production (D61). The admin runs `bun run role-passwords --target prod --doadmin-stdin`
-  (prod-init role-passwords as doadmin) before the preflight. It creates pg_stat_statements and
-  grants rm_readonly pg_read_all_stats, which no migration can (the extension is untrusted and
-  rm_owner holds no admin option on pg_read_all_stats). Without it, 0130 only logs a NOTICE, and
-  C25a-db-stats fails after the cutover. On stage, Q04-role-passwords does the same with stage's
-  disposable doadmin.
+  What ships: PRs 1588, 1589, 1590 and 1594 (site; 1590 also edits one comment in
+  backend/src/swarm/dormancy.ts), 1592 (docs only) and 1593 (the v0.7.3 backport, already shipped).
+  Outside frontend/, backend/ differs from v0.7.3 only by that comment, and the log rules by one
+  added rule (below).
 
-  Issue 1579 (PR 1595). Every app pool opens its sessions with jit=off. The log rule
-  known-swarm-seat-silence-jit-statement-timeout (scripts/lib/gate/log-classifications.json) carries
-  fixedIn 0.7.4: the baseline gates (Q13, P08) report its statement timeouts as a warning, and every
-  gate after the release (Q28/C16 log verdict, Q32/C20 soak gate) fails on one. Q39/C27-no-jit read
-  `SHOW jit` on the running api's pool.
+  Migrations: none. backend/migrations and the schema snapshot equal v0.7.3's, so nothing is
+  breaking, no `breaking:` list is declared, and no role-passwords run is needed before production.
+
+  Issue 1579 stays open on v0.7.4. The log rule known-swarm-seat-silence-jit-statement-timeout is kept
+  with fixedIn 0.8.0 (main PR 1599 sets the same). The six-hourly statement timeouts on the member and
+  admin pages still happen on v0.7.4: the rule classifies them ahead of the 1035 rule (fixedIn 0.5.2),
+  so every gate on v0.7.4 reports them as a warning, not a failure.
 
   Carried check. Q34b-archive-records and C22a-archive-records are v0.7.1's archive check, added
   again (added: v0.7.4) as v0.7.2 and v0.7.3 did, because it guards the archive 503 that broke
   v0.7.0's cutover (issue 1508).
 
-  Added checks. Q38/C26-public-surface read one served file per site PR (1588, 1589, 1590, 1594) for
-  a text it added that v0.7.3's copy lacks. Q39/C27-no-jit run `SHOW jit` inside each running api
-  container on the general pool of the image's own client.ts (makePool, which builds the request
-  and batch pools the same way) and on a plain connection as the control; the pool must answer off.
-  Both are reads with production twins. The template's since-v0.7.4 steps Q37a/C25a-db-stats and
-  Q37b-jobs-plans (stage only) bind this release and prove PRs 1582 and 1586.
-
-  Stage fix (first stage run, 20261110T065336Z). Q03-stage-up installed pg_stat_statements as the
-  container superuser, so v0.7.3's check 3a refused its members (v0.7.3's manifest neither lists the
-  extension nor names that owner) and the v0.7.3 stack never booted; Q05, Q12 and Q13 failed after
-  it. `up` now gives the members to doadmin, the provider role production's install runs as. Whether
-  production's members end up with doadmin is issue 1583's open question: if they do not, a v0.7.3
-  restart after role-passwords refuses, and the production preflight's check 3a shows it before the
-  cutover.
+  Added check. Q38/C26-public-surface read one served file per site PR (1588, 1589, 1590, 1594) for
+  a text it added that v0.7.3's copy lacks. It is a read with a production twin.
 recovery: |
-  Migrations 0130 and 0131 are additive. v0.7.3 runs correctly on the new schema: every
-  swarm_briefs INSERT in v0.7.3 names its columns (backend/src/swarm/domain.ts, epoch.ts) and never
-  reads allocation; the trigger fills the column on v0.7.3's writes too; the new indexes, the
-  statistics targets and pg_stat_statements change no query result; no row is removed and no grant
-  changes. v0.7.3's boot accepts ledger rows it does not ship when each carries compat additive
-  (backend/src/db/schema-compat.ts), and its schema check reads the manifest the migrate publishes.
+  No migration and no schema change: backend/migrations and the schema snapshot equal v0.7.3's.
+  The upgrade is the rolling restart only.
   - Before C05-migrate (the preflight, or C01-backup to C04-probe-start): nothing has changed. Fix on a
     new QA branch and cut v0.7.4-rc.(N+1).
-  - A failed C05-migrate: each file runs in one transaction, so a failed file rolls back whole. A
-    lock_timeout (55P03) is a busy table: resume at C05-migrate. v0.7.3 keeps serving and the
-    website stays up. Any other failure stops the cutover; v0.7.3 keeps serving on the schema it had
-    plus any file that committed, which it runs correctly (above).
-  - After C05-migrate: v0.7.3 runs correctly on this schema. A defect found after the cutover is an
-    issue against v0.7.5 (policy §3 step 8). Rolling back to the v0.7.3 checkout (/root/rm-073) is a
-    code-only rollback and is safe; the schema stays.
+  - C05-migrate has no pending file. If it fails, resume at C05-migrate; v0.7.3 keeps serving and the
+    website stays up.
+  - After C05-migrate: the schema is v0.7.3's. A defect found after the cutover is an issue against
+    v0.7.5 (policy §3 step 8). Rolling back to the v0.7.3 checkout (/root/rm-073) is safe: the same
+    schema, a code-only rollback.
 scope:
-  - {pr: 1582, what: "perf(db): stop full scans of the jobs table, prune finished jobs, read brief allocations without the full body, and turn on query statistics (migration 0130, issue 1581)", check: "Q37b-jobs-plans"}
-  - {pr: 1586, what: "fix(db): migration 0130 lock timeout, per-chunk prune commits and dangling job links (issue 1584)", check: "Q37b-jobs-plans"}
+  - {pr: 1582, what: "perf(db): jobs-table scans, prune, brief allocations, query statistics (issue 1581)", none: "not shipped: reverted on qa/0.7.x-2026-11-10-2 by the owner's web-only rescope (2026-11-10); moves to v0.8.0"}
+  - {pr: 1586, what: "fix(db): migration 0130 lock timeout, per-chunk prune commits, dangling job links (issue 1584)", none: "not shipped: reverted on qa/0.7.x-2026-11-10-2 by the owner's web-only rescope (2026-11-10); moves to v0.8.0"}
   - {pr: 1588, what: "Launch polish: the launch date, the early access confirmation and the regime dial", check: "Q38-public-surface"}
   - {pr: 1589, what: "docs(skill): keep a judge loop running without systemd (the served onboarding SKILL.md)", check: "Q38-public-surface"}
   - {pr: 1590, what: "a silent seat shows as a callout on its member page", check: "Q38-public-surface"}
   - {pr: 1592, what: "docs(audits): Alpine images vs. the OpenSSH musl password-bypass (10.6p2)", none: "docs only: one file under docs/audits, nothing on a target"}
   - {pr: 1593, what: "chore(release): backport the v0.7.3 release-line fixes to main", none: "shipped in v0.7.3 by its squash; main's commit enters the range by the route (a) merge"}
   - {pr: 1594, what: "feat(home): the market regime under the model portfolio, with percentile as the regime scale", check: "Q38-public-surface"}
-  - {pr: 1595, what: "fix(api): jit=off on every app pool, so the member and admin pages stop timing out (issue 1579)", check: "Q39-no-jit"}
+  - {pr: 1595, what: "fix(api): jit=off on every app pool (issue 1579)", none: "not shipped: reverted on qa/0.7.x-2026-11-10-2 by the owner's web-only rescope (2026-11-10); moves to v0.8.0. Its log rule stays with fixedIn 0.8.0"}
 steps:
   # ── QA: stage only, as often as needed. Every step here runs on the stage target and
   # on no other: stage's preparation (Q01 to Q05), then the whole upgrade (checkout, install,
@@ -659,38 +642,7 @@ steps:
     after: ["Q23-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
-  # ── Query statistics and the jobs-table plans (issue 1581), from release v0.7.4 (since): on the
-  # target host, read-only as rm_readonly, after the soak. db-stats needs what role-passwords set up as
-  # doadmin (pg_stat_statements, rm_readonly in pg_read_all_stats); jobs-plans reads production's dump
-  # on stage only, so it has no production twin.
-  - id: "Q37a-db-stats"
-    standing: []
-    host: "target"
-    phase: "qa"
-    since: "v0.7.4"
-    description: "Query statistics: pg_extension lists pg_stat_statements, and rm_readonly holds pg_read_all_stats and reads other roles' rows in pg_stat_statements and pg_stat_activity with no query text hidden"
-    cmds:
-      - ["bun", "scripts/release/db-stats-check.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
-    irreversible: false
-    onlyFor: "stage"
-  - id: "Q37b-jobs-plans"
-    standing: []
-    host: "target"
-    phase: "qa"
-    since: "v0.7.4"
-    stageOnly: true
-    description: "Jobs-table plans on production's dump: the reaper, the enqueue live guard, livePayloadField and the backlog sweep (read forms) use jobs_live_kind_locked_idx with no Seq Scan on jobs and run under 10 ms; the admin job counts run under 50 ms (EXPLAIN ANALYZE as rm_readonly)"
-    cmds:
-      - ["bun", "scripts/release/jobs-query-plans.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "jobs-query-plans.json", "required": true}
-    irreversible: false
-    onlyFor: "stage"
-  # ── v0.7.4's version checks (added: v0.7.4): read-only, after the soak, each with a production twin.
+  # ── v0.7.4's version check (added: v0.7.4): read-only, after the soak, with a production twin.
   - id: "Q38-public-surface"
     standing: ["SV.7"]
     host: "target"
@@ -702,21 +654,6 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-public-surface.json", "required": true}
-    irreversible: false
-    onlyFor: "stage"
-    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
-    maxMinutes: 10
-  - id: "Q39-no-jit"
-    standing: ["SV.7"]
-    host: "target"
-    phase: "qa"
-    added: "v0.7.4"
-    description: "No JIT on the api's pools (PR 1595, issue 1579): in each running api container, SHOW jit on the general pool of /app/src/db/client.ts (built as the request and batch pools are) answers off; a plain connection's SHOW jit (the server default) is recorded as the control. One extra rm_app connection, reads only"
-    cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "no-jit", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-no-jit.json", "required": true}
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
@@ -1227,21 +1164,7 @@ steps:
     after: ["C11-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
-  # ── Query statistics (issue 1581), from release v0.7.4 (since): Q37a-db-stats's production twin.
-  - id: "C25a-db-stats"
-    standing: []
-    host: "target"
-    phase: "cutover"
-    since: "v0.7.4"
-    description: "Query statistics: pg_extension lists pg_stat_statements, and rm_readonly holds pg_read_all_stats and reads other roles' rows in pg_stat_statements and pg_stat_activity with no query text hidden"
-    cmds:
-      - ["bun", "scripts/release/db-stats-check.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
-    irreversible: false
-    onlyFor: "prod"
-  # ── v0.7.4's version checks (added: v0.7.4): the production twins of Q38 and Q39.
+  # ── v0.7.4's version check (added: v0.7.4): the production twin of Q38.
   - id: "C26-public-surface"
     standing: ["SV.7"]
     host: "target"
@@ -1253,21 +1176,6 @@ steps:
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-public-surface.json", "required": true}
-    irreversible: false
-    onlyFor: "prod"
-    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
-    maxMinutes: 10
-  - id: "C27-no-jit"
-    standing: ["SV.7"]
-    host: "target"
-    phase: "cutover"
-    added: "v0.7.4"
-    description: "No JIT on the api's pools (PR 1595, issue 1579): in each running api container, SHOW jit on the general pool of /app/src/db/client.ts (built as the request and batch pools are) answers off; a plain connection's SHOW jit (the server default) is recorded as the control. One extra rm_app connection, reads only"
-    cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "no-jit", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "version-check-no-jit.json", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
