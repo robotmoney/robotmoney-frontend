@@ -60,8 +60,11 @@ describe("Q38-committed-inputs/C26-committed-inputs (1533, 1536)", () => {
 describe("Q39-migration-ledger/C27-migration-ledger (0128, 0129)", () => {
   const repo = repoMigrations();
   const good = { triggers: TRIGGERS.map((tgname) => ({ tgname, tgenabled: "A" })), constraint: { def: "CHECK ((table_name = ANY (ARRAY['raw_indicator_history'::text, 'regime_snapshots'::text, 'research_signals'::text, 'asset_prices'::text])))", validated: true } };
-  test("the release's last two migrations are 0128 and 0129, both compat: additive", () => {
-    expect(repo.slice(-2)).toEqual([MIGRATION, FRAMEWORK_MIGRATION]);
+  // v0.7.1's last two migrations; later releases add files after them (v0.7.4: 0130, 0131).
+  test("the release's migrations 0128 and 0129 are in the repo, in order, both compat: additive", () => {
+    const at = repo.indexOf(MIGRATION);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(repo.slice(at, at + 2)).toEqual([MIGRATION, FRAMEWORK_MIGRATION]);
     for (const m of [MIGRATION, FRAMEWORK_MIGRATION]) expect(readFileSync(join(import.meta.dir, "../../../backend/migrations", m), "utf8").split("\n")[0]).toBe("-- compat: additive");
   });
   test("passes when 0128 is applied and its triggers and check are in place", () => {
