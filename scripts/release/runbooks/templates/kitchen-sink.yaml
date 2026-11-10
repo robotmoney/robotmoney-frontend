@@ -578,37 +578,6 @@ steps:
     after: ["Q23-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
-  # ── Query statistics and the jobs-table plans (issue 1581), from release v0.7.4 (since): on the
-  # target host, read-only as rm_readonly, after the soak. db-stats needs what role-passwords set up as
-  # doadmin (pg_stat_statements, rm_readonly in pg_read_all_stats); jobs-plans reads production's dump
-  # on stage only, so it has no production twin.
-  - id: "Q37a-db-stats"
-    standing: []
-    host: "target"
-    phase: "qa"
-    since: "v0.7.4"
-    description: "Query statistics: pg_extension lists pg_stat_statements, and rm_readonly holds pg_read_all_stats and reads other roles' rows in pg_stat_statements and pg_stat_activity with no query text hidden"
-    cmds:
-      - ["bun", "scripts/release/db-stats-check.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
-    irreversible: false
-    onlyFor: "stage"
-  - id: "Q37b-jobs-plans"
-    standing: []
-    host: "target"
-    phase: "qa"
-    since: "v0.7.4"
-    stageOnly: true
-    description: "Jobs-table plans on production's dump: the reaper, the enqueue live guard, livePayloadField and the backlog sweep (read forms) use jobs_live_kind_locked_idx with no Seq Scan on jobs and run under 10 ms; the admin job counts run under 50 ms (EXPLAIN ANALYZE as rm_readonly)"
-    cmds:
-      - ["bun", "scripts/release/jobs-query-plans.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "jobs-query-plans.json", "required": true}
-    irreversible: false
-    onlyFor: "stage"
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
@@ -1100,17 +1069,3 @@ steps:
     after: ["C11-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
-  # ── Query statistics (issue 1581), from release v0.7.4 (since): Q37a-db-stats's production twin.
-  - id: "C25a-db-stats"
-    standing: []
-    host: "target"
-    phase: "cutover"
-    since: "v0.7.4"
-    description: "Query statistics: pg_extension lists pg_stat_statements, and rm_readonly holds pg_read_all_stats and reads other roles' rows in pg_stat_statements and pg_stat_activity with no query text hidden"
-    cmds:
-      - ["bun", "scripts/release/db-stats-check.ts", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
-    expectExit: 0
-    receipts:
-      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
-    irreversible: false
-    onlyFor: "prod"

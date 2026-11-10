@@ -302,9 +302,7 @@ describe("loadSnapshot — three parts, three application rules, one identity", 
 describe("the provider exclusion list — explicit, carried by the snapshot, narrow on purpose", () => {
   test("the real snapshot carries it: specific names, never a pattern, never a §3 taxonomy role", async () => {
     const snapshot = await loadSnapshot();
-    // pg_stat_statements (issue 1581) is the provider's like pgcrypto: doadmin
-    // creates it through role-passwords, and rm_owner may not.
-    expect(snapshot.exclusions).toEqual({ roles: ["doadmin", "postgres"], extensions: ["pg_stat_statements", "pgcrypto", "plpgsql"] });
+    expect(snapshot.exclusions).toEqual({ roles: ["doadmin", "postgres"], extensions: ["pgcrypto", "plpgsql"] });
     // Never a pattern: a pattern would silently exempt an application table the
     // day someone names one badly.
     for (const entry of [...snapshot.exclusions.roles, ...snapshot.exclusions.extensions]) {

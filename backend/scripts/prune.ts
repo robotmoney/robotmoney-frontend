@@ -28,31 +28,6 @@
 //     `expires_at > now()`), and the sign-in it came from is audit_log's
 //     `login_passkey` row, so the row has no audit value. A REVOKED session is
 //     a security tombstone (D55 (6)) and is kept, whatever its age.
-//   * `jobs` rows that finished long ago (issue 1581). The queue table grew by
-//     ~3,600 rows a day and was never pruned; every read of it that is not an
-//     index lookup paid for the whole history. Two entries, each with its own
-//     floor on top of the window: `succeeded` and `cancelled` rows last
-//     updated more than 30 days ago, and `dead` and `failed` rows more than 90
-//     days ago (kept longer: they are what an operator investigates). A job
-//     that audit_log, analytics_runs or swarm_session_events still names is
-//     KEPT, whatever its age: those edges are `ON DELETE SET NULL`, so
-//     deleting it would blank the provenance on a history row, and the
-//     command never edits audit history. `pending` and `running` rows are
-//     never candidates. The rows go in chunks of JOBS_PRUNE_CHUNK, and each
-//     chunk is its own transaction (issue 1584): no transaction holds more
-//     than one chunk of row locks, and a chunk is committed before the next
-//     one starts.
-//   * the `job_runs` rows of each jobs row that goes, in the same statement
-//     (issue 1584). job_runs.job_id has no foreign key, so a run left behind
-//     would name a job that no longer exists, and GET /api/admin/runs's scope
-//     filters (a LEFT JOIN to jobs) could no longer find it. A run is the log
-//     of one attempt of a job that is gone and older than its floor: it is
-//     operational state, not audit history. Nearly every job has a run, so
-//     keeping the job instead would prune nothing.
-//     The three other tables whose job_id has no foreign key keep their rows:
-//     research_pipeline_runs and pipeline_ingest_receipts are provenance, and
-//     analytics_ledger_runs is an immutable ledger. A job one of them names is
-//     KEPT, like a job history names, so none of them names a deleted job.
 // WHAT IT NEVER PRUNES, BY CONSTRUCTION: every other table. In particular the
 // revocation tombstones (`admin_session` / `admin_passkey` rows with
 // `revoked_at`), `swarm_member_keys`, `automation_tokens`, `audit_log`, every
@@ -62,25 +37,18 @@
 //
 // THE WINDOW. `--retention-days <n>`, default 7. A value below 7 refuses before
 // anything connects: the window is a floor the owner confirmed, configurable
-// upward only. A target may carry a higher floor of its own (the
-// jobs entries: 30 and 90 days); its window is the larger of the two. The cutoff is `now() - n days` by the DATABASE's clock, taken
-// by the first prune statement, so a skewed operator clock cannot move it.
-// Every later statement of the run is handed that same `now()`, so each
-// target's cutoff is the run's time minus its window, whichever transaction
-// it commits in.
+// upward only. The cutoff is `now() - n days` by the DATABASE's clock, taken
+// inside the fenced transaction, so a skewed operator clock cannot move it.
 //
 // THE SEQUENCE, like `bun run migrate` (backend/scripts/migrate.ts):
 //   plan (read the target) → lock (the §2 session lock, revalidated) → gates
 //   (the §4.3 matrix) → owner (`~/.env`'s rm_owner line, proven by a login;
 //   a missing line refuses naming the key and the file) → confirm
-//   (`--confirm-target` equal to the target `~/.env` resolves, D61) → prune (one
-//   transaction per target, and per chunk for jobs, each fenced with
-//   `pg_advisory_xact_lock` on the target key, as rm_owner, after the session
-//   lock is proven held again) → receipt.
+//   (`--confirm-target` equal to the target `~/.env` resolves, D61) → prune (ONE transaction, fenced
+//   with `pg_advisory_xact_lock` on the target key, as rm_owner) → receipt.
 // Beside the receipt a journal records the phase every run reached, refused
 // and interrupted runs included (§2: a losing tool "journals the phase and
-// exits non-zero"). A prune that fails after some transactions committed
-// names, in the journal, the rows they removed.
+// exits non-zero").
 //
 // usage: bun run prune --confirm-target <host:port/database> [--retention-days <n>] [--instance <name>] [--receipt <path>] [--lock-timeout <seconds>]
 //
@@ -119,13 +87,11 @@ export const DEFAULT_RETENTION_DAYS = MIN_RETENTION_DAYS;
 
 const CALLERS = ["scripts/prune"];
 
-// ── The statements, each a registered rm_owner site (spec §7.1) ─────────────
+// ── The two statements, each a registered rm_owner site (spec §7.1) ─────────
 //
-// Each is one statement: the cutoff, the DELETE and the count. `$1` is the
-// run's `now()` as text, or NULL for the run's first statement, which takes
-// the database's own `now()` and returns it for every later one. The cutoff
-// is that time minus the window, and it is returned even when no row matched,
-// so the receipt can always name it.
+// Each is one statement: the cutoff, the DELETE and the count. The cutoff is
+// the database's `now()` minus the window, and it is returned even when no row
+// matched, so the receipt can always name it.
 
 const pruneStreamEvents = registerQuery({
   role: "rm_owner",
@@ -138,11 +104,10 @@ const pruneStreamEvents = registerQuery({
     "typed-owner `bun run prune` (D55 (12)).",
   callers: CALLERS,
   probe: {
-    statement: `WITH run AS (SELECT COALESCE($1::timestamptz, now()) AS now),
-      cut AS (SELECT now - make_interval(days => $2) AS at FROM run),
+    statement: `WITH cut AS (SELECT now() - make_interval(days => $1) AS at),
       gone AS (DELETE FROM swarm_stream_events e USING cut WHERE e.committed_at < cut.at RETURNING e.seq)
-      SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`,
-    params: [null, MIN_RETENTION_DAYS],
+      SELECT (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`,
+    params: [MIN_RETENTION_DAYS],
   },
 });
 
@@ -157,195 +122,12 @@ const pruneExpiredSessions = registerQuery({
     "security tombstone and is kept (D55 (6), (12)).",
   callers: CALLERS,
   probe: {
-    statement: `WITH run AS (SELECT COALESCE($1::timestamptz, now()) AS now),
-      cut AS (SELECT now - make_interval(days => $2) AS at FROM run),
+    statement: `WITH cut AS (SELECT now() - make_interval(days => $1) AS at),
       gone AS (DELETE FROM admin_session s USING cut WHERE s.revoked_at IS NULL AND s.expires_at < cut.at RETURNING s.token)
-      SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`,
-    params: [null, MIN_RETENTION_DAYS],
+      SELECT (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`,
+    params: [MIN_RETENTION_DAYS],
   },
 });
-
-// ── The jobs entries (issues 1581, 1584) ────────────────────────────────────
-//
-// One statement per chunk, each in its own transaction: the cutoff, up to
-// JOBS_PRUNE_CHUNK candidate ids (oldest first), the DELETE of their job_runs
-// rows and of the jobs themselves, and the counts. `$3` is the comma-separated
-// status list of the entry. The NOT EXISTS edges are every table whose
-// job_id names a job and must keep naming it: the three `ON DELETE SET NULL`
-// foreign keys (audit_log, analytics_runs, swarm_session_events) and the three
-// key-less provenance columns (research_pipeline_runs, analytics_ledger_runs,
-// pipeline_ingest_receipts), each served by an index (migration 0130 adds the
-// missing ones).
-
-/** The most jobs rows one chunk (one statement, one transaction) removes. */
-export const JOBS_PRUNE_CHUNK = 5000;
-/** The floors of the two jobs entries, in days, on top of the command's window. */
-export const JOBS_FINISHED_MIN_DAYS = 30;
-export const JOBS_FAILED_MIN_DAYS = 90;
-
-const JOBS_CHUNK_SQL = `WITH run AS (SELECT COALESCE($1::timestamptz, now()) AS now),
-      cut AS (SELECT now - make_interval(days => $2) AS at FROM run),
-      victims AS (SELECT j.id FROM jobs j, cut
-        WHERE j.status = ANY (string_to_array($3, ',')) AND j.updated_at < cut.at
-          AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.job_id = j.id)
-          AND NOT EXISTS (SELECT 1 FROM analytics_runs r WHERE r.job_id = j.id)
-          AND NOT EXISTS (SELECT 1 FROM swarm_session_events e WHERE e.job_id = j.id)
-          AND NOT EXISTS (SELECT 1 FROM research_pipeline_runs p WHERE p.job_id = j.id)
-          AND NOT EXISTS (SELECT 1 FROM analytics_ledger_runs l WHERE l.job_id = j.id)
-          AND NOT EXISTS (SELECT 1 FROM pipeline_ingest_receipts i WHERE i.job_id = j.id)
-        ORDER BY j.id LIMIT $4),
-      runs AS (DELETE FROM job_runs r USING victims v WHERE r.job_id = v.id RETURNING r.id),
-      gone AS (DELETE FROM jobs j USING victims v WHERE j.id = v.id RETURNING j.id)
-      SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff,
-             (SELECT count(*) FROM gone)::int AS rows, (SELECT count(*) FROM runs)::int AS job_runs`;
-const JOBS_PROBE = { statement: JOBS_CHUNK_SQL, params: [null, JOBS_FINISHED_MIN_DAYS, "succeeded,cancelled", JOBS_PRUNE_CHUNK] };
-const JOBS_PURPOSE =
-  "Remove one chunk of finished jobs older than their floor (30 days succeeded/cancelled, 90 days dead/failed) with " +
-  "their job_runs rows, skipping any job history or provenance still names, on an operator's `bun run prune` " +
-  "(D55 (12), issues 1581 and 1584).";
-
-const pruneJobs = registerQuery({
-  role: "rm_owner",
-  object: "jobs",
-  // SELECT because the WHERE reads status and updated_at, and RETURNING id.
-  privileges: ["DELETE", "SELECT"],
-  site: "scripts/prune:pruneJobs",
-  purpose: JOBS_PURPOSE,
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsRunLog = registerQuery({
-  role: "rm_owner",
-  object: "job_runs",
-  // SELECT because the USING reads job_id and RETURNING id.
-  privileges: ["DELETE", "SELECT"],
-  site: "scripts/prune:pruneJobs.jobRuns",
-  purpose:
-    "Remove the job_runs rows of each job the prune removes, in the same statement, so no run names a deleted job " +
-    "(job_runs.job_id has no foreign key; issue 1584).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsAudit = registerQuery({
-  role: "rm_owner",
-  object: "audit_log",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.audit",
-  purpose: "Keep any job an audit_log row names, so the prune never blanks audit provenance (issue 1581).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsRuns = registerQuery({
-  role: "rm_owner",
-  object: "analytics_runs",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.analyticsRuns",
-  purpose: "Keep any job an analytics_runs row names, so the prune never blanks a run's provenance (issue 1581).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsEvents = registerQuery({
-  role: "rm_owner",
-  object: "swarm_session_events",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.sessionEvents",
-  purpose: "Keep any job a swarm_session_events row names, so the prune never blanks session history (issue 1581).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsResearch = registerQuery({
-  role: "rm_owner",
-  object: "research_pipeline_runs",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.researchRuns",
-  purpose: "Keep any job a research_pipeline_runs row names: its job_id has no foreign key, and must never name a deleted job (issue 1584).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsLedger = registerQuery({
-  role: "rm_owner",
-  object: "analytics_ledger_runs",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.ledgerRuns",
-  purpose: "Keep any job an analytics_ledger_runs row names: an immutable ledger row must never name a deleted job (issue 1584).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-const pruneJobsReceipts = registerQuery({
-  role: "rm_owner",
-  object: "pipeline_ingest_receipts",
-  privileges: ["SELECT"],
-  site: "scripts/prune:pruneJobs.ingestReceipts",
-  purpose: "Keep any job a pipeline_ingest_receipts row names: its job_id has no foreign key, and must never name a deleted job (issue 1584).",
-  callers: CALLERS,
-  probe: JOBS_PROBE,
-});
-
-/** One prune transaction's result: the run's clock, the cutoff and what went. */
-interface StatementResult {
-  readonly now: string;
-  readonly cutoff: Date;
-  readonly rows: number;
-}
-
-/** What one target's prune removed, before the receipt adds its name and window. */
-export interface TargetResult {
-  readonly now: string;
-  readonly cutoff: Date;
-  readonly rows: number;
-  readonly chunks?: number[];
-  readonly jobRuns?: number;
-}
-
-/**
- * Run `body` in a transaction of its own, fenced with the target key's
- * `pg_advisory_xact_lock`, once the session target lock is proven held; then
- * report what that transaction removed, once it has committed.
- */
-export type Fenced = <T extends { rows: number; jobRuns?: number }>(
-  body: (tx: postgresTypes.TransactionSql<{}>) => Promise<T>,
-) => Promise<T>;
-
-/**
- * Delete the jobs of `statuses` last updated before `now - days`, with their
- * job_runs rows, chunk by chunk until a chunk comes back short. Each chunk is
- * one statement in its own fenced transaction, so it commits before the next
- * one starts.
- */
-async function pruneJobsInChunks(fenced: Fenced, now: string | null, days: number, statuses: string): Promise<TargetResult> {
-  const chunks: number[] = [];
-  let jobRuns = 0;
-  let first: StatementResult | null = null;
-  let at = now;
-  for (;;) {
-    const row = await fenced(async (tx) => {
-      const [r] = await on(tx, pruneJobs, pruneJobsRunLog, pruneJobsAudit, pruneJobsRuns, pruneJobsEvents, pruneJobsResearch, pruneJobsLedger, pruneJobsReceipts)<StatementResult & { job_runs: number }>`
-        WITH run AS (SELECT COALESCE(${at}::timestamptz, now()) AS now),
-          cut AS (SELECT now - make_interval(days => ${days}) AS at FROM run),
-          victims AS (SELECT j.id FROM jobs j, cut
-            WHERE j.status = ANY (string_to_array(${statuses}, ',')) AND j.updated_at < cut.at
-              AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.job_id = j.id)
-              AND NOT EXISTS (SELECT 1 FROM analytics_runs r WHERE r.job_id = j.id)
-              AND NOT EXISTS (SELECT 1 FROM swarm_session_events e WHERE e.job_id = j.id)
-              AND NOT EXISTS (SELECT 1 FROM research_pipeline_runs p WHERE p.job_id = j.id)
-              AND NOT EXISTS (SELECT 1 FROM analytics_ledger_runs l WHERE l.job_id = j.id)
-              AND NOT EXISTS (SELECT 1 FROM pipeline_ingest_receipts i WHERE i.job_id = j.id)
-            ORDER BY j.id LIMIT ${JOBS_PRUNE_CHUNK}),
-          runs AS (DELETE FROM job_runs r USING victims v WHERE r.job_id = v.id RETURNING r.id),
-          gone AS (DELETE FROM jobs j USING victims v WHERE j.id = v.id RETURNING j.id)
-          SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff,
-                 (SELECT count(*) FROM gone)::int AS rows, (SELECT count(*) FROM runs)::int AS job_runs`;
-      return { now: r!.now, cutoff: r!.cutoff, rows: Number(r!.rows), jobRuns: Number(r!.job_runs) };
-    });
-    // Every chunk is handed the first one's clock, so all name one cutoff.
-    first ??= row;
-    at = row.now;
-    jobRuns += row.jobRuns;
-    if (row.rows > 0) chunks.push(row.rows);
-    if (row.rows < JOBS_PRUNE_CHUNK) break;
-  }
-  return { now: first!.now, cutoff: first!.cutoff, rows: chunks.reduce((n, c) => n + c, 0), chunks, jobRuns };
-}
 
 /** One table the command may prune: what it removes, and why that is safe. */
 export interface PruneTarget {
@@ -353,63 +135,39 @@ export interface PruneTarget {
   /** The predicate, as the receipt records it. `<cutoff>` is `now() - window`. */
   readonly predicate: string;
   readonly why: string;
-  /** A floor of this target's own, in days; its window is the larger of this and the command's. */
-  readonly minDays?: number;
-  /** `now` is the run's clock (`null` for its first statement, which reads the database's). */
-  readonly run: (fenced: Fenced, now: string | null, days: number) => Promise<TargetResult>;
+  readonly run: (db: postgresTypes.TransactionSql<{}>, days: number) => Promise<{ cutoff: Date; rows: number }>;
 }
-
-const JOBS_KEPT = "no audit_log, analytics_runs, swarm_session_events, research_pipeline_runs, analytics_ledger_runs or pipeline_ingest_receipts row names it";
 
 /**
  * THE CLOSED LIST. A table is pruned only if it is here, and a new entry is a
  * decision with its reason written down. Never a security tombstone, never
  * audit history (D55 (12)); tests/prune-command.test.ts plants both and proves
- * each survives. The jobs entries also remove each pruned job's job_runs rows
- * (issue 1584), and the receipt counts them.
+ * each survives.
  */
 export const PRUNE_TARGETS: readonly PruneTarget[] = Object.freeze([
   {
     table: "swarm_stream_events",
     predicate: "committed_at < <cutoff>",
     why: "the event log keeps a window; a cursor below the retained floor gets resync-and-close (log_truncated)",
-    run: (fenced, now, days) =>
-      fenced(async (tx) => {
-        const [row] = await on(tx, pruneStreamEvents)<StatementResult>`
-          WITH run AS (SELECT COALESCE(${now}::timestamptz, now()) AS now),
-            cut AS (SELECT now - make_interval(days => ${days}) AS at FROM run),
-            gone AS (DELETE FROM swarm_stream_events e USING cut WHERE e.committed_at < cut.at RETURNING e.seq)
-            SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`;
-        return { now: row!.now, cutoff: row!.cutoff, rows: Number(row!.rows) };
-      }),
+    run: async (db, days) => {
+      const [row] = await on(db, pruneStreamEvents)<{ cutoff: Date; rows: number }>`
+        WITH cut AS (SELECT now() - make_interval(days => ${days}) AS at),
+          gone AS (DELETE FROM swarm_stream_events e USING cut WHERE e.committed_at < cut.at RETURNING e.seq)
+          SELECT (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`;
+      return { cutoff: row!.cutoff, rows: Number(row!.rows) };
+    },
   },
   {
     table: "admin_session",
     predicate: "revoked_at IS NULL AND expires_at < <cutoff>",
     why: "an expired, never-revoked session is refused by every read and its sign-in is audit_log's; revoked ones are tombstones and stay",
-    run: (fenced, now, days) =>
-      fenced(async (tx) => {
-        const [row] = await on(tx, pruneExpiredSessions)<StatementResult>`
-          WITH run AS (SELECT COALESCE(${now}::timestamptz, now()) AS now),
-            cut AS (SELECT now - make_interval(days => ${days}) AS at FROM run),
-            gone AS (DELETE FROM admin_session s USING cut WHERE s.revoked_at IS NULL AND s.expires_at < cut.at RETURNING s.token)
-            SELECT (SELECT now FROM run)::text AS now, (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`;
-        return { now: row!.now, cutoff: row!.cutoff, rows: Number(row!.rows) };
-      }),
-  },
-  {
-    table: "jobs",
-    predicate: `status IN ('succeeded', 'cancelled') AND updated_at < <cutoff> AND ${JOBS_KEPT}; its job_runs rows go with it`,
-    why: "a finished job older than 30 days is no live state; a job history or provenance still names is kept, so nothing is left naming a deleted job",
-    minDays: JOBS_FINISHED_MIN_DAYS,
-    run: (fenced, now, days) => pruneJobsInChunks(fenced, now, days, "succeeded,cancelled"),
-  },
-  {
-    table: "jobs",
-    predicate: `status IN ('dead', 'failed') AND updated_at < <cutoff> AND ${JOBS_KEPT}; its job_runs rows go with it`,
-    why: "a dead or failed job is kept 90 days for investigation, then goes like a finished one",
-    minDays: JOBS_FAILED_MIN_DAYS,
-    run: (fenced, now, days) => pruneJobsInChunks(fenced, now, days, "dead,failed"),
+    run: async (db, days) => {
+      const [row] = await on(db, pruneExpiredSessions)<{ cutoff: Date; rows: number }>`
+        WITH cut AS (SELECT now() - make_interval(days => ${days}) AS at),
+          gone AS (DELETE FROM admin_session s USING cut WHERE s.revoked_at IS NULL AND s.expires_at < cut.at RETURNING s.token)
+          SELECT (SELECT at FROM cut) AS cutoff, (SELECT count(*) FROM gone)::int AS rows`;
+      return { cutoff: row!.cutoff, rows: Number(row!.rows) };
+    },
   },
 ]);
 
@@ -442,63 +200,36 @@ export interface PrunedTable {
   readonly windowDays: number;
   readonly cutoff: string;
   readonly rows: number;
-  /** The rows each chunk removed, for a chunked target (jobs); absent for a one-statement target. */
-  readonly chunks?: readonly number[];
-  /** The job_runs rows that went with the jobs (jobs entries only, issue 1584). */
-  readonly jobRuns?: number;
-}
-
-/** One committed prune transaction, as {@link runPrune} reports it the moment it commits. */
-export interface PruneCommit {
-  readonly table: string;
-  readonly rows: number;
-  readonly jobRuns?: number;
 }
 
 /**
- * The prune itself: every PRUNE_TARGETS entry, on the rm_owner pool the caller
- * opened. Each target, and each chunk of a jobs entry, is its own transaction
- * fenced with the target key's `pg_advisory_xact_lock` (§2), and the session
- * lock is proven held before each one starts. A competitor that wins the
- * session lock after this process lost it still blocks on the fence until the
- * transaction in flight commits or aborts, and the next one then refuses.
- * `onCommit` hears of each transaction after it commits, so a run that fails
- * part way can still say what it removed.
+ * The prune itself: every PRUNE_TARGETS entry, in ONE transaction fenced with
+ * the target key's `pg_advisory_xact_lock` (§2), on the rm_owner pool the
+ * caller opened. A competitor that wins the session lock after this process
+ * lost it still blocks on the fence until this commits or aborts.
  */
 export async function runPrune(
   owner: postgresTypes.Sql<{}>,
-  options: { readonly windowDays: number; readonly lock: HeldTargetLock; readonly onCommit?: (commit: PruneCommit) => void | Promise<void> },
+  options: { readonly windowDays: number; readonly lock: HeldTargetLock },
 ): Promise<readonly PrunedTable[]> {
   if (options.windowDays < MIN_RETENTION_DAYS) {
     throw new PruneRefused(`Refusing: a ${options.windowDays}-day window is below the ${MIN_RETENTION_DAYS}-day minimum.`);
   }
-  const pruned: PrunedTable[] = [];
-  let now: string | null = null;
-  for (const target of PRUNE_TARGETS) {
-    const fenced: Fenced = async (body) => {
-      await assertStillHeld(options.lock, "prune");
-      const result = await withFenceOn(owner, "prune", (tx) => body(tx as postgresTypes.TransactionSql<{}>));
-      await options.onCommit?.({
+  await assertStillHeld(options.lock, "prune");
+  return withFenceOn(owner, "prune", async (tx) => {
+    const pruned: PrunedTable[] = [];
+    for (const target of PRUNE_TARGETS) {
+      const { cutoff, rows } = await target.run(tx as postgresTypes.TransactionSql<{}>, options.windowDays);
+      pruned.push({
         table: target.table,
-        rows: result.rows,
-        ...(result.jobRuns === undefined ? {} : { jobRuns: result.jobRuns }),
+        predicate: target.predicate,
+        windowDays: options.windowDays,
+        cutoff: new Date(cutoff).toISOString(),
+        rows,
       });
-      return result;
-    };
-    const windowDays = Math.max(options.windowDays, target.minDays ?? 0);
-    const result = await target.run(fenced, now, windowDays);
-    now ??= result.now;
-    pruned.push({
-      table: target.table,
-      predicate: target.predicate,
-      windowDays,
-      cutoff: new Date(result.cutoff).toISOString(),
-      rows: result.rows,
-      ...(result.chunks === undefined ? {} : { chunks: result.chunks }),
-      ...(result.jobRuns === undefined ? {} : { jobRuns: result.jobRuns }),
-    });
-  }
-  return pruned;
+    }
+    return pruned;
+  });
 }
 
 // ── The journal (§2) ────────────────────────────────────────────────────────
@@ -673,9 +404,6 @@ export async function pruneCommand(input: {
   let owner: postgresTypes.Sql<{}> | null = null;
   let release: (() => Promise<void>) | null = null;
   let lock: HeldTargetLock | null = null;
-  // What committed so far, by table: a failure part way through the prune
-  // phase names it in the journal, because those rows are gone either way.
-  const committed = new Map<string, { rows: number; jobRuns: number }>();
   const phase = async (name: string): Promise<void> => {
     journal.begin(name);
     if (lock !== null) await assertStillHeld(lock, name);
@@ -738,7 +466,7 @@ export async function pruneCommand(input: {
     }
 
     await phase("confirm");
-    const plan = PRUNE_TARGETS.map((t) => `  ${t.table}: ${t.predicate}${t.minDays ? ` (window at least ${t.minDays} days)` : ""}`).join("\n");
+    const plan = PRUNE_TARGETS.map((t) => `  ${t.table}: ${t.predicate}`).join("\n");
     input.log(
       `WARNING: this deletes rows from ${target} as rm_owner, with a ${input.windowDays}-day window ` +
         "(<cutoff> = the database's now() minus the window):\n" +
@@ -752,18 +480,8 @@ export async function pruneCommand(input: {
     }
 
     await phase("prune");
-    const tables = await runPrune(owner, {
-      windowDays: input.windowDays,
-      lock: held,
-      onCommit: (c) => {
-        const sum = committed.get(c.table) ?? { rows: 0, jobRuns: 0 };
-        committed.set(c.table, { rows: sum.rows + c.rows, jobRuns: sum.jobRuns + (c.jobRuns ?? 0) });
-      },
-    });
-    for (const t of tables) {
-      const runs = t.jobRuns === undefined ? "" : ` (and ${t.jobRuns} job_runs row(s))`;
-      input.log(`${t.table}: ${t.rows} row(s)${runs} where ${t.predicate}, cutoff ${t.cutoff}`);
-    }
+    const tables = await runPrune(owner, { windowDays: input.windowDays, lock: held });
+    for (const t of tables) input.log(`${t.table}: ${t.rows} row(s) where ${t.predicate}, cutoff ${t.cutoff}`);
 
     await phase("receipt");
     const receipt: PruneReceipt = {
@@ -782,14 +500,7 @@ export async function pruneCommand(input: {
     return { receipt: input.receiptPath, tables };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const gone = [...committed].filter(([, c]) => c.rows + c.jobRuns > 0);
-    const reason =
-      gone.length === 0
-        ? message
-        : `${message} (committed before it stopped: ${gone
-            .map(([table, c]) => `${table} ${c.rows} row(s)${c.jobRuns > 0 ? ` and ${c.jobRuns} job_runs row(s)` : ""}`)
-            .join(", ")})`;
-    journal.close(error instanceof PruneRefused || message.startsWith("Refusing") ? "refused" : "failed", reason);
+    journal.close(error instanceof PruneRefused || message.startsWith("Refusing") ? "refused" : "failed", message);
     throw error;
   } finally {
     await owner?.end({ timeout: 5 }).catch(() => undefined);

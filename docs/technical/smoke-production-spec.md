@@ -412,7 +412,7 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - Neither privileged password appears in a receipt, a journal, a log line, an error message or a process argument. No container environment or compose file `bun smoke` assembles carries `rm_owner` or `doadmin`.
 - More than 32 unauthenticated WebAuthn option requests leave the challenge row count at 32.
 - Code built before the `compat: breaking` migration that revokes runtime `DELETE` refuses to boot after it.
-- The prune command takes `rm_owner` from `~/.env` and `--confirm-target`, and writes a receipt. It never removes a row younger than 7 days, a security tombstone or audit history. Its `jobs` entries (issue 1581) remove finished jobs past their own 30- and 90-day floors in bounded chunks, and keep any job a history row names. Each chunk is its own fenced transaction, and it removes its jobs' `job_runs` rows with them, so no row is left naming a deleted job (issue 1584).
+- The prune command takes `rm_owner` from `~/.env` and `--confirm-target`, and writes a receipt. It never removes a row younger than 7 days, a security tombstone or audit history.
 - `rm_app` can `UPDATE` only the `final` column of `swarm_recommendations`.
 - Production baseline: a live schema that differs from the snapshot blocks the first manifest publication.
 - Registry structurally enforced; execution under each role on a disposable database.
