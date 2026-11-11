@@ -18,14 +18,18 @@
 // docs and comment-only edits (issue 1603), pushes it as a fast-forward, waits for
 // web-client.yml and e2e-web.yml, cuts the annotated web-vA.B.C tag,
 // waits for web-tag-guard.yml, checks the tag out on the host, deploys, checks
-// the live site and creates the GitHub release. A failed live check rolls the
-// site back with `bun smoke:web --rollback`. The tag is never moved or deleted:
+// the live site (version.json, the served bytes against the host's
+// web/current, the sitemap, an unchanged api) and creates the GitHub release.
+// Before the tag, W04 to W06 run the release on the kitchen-sink stage target. A failed live check rolls the site back with
+// `bun smoke:web --rollback`; W01 refuses when the host has no site to roll
+// back to. The tag is never moved or deleted:
 // the fix ships as web-vA.B.(C+1).
 //
 // Every git, gh, ssh and http call goes through an injected Deps, so the unit
 // tests run the steps against a local bare origin and stubs. Each step has a
 // read-only done check, so a rerun reports the steps already done and continues
 // at the first that is not; `--dry-run` runs only the preflight and the checks.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,12 +46,18 @@ export type { ExecResult, StepResult } from "./sdk-release-lib.ts";
 export const WEB_RUNBOOK_PATH = join(dirname(fileURLToPath(import.meta.url)), "runbooks", "web-content.yaml");
 
 /** The nine kinds, in the one order the runbook holds them. */
-export const WEB_KINDS = ["preflight", "branch", "gate", "tag", "tag-guard", "checkout", "deploy", "live-check", "release"] as const;
+export const WEB_KINDS = [
+  "preflight", "branch", "gate", "stage-up", "stage-deploy", "stage-check", "tag", "tag-guard", "checkout", "deploy", "live-check", "release",
+] as const;
 export type WebStepKind = (typeof WEB_KINDS)[number];
 
-/** Whether each kind writes to GitHub or switches what production serves. A step's `irreversible` must say the same. */
+/** The kinds that act on production or publish the release: none writes unless stage QA passed on the release commit (owner, 2026-11-11). */
+export const PRODUCTION_KINDS: readonly WebStepKind[] = Object.freeze(["tag", "tag-guard", "checkout", "deploy", "live-check", "release"]);
+
+/** Whether each kind writes to GitHub or switches what production serves. A step's `irreversible` must say the same (stage steps write only to the stage host). */
 const KIND_IRREVERSIBLE: Readonly<Record<WebStepKind, boolean>> = Object.freeze({
-  preflight: false, branch: true, gate: false, tag: true, "tag-guard": false, checkout: false, deploy: true, "live-check": false, release: true,
+  preflight: false, branch: true, gate: false, "stage-up": false, "stage-deploy": false, "stage-check": false,
+  tag: true, "tag-guard": false, checkout: false, deploy: true, "live-check": false, release: true,
 });
 const POLLING_KINDS: readonly WebStepKind[] = ["gate", "tag-guard"];
 
@@ -238,6 +248,8 @@ export interface Deps extends SdkDeps {
   ssh(host: string, remote: string): Promise<ExecResult>;
   /** GET a URL. Throws when it cannot be reached. */
   http(url: string): Promise<HttpResult>;
+  /** GET a URL as bytes (W11 hashes what is served). Throws when it cannot be reached. */
+  httpBytes(url: string): Promise<{ readonly status: number; readonly bytes: Uint8Array }>;
   readFile(path: string): string | undefined;
 }
 
@@ -247,8 +259,10 @@ export interface Inputs {
   readonly version?: string;
   readonly target: WebTarget;
   readonly dryRun: boolean;
-  /** Where the runner keeps its scratch worktree, the W07 record and the notes. Stable across reruns. */
+  /** Where the runner keeps its scratch worktree, the W10 record and the notes. Stable across reruns. */
   readonly workDir: string;
+  /** The stage target (targets/stage.json): W04 to W06 QA the release there before any production step writes. */
+  readonly stage: WebTarget;
 }
 
 /** What the preflight resolved: one web content release. */
@@ -266,6 +280,14 @@ export interface Release {
   readonly changed: readonly string[];
   /** Each named commit's paths outside WEB_CONTENT_PATHS: tests carried, docs and comment-only edits left out. */
   readonly outside: readonly OutsidePath[];
+  /** What W01 read of the host's web/current and web/previous: the site a W11 rollback returns to is `current`. */
+  readonly sites?: HostSites;
+}
+
+/** The instance's web/current and web/previous links on the host, as the site ids they name. */
+export interface HostSites {
+  readonly current?: string;
+  readonly previous?: string;
 }
 
 /**
@@ -358,7 +380,7 @@ export function envCommand(t: WebTarget, argv: readonly string[]): string {
   return `env -i ${pairs.join(" ")} ${argv.map(shellQuote).join(" ")}`;
 }
 
-/** PURE. W06's host command: clone {home}/rm-web when missing, fetch the tags, detach at the tag, install from the lockfile. */
+/** PURE. W09's host command: clone {home}/rm-web when missing, fetch the tags, detach at the tag, install from the lockfile. */
 export function checkoutCommand(t: WebTarget, tag: string): string {
   return [
     `{ test -e ${shellQuote(`${t.checkout}/.git`)} || ${envCommand(t, ["git", "clone", "--quiet", t.cloneFrom, t.checkout])}; }`,
@@ -369,11 +391,22 @@ export function checkoutCommand(t: WebTarget, tag: string): string {
   ].join(" && ");
 }
 
-/** PURE. W07's host command: `bun run smoke:web` from the runner's checkout. */
+/** PURE. W05's stage host command: clone {home}/rm-web when missing, fetch the web release branches, detach at the release commit (no tag exists yet), install from the lockfile. */
+export function checkoutCommitCommand(t: WebTarget, commit: string): string {
+  return [
+    `{ test -e ${shellQuote(`${t.checkout}/.git`)} || ${envCommand(t, ["git", "clone", "--quiet", t.cloneFrom, t.checkout])}; }`,
+    `cd ${shellQuote(t.checkout)}`,
+    envCommand(t, ["git", "fetch", "--quiet", "origin", "+refs/heads/web/*:refs/remotes/origin/web/*"]),
+    envCommand(t, ["git", "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", commit]),
+    envCommand(t, ["bun", "install", "--frozen-lockfile"]),
+  ].join(" && ");
+}
+
+/** PURE. W10's host command: `bun run smoke:web` from the runner's checkout. */
 export const deployCommand = (t: WebTarget): string =>
   `cd ${shellQuote(t.checkout)} && ${envCommand(t, ["bun", "run", "smoke:web", "--instance", t.instance])}`;
 
-/** PURE. W08's rollback: `bun run smoke:web --rollback` from the runner's checkout. */
+/** PURE. W11's rollback: `bun run smoke:web --rollback` from the runner's checkout. */
 export const rollbackCommand = (t: WebTarget): string =>
   `cd ${shellQuote(t.checkout)} && ${envCommand(t, ["bun", "run", "smoke:web", "--instance", t.instance, "--rollback"])}`;
 
@@ -543,6 +576,12 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
     }
   }
   if (errors.length > 0) return { errors };
+
+  // The rollback target: after W10's switch, web/previous names what web/current names now.
+  const sites = await readHostSites(t, deps);
+  if ("error" in sites) return { errors: [sites.error] };
+  const noTarget = rollbackTargetProblem(t, sites.sites);
+  if (noTarget !== undefined) return { errors: [noTarget] };
   if (tags.get(tag) === commit) {
     const rolled = await rolledBack(t, deps, version, tag, commit);
     if (rolled !== undefined) return { errors: [rolled] };
@@ -550,7 +589,44 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   const admin = deps.gh(["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"]);
   if (admin.status !== 0) return { errors: [`gh api repos/{owner}/{repo} failed: ${errText(admin)}`] };
   if (admin.stdout.trim() !== "true") return { errors: ["the operator lacks the admin permission on the repository (the tag push needs it)"] };
-  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside } };
+  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside, sites: sites.sites } };
+}
+
+const webDirOf = (t: WebTarget): string => `${instanceDir(t)}/web`;
+
+/** PURE. W01's read of web/current and web/previous: each link's site id, and "dangling" when it names no directory. */
+export function hostSitesCommand(t: WebTarget): string {
+  const d = shellQuote(webDirOf(t));
+  return `for l in current previous; do if test -L ${d}/"$l"; then s=$(readlink -- ${d}/"$l"); if test -d ${d}/"$l"/; then printf '%s\\t%s\\n' "$l" "$s"; else printf '%s\\t%s\\tdangling\\n' "$l" "$s"; fi; fi; done`;
+}
+
+/** Read the host's web/current and web/previous (read only). A dangling link is reported as absent with its name. */
+export async function readHostSites(t: WebTarget, deps: Deps): Promise<{ sites: HostSites & { dangling?: string[] } } | { error: string }> {
+  const r = await deps.ssh(t.host, hostSitesCommand(t));
+  if (r.status !== 0) return { error: `ssh ${t.host} could not read ${webDirOf(t)}/current and previous: ${errText(r)}` };
+  const out: { current?: string; previous?: string; dangling?: string[] } = {};
+  for (const l of lines(r.stdout)) {
+    const [name, site = "", flag] = l.split("\t");
+    if (name !== "current" && name !== "previous") continue;
+    if (flag === "dangling") (out.dangling ??= []).push(`${name} -> ${site}`);
+    else out[name] = site;
+  }
+  return { sites: out };
+}
+
+/** PURE. Why production would have no site to roll back to after W10's switch: web/current is absent or dangling. */
+export function rollbackTargetProblem(t: WebTarget, sites: HostSites & { dangling?: string[] }): string | undefined {
+  if (sites.current !== undefined) return undefined;
+  const why = sites.dangling?.some((d) => d.startsWith("current ")) ? `names no site directory (${sites.dangling.join(", ")})` : "is absent";
+  return `${t.host}:${webDirOf(t)}/current ${why}, so after W10's switch web/previous would name no site and a failed W11 could not roll back ` +
+    `(bun smoke:web --rollback refuses with no previous site). Put a site in place with bun smoke:web --instance ${t.instance} by hand first`;
+}
+
+/** PURE. The run log's line for the host's sites. */
+export function sitesLine(sites: HostSites | undefined): string {
+  if (sites === undefined) return "[web-release] web/current and web/previous: not read";
+  return `[web-release] production serves web/current -> ${sites.current ?? "(absent)"}; web/previous -> ${sites.previous ?? "(absent)"}; ` +
+    `after the switch a W11 rollback returns to ${sites.current ?? "(nothing)"}`;
 }
 
 /**
@@ -664,7 +740,7 @@ const nextPatch = (version: string): string => {
   return `${a}.${b}.${c! + 1}`;
 };
 
-/** Why a rerun may not resume an existing tag: the host's web receipt says W08 rolled it back. */
+/** Why a rerun may not resume an existing tag: the host's web receipt says W11 rolled it back. */
 async function rolledBack(t: WebTarget, deps: Deps, version: string, tag: string, commit: string): Promise<string | undefined> {
   const receipt = await deps.ssh(t.host, catIfPresent(`${instanceDir(t)}/web/receipt.json`));
   if (receipt.status !== 0) return `ssh ${t.host} could not read the web receipt: ${errText(receipt)}`;
@@ -676,7 +752,7 @@ async function rolledBack(t: WebTarget, deps: Deps, version: string, tag: string
     return `the web receipt on ${t.host} is not JSON`;
   }
   if (r.action === "rollback" && siteIdIs(r.previous, version, commit)) {
-    return `${tag} was rolled back at W08 on ${t.host}; the tag is never moved or cut again: ship the fix as ${WEB_TAG_PREFIX}${nextPatch(version)}`;
+    return `${tag} was rolled back at W11 on ${t.host}; the tag is never moved or cut again: ship the fix as ${WEB_TAG_PREFIX}${nextPatch(version)}`;
   }
   return undefined;
 }
@@ -712,7 +788,7 @@ export function runBranch(rel: Release, deps: Deps): StepResult {
   return { state: "done", detail: `pushed ${rel.commit} to origin/${rel.branch}` };
 }
 
-// ── W03 and W05: the polled CI reads ─────────────────────────────────────────
+// ── W03 and W08: the polled CI reads ─────────────────────────────────────────
 
 type Read = ReturnType<typeof readRun>;
 const asCheck = (r: Read): StepResult => ({ state: r.state === "pass" ? "done" : r.state === "wait" ? "todo" : "failed", detail: r.detail });
@@ -757,7 +833,7 @@ export function dispatchGate(rel: Release, deps: Deps): StepResult {
   return { state: "done", detail: sent.length === 0 ? "nothing to dispatch" : `dispatched ${sent.join(", ")} on ${rel.branch}` };
 }
 
-/** The workflow files W03 and W05 need, and the trigger each must declare at the release commit. */
+/** The workflow files W03 and W08 need, and the trigger each must declare at the release commit. */
 export const GATE_TRIGGERS: readonly { readonly workflow: string; readonly why: string; readonly ok: (on: Record<string, unknown>) => boolean }[] = Object.freeze([
   {
     workflow: "web-client.yml", why: "a push trigger on web/releases-* (W03)",
@@ -765,7 +841,7 @@ export const GATE_TRIGGERS: readonly { readonly workflow: string; readonly why: 
   },
   { workflow: "e2e-web.yml", why: "a workflow_dispatch trigger (W03 dispatches it)", ok: (on) => "workflow_dispatch" in on },
   {
-    workflow: TAG_GUARD_WORKFLOW, why: "a push trigger on web-v* tags (W05)",
+    workflow: TAG_GUARD_WORKFLOW, why: "a push trigger on web-v* tags (W08)",
     ok: (on) => listOf((on.push as Record<string, unknown> | undefined)?.tags).includes("web-v*"),
   },
 ]);
@@ -773,7 +849,7 @@ export const GATE_TRIGGERS: readonly { readonly workflow: string; readonly why: 
 const listOf = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" ? [v] : []);
 
 /**
- * Why the release commit's own workflow files cannot run W03 or W05: GitHub
+ * Why the release commit's own workflow files cannot run W03 or W08: GitHub
  * reads a workflow's triggers from the commit it runs on, and the release tree
  * carries production's .github/. Empty when every gate can trigger.
  */
@@ -803,7 +879,125 @@ async function gateStep(rel: Release, deps: Deps, maxMinutes: number, id: string
   return poll(() => readGate(rel, deps), maxMinutes, deps, id, rerun);
 }
 
-// ── W04: tag ─────────────────────────────────────────────────────────────────
+// ── W04 to W06: stage QA ─────────────────────────────────────────────────────
+//
+// Owner, 2026-11-11 (D81 amendment): "You already have the stage machine for
+// doing QA as we do in the kitchen sink. Why would you use a different method
+// when a good one exists?" Before any production step writes, the release runs
+// on the kitchen-sink stage target (./stage-target.ts, docs/runbooks/
+// stage-target.md): W04 brings it up at production's running commit from a
+// fresh production dump (the kitchen sink's Q02-dump and Q03-stage-up), W05
+// deploys the release tree there with the same `bun run smoke:web` W10 runs on
+// production, and W06 runs W11's live check against the stage origin. A pass
+// is recorded for the release commit and the stage target is torn down; W07
+// onward refuse to write without that record.
+
+/** PURE. Where the runner records that stage QA passed for a release commit. */
+export const stagePassPath = (inputs: Pick<Inputs, "workDir">, rel: Pick<Release, "tag">): string => join(inputs.workDir, `${rel.tag}-stage-pass.json`);
+
+/** What the runner records when W06 passes. */
+export interface StagePass {
+  readonly commit: string;
+  readonly origin: string;
+  readonly at: string;
+  readonly summary: string;
+}
+
+/** The recorded stage pass for this release commit, or undefined. A pass for another commit does not count. */
+export function stagePassed(rel: Release, inputs: Inputs, deps: Deps): StagePass | undefined {
+  const text = deps.readFile(stagePassPath(inputs, rel));
+  if (text === undefined) return undefined;
+  try {
+    const p = JSON.parse(text) as StagePass;
+    return p.commit === rel.commit ? p : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The run's inputs aimed at the stage target. */
+const onStage = (inputs: Inputs): Inputs => ({ ...inputs, target: inputs.stage });
+
+/** W04's commands, run from the control machine as the kitchen sink's Q02-dump and Q03-stage-up run them. */
+export const STAGE_UP_COMMANDS: readonly (readonly string[])[] = Object.freeze([
+  ["bun", "scripts/release/stage-target.ts", "dump"],
+  ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"],
+]);
+/** W06's teardown after a pass (the kitchen-sink policy: stage is torn down once QA passed). */
+export const STAGE_DOWN_COMMAND: readonly string[] = Object.freeze(["bun", "scripts/release/stage-target.ts", "down"]);
+
+/** W04's done check: stage QA already passed on this commit, or the stage stack runs production's API commit. */
+export async function checkStageUp(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+  const passed = stagePassed(rel, inputs, deps);
+  if (passed !== undefined) return { state: "done", detail: `stage QA already passed on ${short(rel.commit)} (${passed.at})` };
+  const api = await readApiVersion(inputs.stage, deps);
+  if ("error" in api) return { state: "todo", detail: `the stage target is not up (${api.error}): bring it up from a fresh production dump` };
+  if (api.body.commit !== rel.apiCommit) {
+    return { state: "todo", detail: `the stage target runs ${String(api.body.commit).slice(0, 12)}, not production's API commit ${short(rel.apiCommit)}: rebuild it from a fresh production dump` };
+  }
+  return { state: "done", detail: `the stage target runs production's API commit ${short(rel.apiCommit)}` };
+}
+
+/** W04's write: the stage target from a fresh production dump, at production's running commit. */
+export async function runStageUp(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+  for (const cmd of STAGE_UP_COMMANDS) {
+    deps.log(`[web-release] ${cmd.join(" ")} (the dump and the stage build take 15 to 45 minutes)`);
+    const r = deps.exec(cmd as string[]);
+    if (r.status !== 0) return failed(`${cmd.join(" ")} exited ${r.status}: ${errText(r)}`);
+  }
+  const after = await checkStageUp(rel, inputs, deps);
+  return after.state === "done" ? after : failed(`after the stage build: ${after.detail}`);
+}
+
+/** W05's done check: stage QA already passed, or stage serves the release with W05's record of its api and workers. */
+export async function checkStageDeploy(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+  const passed = stagePassed(rel, inputs, deps);
+  if (passed !== undefined) return { state: "done", detail: `stage QA already passed on ${short(rel.commit)} (${passed.at})` };
+  const live = await readLiveSite(inputs.stage, deps);
+  if ("error" in live) return { state: "todo", detail: `the stage site cannot be read (${live.error}): deploy ${short(rel.commit)} there` };
+  return checkDeploy(rel, onStage(inputs), deps);
+}
+
+/** W05's write: check the release commit out on the stage host, then smoke:web there, exactly as W09 and W10 do on production. */
+export async function runStageDeploy(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+  const s = inputs.stage;
+  const r = await deps.ssh(s.host, checkoutCommitCommand(s, rel.commit));
+  if (r.status !== 0) return failed(`the checkout on ${s.host} exited ${r.status}: ${errText(r)}`);
+  const co = await checkCheckout(rel, s, deps);
+  if (co.state !== "done") return failed(`after the stage checkout: ${co.detail}`);
+  return runDeploy(rel, onStage(inputs), deps);
+}
+
+/** W06's done check: a recorded stage pass on this commit. */
+export function checkStageCheck(rel: Release, inputs: Inputs, deps: Deps): StepResult {
+  const passed = stagePassed(rel, inputs, deps);
+  return passed !== undefined
+    ? { state: "done", detail: `stage QA passed on ${short(rel.commit)} (${passed.at}): ${passed.summary}` }
+    : { state: "todo", detail: `stage QA has not passed on ${short(rel.commit)}` };
+}
+
+/** W06's write: W11's live check against the stage origin; on a pass, record it and tear the stage target down. */
+export async function runStageCheck(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+  const s = inputs.stage;
+  const r = await liveResult(rel, onStage(inputs), deps);
+  if (r.problems.length > 0) {
+    return failed(`stage QA failed on ${s.publicOrigin}: ${r.problems.join("; ")}. Nothing reached production. The stage target is left up for inspection; ` +
+      `fix the release on main and run again (stage-target.ts down removes it)`);
+  }
+  const pass: StagePass = { commit: rel.commit, origin: s.publicOrigin, at: new Date(deps.clock()).toISOString(), summary: r.summary };
+  deps.writeFile(stagePassPath(inputs, rel), `${JSON.stringify(pass, null, 2)}\n`);
+  const down = deps.exec(STAGE_DOWN_COMMAND as string[]);
+  if (down.status !== 0) {
+    return failed(`stage QA passed and is recorded (${stagePassPath(inputs, rel)}), but ${STAGE_DOWN_COMMAND.join(" ")} exited ${down.status}: ${errText(down)}. Tear it down by hand; a rerun continues at W07`);
+  }
+  return { state: "done", detail: `stage QA passed on ${s.publicOrigin} (${r.summary}); recorded, and the stage target is torn down` };
+}
+
+/** PURE. Why a production step may not write: no stage pass is recorded for the release commit. */
+export const stageGateProblem = (rel: Release, inputs: Inputs): string =>
+  `stage QA (W04 to W06) has not passed on ${short(rel.commit)}: no production step writes before it does (${stagePassPath(inputs, rel)} is missing or names another commit)`;
+
+// ── W07: tag ─────────────────────────────────────────────────────────────────
 
 /** The tag step's done check: done when the tag on origin points at the commit, failed when at another. */
 export function checkTagStep(rel: Release, deps: Deps): StepResult {
@@ -848,7 +1042,7 @@ export function runTagStep(rel: Release, deps: Deps): StepResult {
   return { state: "done", detail: `pushed the annotated ${rel.tag} at ${rel.commit}` };
 }
 
-// ── W06: checkout ────────────────────────────────────────────────────────────
+// ── W09: checkout ────────────────────────────────────────────────────────────
 
 /** The checkout step's done check: {home}/rm-web is detached at the release commit with its dependencies installed. */
 export async function checkCheckout(rel: Release, t: WebTarget, deps: Deps): Promise<StepResult> {
@@ -868,10 +1062,10 @@ export async function runCheckout(rel: Release, t: WebTarget, deps: Deps): Promi
   return after.state === "done" ? after : failed(`after the checkout: ${after.detail}`);
 }
 
-// ── W07: deploy ──────────────────────────────────────────────────────────────
+// ── W10: deploy ──────────────────────────────────────────────────────────────
 
-/** PURE. Where W07 records what production served beside the site before the deploy. */
-export const servingRecordPath = (inputs: Pick<Inputs, "workDir">, rel: Pick<Release, "tag">): string => join(inputs.workDir, `${rel.tag}-w07-serving.json`);
+/** PURE. Where W10 records what production served beside the site before the deploy. */
+export const servingRecordPath = (inputs: Pick<Inputs, "workDir" | "target">, rel: Pick<Release, "tag">): string => join(inputs.workDir, `${rel.tag}-${inputs.target.name}-serving.json`);
 
 function readRecord(inputs: Inputs, rel: Release, deps: Deps): Serving | undefined {
   const text = deps.readFile(servingRecordPath(inputs, rel));
@@ -883,13 +1077,13 @@ function readRecord(inputs: Inputs, rel: Release, deps: Deps): Serving | undefin
   }
 }
 
-/** The deploy step's done check: the live /version.json reports the release, and W07's record exists. */
+/** The deploy step's done check: the live /version.json reports the release, and W10's record exists. */
 export async function checkDeploy(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
   const live = await readLiveSite(inputs.target, deps);
   if ("error" in live) return failed(live.error);
   if (!liveIs(live, rel)) return { state: "todo", detail: `${inputs.target.publicOrigin} serves ${live.version}-${live.commit}: deploy ${rel.tag}` };
   if (readRecord(inputs, rel, deps) === undefined) {
-    return failed(`${inputs.target.publicOrigin} already serves ${rel.tag}, but ${servingRecordPath(inputs, rel)} (W07's record of the api and workers) is missing, so W08 has nothing to compare: check the site by hand`);
+    return failed(`${inputs.target.publicOrigin} already serves ${rel.tag}, but ${servingRecordPath(inputs, rel)} (W10's record of the api and workers) is missing, so W11 has nothing to compare: check the site by hand`);
   }
   return { state: "done", detail: `${inputs.target.publicOrigin} serves ${rel.version}-${live.commit}` };
 }
@@ -905,26 +1099,163 @@ export async function runDeploy(rel: Release, inputs: Inputs, deps: Deps): Promi
   return { state: "done", detail: `bun run smoke:web switched ${t.instance}'s site to ${rel.tag}; api and workers recorded (${Object.keys(serving.containers).join(", ")})` };
 }
 
-// ── W08: live check ──────────────────────────────────────────────────────────
+// ── W11: live check ──────────────────────────────────────────────────────────
+//
+// W11 proves three things, in order, and rolls the site back on any failure:
+//
+//   1. {publicOrigin}/version.json names the release (the site switched);
+//   2. every changed file the site serves is served byte for byte as the host
+//      holds it in web/current (the release's own bytes reach a visitor, past
+//      Cloudflare and nginx). The host's copy, not git's, is the reference:
+//      the assembly stamps imports with ?v= and prerenders routes, so a served
+//      file differs from its source by design;
+//   3. every sitemap route answers 200 (weak on its own: nginx answers an
+//      unknown path with the SPA shell, 200);
+//
+// and that the api and worker containers and /api/version are unchanged.
 
-/** Every way the live site is not this release served beside an unchanged api: empty when it is. */
-export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
+/** The directory a site is served from: frontend/public/X is served at /X. */
+export const SERVED_ROOT = "frontend/public/";
+
+/** PURE. The URL path a repository path is served at, or undefined when the site does not serve it (a build input, a test). */
+export const servedUrlPath = (path: string): string | undefined =>
+  path.startsWith(SERVED_ROOT) && path.length > SERVED_ROOT.length ? `/${path.slice(SERVED_ROOT.length)}` : undefined;
+
+/** What W11 compares: each served changed file, each removed one, and the changed paths the site does not serve. */
+export interface ServedPlan {
+  /** Served files: the path inside the site directory and the URL path. */
+  readonly compare: readonly { readonly path: string; readonly file: string; readonly url: string }[];
+  /** Served paths the release removes: absent from web/current. */
+  readonly removed: readonly { readonly path: string; readonly file: string }[];
+  /** Changed paths the site does not serve (build scripts, tests, the manifest): listed, not compared. */
+  readonly skipped: readonly string[];
+}
+
+/** PURE. The served plan for the release's changed paths; `exists` says whether a path is in the release tree. */
+export function servedPlan(changed: readonly string[], exists: (path: string) => boolean): ServedPlan {
+  const compare: { path: string; file: string; url: string }[] = [];
+  const removed: { path: string; file: string }[] = [];
+  const skipped: string[] = [];
+  for (const path of [...new Set(changed)].sort()) {
+    const url = servedUrlPath(path);
+    if (url === undefined) { skipped.push(path); continue; }
+    const file = url.slice(1);
+    if (exists(path)) compare.push({ path, file, url });
+    else removed.push({ path, file });
+  }
+  return { compare, removed, skipped };
+}
+
+const servedPlanOf = (rel: Release, deps: Deps): ServedPlan =>
+  servedPlan(rel.changed, (p) => deps.git(["cat-file", "-e", `${rel.commit}:${p}`]).status === 0);
+
+/** PURE. The host command that names web/current's site and hashes (or proves absent) each file inside it. */
+export function servedHashCommand(t: WebTarget, plan: ServedPlan): string {
+  const files = [...plan.compare.map((c) => c.file), ...plan.removed.map((r) => r.file)].map(shellQuote).join(" ");
+  const d = shellQuote(webDirOf(t));
+  return `cd ${d} && printf 'site\\t%s\\n' "$(readlink -- current)" && cd current/ && for f in ${files}; do ` +
+    `if test -f "$f"; then printf 'sha\\t%s\\t%s\\n' "$(sha256sum < "$f" | cut -d ' ' -f 1)" "$f"; else printf 'missing\\t%s\\n' "$f"; fi; done`;
+}
+
+const sha256 = (b: Uint8Array): string => createHash("sha256").update(b).digest("hex");
+
+/** PURE. A URL path with each segment percent-encoded as a browser sends it. */
+const encodePath = (p: string): string => p.split("/").map((s) => encodeURIComponent(s)).join("/");
+
+/**
+ * W11 (2): every served changed file is served as web/current holds it, and
+ * web/current is this release's site. Each URL carries a one-off query so a
+ * cache in front of nginx cannot answer with an older copy.
+ */
+export async function servedProblems(rel: Release, t: WebTarget, deps: Deps, plan: ServedPlan = servedPlanOf(rel, deps)): Promise<{ problems: string[]; compared: number }> {
+  if (plan.compare.length === 0 && plan.removed.length === 0) return { problems: [], compared: 0 };
+  const r = await deps.ssh(t.host, servedHashCommand(t, plan));
+  if (r.status !== 0) return { problems: [`ssh ${t.host} could not hash the served files in ${webDirOf(t)}/current: ${errText(r)}`], compared: 0 };
+  let site = "";
+  const host = new Map<string, string | null>();
+  for (const l of r.stdout.split("\n")) {
+    const [k, a = "", b = ""] = l.split("\t");
+    if (k === "site") site = a;
+    else if (k === "sha") host.set(b, a);
+    else if (k === "missing") host.set(a, null);
+  }
+  const problems: string[] = [];
+  if (!siteIdIs(site, rel.version, rel.commit)) {
+    return { problems: [`${webDirOf(t)}/current on ${t.host} names ${site || "nothing"}, not ${rel.version}-${short(rel.commit)}`], compared: 0 };
+  }
+  for (const rm of plan.removed) {
+    if (host.get(rm.file) !== null) problems.push(`${rm.path} is removed by ${rel.tag} but ${site}/${rm.file} exists on ${t.host}`);
+  }
+  const bust = `rm-live-check=${short(rel.commit)}-${deps.clock()}`;
+  let compared = 0;
+  for (const c of plan.compare) {
+    const want = host.get(c.file);
+    if (want === undefined || want === null) { problems.push(`${c.path} is in ${rel.tag} but ${site}/${c.file} is missing on ${t.host}`); continue; }
+    const url = `${t.publicOrigin}${encodePath(c.url)}?${bust}`;
+    try {
+      const got = await deps.httpBytes(url);
+      if (got.status !== 200) { problems.push(`GET ${c.url} answered ${got.status}, not the deployed ${c.file}`); continue; }
+      const sha = sha256(got.bytes);
+      if (sha !== want) problems.push(`GET ${c.url} serves sha256 ${sha.slice(0, 16)}, not the deployed ${site}/${c.file} (${want.slice(0, 16)})`);
+      else compared++;
+    } catch (e) {
+      problems.push(`GET ${c.url} failed: ${(e as Error).message}`);
+    }
+  }
+  return { problems, compared };
+}
+
+/** The sitemap's routes, or why it could not be read. */
+async function sitemapRoutes(t: WebTarget, deps: Deps): Promise<{ routes: string[] } | { error: string }> {
+  try {
+    const sm = await deps.http(`${t.publicOrigin}/sitemap.xml`);
+    if (sm.status !== 200) return { error: `GET ${t.publicOrigin}/sitemap.xml answered ${sm.status}` };
+    const routes = [...sm.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].flatMap((m) => { try { const u = new URL(m[1]!); return [`${u.pathname}${u.search}`]; } catch { return []; } });
+    if (routes.length === 0) return { error: `${t.publicOrigin}/sitemap.xml lists no route` };
+    return { routes };
+  } catch (e) {
+    return { error: `GET ${t.publicOrigin}/sitemap.xml failed: ${(e as Error).message}` };
+  }
+}
+
+/** PURE. The plan's lines for W06 and W11: which served files (2) compares, which must be absent, which are skipped. */
+export function livePlanLines(served: ServedPlan): string[] {
+  return [
+    `served files compared with web/current: ${served.compare.length === 0 ? "(none)" : served.compare.map((c) => c.url).join(", ")}`,
+    ...(served.removed.length > 0 ? [`removed, must be absent from web/current: ${served.removed.map((r) => r.file).join(", ")}`] : []),
+    `not served (skipped): ${served.skipped.length === 0 ? "(none)" : served.skipped.join(", ")}`,
+  ];
+}
+
+/** The dry run's plan for W06 and W11: the served comparison, from the release tree alone (no request). */
+export const livePlan = (rel: Release, deps: Deps): string[] => livePlanLines(servedPlanOf(rel, deps));
+
+/** What W11 found: its problems, and what it checked when it passed. One W11 run judges the site once (runWebRelease hands this to runLive). */
+export interface LiveResult {
+  readonly problems: string[];
+  readonly summary: string;
+}
+
+/** Every way the live site is not this release served beside an unchanged api: no problems when it is. */
+export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Promise<LiveResult> {
   const t = inputs.target;
   const before = readRecord(inputs, rel, deps);
-  if (before === undefined) return [`${servingRecordPath(inputs, rel)} (W07's record) is missing`];
+  if (before === undefined) return { problems: [`${servingRecordPath(inputs, rel)} (W10's record) is missing`], summary: "" };
   const out: string[] = [];
   const live = await readLiveSite(t, deps);
   if ("error" in live) out.push(live.error);
   else if (!liveIs(live, rel)) out.push(`${t.publicOrigin}/version.json reports ${live.version}-${live.commit}, not ${rel.version}-${short(rel.commit)}`);
-  let routes: string[] = [];
-  try {
-    const sm = await deps.http(`${t.publicOrigin}/sitemap.xml`);
-    if (sm.status !== 200) out.push(`GET ${t.publicOrigin}/sitemap.xml answered ${sm.status}`);
-    else routes = [...sm.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => { const u = new URL(m[1]!); return `${u.pathname}${u.search}`; });
-    if (sm.status === 200 && routes.length === 0) out.push(`${t.publicOrigin}/sitemap.xml lists no route`);
-  } catch (e) {
-    out.push(`GET ${t.publicOrigin}/sitemap.xml failed: ${(e as Error).message}`);
-  }
+
+  const plan = servedPlanOf(rel, deps);
+  // A dry run hashes no file, even when W10's record exists (a rerun after a deploy).
+  if (inputs.dryRun) return { problems: [...out, "a dry run does not compare the served files"], summary: "" };
+  for (const l of livePlanLines(plan)) deps.log(`[web-release] ${l}`);
+  const served = await servedProblems(rel, t, deps, plan);
+  out.push(...served.problems);
+
+  const sm = await sitemapRoutes(t, deps);
+  const routes = "routes" in sm ? sm.routes : [];
+  if ("error" in sm) out.push(sm.error);
   for (const route of routes) {
     try {
       const r = await deps.http(`${t.publicOrigin}${route}`);
@@ -933,6 +1264,7 @@ export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Pr
       out.push(`GET ${route} failed: ${(e as Error).message}`);
     }
   }
+
   const now = await readServing(t, deps);
   if ("error" in now) out.push(now.error);
   else {
@@ -941,21 +1273,34 @@ export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Pr
     }
     if (now.apiVersion !== before.apiVersion) out.push(`/api/version changed: ${before.apiVersion} -> ${now.apiVersion}`);
   }
-  return out;
+  const summary = `${t.publicOrigin} serves ${rel.tag}, ${served.compared} changed file(s) are served as deployed (${plan.skipped.length} not served), ` +
+    "every sitemap route answers 200, the api and workers are unchanged";
+  return { problems: out, summary };
 }
+
+/** Every way the live site is not this release served beside an unchanged api: empty when it is. */
+export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
+  return (await liveResult(rel, inputs, deps)).problems;
+}
+
+/** PURE. The live check's done state from a judged result. */
+export const liveState = (r: LiveResult): StepResult =>
+  r.problems.length === 0 ? { state: "done", detail: r.summary } : { state: "todo", detail: r.problems.join("; ") };
 
 export async function checkLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
-  const problems = await liveProblems(rel, inputs, deps);
-  return problems.length === 0
-    ? { state: "done", detail: `${inputs.target.publicOrigin} serves ${rel.tag}, every sitemap route answers 200, the api and workers are unchanged` }
-    : { state: "todo", detail: problems.join("; ") };
+  return liveState(await liveResult(rel, inputs, deps));
 }
 
-/** The live check: pass, or roll the site back with `bun run smoke:web --rollback` and fail. The tag stays. */
-export async function runLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+/**
+ * The live check: pass, or roll the site back with `bun run smoke:web
+ * --rollback` and fail. The tag stays. `judged` is the done check's result:
+ * the runner judges the site once per W11, so a page never gets a second
+ * smoke to pass in.
+ */
+export async function runLive(rel: Release, inputs: Inputs, deps: Deps, judged?: LiveResult): Promise<StepResult> {
   const t = inputs.target;
-  const problems = await liveProblems(rel, inputs, deps);
-  if (problems.length === 0) return { state: "done", detail: `${t.publicOrigin} serves ${rel.tag}, every sitemap route answers 200, the api and workers are unchanged` };
+  const { problems, summary } = judged ?? await liveResult(rel, inputs, deps);
+  if (problems.length === 0) return { state: "done", detail: summary };
   const next = `${WEB_TAG_PREFIX}${nextPatch(rel.version)}`;
   deps.log(`[web-release] the live check failed: ${problems.join("; ")}; rolling back`);
   const r = await deps.ssh(t.host, rollbackCommand(t));
@@ -968,7 +1313,7 @@ export async function runLive(rel: Release, inputs: Inputs, deps: Deps): Promise
   return failed(`the live check failed: ${problems.join("; ")}. ${rolled}. ${rel.tag} stays where it is: ship the fix as ${next}`);
 }
 
-// ── W09: release ─────────────────────────────────────────────────────────────
+// ── W12: release ─────────────────────────────────────────────────────────────
 
 /** PURE. The release notes: what the release is, the commits it ships, and every changed content path. */
 export function renderNotes(rel: Release, picks: readonly string[]): string {
@@ -1035,28 +1380,46 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
   deps.log(`[web-release] content paths changed: ${rel.changed.length === 0 ? "(none)" : rel.changed.join(", ")}`);
   deps.log(`[web-release] outside the web content paths: ${rel.outside.length === 0 ? "(none)" : "tests carried, docs and comment-only edits left out"}`);
   for (const l of outsideLines(rel.outside)) deps.log(`  ${l}`);
+  deps.log(sitesLine(rel.sites));
   deps.log(`[${first!.id}] passed`);
+  let live: LiveResult | undefined;
   for (const step of rest) {
     const check: StepResult =
       step.kind === "branch" ? checkBranch(rel, deps)
       : step.kind === "gate" ? asCheck(readGate(rel, deps))
+      : step.kind === "stage-up" ? await checkStageUp(rel, inputs, deps)
+      : step.kind === "stage-deploy" ? await checkStageDeploy(rel, inputs, deps)
+      : step.kind === "stage-check" ? checkStageCheck(rel, inputs, deps)
       : step.kind === "tag" ? checkTagStep(rel, deps)
       : step.kind === "tag-guard" ? asCheck(readTagGuard(rel, deps))
       : step.kind === "checkout" ? await checkCheckout(rel, t, deps)
       : step.kind === "deploy" ? await checkDeploy(rel, inputs, deps)
-      : step.kind === "live-check" ? await checkLive(rel, inputs, deps)
+      : step.kind === "live-check" ? liveState(live = await liveResult(rel, inputs, deps))
       : checkReleaseStep(rel, deps);
     if (check.state === "done") { deps.log(`[${step.id}] already done: ${check.detail}`); continue; }
     if (check.state === "failed") return stop(step.id, check.detail);
-    if (inputs.dryRun) { deps.log(`[${step.id}] not done${step.irreversible ? " (IRREVERSIBLE, would write)" : ""}: ${check.detail}`); continue; }
+    const gated = PRODUCTION_KINDS.includes(step.kind) && stagePassed(rel, inputs, deps) === undefined;
+    if (inputs.dryRun) {
+      deps.log(`[${step.id}] not done${step.irreversible ? " (IRREVERSIBLE, would write)" : ""}: ${check.detail}${gated ? "; it refuses until stage QA passes on this commit" : ""}`);
+      if (step.kind === "stage-check" || step.kind === "live-check") {
+        const at = step.kind === "stage-check" ? inputs.stage.publicOrigin : t.publicOrigin;
+        deps.log(`[${step.id}] plan: version.json, the served files, every sitemap route and an unchanged api on ${at}`);
+        for (const l of livePlan(rel, deps)) deps.log(`[${step.id}] plan: ${l}`);
+      }
+      continue;
+    }
+    if (gated) return stop(step.id, stageGateProblem(rel, inputs));
     const result: StepResult =
       step.kind === "branch" ? runBranch(rel, deps)
       : step.kind === "gate" ? await gateStep(rel, deps, step.maxMinutes!, step.id, rerun)
+      : step.kind === "stage-up" ? await runStageUp(rel, inputs, deps)
+      : step.kind === "stage-deploy" ? await runStageDeploy(rel, inputs, deps)
+      : step.kind === "stage-check" ? await runStageCheck(rel, inputs, deps)
       : step.kind === "tag" ? runTagStep(rel, deps)
       : step.kind === "tag-guard" ? await poll(() => readTagGuard(rel, deps), step.maxMinutes!, deps, step.id, rerun)
       : step.kind === "checkout" ? await runCheckout(rel, t, deps)
       : step.kind === "deploy" ? await runDeploy(rel, inputs, deps)
-      : step.kind === "live-check" ? await runLive(rel, inputs, deps)
+      : step.kind === "live-check" ? await runLive(rel, inputs, deps, live)
       : runReleaseStep(rel, inputs, deps);
     if (result.state !== "done") return stop(step.id, result.detail);
     deps.log(`[${step.id}] done: ${result.detail}`);

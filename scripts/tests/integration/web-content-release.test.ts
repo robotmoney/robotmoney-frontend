@@ -2,19 +2,21 @@
 // 1561, D81; release-runbooks.md §12).
 //
 // One `bun smoke --local blank --migrate` boot of its own instance stands in for
-// production. A web release's W06 to W08 then run their own commands
+// production. A web release's W09 to W11 then run their own commands
 // (scripts/release/web-release-lib.ts runCheckout, runDeploy, runLive) through a
 // local shell in place of ssh, exactly as the runner renders them for the host:
 //
-//   W06  clones the release checkout from a variant tree (smoke-web-harness.ts:
+//   W09  clones the release checkout from a variant tree (smoke-web-harness.ts:
 //        this checkout's source with another frontend version, tagged web-v*),
 //        detaches it at the tag and runs bun install --frozen-lockfile;
-//   W07  records the api and worker containers and /api/version, then runs
+//   W10  records the api and worker containers and /api/version, then runs
 //        `bun run smoke:web` from that checkout;
-//   W08  checks /version.json, every sitemap route and the api and workers.
+//   W11  checks /version.json, that each changed served file is served byte for
+//        byte as web/current holds it, every sitemap route, and the api and
+//        workers.
 //
 // Then a second version deploys and its live check is forced to fail (one
-// sitemap route answers 500 through the injected http): W08 runs
+// sitemap route answers 500 through the injected http): W11 runs
 // `bun run smoke:web --rollback` and /version.json is back on the first site.
 // Across all of it the api and every worker keep their container id and the
 // /api/version body stays byte-for-byte the same.
@@ -34,6 +36,7 @@ import { servedSite, serviceContainers, variantTree, type ServiceContainer, type
 
 const API_VERSION = readContractVersion();
 const FAILING_ROUTE = "/swarm";
+const SERVED_CHANGES = ["frontend/package.json", "frontend/public/index.html", "frontend/public/sitemap.xml", "frontend/public/views/regime.html"];
 
 let h: BootHarness;
 let boot: RunningBoot;
@@ -68,7 +71,8 @@ function release(version: string): Release {
   const tag = `web-v${version}`;
   gitIn(variant.dir, ["tag", "-a", tag, "-m", tag]);
   const commit = gitIn(variant.dir, ["rev-parse", "HEAD"]);
-  return { version, commit, branch: "web/releases-9.9.x", tag, apiCommit: "", base: "", changed: [], outside: [] };
+  // W11 compares the served copies of the changed files the site serves; the package manifest is a build input, skipped.
+  return { version, commit, branch: "web/releases-9.9.x", tag, apiCommit: "", base: "", changed: SERVED_CHANGES, outside: [] };
 }
 
 beforeAll(async () => {
@@ -96,19 +100,29 @@ beforeAll(async () => {
     return { status: r.status, body: await r.text() };
   };
   const files = new Map<string, string>();
+  const realBytes = async (url: string) => {
+    const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    return { status: r.status, bytes: new Uint8Array(await r.arrayBuffer()) };
+  };
   const deps = (http = realHttp): Deps => ({
-    git: () => { throw new Error("no git call from W06-W08"); },
-    gh: () => { throw new Error("no gh call from W06-W08"); },
-    exec: () => { throw new Error("no exec call from W06-W08"); },
+    // W11 reads the release tree (does a changed path exist; routes.js): the variant tree holds the release commits.
+    git: (a) => {
+      if (a[0] !== "show" && a[0] !== "cat-file") throw new Error(`no git ${a[0]} call from W09-W11`);
+      const r = Bun.spawnSync(["git", ...a], { cwd: variant.dir, stdout: "pipe", stderr: "pipe" });
+      return { status: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
+    },
+    gh: () => { throw new Error("no gh call from W09-W11"); },
+    exec: () => { throw new Error("no exec call from W09-W11"); },
     ssh: shell,
     http,
+    httpBytes: realBytes,
     readFile: (p) => files.get(p),
     writeFile: (p, t) => { files.set(p, t); },
     clock: () => Date.now(),
     sleep: (ms) => Bun.sleep(ms),
     log: (l) => console.log(`[web-content-release] ${l}`),
   });
-  const inputs: Inputs = { commits: [], target, dryRun: false, workDir: scratch };
+  const inputs: Inputs = { commits: [], target, stage: target, dryRun: false, workDir: scratch };
   const site = async () => { const s = await servedSite(webPort); return `${s.version}-${s.commit}`; };
   const apiBody = async () => (await fetch(`http://127.0.0.1:${webPort}/api/version`)).text();
 
@@ -142,18 +156,22 @@ afterAll(() => {
 }, 300_000);
 
 describe("a web content release's host steps on a running stack", () => {
-  test("W06 clones {home}/rm-web, detaches it at the tag and installs", () => {
+  test("W09 clones {home}/rm-web, detaches it at the tag and installs", () => {
     expect(steps.checkout1, steps.checkout1?.detail).toMatchObject({ state: "done" });
     expect(steps.checkout1!.detail).toContain(`detached at ${first.tag}`);
     expect(steps.checkout2, steps.checkout2?.detail).toMatchObject({ state: "done" });
   });
 
-  test("W07 and W08 switch /version.json to the new version", () => {
+  test("W10 and W11 switch /version.json to the new version", () => {
     expect(steps.deploy1, steps.deploy1?.detail).toMatchObject({ state: "done" });
     expect(steps.live1, steps.live1?.detail).toMatchObject({ state: "done" });
     expect(served.first!.startsWith("9.9.1-")).toBe(true);
     expect(first.commit.startsWith(served.first!.slice("9.9.1-".length))).toBe(true);
     expect(served.first).not.toBe(served.boot);
+  });
+
+  test("W11 compared the changed served files with web/current", () => {
+    expect(steps.live1!.detail).toContain("3 changed file(s) are served as deployed (1 not served)");
   });
 
   test("the api and worker container ids and the /api/version body stay identical", () => {

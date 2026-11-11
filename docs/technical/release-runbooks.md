@@ -728,9 +728,11 @@ git sparse-checkout set packages/analyst-sdk
 A copy, image or style edit to the web client ships on its own release line (accepted in
 [D81](../decisions.md#d81), refining [D54](../decisions.md#d54) and [D70](../decisions.md#d70)).
 Sections 2 to 10 govern platform releases. None of them applies to a web content release. It has
-no QA branch, no stage run (owner, 2026-11-04), no rc tag, no backup, no migration and no rolling
+no QA branch, no rc tag, no backup, no migration and no rolling
 boot. It changes only what `website-server` serves, through `bun smoke:web` (D54). The platform tag
-production runs does not advance.
+production runs does not advance. It does have a stage QA (owner, 2026-11-11, D81 amendment): before
+any production step writes, the release runs on the kitchen-sink stage target exactly as it will on
+production (W04 to W06 below).
 
 **Eligibility.** A release is content-only when its tree differs from the commit production's API
 runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS` and test paths (below)
@@ -780,8 +782,12 @@ order:
   commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
   tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
-  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W08
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W11
   rolled back is refused (below). The operator must hold the admin permission on the repository.
+  The runner reads the instance's `web/current` and `web/previous` links on the host (read only)
+  and reports both. W10's switch makes today's `current` the `previous` that `bun smoke:web
+  --rollback` returns to, so W01 refuses when `current` is absent or names no site directory:
+  production would have no rollback target.
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
@@ -800,21 +806,53 @@ order:
   commit. A dry run never dispatches. W01 refuses up front when the release tree's `web-client.yml`
   lacks the push trigger, its `e2e-web.yml` lacks `workflow_dispatch`, or its `web-tag-guard.yml`
   lacks the `web-v*` tag trigger.
-- **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
+- **W04-stage-up.** The kitchen-sink stage target (`scripts/release/stage-target.ts`,
+  [docs/runbooks/stage-target.md](../runbooks/stage-target.md)) is brought up at production's running
+  commit from a fresh production dump, as the kitchen sink's Q02-dump and Q03-stage-up do: `bun
+  scripts/release/stage-target.ts dump`, then `up --dump newest --replace`, from the control machine.
+  A stage stack that already runs production's API commit is reused on a rerun. Q04-role-passwords
+  is not run: a web release migrates nothing.
+- **W05-stage-deploy.** On the stage host, the runner clones `{stage home}/rm-web` when missing,
+  fetches `web/releases-*`, detaches at the release commit (no tag exists yet) and runs `bun install
+  --frozen-lockfile`. It records the stage `api` and worker container ids and `/api/version`, then
+  runs `bun run smoke:web --instance stage_target`: the same command W10 runs on production, so the
+  stage switch, its range check and its reload are the ones production will see.
+- **W06-stage-check.** W11's live check, all of it, against the stage origin
+  (`https://stage.robotmoney-labs.dev`): `/version.json`, the served bytes against stage's
+  `web/current`, every sitemap route, and the stage `api` and workers unchanged. It reads, as the
+  kitchen sink's product checks do; it writes nothing to stage. On a pass the
+  runner records it for the release commit (`<tag>-stage-pass.json` in its work directory) and tears
+  the stage target down (`stage-target.ts down`), as the kitchen sink does after a pass. On a
+  failure nothing has reached production; the stage target is left up for inspection, and the fix
+  ships from main. **No step from W07 on writes unless a stage pass is recorded for the same
+  release commit**; a pass recorded for another commit does not count.
+- **W07-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
   `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
-- **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
-- **W06-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
+- **W08-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
+- **W09-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
   fetch the tags, detach at the tag and run `bun install --frozen-lockfile`. It is the runner's own
   checkout, never the platform release checkout.
-- **W07-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
+- **W10-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
   body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
   database row, runs no migration and restarts no backend service.
-- **W08-live-check.** `{publicOrigin}/version.json` reports the tag's version and commit, every
-  sitemap route answers 200, and the `api` and worker container ids and `/api/version` are
-  unchanged. On a failure the runner runs `bun run smoke:web --rollback`, reads `/version.json`
-  again to report what production now serves, and exits non-zero. The branch and the tag stay; no
-  GitHub release is created.
-- **W09-release** (irreversible). The GitHub release for the tag lists the main commits, the
+- **W11-live-check.** Three checks, in order, and then the backend:
+  1. `{publicOrigin}/version.json` reports the tag's version and commit.
+  2. **Served content equals the release.** Each changed path under `frontend/public/` is fetched
+     at the URL it is served at (`frontend/public/X` at `/X`, with a one-off query so no cache
+     answers) and its sha256 must equal the file in the host's `web/current`, which must name this
+     release's site. The host's copy is the reference, not git's: the assembly stamps imports with
+     `?v=` and prerenders routes, so a served file differs from its source by design. A path the
+     release removes must be absent from `web/current`. A changed path the site does not serve (a
+     build script, a test, `frontend/package.json`) is skipped and listed.
+  3. Every sitemap route answers 200. This is weak on its own: nginx answers an unknown path with
+     the SPA shell, 200.
+  A dry run prints the files W06 and W11 would compare and skip, from the release tree alone, and
+  hashes no file even when W10's record exists.
+
+  Last, the `api` and worker container ids and `/api/version` are unchanged. On a failure the
+  runner runs `bun run smoke:web --rollback`, reads `/version.json` again to report what production
+  now serves, and exits non-zero. The branch and the tag stay; no GitHub release is created.
+- **W12-release** (irreversible). The GitHub release for the tag lists the main commits, the
   changed paths and each commit's paths outside the content paths, carried or left out. It is never marked latest: the platform's release keeps that.
 
 The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
@@ -832,7 +870,7 @@ equals `version` in `frontend/package.json` at that commit and is above every ot
 The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-web-tag.ts` on a push of
 a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
 
-**Rollback.** A tag is never moved, deleted or cut again. When W08 rolls the site back, the host's
+**Rollback.** A tag is never moved, deleted or cut again. When W11 rolls the site back, the host's
 web receipt records it, and a rerun of the same version stops at W01, including when `bun
 smoke:web` installed the site under a digest-suffixed id. The fix ships as
 `web-vA.B.(C+1)`.

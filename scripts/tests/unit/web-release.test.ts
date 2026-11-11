@@ -4,9 +4,10 @@
 // `origin`: no network, and never the GitHub remote. gh, ssh and http are
 // in-process stubs that record every call. The ssh stub is a fake production
 // host: it keeps a checkout HEAD, the served site and the web receipt, and
-// answers the commands W06 to W08 send the way the real host would.
+// answers the commands W09 to W11 send the way the real host would.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,6 +17,7 @@ import { parseArgs } from "../../release/web-release.ts";
 import {
   classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
   WEB_RUNBOOK_PATH, webTargetOf,
+  stageGateProblem, stagePassed, rollbackTargetProblem, servedPlan, servedUrlPath,
   type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
 
@@ -29,6 +31,7 @@ const GIT_ENV = {
   GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
 };
 const PROD: WebTarget = webTargetOf(loadTarget(join(ROOT, "scripts/release/targets/prod.json")));
+const STAGE: WebTarget = webTargetOf(loadTarget(join(ROOT, "scripts/release/targets/stage.json")));
 const ORIGIN = PROD.publicOrigin;
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
@@ -46,7 +49,7 @@ function sh(cwd: string, ...args: string[]): string {
   return r.stdout.trim();
 }
 
-/** The trigger lines of the three workflows W03 and W05 need, as production's copies (since 1561) carry them. */
+/** The trigger lines of the three workflows W03 and W08 need, as production's copies (since 1561) carry them. */
 const WORKFLOWS: Record<string, string> = {
   ".github/workflows/web-client.yml": "on:\n  push:\n    branches: [main, \"releases-*\", \"qa/**\", \"web/releases-*\"]\n",
   ".github/workflows/e2e-web.yml": "on:\n  push:\n    branches: [main, \"releases-*\", \"qa/**\"]\n  workflow_dispatch:\n",
@@ -117,34 +120,63 @@ function sideBranch(f: Fixture, from: string, branch: string, files: Record<stri
 type Ci = "success" | "failure" | "none" | "running";
 /** The fake run id gh reports for each workflow's push run. */
 const RUN_IDS: Record<string, number> = { "web-client.yml": 7, "e2e-web.yml": 8, "web-tag-guard.yml": 9 };
-interface State {
+/** One fake host's site state: production's, or the stage target's. */
+interface HostState {
+  head?: string; installed: boolean;
+  live: { version: string; commit: string };
+  prevLive?: { version: string; commit: string };
+  receipt: string;
+  apiId: string;
+}
+
+interface State extends HostState {
   apiCommit: string;
   ci: Record<string, Ci>;
   admin: string;
   release: boolean;
   /** Workflows the runner dispatched; a dispatched workflow with ci "none" then reports success. */
   dispatched: string[];
-  /** The fake host. */
-  head?: string; installed: boolean;
-  live: { version: string; commit: string };
-  prevLive?: { version: string; commit: string };
-  receipt: string;
   failRoute?: string;
-  apiId: string;
+  /** web/current and web/previous on the fake production host, as `readHostSites` reports them (stdout lines). */
+  siteLinks: string;
+  /** A URL path the fake production origin serves with other bytes than the host's web/current holds. */
+  servedOverride?: Record<string, string>;
+  /** A URL path the fake stage origin serves with other bytes than stage's web/current holds. */
+  stageServedOverride?: Record<string, string>;
+  /** The fake stage target: whether stage-target.ts up built it, and its site. */
+  stageUp: boolean;
+  stage: HostState;
+  /** The stage-target.ts commands the runner ran (W04, W06). */
+  execCalls: string[][];
+  /** stage-target.ts down exits non-zero. */
+  stageDownFails?: boolean;
 }
 
 interface Harness {
-  deps: Deps; out: string[]; pushes: string[][]; ghCalls: string[][]; ssh: string[]; http: string[]; files: Map<string, string>; state: State;
+  deps: Deps; out: string[]; pushes: string[][]; ghCalls: string[][]; ssh: string[]; stageSsh: string[]; http: string[]; httpBytes: string[]; files: Map<string, string>; state: State;
 }
 
 const SITEMAP = `<?xml version="1.0"?><urlset><url><loc>https://robotmoney.network/</loc></url><url><loc>https://robotmoney.network/swarm</loc></url></urlset>`;
 
 function harness(f: Fixture, state: Partial<State> = {}): Harness {
-  const s: State = { apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1", ...state };
+  const s: State = {
+    apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1",
+    siteLinks: `current\t0.1.0-${f.c0.slice(0, 8)}\nprevious\t0.1.0-${f.r0.slice(0, 8)}\n`, 
+    stageUp: false, stage: { installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "stage-api-1" }, execCalls: [], ...state,
+  };
+  const onStage = (host: string): boolean => host === STAGE.host;
+  const hostOf = (host: string): HostState => (onStage(host) ? s.stage : s);
+  /** The deployed copy of a served file: the release tree's bytes at that host's checkout HEAD. */
+  const deployed = (h: HostState, file: string): string | undefined => {
+    const r = git(f.work, ["show", `${h.head}:frontend/public/${file}`]);
+    return r.status === 0 ? r.stdout : undefined;
+  };
+  const httpBytesCalls: string[] = [];
   const out: string[] = [];
   const pushes: string[][] = [];
   const ghCalls: string[][] = [];
   const sshCalls: string[] = [];
+  const stageSshCalls: string[] = [];
   const httpCalls: string[] = [];
   const files = new Map<string, string>();
   let now = 0;
@@ -170,40 +202,75 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     if (args[0] === "release" && args[1] === "create") { s.release = true; return ok(); }
     return { status: 1, stdout: "", stderr: `unexpected gh ${args.join(" ")}` };
   };
-  const ssh = async (_host: string, remote: string): Promise<ExecResult> => {
-    sshCalls.push(remote);
-    if (remote.includes("web/receipt.json")) return ok(s.receipt);
-    if (remote.includes("stack-state.json")) return ok(JSON.stringify({ project: "rm_prod_stack" }));
-    if (remote.includes("docker ps")) return ok(`api\t${s.apiId}\nworker-analytics\tw-1\nwebsite-server\tweb-1\n`);
+  const ssh = async (host: string, remote: string): Promise<ExecResult> => {
+    (onStage(host) ? stageSshCalls : sshCalls).push(remote);
+    const h = hostOf(host);
+    if (remote.startsWith("for l in current previous")) return ok(s.siteLinks);
+    if (remote.includes("sha256sum")) {
+      // The file list between `for f in` and `; do`, each word shellQuote'd (simple names stay bare).
+      const list = /for f in (.*?); do /.exec(remote)![1]!;
+      const names = [...list.matchAll(/'((?:[^']|'\\'')*)'|(\S+)/g)].map((m) => (m[1] ?? m[2]!).replace(/'\\''/g, "'"));
+      const lines = [`site\t${h.live.version}-${h.live.commit}`];
+      for (const file of names) {
+        const text = deployed(h, file);
+        lines.push(text === undefined ? `missing\t${file}` : `sha\t${createHash("sha256").update(text).digest("hex")}\t${file}`);
+      }
+      return ok(`${lines.join("\n")}\n`);
+    }
+    if (remote.includes("web/receipt.json")) return ok(h.receipt);
+    if (remote.includes("stack-state.json")) return ok(JSON.stringify({ project: onStage(host) ? "stage_target_stack" : "rm_prod_stack" }));
+    if (remote.includes("docker ps")) return ok(`api\t${h.apiId}\nworker-analytics\tw-1\nwebsite-server\tweb-1\n`);
     if (remote.includes("--rollback")) {
-      const from = `${s.live.version}-${s.live.commit}`;
-      s.live = s.prevLive!;
-      s.receipt = JSON.stringify({ action: "rollback", siteId: `${s.live.version}-${s.live.commit}`, previous: from });
+      const from = `${h.live.version}-${h.live.commit}`;
+      h.live = h.prevLive!;
+      h.receipt = JSON.stringify({ action: "rollback", siteId: `${h.live.version}-${h.live.commit}`, previous: from });
       return ok();
     }
     if (remote.includes("smoke:web")) {
-      s.prevLive = s.live;
-      const version = (JSON.parse(sh(f.work, "show", `${s.head}:frontend/package.json`)) as { version: string }).version;
-      s.live = { version, commit: s.head!.slice(0, 9) };
-      s.receipt = JSON.stringify({ action: "deploy", siteId: `${version}-${s.head!.slice(0, 9)}`, previous: null });
+      h.prevLive = h.live;
+      const version = (JSON.parse(sh(f.work, "show", `${h.head}:frontend/package.json`)) as { version: string }).version;
+      h.live = { version, commit: h.head!.slice(0, 9) };
+      h.receipt = JSON.stringify({ action: "deploy", siteId: `${version}-${h.head!.slice(0, 9)}`, previous: null });
       return ok();
     }
     if (remote.includes("bun install --frozen-lockfile")) {
-      const tag = /refs\/tags\/(web-v[0-9.]+)/.exec(remote)![1]!;
-      s.head = sh(f.bare, "rev-parse", `refs/tags/${tag}^{commit}`);
-      s.installed = true;
+      const tag = /refs\/tags\/(web-v[0-9.]+)/.exec(remote)?.[1];
+      // W09 detaches production at the tag; W05 detaches stage at the release commit (no tag exists yet).
+      h.head = tag !== undefined ? sh(f.bare, "rev-parse", `refs/tags/${tag}^{commit}`) : /--detach ([0-9a-f]{40})/.exec(remote)![1]!;
+      h.installed = true;
       return ok();
     }
-    if (remote.includes("rev-parse HEAD")) return ok(s.head ? `${s.head}\n${s.installed ? "installed\n" : ""}` : "");
+    if (remote.includes("rev-parse HEAD")) return ok(h.head ? `${h.head}\n${h.installed ? "installed\n" : ""}` : "");
     return { status: 1, stdout: "", stderr: `unexpected ssh ${remote}` };
   };
   const http = async (url: string) => {
     httpCalls.push(url);
-    const path = url.slice(ORIGIN.length);
+    const stage = url.startsWith(STAGE.publicOrigin);
+    if (stage && !s.stageUp) throw new Error("Unable to connect");
+    const path = url.slice((stage ? STAGE : PROD).publicOrigin.length);
+    const h = stage ? s.stage : s;
     if (path === "/api/version") return { status: 200, body: JSON.stringify({ api: "0.5.0", commit: s.apiCommit }) };
-    if (path === "/version.json") return { status: 200, body: JSON.stringify({ ...s.live, apiRange: "^0.5.0" }) };
+    if (path === "/version.json") return { status: 200, body: JSON.stringify({ ...h.live, apiRange: "^0.5.0" }) };
     if (path === "/sitemap.xml") return { status: 200, body: SITEMAP };
-    return { status: path === s.failRoute ? 500 : 200, body: "<html>" };
+    if (path === "/api/swarm/members") return { status: 200, body: JSON.stringify({ members: [{ id: "m-1", handle: "athena", status: "active" }] }) };
+    if (path.startsWith("/api/swarm/sessions")) return { status: 200, body: JSON.stringify({ sessions: [{ id: "s-1", subjectId: "robotmoney-vault", publishedAt: "2026-11-01T00:00:00Z" }] }) };
+    return { status: !stage && path === s.failRoute ? 500 : 200, body: "<html>" };
+  };
+  const httpBytes = async (url: string) => {
+    httpBytesCalls.push(url);
+    const stage = url.startsWith(STAGE.publicOrigin);
+    const path = new URL(url).pathname;
+    const text = (stage ? s.stageServedOverride?.[path] : s.servedOverride?.[path]) ?? deployed(stage ? s.stage : s, path.slice(1));
+    return text === undefined ? { status: 200, bytes: new TextEncoder().encode("<html>shell") } : { status: 200, bytes: new TextEncoder().encode(text) };
+  };
+  const exec = (argv: string[]): ExecResult => {
+    s.execCalls.push(argv);
+    const cmd = argv.slice(0, 2).join(" ");
+    if (cmd !== "bun scripts/release/stage-target.ts") return { status: 1, stdout: "", stderr: `unexpected exec ${argv.join(" ")}` };
+    if (argv[2] === "dump") return ok("dump ok");
+    if (argv[2] === "up") { s.stageUp = true; s.stage = { installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "stage-api-1" }; return ok("up ok"); }
+    if (argv[2] === "down") { if (s.stageDownFails) return { status: 1, stdout: "", stderr: "down failed" }; s.stageUp = false; return ok("down ok"); }
+    return { status: 1, stdout: "", stderr: `unexpected exec ${argv.join(" ")}` };
   };
   const deps: Deps = {
     git: (args) => {
@@ -211,19 +278,20 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
       return git(f.work, args);
     },
     gh,
-    exec: () => ({ status: 1, stdout: "", stderr: "no exec" }),
+    exec,
     ssh,
     http,
+    httpBytes,
     readFile: (p) => files.get(p),
     writeFile: (p, text) => { files.set(p, text); },
     clock: () => now,
     sleep: async (ms) => { now += ms; },
     log: (l) => out.push(l),
   };
-  return { deps, out, pushes, ghCalls, ssh: sshCalls, http: httpCalls, files, state: s };
+  return { deps, out, pushes, ghCalls, ssh: sshCalls, stageSsh: stageSshCalls, http: httpCalls, httpBytes: httpBytesCalls, files, state: s };
 }
 
-const inputs = (f: Fixture, commits: string[], o: Partial<Inputs> = {}): Inputs => ({ commits, target: PROD, dryRun: false, workDir: f.workDir, ...o });
+const inputs = (f: Fixture, commits: string[], o: Partial<Inputs> = {}): Inputs => ({ commits, target: PROD, stage: STAGE, dryRun: false, workDir: f.workDir, ...o });
 const errorsOf = (r: Awaited<ReturnType<typeof preflight>>): string => ("errors" in r ? r.errors.join("\n") : "");
 const runbook = loadWebRunbook();
 const remoteRef = (f: Fixture, ref: string): string | undefined => {
@@ -237,11 +305,12 @@ const ghWrites = (h: Harness): string[][] => h.ghCalls.filter((c) => (c[0] === "
 // ── the runbook and its loader ───────────────────────────────────────────────
 
 describe("the committed runbook", () => {
-  test("holds W01-preflight to W09-release in order; W02, W04, W07 and W09 are irreversible", () => {
+  test("holds W01-preflight to W12-release in order; W02, W07, W10 and W12 are irreversible", () => {
     expect(runbook.steps.map((s) => s.id)).toEqual([
-      "W01-preflight", "W02-branch", "W03-gate", "W04-tag", "W05-tag-guard", "W06-checkout", "W07-deploy", "W08-live-check", "W09-release",
+      "W01-preflight", "W02-branch", "W03-gate", "W04-stage-up", "W05-stage-deploy", "W06-stage-check",
+      "W07-tag", "W08-tag-guard", "W09-checkout", "W10-deploy", "W11-live-check", "W12-release",
     ]);
-    expect(runbook.steps.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["W02-branch", "W04-tag", "W07-deploy", "W09-release"]);
+    expect(runbook.steps.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["W02-branch", "W07-tag", "W10-deploy", "W12-release"]);
   });
 
   test("sits outside templates/ and releases/, so the platform loader never reads it", () => {
@@ -267,18 +336,18 @@ describe("parseWebRunbook refuses", () => {
     expect(refusal((d) => { d.steps[2]!.cmds = [["true"]]; })).toContain("W03-gate: unknown key cmds");
   });
   test("an unknown kind", () => {
-    expect(refusal((d) => { d.steps[5]!.kind = "migrate"; })).toContain("W06-checkout: unknown kind migrate");
+    expect(refusal((d) => { d.steps[8]!.kind = "migrate"; })).toContain("W09-checkout: unknown kind migrate");
   });
   test("an id outside the W<nn>-<name> shape, and a duplicate id", () => {
     expect(refusal((d) => { d.steps[1]!.id = "S02-branch"; })).toContain("S02-branch: id is W<two digits>-<name>");
     expect(refusal((d) => { d.steps[2]!.id = "W02-branch"; })).toContain("W02-branch: duplicate id");
   });
   test("a wrong irreversible mark", () => {
-    expect(refusal((d) => { d.steps[6]!.irreversible = false; })).toContain("W07-deploy: a deploy step is irreversible: true");
+    expect(refusal((d) => { d.steps[9]!.irreversible = false; })).toContain("W10-deploy: a deploy step is irreversible: true");
   });
   test("a polling step without maxMinutes, and maxMinutes on another kind", () => {
     expect(refusal((d) => { delete d.steps[2]!.maxMinutes; })).toContain("W03-gate: a gate step names maxMinutes");
-    expect(refusal((d) => { d.steps[6]!.maxMinutes = 5; })).toContain("W07-deploy: only a gate or tag-guard step carries maxMinutes");
+    expect(refusal((d) => { d.steps[9]!.maxMinutes = 5; })).toContain("W10-deploy: only a gate or tag-guard step carries maxMinutes");
   });
   test("the deploy before the tag", () => {
     expect(refusal((d) => { [d.steps[3], d.steps[6]] = [d.steps[6]!, d.steps[3]!]; })).toContain("each once, in that order");
@@ -320,7 +389,7 @@ describe("the CLI and the target", () => {
     expect(PROD).toMatchObject({ host: "rm-frontend-prod-1", home: "/root", instance: "rm_prod", checkout: "/root/rm-web", stateRoot: "/root/.local/state/robotmoney-smoke", env: {} });
   });
   test("the rerun command repeats every --commit", () => {
-    expect(rerunCommand({ commits: ["a", "b"], target: PROD, dryRun: false, workDir: "/x" })).toBe("bun run release:web --commit a --commit b");
+    expect(rerunCommand({ commits: ["a", "b"], target: PROD, stage: STAGE, dryRun: false, workDir: "/x" })).toBe("bun run release:web --commit a --commit b");
   });
   test("a site id names a version at a commit by its short sha", () => {
     expect(siteIdIs("0.2.0-abc1234", "0.2.0", "abc1234ffff")).toBe(true);
@@ -657,7 +726,7 @@ describe("W03-gate", () => {
   });
 });
 
-describe("W08 rollback of a digest-suffixed site", () => {
+describe("W11 rollback of a digest-suffixed site", () => {
   test("a rerun is refused when the rolled-back site id carries smoke-site.ts's digest suffix", async () => {
     const f = fixture();
     const h = harness(f, { failRoute: "/swarm" });
@@ -666,7 +735,7 @@ describe("W08 rollback of a digest-suffixed site", () => {
     receipt.previous = `${receipt.previous}-0123456789ab`;
     const again = harness(f, { receipt: JSON.stringify(receipt), head: h.state.head, installed: true, live: h.state.live });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), again.deps)).toBe(1);
-    expect(again.out.join("\n")).toContain("FAILED at W01-preflight: web-v0.2.0 was rolled back at W08");
+    expect(again.out.join("\n")).toContain("FAILED at W01-preflight: web-v0.2.0 was rolled back at W11");
   });
 });
 
@@ -686,10 +755,10 @@ describe("runWebRelease", () => {
     expect(ghWrites(h)).toEqual([]);
   });
 
-  test("runs W01 to W09: branch, tag, checkout, deploy, live check and a release never marked latest", async () => {
+  test("runs W01 to W12: branch, tag, checkout, deploy, live check and a release never marked latest", async () => {
     const f = fixture();
     const h = harness(f);
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps), h.out.join("\n")).toBe(0);
     const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
     expect(remoteRef(f, "refs/tags/web-v0.2.0^{commit}")).toBe(tip);
     expect(sh(f.bare, "cat-file", "-t", "refs/tags/web-v0.2.0")).toBe("tag");
@@ -729,7 +798,7 @@ describe("runWebRelease", () => {
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     const tagged = remoteRef(f, "refs/tags/web-v0.2.0^{commit}")!;
     const log = h.out.join("\n");
-    expect(log).toContain("FAILED at W08-live-check: the live check failed: GET /swarm answered 500");
+    expect(log).toContain("FAILED at W11-live-check: the live check failed: GET /swarm answered 500");
     expect(log).toContain(`rolled back to the previous site (bun run smoke:web --rollback); ${ORIGIN} now serves 0.1.0-${f.c0.slice(0, 9)}`);
     expect(log).toContain("ship the fix as web-v0.2.1");
     expect(h.ssh.some((c) => c.includes("bun run smoke:web --instance rm_prod --rollback"))).toBe(true);
@@ -737,7 +806,7 @@ describe("runWebRelease", () => {
 
     const again = harness(f, { receipt: h.state.receipt, head: h.state.head, installed: true, live: h.state.live });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), again.deps)).toBe(1);
-    expect(again.out.join("\n")).toContain("FAILED at W01-preflight: web-v0.2.0 was rolled back at W08 on rm-frontend-prod-1; the tag is never moved or cut again: ship the fix as web-v0.2.1");
+    expect(again.out.join("\n")).toContain("FAILED at W01-preflight: web-v0.2.0 was rolled back at W11 on rm-frontend-prod-1; the tag is never moved or cut again: ship the fix as web-v0.2.1");
     expect(again.pushes).toEqual([]);
     expect(hostWrites(again)).toEqual([]);
     expect(remoteRef(f, "refs/tags/web-v0.2.0^{commit}")).toBe(tagged);
@@ -749,11 +818,174 @@ describe("runWebRelease", () => {
     const ssh = h.deps.ssh;
     h.deps.ssh = async (host, remote) => {
       const r = await ssh(host, remote);
-      if (remote.includes("smoke:web") && !remote.includes("--rollback")) h.state.apiId = "api-2";
+      if (host === PROD.host && remote.includes("smoke:web") && !remote.includes("--rollback")) h.state.apiId = "api-2";
       return r;
     };
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     expect(h.out.join("\n")).toContain('the api and worker containers changed: {"api":"api-1","worker-analytics":"w-1"} -> {"api":"api-2","worker-analytics":"w-1"}');
     expect(h.state.live.version).toBe("0.1.0");
+  });
+});
+
+// ── the strengthened live check (W01 rollback target, W11 served bytes) ──
+
+describe("W01 refuses when production would have no rollback target", () => {
+  test("web/current absent: refused before any push, naming the host path", async () => {
+    const f = fixture();
+    const before = f.refs();
+    const h = harness(f, { siteLinks: "" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toContain("FAILED at W01-preflight: rm-frontend-prod-1:/root/.local/state/robotmoney-smoke/rm_prod/web/current is absent");
+    expect(log).toContain("a failed W11 could not roll back");
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
+  });
+
+  test("web/current dangling: refused", () => {
+    expect(rollbackTargetProblem(PROD, { dangling: ["current -> 0.1.0-gone"] })).toContain("names no site directory (current -> 0.1.0-gone)");
+    expect(rollbackTargetProblem(PROD, { current: "0.1.0-abc" })).toBeUndefined();
+  });
+
+  test("the plan reports both links; a host with no previous still passes (the switch makes current the previous)", async () => {
+    const f = fixture();
+    const h = harness(f, { siteLinks: "current\t0.1.0-fe89c5ac\n" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
+    expect(h.out.join("\n")).toContain("[web-release] production serves web/current -> 0.1.0-fe89c5ac; web/previous -> (absent); after the switch a W11 rollback returns to 0.1.0-fe89c5ac");
+  });
+});
+
+describe("W11 served content equals the release", () => {
+  test("servedPlan: frontend/public paths are compared at their URL, removed ones must be absent, the rest is skipped and listed", () => {
+    const plan = servedPlan(
+      ["frontend/public/index.html", "frontend/public/views/regime.html", "frontend/public/old.js", "frontend/package.json", "scripts/stamp-assets.ts", "frontend/test/x.spec.ts"],
+      (p) => p !== "frontend/public/old.js",
+    );
+    expect(plan.compare.map((c) => c.url)).toEqual(["/index.html", "/views/regime.html"]);
+    expect(plan.removed.map((r) => r.file)).toEqual(["old.js"]);
+    expect(plan.skipped).toEqual(["frontend/package.json", "frontend/test/x.spec.ts", "scripts/stamp-assets.ts"]);
+    expect(servedUrlPath("frontend/public/")).toBeUndefined();
+    expect(servedUrlPath("frontend/publicity.txt")).toBeUndefined();
+  });
+
+  test("a served file whose sha256 differs from web/current's copy fails W11 and rolls back", async () => {
+    const f = fixture();
+    const h = harness(f, { servedOverride: { "/index.html": "home v1 (a stale cache)\n" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toMatch(/FAILED at W11-live-check: the live check failed: GET \/index.html serves sha256 [0-9a-f]{16}, not the deployed 0\.2\.0-[0-9a-f]{9}\/index.html/);
+    expect(log).toContain("rolled back to the previous site (bun run smoke:web --rollback)");
+    expect(h.state.live.version).toBe("0.1.0");
+    // The comparison read the served copy past any cache, and hashed web/current on the host.
+    expect(h.httpBytes.every((u) => /\?rm-live-check=[0-9a-f]{12}-\d+$/.test(u))).toBe(true);
+    expect(h.ssh.some((c) => c.includes("sha256sum") && c.includes("cd current/"))).toBe(true);
+  });
+
+  test("a passing W11 compares every served changed file and lists the skipped ones", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    const log = h.out.join("\n");
+    expect(log).toContain("[web-release] served files compared with web/current: /index.html");
+    expect(log).toContain("[web-release] not served (skipped): frontend/package.json");
+    expect(log).toContain("1 changed file(s) are served as deployed (1 not served)");
+    expect(log).toContain("every sitemap route answers 200, the api and workers are unchanged");
+  });
+});
+
+describe("W04 to W06: stage QA before any production step writes", () => {
+  const prodWrites = (h: Harness): string[] => h.ssh.filter((c) => /smoke:web|git clone|checkout --quiet --detach|bun install/.test(c));
+  const at = (h: Harness, line: string): number => h.out.findIndex((l) => l.startsWith(line));
+
+  test("a full run brings stage up from a fresh dump, deploys the release commit there with smoke:web, checks it, records the pass and tears stage down, all before the tag", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps), h.out.join("\n")).toBe(0);
+    const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
+    expect(h.state.execCalls).toEqual([
+      ["bun", "scripts/release/stage-target.ts", "dump"],
+      ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"],
+      ["bun", "scripts/release/stage-target.ts", "down"],
+    ]);
+    expect(h.stageSsh.some((c) => c.includes(`checkout --quiet --detach ${tip}`) && c.includes("+refs/heads/web/*:refs/remotes/origin/web/*"))).toBe(true);
+    expect(h.stageSsh.some((c) => c.includes("bun run smoke:web --instance stage_target") && c.startsWith("cd /home/stage-server/stage-target/rm-web"))).toBe(true);
+    const pass = JSON.parse(h.files.get(join(f.workDir, "web-v0.2.0-stage-pass.json"))!) as { commit: string; origin: string };
+    expect(pass).toMatchObject({ commit: tip, origin: STAGE.publicOrigin });
+    expect(at(h, "[W06-stage-check] done: stage QA passed on https://stage.robotmoney-labs.dev")).toBeLessThan(at(h, "[W07-tag] done"));
+    // Stage's served bytes were compared before production's.
+    const firstStage = h.httpBytes.findIndex((u) => u.startsWith(STAGE.publicOrigin));
+    expect(firstStage).toBeGreaterThanOrEqual(0);
+    expect(firstStage).toBeLessThan(h.httpBytes.findIndex((u) => u.startsWith(ORIGIN)));
+    expect(h.state.stageUp).toBe(false);
+  });
+
+  test("a stage failure stops the run at W06: no tag, nothing on production, stage left up for inspection", async () => {
+    const f = fixture();
+    const h = harness(f, { stageServedOverride: { "/index.html": "home v1 (stale)\n" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toMatch(/FAILED at W06-stage-check: stage QA failed on https:\/\/stage\.robotmoney-labs\.dev: GET \/index\.html serves sha256 [0-9a-f]{16}, not the deployed 0\.2\.0-[0-9a-f]{9}\/index\.html .*Nothing reached production/);
+    expect(remoteRef(f, "refs/tags/web-v0.2.0")).toBeUndefined();
+    expect(prodWrites(h)).toEqual([]);
+    expect(h.state.execCalls.map((c) => c[2])).toEqual(["dump", "up"]);
+    expect(h.state.stageUp).toBe(true);
+  });
+
+  test("no production step writes without a recorded stage pass on the release commit", async () => {
+    const f = fixture();
+    const h = harness(f);
+    const write = h.deps.writeFile;
+    h.deps.writeFile = (p, text) => { if (!p.endsWith("-stage-pass.json")) write(p, text); };
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toMatch(/FAILED at W06-stage-check|FAILED at W07-tag: stage QA \(W04 to W06\) has not passed on [0-9a-f]{12}/);
+    expect(remoteRef(f, "refs/tags/web-v0.2.0")).toBeUndefined();
+    expect(prodWrites(h)).toEqual([]);
+  });
+
+  test("a stage pass recorded for another commit does not count", () => {
+    const f = fixture();
+    const h = harness(f);
+    const rel = { version: "0.2.0", commit: "a".repeat(40), branch: "web/releases-0.2.x", tag: "web-v0.2.0", apiCommit: f.c0, base: f.c0, changed: [], outside: [] };
+    h.files.set(join(f.workDir, "web-v0.2.0-stage-pass.json"), JSON.stringify({ commit: "b".repeat(40), origin: STAGE.publicOrigin, at: "x", summary: "" }));
+    expect(stagePassed(rel, inputs(f, []), h.deps)).toBeUndefined();
+    expect(stageGateProblem(rel, inputs(f, []))).toContain("stage QA (W04 to W06) has not passed on aaaaaaaaaaaa");
+  });
+
+  test("a rerun after the stage pass reports W04 to W06 done and builds no stage again", async () => {
+    const f = fixture();
+    const first = harness(f, { ci: { "web-tag-guard.yml": "failure" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), first.deps)).toBe(1);
+    expect(first.out.join("\n")).toContain("FAILED at W08-tag-guard");
+    const again = harness(f);
+    for (const [p, t] of first.files) again.files.set(p, t);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), again.deps), again.out.join("\n")).toBe(0);
+    const log = again.out.join("\n");
+    expect(log).toContain("[W04-stage-up] already done: stage QA already passed");
+    expect(log).toContain("[W06-stage-check] already done: stage QA passed");
+    expect(again.state.execCalls).toEqual([]);
+  });
+
+  test("a teardown that fails after a pass keeps the pass; the rerun continues at W07", async () => {
+    const f = fixture();
+    const h = harness(f, { stageDownFails: true });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toContain("FAILED at W06-stage-check: stage QA passed and is recorded");
+    expect(h.files.has(join(f.workDir, "web-v0.2.0-stage-pass.json"))).toBe(true);
+  });
+
+  test("the dry run plans the stage steps and writes nothing: no stage build, no stage host command, no file hash", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
+    const log = h.out.join("\n");
+    expect(log).toContain("[W04-stage-up] not done: the stage target is not up");
+    expect(log).toContain("[W06-stage-check] plan: version.json, the served files, every sitemap route and an unchanged api on https://stage.robotmoney-labs.dev");
+    expect(log).toContain("[W11-live-check] plan: served files compared with web/current: /index.html");
+    expect(log).toContain("[W07-tag] not done (IRREVERSIBLE, would write): web-v0.2.0 is absent");
+    expect(log).toContain("it refuses until stage QA passes on this commit");
+    expect(h.state.execCalls).toEqual([]);
+    expect(h.stageSsh).toEqual([]);
+    expect(h.httpBytes).toEqual([]);
+    expect(h.ssh.filter((c) => c.includes("sha256sum"))).toEqual([]);
   });
 });
