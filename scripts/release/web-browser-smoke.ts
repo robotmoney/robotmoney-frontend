@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// scripts/release/web-browser-smoke.ts — W08's browser smoke of a live site
+// scripts/release/web-browser-smoke.ts — W11's browser smoke of a live site
 // (D81 amendment, release-runbooks.md §12, ./web-release-lib.ts liveProblems).
 //
 // A headless Chromium from the repository's own @playwright/test loads each
@@ -8,7 +8,7 @@
 // console.error, a same-origin request that failed or answered 4xx/5xx, a page
 // that never reached the router's ready signal, and a route the router
 // rendered as the not-found view. ./web-release-lib.ts pageProblems turns a
-// report into the reasons W08 fails; this file only drives the browser.
+// report into the reasons W11 fails; this file only drives the browser.
 //
 // THE READY SIGNAL is the router's own: router.js render() sets
 // `data-routed` on <html> once the route's view is in the DOM (the same
@@ -31,7 +31,10 @@
 // so a smoke neither fails on the edge's noise nor sends production analytics
 // a page view.
 //
-//   bun scripts/release/web-browser-smoke.ts --origin https://robotmoney.network [--route /path]... [--budget-seconds 180]
+//   bun scripts/release/web-browser-smoke.ts --origin https://robotmoney.network [--route /path]... [--budget-seconds 180] [--json]
+//
+// In a release it runs on the stage host, never on the control machine:
+// ./stage-browser.ts copies it there as a bundle and runs it with --json.
 //
 // With no --route it visits the default routes (BROWSER_BASE_ROUTES and one
 // swarm member page discovered from the public API) and prints each page's
@@ -47,7 +50,7 @@ export interface FailedRequest {
 }
 
 /**
- * How W01 and W08 launch Chromium: headless, with Chromium's own sandbox ON.
+ * How W01 and W11 launch Chromium: headless, with Chromium's own sandbox ON.
  * Playwright passes --no-sandbox unless chromiumSandbox is true, and the
  * control machine holds the operator's production ssh access and a gh token
  * with admin rights, while the pages load third-party scripts and member
@@ -82,7 +85,7 @@ export interface PageReport {
   readonly ms: number;
 }
 
-/** The browser half of W08: load each route, or (with no routes) only prove the browser launches. */
+/** The browser half of W11: load each route, or (with no routes) only prove the browser launches. */
 export type BrowserSmoke = (origin: string, routes: readonly string[], budgetMs: number) => Promise<PageReport[]>;
 
 /** One page's ceiling inside the overall budget. */
@@ -188,16 +191,31 @@ async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   let origin = "";
   let budgetMs = 180_000;
+  let json = false;
   const routes: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--origin") origin = argv[++i] ?? "";
+    if (a === "--json") json = true;
+    else if (a === "--origin") origin = argv[++i] ?? "";
     else if (a === "--route") routes.push(argv[++i] ?? "/");
     else if (a === "--budget-seconds") budgetMs = Number(argv[++i]) * 1000;
     else { console.error(`unknown argument ${a}`); return 2; }
   }
   if (!/^https?:\/\//.test(origin)) { console.error("usage: bun scripts/release/web-browser-smoke.ts --origin <url> [--route /path]... [--budget-seconds 180]"); return 2; }
   origin = origin.replace(/\/+$/, "");
+  // --json: the stage host's half of W01, W06 and W11 (./stage-browser.ts runs it there over ssh). It loads exactly the
+  // routes given (none: only launch, W01's probe) and prints the reports as one JSON line; the control machine judges them.
+  if (json) {
+    try {
+      process.stdout.write(`${JSON.stringify(await runBrowserSmoke(origin, routes, budgetMs))}\n`);
+      return 0;
+    } catch (e) {
+      const m = (e as Error).message;
+      const { NOT_INSTALLED } = await import("./stage-browser-lib.ts");
+      console.error(/Cannot find (package|module) '?@playwright\/test|Executable doesn't exist/.test(m) ? `${NOT_INSTALLED}: ${m.split("\n")[0]}` : m);
+      return 1;
+    }
+  }
   const { BROWSER_BASE_ROUTES, discoverMemberRoute, pageProblems, smokePages } = await import("./web-release-lib.ts");
   const http = async (url: string) => {
     const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });

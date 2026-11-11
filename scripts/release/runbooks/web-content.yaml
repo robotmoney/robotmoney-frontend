@@ -2,12 +2,19 @@
 # docs/technical/release-runbooks.md §12). `bun run release:web --commit <main sha>...`
 # runs it (loader and steps in ./../web-release-lib.ts).
 #
-# It is not a platform runbook: no Q/P/C phases, no go file, no stage rehearsal
-# (owner, 2026-11-04). It reads the platform target file for where the site is
-# served and sits outside templates/ and releases/, so scripts/release/runbook.ts
+# It is not a platform runbook: no Q/P/C phases and no go file. It reads the
+# platform target files (prod.json for where the site is served, stage.json for
+# its QA) and sits outside templates/ and releases/, so scripts/release/runbook.ts
 # never reads it and the kitchen-sink step-list hash is unchanged.
 #
-# Each step names a `kind`. The nine kinds run once each, in this order.
+# Stage QA before production (owner, 2026-11-11, D81 amendment): W04 to W06 bring
+# the kitchen-sink stage target up at production's running commit from a fresh
+# production dump (as Q02-dump and Q03-stage-up do), deploy the release there with
+# smoke:web exactly as W10 will on production, and check it there. No step from
+# W07-tag on writes unless that stage QA passed on the same release commit. Every
+# headless browser runs on the stage host, never on the control machine.
+#
+# Each step names a `kind`. The twelve kinds run once each, in this order.
 # `irreversible` marks a step that writes to GitHub or switches what production
 # serves. The loader refuses an unknown key or kind, a duplicate id, and a kind
 # missing, repeated or out of order.
@@ -15,7 +22,7 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W05; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the host's web/current and web/previous are read and reported, and W01 refuses when web/current is absent or dangling (no rollback target after the switch); W08's headless browser launches with its sandbox on; every changed view maps to a route the browser loads (or is named in UNROUTED_VIEWS); the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W08; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the host's web/current and web/previous are read and reported, and W01 refuses when web/current is absent or dangling (no rollback target after the switch); the stage host's headless browser (scripts/release/stage-browser.ts) launches with its sandbox on; every changed view maps to a route the browser loads (or is named in UNROUTED_VIEWS); the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
@@ -26,28 +33,40 @@ steps:
     description: "The web-client.yml push run (job web-client) and an e2e-web.yml run the runner dispatches once (workflow_dispatch; job e2e-web, a live stack built from the release tree, whose backend is production's API commit) on the release branch at the commit concluded success"
     irreversible: false
     maxMinutes: 90
-  - id: "W04-tag"
+  - id: "W04-stage-up"
+    kind: "stage-up"
+    description: "The stage target (scripts/release/stage-target.ts, docs/runbooks/stage-target.md) brought up at production's running commit from a fresh production dump, as the kitchen sink's Q02-dump and Q03-stage-up do: stage-target.ts dump, then up --dump newest --replace; done when no stage pass is recorded yet and the stage origin's /api/version reports production's API commit"
+    irreversible: false
+  - id: "W05-stage-deploy"
+    kind: "stage-deploy"
+    description: "On the stage host: clone {stage home}/rm-web when missing, fetch web/releases-*, detach at the release commit, bun install --frozen-lockfile; record the stage api and worker containers and /api/version; then bun run smoke:web --instance stage_target, exactly as W10 runs it on production"
+    irreversible: false
+  - id: "W06-stage-check"
+    kind: "stage-check"
+    description: "W11's live check against the stage origin: /version.json names the release, every changed frontend/public file is served with the sha256 of its copy in stage's web/current, every sitemap route answers 200, the strict browser smoke (run on the stage host) passes, and the stage api and workers are unchanged; on a pass the runner records the stage pass for the release commit and tears the stage target down (stage-target.ts down); on a failure stage is left up for inspection and the run stops. W07 onward refuse to write without that recorded pass"
+    irreversible: false
+  - id: "W07-tag"
     kind: "tag"
     description: "checkWebTag passes, then the annotated tag web-vA.B.C on the commit is created and pushed; it is never moved or deleted"
     irreversible: true
-  - id: "W05-tag-guard"
+  - id: "W08-tag-guard"
     kind: "tag-guard"
     description: "The web-tag-guard run for the tag concluded success at the commit"
     irreversible: false
     maxMinutes: 20
-  - id: "W06-checkout"
+  - id: "W09-checkout"
     kind: "checkout"
     description: "Over ssh: clone {home}/rm-web when missing, fetch the tags, detach at the tag and run bun install --frozen-lockfile"
     irreversible: false
-  - id: "W07-deploy"
+  - id: "W10-deploy"
     kind: "deploy"
     description: "Record the api and worker container ids and /api/version, then bun run smoke:web --instance {instance} from {home}/rm-web: no database write, no migration, no backend restart"
     irreversible: true
-  - id: "W08-live-check"
+  - id: "W11-live-check"
     kind: "live-check"
-    description: "{publicOrigin}/version.json reports the tag's version and commit; every changed frontend/public file is served from {publicOrigin} with the sha256 of its copy in the host's web/current (other changed paths are skipped and listed); every sitemap route answers 200; a headless browser from the control machine loads /, /regime, a swarm member page, /early-access and each changed view's route with no page error, console.error or failed same-origin request, each reaching <html data-routed> (any such fault fails the page at once; a same-origin /api/ 503 excuses only that request, its console line and the archive-manifest 404 fallback, and a load whose only fault is that is loaded again, up to three loads; a changed view's route with a 503 on every load fails, an unchanged one warns; a media preload the browser aborts is exempt; Chromium sandbox on; judged once per W08; 3 minutes in all; read only); and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
+    description: "{publicOrigin}/version.json reports the tag's version and commit; every changed frontend/public file is served from {publicOrigin} with the sha256 of its copy in the host's web/current (other changed paths are skipped and listed); every sitemap route answers 200; a headless browser on the stage host (never the control machine; scripts/release/stage-browser.ts) loads /, /regime, a swarm member page, /early-access and each changed view's route with no page error, console.error or failed same-origin request, each reaching <html data-routed> (any such fault fails the page at once; a same-origin /api/ 503 excuses only that request, its console line and the archive-manifest 404 fallback, and a load whose only fault is that is loaded again, up to three loads; a changed view's route with a 503 on every load fails, an unchanged one warns; a media preload the browser aborts is exempt; Chromium sandbox on; judged once per W11; 3 minutes in all; read only); and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
     irreversible: false
-  - id: "W09-release"
+  - id: "W12-release"
     kind: "release"
     description: "The GitHub release for the tag, listing the main commits, the changed paths and each commit's paths outside WEB_CONTENT_PATHS, carried or left out; never marked latest"
     irreversible: true

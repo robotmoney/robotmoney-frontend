@@ -728,9 +728,11 @@ git sparse-checkout set packages/analyst-sdk
 A copy, image or style edit to the web client ships on its own release line (accepted in
 [D81](../decisions.md#d81), refining [D54](../decisions.md#d54) and [D70](../decisions.md#d70)).
 Sections 2 to 10 govern platform releases. None of them applies to a web content release. It has
-no QA branch, no stage run (owner, 2026-11-04), no rc tag, no backup, no migration and no rolling
+no QA branch, no rc tag, no backup, no migration and no rolling
 boot. It changes only what `website-server` serves, through `bun smoke:web` (D54). The platform tag
-production runs does not advance.
+production runs does not advance. It does have a stage QA (owner, 2026-11-11, D81 amendment): before
+any production step writes, the release runs on the kitchen-sink stage target exactly as it will on
+production (W04 to W06 below).
 
 **Eligibility.** A release is content-only when its tree differs from the commit production's API
 runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS` and test paths (below)
@@ -780,14 +782,16 @@ order:
   commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
   tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
-  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W08
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W11
   rolled back is refused (below). The operator must hold the admin permission on the repository.
   The runner reads the instance's `web/current` and `web/previous` links on the host (read only)
-  and reports both. W07's switch makes today's `current` the `previous` that `bun smoke:web
+  and reports both. W10's switch makes today's `current` the `previous` that `bun smoke:web
   --rollback` returns to, so W01 refuses when `current` is absent or names no site directory:
-  production would have no rollback target. W01 also launches W08's headless browser once (no page
-  load) and refuses when it does not start (`bunx playwright install chromium`), so a missing
-  browser is never found after the deploy.
+  production would have no rollback target. W01 also launches the stage host's headless browser
+  once (no page load, `scripts/release/stage-browser.ts`) and refuses until it starts with its
+  sandbox on: when it is not installed it names `bun scripts/release/stage-browser.ts install`;
+  when the sandbox is refused it names the owner's one-time root step (below). A browser problem
+  is never found after the deploy.
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
@@ -806,16 +810,36 @@ order:
   commit. A dry run never dispatches. W01 refuses up front when the release tree's `web-client.yml`
   lacks the push trigger, its `e2e-web.yml` lacks `workflow_dispatch`, or its `web-tag-guard.yml`
   lacks the `web-v*` tag trigger.
-- **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
+- **W04-stage-up.** The kitchen-sink stage target (`scripts/release/stage-target.ts`,
+  [docs/runbooks/stage-target.md](../runbooks/stage-target.md)) is brought up at production's running
+  commit from a fresh production dump, as the kitchen sink's Q02-dump and Q03-stage-up do: `bun
+  scripts/release/stage-target.ts dump`, then `up --dump newest --replace`, from the control machine.
+  A stage stack that already runs production's API commit is reused on a rerun. Q04-role-passwords
+  is not run: a web release migrates nothing.
+- **W05-stage-deploy.** On the stage host, the runner clones `{stage home}/rm-web` when missing,
+  fetches `web/releases-*`, detaches at the release commit (no tag exists yet) and runs `bun install
+  --frozen-lockfile`. It records the stage `api` and worker container ids and `/api/version`, then
+  runs `bun run smoke:web --instance stage_target`: the same command W10 runs on production, so the
+  stage switch, its range check and its reload are the ones production will see.
+- **W06-stage-check.** W11's live check, all of it, against the stage origin
+  (`https://stage.robotmoney-labs.dev`): `/version.json`, the served bytes against stage's
+  `web/current`, every sitemap route, the strict browser smoke (run on the stage host) against
+  production's data in the stage copy, and the stage `api` and workers unchanged. On a pass the
+  runner records it for the release commit (`<tag>-stage-pass.json` in its work directory) and tears
+  the stage target down (`stage-target.ts down`), as the kitchen sink does after a pass. On a
+  failure nothing has reached production; the stage target is left up for inspection, and the fix
+  ships from main. **No step from W07 on writes unless a stage pass is recorded for the same
+  release commit**; a pass recorded for another commit does not count.
+- **W07-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
   `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
-- **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
-- **W06-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
+- **W08-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
+- **W09-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
   fetch the tags, detach at the tag and run `bun install --frozen-lockfile`. It is the runner's own
   checkout, never the platform release checkout.
-- **W07-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
+- **W10-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
   body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
   database row, runs no migration and restarts no backend service.
-- **W08-live-check.** Four checks, in order, and then the backend:
+- **W11-live-check.** Four checks, in order, and then the backend:
   1. `{publicOrigin}/version.json` reports the tag's version and commit.
   2. **Served content equals the release.** Each changed path under `frontend/public/` is fetched
      at the URL it is served at (`frontend/public/X` at `/X`, with a one-off query so no cache
@@ -826,9 +850,9 @@ order:
      build script, a test, `frontend/package.json`) is skipped and listed.
   3. Every sitemap route answers 200. This is weak on its own: nginx answers an unknown path with
      the SPA shell, 200.
-  4. **Browser smoke against production.** From the control machine, a headless Chromium (the
-     repository's `@playwright/test`, `scripts/release/web-browser-smoke.ts`, launched with
-     Chromium's sandbox on) loads `/`, `/regime`, one swarm member page (a member read from
+  4. **Browser smoke against production.** On the stage host, never on the control machine, a
+     headless Chromium (Playwright's, pinned to the repository's `@playwright/test`, driven by
+     `scripts/release/web-browser-smoke.ts`, launched with Chromium's sandbox on) loads `/`, `/regime`, one swarm member page (a member read from
      `GET /api/swarm/members`), `/early-access`, and the route of each changed view: the first
      candidate route (those, the release tree's sitemap, a session and its subject from
      `GET /api/swarm/sessions`, then the catch-all route `/X` for `views/X.html`) for which the
@@ -848,28 +872,24 @@ order:
      ready signal. On 2026-11-11 production's `GET /api/swarm/members/<handle>` hit Postgres'
      statement timeout now and then (503), and the member page fell back to its archive manifest
      (404). A load whose only fault is such a 503 is inconclusive, and the page is loaded again, up
-     to three loads. A page with a clean load passes. A page inconclusive on every load fails W08
+     to three loads. A page with a clean load passes. A page inconclusive on every load fails W11
      when it shows a changed view (the release's own surface was never seen working); it is a
      warning when it shows none. The whole smoke has 3 minutes. The runner judges the site once per
-     W08: the done check's result is the one the step acts on, so a page never gets a second smoke.
+     W11: the done check's result is the one the step acts on, so a page never gets a second smoke.
      It is read only: it submits no form, and any non-GET request a page makes is answered 204
      inside the browser. Cloudflare's edge scripts (`/cdn-cgi/`: Zaraz, the RUM beacon) are
      answered inside the browser (an empty script, or 204 for a beacon): the release holds none of
      them, and on 2026-11-11 Zaraz's Google Analytics tool broke the site's own CSP (`connect-src`)
      with a `console.error` on every page. `scripts/tests/integration/web-browser-smoke.test.ts`
-     proves both against a local server with a real Chromium. W01 launches the browser with the
-     same options and refuses when it does not start: on a host with
-     `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 24.04) Chromium's sandbox needs an
-     AppArmor profile that grants the Playwright Chromium binary `userns`, or root lifting the
-     restriction (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`, as `integration.yml` does
-     on its throwaway VM). The sandbox is never turned off to get past it. A dry run prints the routes and
-     files W08 would check, discovered with GETs only, and loads no page and hashes no file even
-     when W07's record exists.
+     proves both against a local server with a real Chromium. W01 launches the stage browser with
+     the same options and refuses when it does not start. A dry run prints the routes and
+     files W11 would check, discovered with GETs only, and loads no page and hashes no file even
+     when W10's record exists.
 
   Last, the `api` and worker container ids and `/api/version` are unchanged. On a failure the
   runner runs `bun run smoke:web --rollback`, reads `/version.json` again to report what production
   now serves, and exits non-zero. The branch and the tag stay; no GitHub release is created.
-- **W09-release** (irreversible). The GitHub release for the tag lists the main commits, the
+- **W12-release** (irreversible). The GitHub release for the tag lists the main commits, the
   changed paths and each commit's paths outside the content paths, carried or left out. It is never marked latest: the platform's release keeps that.
 
 The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
@@ -887,7 +907,43 @@ equals `version` in `frontend/package.json` at that commit and is above every ot
 The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-web-tag.ts` on a push of
 a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
 
-**Rollback.** A tag is never moved, deleted or cut again. When W08 rolls the site back, the host's
+**The browser on the stage host.** Every headless browser of a web release runs on
+`rm-frontend-stage-2` as `stage-server`, never on the control machine. The control machine holds the
+operator's production ssh access and a gh token with admin rights; the pages load third-party
+scripts and member content. `bun scripts/release/stage-browser.ts install` (from the control machine)
+installs `@playwright/test` at the version this checkout's `bun.lock` resolved, and its headless
+shell, into `/home/stage-server/rm-web-browser`. That folder sits outside the stage target's `HOME`,
+so `stage-target.ts down` keeps it. The runner copies `web-browser-smoke.ts` there as a bundle, runs
+it over ssh under `env -i` and reads the page reports back as JSON. Chromium keeps its sandbox on.
+
+Stage-2 runs Ubuntu 24.04, whose `kernel.apparmor_restrict_unprivileged_userns=1` denies the sandbox
+its user namespace, so W01 refuses until the owner runs, once, as root on `rm-frontend-stage-2`:
+
+```bash
+sudo install -m 0644 -o root -g root /home/stage-server/rm-web-browser/rm-web-browser.apparmor /etc/apparmor.d/rm-web-browser
+sudo apparmor_parser -r /etc/apparmor.d/rm-web-browser
+```
+
+`stage-browser.ts install` writes that profile file (`APPARMOR_PROFILE` in
+`scripts/release/stage-browser-lib.ts`); read it before installing it. It grants `userns` to the
+Playwright headless shell under `rm-web-browser/browsers/chromium_headless_shell-*/` and to nothing
+else, the shape Ubuntu ships for Google Chrome. The glob covers every Playwright revision, so a
+Playwright bump needs no new root step. The binary lives in `stage-server`'s home, which
+`stage-server` can rewrite. A root-owned copy would add no protection on stage, because `stage-server`
+is in the `docker` group and so already root-equivalent there. The host-wide fallback, acceptable on
+stage only, is `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` (plus the same line in a
+file under `/etc/sysctl.d/` to survive a reboot). `bun scripts/release/stage-browser.ts probe` reports
+whether the sandbox starts.
+
+What `stage-server` holds (read 2026-11-11), the reason a stage browser is the safer place: no key
+production's `/root/.ssh/authorized_keys` accepts, no gh login and no git credential helper. It holds
+a read-only deploy key for this repository (`stage-server-user`), and a deploy key with write access
+to `robotmoney/csv-backups`. Its `~/.env` holds the production read replica's `rm_readonly` password
+and the OpenCode and CoinGecko API keys. `rehearsal-creds.json` holds member signing keys and bearers from the October rehearsals (not checked against production). It is
+also a member of the `docker` group. A browser compromise there could reach those, not production's
+host or the repository's admin rights.
+
+**Rollback.** A tag is never moved, deleted or cut again. When W11 rolls the site back, the host's
 web receipt records it, and a rerun of the same version stops at W01, including when `bun
 smoke:web` installed the site under a digest-suffixed id. The fix ships as
 `web-vA.B.(C+1)`.

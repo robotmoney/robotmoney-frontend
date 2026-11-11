@@ -1,7 +1,7 @@
-// W08's browser smoke is read only, executed (issue 1606, D81 live-check amendment).
+// W11's browser smoke is read only, executed (issue 1606, D81 live-check amendment).
 //
 // A real headless Chromium (scripts/release/web-browser-smoke.ts runBrowserSmoke,
-// launched with the sandbox on, as W01 and W08 launch it) loads a page from a
+// launched with the sandbox on, as W01 and W11 launch it) loads a page from a
 // tiny local server. The page POSTs to the api and loads Cloudflare edge
 // scripts under /cdn-cgi/. The server records every request it receives: the
 // POST must be answered 204 inside the browser and never reach it, no
