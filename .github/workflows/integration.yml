@@ -133,6 +133,12 @@ jobs:
       # a headless Chromium from the root @playwright/test, as web-client.yml installs it.
       - name: Install Playwright Chromium
         run: bunx playwright install chromium
+      # Chromium's sandbox stays ON (scripts/release/web-browser-smoke.ts LAUNCH_OPTIONS).
+      # ubuntu-latest (24.04) sets kernel.apparmor_restrict_unprivileged_userns=1,
+      # which denies the user namespace the sandbox needs ("No usable sandbox!").
+      # Lifting it on this throwaway VM lets the sandbox start; it does not turn the sandbox off.
+      - name: Let Chromium's sandbox start (unprivileged user namespaces)
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Installed BEFORE test steps (issue #108): scripts/tests/
       # integration/smoke-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
       # as a host-side subprocess (cwd: backend/), which needs backend's own

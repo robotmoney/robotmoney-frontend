@@ -596,8 +596,9 @@ const webDirOf = (t: WebTarget): string => `${instanceDir(t)}/web`;
 export function browserLaunchProblem(message: string): string {
   if (/sandbox/i.test(message)) {
     return "W08's headless browser cannot start Chromium's sandbox on this machine (Playwright: \"Chromium sandboxing failed\"). " +
-      "On Ubuntu 24.04 kernel.apparmor_restrict_unprivileged_userns=1 denies the user namespace the sandbox needs unless an AppArmor profile, " +
-      "installed by root, grants the Playwright Chromium binary `userns`. Run the release from a host where the sandbox starts; " +
+      "On Ubuntu 24.04 kernel.apparmor_restrict_unprivileged_userns=1 denies the user namespace the sandbox needs. Root can lift it " +
+      "(sysctl kernel.apparmor_restrict_unprivileged_userns=0, as integration.yml does on its VM) or install an AppArmor profile granting the " +
+      "Playwright Chromium binary `userns`. Or run the release from a host where the sandbox starts; " +
       "the sandbox is never turned off to get past this";
   }
   return `W08's headless browser does not launch here (${message.split("\n")[0]}): run bunx playwright install chromium`;

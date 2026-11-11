@@ -860,8 +860,9 @@ order:
      proves both against a local server with a real Chromium. W01 launches the browser with the
      same options and refuses when it does not start: on a host with
      `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 24.04) Chromium's sandbox needs an
-     AppArmor profile that grants the Playwright Chromium binary `userns`, which only root can
-     install. The sandbox is never turned off to get past it. A dry run prints the routes and
+     AppArmor profile that grants the Playwright Chromium binary `userns`, or root lifting the
+     restriction (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`, as `integration.yml` does
+     on its throwaway VM). The sandbox is never turned off to get past it. A dry run prints the routes and
      files W08 would check, discovered with GETs only, and loads no page and hashes no file even
      when W07's record exists.
 
