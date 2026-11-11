@@ -14,7 +14,11 @@ env:
   CI_CLASS: system-correctness
 on:
   push:
-    branches: [main, "releases-*", "qa/**"]
+    # web/releases-* (D81, issue 1603): `bun run release:web` W03-gate waits for
+    # this workflow's push run at the web content release commit. That tree's
+    # backend is production's API commit, so this is the one run that checks
+    # the new content against the backend it will be served beside.
+    branches: [main, "releases-*", "qa/**", "web/releases-*"]
   schedule:
     - cron: "27 4 * * *"
   pull_request:

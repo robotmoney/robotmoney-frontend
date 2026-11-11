@@ -14,7 +14,8 @@ import { releaseRunbookNames, TEMPLATE_NAMES } from "../../release/runbook.ts";
 import { loadTarget } from "../../release/target.ts";
 import { parseArgs } from "../../release/web-release.ts";
 import {
-  classifyContentDiff, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs, WEB_RUNBOOK_PATH, webTargetOf,
+  classifyContentDiff, GATE_RUNS, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
+  WEB_RUNBOOK_PATH, webTargetOf,
   type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
 
@@ -80,6 +81,7 @@ function fixture(): Fixture {
   };
   const r0 = commit("chore: root", {
     "frontend/package.json": pkg("0.1.0"), "frontend/public/index.html": "home\n", "frontend/public/a.txt": "orig\n", "backend/src/a.ts": "export const a = 1;\n",
+    "backend/src/b.ts": "// b: the member page reads it\nexport const b = 1;\n", "scripts/tests/unit/b.test.js": "v1\n", "docs/b.md": "v1\n",
   });
   const c0 = commit("feat(api): platform", { "backend/src/a.ts": "export const a = 2;\n" });
   sh(work, "tag", "-a", "v0.7.0", "-m", "v0.7.0");
@@ -104,7 +106,9 @@ function sideBranch(f: Fixture, from: string, branch: string, files: Record<stri
   return c;
 }
 
-type Ci = "success" | "failure" | "none";
+type Ci = "success" | "failure" | "none" | "running";
+/** The fake run id gh reports for each workflow's push run. */
+const RUN_IDS: Record<string, number> = { "web-client.yml": 7, "e2e-web.yml": 8, "web-tag-guard.yml": 9 };
 interface State {
   apiCommit: string;
   ci: Record<string, Ci>;
@@ -142,9 +146,15 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
       const wf = args[args.indexOf("--workflow") + 1]!;
       const sha = args[args.indexOf("--commit") + 1]!;
       const c = s.ci[wf] ?? "success";
-      return ok(JSON.stringify(c === "none" ? [] : [{ databaseId: 7, headSha: sha, status: "completed", conclusion: c }]));
+      const id = RUN_IDS[wf] ?? 7;
+      if (c === "running") return ok(JSON.stringify([{ databaseId: id, headSha: sha, status: "in_progress", conclusion: "" }]));
+      return ok(JSON.stringify(c === "none" ? [] : [{ databaseId: id, headSha: sha, status: "completed", conclusion: c }]));
     }
-    if (args[0] === "run" && args[1] === "view") return ok(JSON.stringify({ jobs: [{ name: "web-client", status: "completed", conclusion: "success" }] }));
+    if (args[0] === "run" && args[1] === "view") {
+      const wf = Object.entries(RUN_IDS).find(([, id]) => String(id) === args[2])?.[0] ?? "";
+      const job = GATE_RUNS.find((g) => g.workflow === wf)?.job ?? "guard";
+      return ok(JSON.stringify({ jobs: [{ name: job, status: "completed", conclusion: "success" }] }));
+    }
     if (args[0] === "release" && args[1] === "view") return s.release ? ok("{}") : { status: 1, stdout: "", stderr: "release not found" };
     if (args[0] === "release" && args[1] === "create") { s.release = true; return ok(); }
     return { status: 1, stdout: "", stderr: `unexpected gh ${args.join(" ")}` };
@@ -306,6 +316,11 @@ describe("the CLI and the target", () => {
     expect(siteIdIs("0.2.0-abc1234", "0.2.1", "abc1234ffff")).toBe(false);
     expect(siteIdIs("0.2.0-abc1234", "0.2.0", "def")).toBe(false);
   });
+  test("a site id with smoke-site.ts's digest suffix names the same version at the same commit", () => {
+    expect(siteIdIs("0.2.0-abc1234-0123456789ab", "0.2.0", "abc1234ffff")).toBe(true);
+    expect(siteIdIs("0.2.0-abc1234-0123456789ab", "0.2.0", "def")).toBe(false);
+    expect(siteIdIs("0.2.0-abc1234-xyz", "0.2.0", "abc1234ffff")).toBe(false);
+  });
 });
 
 // ── W01: the preflight ───────────────────────────────────────────────────────
@@ -339,7 +354,7 @@ describe("W01-preflight refuses before any push", () => {
     const before = f.refs();
     const h = harness(f);
     const r = await preflight(inputs(f, [f.m1, f.m2]), h.deps);
-    expect(errorsOf(r)).toContain("outside the web content paths: backend/src/a.ts, docker-compose.yml. Ship it with bun run release:run");
+    expect(errorsOf(r)).toContain("outside the web content and test paths: backend/src/a.ts, docker-compose.yml. Ship it with bun run release:run");
     expect(h.pushes).toEqual([]);
     expect(f.refs()).toBe(before);
   });
@@ -398,12 +413,12 @@ describe("W02-branch", () => {
     expect(h.out.join("\n")).toContain("FAILED at W03-gate");
   });
 
-  test("refuses a named main commit that touches backend/src/** before any push", async () => {
+  test("refuses a named main commit that touches only backend/src/** before any push", async () => {
     const f = fixture();
     const before = f.refs();
     const h = harness(f);
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.mb]), h.deps)).toBe(1);
-    expect(h.out.join("\n")).toContain(`commit ${f.mb.slice(0, 12)} is not content-only; it touches backend/src/a.ts`);
+    expect(h.out.join("\n")).toContain(`commit ${f.mb.slice(0, 12)} touches no web content path (backend/src/a.ts): there is nothing to ship`);
     expect(h.pushes).toEqual([]);
     expect(f.refs()).toBe(before);
   });
@@ -417,6 +432,158 @@ describe("W02-branch", () => {
     expect(h.pushes).toEqual([]);
     expect(f.refs()).toBe(before);
     expect(sh(f.work, "worktree", "list").split("\n")).toHaveLength(1);
+  });
+});
+
+// ── W01: only the web content part of each commit ships (issue 1603) ─────────
+
+/** Commit on main and push it, as a merged PR would land. */
+function onMain(f: Fixture, msg: string, files: Record<string, string>): string {
+  const c = f.commit(msg, files);
+  sh(f.work, "push", "-q", "origin", "main");
+  return c;
+}
+
+describe("the left-out rule", () => {
+  test("test paths and doc paths are told apart from runtime paths", () => {
+    for (const p of ["scripts/tests/unit/x.test.js", "backend/tests/a.test.js", "contract/tests/x.ts", "packages/csvb/tests/a.ts", "backend/src/x.spec.ts"]) {
+      expect(isTestPath(p)).toBe(true);
+    }
+    expect(isDocPath("docs/decisions.md")).toBe(true);
+    for (const p of ["backend/src/swarm/dormancy.ts", "docker-compose.yml", "bun.lock", "README.md", "test-fixtures/a.json", "goldens/x.json", "scripts/testsuite.ts"]) {
+      expect(isTestPath(p) || isDocPath(p)).toBe(false);
+    }
+  });
+  test("a comment-only edit compiles to the same code; any token change does not", () => {
+    const before = "// the count is shown on the member page\nexport const a = 1;\n/** doc */\nexport function f(x: number): number { return x + a; }\n";
+    expect(isCommentOnlyChange("x.ts", before, "// the count is shown as a callout\nexport const a = 1;\n/** other doc */\nexport function f(x: number): number {\n  return x + a;\n}\n")).toBe(true);
+    expect(isCommentOnlyChange("x.ts", before, before.replace("= 1", "= 2"))).toBe(false);
+    expect(isCommentOnlyChange("x.ts", before, before.replace("async ", "").replace("export function", "export async function"))).toBe(false);
+    expect(isCommentOnlyChange("x.json", "{}", "{ }")).toBe(false);
+    expect(isCommentOnlyChange("x.ts", before, "export const = ;")).toBe(false);
+  });
+  test("PR 1590's dormancy.ts edit is comment-only, and a real change to that file is not", () => {
+    const show = (rev: string): string => sh(ROOT, "show", rev);
+    const has = git(ROOT, ["cat-file", "-e", "b54d4b36a6bb664280b5eb9d92056ce0327243b8^{commit}"]).status === 0;
+    if (!has) return; // a shallow clone without the commit: the fixture cases below still cover the rule
+    expect(isCommentOnlyChange("dormancy.ts", show("b54d4b36^:backend/src/swarm/dormancy.ts"), show("b54d4b36:backend/src/swarm/dormancy.ts"))).toBe(true);
+    expect(isCommentOnlyChange("dormancy.ts", show("fe89c5ac:backend/src/swarm/dormancy.ts"), show("2285064e:backend/src/swarm/dormancy.ts"))).toBe(false);
+  });
+});
+
+describe("W01 ships only the web content part of each named commit", () => {
+  test("a commit with a test, a doc and a comment-only backend edit ships its frontend part and its test; the backend and docs equal the API commit's", async () => {
+    const f = fixture();
+    const mix = onMain(f, "feat(web): callout", {
+      "frontend/public/mix.txt": "callout\n", "scripts/tests/unit/mix.test.js": "test\n", "docs/mix.md": "doc\n",
+      "backend/src/b.ts": "// b: the member page shows it as a callout\nexport const b = 1;\n",
+    });
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [mix, f.m2]), h.deps)).toBe(0);
+    const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
+    expect(sh(f.bare, "diff", "--name-only", f.c0, tip).split("\n")).toEqual(["frontend/package.json", "frontend/public/mix.txt", "scripts/tests/unit/mix.test.js"]);
+    const log = h.out.join("\n");
+    expect(log).toContain(`  ${mix.slice(0, 12)} backend/src/b.ts (comment-only: left out)`);
+    expect(log).toContain(`  ${mix.slice(0, 12)} docs/mix.md (doc: left out)`);
+    expect(log).toContain(`  ${mix.slice(0, 12)} scripts/tests/unit/mix.test.js (test: carried)`);
+    const body = sh(f.bare, "log", "--format=%B", `${f.c0}..${tip}`);
+    expect(body).toContain(`(cherry picked from commit ${mix})\nWeb content release: left out backend/src/b.ts, docs/mix.md.`);
+    expect(sh(f.bare, "log", "-1", "--format=%an", `${tip}~1`)).toBe("t");
+    const notes = [...h.files.entries()].find(([p]) => p.endsWith("web-v0.2.0-notes.md"))![1];
+    expect(notes).toContain(`- ${mix.slice(0, 12)} \`backend/src/b.ts\` (comment-only: left out)`);
+    expect(notes).toContain(`- ${mix.slice(0, 12)} \`scripts/tests/unit/mix.test.js\` (test: carried)`);
+  });
+
+  test("a rerun of the same commits finds them already picked and keeps the pushed tip", async () => {
+    const f = fixture();
+    const mix = onMain(f, "feat(web): callout", { "frontend/public/mix.txt": "callout\n", "scripts/tests/unit/mix.test.js": "test\n" });
+    const first = harness(f, { ci: { "e2e-web.yml": "failure" } });
+    expect(await runWebRelease(runbook, inputs(f, [mix, f.m2]), first.deps)).toBe(1);
+    expect(first.out.join("\n")).toContain("FAILED at W03-gate: e2e-web.yml run 8 concluded failure");
+    const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
+    const again = harness(f, { ci: { "e2e-web.yml": "running" } });
+    expect(await runWebRelease(runbook, inputs(f, [mix, f.m2], { dryRun: true }), again.deps)).toBe(0);
+    expect(again.out.join("\n")).toContain(`[W02-branch] already done: origin/web/releases-0.2.x is at ${tip}`);
+    expect(again.out.join("\n")).toContain("[W03-gate] not done: e2e-web.yml run 8 is in_progress");
+  });
+
+  test("refuses a left-out change to runtime code, and an added runtime file, before any push", async () => {
+    const f = fixture();
+    const real = onMain(f, "feat(web): b", { "frontend/public/b.txt": "b\n", "backend/src/b.ts": "// b: the member page reads it\nexport const b = 2;\n" });
+    const added = onMain(f, "feat(web): c", { "frontend/public/c.txt": "c\n", "backend/src/c.ts": "// c\n" });
+    const before = f.refs();
+    const h = harness(f);
+    const r = await preflight(inputs(f, [real, added, f.m2]), h.deps);
+    const errors = errorsOf(r);
+    expect(errors).toContain(`commit ${real.slice(0, 12)} changes backend/src/b.ts outside the web content paths, and that change is not a test, a doc or a comment-only edit`);
+    expect(errors).toContain(`commit ${added.slice(0, 12)} changes backend/src/c.ts outside the web content paths`);
+    expect(errors).toContain("ship it with bun run release:run");
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
+  });
+
+  test("a conflict in a left-out path does not stop the run; the path keeps the API commit's content", async () => {
+    const f = fixture();
+    onMain(f, "docs: b v2", { "docs/b.md": "v2\n" });
+    const dc = onMain(f, "feat(web): dc", { "frontend/public/dc.txt": "dc\n", "docs/b.md": "v3\n" });
+    const h = harness(f);
+    const r = await preflight(inputs(f, [dc], { version: "0.1.0" }), h.deps);
+    if (!("release" in r)) throw new Error(errorsOf(r));
+    expect(sh(f.work, "diff", "--name-only", f.c0, r.release.commit)).toBe("frontend/public/dc.txt");
+    expect(sh(f.work, "show", `${r.release.commit}:docs/b.md`)).toBe("v1");
+    expect(sh(f.work, "worktree", "list").split("\n")).toHaveLength(1);
+  });
+
+  test("a conflict in a carried test path stops the run before any push, naming the path", async () => {
+    const f = fixture();
+    onMain(f, "test: b v2", { "scripts/tests/unit/b.test.js": "v2\n" });
+    const tc = onMain(f, "feat(web): tc", { "frontend/public/tc.txt": "tc\n", "scripts/tests/unit/b.test.js": "v3\n" });
+    const before = f.refs();
+    const h = harness(f);
+    const r = await preflight(inputs(f, [tc], { version: "0.1.0" }), h.deps);
+    expect(errorsOf(r)).toContain(`cherry-picking ${tc.slice(0, 12)} onto ${f.c0.slice(0, 12)} conflicts in scripts/tests/unit/b.test.js`);
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
+    expect(sh(f.work, "worktree", "list").split("\n")).toHaveLength(1);
+  });
+
+  test("an existing branch whose tree carries a test path beside content is still eligible", async () => {
+    const f = fixture();
+    sideBranch(f, f.c0, "web/releases-0.2.x", { "frontend/public/z.txt": "z\n", "scripts/tests/unit/z.test.js": "z\n" });
+    const h = harness(f);
+    const r = await preflight(inputs(f, [f.m1, f.m2]), h.deps);
+    if (!("release" in r)) throw new Error(errorsOf(r));
+    expect(r.release.changed).toContain("scripts/tests/unit/z.test.js");
+  });
+});
+
+describe("W03-gate", () => {
+  test("requires web-client and e2e-web, and e2e-web.yml runs on a push to web/releases-*", () => {
+    expect(GATE_RUNS).toEqual([{ workflow: "web-client.yml", job: "web-client" }, { workflow: "e2e-web.yml", job: "e2e-web" }]);
+    for (const wf of ["web-client.yml", "e2e-web.yml"]) {
+      const doc = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows", wf), "utf8")) as { on: { push: { branches: string[] } } };
+      expect(doc.on.push.branches).toContain("web/releases-*");
+    }
+  });
+  test("fails at W03 when e2e-web fails at the release commit, and cuts no tag", async () => {
+    const f = fixture();
+    const h = harness(f, { ci: { "e2e-web.yml": "failure" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toContain("FAILED at W03-gate: e2e-web.yml run 8 concluded failure");
+    expect(remoteRef(f, "refs/tags/web-v0.2.0")).toBeUndefined();
+  });
+});
+
+describe("W08 rollback of a digest-suffixed site", () => {
+  test("a rerun is refused when the rolled-back site id carries smoke-site.ts's digest suffix", async () => {
+    const f = fixture();
+    const h = harness(f, { failRoute: "/swarm" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const receipt = JSON.parse(h.state.receipt) as { previous: string };
+    receipt.previous = `${receipt.previous}-0123456789ab`;
+    const again = harness(f, { receipt: JSON.stringify(receipt), head: h.state.head, installed: true, live: h.state.live });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), again.deps)).toBe(1);
+    expect(again.out.join("\n")).toContain("FAILED at W01-preflight: web-v0.2.0 was rolled back at W08");
   });
 });
 
@@ -468,7 +635,7 @@ describe("runWebRelease", () => {
     const log = again.out.join("\n");
     expect(log).toContain("[W01-preflight] passed");
     expect(log).toContain(`[W02-branch] already done: origin/web/releases-0.2.x is at ${tip}`);
-    expect(log).toContain("[W03-gate] already done: web-client.yml job web-client concluded success");
+    expect(log).toContain("[W03-gate] already done: web-client.yml job web-client concluded success in run 7; e2e-web.yml job e2e-web concluded success in run 8");
     expect(again.pushes.map((p) => p[2])).toEqual(["refs/tags/web-v0.2.0"]);
     expect(remoteRef(f, "refs/heads/web/releases-0.2.x")).toBe(tip);
   });
@@ -480,7 +647,7 @@ describe("runWebRelease", () => {
     const tagged = remoteRef(f, "refs/tags/web-v0.2.0^{commit}")!;
     const log = h.out.join("\n");
     expect(log).toContain("FAILED at W08-live-check: the live check failed: GET /swarm answered 500");
-    expect(log).toContain("rolled back to the previous site (bun run smoke:web --rollback)");
+    expect(log).toContain(`rolled back to the previous site (bun run smoke:web --rollback); ${ORIGIN} now serves 0.1.0-${f.c0.slice(0, 9)}`);
     expect(log).toContain("ship the fix as web-v0.2.1");
     expect(h.ssh.some((c) => c.includes("bun run smoke:web --instance rm_prod --rollback"))).toBe(true);
     expect(h.state.live.version).toBe("0.1.0");

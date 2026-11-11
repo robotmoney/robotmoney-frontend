@@ -68,7 +68,7 @@ function release(version: string): Release {
   const tag = `web-v${version}`;
   gitIn(variant.dir, ["tag", "-a", tag, "-m", tag]);
   const commit = gitIn(variant.dir, ["rev-parse", "HEAD"]);
-  return { version, commit, branch: "web/releases-9.9.x", tag, apiCommit: "", base: "", changed: [] };
+  return { version, commit, branch: "web/releases-9.9.x", tag, apiCommit: "", base: "", changed: [], outside: [] };
 }
 
 beforeAll(async () => {

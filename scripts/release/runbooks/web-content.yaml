@@ -15,17 +15,17 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and content-only; production's API commit is read from {publicOrigin}/api/version; the commits are cherry-picked onto web/releases-A.B.x (or the API commit) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS; a rolled-back tag is refused; the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a test (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and test paths; a rolled-back tag is refused; the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
-    description: "Push the cherry-picked commit to web/releases-A.B.x: create it at production's API commit, or fast-forward it; never force-push, no pull request"
+    description: "Push the cherry-picked commit to web/releases-A.B.x: create it at the eligibility base (production's API commit, or the last web tag on it), or fast-forward it; never force-push, no pull request"
     irreversible: true
   - id: "W03-gate"
     kind: "gate"
-    description: "The push run of web-client.yml (job web-client) on the release branch at the commit concluded success"
+    description: "The push runs of web-client.yml (job web-client) and e2e-web.yml (job e2e-web, a live stack built from the release tree, whose backend is production's API commit) on the release branch at the commit concluded success"
     irreversible: false
-    maxMinutes: 60
+    maxMinutes: 90
   - id: "W04-tag"
     kind: "tag"
     description: "checkWebTag passes, then the annotated tag web-vA.B.C on the commit is created and pushed; it is never moved or deleted"
@@ -45,9 +45,9 @@ steps:
     irreversible: true
   - id: "W08-live-check"
     kind: "live-check"
-    description: "{publicOrigin}/version.json reports the tag's version and commit, every sitemap route answers 200, and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback and fail"
+    description: "{publicOrigin}/version.json reports the tag's version and commit, every sitemap route answers 200, and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
     irreversible: false
   - id: "W09-release"
     kind: "release"
-    description: "The GitHub release for the tag, listing the main commits and the changed content paths; never marked latest"
+    description: "The GitHub release for the tag, listing the main commits, the changed paths and each commit's paths outside WEB_CONTENT_PATHS, carried or left out; never marked latest"
     irreversible: true

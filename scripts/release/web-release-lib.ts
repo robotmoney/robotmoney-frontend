@@ -9,12 +9,14 @@
 // production lives and runs its host commands over ssh in the platform's shape
 // (./steps.ts: `env -i`, BASE_ENV, shellQuote), with no new target key.
 //
-// A web content release ships main commits that touch only WEB_CONTENT_PATHS
-// (scripts/lib/website-release.ts) to production's website-server through the
-// existing `bun smoke:web`, with no database write, no migration and no api or
-// worker restart. The runner cherry-picks the named main commits onto
-// web/releases-A.B.x (created at the commit production's API runs), pushes it as
-// a fast-forward, waits for web-client.yml, cuts the annotated web-vA.B.C tag,
+// A web content release ships the WEB_CONTENT_PATHS part (scripts/lib/
+// website-release.ts) of named main commits, with their tests, to production's website-server
+// through the existing `bun smoke:web`, with no database write, no migration
+// and no api or worker restart. The runner cherry-picks that part of each
+// commit onto web/releases-A.B.x (created at the eligibility base: production's
+// API commit, or the last web tag on it), carrying its tests and leaving out
+// docs and comment-only edits (issue 1603), pushes it as a fast-forward, waits for
+// web-client.yml and e2e-web.yml, cuts the annotated web-vA.B.C tag,
 // waits for web-tag-guard.yml, checks the tag out on the host, deploys, checks
 // the live site and creates the GitHub release. A failed live check rolls the
 // site back with `bun smoke:web --rollback`. The tag is never moved or deleted:
@@ -128,6 +130,63 @@ export function classifyContentDiff(paths: readonly string[]): { eligible: boole
   return { eligible: offending.length === 0, offending };
 }
 
+// ── What a named commit carries outside the content paths ────────────────────
+//
+// A main commit often carries a test or a doc beside its web content, and now
+// and then a comment edit in backend code (PR 1590). W01 cherry-picks the
+// WEB_CONTENT_PATHS part of each named commit and its test paths, and leaves
+// the rest out. So the release tree equals production's API commit outside the
+// content and test paths, byte for byte: production's backend is untouched and
+// the served site equals the tag. Tests ride along because they deploy nothing
+// and the web client's own gate runs them (frontend/test/unit.list names files
+// under scripts/tests/unit; leaving one out fails W03 or runs a stale one).
+// What W01 leaves out must be something the content cannot depend on, or the
+// site would ship expecting a backend change production does not run: a doc,
+// or a comment-only edit. Any other path refuses the release (issue 1603, D81
+// amendment).
+
+/** A path outside WEB_CONTENT_PATHS: a test (carried), a doc or a comment-only edit (both left out). */
+export type OutsideKind = "test" | "doc" | "comment-only";
+
+export interface OutsidePath {
+  readonly commit: string;
+  readonly path: string;
+  readonly kind: OutsideKind;
+}
+
+/** PURE. A test path, which no deploy runs: a test/ or tests/ directory, a *.test.* or *.spec.* file. */
+export const isTestPath = (path: string): boolean => /(^|\/)tests?\//.test(path) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(path);
+
+/** PURE. A doc path, which no deploy reads: docs/. */
+export const isDocPath = (path: string): boolean => path.startsWith("docs/");
+
+/** PURE. Whether W01 carries an outside path into the release tree (a test) rather than leaving it out. */
+export const isCarried = (o: Pick<OutsidePath, "kind">): boolean => o.kind === "test";
+
+/** PURE. A release tree diff's paths that make it a platform release: outside both the content and the test paths. */
+export const platformPaths = (paths: readonly string[]): string[] => classifyContentDiff(paths).offending.filter((p) => !isTestPath(p));
+
+const TRANSPILE_LOADERS: Readonly<Record<string, "ts" | "tsx" | "js" | "jsx">> = {
+  ".ts": "ts", ".mts": "ts", ".cts": "ts", ".tsx": "tsx", ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "jsx",
+};
+
+/**
+ * PURE. Whether two versions of a JS/TS file differ only in comments and
+ * whitespace: Bun's transpiler, which drops comments, gives the same output
+ * for both. False for any other file type and for source that does not parse.
+ */
+export function isCommentOnlyChange(path: string, before: string, after: string): boolean {
+  const ext = /\.[a-z]+$/.exec(path)?.[0] ?? "";
+  const loader = TRANSPILE_LOADERS[ext];
+  if (loader === undefined) return false;
+  try {
+    const t = new Bun.Transpiler({ loader, minifyWhitespace: true });
+    return t.transformSync(before) === t.transformSync(after);
+  } catch {
+    return false;
+  }
+}
+
 // ── Target, Deps and inputs ──────────────────────────────────────────────────
 
 /** Where a web content release acts: the platform target's host, home, instance and origin, and the runner's own checkout. */
@@ -192,10 +251,21 @@ export interface Release {
   readonly base: string;
   /** The content paths the release changes since the base. */
   readonly changed: readonly string[];
+  /** Each named commit's paths outside WEB_CONTENT_PATHS: tests carried, docs and comment-only edits left out. */
+  readonly outside: readonly OutsidePath[];
 }
 
-export const GATE_WORKFLOW = "web-client.yml";
-export const GATE_JOB = "web-client";
+/**
+ * W03's runs: every one must conclude success at the release commit. web-client
+ * builds the site and runs the view specs against goldens. e2e-web boots a live
+ * stack from the release tree, whose backend is production's API commit, and
+ * runs the specs that need a real api: the only check of the new content
+ * against the backend it will be served beside (issue 1603).
+ */
+export const GATE_RUNS: readonly { readonly workflow: string; readonly job: string }[] = Object.freeze([
+  { workflow: "web-client.yml", job: "web-client" },
+  { workflow: "e2e-web.yml", job: "e2e-web" },
+]);
 export const TAG_GUARD_WORKFLOW = "web-tag-guard.yml";
 
 /** PURE. The release line's branch for a version: web/releases-A.B.x. */
@@ -287,11 +357,15 @@ const instanceDir = (t: WebTarget): string => `${t.stateRoot}/${t.instance}`;
 /** PURE. Print a host file when it exists, nothing when it does not; any other exit means the host could not be read. */
 const catIfPresent = (path: string): string => `if test -e ${shellQuote(path)}; then cat -- ${shellQuote(path)}; fi`;
 
-/** PURE. Whether a site id (`<version>-<short commit>`, smoke-site.ts) names this version at this commit. */
+/**
+ * PURE. Whether a site id names this version at this commit: `<version>-<short
+ * commit>`, or with the `-<12 hex>` digest suffix smoke-site.ts installSite adds
+ * when that version and commit were already installed with other bytes.
+ */
 export function siteIdIs(siteId: unknown, version: string, commit: string): boolean {
   if (typeof siteId !== "string" || !siteId.startsWith(`${version}-`)) return false;
-  const c = siteId.slice(version.length + 1);
-  return /^[0-9a-f]{7,40}$/.test(c) && commit.startsWith(c);
+  const m = /^([0-9a-f]{7,40})(-[0-9a-f]{12})?$/.exec(siteId.slice(version.length + 1));
+  return m !== null && commit.startsWith(m[1]!);
 }
 
 /** What production serves beside the site: the api and worker containers and the /api/version body. */
@@ -367,19 +441,19 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
     "+refs/heads/main:refs/remotes/origin/main", "+refs/heads/web/*:refs/remotes/origin/web/*", "+refs/heads/releases-*:refs/remotes/origin/releases-*"]);
   if (fetched.status !== 0) return { errors: [`git fetch origin failed: ${errText(fetched)}`] };
 
-  // Each named commit: on main, and content-only in its own diff.
+  // Each named commit: on main, with web content, and nothing outside it the content could depend on.
   const errors: string[] = [];
   const commits: string[] = [];
+  const outside: OutsidePath[] = [];
   for (const c of inputs.commits) {
     const r = deps.git(["rev-parse", "--verify", "--quiet", `${c}^{commit}`]);
     if (r.status !== 0) { errors.push(`--commit ${c} is not a commit here`); continue; }
     const sha = r.stdout.trim();
     commits.push(sha);
     if (!isAncestor(deps, sha, "origin/main")) errors.push(`commit ${short(sha)} is not on origin/main (a web release ships main commits only)`);
-    const own = diffPaths(deps, `${sha}^`, sha);
-    if ("error" in own) { errors.push(own.error); continue; }
-    const cls = classifyContentDiff(own);
-    if (!cls.eligible) errors.push(`commit ${short(sha)} is not content-only; it touches ${cls.offending.join(", ")}: ship it with bun run release:run`);
+    const own = outsideOf(deps, sha);
+    if ("error" in own) errors.push(own.error);
+    else outside.push(...own.outside);
   }
   if (errors.length > 0) return { errors };
 
@@ -416,7 +490,7 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   // The candidate: the branch tip (or, for a new branch, the base) with each named commit cherry-picked, in order.
   const tipRead = deps.git(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}^{commit}`]);
   const start = tipRead.status === 0 ? tipRead.stdout.trim() : base;
-  const built = buildCandidate(deps, start, commits, inputs.workDir);
+  const built = buildCandidate(deps, start, commits, outside, inputs.workDir);
   if ("error" in built) return { errors: [built.error] };
   const commit = built.commit;
   const atCandidate = versionAt(deps, commit);
@@ -425,16 +499,19 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
 
   let changed: string[] = [];
   if (!isAncestor(deps, base, commit)) {
-    errors.push(`the release commit ${short(commit)} on ${branch} does not descend from the base ${short(base)} (${baseName}): ${branch} was cut from another release`);
+    errors.push(
+      `the release commit ${short(commit)} on ${branch} does not descend from the base ${short(base)} (${baseName}): ${branch} was cut from another release, ` +
+        `most likely before production's last platform release. Ship on a new line: bump A.B in ${WEB_MANIFEST} on main and name that commit too`,
+    );
   } else {
     const fromBase = diffPaths(deps, base, commit);
     const fromApi = diffPaths(deps, apiSha, commit);
     if ("error" in fromBase) errors.push(fromBase.error);
     else if ("error" in fromApi) errors.push(fromApi.error);
     else {
-      const cls = classifyContentDiff([...fromBase, ...fromApi]);
-      if (!cls.eligible) {
-        errors.push(`the release tree differs from production's API commit ${short(apiSha)} outside the web content paths: ${cls.offending.join(", ")}. Ship it with bun run release:run`);
+      const offending = platformPaths([...fromBase, ...fromApi]);
+      if (offending.length > 0) {
+        errors.push(`the release tree differs from production's API commit ${short(apiSha)} outside the web content and test paths: ${offending.join(", ")}. Ship it with bun run release:run`);
       }
       changed = [...new Set(fromBase)].sort();
     }
@@ -447,11 +524,57 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   const admin = deps.gh(["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"]);
   if (admin.status !== 0) return { errors: [`gh api repos/{owner}/{repo} failed: ${errText(admin)}`] };
   if (admin.stdout.trim() !== "true") return { errors: ["the operator lacks the admin permission on the repository (the tag push needs it)"] };
-  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed } };
+  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside } };
 }
 
-/** The candidate commit: `start` with each commit not already on it cherry-picked (-x), in a scratch worktree. */
-function buildCandidate(deps: Deps, start: string, commits: readonly string[], workDir: string): { commit: string } | { error: string } {
+/**
+ * One named commit's paths outside WEB_CONTENT_PATHS, each with its kind.
+ * Refuses a commit with no content path, and any outside path that is neither
+ * a test or doc path nor a comment-only edit of a JS/TS file that exists on
+ * both sides.
+ */
+function outsideOf(deps: Deps, sha: string): { outside: OutsidePath[] } | { error: string } {
+  const own = diffPaths(deps, `${sha}^`, sha);
+  if ("error" in own) return own;
+  const paths = classifyContentDiff(own).offending;
+  if (paths.length === new Set(own).size) {
+    return { error: `commit ${short(sha)} touches no web content path (${paths.join(", ")}): there is nothing to ship; ship it with bun run release:run` };
+  }
+  const outside: OutsidePath[] = [];
+  const runtime: string[] = [];
+  for (const path of paths) {
+    if (isTestPath(path)) { outside.push({ commit: sha, path, kind: "test" }); continue; }
+    if (isDocPath(path)) { outside.push({ commit: sha, path, kind: "doc" }); continue; }
+    const before = deps.git(["show", `${sha}^:${path}`]);
+    const after = deps.git(["show", `${sha}:${path}`]);
+    if (before.status === 0 && after.status === 0 && isCommentOnlyChange(path, before.stdout, after.stdout)) {
+      outside.push({ commit: sha, path, kind: "comment-only" });
+    } else runtime.push(path);
+  }
+  if (runtime.length > 0) {
+    return {
+      error: `commit ${short(sha)} changes ${runtime.join(", ")} outside the web content paths, and that change is not a test, a doc or a comment-only edit, ` +
+        "so the content may depend on it: ship it with bun run release:run",
+    };
+  }
+  return { outside };
+}
+
+/** PURE. The run log's lines for the outside paths, one per path. */
+export function outsideLines(outside: readonly OutsidePath[]): string[] {
+  return outside.map((o) => `${short(o.commit)} ${o.path} (${o.kind}: ${isCarried(o) ? "carried" : "left out"})`);
+}
+
+/**
+ * The candidate commit: `start` with each commit not already on it
+ * cherry-picked (-x) in a scratch worktree, keeping its WEB_CONTENT_PATHS and
+ * test part. A doc or comment-only path is put back to `start`'s state,
+ * including after a conflict there; a conflict in a content or test path stops
+ * the run.
+ */
+function buildCandidate(
+  deps: Deps, start: string, commits: readonly string[], outside: readonly OutsidePath[], workDir: string,
+): { commit: string } | { error: string } {
   const log = deps.git(["log", "--format=%B", `refs/remotes/origin/main..${start}`]);
   if (log.status !== 0) return { error: `git log origin/main..${short(start)} failed: ${errText(log)}` };
   const picked = new Set([...log.stdout.matchAll(/\(cherry picked from commit ([0-9a-f]{40})\)/g)].map((m) => m[1]!));
@@ -461,13 +584,33 @@ function buildCandidate(deps: Deps, start: string, commits: readonly string[], w
   const add = deps.git(["worktree", "add", "--quiet", "--detach", wt, start]);
   if (add.status !== 0) return { error: `git worktree add ${wt} failed: ${errText(add)}` };
   const cleanup = () => { deps.git(["worktree", "remove", "--force", wt]); deps.git(["worktree", "prune"]); };
+  const abort = (detail: string): { error: string } => {
+    deps.git(["-C", wt, "cherry-pick", "--abort"]);
+    cleanup();
+    return { error: `${detail}. Nothing was pushed` };
+  };
   for (const c of todo) {
-    const r = deps.git(["-C", wt, "cherry-pick", "-x", c]);
+    const drop = outside.filter((o) => o.commit === c && !isCarried(o)).map((o) => o.path);
+    const r = deps.git(["-C", wt, "cherry-pick", "-x", "--no-commit", c]);
     if (r.status !== 0) {
-      deps.git(["-C", wt, "cherry-pick", "--abort"]);
-      cleanup();
-      return { error: `cherry-picking ${short(c)} onto ${short(start)} conflicts: ${errText(r)}. Nothing was pushed` };
+      const u = deps.git(["-C", wt, "diff", "--name-only", "--diff-filter=U"]);
+      const unmerged = u.status === 0 ? lines(u.stdout) : [];
+      const kept = unmerged.filter((p) => !drop.includes(p));
+      if (u.status !== 0 || unmerged.length === 0 || kept.length > 0) {
+        return abort(`cherry-picking ${short(c)} onto ${short(start)} conflicts${kept.length > 0 ? ` in ${kept.join(", ")}` : ""}: ${errText(r)}`);
+      }
     }
+    if (drop.length > 0) {
+      const back = deps.git(["-C", wt, "restore", "--source=HEAD", "--staged", "--worktree", "--", ...drop]);
+      if (back.status !== 0) return abort(`leaving ${drop.join(", ")} out of ${short(c)} failed: ${errText(back)}`);
+    }
+    const meta = deps.git(["log", "-1", "--format=%an <%ae>%x00%aI%x00%B", c]);
+    if (meta.status !== 0) return abort(`git log ${short(c)} failed: ${errText(meta)}`);
+    const [author = "", date = "", body = ""] = meta.stdout.split("\0");
+    const note = drop.length > 0 ? `\nWeb content release: left out ${drop.join(", ")}.` : "";
+    const message = `${body.trimEnd()}\n\n(cherry picked from commit ${c})${note}\n`;
+    const commit = deps.git(["-C", wt, "commit", "--quiet", "--no-verify", "--allow-empty", `--author=${author}`, `--date=${date}`, "-m", message]);
+    if (commit.status !== 0) return abort(`committing the web content of ${short(c)} failed: ${errText(commit)}`);
   }
   const head = deps.git(["-C", wt, "rev-parse", "HEAD"]);
   cleanup();
@@ -547,7 +690,15 @@ export function runBranch(rel: Release, deps: Deps): StepResult {
 
 type Read = ReturnType<typeof readRun>;
 const asCheck = (r: Read): StepResult => ({ state: r.state === "pass" ? "done" : r.state === "wait" ? "todo" : "failed", detail: r.detail });
-export const readGate = (rel: Release, deps: Deps): Read => readRun(deps, GATE_WORKFLOW, rel.branch, rel.commit, GATE_JOB);
+/** One read of the gate: every GATE_RUNS entry. A failure anywhere fails it; otherwise any wait waits. */
+export function readGate(rel: Release, deps: Deps): Read {
+  const reads = GATE_RUNS.map((g) => readRun(deps, g.workflow, rel.branch, rel.commit, g.job));
+  const fail = reads.filter((r) => r.state === "fail");
+  if (fail.length > 0) return { state: "fail", detail: fail.map((r) => r.detail).join("; ") };
+  const wait = reads.filter((r) => r.state === "wait");
+  if (wait.length > 0) return { state: "wait", detail: wait.map((r) => r.detail).join("; ") };
+  return { state: "pass", detail: reads.map((r) => r.detail).join("; ") };
+}
 export const readTagGuard = (rel: Release, deps: Deps): Read => readRun(deps, TAG_GUARD_WORKFLOW, rel.tag, rel.commit);
 
 // ── W04: tag ─────────────────────────────────────────────────────────────────
@@ -706,7 +857,12 @@ export async function runLive(rel: Release, inputs: Inputs, deps: Deps): Promise
   const next = `${WEB_TAG_PREFIX}${nextPatch(rel.version)}`;
   deps.log(`[web-release] the live check failed: ${problems.join("; ")}; rolling back`);
   const r = await deps.ssh(t.host, rollbackCommand(t));
-  const rolled = r.status === 0 ? "rolled back to the previous site (bun run smoke:web --rollback)" : `THE ROLLBACK FAILED (exit ${r.status}: ${errText(r)}): run bun run smoke:web --rollback --instance ${t.instance} on ${t.host} by hand`;
+  // Read back what production serves now, rather than trust the rollback's exit code.
+  const after = await readLiveSite(t, deps);
+  const serves = "error" in after ? `${t.publicOrigin}/version.json could not be read after it (${after.error})` : `${t.publicOrigin} now serves ${after.version}-${after.commit}`;
+  const rolled = r.status === 0
+    ? `rolled back to the previous site (bun run smoke:web --rollback); ${serves}`
+    : `THE ROLLBACK FAILED (exit ${r.status}: ${errText(r)}); ${serves}: run bun run smoke:web --rollback --instance ${t.instance} on ${t.host} by hand`;
   return failed(`the live check failed: ${problems.join("; ")}. ${rolled}. ${rel.tag} stays where it is: ship the fix as ${next}`);
 }
 
@@ -722,6 +878,9 @@ export function renderNotes(rel: Release, picks: readonly string[]): string {
     ...picks.map((p) => `- ${p}`),
     "", `## Changed content paths since ${short(rel.base)}`, "",
     ...(rel.changed.length === 0 ? ["- (none)"] : rel.changed.map((p) => `- \`${p}\``)),
+    "", "## Outside the web content paths", "",
+    "Paths the main commits touch outside the web content paths. Tests are carried (they deploy nothing, and the gate runs them); docs and comment-only edits are left out.", "",
+    ...(rel.outside.length === 0 ? ["- (none)"] : rel.outside.map((o) => `- ${short(o.commit)} \`${o.path}\` (${o.kind}: ${isCarried(o) ? "carried" : "left out"})`)),
     "",
   ];
   return out.join("\n");
@@ -772,6 +931,8 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
   const rel = pre.release;
   deps.log(`[web-release] version ${rel.version}, commit ${rel.commit}, branch ${rel.branch}, tag ${rel.tag}, base ${rel.base}`);
   deps.log(`[web-release] content paths changed: ${rel.changed.length === 0 ? "(none)" : rel.changed.join(", ")}`);
+  deps.log(`[web-release] outside the web content paths: ${rel.outside.length === 0 ? "(none)" : "tests carried, docs and comment-only edits left out"}`);
+  for (const l of outsideLines(rel.outside)) deps.log(`  ${l}`);
   deps.log(`[${first!.id}] passed`);
   for (const step of rest) {
     const check: StepResult =
