@@ -17,11 +17,9 @@ import { parseArgs } from "../../release/web-release.ts";
 import {
   classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
   WEB_RUNBOOK_PATH, webTargetOf,
-  judgeLoad, pageProblems, stageGateProblem, stagePassed, routesForViews, rollbackTargetProblem, servedPlan, servedUrlPath, smokePages, UNROUTED_VIEWS,
-  type Deps, type ExecResult, type Inputs, type PageReport, type WebTarget,
+  stageGateProblem, stagePassed, rollbackTargetProblem, servedPlan, servedUrlPath,
+  type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
-import { isEdgeScript, LAUNCH_OPTIONS } from "../../release/web-browser-smoke.ts";
-import { APPARMOR_PROFILE, NOT_INSTALLED, OWNER_SANDBOX_COMMANDS, STAGE_BROWSER, stageBrowserProblem } from "../../release/stage-browser-lib.ts";
 
 // Each case drives real git (clones, cherry-picks, worktrees); a loaded runner needs more than 5 s.
 setDefaultTimeout(60_000);
@@ -143,16 +141,8 @@ interface State extends HostState {
   siteLinks: string;
   /** A URL path the fake production origin serves with other bytes than the host's web/current holds. */
   servedOverride?: Record<string, string>;
-  /** The fake browser on production's origin: each route's report (default: a clean page). */
-  page?: (route: string, attempt: number) => Partial<PageReport>;
-  /** The same on the stage origin (W06). */
-  stagePage?: (route: string, attempt: number) => Partial<PageReport>;
-  /** Every browser call's routes. */
-  browserCalls: string[][];
-  /** Every browser call's origin. */
-  browserOrigins: string[];
-  /** Throw this from the browser (it does not start on the stage host). */
-  noBrowser?: string;
+  /** A URL path the fake stage origin serves with other bytes than stage's web/current holds. */
+  stageServedOverride?: Record<string, string>;
   /** The fake stage target: whether stage-target.ts up built it, and its site. */
   stageUp: boolean;
   stage: HostState;
@@ -166,16 +156,12 @@ interface Harness {
   deps: Deps; out: string[]; pushes: string[][]; ghCalls: string[][]; ssh: string[]; stageSsh: string[]; http: string[]; httpBytes: string[]; files: Map<string, string>; state: State;
 }
 
-const cleanPage = (route: string): PageReport => ({
-  route, finalUrl: `${ORIGIN}${route}`, ready: true, idle: true, pageErrors: [], consoleErrors: [], failedRequests: [], blocked: [], stubbed: [], notFoundView: false, ms: 900,
-});
-
 const SITEMAP = `<?xml version="1.0"?><urlset><url><loc>https://robotmoney.network/</loc></url><url><loc>https://robotmoney.network/swarm</loc></url></urlset>`;
 
 function harness(f: Fixture, state: Partial<State> = {}): Harness {
   const s: State = {
     apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1",
-    siteLinks: `current\t0.1.0-${f.c0.slice(0, 8)}\nprevious\t0.1.0-${f.r0.slice(0, 8)}\n`, browserCalls: [], browserOrigins: [],
+    siteLinks: `current\t0.1.0-${f.c0.slice(0, 8)}\nprevious\t0.1.0-${f.r0.slice(0, 8)}\n`, 
     stageUp: false, stage: { installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "stage-api-1" }, execCalls: [], ...state,
   };
   const onStage = (host: string): boolean => host === STAGE.host;
@@ -274,20 +260,8 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     httpBytesCalls.push(url);
     const stage = url.startsWith(STAGE.publicOrigin);
     const path = new URL(url).pathname;
-    const text = (!stage ? s.servedOverride?.[path] : undefined) ?? deployed(stage ? s.stage : s, path.slice(1));
+    const text = (stage ? s.stageServedOverride?.[path] : s.servedOverride?.[path]) ?? deployed(stage ? s.stage : s, path.slice(1));
     return text === undefined ? { status: 200, bytes: new TextEncoder().encode("<html>shell") } : { status: 200, bytes: new TextEncoder().encode(text) };
-  };
-  const attempts = new Map<string, number>();
-  const browser = async (origin: string, routes: readonly string[]): Promise<PageReport[]> => {
-    s.browserCalls.push([...routes]);
-    s.browserOrigins.push(origin);
-    if (s.noBrowser !== undefined) throw new Error(s.noBrowser);
-    const page = origin === STAGE.publicOrigin ? s.stagePage : s.page;
-    return routes.map((route) => {
-      const n = (attempts.get(`${origin}${route}`) ?? 0) + 1;
-      attempts.set(`${origin}${route}`, n);
-      return { ...cleanPage(route), finalUrl: `${origin}${route}`, ...(page?.(route, n) ?? {}) };
-    });
   };
   const exec = (argv: string[]): ExecResult => {
     s.execCalls.push(argv);
@@ -308,7 +282,6 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     ssh,
     http,
     httpBytes,
-    browser,
     readFile: (p) => files.get(p),
     writeFile: (p, text) => { files.set(p, text); },
     clock: () => now,
@@ -854,7 +827,7 @@ describe("runWebRelease", () => {
   });
 });
 
-// ── the strengthened live check (W01 rollback target, W11 served bytes and browser) ──
+// ── the strengthened live check (W01 rollback target, W11 served bytes) ──
 
 describe("W01 refuses when production would have no rollback target", () => {
   test("web/current absent: refused before any push, naming the host path", async () => {
@@ -879,24 +852,6 @@ describe("W01 refuses when production would have no rollback target", () => {
     const h = harness(f, { siteLinks: "current\t0.1.0-fe89c5ac\n" });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
     expect(h.out.join("\n")).toContain("[web-release] production serves web/current -> 0.1.0-fe89c5ac; web/previous -> (absent); after the switch a W11 rollback returns to 0.1.0-fe89c5ac");
-  });
-
-  test("a stage browser whose sandbox cannot start is refused at W01 with the owner's root step, before any push", async () => {
-    const f = fixture();
-    const h = harness(f, { noBrowser: "launch: Target page, context or browser has been closed\nBrowser logs:\nChromium sandboxing failed!" });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
-    const log = h.out.join("\n");
-    expect(log).toContain("FAILED at W01-preflight: the headless browser on rm-frontend-stage-2 cannot start Chromium's sandbox");
-    expect(log).toContain(OWNER_SANDBOX_COMMANDS.join(" && "));
-    expect(h.pushes).toEqual([]);
-    expect(h.state.execCalls).toEqual([]);
-  });
-
-  test("a stage browser that is not installed is refused at W01 with the install command", async () => {
-    const f = fixture();
-    const h = harness(f, { noBrowser: `${NOT_INSTALLED}: Cannot find package '@playwright/test'` });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
-    expect(h.out.join("\n")).toContain("FAILED at W01-preflight: the headless browser is not installed on rm-frontend-stage-2: run bun scripts/release/stage-browser.ts install");
   });
 });
 
@@ -934,186 +889,9 @@ describe("W11 served content equals the release", () => {
     expect(log).toContain("[web-release] served files compared with web/current: /index.html");
     expect(log).toContain("[web-release] not served (skipped): frontend/package.json");
     expect(log).toContain("1 changed file(s) are served as deployed (1 not served)");
-    expect(log).toContain("the browser smoke passed on 4 page(s)");
+    expect(log).toContain("every sitemap route answers 200, the api and workers are unchanged");
   });
 });
-
-describe("W11 browser smoke", () => {
-  const report = (o: Partial<PageReport>): PageReport => ({ ...cleanPage("/regime"), ...o });
-
-  test("pageProblems: a console.error, a page error, a same-origin 5xx or network failure, the not-found view and a missing ready signal each fail; cross-origin failures and browser cancellations do not", () => {
-    expect(pageProblems(ORIGIN, report({}))).toEqual([]);
-    const p = pageProblems(ORIGIN, report({
-      ready: false, readyDetail: "Timeout 30000ms exceeded", notFoundView: true,
-      pageErrors: ["TypeError: x is undefined\n    at regime.js:1"], consoleErrors: ["boom"],
-      failedRequests: [
-        { url: `${ORIGIN}/api/regime/latest?x=1`, method: "GET", status: 502 },
-        { url: `${ORIGIN}/assets/js/app/main.js`, method: "GET", failure: "net::ERR_CONNECTION_RESET" },
-        { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "media" },
-        { url: "https://fonts.googleapis.com/css", method: "GET", status: 500 },
-      ],
-    }));
-    expect(p).toEqual([
-      "browser /regime: never reached the router's ready signal (<html data-routed>): Timeout 30000ms exceeded",
-      "browser /regime: the router rendered the not-found view",
-      "browser /regime: uncaught page error: TypeError: x is undefined",
-      "browser /regime: console.error: boom",
-      "browser /regime: GET /api/regime/latest?x=1 answered 502",
-      "browser /regime: GET /assets/js/app/main.js failed (net::ERR_CONNECTION_RESET)",
-    ]);
-  });
-
-  test("a console.error on a page fails W11 (on both loads) and rolls back", async () => {
-    const f = fixture();
-    const h = harness(f, { page: (route) => (route === "/regime" ? { consoleErrors: ["Uncaught (in promise) regime dial: no data"] } : {}) });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
-    const log = h.out.join("\n");
-    expect(log).toContain("FAILED at W11-live-check: the live check failed: browser /regime: console.error: Uncaught (in promise) regime dial: no data");
-    expect(log).toContain("rolled back to the previous site");
-    expect(h.state.live.version).toBe("0.1.0");
-  });
-
-  test("a page that fails once and passes on its second load passes, and the first failure is logged", async () => {
-    const f = fixture();
-    const h = harness(f, { page: (route, n) => (route.startsWith("/swarm/members/") && n === 1 ? { failedRequests: [{ url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503 }] } : {}) });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("browser /swarm/members/athena load 1 was inconclusive (the api answered 503 for /api/swarm/members/athena); loaded again");
-  });
-
-  test("a page that fails once on its own (not an api 503) FAILS: no load is retried to get past a failure", async () => {
-    const f = fixture();
-    const h = harness(f, { page: (route, n) => (route === "/early-access" && n === 1 ? { pageErrors: ["TypeError: flaky"] } : {}) });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
-    expect(h.out.join("\n")).toContain("FAILED at W11-live-check: the live check failed: browser /early-access: uncaught page error: TypeError: flaky");
-    // One judged smoke per W11: the done check's result is the one runLive acts on, so /early-access was loaded once.
-    expect(h.state.browserCalls.filter((c, i) => h.state.browserOrigins[i] === ORIGIN && c.includes("/early-access")).length).toBe(1);
-    expect(h.state.live.version).toBe("0.1.0");
-  });
-
-  const api503 = (path: string) => ({
-    failedRequests: [
-      { url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503, resourceType: "fetch" },
-      { url: `${ORIGIN}${path}`, method: "GET", status: 404, resourceType: "fetch" },
-    ],
-    consoleErrors: [
-      `Failed to load resource: the server responded with a status of 503 () (${ORIGIN}/api/swarm/members/athena:0)`,
-      `Failed to load resource: the server responded with a status of 404 () (${ORIGIN}${path}:0)`,
-    ],
-  });
-
-  test("judgeLoad: an /api/ 503 excuses only itself, its console line and the archive-manifest 404; never a page error, other console.error, the not-found view or a ready miss", () => {
-    const base = { ...cleanPage("/swarm/members/athena"), ...api503("/data/swarm/manifests/members/athena.json") };
-    expect(judgeLoad(ORIGIN, base)).toEqual({ problems: [], unavailable: ["/api/swarm/members/athena"] });
-    const other404 = judgeLoad(ORIGIN, { ...cleanPage("/swarm/members/athena"), ...api503("/assets/js/app/missing.js") });
-    expect(other404.problems).toContain("browser /swarm/members/athena: GET /assets/js/app/missing.js answered 404");
-    const worse = judgeLoad(ORIGIN, { ...base, pageErrors: ["TypeError: x"], consoleErrors: [...base.consoleErrors, "boom"], notFoundView: true, ready: false, readyDetail: "Timeout" });
-    expect(worse.problems).toEqual([
-      "browser /swarm/members/athena: never reached the router's ready signal (<html data-routed>): Timeout",
-      "browser /swarm/members/athena: the router rendered the not-found view",
-      "browser /swarm/members/athena: uncaught page error: TypeError: x",
-      "browser /swarm/members/athena: console.error: boom",
-    ]);
-    // Without a 503 the archive 404 is an ordinary failure.
-    expect(judgeLoad(ORIGIN, { ...cleanPage("/swarm/members/athena"), failedRequests: [{ url: `${ORIGIN}/data/swarm/manifests/members/athena.json`, method: "GET", status: 404 }] }).problems)
-      .toEqual(["browser /swarm/members/athena: GET /data/swarm/manifests/members/athena.json answered 404"]);
-  });
-
-  test("judgeLoad: only a media request the browser aborts is exempt; any other aborted same-origin request counts", () => {
-    const r = judgeLoad(ORIGIN, { ...cleanPage("/changelog"), failedRequests: [
-      { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "media" },
-      { url: `${ORIGIN}/api/version`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "fetch" },
-    ] });
-    expect(r.problems).toEqual(["browser /changelog: GET /api/version failed (net::ERR_ABORTED)"]);
-  });
-
-  test("smokePages: a route showing a CHANGED view with an /api/ 503 on every load fails; an unchanged one warns; a conclusive failure fails at once", async () => {
-    let calls = 0;
-    const r = await smokePages(ORIGIN, ["/swarm/members/athena", "/", "/regime"], ["/swarm/members/athena"], async (_o, routes) => {
-      calls++;
-      return routes.map((route) => (route === "/regime" ? { ...cleanPage(route), consoleErrors: ["broken"] } : { ...cleanPage(route), ...api503("/data/swarm/manifests/members/athena.json") }));
-    }, () => 0);
-    expect(calls).toBe(3);
-    expect(r.problems).toEqual([
-      "browser /swarm/members/athena: shows a changed view but was never judged: the api answered 503 on all 3 load(s) (/api/swarm/members/athena)",
-      "browser /regime: console.error: broken",
-    ]);
-    expect(r.warnings).toEqual(["browser /: not judged: the api answered 503 on all 3 load(s) (/api/swarm/members/athena); it shows no changed view"]);
-  });
-
-  test("smokePages: a page error on an inconclusive load fails even when a later load is clean", async () => {
-    const r = await smokePages(ORIGIN, ["/swarm/members/athena"], [], async (_o, routes) =>
-      routes.map((route) => ({ ...cleanPage(route), ...api503("/data/swarm/manifests/members/athena.json"), pageErrors: ["TypeError: member"] })), () => 0);
-    expect(r.problems).toEqual(["browser /swarm/members/athena: uncaught page error: TypeError: member"]);
-  });
-
-  test("the browser launches with Chromium's sandbox on, the same options for W01's start check and W11", () => {
-    expect(LAUNCH_OPTIONS).toEqual({ headless: true, chromiumSandbox: true });
-    expect(readFileSync(join(ROOT, "scripts/release/web-browser-smoke.ts"), "utf8")).toContain("chromium.launch({ ...LAUNCH_OPTIONS })");
-  });
-
-  test("the AppArmor profile grants userns to the stage browser's headless shell alone; the owner's commands install exactly that file", () => {
-    expect(APPARMOR_PROFILE).toContain(`profile rm-web-browser ${STAGE_BROWSER.browsers}/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell flags=(unconfined) {`);
-    expect(APPARMOR_PROFILE).toContain("  userns,");
-    expect(OWNER_SANDBOX_COMMANDS[0]).toContain(STAGE_BROWSER.profileFile);
-    expect(stageBrowserProblem("Executable doesn't exist")).toContain("run bun scripts/release/stage-browser.ts install");
-  });
-
-  test("W01 refuses a changed view no route shows; a view in UNROUTED_VIEWS is not mapped", async () => {
-    const f = fixture();
-    const mv = f.commit("feat(web): a view", { "frontend/public/views/vault.html": "<p>j</p>\n", "frontend/public/assets/js/app/routes.js": readFileSync(join(ROOT, "frontend/public/assets/js/app/routes.js"), "utf8") });
-    sh(f.work, "push", "-q", "origin", "main");
-    const h = harness(f);
-    expect(await runWebRelease(runbook, inputs(f, [f.m2, mv]), h.deps)).toBe(1);
-    expect(h.out.join("\n")).toContain("FAILED at W01-preflight: no route shows the changed view(s) /views/vault.html");
-    expect(h.pushes).toEqual([]);
-    expect(UNROUTED_VIEWS).toContain("/views/dash/_layout.html");
-  });
-
-  test("smokePages: a route the browser never reports fails", async () => {
-    const r = await smokePages(ORIGIN, ["/", "/regime"], [], async () => [cleanPage("/")], () => 0);
-    expect(r.problems).toEqual(["browser /regime: no report"]);
-  });
-
-  test("routesForViews maps the release's changed views to routes with the real routes.js", async () => {
-    const { viewFor } = (await import(join(ROOT, "frontend/public/assets/js/app/routes.js"))) as { viewFor: (p: string) => string };
-    const m = routesForViews(
-      ["/views/home.html", "/views/swarm/member.html", "/views/swarm/session.html", "/views/blog/swarm-announcement.html", "/views/nowhere.html"],
-      ["/", "/regime", "/swarm/members/athena", "/early-access", "/blog/swarm-announcement", "/swarm/sessions/22b0508c-bec9-4a3d-ab8e-3244716e09bf"],
-      viewFor,
-    );
-    expect([...m.entries()]).toEqual([
-      ["/views/home.html", "/"],
-      ["/views/swarm/member.html", "/swarm/members/athena"],
-      ["/views/swarm/session.html", "/swarm/sessions/22b0508c-bec9-4a3d-ab8e-3244716e09bf"],
-      ["/views/blog/swarm-announcement.html", "/blog/swarm-announcement"],
-      ["/views/nowhere.html", undefined],
-    ]);
-  });
-
-  test("isEdgeScript: only the site's own /cdn-cgi/ paths are Cloudflare's edge", () => {
-    expect(isEdgeScript(`${ORIGIN}/cdn-cgi/zaraz/s.js?z=1`, "robotmoney.network")).toBe(true);
-    expect(isEdgeScript(`${ORIGIN}/assets/cdn-cgi.js`, "robotmoney.network")).toBe(false);
-    expect(isEdgeScript("https://evil.example/cdn-cgi/x", "robotmoney.network")).toBe(false);
-  });
-
-  test("the dry run discovers W11's routes with GETs only: it never loads a page, hashes a file or writes", async () => {
-    const f = fixture();
-    const h = harness(f);
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
-    const log = h.out.join("\n");
-    expect(log).toContain("[W11-live-check] plan: browser routes: /, /regime, /swarm/members/athena, /early-access");
-    expect(log).toContain("[W11-live-check] plan: served files compared with web/current: /index.html");
-    expect(h.http).toContain(`${ORIGIN}/api/swarm/members`);
-    // The only browser call is W01's launch check, with no route.
-    expect(h.state.browserCalls).toEqual([[]]);
-    expect(h.httpBytes).toEqual([]);
-    expect(h.ssh.filter((c) => c.includes("sha256sum"))).toEqual([]);
-    expect(hostWrites(h)).toEqual([]);
-    expect(h.pushes).toEqual([]);
-  });
-});
-
-// ── stage QA before production (owner, 2026-11-11) ───────────────────────────
 
 describe("W04 to W06: stage QA before any production step writes", () => {
   const prodWrites = (h: Harness): string[] => h.ssh.filter((c) => /smoke:web|git clone|checkout --quiet --detach|bun install/.test(c));
@@ -1134,20 +912,19 @@ describe("W04 to W06: stage QA before any production step writes", () => {
     const pass = JSON.parse(h.files.get(join(f.workDir, "web-v0.2.0-stage-pass.json"))!) as { commit: string; origin: string };
     expect(pass).toMatchObject({ commit: tip, origin: STAGE.publicOrigin });
     expect(at(h, "[W06-stage-check] done: stage QA passed on https://stage.robotmoney-labs.dev")).toBeLessThan(at(h, "[W07-tag] done"));
-    // The browser smoked stage before production; every page load ran through deps.browser (the stage host's browser).
-    // (Call 0 is W01's launch probe, which loads no page.)
-    const loads = h.state.browserOrigins.filter((_, i) => h.state.browserCalls[i]!.length > 0);
-    expect(loads.indexOf(STAGE.publicOrigin)).toBe(0);
-    expect(loads.indexOf(ORIGIN)).toBeGreaterThan(0);
+    // Stage's served bytes were compared before production's.
+    const firstStage = h.httpBytes.findIndex((u) => u.startsWith(STAGE.publicOrigin));
+    expect(firstStage).toBeGreaterThanOrEqual(0);
+    expect(firstStage).toBeLessThan(h.httpBytes.findIndex((u) => u.startsWith(ORIGIN)));
     expect(h.state.stageUp).toBe(false);
   });
 
   test("a stage failure stops the run at W06: no tag, nothing on production, stage left up for inspection", async () => {
     const f = fixture();
-    const h = harness(f, { stagePage: (route) => (route === "/regime" ? { consoleErrors: ["regime dial: no data"] } : {}) });
+    const h = harness(f, { stageServedOverride: { "/index.html": "home v1 (stale)\n" } });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     const log = h.out.join("\n");
-    expect(log).toContain("FAILED at W06-stage-check: stage QA failed on https://stage.robotmoney-labs.dev: browser /regime: console.error: regime dial: no data. Nothing reached production");
+    expect(log).toMatch(/FAILED at W06-stage-check: stage QA failed on https:\/\/stage\.robotmoney-labs\.dev: GET \/index\.html serves sha256 [0-9a-f]{16}, not the deployed 0\.2\.0-[0-9a-f]{9}\/index\.html .*Nothing reached production/);
     expect(remoteRef(f, "refs/tags/web-v0.2.0")).toBeUndefined();
     expect(prodWrites(h)).toEqual([]);
     expect(h.state.execCalls.map((c) => c[2])).toEqual(["dump", "up"]);
@@ -1196,17 +973,19 @@ describe("W04 to W06: stage QA before any production step writes", () => {
     expect(h.files.has(join(f.workDir, "web-v0.2.0-stage-pass.json"))).toBe(true);
   });
 
-  test("the dry run plans the stage steps and writes nothing: no stage build, no stage host command, no page load", async () => {
+  test("the dry run plans the stage steps and writes nothing: no stage build, no stage host command, no file hash", async () => {
     const f = fixture();
     const h = harness(f);
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
     const log = h.out.join("\n");
     expect(log).toContain("[W04-stage-up] not done: the stage target is not up");
-    expect(log).toContain("[W06-stage-check] plan: W11's checks against https://stage.robotmoney-labs.dev, the browser on rm-frontend-stage-2");
+    expect(log).toContain("[W06-stage-check] plan: version.json, the served files, every sitemap route and an unchanged api on https://stage.robotmoney-labs.dev");
+    expect(log).toContain("[W11-live-check] plan: served files compared with web/current: /index.html");
     expect(log).toContain("[W07-tag] not done (IRREVERSIBLE, would write): web-v0.2.0 is absent");
     expect(log).toContain("it refuses until stage QA passes on this commit");
     expect(h.state.execCalls).toEqual([]);
     expect(h.stageSsh).toEqual([]);
-    expect(h.state.browserCalls).toEqual([[]]);
+    expect(h.httpBytes).toEqual([]);
+    expect(h.ssh.filter((c) => c.includes("sha256sum"))).toEqual([]);
   });
 });

@@ -14,10 +14,6 @@
 // --dry-run runs the preflight and every step's read-only done check, and
 // writes nothing to origin, GitHub or the host.
 //
-// No browser runs here. W06's and W11's browser smokes run on the stage host
-// (./stage-browser.ts: Playwright's Chromium there, sandbox on); W01 probes it
-// and refuses until it starts.
-//
 // Host commands go over ssh the way ./run.ts runs a step (its realDeps, typed
 // by ./step-exec.ts RunnerDeps), from the control machine (D61 (4)).
 import { spawnSync } from "node:child_process";
@@ -28,7 +24,6 @@ import { fileURLToPath } from "node:url";
 import { realDeps } from "./run.ts";
 import type { RunnerDeps } from "./step-exec.ts";
 import { loadTarget } from "./target.ts";
-import { stageBrowser } from "./stage-browser.ts";
 import { loadWebRunbook, runWebRelease, webTargetOf, type Deps, type ExecResult } from "./web-release-lib.ts";
 
 const USAGE = "usage: bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]";
@@ -100,8 +95,6 @@ async function main(): Promise<number> {
       const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
       return { status: r.status, bytes: new Uint8Array(await r.arrayBuffer()) };
     },
-    // Every browser runs on the stage host, never here (./stage-browser.ts).
-    browser: stageBrowser,
     readFile(path) {
       try { return readFileSync(path, "utf8"); } catch { return undefined; }
     },

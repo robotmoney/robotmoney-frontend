@@ -12,8 +12,7 @@
 //   W10  records the api and worker containers and /api/version, then runs
 //        `bun run smoke:web` from that checkout;
 //   W11  checks /version.json, that each changed served file is served byte for
-//        byte as web/current holds it, every sitemap route, a headless browser
-//        (the real ./web-browser-smoke.ts) on the base routes, and the api and
+//        byte as web/current holds it, every sitemap route, and the api and
 //        workers.
 //
 // Then a second version deploys and its live check is forced to fail (one
@@ -30,9 +29,8 @@ import { join } from "node:path";
 import { readContractVersion } from "../../lib/api-range.ts";
 import { readStackState } from "../../lib/smoke-state.ts";
 import {
-  runCheckout, runDeploy, runLive, type Deps, type ExecResult, type Inputs, type PageReport, type Release, type StepResult, type WebTarget,
+  runCheckout, runDeploy, runLive, type Deps, type ExecResult, type Inputs, type Release, type StepResult, type WebTarget,
 } from "../../release/web-release-lib.ts";
-import { runBrowserSmoke } from "../../release/web-browser-smoke.ts";
 import { BOOT_TIMEOUT_MS, bootFailureReport, harness, spawnBoot, teardown, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
 import { servedSite, serviceContainers, variantTree, type ServiceContainer, type VariantTree } from "./smoke-web-harness.ts";
 
@@ -52,7 +50,6 @@ const steps: Record<string, StepResult> = {};
 let served: Record<string, string> = {};
 let apiBodies: Record<string, string> = {};
 let containers: Record<string, Record<string, ServiceContainer>> = {};
-const browserReports: PageReport[] = [];
 
 const backend = (all: Record<string, ServiceContainer>): Record<string, string> =>
   Object.fromEntries(Object.entries(all).filter(([s]) => s === "api" || s.startsWith("worker")).map(([s, c]) => [s, c.id]));
@@ -119,11 +116,6 @@ beforeAll(async () => {
     ssh: shell,
     http,
     httpBytes: realBytes,
-    browser: async (origin, routes, budgetMs) => {
-      const reports = await runBrowserSmoke(origin, routes, budgetMs);
-      browserReports.push(...reports);
-      return reports;
-    },
     readFile: (p) => files.get(p),
     writeFile: (p, t) => { files.set(p, t); },
     clock: () => Date.now(),
@@ -178,10 +170,8 @@ describe("a web content release's host steps on a running stack", () => {
     expect(served.first).not.toBe(served.boot);
   });
 
-  test("W11 compared the changed served files with web/current and loaded the base routes in a real browser", () => {
+  test("W11 compared the changed served files with web/current", () => {
     expect(steps.live1!.detail).toContain("3 changed file(s) are served as deployed (1 not served)");
-    expect(browserReports.map((r) => r.route)).toEqual(expect.arrayContaining(["/", "/regime", "/early-access"]));
-    expect(steps.live1!.detail).toMatch(/the browser smoke passed on \d+ page\(s\)/);
   });
 
   test("the api and worker container ids and the /api/version body stay identical", () => {

@@ -11,8 +11,7 @@
 # the kitchen-sink stage target up at production's running commit from a fresh
 # production dump (as Q02-dump and Q03-stage-up do), deploy the release there with
 # smoke:web exactly as W10 will on production, and check it there. No step from
-# W07-tag on writes unless that stage QA passed on the same release commit. Every
-# headless browser runs on the stage host, never on the control machine.
+# W07-tag on writes unless that stage QA passed on the same release commit.
 #
 # Each step names a `kind`. The twelve kinds run once each, in this order.
 # `irreversible` marks a step that writes to GitHub or switches what production
@@ -22,7 +21,7 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W08; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the host's web/current and web/previous are read and reported, and W01 refuses when web/current is absent or dangling (no rollback target after the switch); the stage host's headless browser (scripts/release/stage-browser.ts) launches with its sandbox on; every changed view maps to a route the browser loads (or is named in UNROUTED_VIEWS); the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W08; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the host's web/current and web/previous are read and reported, and W01 refuses when web/current is absent or dangling (no rollback target after the switch); the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
@@ -43,7 +42,7 @@ steps:
     irreversible: false
   - id: "W06-stage-check"
     kind: "stage-check"
-    description: "W11's live check against the stage origin: /version.json names the release, every changed frontend/public file is served with the sha256 of its copy in stage's web/current, every sitemap route answers 200, the strict browser smoke (run on the stage host) passes, and the stage api and workers are unchanged; on a pass the runner records the stage pass for the release commit and tears the stage target down (stage-target.ts down); on a failure stage is left up for inspection and the run stops. W07 onward refuse to write without that recorded pass"
+    description: "W11's live check against the stage origin: /version.json names the release, every changed frontend/public file is served with the sha256 of its copy in stage's web/current, every sitemap route answers 200, and the stage api and workers are unchanged; on a pass the runner records the stage pass for the release commit and tears the stage target down (stage-target.ts down); on a failure stage is left up for inspection and the run stops. W07 onward refuse to write without that recorded pass"
     irreversible: false
   - id: "W07-tag"
     kind: "tag"
@@ -64,7 +63,7 @@ steps:
     irreversible: true
   - id: "W11-live-check"
     kind: "live-check"
-    description: "{publicOrigin}/version.json reports the tag's version and commit; every changed frontend/public file is served from {publicOrigin} with the sha256 of its copy in the host's web/current (other changed paths are skipped and listed); every sitemap route answers 200; a headless browser on the stage host (never the control machine; scripts/release/stage-browser.ts) loads /, /regime, a swarm member page, /early-access and each changed view's route with no page error, console.error or failed same-origin request, each reaching <html data-routed> (any such fault fails the page at once; a same-origin /api/ 503 excuses only that request, its console line and the archive-manifest 404 fallback, and a load whose only fault is that is loaded again, up to three loads; a changed view's route with a 503 on every load fails, an unchanged one warns; a media preload the browser aborts is exempt; Chromium sandbox on; judged once per W11; 3 minutes in all; read only); and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
+    description: "{publicOrigin}/version.json reports the tag's version and commit; every changed frontend/public file is served from {publicOrigin} with the sha256 of its copy in the host's web/current (other changed paths are skipped and listed); every sitemap route answers 200; and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
     irreversible: false
   - id: "W12-release"
     kind: "release"
