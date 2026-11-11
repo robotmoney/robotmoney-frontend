@@ -116,7 +116,7 @@ There is one archive format: format 1, the layout csvb writes (decisions D72 and
 - **Pinning.** A backup id names an exact state. `csvb resolve --as-of <id>` returns a report as of that backup.
 - **Identity.** An archive is identified by the SHA-256 of its uncompressed canonical bytes, recorded in `backup.json` as `sha256_raw` beside `bytes_raw`. Gzip is only a transport encoding: any runtime may produce any valid gzip of those bytes, and no gzip encoder, Bun version or container image is part of an archive's identity. A client decompresses an archive, then verifies the hash. `backup.json` records no hash or size of the gzip bytes.
 - **Provenance.** `backup.json` records `source` (`db` or `api`) and `consistency` (`snapshot` or `paged`).
-- **Location.** Backups live in robotmoney/csv-backups, outside this repo. The tool lives in this repo (`packages/csvb`) and refuses a backup directory inside a checkout of it.
+- **Location.** Backups live in robotmoney/csv-backups, outside this repo. The tool lives in this repo (`packages/csvb`) and refuses a backup directory inside a checkout of it. The data repo holds no code: it tracks only `csv/**`, `README.md` and `.gitignore`, and `csvb layout --repo DIR` fails when it tracks anything else.
 - **Access.** The csv-backups repo is private and holds production data.
 
 ### 4.6 The API serves archives

@@ -6339,7 +6339,7 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 
 **Why.** Before this, format 1 had two independent writers. csvb named a backup by its replica snapshot time. The archive store re-implemented csvb's encoding and naming and cut one backup per UTC day. The two chains never met, so the default fill (clone the repo, then fetch the increment from the API) could not join. One module, one cut rule and one junction make the two fills produce the same local copy.
 
-**Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo is a data-repo change made after this ships. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).
+**Left alone.** No archive in robotmoney/csv-backups is rewritten, renamed or re-cut. Deleting the old tool source from that repo was a data-repo change made after this shipped; issue 1609 did it (2026-11-11): robotmoney/csv-backups now tracks only `csv/**`, `README.md` and `.gitignore`, and `csvb layout --repo DIR` fails when anything else is tracked. The API still serves no revision archives (analytics requirements section 4.6), no run events and no parity observations. `csvb backup --source api` and `csvb inputs` stay a follow-up (issue 1436).
 
 ---
 

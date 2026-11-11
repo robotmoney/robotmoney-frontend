@@ -7,6 +7,7 @@
 //                        [--max-rss-mb 1500] [--only table,table] [--env-file PATH]
 //   bun run csvb finish  [--repo DIR]     (verify and add a backup that was staged but not finished)
 //   bun run csvb verify  [--repo DIR] [--backup ID]
+//   bun run csvb layout  [--repo DIR]     (fail when the data repo tracks anything but csv/**, README.md, .gitignore)
 //   bun run csvb list    [--repo DIR]
 //   bun run csvb resolve --table T [--as-of latest|ID|DATE|DATETIME] [--where col=value]... [--limit N] [--repo DIR]
 //   bun run csvb history --table T --where col=value [--where col=value]... [--repo DIR]
@@ -29,6 +30,7 @@ import { writeReport, type Outputs } from "./audit/report.ts";
 import { replayRun } from "./audit/replay.ts";
 import { analyseRevisions } from "./audit/revisions.ts";
 import { analyseRuns, loadRuns } from "./audit/runs.ts";
+import { strayPaths } from "./layout.ts";
 import { verifyRepo } from "./verify.ts";
 
 interface Args {
@@ -142,6 +144,17 @@ async function main(): Promise<number> {
       for (const r of loadRecords(layout)) for (const an of r.anomalies ?? []) console.log(`note (backup ${r.backup}): ${describeAnomaly(an)}`);
       return 0;
     }
+    case "layout": {
+      known(a, ["--repo"]);
+      const stray = strayPaths(repo);
+      if (stray.length) {
+        for (const p of stray) console.error(`  stray: ${p}`);
+        console.error(`${repo}: ${stray.length} tracked path(s) outside csv/, README.md and .gitignore`);
+        return 1;
+      }
+      console.log(`${repo}: tracked files are only csv/**, README.md and .gitignore`);
+      return 0;
+    }
     case "list":
       known(a, ["--repo"]);
       for (const l of listBackups(layout)) console.log(l);
@@ -201,7 +214,7 @@ async function main(): Promise<number> {
       return 0;
     }
     default:
-      console.error("usage: csvb <backup|finish|verify|list|resolve|history|diff|audit> [options]  (see the header of src/cli.ts)");
+      console.error("usage: csvb <backup|finish|verify|layout|list|resolve|history|diff|audit> [options]  (see the header of src/cli.ts)");
       return a.cmd ? 2 : 0;
   }
 }

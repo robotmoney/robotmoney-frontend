@@ -5,6 +5,11 @@ The tool lives here, in robotmoney-frontend. The data lives in a checkout of the
 repo, which holds backups and nothing else. Every command takes that checkout with `--repo`. csvb refuses to write
 backups inside a robotmoney-frontend checkout.
 
+**The data repo holds no code.** robotmoney/csv-backups tracks only `csv/**`, `README.md` and `.gitignore`. No tool
+source, package file or lockfile lives there, and nothing ever runs from a clone of it. `csvb layout --repo DIR` reads
+`git ls-files` in the data repo and exits 1, listing the stray paths, when anything else is tracked. Untracked or
+ignored files (`reports/`, `node_modules/`) are not reported. A directory that is not a git repo is refused.
+
 Format 1 is defined once, in `packages/analyst-sdk/src/archive/format1.ts`: the record, file names, COPY CSV text,
 part splitting, the table catalog and the backup cut rule. csvb, the public archive routes and the SDK's reader all
 use it. The SDK never imports csvb; csvb imports the SDK (a path dependency on `../analyst-sdk`).
