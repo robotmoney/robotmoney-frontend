@@ -15,7 +15,7 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W05; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W05; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the host's web/current and web/previous are read and reported, and W01 refuses when web/current is absent or dangling (no rollback target after the switch); W08's headless browser launches; the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
@@ -45,7 +45,7 @@ steps:
     irreversible: true
   - id: "W08-live-check"
     kind: "live-check"
-    description: "{publicOrigin}/version.json reports the tag's version and commit, every sitemap route answers 200, and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
+    description: "{publicOrigin}/version.json reports the tag's version and commit; every changed frontend/public file is served from {publicOrigin} with the sha256 of its copy in the host's web/current (other changed paths are skipped and listed); every sitemap route answers 200; a headless browser from the control machine loads /, /regime, a swarm member page, /early-access and each changed view's route with no page error, console.error or failed same-origin request, each reaching <html data-routed> (a page that fails, or sees an /api/ 503, is loaded again, up to three loads, and judged by its last load without an /api/ 503; 3 minutes in all; read only); and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --rollback, read {publicOrigin}/version.json again to report what production serves, and fail"
     irreversible: false
   - id: "W09-release"
     kind: "release"

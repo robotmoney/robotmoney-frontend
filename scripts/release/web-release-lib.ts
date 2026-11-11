@@ -18,14 +18,18 @@
 // docs and comment-only edits (issue 1603), pushes it as a fast-forward, waits for
 // web-client.yml and e2e-web.yml, cuts the annotated web-vA.B.C tag,
 // waits for web-tag-guard.yml, checks the tag out on the host, deploys, checks
-// the live site and creates the GitHub release. A failed live check rolls the
-// site back with `bun smoke:web --rollback`. The tag is never moved or deleted:
+// the live site (the served bytes against the host's web/current, and a
+// headless browser against production's data: ./web-browser-smoke.ts) and
+// creates the GitHub release. A failed live check rolls the site back with
+// `bun smoke:web --rollback`; W01 refuses when the host has no site to roll
+// back to. The tag is never moved or deleted:
 // the fix ships as web-vA.B.(C+1).
 //
 // Every git, gh, ssh and http call goes through an injected Deps, so the unit
 // tests run the steps against a local bare origin and stubs. Each step has a
 // read-only done check, so a rerun reports the steps already done and continues
 // at the first that is not; `--dry-run` runs only the preflight and the checks.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,8 +39,10 @@ import { WEB_CONTENT_PATHS } from "../lib/website-release.ts";
 import { poll, readRun, type Deps as SdkDeps, type ExecResult, type StepResult } from "./sdk-release-lib.ts";
 import { BASE_ENV, RELEASE_REPO_URL, shellQuote } from "./steps.ts";
 import type { ReleaseTarget } from "./target.ts";
+import type { BrowserSmoke, PageReport } from "./web-browser-smoke.ts";
 
 export type { ExecResult, StepResult } from "./sdk-release-lib.ts";
+export type { BrowserSmoke, PageReport } from "./web-browser-smoke.ts";
 
 /** The committed web content runbook. It sits outside templates/ and releases/, so ./runbook.ts never reads it. */
 export const WEB_RUNBOOK_PATH = join(dirname(fileURLToPath(import.meta.url)), "runbooks", "web-content.yaml");
@@ -238,6 +244,10 @@ export interface Deps extends SdkDeps {
   ssh(host: string, remote: string): Promise<ExecResult>;
   /** GET a URL. Throws when it cannot be reached. */
   http(url: string): Promise<HttpResult>;
+  /** GET a URL as bytes (W08 hashes what is served). Throws when it cannot be reached. */
+  httpBytes(url: string): Promise<{ readonly status: number; readonly bytes: Uint8Array }>;
+  /** W08's headless browser (./web-browser-smoke.ts runBrowserSmoke); with no routes it only proves the browser launches (W01). */
+  browser: BrowserSmoke;
   readFile(path: string): string | undefined;
 }
 
@@ -266,6 +276,14 @@ export interface Release {
   readonly changed: readonly string[];
   /** Each named commit's paths outside WEB_CONTENT_PATHS: tests carried, docs and comment-only edits left out. */
   readonly outside: readonly OutsidePath[];
+  /** What W01 read of the host's web/current and web/previous: the site a W08 rollback returns to is `current`. */
+  readonly sites?: HostSites;
+}
+
+/** The instance's web/current and web/previous links on the host, as the site ids they name. */
+export interface HostSites {
+  readonly current?: string;
+  readonly previous?: string;
 }
 
 /**
@@ -543,6 +561,18 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
     }
   }
   if (errors.length > 0) return { errors };
+
+  // The rollback target: after W07's switch, web/previous names what web/current names now.
+  const sites = await readHostSites(t, deps);
+  if ("error" in sites) return { errors: [sites.error] };
+  const noTarget = rollbackTargetProblem(t, sites.sites);
+  if (noTarget !== undefined) return { errors: [noTarget] };
+  // W08's browser must launch on this machine; finding out after the deploy would roll back a good site.
+  try {
+    await deps.browser(t.publicOrigin, [], BROWSER_BUDGET_MS);
+  } catch (e) {
+    return { errors: [`W08's headless browser does not launch here (${(e as Error).message.split("\n")[0]}): run bunx playwright install chromium`] };
+  }
   if (tags.get(tag) === commit) {
     const rolled = await rolledBack(t, deps, version, tag, commit);
     if (rolled !== undefined) return { errors: [rolled] };
@@ -550,7 +580,44 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   const admin = deps.gh(["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"]);
   if (admin.status !== 0) return { errors: [`gh api repos/{owner}/{repo} failed: ${errText(admin)}`] };
   if (admin.stdout.trim() !== "true") return { errors: ["the operator lacks the admin permission on the repository (the tag push needs it)"] };
-  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside } };
+  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside, sites: sites.sites } };
+}
+
+const webDirOf = (t: WebTarget): string => `${instanceDir(t)}/web`;
+
+/** PURE. W01's read of web/current and web/previous: each link's site id, and "dangling" when it names no directory. */
+export function hostSitesCommand(t: WebTarget): string {
+  const d = shellQuote(webDirOf(t));
+  return `for l in current previous; do if test -L ${d}/"$l"; then s=$(readlink -- ${d}/"$l"); if test -d ${d}/"$l"/; then printf '%s\\t%s\\n' "$l" "$s"; else printf '%s\\t%s\\tdangling\\n' "$l" "$s"; fi; fi; done`;
+}
+
+/** Read the host's web/current and web/previous (read only). A dangling link is reported as absent with its name. */
+export async function readHostSites(t: WebTarget, deps: Deps): Promise<{ sites: HostSites & { dangling?: string[] } } | { error: string }> {
+  const r = await deps.ssh(t.host, hostSitesCommand(t));
+  if (r.status !== 0) return { error: `ssh ${t.host} could not read ${webDirOf(t)}/current and previous: ${errText(r)}` };
+  const out: { current?: string; previous?: string; dangling?: string[] } = {};
+  for (const l of lines(r.stdout)) {
+    const [name, site = "", flag] = l.split("\t");
+    if (name !== "current" && name !== "previous") continue;
+    if (flag === "dangling") (out.dangling ??= []).push(`${name} -> ${site}`);
+    else out[name] = site;
+  }
+  return { sites: out };
+}
+
+/** PURE. Why production would have no site to roll back to after W07's switch: web/current is absent or dangling. */
+export function rollbackTargetProblem(t: WebTarget, sites: HostSites & { dangling?: string[] }): string | undefined {
+  if (sites.current !== undefined) return undefined;
+  const why = sites.dangling?.some((d) => d.startsWith("current ")) ? `names no site directory (${sites.dangling.join(", ")})` : "is absent";
+  return `${t.host}:${webDirOf(t)}/current ${why}, so after W07's switch web/previous would name no site and a failed W08 could not roll back ` +
+    `(bun smoke:web --rollback refuses with no previous site). Put a site in place with bun smoke:web --instance ${t.instance} by hand first`;
+}
+
+/** PURE. The run log's line for the host's sites. */
+export function sitesLine(sites: HostSites | undefined): string {
+  if (sites === undefined) return "[web-release] web/current and web/previous: not read";
+  return `[web-release] production serves web/current -> ${sites.current ?? "(absent)"}; web/previous -> ${sites.previous ?? "(absent)"}; ` +
+    `after the switch a W08 rollback returns to ${sites.current ?? "(nothing)"}`;
 }
 
 /**
@@ -906,25 +973,385 @@ export async function runDeploy(rel: Release, inputs: Inputs, deps: Deps): Promi
 }
 
 // ── W08: live check ──────────────────────────────────────────────────────────
+//
+// W08 proves four things, in order, and rolls the site back on any failure:
+//
+//   1. {publicOrigin}/version.json names the release (the site switched);
+//   2. every changed file the site serves is served byte for byte as the host
+//      holds it in web/current (the release's own bytes reach a visitor, past
+//      Cloudflare and nginx). The host's copy, not git's, is the reference:
+//      the assembly stamps imports with ?v= and prerenders routes, so a served
+//      file differs from its source by design;
+//   3. every sitemap route answers 200 (weak on its own: nginx answers an
+//      unknown path with the SPA shell, 200);
+//   4. a headless browser loads the base routes, one swarm member page and the
+//      route of every changed view against production's data, with no page
+//      error, console.error or failed same-origin request, each reaching the
+//      router's ready signal (./web-browser-smoke.ts);
+//
+// and that the api and worker containers and /api/version are unchanged.
 
-/** Every way the live site is not this release served beside an unchanged api: empty when it is. */
-export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
+/** The directory a site is served from: frontend/public/X is served at /X. */
+export const SERVED_ROOT = "frontend/public/";
+
+/** PURE. The URL path a repository path is served at, or undefined when the site does not serve it (a build input, a test). */
+export const servedUrlPath = (path: string): string | undefined =>
+  path.startsWith(SERVED_ROOT) && path.length > SERVED_ROOT.length ? `/${path.slice(SERVED_ROOT.length)}` : undefined;
+
+/** What W08 compares: each served changed file, each removed one, and the changed paths the site does not serve. */
+export interface ServedPlan {
+  /** Served files: the path inside the site directory and the URL path. */
+  readonly compare: readonly { readonly path: string; readonly file: string; readonly url: string }[];
+  /** Served paths the release removes: absent from web/current. */
+  readonly removed: readonly { readonly path: string; readonly file: string }[];
+  /** Changed paths the site does not serve (build scripts, tests, the manifest): listed, not compared. */
+  readonly skipped: readonly string[];
+}
+
+/** PURE. The served plan for the release's changed paths; `exists` says whether a path is in the release tree. */
+export function servedPlan(changed: readonly string[], exists: (path: string) => boolean): ServedPlan {
+  const compare: { path: string; file: string; url: string }[] = [];
+  const removed: { path: string; file: string }[] = [];
+  const skipped: string[] = [];
+  for (const path of [...new Set(changed)].sort()) {
+    const url = servedUrlPath(path);
+    if (url === undefined) { skipped.push(path); continue; }
+    const file = url.slice(1);
+    if (exists(path)) compare.push({ path, file, url });
+    else removed.push({ path, file });
+  }
+  return { compare, removed, skipped };
+}
+
+const servedPlanOf = (rel: Release, deps: Deps): ServedPlan =>
+  servedPlan(rel.changed, (p) => deps.git(["cat-file", "-e", `${rel.commit}:${p}`]).status === 0);
+
+/** PURE. The host command that names web/current's site and hashes (or proves absent) each file inside it. */
+export function servedHashCommand(t: WebTarget, plan: ServedPlan): string {
+  const files = [...plan.compare.map((c) => c.file), ...plan.removed.map((r) => r.file)].map(shellQuote).join(" ");
+  const d = shellQuote(webDirOf(t));
+  return `cd ${d} && printf 'site\\t%s\\n' "$(readlink -- current)" && cd current/ && for f in ${files}; do ` +
+    `if test -f "$f"; then printf 'sha\\t%s\\t%s\\n' "$(sha256sum < "$f" | cut -d ' ' -f 1)" "$f"; else printf 'missing\\t%s\\n' "$f"; fi; done`;
+}
+
+const sha256 = (b: Uint8Array): string => createHash("sha256").update(b).digest("hex");
+
+/** PURE. A URL path with each segment percent-encoded as a browser sends it. */
+const encodePath = (p: string): string => p.split("/").map((s) => encodeURIComponent(s)).join("/");
+
+/**
+ * W08 (2): every served changed file is served as web/current holds it, and
+ * web/current is this release's site. Each URL carries a one-off query so a
+ * cache in front of nginx cannot answer with an older copy.
+ */
+export async function servedProblems(rel: Release, t: WebTarget, deps: Deps, plan: ServedPlan = servedPlanOf(rel, deps)): Promise<{ problems: string[]; compared: number }> {
+  if (plan.compare.length === 0 && plan.removed.length === 0) return { problems: [], compared: 0 };
+  const r = await deps.ssh(t.host, servedHashCommand(t, plan));
+  if (r.status !== 0) return { problems: [`ssh ${t.host} could not hash the served files in ${webDirOf(t)}/current: ${errText(r)}`], compared: 0 };
+  let site = "";
+  const host = new Map<string, string | null>();
+  for (const l of r.stdout.split("\n")) {
+    const [k, a = "", b = ""] = l.split("\t");
+    if (k === "site") site = a;
+    else if (k === "sha") host.set(b, a);
+    else if (k === "missing") host.set(a, null);
+  }
+  const problems: string[] = [];
+  if (!siteIdIs(site, rel.version, rel.commit)) {
+    return { problems: [`${webDirOf(t)}/current on ${t.host} names ${site || "nothing"}, not ${rel.version}-${short(rel.commit)}`], compared: 0 };
+  }
+  for (const rm of plan.removed) {
+    if (host.get(rm.file) !== null) problems.push(`${rm.path} is removed by ${rel.tag} but ${site}/${rm.file} exists on ${t.host}`);
+  }
+  const bust = `rm-live-check=${short(rel.commit)}-${deps.clock()}`;
+  let compared = 0;
+  for (const c of plan.compare) {
+    const want = host.get(c.file);
+    if (want === undefined || want === null) { problems.push(`${c.path} is in ${rel.tag} but ${site}/${c.file} is missing on ${t.host}`); continue; }
+    const url = `${t.publicOrigin}${encodePath(c.url)}?${bust}`;
+    try {
+      const got = await deps.httpBytes(url);
+      if (got.status !== 200) { problems.push(`GET ${c.url} answered ${got.status}, not the deployed ${c.file}`); continue; }
+      const sha = sha256(got.bytes);
+      if (sha !== want) problems.push(`GET ${c.url} serves sha256 ${sha.slice(0, 16)}, not the deployed ${site}/${c.file} (${want.slice(0, 16)})`);
+      else compared++;
+    } catch (e) {
+      problems.push(`GET ${c.url} failed: ${(e as Error).message}`);
+    }
+  }
+  return { problems, compared };
+}
+
+/** The routes a browser always loads; a swarm member page is discovered and added after /regime. */
+export const BROWSER_BASE_ROUTES: readonly string[] = Object.freeze(["/", "/regime", "/early-access"]);
+/** The browser smoke's whole budget. A route it does not reach fails W08. */
+export const BROWSER_BUDGET_MS = 180_000;
+
+type Get = (url: string) => Promise<HttpResult>;
+
+async function getJson(http: Get, url: string): Promise<{ body: unknown } | { error: string }> {
+  try {
+    const r = await http(url);
+    if (r.status !== 200) return { error: `GET ${url} answered ${r.status}` };
+    return { body: JSON.parse(r.body) as unknown };
+  } catch (e) {
+    return { error: `GET ${url} failed: ${(e as Error).message}` };
+  }
+}
+
+/** One swarm member's public page, from GET /api/swarm/members (an active member first). */
+export async function discoverMemberRoute(origin: string, http: Get): Promise<{ route: string } | { note: string } | { error: string }> {
+  const r = await getJson(http, `${origin}/api/swarm/members`);
+  if ("error" in r) return r;
+  const members = ((r.body as { members?: unknown }).members ?? []) as { id?: unknown; handle?: unknown; status?: unknown }[];
+  if (!Array.isArray(members)) return { error: `GET ${origin}/api/swarm/members gave no members list` };
+  const m = members.find((x) => x.status === "active") ?? members[0];
+  const ref = m === undefined ? undefined : typeof m.handle === "string" && m.handle !== "" ? m.handle : typeof m.id === "string" ? m.id : undefined;
+  if (ref === undefined) return { note: `${origin}/api/swarm/members lists no member, so no member page is loaded` };
+  return { route: `/swarm/members/${encodeURIComponent(ref)}` };
+}
+
+/** One swarm session (a published one first), from GET /api/swarm/sessions: its page and its subject's. */
+async function discoverSessionRoutes(origin: string, http: Get): Promise<{ routes: string[] } | { error: string }> {
+  const r = await getJson(http, `${origin}/api/swarm/sessions?limit=10`);
+  if ("error" in r) return r;
+  const sessions = ((r.body as { sessions?: unknown }).sessions ?? []) as { id?: unknown; subjectId?: unknown; publishedAt?: unknown }[];
+  if (!Array.isArray(sessions)) return { error: `GET ${origin}/api/swarm/sessions gave no sessions list` };
+  const s = sessions.find((x) => typeof x.publishedAt === "string") ?? sessions[0];
+  const out: string[] = [];
+  if (typeof s?.id === "string") out.push(`/swarm/sessions/${encodeURIComponent(s.id)}`);
+  if (typeof s?.subjectId === "string") out.push(`/swarm/subjects/${encodeURIComponent(s.subjectId)}`);
+  return { routes: out };
+}
+
+/** PURE. A changed view file's fragment path as routes.js names it: frontend/public/views/x.html -> /views/x.html. */
+export const viewFragmentOf = (path: string): string | undefined =>
+  /^frontend\/public\/views\/.+\.html$/.test(path) ? path.slice("frontend/public".length) : undefined;
+
+/**
+ * routes.js viewFor at the release commit: the router's own map from a route to
+ * the view fragment it renders, so a changed view maps to the route that shows
+ * it. routes.js imports nothing; it is loaded from a data: URL.
+ */
+async function releaseViewFor(rel: Release, deps: Deps): Promise<((p: string) => string) | { error: string }> {
+  const r = deps.git(["show", `${rel.commit}:frontend/public/assets/js/app/routes.js`]);
+  if (r.status !== 0) return { error: `routes.js at ${short(rel.commit)} could not be read: ${errText(r)}` };
+  try {
+    const m = (await import(`data:text/javascript;base64,${Buffer.from(r.stdout).toString("base64")}`)) as { viewFor?: unknown };
+    if (typeof m.viewFor !== "function") return { error: `routes.js at ${short(rel.commit)} exports no viewFor` };
+    return m.viewFor as (p: string) => string;
+  } catch (e) {
+    return { error: `routes.js at ${short(rel.commit)} does not load on its own (${(e as Error).message})` };
+  }
+}
+
+/** The browser's routes: the base routes, a member page, and one route per changed view; plus notes and errors from discovering them. */
+export interface BrowserPlan {
+  readonly routes: readonly string[];
+  /** Changed views with the route that shows each, or why none was found. */
+  readonly views: readonly string[];
+  readonly notes: readonly string[];
+  readonly errors: readonly string[];
+}
+
+/**
+ * PURE. The route for each changed view: the first candidate whose viewFor is
+ * that view. Candidates are tried in order, so a base route wins.
+ */
+export function routesForViews(views: readonly string[], candidates: readonly string[], viewFor: (p: string) => string): Map<string, string | undefined> {
+  const out = new Map<string, string | undefined>();
+  for (const v of views) out.set(v, candidates.find((c) => { try { return viewFor(c) === v; } catch { return false; } }));
+  return out;
+}
+
+/** W08 (4)'s plan. GETs only: the public API for a member and a session, nothing else. */
+export async function browserPlan(rel: Release, t: WebTarget, deps: Deps, sitemapRoutes: readonly string[]): Promise<BrowserPlan> {
+  const notes: string[] = [];
+  const errors: string[] = [];
+  const routes = [...BROWSER_BASE_ROUTES];
+  const member = await discoverMemberRoute(t.publicOrigin, deps.http);
+  if ("route" in member) routes.splice(2, 0, member.route);
+  else if ("note" in member) notes.push(member.note);
+  else errors.push(member.error);
+  const views = [...new Set(rel.changed.map(viewFragmentOf).filter((v): v is string => v !== undefined))].sort();
+  const viewLines: string[] = [];
+  if (views.length > 0) {
+    const viewFor = await releaseViewFor(rel, deps);
+    if (typeof viewFor !== "function") errors.push(`${viewFor.error}, so the changed views ${views.join(", ")} cannot be mapped to routes`);
+    else {
+      const candidates = [...routes, ...sitemapRoutes];
+      let mapped = routesForViews(views, candidates, viewFor);
+      if ([...mapped.values()].some((r) => r === undefined)) {
+        const s = await discoverSessionRoutes(t.publicOrigin, deps.http);
+        if ("error" in s) notes.push(`${s.error}: session and subject pages are not candidates`);
+        else mapped = routesForViews(views, [...candidates, ...s.routes], viewFor);
+      }
+      for (const [v, r] of mapped) {
+        if (r === undefined) { notes.push(`no route found for the changed view ${v}: the browser does not load it`); viewLines.push(`${v} -> (none)`); continue; }
+        viewLines.push(`${v} -> ${r}`);
+        if (!routes.includes(r)) routes.push(r);
+      }
+    }
+  }
+  return { routes, views: viewLines, notes, errors };
+}
+
+/**
+ * The browser's own cancellation of a request, not a server failure: a video's
+ * preload it stops once it has the metadata (seen on /changelog's mp4 on
+ * 2026-11-11), a view fetch the router aborts for a newer route. A server
+ * failure shows as a status or another net:: error.
+ */
+const BROWSER_CANCELLED = "net::ERR_ABORTED";
+
+/** PURE. Why one browser page fails W08: empty when it passed. Cross-origin failures and browser cancellations are not counted. */
+export function pageProblems(origin: string, r: PageReport): string[] {
+  const at = `browser ${r.route}`;
+  const out: string[] = [];
+  if (!r.ready) out.push(`${at}: never reached the router's ready signal (<html data-routed>): ${r.readyDetail ?? "timed out"}`);
+  if (r.notFoundView) out.push(`${at}: the router rendered the not-found view`);
+  for (const e of r.pageErrors) out.push(`${at}: uncaught page error: ${e.split("\n")[0]}`);
+  // Chrome logs "Failed to load resource" for every 4xx/5xx and network failure; the request checks below judge those.
+  for (const e of r.consoleErrors) if (!e.startsWith("Failed to load resource:")) out.push(`${at}: console.error: ${e}`);
+  for (const f of r.failedRequests) {
+    let u: URL;
+    try { u = new URL(f.url); } catch { continue; }
+    if (u.origin !== origin) continue;
+    if (f.status === undefined && f.failure === BROWSER_CANCELLED) continue;
+    out.push(`${at}: ${f.method} ${u.pathname}${u.search} ${f.status !== undefined ? `answered ${f.status}` : `failed (${f.failure ?? "network"})`}`);
+  }
+  return out;
+}
+
+/** What the browser smoke found: the problems of each page's judged load, and the pages loaded more than once. */
+export interface SmokeResult {
+  readonly problems: string[];
+  readonly reports: readonly PageReport[];
+  /** One line per page load that failed or was inconclusive and was loaded again, with what it saw. */
+  readonly retried: string[];
+  /** Pages never judged: the api answered 503 on every load. They do not fail W08. */
+  readonly warnings: string[];
+}
+
+/** How many times a page is loaded at most. */
+export const PAGE_LOADS = 3;
+
+/**
+ * PURE. Whether a load is inconclusive: a same-origin /api/ request answered
+ * 503, the api's own "unavailable" (its pool gate's db_saturated, a statement
+ * timeout). The release changes no api (W08 proves the containers and
+ * /api/version unchanged), so such a load says nothing about the site. Seen on
+ * production on 2026-11-11: GET /api/swarm/members/<handle> hit Postgres'
+ * statement timeout now and then, and the member page fell back to its archive
+ * manifest (404).
+ */
+export function inconclusive(origin: string, r: PageReport): boolean {
+  return r.failedRequests.some((f) => {
+    try {
+      const u = new URL(f.url);
+      return u.origin === origin && u.pathname.startsWith("/api/") && f.status === 503;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Load every route; load again, up to PAGE_LOADS in all and inside the
+ * budget, each page whose load failed or was inconclusive. A page is judged by
+ * its last conclusive load: a transient api answer is not the site's fault,
+ * and a broken page fails every time. A page whose every load was
+ * inconclusive is a warning, not a failure. A route the browser never
+ * reported fails.
+ */
+export async function smokePages(origin: string, routes: readonly string[], browser: BrowserSmoke, clock: () => number, budgetMs: number = BROWSER_BUDGET_MS): Promise<SmokeResult> {
+  const t0 = clock();
+  const loads = new Map<string, PageReport[]>();
+  const record = (rs: readonly PageReport[]) => { for (const r of rs) loads.set(r.route, [...(loads.get(r.route) ?? []), r]); };
+  record(await browser(origin, routes, budgetMs));
+  const settled = (r: PageReport): boolean => r.ms === 0 || (!inconclusive(origin, r) && pageProblems(origin, r).length === 0);
+  const retried: string[] = [];
+  for (let n = 1; n < PAGE_LOADS; n++) {
+    const again = routes.filter((route) => { const l = loads.get(route); return l !== undefined && !settled(l[l.length - 1]!); });
+    const left = budgetMs - (clock() - t0);
+    if (again.length === 0 || left <= 1_000) break;
+    for (const route of again) {
+      const last = loads.get(route)!.at(-1)!;
+      const why = inconclusive(origin, last) ? "was inconclusive (the api answered 503)" : "failed";
+      retried.push(`${route} load ${n} ${why} (${pageProblems(origin, last).join("; ")}); loaded again`);
+    }
+    record(await browser(origin, again, left));
+  }
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  const reports: PageReport[] = [];
+  for (const route of routes) {
+    const l = loads.get(route);
+    if (l === undefined) { problems.push(`browser ${route}: no report`); continue; }
+    const judged = [...l].reverse().find((r) => !inconclusive(origin, r));
+    reports.push(judged ?? l[l.length - 1]!);
+    if (judged !== undefined) problems.push(...pageProblems(origin, judged));
+    else warnings.push(`browser ${route}: not judged: the api answered 503 on all ${l.length} load(s) (backend unavailable; this release changes no api)`);
+  }
+  return { problems, reports, retried, warnings };
+}
+
+/** The sitemap's routes, or why it could not be read. */
+async function sitemapRoutes(t: WebTarget, deps: Deps): Promise<{ routes: string[] } | { error: string }> {
+  try {
+    const sm = await deps.http(`${t.publicOrigin}/sitemap.xml`);
+    if (sm.status !== 200) return { error: `GET ${t.publicOrigin}/sitemap.xml answered ${sm.status}` };
+    const routes = [...sm.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => { const u = new URL(m[1]!); return `${u.pathname}${u.search}`; });
+    if (routes.length === 0) return { error: `${t.publicOrigin}/sitemap.xml lists no route` };
+    return { routes };
+  } catch (e) {
+    return { error: `GET ${t.publicOrigin}/sitemap.xml failed: ${(e as Error).message}` };
+  }
+}
+
+/** PURE. The plan's lines for W08: what (2) compares and skips, and what (4) loads. */
+export function livePlanLines(served: ServedPlan, browser: BrowserPlan): string[] {
+  return [
+    `served files compared with web/current: ${served.compare.length === 0 ? "(none)" : served.compare.map((c) => c.url).join(", ")}`,
+    ...(served.removed.length > 0 ? [`removed, must be absent from web/current: ${served.removed.map((r) => r.file).join(", ")}`] : []),
+    `not served (skipped): ${served.skipped.length === 0 ? "(none)" : served.skipped.join(", ")}`,
+    `browser routes: ${browser.routes.join(", ")}`,
+    ...(browser.views.length > 0 ? [`changed views: ${browser.views.join("; ")}`] : []),
+    ...browser.notes.map((n) => `note: ${n}`),
+    ...browser.errors.map((e) => `discovery failed: ${e}`),
+  ];
+}
+
+/** The dry run's W08 plan: the served comparison and the browser routes, discovered with GETs only. */
+export async function livePlan(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
+  const sm = await sitemapRoutes(inputs.target, deps);
+  const browser = await browserPlan(rel, inputs.target, deps, "routes" in sm ? sm.routes : []);
+  return [...("error" in sm ? [`discovery failed: ${sm.error}`] : []), ...livePlanLines(servedPlanOf(rel, deps), browser)];
+}
+
+/** What W08 found: its problems, and what it checked when it passed. */
+interface LiveResult {
+  readonly problems: string[];
+  readonly summary: string;
+}
+
+/** Every way the live site is not this release served beside an unchanged api: no problems when it is. */
+export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Promise<LiveResult> {
   const t = inputs.target;
   const before = readRecord(inputs, rel, deps);
-  if (before === undefined) return [`${servingRecordPath(inputs, rel)} (W07's record) is missing`];
+  if (before === undefined) return { problems: [`${servingRecordPath(inputs, rel)} (W07's record) is missing`], summary: "" };
   const out: string[] = [];
   const live = await readLiveSite(t, deps);
   if ("error" in live) out.push(live.error);
   else if (!liveIs(live, rel)) out.push(`${t.publicOrigin}/version.json reports ${live.version}-${live.commit}, not ${rel.version}-${short(rel.commit)}`);
-  let routes: string[] = [];
-  try {
-    const sm = await deps.http(`${t.publicOrigin}/sitemap.xml`);
-    if (sm.status !== 200) out.push(`GET ${t.publicOrigin}/sitemap.xml answered ${sm.status}`);
-    else routes = [...sm.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => { const u = new URL(m[1]!); return `${u.pathname}${u.search}`; });
-    if (sm.status === 200 && routes.length === 0) out.push(`${t.publicOrigin}/sitemap.xml lists no route`);
-  } catch (e) {
-    out.push(`GET ${t.publicOrigin}/sitemap.xml failed: ${(e as Error).message}`);
-  }
+
+  const plan = servedPlanOf(rel, deps);
+  const served = await servedProblems(rel, t, deps, plan);
+  out.push(...served.problems);
+
+  const sm = await sitemapRoutes(t, deps);
+  const routes = "routes" in sm ? sm.routes : [];
+  if ("error" in sm) out.push(sm.error);
   for (const route of routes) {
     try {
       const r = await deps.http(`${t.publicOrigin}${route}`);
@@ -933,6 +1360,27 @@ export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Pr
       out.push(`GET ${route} failed: ${(e as Error).message}`);
     }
   }
+
+  let pages = 0;
+  if (out.length > 0) deps.log("[web-release] browser smoke skipped: the checks above already failed");
+  else {
+    const bp = await browserPlan(rel, t, deps, routes);
+    for (const l of livePlanLines(plan, bp)) deps.log(`[web-release] ${l}`);
+    out.push(...bp.errors);
+    try {
+      const smoke = await smokePages(t.publicOrigin, bp.routes, deps.browser, deps.clock);
+      out.push(...smoke.problems);
+      for (const l of smoke.retried) deps.log(`[web-release] browser ${l}`);
+      for (const w of smoke.warnings) deps.log(`[web-release] WARNING ${w}`);
+      for (const r of smoke.reports) {
+        if (r.blocked.length > 0) deps.log(`[web-release] browser ${r.route}: answered ${r.blocked.length} non-GET request(s) inside the browser (read only): ${r.blocked.join(", ")}`);
+      }
+      pages = smoke.reports.length;
+    } catch (e) {
+      out.push(`the browser smoke could not run: ${(e as Error).message.split("\n")[0]}`);
+    }
+  }
+
   const now = await readServing(t, deps);
   if ("error" in now) out.push(now.error);
   else {
@@ -941,21 +1389,26 @@ export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Pr
     }
     if (now.apiVersion !== before.apiVersion) out.push(`/api/version changed: ${before.apiVersion} -> ${now.apiVersion}`);
   }
-  return out;
+  const summary = `${t.publicOrigin} serves ${rel.tag}, ${served.compared} changed file(s) are served as deployed (${plan.skipped.length} not served), ` +
+    `every sitemap route answers 200, the browser smoke passed on ${pages} page(s), the api and workers are unchanged`;
+  return { problems: out, summary };
+}
+
+/** Every way the live site is not this release served beside an unchanged api: empty when it is. */
+export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
+  return (await liveResult(rel, inputs, deps)).problems;
 }
 
 export async function checkLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
-  const problems = await liveProblems(rel, inputs, deps);
-  return problems.length === 0
-    ? { state: "done", detail: `${inputs.target.publicOrigin} serves ${rel.tag}, every sitemap route answers 200, the api and workers are unchanged` }
-    : { state: "todo", detail: problems.join("; ") };
+  const r = await liveResult(rel, inputs, deps);
+  return r.problems.length === 0 ? { state: "done", detail: r.summary } : { state: "todo", detail: r.problems.join("; ") };
 }
 
 /** The live check: pass, or roll the site back with `bun run smoke:web --rollback` and fail. The tag stays. */
 export async function runLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
   const t = inputs.target;
-  const problems = await liveProblems(rel, inputs, deps);
-  if (problems.length === 0) return { state: "done", detail: `${t.publicOrigin} serves ${rel.tag}, every sitemap route answers 200, the api and workers are unchanged` };
+  const { problems, summary } = await liveResult(rel, inputs, deps);
+  if (problems.length === 0) return { state: "done", detail: summary };
   const next = `${WEB_TAG_PREFIX}${nextPatch(rel.version)}`;
   deps.log(`[web-release] the live check failed: ${problems.join("; ")}; rolling back`);
   const r = await deps.ssh(t.host, rollbackCommand(t));
@@ -1035,6 +1488,7 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
   deps.log(`[web-release] content paths changed: ${rel.changed.length === 0 ? "(none)" : rel.changed.join(", ")}`);
   deps.log(`[web-release] outside the web content paths: ${rel.outside.length === 0 ? "(none)" : "tests carried, docs and comment-only edits left out"}`);
   for (const l of outsideLines(rel.outside)) deps.log(`  ${l}`);
+  deps.log(sitesLine(rel.sites));
   deps.log(`[${first!.id}] passed`);
   for (const step of rest) {
     const check: StepResult =
@@ -1048,7 +1502,11 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
       : checkReleaseStep(rel, deps);
     if (check.state === "done") { deps.log(`[${step.id}] already done: ${check.detail}`); continue; }
     if (check.state === "failed") return stop(step.id, check.detail);
-    if (inputs.dryRun) { deps.log(`[${step.id}] not done${step.irreversible ? " (IRREVERSIBLE, would write)" : ""}: ${check.detail}`); continue; }
+    if (inputs.dryRun) {
+      deps.log(`[${step.id}] not done${step.irreversible ? " (IRREVERSIBLE, would write)" : ""}: ${check.detail}`);
+      if (step.kind === "live-check") for (const l of await livePlan(rel, inputs, deps)) deps.log(`[${step.id}] plan: ${l}`);
+      continue;
+    }
     const result: StepResult =
       step.kind === "branch" ? runBranch(rel, deps)
       : step.kind === "gate" ? await gateStep(rel, deps, step.maxMinutes!, step.id, rerun)

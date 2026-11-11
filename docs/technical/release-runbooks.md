@@ -782,6 +782,12 @@ order:
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
   must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W08
   rolled back is refused (below). The operator must hold the admin permission on the repository.
+  The runner reads the instance's `web/current` and `web/previous` links on the host (read only)
+  and reports both. W07's switch makes today's `current` the `previous` that `bun smoke:web
+  --rollback` returns to, so W01 refuses when `current` is absent or names no site directory:
+  production would have no rollback target. W01 also launches W08's headless browser once (no page
+  load) and refuses when it does not start (`bunx playwright install chromium`), so a missing
+  browser is never found after the deploy.
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
@@ -809,11 +815,43 @@ order:
 - **W07-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
   body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
   database row, runs no migration and restarts no backend service.
-- **W08-live-check.** `{publicOrigin}/version.json` reports the tag's version and commit, every
-  sitemap route answers 200, and the `api` and worker container ids and `/api/version` are
-  unchanged. On a failure the runner runs `bun run smoke:web --rollback`, reads `/version.json`
-  again to report what production now serves, and exits non-zero. The branch and the tag stay; no
-  GitHub release is created.
+- **W08-live-check.** Four checks, in order, and then the backend:
+  1. `{publicOrigin}/version.json` reports the tag's version and commit.
+  2. **Served content equals the release.** Each changed path under `frontend/public/` is fetched
+     at the URL it is served at (`frontend/public/X` at `/X`, with a one-off query so no cache
+     answers) and its sha256 must equal the file in the host's `web/current`, which must name this
+     release's site. The host's copy is the reference, not git's: the assembly stamps imports with
+     `?v=` and prerenders routes, so a served file differs from its source by design. A path the
+     release removes must be absent from `web/current`. A changed path the site does not serve (a
+     build script, a test, `frontend/package.json`) is skipped and listed.
+  3. Every sitemap route answers 200. This is weak on its own: nginx answers an unknown path with
+     the SPA shell, 200.
+  4. **Browser smoke against production.** From the control machine, a headless Chromium (the
+     repository's `@playwright/test`, `scripts/release/web-browser-smoke.ts`) loads `/`, `/regime`,
+     one swarm member page (a member read from `GET /api/swarm/members`), `/early-access`, and the
+     route of each changed view: the first candidate route (those, the sitemap's, then a session
+     and its subject from `GET /api/swarm/sessions`) for which the release's own `routes.js`
+     `viewFor` names that view. A page fails on an uncaught page error, any `console.error`, a
+     same-origin request that fails or answers 4xx/5xx (not the browser's own cancellation,
+     `net::ERR_ABORTED`, such as a video preload it stops), the router rendering the not-found view,
+     or not reaching the router's ready signal (`<html data-routed>`, set by `router.js` once the
+     view is in the DOM; then up to 15 s for network idle). Chrome's own "Failed to load resource"
+     console lines are left to the request checks. A load in which a same-origin `/api/` request
+     answered 503 is inconclusive: the api is unavailable, and this release changes no api. On
+     2026-11-11 production's `GET /api/swarm/members/<handle>` hit Postgres' statement timeout now
+     and then (503), and the member page fell back to its archive manifest (404). A page whose load
+     failed or was inconclusive is loaded again, up to three loads, and is judged by its last
+     conclusive load. A page inconclusive on every load is a warning in the log, not a failure.
+     The whole smoke has 3 minutes. It is read only: it submits no form, and any non-GET request a page makes
+     is answered 204 inside the browser. Cloudflare's edge scripts (`/cdn-cgi/`: Zaraz, the RUM
+     beacon) are answered empty inside the browser: the release holds none of them, and on
+     2026-11-11 Zaraz's Google Analytics tool broke the site's own CSP (`connect-src`) with a
+     `console.error` on every page. A dry run prints the routes and files W08 would check,
+     discovered with GETs only.
+
+  Last, the `api` and worker container ids and `/api/version` are unchanged. On a failure the
+  runner runs `bun run smoke:web --rollback`, reads `/version.json` again to report what production
+  now serves, and exits non-zero. The branch and the tag stay; no GitHub release is created.
 - **W09-release** (irreversible). The GitHub release for the tag lists the main commits, the
   changed paths and each commit's paths outside the content paths, carried or left out. It is never marked latest: the platform's release keeps that.
 

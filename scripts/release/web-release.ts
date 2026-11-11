@@ -14,6 +14,10 @@
 // --dry-run runs the preflight and every step's read-only done check, and
 // writes nothing to origin, GitHub or the host.
 //
+// W08's browser smoke runs here too: a headless Chromium from the repository's
+// @playwright/test (./web-browser-smoke.ts) against the public origin; W01
+// refuses when it does not launch (bunx playwright install chromium).
+//
 // Host commands go over ssh the way ./run.ts runs a step (its realDeps, typed
 // by ./step-exec.ts RunnerDeps), from the control machine (D61 (4)).
 import { spawnSync } from "node:child_process";
@@ -24,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { realDeps } from "./run.ts";
 import type { RunnerDeps } from "./step-exec.ts";
 import { loadTarget } from "./target.ts";
+import { runBrowserSmoke } from "./web-browser-smoke.ts";
 import { loadWebRunbook, runWebRelease, webTargetOf, type Deps, type ExecResult } from "./web-release-lib.ts";
 
 const USAGE = "usage: bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]";
@@ -86,6 +91,11 @@ async function main(): Promise<number> {
       const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
       return { status: r.status, body: await r.text() };
     },
+    async httpBytes(url) {
+      const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+      return { status: r.status, bytes: new Uint8Array(await r.arrayBuffer()) };
+    },
+    browser: runBrowserSmoke,
     readFile(path) {
       try { return readFileSync(path, "utf8"); } catch { return undefined; }
     },

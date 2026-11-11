@@ -128,6 +128,11 @@ jobs:
           node-version: "20"
       - name: Install root tooling
         run: bun install --frozen-lockfile
+      # scripts/tests/integration/web-content-release.test.ts runs W08's browser
+      # smoke (scripts/release/web-browser-smoke.ts) for real against its stack:
+      # a headless Chromium from the root @playwright/test, as web-client.yml installs it.
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium
       # Installed BEFORE test steps (issue #108): scripts/tests/
       # integration/smoke-edgar-bootstrap.test.ts spawns backend/scripts/edgar-seed-bootstrap.ts
       # as a host-side subprocess (cwd: backend/), which needs backend's own

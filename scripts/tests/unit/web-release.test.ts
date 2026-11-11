@@ -7,6 +7,7 @@
 // answers the commands W06 to W08 send the way the real host would.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,8 +17,10 @@ import { parseArgs } from "../../release/web-release.ts";
 import {
   classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
   WEB_RUNBOOK_PATH, webTargetOf,
-  type Deps, type ExecResult, type Inputs, type WebTarget,
+  pageProblems, routesForViews, rollbackTargetProblem, servedPlan, servedUrlPath, smokePages,
+  type Deps, type ExecResult, type Inputs, type PageReport, type WebTarget,
 } from "../../release/web-release-lib.ts";
+import { isEdgeScript } from "../../release/web-browser-smoke.ts";
 
 // Each case drives real git (clones, cherry-picks, worktrees); a loaded runner needs more than 5 s.
 setDefaultTimeout(60_000);
@@ -131,16 +134,39 @@ interface State {
   receipt: string;
   failRoute?: string;
   apiId: string;
+  /** web/current and web/previous on the fake host, as `readHostSites` reports them (stdout lines). */
+  siteLinks: string;
+  /** A URL path the fake origin serves with other bytes than the host's web/current holds. */
+  servedOverride?: Record<string, string>;
+  /** The fake browser: each route's report (default: a clean page). */
+  page?: (route: string, attempt: number) => Partial<PageReport>;
+  /** Every browser call's routes. */
+  browserCalls: string[][];
+  /** Throw from the browser (it does not launch). */
+  noBrowser?: boolean;
 }
 
 interface Harness {
-  deps: Deps; out: string[]; pushes: string[][]; ghCalls: string[][]; ssh: string[]; http: string[]; files: Map<string, string>; state: State;
+  deps: Deps; out: string[]; pushes: string[][]; ghCalls: string[][]; ssh: string[]; http: string[]; httpBytes: string[]; files: Map<string, string>; state: State;
 }
+
+const cleanPage = (route: string): PageReport => ({
+  route, finalUrl: `${ORIGIN}${route}`, ready: true, idle: true, pageErrors: [], consoleErrors: [], failedRequests: [], blocked: [], stubbed: [], notFoundView: false, ms: 900,
+});
 
 const SITEMAP = `<?xml version="1.0"?><urlset><url><loc>https://robotmoney.network/</loc></url><url><loc>https://robotmoney.network/swarm</loc></url></urlset>`;
 
 function harness(f: Fixture, state: Partial<State> = {}): Harness {
-  const s: State = { apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1", ...state };
+  const s: State = {
+    apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1",
+    siteLinks: `current\t0.1.0-${f.c0.slice(0, 8)}\nprevious\t0.1.0-${f.r0.slice(0, 8)}\n`, browserCalls: [], ...state,
+  };
+  /** The deployed copy of a served file: the release tree's bytes at the host checkout's HEAD. */
+  const deployed = (file: string): string | undefined => {
+    const r = git(f.work, ["show", `${s.head}:frontend/public/${file}`]);
+    return r.status === 0 ? r.stdout : undefined;
+  };
+  const httpBytesCalls: string[] = [];
   const out: string[] = [];
   const pushes: string[][] = [];
   const ghCalls: string[][] = [];
@@ -172,6 +198,18 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
   };
   const ssh = async (_host: string, remote: string): Promise<ExecResult> => {
     sshCalls.push(remote);
+    if (remote.startsWith("for l in current previous")) return ok(s.siteLinks);
+    if (remote.includes("sha256sum")) {
+      // The file list between `for f in` and `; do`, each word shellQuote'd (simple names stay bare).
+      const list = /for f in (.*?); do /.exec(remote)![1]!;
+      const files = [...list.matchAll(/'((?:[^']|'\\'')*)'|(\S+)/g)].map((m) => (m[1] ?? m[2]!).replace(/'\\''/g, "'"));
+      const lines = [`site\t${s.live.version}-${s.live.commit}`];
+      for (const file of files) {
+        const text = deployed(file);
+        lines.push(text === undefined ? `missing\t${file}` : `sha\t${createHash("sha256").update(text).digest("hex")}\t${file}`);
+      }
+      return ok(`${lines.join("\n")}\n`);
+    }
     if (remote.includes("web/receipt.json")) return ok(s.receipt);
     if (remote.includes("stack-state.json")) return ok(JSON.stringify({ project: "rm_prod_stack" }));
     if (remote.includes("docker ps")) return ok(`api\t${s.apiId}\nworker-analytics\tw-1\nwebsite-server\tweb-1\n`);
@@ -203,7 +241,25 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     if (path === "/api/version") return { status: 200, body: JSON.stringify({ api: "0.5.0", commit: s.apiCommit }) };
     if (path === "/version.json") return { status: 200, body: JSON.stringify({ ...s.live, apiRange: "^0.5.0" }) };
     if (path === "/sitemap.xml") return { status: 200, body: SITEMAP };
+    if (path === "/api/swarm/members") return { status: 200, body: JSON.stringify({ members: [{ id: "m-1", handle: "athena", status: "active" }] }) };
+    if (path.startsWith("/api/swarm/sessions")) return { status: 200, body: JSON.stringify({ sessions: [{ id: "s-1", subjectId: "robotmoney-vault", publishedAt: "2026-11-01T00:00:00Z" }] }) };
     return { status: path === s.failRoute ? 500 : 200, body: "<html>" };
+  };
+  const httpBytes = async (url: string) => {
+    httpBytesCalls.push(url);
+    const path = new URL(url).pathname;
+    const text = s.servedOverride?.[path] ?? deployed(path.slice(1));
+    return text === undefined ? { status: 200, bytes: new TextEncoder().encode("<html>shell") } : { status: 200, bytes: new TextEncoder().encode(text) };
+  };
+  const attempts = new Map<string, number>();
+  const browser = async (_origin: string, routes: readonly string[]): Promise<PageReport[]> => {
+    s.browserCalls.push([...routes]);
+    if (s.noBrowser) throw new Error("browserType.launch: Executable doesn't exist at /x/chrome-headless-shell");
+    return routes.map((route) => {
+      const n = (attempts.get(route) ?? 0) + 1;
+      attempts.set(route, n);
+      return { ...cleanPage(route), ...(s.page?.(route, n) ?? {}) };
+    });
   };
   const deps: Deps = {
     git: (args) => {
@@ -214,13 +270,15 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     exec: () => ({ status: 1, stdout: "", stderr: "no exec" }),
     ssh,
     http,
+    httpBytes,
+    browser,
     readFile: (p) => files.get(p),
     writeFile: (p, text) => { files.set(p, text); },
     clock: () => now,
     sleep: async (ms) => { now += ms; },
     log: (l) => out.push(l),
   };
-  return { deps, out, pushes, ghCalls, ssh: sshCalls, http: httpCalls, files, state: s };
+  return { deps, out, pushes, ghCalls, ssh: sshCalls, http: httpCalls, httpBytes: httpBytesCalls, files, state: s };
 }
 
 const inputs = (f: Fixture, commits: string[], o: Partial<Inputs> = {}): Inputs => ({ commits, target: PROD, dryRun: false, workDir: f.workDir, ...o });
@@ -755,5 +813,184 @@ describe("runWebRelease", () => {
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     expect(h.out.join("\n")).toContain('the api and worker containers changed: {"api":"api-1","worker-analytics":"w-1"} -> {"api":"api-2","worker-analytics":"w-1"}');
     expect(h.state.live.version).toBe("0.1.0");
+  });
+});
+
+// ── the strengthened live check (W01 rollback target, W08 served bytes and browser) ──
+
+describe("W01 refuses when production would have no rollback target", () => {
+  test("web/current absent: refused before any push, naming the host path", async () => {
+    const f = fixture();
+    const before = f.refs();
+    const h = harness(f, { siteLinks: "" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toContain("FAILED at W01-preflight: rm-frontend-prod-1:/root/.local/state/robotmoney-smoke/rm_prod/web/current is absent");
+    expect(log).toContain("a failed W08 could not roll back");
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
+  });
+
+  test("web/current dangling: refused", () => {
+    expect(rollbackTargetProblem(PROD, { dangling: ["current -> 0.1.0-gone"] })).toContain("names no site directory (current -> 0.1.0-gone)");
+    expect(rollbackTargetProblem(PROD, { current: "0.1.0-abc" })).toBeUndefined();
+  });
+
+  test("the plan reports both links; a host with no previous still passes (the switch makes current the previous)", async () => {
+    const f = fixture();
+    const h = harness(f, { siteLinks: "current\t0.1.0-fe89c5ac\n" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
+    expect(h.out.join("\n")).toContain("[web-release] production serves web/current -> 0.1.0-fe89c5ac; web/previous -> (absent); after the switch a W08 rollback returns to 0.1.0-fe89c5ac");
+  });
+
+  test("a browser that does not launch is refused at W01, not found at W08", async () => {
+    const f = fixture();
+    const h = harness(f, { noBrowser: true });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toContain("FAILED at W01-preflight: W08's headless browser does not launch here (browserType.launch: Executable doesn't exist at /x/chrome-headless-shell): run bunx playwright install chromium");
+    expect(h.pushes).toEqual([]);
+  });
+});
+
+describe("W08 served content equals the release", () => {
+  test("servedPlan: frontend/public paths are compared at their URL, removed ones must be absent, the rest is skipped and listed", () => {
+    const plan = servedPlan(
+      ["frontend/public/index.html", "frontend/public/views/regime.html", "frontend/public/old.js", "frontend/package.json", "scripts/stamp-assets.ts", "frontend/test/x.spec.ts"],
+      (p) => p !== "frontend/public/old.js",
+    );
+    expect(plan.compare.map((c) => c.url)).toEqual(["/index.html", "/views/regime.html"]);
+    expect(plan.removed.map((r) => r.file)).toEqual(["old.js"]);
+    expect(plan.skipped).toEqual(["frontend/package.json", "frontend/test/x.spec.ts", "scripts/stamp-assets.ts"]);
+    expect(servedUrlPath("frontend/public/")).toBeUndefined();
+    expect(servedUrlPath("frontend/publicity.txt")).toBeUndefined();
+  });
+
+  test("a served file whose sha256 differs from web/current's copy fails W08 and rolls back", async () => {
+    const f = fixture();
+    const h = harness(f, { servedOverride: { "/index.html": "home v1 (a stale cache)\n" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toMatch(/FAILED at W08-live-check: the live check failed: GET \/index.html serves sha256 [0-9a-f]{16}, not the deployed 0\.2\.0-[0-9a-f]{9}\/index.html/);
+    expect(log).toContain("rolled back to the previous site (bun run smoke:web --rollback)");
+    expect(h.state.live.version).toBe("0.1.0");
+    // The comparison read the served copy past any cache, and hashed web/current on the host.
+    expect(h.httpBytes.every((u) => /\?rm-live-check=[0-9a-f]{12}-\d+$/.test(u))).toBe(true);
+    expect(h.ssh.some((c) => c.includes("sha256sum") && c.includes("cd current/"))).toBe(true);
+  });
+
+  test("a passing W08 compares every served changed file and lists the skipped ones", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    const log = h.out.join("\n");
+    expect(log).toContain("[web-release] served files compared with web/current: /index.html");
+    expect(log).toContain("[web-release] not served (skipped): frontend/package.json");
+    expect(log).toContain("1 changed file(s) are served as deployed (1 not served)");
+    expect(log).toContain("the browser smoke passed on 4 page(s)");
+  });
+});
+
+describe("W08 browser smoke", () => {
+  const report = (o: Partial<PageReport>): PageReport => ({ ...cleanPage("/regime"), ...o });
+
+  test("pageProblems: a console.error, a page error, a same-origin 5xx or network failure, the not-found view and a missing ready signal each fail; cross-origin failures and browser cancellations do not", () => {
+    expect(pageProblems(ORIGIN, report({}))).toEqual([]);
+    const p = pageProblems(ORIGIN, report({
+      ready: false, readyDetail: "Timeout 30000ms exceeded", notFoundView: true,
+      pageErrors: ["TypeError: x is undefined\n    at regime.js:1"], consoleErrors: ["boom"],
+      failedRequests: [
+        { url: `${ORIGIN}/api/regime/latest?x=1`, method: "GET", status: 502 },
+        { url: `${ORIGIN}/assets/js/app/main.js`, method: "GET", failure: "net::ERR_CONNECTION_RESET" },
+        { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED" },
+        { url: "https://fonts.googleapis.com/css", method: "GET", status: 500 },
+      ],
+    }));
+    expect(p).toEqual([
+      "browser /regime: never reached the router's ready signal (<html data-routed>): Timeout 30000ms exceeded",
+      "browser /regime: the router rendered the not-found view",
+      "browser /regime: uncaught page error: TypeError: x is undefined",
+      "browser /regime: console.error: boom",
+      "browser /regime: GET /api/regime/latest?x=1 answered 502",
+      "browser /regime: GET /assets/js/app/main.js failed (net::ERR_CONNECTION_RESET)",
+    ]);
+  });
+
+  test("a console.error on a page fails W08 (on both loads) and rolls back", async () => {
+    const f = fixture();
+    const h = harness(f, { page: (route) => (route === "/regime" ? { consoleErrors: ["Uncaught (in promise) regime dial: no data"] } : {}) });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    const log = h.out.join("\n");
+    expect(log).toContain("FAILED at W08-live-check: the live check failed: browser /regime: console.error: Uncaught (in promise) regime dial: no data");
+    expect(log).toContain("rolled back to the previous site");
+    expect(h.state.live.version).toBe("0.1.0");
+  });
+
+  test("a page that fails once and passes on its second load passes, and the first failure is logged", async () => {
+    const f = fixture();
+    const h = harness(f, { page: (route, n) => (route.startsWith("/swarm/members/") && n === 1 ? { failedRequests: [{ url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503 }] } : {}) });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    expect(h.out.join("\n")).toContain("browser /swarm/members/athena load 1 was inconclusive (the api answered 503) (browser /swarm/members/athena: GET /api/swarm/members/athena answered 503); loaded again");
+  });
+
+  test("a page that fails once on its own (not an api 503) and passes on its second load passes", async () => {
+    const f = fixture();
+    const h = harness(f, { page: (route, n) => (route === "/early-access" && n === 1 ? { pageErrors: ["TypeError: flaky"] } : {}) });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    expect(h.out.join("\n")).toContain("browser /early-access load 1 failed (browser /early-access: uncaught page error: TypeError: flaky); loaded again");
+  });
+
+  test("smokePages: an api 503 on every load is a warning, not a failure; a conclusive failing load still fails", async () => {
+    const api503 = { failedRequests: [{ url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503 }], consoleErrors: ["Failed to load resource: the server responded with a status of 503 ()"] };
+    let calls = 0;
+    const r = await smokePages(ORIGIN, ["/swarm/members/athena", "/regime"], async (_o, routes) => {
+      calls++;
+      return routes.map((route) => (route === "/regime" ? { ...cleanPage(route), consoleErrors: ["broken"] } : { ...cleanPage(route), ...api503 }));
+    }, () => 0);
+    expect(calls).toBe(3);
+    expect(r.warnings).toEqual(["browser /swarm/members/athena: not judged: the api answered 503 on all 3 load(s) (backend unavailable; this release changes no api)"]);
+    expect(r.problems).toEqual(["browser /regime: console.error: broken"]);
+  });
+
+  test("smokePages: a route the browser never reports fails", async () => {
+    const r = await smokePages(ORIGIN, ["/", "/regime"], async () => [cleanPage("/")], () => 0);
+    expect(r.problems).toEqual(["browser /regime: no report"]);
+  });
+
+  test("routesForViews maps the release's changed views to routes with the real routes.js", async () => {
+    const { viewFor } = (await import(join(ROOT, "frontend/public/assets/js/app/routes.js"))) as { viewFor: (p: string) => string };
+    const m = routesForViews(
+      ["/views/home.html", "/views/swarm/member.html", "/views/swarm/session.html", "/views/blog/swarm-announcement.html", "/views/nowhere.html"],
+      ["/", "/regime", "/swarm/members/athena", "/early-access", "/blog/swarm-announcement", "/swarm/sessions/22b0508c-bec9-4a3d-ab8e-3244716e09bf"],
+      viewFor,
+    );
+    expect([...m.entries()]).toEqual([
+      ["/views/home.html", "/"],
+      ["/views/swarm/member.html", "/swarm/members/athena"],
+      ["/views/swarm/session.html", "/swarm/sessions/22b0508c-bec9-4a3d-ab8e-3244716e09bf"],
+      ["/views/blog/swarm-announcement.html", "/blog/swarm-announcement"],
+      ["/views/nowhere.html", undefined],
+    ]);
+  });
+
+  test("isEdgeScript: only the site's own /cdn-cgi/ paths are Cloudflare's edge", () => {
+    expect(isEdgeScript(`${ORIGIN}/cdn-cgi/zaraz/s.js?z=1`, "robotmoney.network")).toBe(true);
+    expect(isEdgeScript(`${ORIGIN}/assets/cdn-cgi.js`, "robotmoney.network")).toBe(false);
+    expect(isEdgeScript("https://evil.example/cdn-cgi/x", "robotmoney.network")).toBe(false);
+  });
+
+  test("the dry run discovers W08's routes with GETs only: it never loads a page, hashes a file or writes", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
+    const log = h.out.join("\n");
+    expect(log).toContain("[W08-live-check] plan: browser routes: /, /regime, /swarm/members/athena, /early-access");
+    expect(log).toContain("[W08-live-check] plan: served files compared with web/current: /index.html");
+    expect(h.http).toContain(`${ORIGIN}/api/swarm/members`);
+    // The only browser call is W01's launch check, with no route.
+    expect(h.state.browserCalls).toEqual([[]]);
+    expect(h.httpBytes).toEqual([]);
+    expect(h.ssh.filter((c) => c.includes("sha256sum"))).toEqual([]);
+    expect(hostWrites(h)).toEqual([]);
+    expect(h.pushes).toEqual([]);
   });
 });
