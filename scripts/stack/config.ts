@@ -49,11 +49,15 @@ export const WORKER_LANE_SERVICES = ["worker-analytics"] as const;
 // accident, and anything that reasons about "the full stack" must.
 export const SCHEDULER_SERVICES = ["system-scheduler"] as const;
 export const PRODUCER_SERVICES = ["analytics-producer"] as const;
+// The scheduled archive backup (issue 1608, D80): its own image, its own read-only credential directory (replica.env
+// and push-key), no API token. Not a worker lane and not the clock: anything reasoning about lanes must not pick it up.
+export const BACKUP_SERVICES = ["csvb-backup"] as const;
 export const FULL_SERVICES = [
   ...CORE_SERVICES,
   ...WORKER_LANE_SERVICES,
   ...SCHEDULER_SERVICES,
   ...PRODUCER_SERVICES,
+  ...BACKUP_SERVICES,
 ] as const;
 export const MEMBER_AGENT_SERVICE = "member-agent" as const;
 
@@ -105,6 +109,7 @@ export const SERVICE_BUILD_CONTEXTS: Readonly<Record<string, string>> = Object.f
   "worker-analytics": ".",
   "system-scheduler": ".",
   "analytics-producer": ".",
+  "csvb-backup": ".",
   [MEMBER_AGENT_SERVICE]: ".",
 });
 

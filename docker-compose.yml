@@ -683,6 +683,57 @@ services:
       # cover container start up to that first record.
       start_period: 300s
 
+  # THE ARCHIVE BACKUP (issue 1608, D80, D72). One long-running container that wakes hourly, cuts every sealed UTC
+  # day boundary newer than its clone's newest backup, verifies, commits csv/** and pushes robotmoney/csv-backups
+  # as a fast-forward (`csvb serve`, packages/csvb/src/serve.ts). Its image copies only packages/csvb and
+  # packages/analyst-sdk; the data repo holds data only and nothing in it is ever run.
+  #
+  # IT IS THE ONE NAMED EXCEPTION TO D75, AND A NARROW ONE. It reads the READ REPLICA as `rm_readonly`, through a
+  # FILE: `replica.env` (host, port, database, sslmode and the rm_readonly line, nothing else) in its OWN credential
+  # directory, with the GitHub deploy key `push-key` beside it. No database URL, no connection key and no pool
+  # setting is in its environment, and no other role's password is in the file (csvb refuses a file that holds
+  # one). It holds no API token, no model key, no signing key and no Docker socket. See docs/decisions.md (D82)
+  # and the EXEMPT list in
+  # scripts/tests/integration/no-db-credential-outside-api-compose-config.test.ts.
+  #
+  # An instance with no files in that directory (a stage or local boot) runs the container idle: its health says
+  # "not provisioned" and nothing is backed up or pushed.
+  csvb-backup:
+    build:
+      context: .
+      dockerfile: packages/csvb/Dockerfile
+    command: ["serve", "--repo", "/data/csv-backups"]
+    labels:
+      <<: *smoke-labels
+      robotmoney.instance: ${RM_INSTANCE:?RM_INSTANCE is required; bun smoke sets it from the resolved instance}
+    environment:
+      CSVB_REMOTE: ${CSVB_REMOTE:-git@github.com:robotmoney/csv-backups.git}
+      CSVB_ENV_FILE: /run/csvb-credentials/replica.env
+      CSVB_PUSH_KEY: /run/csvb-credentials/push-key
+      CSVB_HEALTH_PORT: "8091"
+      CSVB_INTERVAL_S: "3600"
+      CSVB_STALE_DAYS: "3"
+      # Sized for a multi-cut catch-up (1671 MB peak for 14 cuts); mem_limit below is the hard ceiling.
+      CSVB_MAX_RSS_MB: "3000"
+    volumes:
+      # Its OWN credential directory, READ-ONLY, and nothing else of the instance's state: replica.env and push-key.
+      - ${RM_INSTANCE_STATE_DIR:?RM_INSTANCE_STATE_DIR is required; bun smoke sets it to the instance's state directory}/csvb-backup:/run/csvb-credentials:ro
+      # The clone of the data repo, so a restart does not re-fetch the archive. Not a credential.
+      - csvb_backup_clone:/data
+    mem_limit: 4g
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    logging: *default-logging
+    # 200 inside the stale window (and while unprovisioned or on the first wake), 503 once the newest backup is
+    # older than CSVB_STALE_DAYS. The body is printed so `docker inspect` carries the reason into smoke:status.
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:8091/health'); console.log((await r.text()).trim()); process.exit(r.ok ? 0 : 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   # Onboarding eval (docs/architecture.md §11 R8, Stage 5): a vanilla OpenCode
   # agent container, no Robot Money tooling preinstalled (see
   # scripts/lib/member-agent/Dockerfile). This is a TEMPLATE, not a standing
@@ -721,6 +772,9 @@ services:
 # that deletes it. With `bun run smoke -- --pg-data <host-dir>` postgres is
 # bind-mounted to that host dir instead, so no named volume is created.
 volumes:
+  csvb_backup_clone:
+    labels:
+      <<: *smoke-labels
   pgdata:
     labels:
       <<: *smoke-labels

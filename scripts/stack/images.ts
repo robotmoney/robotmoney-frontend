@@ -45,6 +45,7 @@ export const SHIPPED_IMAGE_SERVICES = [
   "worker-analytics",
   "system-scheduler",
   "analytics-producer",
+  "csvb-backup",
   "member-agent",
 ] as const;
 

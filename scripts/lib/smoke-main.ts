@@ -70,6 +70,7 @@ import {
   acquireDeploymentLock,
   instanceFlag,
   instancePaths,
+  reconcileReplicaEnv,
   readRolePasswords,
   readStackState,
   resolveInstance,
@@ -367,6 +368,8 @@ const instance = (() => {
   }
 })();
 const paths = instancePaths(statesRoot, instance.name, { create: true });
+// The csvb-backup container's connection file, reconciled from ~/.env when this boot read one (issue 1608, D82).
+if (Object.keys(homeEnv).length > 0) console.log(`[smoke] ${reconcileReplicaEnv(paths, homeEnv)}`);
 // WHICH ENVIRONMENT this boot belongs to (scripts/stack/naming.ts): `ci` under
 // GitHub Actions with a hash of the job's identity (stable for every step of
 // one job), `local` otherwise, hashed from the INSTANCE name so the compose

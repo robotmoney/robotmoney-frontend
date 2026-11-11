@@ -156,6 +156,10 @@ export function findDatabaseCredentials(cfg: ComposeConfigLike): CredentialFindi
 export const EXEMPT: Record<string, string> = {
   api: "§1 and D75: the API is the only service that holds a database connection",
   migrate: "a one-shot migration runner, not a running service; it exists to hold rm_owner for one command",
+  "csvb-backup":
+    "D82 (amends D75): the scheduled archive backup reads the READ REPLICA as rm_readonly through a read-only FILE " +
+    "(replica.env), never through an environment key, a URL or another role. Its environment carries none of the keys " +
+    "this detector looks for, and the test below asserts exactly that",
 };
 
 /**
@@ -456,6 +460,19 @@ describe("only the named services carry a database credential (§9, §10)", () =
     }
   });
 
+  test("the exemptions are exactly api, migrate and csvb-backup (D82), and csvb-backup's credential is one read-only FILE", () => {
+    expect(Object.keys(EXEMPT).sort()).toEqual(["api", "csvb-backup", "migrate"]);
+    for (const { label, files, profiles } of COMPOSITIONS) {
+      const svc = composeConfig(files, profiles).services?.["csvb-backup"];
+      expect({ label, present: svc !== undefined }).toEqual({ label, present: true });
+      // The exemption is for a file credential: no key, URL or pool setting reaches the environment at all.
+      expect({ label, db: findDatabaseCredentials({ services: { "csvb-backup": svc } }) }).toEqual({ label, db: [] });
+      const env = normaliseEnvironment(svc?.environment);
+      expect({ label, file: env.CSVB_ENV_FILE }).toEqual({ label, file: "/run/csvb-credentials/replica.env" });
+      expect({ label, secrets: Object.keys(env).filter((k) => /PASSWORD|SECRET|_TOKEN\b|rm_/.test(k)) }).toEqual({ label, secrets: [] });
+    }
+  });
+
   test("every exemption is still a real service — a stale exemption is itself a finding", () => {
     const names = new Set<string>();
     for (const { files, profiles } of COMPOSITIONS) {
@@ -514,6 +531,18 @@ describe("the detector", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("RED CONTROL: a planted credential is caught end to end", () => {
+  test("a second service beside csvb-backup that is handed a database key is a finding the exemption list does not excuse", () => {
+    const findings = findDatabaseCredentials({
+      services: {
+        "csvb-backup": { environment: { CSVB_ENV_FILE: "/run/csvb-credentials/replica.env" } },
+        "csvb-backup-2": { environment: { DATABASE_URL: "" } },
+        "csvb-extra": { environment: { PGHOST: "replica" } },
+      },
+    });
+    expect(findings.map((f) => f.service)).toEqual(["csvb-backup-2", "csvb-extra"]);
+    expect(findings.filter((f) => !(f.service in EXEMPT)).length).toBe(2);
+  });
+
   test("an overlay handing `worker-analytics` a WORKER_DATABASE_URL and a pool setting is named by the detector", () => {
     const dir = mkdtempSync(join(tmpdir(), "rm-dbcred-worker-"));
     const overlay = join(dir, "docker-compose.planted.yml");

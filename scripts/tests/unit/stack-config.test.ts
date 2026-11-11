@@ -35,6 +35,7 @@ import {
   upArgs,
   WORKER_LANE_SERVICES,
   PRODUCER_SERVICES,
+  BACKUP_SERVICES,
   SCHEDULER_SERVICES,
   serviceTokenFile,
   type StackConfig,
@@ -64,9 +65,9 @@ describe("stack profiles", () => {
     expect(servicesFor("core")).not.toContain("member-agent");
   });
 
-  test("full is core plus worker lanes, the clock and the independent producer, in order", () => {
+  test("full is core plus worker lanes, the clock, the independent producer and the archive backup, in order", () => {
     expect(servicesFor("full"))
-      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES]);
+      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES, ...BACKUP_SERVICES]);
     expect(servicesFor("full")).not.toContain("member-agent");
   });
 

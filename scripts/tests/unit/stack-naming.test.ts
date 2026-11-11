@@ -187,8 +187,8 @@ describe("the scheme is actually wired into every spawner", () => {
     // The overlay that used to carry these was deleted (issue #1026 wave 6, P1).
     // The three stamps are defined ONCE, as the `x-smoke-labels` anchor, and
     // every stamped object refers to it: postgres, api, website-server,
-    // worker-analytics, system-scheduler, analytics-producer, member-agent, the
-    // pgdata volume and the default network.
+    // worker-analytics, system-scheduler, analytics-producer, csvb-backup, member-agent, the
+    // pgdata and csvb_backup_clone volumes and the default network.
     expect(existsSync(join(repoRoot, "docker-compose.smoke.yml"))).toBe(false);
     const compose = readFileSync(join(repoRoot, "docker-compose.yml"), "utf8");
     const classLines = compose.split("\n").filter((l) => l.includes(`${ENV_CLASS_LABEL}:`));
@@ -197,7 +197,8 @@ describe("the scheme is actually wired into every spawner", () => {
     expect(hashLines.length).toBe(1);
     expect(classLines[0]).toContain(`\${${ENV_CLASS_COMPOSE_VAR}`);
     expect(hashLines[0]).toContain(`\${${ENV_HASH_COMPOSE_VAR}`);
-    expect(compose.match(/\*smoke-labels/g)?.length).toBe(9);
+    // 9 before csvb-backup (issue 1608), which adds its service and its clone volume.
+    expect(compose.match(/\*smoke-labels/g)?.length).toBe(11);
     expect(compose).toContain(`${MANAGED_NETWORK_LABEL}: "1"`);
   });
 

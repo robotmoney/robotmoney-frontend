@@ -23,6 +23,7 @@ export const D61_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   "database",
   "dbname",
   "sslmode",
+  "replica_host",
   "rm_app",
   "rm_readonly",
   "rm_owner",

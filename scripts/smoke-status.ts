@@ -67,6 +67,11 @@ export interface StatusInput {
    * daemon could not be reached). Shown beside the receipt, which is history.
    */
   readonly schedulerHealth?: SchedulerHealthReport | null | "not-running";
+  /**
+   * The csvb-backup container's Docker health NOW and the last line its healthcheck printed (issue 1608): the stale
+   * alarm. `not-running` when no container is up. Absent: not asked (the daemon could not be reached).
+   */
+  readonly csvbBackup?: { readonly health: string; readonly detail: string } | "not-running";
 }
 
 /** One service's standing after a run, relative to what ran when replacement began (§1.4). */
@@ -178,6 +183,7 @@ export function statusReport(input: StatusInput): string[] {
     lines.push("[smoke:status] No receipt and no journal: this instance has no recorded run.");
   }
   lines.push(...schedulerNowLines(input.schedulerHealth));
+  lines.push(...csvbBackupLines(input.csvbBackup));
 
   const s = input.stack;
   if (s === null) {
@@ -221,6 +227,37 @@ export function schedulerNowLines(health: StatusInput["schedulerHealth"]): strin
     );
   }
   return lines;
+}
+
+/**
+ * The archive backup's standing NOW (issue 1608). Healthy and unhealthy are the container's own answer: it turns
+ * unhealthy when the newest backup is older than its stale window, and its healthcheck prints why.
+ */
+export function csvbBackupLines(state: StatusInput["csvbBackup"]): string[] {
+  if (state === undefined) return ["[smoke:status] now: csvb-backup not asked (the daemon could not be reached)"];
+  if (state === "not-running") return ["[smoke:status] now: csvb-backup is NOT RUNNING (no archive backups are being taken)"];
+  const line = `[smoke:status] now: csvb-backup ${state.health}${state.detail ? ` — ${state.detail}` : ""}`;
+  return state.health === "unhealthy" ? [line, "[smoke:status]   STALE ARCHIVE BACKUP: see the line above; the archive in robotmoney/csv-backups is behind"] : [line];
+}
+
+/** The csvb-backup container's health, or `not-running`, or `null` when the daemon cannot be asked. */
+function csvbBackupState(project: string, env: Record<string, string | undefined>): StatusInput["csvbBackup"] | null {
+  const dockerEnv = dockerClientHostEnv(env);
+  const ps = Bun.spawnSync(
+    ["docker", "ps", "-q", "--filter", `label=com.docker.compose.project=${project}`, "--filter", "label=com.docker.compose.service=csvb-backup"],
+    { env: dockerEnv, stdout: "pipe", stderr: "pipe" },
+  );
+  if (ps.exitCode !== 0) return null;
+  const id = ps.stdout.toString().split("\n").map((l) => l.trim()).find(Boolean);
+  if (id === undefined) return "not-running";
+  const inspect = Bun.spawnSync(["docker", "inspect", "--format", "{{json .State.Health}}", id], { env: dockerEnv, stdout: "pipe", stderr: "pipe" });
+  if (inspect.exitCode !== 0) return null;
+  try {
+    const h = JSON.parse(inspect.stdout.toString()) as { Status?: string; Log?: Array<{ Output?: string }> } | null;
+    return { health: h?.Status ?? "no healthcheck", detail: (h?.Log?.at(-1)?.Output ?? "").trim() };
+  } catch {
+    return null;
+  }
 }
 
 /** Running application services of `project` → image digest, or `null` when the daemon cannot be asked. */
@@ -293,6 +330,10 @@ export async function main(argv: readonly string[], env: Record<string, string |
       ...input,
       schedulerHealth: healthPort === undefined ? "not-running" : await fetchSchedulerHealth(`http://127.0.0.1:${healthPort}/health`),
     };
+  }
+  if (input.live !== null) {
+    const csvb = csvbBackupState(input.stack?.project ?? input.derivedProject!, env);
+    if (csvb !== null && csvb !== undefined) input = { ...input, csvbBackup: csvb };
   }
   for (const line of statusReport(input)) console.log(line);
 

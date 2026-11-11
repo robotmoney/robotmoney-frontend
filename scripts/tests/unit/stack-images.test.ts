@@ -38,7 +38,7 @@ import { createStack, type StackRuntime } from "../../stack/stack.ts";
 const TAG = "v0.5.0-rc.3";
 
 describe("shipped image plan (pure)", () => {
-  test("names exactly the six services this repo builds", () => {
+  test("names exactly the seven services this repo builds", () => {
     expect([...SHIPPED_IMAGE_SERVICES]).toEqual([
       "api",
       "worker-analytics",
@@ -47,6 +47,8 @@ describe("shipped image plan (pure)", () => {
       // staging host still compiles nothing (AC-ID-05).
       "system-scheduler",
       "analytics-producer",
+      // The scheduled archive backup (issue 1608): its own image from packages/csvb/Dockerfile.
+      "csvb-backup",
       "member-agent",
     ]);
   });

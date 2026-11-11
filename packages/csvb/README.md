@@ -123,6 +123,31 @@ GitHub rejects files over 100 MB), `--pause-ms`, `--max-seconds`, `--statement-t
 `--only table,table`, `--env-file`. The staged files are verified before they join the repo; `csvb finish` completes
 a run interrupted after staging.
 
+## Scheduled backups
+
+The `csvb-backup` container (`docker-compose.yml`, `Dockerfile` here, issue 1608, D82) runs `csvb serve` so no one
+has to make the backups by hand. The manual three-step recipe above stays.
+
+Each hourly wake fast-forwards its clone of robotmoney/csv-backups, finds every sealed UTC day boundary newer than the
+clone's newest backup, runs `csvb backup` against the read replica, verifies, commits `csv/**` only and pushes without
+force. A failed wake adds nothing, rolls the clone back and leaves the remote ref unchanged. Nothing in the clone is
+ever run, and the image holds only `packages/csvb` and `packages/analyst-sdk`.
+
+```
+bun run csvb serve --repo DIR --remote URL --once          # one wake (tests, a manual catch-up)
+bun run csvb serve --repo DIR --remote URL                 # the loop; GET :8091/health
+bun run csvb stale --repo DIR --max-days 3                 # exit 1 naming the newest id and its age when older
+```
+
+The container holds one read-only mount, its credential directory: `replica.env` (host, port, database, sslmode and the
+`rm_readonly` line, made by `bun smoke` from `~/.env`, with `host` taken from `replica_host`) and `push-key` (a GitHub
+deploy key with write access to robotmoney/csv-backups only, placed by the operator). The serve reader refuses a file
+that also holds an `rm_owner`, `rm_app` or `doadmin` line. An instance without the two files runs idle.
+
+Health is 200 while the newest backup is within `CSVB_STALE_DAYS` (default 3) and 503 after. `bun smoke:status` prints
+the container's health and the reason. Settings: `CSVB_REMOTE`, `CSVB_INTERVAL_S` (3600), `CSVB_MAX_RSS_MB` (3000, with
+`mem_limit: 4g`), `CSVB_HEALTH_PORT` (8091).
+
 ## Anomalies
 
 A backup never stops because the database looks different from what the repo expects. It records the difference,

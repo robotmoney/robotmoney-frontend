@@ -23,7 +23,7 @@ import {
   type StateExpectations,
 } from "../../lib/smoke-journal.ts";
 import { instancePaths, instanceStackProject, type InstancePaths } from "../../lib/smoke-state.ts";
-import { classifyServices, schedulerNowLines, statusReport } from "../../smoke-status.ts";
+import { classifyServices, csvbBackupLines, schedulerNowLines, statusReport } from "../../smoke-status.ts";
 import { healthPayload } from "../../lib/system-scheduler/health.ts";
 import { deadDockerEnv } from "../support/dead-docker";
 
@@ -186,6 +186,24 @@ describe("the receipt is read back (§1.4, criterion 29)", () => {
       timers: { boundaries: 2, deadlines: 0 },
     });
     expect(schedulerNowLines(healthy)).toEqual(["[smoke:status] now: scheduler health: healthy (2 boundary timer(s), 0 judging deadline(s))"]);
+  });
+});
+
+// The archive backup's stale alarm (issue 1608): the container turns unhealthy and smoke:status says so.
+describe("the csvb-backup line", () => {
+  test("a stale backup is an unhealthy container with the healthcheck's reason and a loud second line", () => {
+    const lines = csvbBackupLines({ health: "unhealthy", detail: "stale: newest backup 2026-10-28T180400Z is 14.0 days old (limit 3)" });
+    expect(lines[0]).toContain("csvb-backup unhealthy");
+    expect(lines[0]).toContain("2026-10-28T180400Z is 14.0 days old");
+    expect(lines[1]).toContain("STALE ARCHIVE BACKUP");
+  });
+
+  test("a healthy container is one line, a missing one is NOT RUNNING, an unasked one is said so, and statusReport carries the line", () => {
+    expect(csvbBackupLines({ health: "healthy", detail: "ok: newest backup 2026-11-10T000000Z is 1.2 days old (limit 3)" })).toHaveLength(1);
+    expect(csvbBackupLines("not-running").join("\n")).toContain("NOT RUNNING");
+    expect(csvbBackupLines(undefined).join("\n")).toContain("not asked");
+    const lines = statusReport({ instance: "rm_local_x", stateDir: "/x", journal: null, receipt: null, stack: null, live: {}, lockHolder: null, csvbBackup: "not-running" });
+    expect(lines.some((l) => l.includes("csvb-backup is NOT RUNNING"))).toBe(true);
   });
 });
 
