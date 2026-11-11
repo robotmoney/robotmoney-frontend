@@ -278,6 +278,8 @@ export interface Release {
   readonly outside: readonly OutsidePath[];
   /** What W01 read of the host's web/current and web/previous: the site a W08 rollback returns to is `current`. */
   readonly sites?: HostSites;
+  /** How many changed views W01 mapped to a route W08's browser loads (every one, or W01 refuses). */
+  readonly viewsMapped?: number;
 }
 
 /** The instance's web/current and web/previous links on the host, as the site ids they name. */
@@ -567,11 +569,16 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   if ("error" in sites) return { errors: [sites.error] };
   const noTarget = rollbackTargetProblem(t, sites.sites);
   if (noTarget !== undefined) return { errors: [noTarget] };
-  // W08's browser must launch on this machine; finding out after the deploy would roll back a good site.
+  // W08's browser plan: every changed view must map to a route the browser loads.
+  const bp = await browserPlan({ version, commit, branch, tag, apiCommit: apiSha, base, changed, outside }, t, deps);
+  deps.log(`[web-release] changed views mapped to a browser route: ${bp.views.length - bp.unmapped.length} of ${bp.views.length}${bp.views.length > 0 ? ` (${bp.views.join("; ")})` : ""}`);
+  const planProblems = browserPlanProblems(bp);
+  if (planProblems.length > 0) return { errors: planProblems };
+  // W08's browser must launch on this machine, with the options W08 uses; finding out after the deploy would roll back a good site.
   try {
     await deps.browser(t.publicOrigin, [], BROWSER_BUDGET_MS);
   } catch (e) {
-    return { errors: [`W08's headless browser does not launch here (${(e as Error).message.split("\n")[0]}): run bunx playwright install chromium`] };
+    return { errors: [browserLaunchProblem((e as Error).message)] };
   }
   if (tags.get(tag) === commit) {
     const rolled = await rolledBack(t, deps, version, tag, commit);
@@ -580,10 +587,21 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   const admin = deps.gh(["api", "repos/{owner}/{repo}", "--jq", ".permissions.admin"]);
   if (admin.status !== 0) return { errors: [`gh api repos/{owner}/{repo} failed: ${errText(admin)}`] };
   if (admin.stdout.trim() !== "true") return { errors: ["the operator lacks the admin permission on the repository (the tag push needs it)"] };
-  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside, sites: sites.sites } };
+  return { release: { version, commit, branch, tag, apiCommit: apiSha, base, changed, outside, sites: sites.sites, viewsMapped: bp.views.length } };
 }
 
 const webDirOf = (t: WebTarget): string => `${instanceDir(t)}/web`;
+
+/** PURE. W01's refusal when the browser does not launch: the sandbox's reason when that is what failed, else the install hint. */
+export function browserLaunchProblem(message: string): string {
+  if (/sandbox/i.test(message)) {
+    return "W08's headless browser cannot start Chromium's sandbox on this machine (Playwright: \"Chromium sandboxing failed\"). " +
+      "On Ubuntu 24.04 kernel.apparmor_restrict_unprivileged_userns=1 denies the user namespace the sandbox needs unless an AppArmor profile, " +
+      "installed by root, grants the Playwright Chromium binary `userns`. Run the release from a host where the sandbox starts; " +
+      "the sandbox is never turned off to get past this";
+  }
+  return `W08's headless browser does not launch here (${message.split("\n")[0]}): run bunx playwright install chromium`;
+}
 
 /** PURE. W01's read of web/current and web/previous: each link's site id, and "dangling" when it names no directory. */
 export function hostSitesCommand(t: WebTarget): string {
@@ -1148,11 +1166,23 @@ async function releaseViewFor(rel: Release, deps: Deps): Promise<((p: string) =>
 /** The browser's routes: the base routes, a member page, and one route per changed view; plus notes and errors from discovering them. */
 export interface BrowserPlan {
   readonly routes: readonly string[];
-  /** Changed views with the route that shows each, or why none was found. */
+  /** The routes that show a changed view: a page among them that is never judged fails W08. */
+  readonly changedRoutes: readonly string[];
+  /** Changed views with the route that shows each. */
   readonly views: readonly string[];
+  /** Changed views no candidate route shows (and not in UNROUTED_VIEWS): W01 refuses them. */
+  readonly unmapped: readonly string[];
   readonly notes: readonly string[];
   readonly errors: readonly string[];
 }
+
+/**
+ * View files the router never renders as a page of their own, so a change to
+ * one maps to no route: the dashboard layout, injected around every /list,
+ * /agents ... page (routes.js DASH_LAYOUT_VIEW). A change to any other view
+ * with no route refuses the release at W01, since the browser could not load it.
+ */
+export const UNROUTED_VIEWS: readonly string[] = Object.freeze(["/views/dash/_layout.html"]);
 
 /**
  * PURE. The route for each changed view: the first candidate whose viewFor is
@@ -1164,8 +1194,18 @@ export function routesForViews(views: readonly string[], candidates: readonly st
   return out;
 }
 
-/** W08 (4)'s plan. GETs only: the public API for a member and a session, nothing else. */
-export async function browserPlan(rel: Release, t: WebTarget, deps: Deps, sitemapRoutes: readonly string[]): Promise<BrowserPlan> {
+/** PURE. The routes a sitemap lists (path and query), from its XML. */
+export const sitemapLocs = (xml: string): string[] =>
+  [...xml.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].flatMap((m) => { try { const u = new URL(m[1]!); return [`${u.pathname}${u.search}`]; } catch { return []; } });
+
+/**
+ * W08 (4)'s plan, which W01 also builds to refuse an unmapped changed view.
+ * GETs only: the public API for a member and a session, nothing else. The
+ * candidate routes for a changed view are the base routes, the member page,
+ * the release tree's own sitemap, a session and its subject, then the
+ * catch-all route routes.js resolves /views/X.html from (/X).
+ */
+export async function browserPlan(rel: Release, t: WebTarget, deps: Deps): Promise<BrowserPlan> {
   const notes: string[] = [];
   const errors: string[] = [];
   const routes = [...BROWSER_BASE_ROUTES];
@@ -1173,113 +1213,144 @@ export async function browserPlan(rel: Release, t: WebTarget, deps: Deps, sitema
   if ("route" in member) routes.splice(2, 0, member.route);
   else if ("note" in member) notes.push(member.note);
   else errors.push(member.error);
-  const views = [...new Set(rel.changed.map(viewFragmentOf).filter((v): v is string => v !== undefined))].sort();
+  const views = [...new Set(rel.changed.map(viewFragmentOf).filter((v): v is string => v !== undefined))].filter((v) => !UNROUTED_VIEWS.includes(v)).sort();
   const viewLines: string[] = [];
+  const unmapped: string[] = [];
+  const changedRoutes: string[] = [];
   if (views.length > 0) {
     const viewFor = await releaseViewFor(rel, deps);
     if (typeof viewFor !== "function") errors.push(`${viewFor.error}, so the changed views ${views.join(", ")} cannot be mapped to routes`);
     else {
-      const candidates = [...routes, ...sitemapRoutes];
+      const sm = deps.git(["show", `${rel.commit}:frontend/public/sitemap.xml`]);
+      const catchAll = views.map((v) => v.slice("/views".length, -".html".length));
+      // The catch-all /X comes last: a param view (a session, a member) needs a real id, not /swarm/session.
+      const candidates = [...routes, ...(sm.status === 0 ? sitemapLocs(sm.stdout) : [])];
       let mapped = routesForViews(views, candidates, viewFor);
       if ([...mapped.values()].some((r) => r === undefined)) {
         const s = await discoverSessionRoutes(t.publicOrigin, deps.http);
-        if ("error" in s) notes.push(`${s.error}: session and subject pages are not candidates`);
-        else mapped = routesForViews(views, [...candidates, ...s.routes], viewFor);
+        if ("error" in s) errors.push(`${s.error}: session and subject pages cannot be found`);
+        else candidates.push(...s.routes);
+        mapped = routesForViews(views, [...candidates, ...catchAll], viewFor);
       }
       for (const [v, r] of mapped) {
-        if (r === undefined) { notes.push(`no route found for the changed view ${v}: the browser does not load it`); viewLines.push(`${v} -> (none)`); continue; }
+        if (r === undefined) { unmapped.push(v); viewLines.push(`${v} -> (none)`); continue; }
         viewLines.push(`${v} -> ${r}`);
         if (!routes.includes(r)) routes.push(r);
+        if (!changedRoutes.includes(r)) changedRoutes.push(r);
       }
     }
   }
-  return { routes, views: viewLines, notes, errors };
+  return { routes, changedRoutes, views: viewLines, unmapped, notes, errors };
 }
+
+/** PURE. Why W01 refuses the plan: a changed view with no route, or discovery that failed. */
+export function browserPlanProblems(bp: BrowserPlan): string[] {
+  return [
+    ...bp.errors.map((e) => `W08's browser plan cannot be built: ${e}`),
+    ...(bp.unmapped.length > 0
+      ? [`no route shows the changed view(s) ${bp.unmapped.join(", ")}, so W08's browser could not load them: add a route, or name the view in UNROUTED_VIEWS (scripts/release/web-release-lib.ts) when no page renders it`]
+      : []),
+  ];
+}
+
+/** What one page load says: the problems that fail the page, and the /api/ requests that answered 503. */
+export interface LoadVerdict {
+  readonly problems: string[];
+  /** Same-origin /api/ paths that answered 503: the api was unavailable for this load. */
+  readonly unavailable: string[];
+}
+
+/** The path prefix of the static archive a swarm page falls back to when its live /api/ read fails (static-views.js loadArchiveMember). */
+const ARCHIVE_FALLBACK = "/data/swarm/manifests/";
 
 /**
- * The browser's own cancellation of a request, not a server failure: a video's
- * preload it stops once it has the metadata (seen on /changelog's mp4 on
- * 2026-11-11), a view fetch the router aborts for a newer route. A server
- * failure shows as a status or another net:: error.
+ * PURE. Judge one load. Everything counts, except:
+ *
+ * - a same-origin /api/ request that answered 503 (the api's own "unavailable":
+ *   its pool gate's db_saturated, a statement timeout), Chrome's "Failed to load
+ *   resource" line for it, and the archive-manifest 404 its page falls back to.
+ *   Seen on production on 2026-11-11: GET /api/swarm/members/<handle> hit
+ *   Postgres' statement timeout now and then, and the member page read
+ *   /data/swarm/manifests/members/<handle>.json (404). The 503 never hides a
+ *   page error, another console.error, the not-found view or a missed ready
+ *   signal on the same load;
+ * - a cross-origin request's failure and its console line (the release ships
+ *   only same-origin files);
+ * - a media request the browser aborts itself (net::ERR_ABORTED on a video or
+ *   audio preload, seen on /changelog's mp4). Any other aborted same-origin
+ *   request counts.
  */
-const BROWSER_CANCELLED = "net::ERR_ABORTED";
-
-/** PURE. Why one browser page fails W08: empty when it passed. Cross-origin failures and browser cancellations are not counted. */
-export function pageProblems(origin: string, r: PageReport): string[] {
+export function judgeLoad(origin: string, r: PageReport): LoadVerdict {
   const at = `browser ${r.route}`;
-  const out: string[] = [];
-  if (!r.ready) out.push(`${at}: never reached the router's ready signal (<html data-routed>): ${r.readyDetail ?? "timed out"}`);
-  if (r.notFoundView) out.push(`${at}: the router rendered the not-found view`);
-  for (const e of r.pageErrors) out.push(`${at}: uncaught page error: ${e.split("\n")[0]}`);
-  // Chrome logs "Failed to load resource" for every 4xx/5xx and network failure; the request checks below judge those.
-  for (const e of r.consoleErrors) if (!e.startsWith("Failed to load resource:")) out.push(`${at}: console.error: ${e}`);
-  for (const f of r.failedRequests) {
-    let u: URL;
-    try { u = new URL(f.url); } catch { continue; }
-    if (u.origin !== origin) continue;
-    if (f.status === undefined && f.failure === BROWSER_CANCELLED) continue;
-    out.push(`${at}: ${f.method} ${u.pathname}${u.search} ${f.status !== undefined ? `answered ${f.status}` : `failed (${f.failure ?? "network"})`}`);
+  const same = (url: string): URL | undefined => { try { const u = new URL(url); return u.origin === origin ? u : undefined; } catch { return undefined; } };
+  const unavailable = r.failedRequests.filter((f) => f.status === 503 && same(f.url)?.pathname.startsWith("/api/")).map((f) => f.url);
+  const excused = new Set(unavailable);
+  if (unavailable.length > 0) {
+    for (const f of r.failedRequests) if (f.status === 404 && same(f.url)?.pathname.startsWith(ARCHIVE_FALLBACK)) excused.add(f.url);
   }
-  return out;
+  const ignored = new Set(excused);
+  for (const f of r.failedRequests) {
+    if (same(f.url) === undefined) ignored.add(f.url);
+    else if (f.status === undefined && f.failure === "net::ERR_ABORTED" && f.resourceType === "media") ignored.add(f.url);
+  }
+  const problems: string[] = [];
+  if (!r.ready) problems.push(`${at}: never reached the router's ready signal (<html data-routed>): ${r.readyDetail ?? "timed out"}`);
+  if (r.notFoundView) problems.push(`${at}: the router rendered the not-found view`);
+  for (const e of r.pageErrors) problems.push(`${at}: uncaught page error: ${e.split("\n")[0]}`);
+  for (const e of r.consoleErrors) {
+    // Chrome's "Failed to load resource: ... (<url>:<line>)" line goes with the request it names.
+    const url = e.startsWith("Failed to load resource:") ? /\((\S+):\d+\)$/.exec(e)?.[1] : undefined;
+    if (url !== undefined && ignored.has(url)) continue;
+    problems.push(`${at}: console.error: ${e}`);
+  }
+  for (const f of r.failedRequests) {
+    if (ignored.has(f.url)) continue;
+    const u = same(f.url)!;
+    problems.push(`${at}: ${f.method} ${u.pathname}${u.search} ${f.status !== undefined ? `answered ${f.status}` : `failed (${f.failure ?? "network"})`}`);
+  }
+  return { problems, unavailable: [...new Set(unavailable.map((u) => new URL(u).pathname))] };
 }
 
-/** What the browser smoke found: the problems of each page's judged load, and the pages loaded more than once. */
+/** PURE. Why one browser load fails W08: empty when it passed (an /api/ 503 alone does not fail it). */
+export const pageProblems = (origin: string, r: PageReport): string[] => judgeLoad(origin, r).problems;
+
+/** What the browser smoke found. */
 export interface SmokeResult {
   readonly problems: string[];
+  /** Each route's last load. */
   readonly reports: readonly PageReport[];
-  /** One line per page load that failed or was inconclusive and was loaded again, with what it saw. */
+  /** One line per inconclusive load that was loaded again. */
   readonly retried: string[];
-  /** Pages never judged: the api answered 503 on every load. They do not fail W08. */
+  /** Unchanged routes never judged (an /api/ 503 on every load). They do not fail W08. */
   readonly warnings: string[];
 }
 
-/** How many times a page is loaded at most. */
+/** How many times a page whose loads are inconclusive is loaded at most. */
 export const PAGE_LOADS = 3;
 
 /**
- * PURE. Whether a load is inconclusive: a same-origin /api/ request answered
- * 503, the api's own "unavailable" (its pool gate's db_saturated, a statement
- * timeout). The release changes no api (W08 proves the containers and
- * /api/version unchanged), so such a load says nothing about the site. Seen on
- * production on 2026-11-11: GET /api/swarm/members/<handle> hit Postgres'
- * statement timeout now and then, and the member page fell back to its archive
- * manifest (404).
+ * Load every route once. A load with any problem fails its page at once: a
+ * page is never loaded again to get past a failure. A load whose only fault is
+ * an /api/ 503 (judgeLoad) is inconclusive, and the page is loaded again, up
+ * to PAGE_LOADS in all and inside the budget. A page with a clean load passes.
+ * A page inconclusive on every load fails when it shows a changed view
+ * (`changedRoutes`: the release's own surface was never seen working), and is
+ * a warning otherwise. A route the browser never reported fails.
  */
-export function inconclusive(origin: string, r: PageReport): boolean {
-  return r.failedRequests.some((f) => {
-    try {
-      const u = new URL(f.url);
-      return u.origin === origin && u.pathname.startsWith("/api/") && f.status === 503;
-    } catch {
-      return false;
-    }
-  });
-}
-
-/**
- * Load every route; load again, up to PAGE_LOADS in all and inside the
- * budget, each page whose load failed or was inconclusive. A page is judged by
- * its last conclusive load: a transient api answer is not the site's fault,
- * and a broken page fails every time. A page whose every load was
- * inconclusive is a warning, not a failure. A route the browser never
- * reported fails.
- */
-export async function smokePages(origin: string, routes: readonly string[], browser: BrowserSmoke, clock: () => number, budgetMs: number = BROWSER_BUDGET_MS): Promise<SmokeResult> {
+export async function smokePages(
+  origin: string, routes: readonly string[], changedRoutes: readonly string[], browser: BrowserSmoke, clock: () => number, budgetMs: number = BROWSER_BUDGET_MS,
+): Promise<SmokeResult> {
   const t0 = clock();
   const loads = new Map<string, PageReport[]>();
   const record = (rs: readonly PageReport[]) => { for (const r of rs) loads.set(r.route, [...(loads.get(r.route) ?? []), r]); };
   record(await browser(origin, routes, budgetMs));
-  const settled = (r: PageReport): boolean => r.ms === 0 || (!inconclusive(origin, r) && pageProblems(origin, r).length === 0);
+  const isInconclusive = (r: PageReport): boolean => { const v = judgeLoad(origin, r); return v.problems.length === 0 && v.unavailable.length > 0; };
   const retried: string[] = [];
   for (let n = 1; n < PAGE_LOADS; n++) {
-    const again = routes.filter((route) => { const l = loads.get(route); return l !== undefined && !settled(l[l.length - 1]!); });
+    const again = routes.filter((route) => { const l = loads.get(route); return l !== undefined && isInconclusive(l[l.length - 1]!); });
     const left = budgetMs - (clock() - t0);
     if (again.length === 0 || left <= 1_000) break;
-    for (const route of again) {
-      const last = loads.get(route)!.at(-1)!;
-      const why = inconclusive(origin, last) ? "was inconclusive (the api answered 503)" : "failed";
-      retried.push(`${route} load ${n} ${why} (${pageProblems(origin, last).join("; ")}); loaded again`);
-    }
+    for (const route of again) retried.push(`${route} load ${n} was inconclusive (the api answered 503 for ${judgeLoad(origin, loads.get(route)!.at(-1)!).unavailable.join(", ")}); loaded again`);
     record(await browser(origin, again, left));
   }
   const problems: string[] = [];
@@ -1288,10 +1359,13 @@ export async function smokePages(origin: string, routes: readonly string[], brow
   for (const route of routes) {
     const l = loads.get(route);
     if (l === undefined) { problems.push(`browser ${route}: no report`); continue; }
-    const judged = [...l].reverse().find((r) => !inconclusive(origin, r));
-    reports.push(judged ?? l[l.length - 1]!);
-    if (judged !== undefined) problems.push(...pageProblems(origin, judged));
-    else warnings.push(`browser ${route}: not judged: the api answered 503 on all ${l.length} load(s) (backend unavailable; this release changes no api)`);
+    reports.push(l[l.length - 1]!);
+    const failing = l.find((r) => judgeLoad(origin, r).problems.length > 0);
+    if (failing !== undefined) { problems.push(...judgeLoad(origin, failing).problems); continue; }
+    if (l.some((r) => !isInconclusive(r))) continue;
+    const why = `the api answered 503 on all ${l.length} load(s) (${[...new Set(l.flatMap((r) => judgeLoad(origin, r).unavailable))].join(", ")})`;
+    if (changedRoutes.includes(route)) problems.push(`browser ${route}: shows a changed view but was never judged: ${why}`);
+    else warnings.push(`browser ${route}: not judged: ${why}; it shows no changed view`);
   }
   return { problems, reports, retried, warnings };
 }
@@ -1301,7 +1375,7 @@ async function sitemapRoutes(t: WebTarget, deps: Deps): Promise<{ routes: string
   try {
     const sm = await deps.http(`${t.publicOrigin}/sitemap.xml`);
     if (sm.status !== 200) return { error: `GET ${t.publicOrigin}/sitemap.xml answered ${sm.status}` };
-    const routes = [...sm.body.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>/g)].map((m) => { const u = new URL(m[1]!); return `${u.pathname}${u.search}`; });
+    const routes = sitemapLocs(sm.body);
     if (routes.length === 0) return { error: `${t.publicOrigin}/sitemap.xml lists no route` };
     return { routes };
   } catch (e) {
@@ -1316,7 +1390,7 @@ export function livePlanLines(served: ServedPlan, browser: BrowserPlan): string[
     ...(served.removed.length > 0 ? [`removed, must be absent from web/current: ${served.removed.map((r) => r.file).join(", ")}`] : []),
     `not served (skipped): ${served.skipped.length === 0 ? "(none)" : served.skipped.join(", ")}`,
     `browser routes: ${browser.routes.join(", ")}`,
-    ...(browser.views.length > 0 ? [`changed views: ${browser.views.join("; ")}`] : []),
+    ...(browser.views.length > 0 ? [`changed views (${browser.views.length - browser.unmapped.length} of ${browser.views.length} mapped): ${browser.views.join("; ")}`] : []),
     ...browser.notes.map((n) => `note: ${n}`),
     ...browser.errors.map((e) => `discovery failed: ${e}`),
   ];
@@ -1324,13 +1398,11 @@ export function livePlanLines(served: ServedPlan, browser: BrowserPlan): string[
 
 /** The dry run's W08 plan: the served comparison and the browser routes, discovered with GETs only. */
 export async function livePlan(rel: Release, inputs: Inputs, deps: Deps): Promise<string[]> {
-  const sm = await sitemapRoutes(inputs.target, deps);
-  const browser = await browserPlan(rel, inputs.target, deps, "routes" in sm ? sm.routes : []);
-  return [...("error" in sm ? [`discovery failed: ${sm.error}`] : []), ...livePlanLines(servedPlanOf(rel, deps), browser)];
+  return livePlanLines(servedPlanOf(rel, deps), await browserPlan(rel, inputs.target, deps));
 }
 
-/** What W08 found: its problems, and what it checked when it passed. */
-interface LiveResult {
+/** What W08 found: its problems, and what it checked when it passed. One W08 run judges the site once (runWebRelease hands this to runLive). */
+export interface LiveResult {
   readonly problems: string[];
   readonly summary: string;
 }
@@ -1346,6 +1418,8 @@ export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Prom
   else if (!liveIs(live, rel)) out.push(`${t.publicOrigin}/version.json reports ${live.version}-${live.commit}, not ${rel.version}-${short(rel.commit)}`);
 
   const plan = servedPlanOf(rel, deps);
+  // A dry run loads no page and hashes no file, even when W07's record exists (a rerun after a deploy).
+  if (inputs.dryRun) return { problems: [...out, "a dry run does not compare the served files or load the browser"], summary: "" };
   const served = await servedProblems(rel, t, deps, plan);
   out.push(...served.problems);
 
@@ -1364,11 +1438,11 @@ export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Prom
   let pages = 0;
   if (out.length > 0) deps.log("[web-release] browser smoke skipped: the checks above already failed");
   else {
-    const bp = await browserPlan(rel, t, deps, routes);
+    const bp = await browserPlan(rel, t, deps);
     for (const l of livePlanLines(plan, bp)) deps.log(`[web-release] ${l}`);
-    out.push(...bp.errors);
+    out.push(...browserPlanProblems(bp));
     try {
-      const smoke = await smokePages(t.publicOrigin, bp.routes, deps.browser, deps.clock);
+      const smoke = await smokePages(t.publicOrigin, bp.routes, bp.changedRoutes, deps.browser, deps.clock);
       out.push(...smoke.problems);
       for (const l of smoke.retried) deps.log(`[web-release] browser ${l}`);
       for (const w of smoke.warnings) deps.log(`[web-release] WARNING ${w}`);
@@ -1399,15 +1473,23 @@ export async function liveProblems(rel: Release, inputs: Inputs, deps: Deps): Pr
   return (await liveResult(rel, inputs, deps)).problems;
 }
 
+/** PURE. The live check's done state from a judged result. */
+export const liveState = (r: LiveResult): StepResult =>
+  r.problems.length === 0 ? { state: "done", detail: r.summary } : { state: "todo", detail: r.problems.join("; ") };
+
 export async function checkLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
-  const r = await liveResult(rel, inputs, deps);
-  return r.problems.length === 0 ? { state: "done", detail: r.summary } : { state: "todo", detail: r.problems.join("; ") };
+  return liveState(await liveResult(rel, inputs, deps));
 }
 
-/** The live check: pass, or roll the site back with `bun run smoke:web --rollback` and fail. The tag stays. */
-export async function runLive(rel: Release, inputs: Inputs, deps: Deps): Promise<StepResult> {
+/**
+ * The live check: pass, or roll the site back with `bun run smoke:web
+ * --rollback` and fail. The tag stays. `judged` is the done check's result:
+ * the runner judges the site once per W08, so a page never gets a second
+ * smoke to pass in.
+ */
+export async function runLive(rel: Release, inputs: Inputs, deps: Deps, judged?: LiveResult): Promise<StepResult> {
   const t = inputs.target;
-  const { problems, summary } = await liveResult(rel, inputs, deps);
+  const { problems, summary } = judged ?? await liveResult(rel, inputs, deps);
   if (problems.length === 0) return { state: "done", detail: summary };
   const next = `${WEB_TAG_PREFIX}${nextPatch(rel.version)}`;
   deps.log(`[web-release] the live check failed: ${problems.join("; ")}; rolling back`);
@@ -1490,6 +1572,7 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
   for (const l of outsideLines(rel.outside)) deps.log(`  ${l}`);
   deps.log(sitesLine(rel.sites));
   deps.log(`[${first!.id}] passed`);
+  let live: LiveResult | undefined;
   for (const step of rest) {
     const check: StepResult =
       step.kind === "branch" ? checkBranch(rel, deps)
@@ -1498,7 +1581,7 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
       : step.kind === "tag-guard" ? asCheck(readTagGuard(rel, deps))
       : step.kind === "checkout" ? await checkCheckout(rel, t, deps)
       : step.kind === "deploy" ? await checkDeploy(rel, inputs, deps)
-      : step.kind === "live-check" ? await checkLive(rel, inputs, deps)
+      : step.kind === "live-check" ? liveState(live = await liveResult(rel, inputs, deps))
       : checkReleaseStep(rel, deps);
     if (check.state === "done") { deps.log(`[${step.id}] already done: ${check.detail}`); continue; }
     if (check.state === "failed") return stop(step.id, check.detail);
@@ -1514,7 +1597,7 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
       : step.kind === "tag-guard" ? await poll(() => readTagGuard(rel, deps), step.maxMinutes!, deps, step.id, rerun)
       : step.kind === "checkout" ? await runCheckout(rel, t, deps)
       : step.kind === "deploy" ? await runDeploy(rel, inputs, deps)
-      : step.kind === "live-check" ? await runLive(rel, inputs, deps)
+      : step.kind === "live-check" ? await runLive(rel, inputs, deps, live)
       : runReleaseStep(rel, inputs, deps);
     if (result.state !== "done") return stop(step.id, result.detail);
     deps.log(`[${step.id}] done: ${result.detail}`);

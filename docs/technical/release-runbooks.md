@@ -827,27 +827,43 @@ order:
   3. Every sitemap route answers 200. This is weak on its own: nginx answers an unknown path with
      the SPA shell, 200.
   4. **Browser smoke against production.** From the control machine, a headless Chromium (the
-     repository's `@playwright/test`, `scripts/release/web-browser-smoke.ts`) loads `/`, `/regime`,
-     one swarm member page (a member read from `GET /api/swarm/members`), `/early-access`, and the
-     route of each changed view: the first candidate route (those, the sitemap's, then a session
-     and its subject from `GET /api/swarm/sessions`) for which the release's own `routes.js`
-     `viewFor` names that view. A page fails on an uncaught page error, any `console.error`, a
-     same-origin request that fails or answers 4xx/5xx (not the browser's own cancellation,
-     `net::ERR_ABORTED`, such as a video preload it stops), the router rendering the not-found view,
-     or not reaching the router's ready signal (`<html data-routed>`, set by `router.js` once the
-     view is in the DOM; then up to 15 s for network idle). Chrome's own "Failed to load resource"
-     console lines are left to the request checks. A load in which a same-origin `/api/` request
-     answered 503 is inconclusive: the api is unavailable, and this release changes no api. On
-     2026-11-11 production's `GET /api/swarm/members/<handle>` hit Postgres' statement timeout now
-     and then (503), and the member page fell back to its archive manifest (404). A page whose load
-     failed or was inconclusive is loaded again, up to three loads, and is judged by its last
-     conclusive load. A page inconclusive on every load is a warning in the log, not a failure.
-     The whole smoke has 3 minutes. It is read only: it submits no form, and any non-GET request a page makes
-     is answered 204 inside the browser. Cloudflare's edge scripts (`/cdn-cgi/`: Zaraz, the RUM
-     beacon) are answered empty inside the browser: the release holds none of them, and on
-     2026-11-11 Zaraz's Google Analytics tool broke the site's own CSP (`connect-src`) with a
-     `console.error` on every page. A dry run prints the routes and files W08 would check,
-     discovered with GETs only.
+     repository's `@playwright/test`, `scripts/release/web-browser-smoke.ts`, launched with
+     Chromium's sandbox on) loads `/`, `/regime`, one swarm member page (a member read from
+     `GET /api/swarm/members`), `/early-access`, and the route of each changed view: the first
+     candidate route (those, the release tree's sitemap, a session and its subject from
+     `GET /api/swarm/sessions`, then the catch-all route `/X` for `views/X.html`) for which the
+     release's own `routes.js` `viewFor` names that view. W01 builds the same plan and refuses a
+     changed view no route shows, unless `UNROUTED_VIEWS` names it (a fragment the router never
+     renders as a page, such as `views/dash/_layout.html`). A page fails on an uncaught page error,
+     any `console.error`, a same-origin request that fails or answers 4xx/5xx, the router rendering
+     the not-found view, or not reaching the router's ready signal (`<html data-routed>`, set by
+     `router.js` once the view is in the DOM; then up to 15 s for network idle). A page with any of
+     these fails at once: it is never loaded again to get past a failure. Two things are exempt.
+     A media request the browser aborts itself (`net::ERR_ABORTED` on a video or audio preload,
+     seen on `/changelog`'s mp4) does not count; any other aborted request does. A same-origin
+     `/api/` request that answers 503 (the api's own unavailability: its pool gate's
+     `db_saturated`, a statement timeout) excuses only that request, Chrome's "Failed to load
+     resource" line for it, and the archive-manifest 404 (`/data/swarm/manifests/`) its page falls
+     back to; it never hides a page error, another `console.error`, the not-found view or a missed
+     ready signal. On 2026-11-11 production's `GET /api/swarm/members/<handle>` hit Postgres'
+     statement timeout now and then (503), and the member page fell back to its archive manifest
+     (404). A load whose only fault is such a 503 is inconclusive, and the page is loaded again, up
+     to three loads. A page with a clean load passes. A page inconclusive on every load fails W08
+     when it shows a changed view (the release's own surface was never seen working); it is a
+     warning when it shows none. The whole smoke has 3 minutes. The runner judges the site once per
+     W08: the done check's result is the one the step acts on, so a page never gets a second smoke.
+     It is read only: it submits no form, and any non-GET request a page makes is answered 204
+     inside the browser. Cloudflare's edge scripts (`/cdn-cgi/`: Zaraz, the RUM beacon) are
+     answered inside the browser (an empty script, or 204 for a beacon): the release holds none of
+     them, and on 2026-11-11 Zaraz's Google Analytics tool broke the site's own CSP (`connect-src`)
+     with a `console.error` on every page. `scripts/tests/integration/web-browser-smoke.test.ts`
+     proves both against a local server with a real Chromium. W01 launches the browser with the
+     same options and refuses when it does not start: on a host with
+     `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 24.04) Chromium's sandbox needs an
+     AppArmor profile that grants the Playwright Chromium binary `userns`, which only root can
+     install. The sandbox is never turned off to get past it. A dry run prints the routes and
+     files W08 would check, discovered with GETs only, and loads no page and hashes no file even
+     when W07's record exists.
 
   Last, the `api` and worker container ids and `/api/version` are unchanged. On a failure the
   runner runs `bun run smoke:web --rollback`, reads `/version.json` again to report what production

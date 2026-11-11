@@ -37,6 +37,27 @@
 // swarm member page discovered from the public API) and prints each page's
 // report and the problems found; it exits 1 when there is any.
 
+/** A request that failed or answered >= 400; resourceType is Playwright's (document, script, fetch, media, ...). */
+export interface FailedRequest {
+  readonly url: string;
+  readonly method: string;
+  readonly status?: number;
+  readonly failure?: string;
+  readonly resourceType?: string;
+}
+
+/**
+ * How W01 and W08 launch Chromium: headless, with Chromium's own sandbox ON.
+ * Playwright passes --no-sandbox unless chromiumSandbox is true, and the
+ * control machine holds the operator's production ssh access and a gh token
+ * with admin rights, while the pages load third-party scripts and member
+ * content. A host that cannot start the sandbox (Ubuntu 24.04's
+ * kernel.apparmor_restrict_unprivileged_userns=1 with no AppArmor profile
+ * granting the Playwright Chromium binary `userns`) fails the launch, and W01
+ * refuses with that reason. The sandbox is never turned off to get past it.
+ */
+export const LAUNCH_OPTIONS = Object.freeze({ headless: true, chromiumSandbox: true });
+
 /** One page's raw record. ./web-release-lib.ts pageProblems classifies it. */
 export interface PageReport {
   readonly route: string;
@@ -51,7 +72,7 @@ export interface PageReport {
   readonly pageErrors: readonly string[];
   readonly consoleErrors: readonly string[];
   /** Same-origin and cross-origin requests that failed or answered >= 400. */
-  readonly failedRequests: readonly { readonly url: string; readonly method: string; readonly status?: number; readonly failure?: string }[];
+  readonly failedRequests: readonly FailedRequest[];
   /** Non-GET requests the page made, answered 204 inside the browser. */
   readonly blocked: readonly string[];
   /** Cloudflare edge (/cdn-cgi/) requests, answered empty inside the browser. */
@@ -88,7 +109,7 @@ export function isEdgeScript(url: string, host: string): boolean {
  */
 export const runBrowserSmoke: BrowserSmoke = async (origin, routes, budgetMs) => {
   const { chromium } = await import("@playwright/test");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ ...LAUNCH_OPTIONS });
   const reports: PageReport[] = [];
   const start = Date.now();
   const host = new URL(origin).host;
@@ -105,7 +126,7 @@ export const runBrowserSmoke: BrowserSmoke = async (origin, routes, budgetMs) =>
       const page = await context.newPage();
       const pageErrors: string[] = [];
       const consoleErrors: string[] = [];
-      const failedRequests: { url: string; method: string; status?: number; failure?: string }[] = [];
+      const failedRequests: FailedRequest[] = [];
       const blocked: string[] = [];
       const stubbed: string[] = [];
       let notFoundView = false;
@@ -113,7 +134,8 @@ export const runBrowserSmoke: BrowserSmoke = async (origin, routes, budgetMs) =>
         const req = r.request();
         if (isEdgeScript(req.url(), host)) {
           stubbed.push(`${req.method()} ${new URL(req.url()).pathname}`);
-          return r.fulfill({ status: 200, contentType: "text/javascript", body: "" });
+          // An empty script for a GET; 204 for a beacon (a 200 answer to a POST is reported as net::ERR_ABORTED).
+          return READ_METHODS.has(req.method()) ? r.fulfill({ status: 200, contentType: "text/javascript", body: "" }) : r.fulfill({ status: 204, body: "" });
         }
         if (READ_METHODS.has(req.method())) return r.continue();
         blocked.push(`${req.method()} ${req.url()}`);
@@ -131,10 +153,10 @@ export const runBrowserSmoke: BrowserSmoke = async (origin, routes, budgetMs) =>
         } catch { /* a data: or blob: url */ }
       });
       page.on("requestfailed", (req) => {
-        failedRequests.push({ url: req.url(), method: req.method(), failure: req.failure()?.errorText ?? "failed" });
+        failedRequests.push({ url: req.url(), method: req.method(), failure: req.failure()?.errorText ?? "failed", resourceType: req.resourceType() });
       });
       page.on("response", (res) => {
-        if (res.status() >= 400) failedRequests.push({ url: res.url(), method: res.request().method(), status: res.status() });
+        if (res.status() >= 400) failedRequests.push({ url: res.url(), method: res.request().method(), status: res.status(), resourceType: res.request().resourceType() });
       });
       let ready = false;
       let readyDetail: string | undefined;
@@ -188,7 +210,8 @@ async function main(): Promise<number> {
     if ("route" in member) routes.splice(2, 0, member.route);
     else notes.push("note" in member ? member.note : `member discovery failed: ${member.error}`);
   }
-  const smoke = await smokePages(origin, routes, runBrowserSmoke, () => Date.now(), budgetMs);
+  // Run by hand, every route is held to the changed-view rule: a route never judged (an /api/ 503 on every load) fails.
+  const smoke = await smokePages(origin, routes, routes, runBrowserSmoke, () => Date.now(), budgetMs);
   for (const r of smoke.reports) {
     const p = pageProblems(origin, r);
     console.log(`${p.length === 0 ? "ok  " : "FAIL"} ${r.route} -> ${r.finalUrl || "(none)"} ${r.ms} ms${r.idle ? "" : " (no network idle)"}` +

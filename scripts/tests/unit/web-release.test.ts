@@ -17,10 +17,10 @@ import { parseArgs } from "../../release/web-release.ts";
 import {
   classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
   WEB_RUNBOOK_PATH, webTargetOf,
-  pageProblems, routesForViews, rollbackTargetProblem, servedPlan, servedUrlPath, smokePages,
+  browserLaunchProblem, judgeLoad, pageProblems, routesForViews, rollbackTargetProblem, servedPlan, servedUrlPath, smokePages, UNROUTED_VIEWS,
   type Deps, type ExecResult, type Inputs, type PageReport, type WebTarget,
 } from "../../release/web-release-lib.ts";
-import { isEdgeScript } from "../../release/web-browser-smoke.ts";
+import { isEdgeScript, LAUNCH_OPTIONS } from "../../release/web-browser-smoke.ts";
 
 // Each case drives real git (clones, cherry-picks, worktrees); a loaded runner needs more than 5 s.
 setDefaultTimeout(60_000);
@@ -901,7 +901,7 @@ describe("W08 browser smoke", () => {
       failedRequests: [
         { url: `${ORIGIN}/api/regime/latest?x=1`, method: "GET", status: 502 },
         { url: `${ORIGIN}/assets/js/app/main.js`, method: "GET", failure: "net::ERR_CONNECTION_RESET" },
-        { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED" },
+        { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "media" },
         { url: "https://fonts.googleapis.com/css", method: "GET", status: 500 },
       ],
     }));
@@ -929,30 +929,98 @@ describe("W08 browser smoke", () => {
     const f = fixture();
     const h = harness(f, { page: (route, n) => (route.startsWith("/swarm/members/") && n === 1 ? { failedRequests: [{ url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503 }] } : {}) });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("browser /swarm/members/athena load 1 was inconclusive (the api answered 503) (browser /swarm/members/athena: GET /api/swarm/members/athena answered 503); loaded again");
+    expect(h.out.join("\n")).toContain("browser /swarm/members/athena load 1 was inconclusive (the api answered 503 for /api/swarm/members/athena); loaded again");
   });
 
-  test("a page that fails once on its own (not an api 503) and passes on its second load passes", async () => {
+  test("a page that fails once on its own (not an api 503) FAILS: no load is retried to get past a failure", async () => {
     const f = fixture();
     const h = harness(f, { page: (route, n) => (route === "/early-access" && n === 1 ? { pageErrors: ["TypeError: flaky"] } : {}) });
-    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("browser /early-access load 1 failed (browser /early-access: uncaught page error: TypeError: flaky); loaded again");
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toContain("FAILED at W08-live-check: the live check failed: browser /early-access: uncaught page error: TypeError: flaky");
+    // One judged smoke per W08: the done check's result is the one runLive acts on, so /early-access was loaded once.
+    expect(h.state.browserCalls.filter((c) => c.includes("/early-access")).length).toBe(1);
+    expect(h.state.live.version).toBe("0.1.0");
   });
 
-  test("smokePages: an api 503 on every load is a warning, not a failure; a conclusive failing load still fails", async () => {
-    const api503 = { failedRequests: [{ url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503 }], consoleErrors: ["Failed to load resource: the server responded with a status of 503 ()"] };
+  const api503 = (path: string) => ({
+    failedRequests: [
+      { url: `${ORIGIN}/api/swarm/members/athena`, method: "GET", status: 503, resourceType: "fetch" },
+      { url: `${ORIGIN}${path}`, method: "GET", status: 404, resourceType: "fetch" },
+    ],
+    consoleErrors: [
+      `Failed to load resource: the server responded with a status of 503 () (${ORIGIN}/api/swarm/members/athena:0)`,
+      `Failed to load resource: the server responded with a status of 404 () (${ORIGIN}${path}:0)`,
+    ],
+  });
+
+  test("judgeLoad: an /api/ 503 excuses only itself, its console line and the archive-manifest 404; never a page error, other console.error, the not-found view or a ready miss", () => {
+    const base = { ...cleanPage("/swarm/members/athena"), ...api503("/data/swarm/manifests/members/athena.json") };
+    expect(judgeLoad(ORIGIN, base)).toEqual({ problems: [], unavailable: ["/api/swarm/members/athena"] });
+    const other404 = judgeLoad(ORIGIN, { ...cleanPage("/swarm/members/athena"), ...api503("/assets/js/app/missing.js") });
+    expect(other404.problems).toContain("browser /swarm/members/athena: GET /assets/js/app/missing.js answered 404");
+    const worse = judgeLoad(ORIGIN, { ...base, pageErrors: ["TypeError: x"], consoleErrors: [...base.consoleErrors, "boom"], notFoundView: true, ready: false, readyDetail: "Timeout" });
+    expect(worse.problems).toEqual([
+      "browser /swarm/members/athena: never reached the router's ready signal (<html data-routed>): Timeout",
+      "browser /swarm/members/athena: the router rendered the not-found view",
+      "browser /swarm/members/athena: uncaught page error: TypeError: x",
+      "browser /swarm/members/athena: console.error: boom",
+    ]);
+    // Without a 503 the archive 404 is an ordinary failure.
+    expect(judgeLoad(ORIGIN, { ...cleanPage("/swarm/members/athena"), failedRequests: [{ url: `${ORIGIN}/data/swarm/manifests/members/athena.json`, method: "GET", status: 404 }] }).problems)
+      .toEqual(["browser /swarm/members/athena: GET /data/swarm/manifests/members/athena.json answered 404"]);
+  });
+
+  test("judgeLoad: only a media request the browser aborts is exempt; any other aborted same-origin request counts", () => {
+    const r = judgeLoad(ORIGIN, { ...cleanPage("/changelog"), failedRequests: [
+      { url: `${ORIGIN}/assets/img/changelog/home-hero.mp4`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "media" },
+      { url: `${ORIGIN}/api/version`, method: "GET", failure: "net::ERR_ABORTED", resourceType: "fetch" },
+    ] });
+    expect(r.problems).toEqual(["browser /changelog: GET /api/version failed (net::ERR_ABORTED)"]);
+  });
+
+  test("smokePages: a route showing a CHANGED view with an /api/ 503 on every load fails; an unchanged one warns; a conclusive failure fails at once", async () => {
     let calls = 0;
-    const r = await smokePages(ORIGIN, ["/swarm/members/athena", "/regime"], async (_o, routes) => {
+    const r = await smokePages(ORIGIN, ["/swarm/members/athena", "/", "/regime"], ["/swarm/members/athena"], async (_o, routes) => {
       calls++;
-      return routes.map((route) => (route === "/regime" ? { ...cleanPage(route), consoleErrors: ["broken"] } : { ...cleanPage(route), ...api503 }));
+      return routes.map((route) => (route === "/regime" ? { ...cleanPage(route), consoleErrors: ["broken"] } : { ...cleanPage(route), ...api503("/data/swarm/manifests/members/athena.json") }));
     }, () => 0);
     expect(calls).toBe(3);
-    expect(r.warnings).toEqual(["browser /swarm/members/athena: not judged: the api answered 503 on all 3 load(s) (backend unavailable; this release changes no api)"]);
-    expect(r.problems).toEqual(["browser /regime: console.error: broken"]);
+    expect(r.problems).toEqual([
+      "browser /swarm/members/athena: shows a changed view but was never judged: the api answered 503 on all 3 load(s) (/api/swarm/members/athena)",
+      "browser /regime: console.error: broken",
+    ]);
+    expect(r.warnings).toEqual(["browser /: not judged: the api answered 503 on all 3 load(s) (/api/swarm/members/athena); it shows no changed view"]);
+  });
+
+  test("smokePages: a page error on an inconclusive load fails even when a later load is clean", async () => {
+    const r = await smokePages(ORIGIN, ["/swarm/members/athena"], [], async (_o, routes) =>
+      routes.map((route) => ({ ...cleanPage(route), ...api503("/data/swarm/manifests/members/athena.json"), pageErrors: ["TypeError: member"] })), () => 0);
+    expect(r.problems).toEqual(["browser /swarm/members/athena: uncaught page error: TypeError: member"]);
+  });
+
+  test("the browser launches with Chromium's sandbox on, the same options for W01's start check and W08", () => {
+    expect(LAUNCH_OPTIONS).toEqual({ headless: true, chromiumSandbox: true });
+    expect(readFileSync(join(ROOT, "scripts/release/web-browser-smoke.ts"), "utf8")).toContain("chromium.launch({ ...LAUNCH_OPTIONS })");
+  });
+
+  test("a sandbox that does not start is named as the reason, never answered by turning it off", () => {
+    expect(browserLaunchProblem("launch: Target page, context or browser has been closed\nBrowser logs:\nChromium sandboxing failed!")).toContain("cannot start Chromium's sandbox on this machine");
+    expect(browserLaunchProblem("browserType.launch: Executable doesn't exist at /x")).toContain("run bunx playwright install chromium");
+  });
+
+  test("W01 refuses a changed view no route shows; a view in UNROUTED_VIEWS is not mapped", async () => {
+    const f = fixture();
+    const mv = f.commit("feat(web): a view", { "frontend/public/views/vault.html": "<p>j</p>\n", "frontend/public/assets/js/app/routes.js": readFileSync(join(ROOT, "frontend/public/assets/js/app/routes.js"), "utf8") });
+    sh(f.work, "push", "-q", "origin", "main");
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m2, mv]), h.deps)).toBe(1);
+    expect(h.out.join("\n")).toContain("FAILED at W01-preflight: no route shows the changed view(s) /views/vault.html");
+    expect(h.pushes).toEqual([]);
+    expect(UNROUTED_VIEWS).toContain("/views/dash/_layout.html");
   });
 
   test("smokePages: a route the browser never reports fails", async () => {
-    const r = await smokePages(ORIGIN, ["/", "/regime"], async () => [cleanPage("/")], () => 0);
+    const r = await smokePages(ORIGIN, ["/", "/regime"], [], async () => [cleanPage("/")], () => 0);
     expect(r.problems).toEqual(["browser /regime: no report"]);
   });
 
