@@ -742,14 +742,18 @@ release a platform release: the runner lists every such path and names `bun run 
 
 **What a named commit may carry beside content.** A main commit often carries a test or a doc
 beside its web content (issue 1603). The runner cherry-picks each named commit's
-`WEB_CONTENT_PATHS` part and its test paths (any `test/` or `tests/` directory, a `*.test.*` or
-`*.spec.*` file). Tests are carried because they deploy nothing and the web client's own gate runs
-them: `frontend/test/unit.list` names files under `scripts/tests/unit`, so leaving one out fails W03
-or runs a stale copy. It leaves a path out only when the content cannot depend on it:
+`WEB_CONTENT_PATHS` part and its test paths under `scripts/tests/`. Tests are carried because they
+deploy nothing and the web client's own gate runs them: `frontend/test/unit.list` names files under
+`scripts/tests/unit`, so leaving one out fails W03 or runs a stale copy. No image copies `scripts/`
+wholesale, and `scripts/checks/check-no-test-imports-in-runtime.sh` refuses a runtime import of
+it. Other test directories are not carried: `backend/tests/fixtures/regime/*` is seed data the
+backend image reads, so a path under `backend/tests/` counts as runtime. It leaves a path out only
+when the content cannot depend on it:
 
 - a doc path: `docs/**`;
 - a comment-only edit of a JS or TS file that exists before and after the commit: Bun's
-  transpiler, which drops comments, gives the same output for both sides.
+  transpiler, which drops comments, gives the same output for both sides. Macros are disabled:
+  a macro import never runs and counts as a change.
 
 So the release tree equals production's API commit outside the content and test paths, byte for
 byte: production's backend is untouched and the served site equals the tag. Any other path outside
@@ -784,11 +788,18 @@ order:
   moves production's API commit, the old branch no longer descends from it and W01 refuses it: the
   next web release bumps A.B in `frontend/package.json` on `main` and names that commit too. No pull request, never a
   force push.
-- **W03-gate.** The push runs of `web-client.yml` (job `web-client`) and `e2e-web.yml` (job
-  `e2e-web`) on the branch at the commit conclude success. `web-client` builds the site and runs the
-  view specs against goldens. `e2e-web` boots a live stack from the release tree, whose backend is
-  production's API commit, so it is the one check of the new content against the backend it will be
-  served beside. Both workflows carry `web/releases-*` in their push branches for this.
+- **W03-gate.** The `web-client.yml` push run (job `web-client`) and an `e2e-web.yml`
+  `workflow_dispatch` run (job `e2e-web`) on the branch at the commit conclude success. `web-client`
+  builds the site and runs the view specs against goldens. `e2e-web` boots a live stack from the
+  release tree, whose backend is production's API commit, so it is the one check of the new content
+  against the backend it will be served beside. GitHub reads a workflow's triggers from the commit
+  it runs on, and the release tree carries production's `.github/`. Production's `web-client.yml`
+  has carried `web/releases-*` in its push branches since issue 1561. Its `e2e-web.yml` has no such
+  push trigger, but it has `workflow_dispatch`, so the runner dispatches it on the branch once (`gh
+  workflow run e2e-web.yml --ref web/releases-A.B.x`) after checking the branch tip is the release
+  commit. A dry run never dispatches. W01 refuses up front when the release tree's `web-client.yml`
+  lacks the push trigger, its `e2e-web.yml` lacks `workflow_dispatch`, or its `web-tag-guard.yml`
+  lacks the `web-v*` tag trigger.
 - **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
   `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
 - **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.

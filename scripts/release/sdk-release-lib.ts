@@ -327,8 +327,8 @@ interface RunRow { databaseId: number; headSha: string; status: string; conclusi
 interface JobRow { name: string; status: string; conclusion: string; steps?: { name: string; status: string; conclusion: string }[] }
 
 /** One read of the newest push run of a workflow on a ref at the commit, and (when named) one job and one step of it. */
-export function readRun(deps: Deps, workflow: string, ref: string, commit: string, job?: string, step?: string): Read {
-  const l = deps.gh(["run", "list", "--workflow", workflow, "--branch", ref, "--commit", commit, "--event", "push", "--json", "databaseId,headSha,status,conclusion", "--limit", "1"]);
+export function readRun(deps: Deps, workflow: string, ref: string, commit: string, job?: string, step?: string, event: "push" | "workflow_dispatch" = "push"): Read {
+  const l = deps.gh(["run", "list", "--workflow", workflow, "--branch", ref, "--commit", commit, "--event", event, "--json", "databaseId,headSha,status,conclusion", "--limit", "1"]);
   if (l.status !== 0) return { state: "fail", detail: `gh run list --workflow ${workflow} failed: ${errText(l)}` };
   let runs: RunRow[];
   try {
@@ -337,7 +337,7 @@ export function readRun(deps: Deps, workflow: string, ref: string, commit: strin
     return { state: "fail", detail: `gh run list --workflow ${workflow} gave no JSON` };
   }
   const run = runs[0];
-  if (run === undefined) return { state: "wait", detail: `no push run of ${workflow} on ${ref} at ${commit.slice(0, 12)} yet` };
+  if (run === undefined) return { state: "wait", detail: `no ${event === "push" ? "push" : "workflow_dispatch"} run of ${workflow} on ${ref} at ${commit.slice(0, 12)} yet` };
   if (run.headSha !== commit) return { state: "fail", detail: `${workflow} run ${run.databaseId} is at ${run.headSha}, not ${commit}` };
   if (run.status !== "completed") return { state: "wait", detail: `${workflow} run ${run.databaseId} is ${run.status}` };
   if (run.conclusion !== "success") return { state: "fail", detail: `${workflow} run ${run.databaseId} concluded ${run.conclusion}` };

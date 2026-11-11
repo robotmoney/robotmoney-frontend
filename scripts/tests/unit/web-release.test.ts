@@ -7,14 +7,14 @@
 // answers the commands W06 to W08 send the way the real host would.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { releaseRunbookNames, TEMPLATE_NAMES } from "../../release/runbook.ts";
 import { loadTarget } from "../../release/target.ts";
 import { parseArgs } from "../../release/web-release.ts";
 import {
-  classifyContentDiff, GATE_RUNS, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
+  classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease, siteIdIs,
   WEB_RUNBOOK_PATH, webTargetOf,
   type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
@@ -45,6 +45,13 @@ function sh(cwd: string, ...args: string[]): string {
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
   return r.stdout.trim();
 }
+
+/** The trigger lines of the three workflows W03 and W05 need, as production's copies (since 1561) carry them. */
+const WORKFLOWS: Record<string, string> = {
+  ".github/workflows/web-client.yml": "on:\n  push:\n    branches: [main, \"releases-*\", \"qa/**\", \"web/releases-*\"]\n",
+  ".github/workflows/e2e-web.yml": "on:\n  push:\n    branches: [main, \"releases-*\", \"qa/**\"]\n  workflow_dispatch:\n",
+  ".github/workflows/web-tag-guard.yml": "on:\n  push:\n    tags: [\"web-v*\"]\n",
+};
 
 const pkg = (version: string): string => `${JSON.stringify({ name: "@robotmoney/web-client", version, apiRange: "^0.5.0" })}\n`;
 
@@ -82,6 +89,7 @@ function fixture(): Fixture {
   const r0 = commit("chore: root", {
     "frontend/package.json": pkg("0.1.0"), "frontend/public/index.html": "home\n", "frontend/public/a.txt": "orig\n", "backend/src/a.ts": "export const a = 1;\n",
     "backend/src/b.ts": "// b: the member page reads it\nexport const b = 1;\n", "scripts/tests/unit/b.test.js": "v1\n", "docs/b.md": "v1\n",
+    ...WORKFLOWS,
   });
   const c0 = commit("feat(api): platform", { "backend/src/a.ts": "export const a = 2;\n" });
   sh(work, "tag", "-a", "v0.7.0", "-m", "v0.7.0");
@@ -114,6 +122,8 @@ interface State {
   ci: Record<string, Ci>;
   admin: string;
   release: boolean;
+  /** Workflows the runner dispatched; a dispatched workflow with ci "none" then reports success. */
+  dispatched: string[];
   /** The fake host. */
   head?: string; installed: boolean;
   live: { version: string; commit: string };
@@ -130,7 +140,7 @@ interface Harness {
 const SITEMAP = `<?xml version="1.0"?><urlset><url><loc>https://robotmoney.network/</loc></url><url><loc>https://robotmoney.network/swarm</loc></url></urlset>`;
 
 function harness(f: Fixture, state: Partial<State> = {}): Harness {
-  const s: State = { apiCommit: f.c0, ci: {}, admin: "true", release: false, installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1", ...state };
+  const s: State = { apiCommit: f.c0, ci: {}, admin: "true", release: false, dispatched: [], installed: false, live: { version: "0.1.0", commit: f.c0.slice(0, 9) }, receipt: "", apiId: "api-1", ...state };
   const out: string[] = [];
   const pushes: string[][] = [];
   const ghCalls: string[][] = [];
@@ -145,7 +155,7 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
     if (args[0] === "run" && args[1] === "list") {
       const wf = args[args.indexOf("--workflow") + 1]!;
       const sha = args[args.indexOf("--commit") + 1]!;
-      const c = s.ci[wf] ?? "success";
+      const c = s.ci[wf] === "none" && s.dispatched.includes(wf) ? "success" : (s.ci[wf] ?? "success");
       const id = RUN_IDS[wf] ?? 7;
       if (c === "running") return ok(JSON.stringify([{ databaseId: id, headSha: sha, status: "in_progress", conclusion: "" }]));
       return ok(JSON.stringify(c === "none" ? [] : [{ databaseId: id, headSha: sha, status: "completed", conclusion: c }]));
@@ -155,6 +165,7 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
       const job = GATE_RUNS.find((g) => g.workflow === wf)?.job ?? "guard";
       return ok(JSON.stringify({ jobs: [{ name: job, status: "completed", conclusion: "success" }] }));
     }
+    if (args[0] === "workflow" && args[1] === "run") { s.dispatched.push(args[2]!); return ok(); }
     if (args[0] === "release" && args[1] === "view") return s.release ? ok("{}") : { status: 1, stdout: "", stderr: "release not found" };
     if (args[0] === "release" && args[1] === "create") { s.release = true; return ok(); }
     return { status: 1, stdout: "", stderr: `unexpected gh ${args.join(" ")}` };
@@ -221,7 +232,7 @@ const remoteRef = (f: Fixture, ref: string): string | undefined => {
 };
 /** ssh commands that change the host: a clone, a checkout, an install, a deploy or a rollback. */
 const hostWrites = (h: Harness): string[] => h.ssh.filter((c) => /smoke:web|git clone|checkout --quiet --detach|bun install/.test(c));
-const ghWrites = (h: Harness): string[][] => h.ghCalls.filter((c) => c[0] === "release" && c[1] !== "view");
+const ghWrites = (h: Harness): string[][] => h.ghCalls.filter((c) => (c[0] === "release" && c[1] !== "view") || (c[0] === "workflow" && c[1] === "run"));
 
 // ── the runbook and its loader ───────────────────────────────────────────────
 
@@ -344,6 +355,7 @@ describe("W01-preflight refuses before any push", () => {
     const h = harness(f);
     const r = await preflight(inputs(f, [f.m1, f.m2]), h.deps);
     expect(errorsOf(r)).toContain(`does not descend from the base ${f.c0.slice(0, 12)} (production's API commit)`);
+    expect(errorsOf(r)).toContain("Ship on a new line: bump A.B in frontend/package.json on main and name that commit too");
     expect(h.pushes).toEqual([]);
     expect(f.refs()).toBe(before);
   });
@@ -445,12 +457,13 @@ function onMain(f: Fixture, msg: string, files: Record<string, string>): string 
 }
 
 describe("the left-out rule", () => {
-  test("test paths and doc paths are told apart from runtime paths", () => {
-    for (const p of ["scripts/tests/unit/x.test.js", "backend/tests/a.test.js", "contract/tests/x.ts", "packages/csvb/tests/a.ts", "backend/src/x.spec.ts"]) {
-      expect(isTestPath(p)).toBe(true);
-    }
+  test("only scripts/tests/** is a carried test path; other test directories count as runtime", () => {
+    for (const p of ["scripts/tests/unit/x.test.js", "scripts/tests/fixtures/a.json"]) expect(isTestPath(p)).toBe(true);
     expect(isDocPath("docs/decisions.md")).toBe(true);
-    for (const p of ["backend/src/swarm/dormancy.ts", "docker-compose.yml", "bun.lock", "README.md", "test-fixtures/a.json", "goldens/x.json", "scripts/testsuite.ts"]) {
+    for (const p of [
+      "backend/tests/fixtures/regime/raw-indicator-history.csv.gz", "backend/tests/a.test.js", "contract/tests/x.ts", "packages/csvb/tests/a.ts", "backend/src/x.spec.ts",
+      "backend/src/swarm/dormancy.ts", "docker-compose.yml", "bun.lock", "README.md", "test-fixtures/a.json", "goldens/x.json", "scripts/testsuite.ts",
+    ]) {
       expect(isTestPath(p) || isDocPath(p)).toBe(false);
     }
   });
@@ -462,12 +475,26 @@ describe("the left-out rule", () => {
     expect(isCommentOnlyChange("x.json", "{}", "{ }")).toBe(false);
     expect(isCommentOnlyChange("x.ts", before, "export const = ;")).toBe(false);
   });
+  test("a macro import is never run and counts as not comment-only", () => {
+    const marker = join(homedir(), "tmp", `web-release-macro-${process.pid}`);
+    rmSync(marker, { force: true });
+    const macroDir = mkdtempSync(join(homedir(), "tmp", "web-release-macro-"));
+    bases.push(macroDir);
+    writeFileSync(join(macroDir, "m.ts"), `import { writeFileSync } from "node:fs";\nexport function boom() { writeFileSync(${JSON.stringify(marker)}, "ran"); return 1; }\n`);
+    const src = (c: string) => `// ${c}\nimport { boom } from ${JSON.stringify(join(macroDir, "m.ts"))} with { type: "macro" };\nexport const x = boom();\n`;
+    expect(isCommentOnlyChange("x.ts", src("one"), src("two"))).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
   test("PR 1590's dormancy.ts edit is comment-only, and a real change to that file is not", () => {
-    const show = (rev: string): string => sh(ROOT, "show", rev);
-    const has = git(ROOT, ["cat-file", "-e", "b54d4b36a6bb664280b5eb9d92056ce0327243b8^{commit}"]).status === 0;
-    if (!has) return; // a shallow clone without the commit: the fixture cases below still cover the rule
-    expect(isCommentOnlyChange("dormancy.ts", show("b54d4b36^:backend/src/swarm/dormancy.ts"), show("b54d4b36:backend/src/swarm/dormancy.ts"))).toBe(true);
-    expect(isCommentOnlyChange("dormancy.ts", show("fe89c5ac:backend/src/swarm/dormancy.ts"), show("2285064e:backend/src/swarm/dormancy.ts"))).toBe(false);
+    // The file at b54d4b36^, b54d4b36 and 2285064e, copied in as fixtures so the
+    // check runs on CI's depth-1 clone (git show b54d4b36:backend/src/swarm/dormancy.ts).
+    const fx = (name: string): string => readFileSync(join(ROOT, "scripts/tests/fixtures/web-release", name), "utf8");
+    const before = fx("dormancy-before-1590.ts.txt");
+    const after = fx("dormancy-after-1590.ts.txt");
+    expect(before).not.toBe(after);
+    expect(isCommentOnlyChange("dormancy.ts", before, after)).toBe(true);
+    // 2285064e exports readSeatSilence (issue 1579): a real change.
+    expect(isCommentOnlyChange("dormancy.ts", after, fx("dormancy-main-2285064e.ts.txt"))).toBe(false);
   });
 });
 
@@ -505,6 +532,17 @@ describe("W01 ships only the web content part of each named commit", () => {
     expect(await runWebRelease(runbook, inputs(f, [mix, f.m2], { dryRun: true }), again.deps)).toBe(0);
     expect(again.out.join("\n")).toContain(`[W02-branch] already done: origin/web/releases-0.2.x is at ${tip}`);
     expect(again.out.join("\n")).toContain("[W03-gate] not done: e2e-web.yml run 8 is in_progress");
+  });
+
+  test("refuses a backend test fixture beside content: backend/tests/fixtures/regime is runtime seed data", async () => {
+    const f = fixture();
+    const seed = onMain(f, "feat(web): regime + seed", { "frontend/public/r.txt": "r\n", "backend/tests/fixtures/regime/raw-indicator-history.csv.gz": "gz\n" });
+    const before = f.refs();
+    const h = harness(f);
+    const r = await preflight(inputs(f, [seed, f.m2]), h.deps);
+    expect(errorsOf(r)).toContain(`commit ${seed.slice(0, 12)} changes backend/tests/fixtures/regime/raw-indicator-history.csv.gz outside the web content paths`);
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
   });
 
   test("refuses a left-out change to runtime code, and an added runtime file, before any push", async () => {
@@ -558,12 +596,57 @@ describe("W01 ships only the web content part of each named commit", () => {
 });
 
 describe("W03-gate", () => {
-  test("requires web-client and e2e-web, and e2e-web.yml runs on a push to web/releases-*", () => {
-    expect(GATE_RUNS).toEqual([{ workflow: "web-client.yml", job: "web-client" }, { workflow: "e2e-web.yml", job: "e2e-web" }]);
-    for (const wf of ["web-client.yml", "e2e-web.yml"]) {
-      const doc = Bun.YAML.parse(readFileSync(join(ROOT, ".github/workflows", wf), "utf8")) as { on: { push: { branches: string[] } } };
-      expect(doc.on.push.branches).toContain("web/releases-*");
+  test("requires web-client by push and e2e-web by workflow_dispatch; this checkout and production's v0.7.3 tree can run both", () => {
+    expect(GATE_RUNS).toEqual([
+      { workflow: "web-client.yml", job: "web-client", event: "push" },
+      { workflow: "e2e-web.yml", job: "e2e-web", event: "workflow_dispatch" },
+    ]);
+    // The real workflow files: HEAD's own (copied into a one-commit repo, since CI clones at depth 1).
+    const f = fixture();
+    const files: Record<string, string> = {};
+    for (const wf of ["web-client.yml", "e2e-web.yml", "web-tag-guard.yml"]) {
+      files[`.github/workflows/${wf}`] = readFileSync(join(ROOT, ".github/workflows", wf), "utf8");
     }
+    const real = onMain(f, "ci: the real workflows", files);
+    expect(gateTriggerProblems(harness(f).deps, real)).toEqual([]);
+  });
+
+  test("W01 refuses when the release tree's e2e-web.yml cannot be dispatched, or web-client.yml lacks the web/releases-* push", async () => {
+    const f = fixture();
+    sideBranch(f, f.c0, "ci-old", {
+      ".github/workflows/e2e-web.yml": "on:\n  push:\n    branches: [main]\n",
+      ".github/workflows/web-client.yml": "on:\n  push:\n    branches: [main]\n",
+    });
+    const old = sh(f.bare, "rev-parse", "refs/heads/ci-old");
+    const h = harness(f, { apiCommit: old });
+    const before = f.refs();
+    const r = await preflight(inputs(f, [f.m1, f.m2]), h.deps);
+    const errors = errorsOf(r);
+    expect(errors).toContain("e2e-web.yml at the release commit");
+    expect(errors).toContain("lacks a workflow_dispatch trigger (W03 dispatches it)");
+    expect(errors).toContain("web-client.yml at the release commit");
+    expect(errors).toContain("lacks a push trigger on web/releases-* (W03)");
+    expect(h.pushes).toEqual([]);
+    expect(f.refs()).toBe(before);
+  });
+
+  test("dispatches e2e-web once on the release branch, then passes when the dispatched run succeeds", async () => {
+    const f = fixture();
+    const h = harness(f, { ci: { "e2e-web.yml": "none" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(0);
+    const dispatches = h.ghCalls.filter((c) => c[0] === "workflow" && c[1] === "run");
+    expect(dispatches).toEqual([["workflow", "run", "e2e-web.yml", "--ref", "web/releases-0.2.x"]]);
+    expect(h.out.join("\n")).toContain("[W03-gate] dispatched e2e-web.yml on web/releases-0.2.x");
+    const lists = h.ghCalls.filter((c) => c[0] === "run" && c[1] === "list" && c.includes("e2e-web.yml"));
+    expect(lists.every((c) => c[c.indexOf("--event") + 1] === "workflow_dispatch")).toBe(true);
+  });
+
+  test("a dry run never dispatches", async () => {
+    const f = fixture();
+    const h = harness(f, { ci: { "e2e-web.yml": "none" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
+    expect(ghWrites(h)).toEqual([]);
+    expect(h.out.join("\n")).toContain("no workflow_dispatch run of e2e-web.yml on web/releases-0.2.x");
   });
   test("fails at W03 when e2e-web fails at the release commit, and cuts no tag", async () => {
     const f = fixture();

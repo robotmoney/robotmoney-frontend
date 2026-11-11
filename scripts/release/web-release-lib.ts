@@ -134,7 +134,7 @@ export function classifyContentDiff(paths: readonly string[]): { eligible: boole
 //
 // A main commit often carries a test or a doc beside its web content, and now
 // and then a comment edit in backend code (PR 1590). W01 cherry-picks the
-// WEB_CONTENT_PATHS part of each named commit and its test paths, and leaves
+// WEB_CONTENT_PATHS part of each named commit and its test paths (scripts/tests/), and leaves
 // the rest out. So the release tree equals production's API commit outside the
 // content and test paths, byte for byte: production's backend is untouched and
 // the served site equals the tag. Tests ride along because they deploy nothing
@@ -154,8 +154,16 @@ export interface OutsidePath {
   readonly kind: OutsideKind;
 }
 
-/** PURE. A test path, which no deploy runs: a test/ or tests/ directory, a *.test.* or *.spec.* file. */
-export const isTestPath = (path: string): boolean => /(^|\/)tests?\//.test(path) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(path);
+/**
+ * PURE. A carried test path: under scripts/tests/, the root the web-client
+ * gate runs from (frontend/test/unit.list). Nothing deployed reads it: no
+ * image copies scripts/ wholesale, and scripts/checks/check-no-test-imports-
+ * in-runtime.sh refuses a runtime import of it. Other test directories are
+ * not carried: backend/tests/fixtures/regime/* is runtime seed data the
+ * backend image reads (floor-seed.ts, edgar-seed.ts), so a backend test path
+ * counts as runtime and refuses the release.
+ */
+export const isTestPath = (path: string): boolean => path.startsWith("scripts/tests/");
 
 /** PURE. A doc path, which no deploy reads: docs/. */
 export const isDocPath = (path: string): boolean => path.startsWith("docs/");
@@ -173,14 +181,19 @@ const TRANSPILE_LOADERS: Readonly<Record<string, "ts" | "tsx" | "js" | "jsx">> =
 /**
  * PURE. Whether two versions of a JS/TS file differ only in comments and
  * whitespace: Bun's transpiler, which drops comments, gives the same output
- * for both. False for any other file type and for source that does not parse.
+ * for both. False for any other file type, for source that does not parse,
+ * and for source with a macro import (never run).
  */
 export function isCommentOnlyChange(path: string, before: string, after: string): boolean {
   const ext = /\.[a-z]+$/.exec(path)?.[0] ?? "";
   const loader = TRANSPILE_LOADERS[ext];
   if (loader === undefined) return false;
   try {
-    const t = new Bun.Transpiler({ loader, minifyWhitespace: true });
+    // macro: false: a `with { type: "macro" }` import would otherwise run code
+    // from the commit on the operator's machine. Disabled, it throws, which
+    // counts as "not comment-only" and refuses the path. (bun-types types
+    // `macro` as a MacroMap only; Bun 1.4 also takes false.)
+    const t = new Bun.Transpiler({ loader, minifyWhitespace: true, macro: false } as unknown as ConstructorParameters<typeof Bun.Transpiler>[0]);
     return t.transformSync(before) === t.transformSync(after);
   } catch {
     return false;
@@ -261,10 +274,22 @@ export interface Release {
  * stack from the release tree, whose backend is production's API commit, and
  * runs the specs that need a real api: the only check of the new content
  * against the backend it will be served beside (issue 1603).
+ *
+ * GitHub reads a workflow's triggers from the commit it runs on, and the
+ * release tree carries production's .github/ (it is outside the content and
+ * test paths). Production's web-client.yml (since 1561) runs on a push to
+ * web/releases-*; its e2e-web.yml does not, but it has `workflow_dispatch`. So
+ * W03 dispatches e2e-web on the release branch, and W01 refuses up front when
+ * the release tree's workflow files cannot run the gate ({@link gateTriggerProblems}).
  */
-export const GATE_RUNS: readonly { readonly workflow: string; readonly job: string }[] = Object.freeze([
-  { workflow: "web-client.yml", job: "web-client" },
-  { workflow: "e2e-web.yml", job: "e2e-web" },
+export interface GateRun {
+  readonly workflow: string;
+  readonly job: string;
+  readonly event: "push" | "workflow_dispatch";
+}
+export const GATE_RUNS: readonly GateRun[] = Object.freeze([
+  { workflow: "web-client.yml", job: "web-client", event: "push" },
+  { workflow: "e2e-web.yml", job: "e2e-web", event: "workflow_dispatch" },
 ]);
 export const TAG_GUARD_WORKFLOW = "web-tag-guard.yml";
 
@@ -496,6 +521,7 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   const atCandidate = versionAt(deps, commit);
   if (atCandidate !== version) errors.push(`${WEB_MANIFEST} at the release commit ${short(commit)} says ${atCandidate ?? "nothing"}, not ${version}`);
   errors.push(...versionProblems(tags, version, tag, commit));
+  errors.push(...gateTriggerProblems(deps, commit));
 
   let changed: string[] = [];
   if (!isAncestor(deps, base, commit)) {
@@ -692,7 +718,7 @@ type Read = ReturnType<typeof readRun>;
 const asCheck = (r: Read): StepResult => ({ state: r.state === "pass" ? "done" : r.state === "wait" ? "todo" : "failed", detail: r.detail });
 /** One read of the gate: every GATE_RUNS entry. A failure anywhere fails it; otherwise any wait waits. */
 export function readGate(rel: Release, deps: Deps): Read {
-  const reads = GATE_RUNS.map((g) => readRun(deps, g.workflow, rel.branch, rel.commit, g.job));
+  const reads = GATE_RUNS.map((g) => readRun(deps, g.workflow, rel.branch, rel.commit, g.job, undefined, g.event));
   const fail = reads.filter((r) => r.state === "fail");
   if (fail.length > 0) return { state: "fail", detail: fail.map((r) => r.detail).join("; ") };
   const wait = reads.filter((r) => r.state === "wait");
@@ -700,6 +726,82 @@ export function readGate(rel: Release, deps: Deps): Read {
   return { state: "pass", detail: reads.map((r) => r.detail).join("; ") };
 }
 export const readTagGuard = (rel: Release, deps: Deps): Read => readRun(deps, TAG_GUARD_WORKFLOW, rel.tag, rel.commit);
+
+/**
+ * W03's write: dispatch each workflow_dispatch gate run that has no run on the
+ * branch at the commit yet. The dispatched run checks out the branch tip, which
+ * W02 just made the release commit; readRun then requires that run's head sha
+ * to equal it. A run that exists (in progress, failed or passed) is never
+ * dispatched again: a failed one is rerun by hand (gh run rerun).
+ */
+export function dispatchGate(rel: Release, deps: Deps): StepResult {
+  const sent: string[] = [];
+  for (const g of GATE_RUNS.filter((x) => x.event === "workflow_dispatch")) {
+    const l = deps.gh(["run", "list", "--workflow", g.workflow, "--branch", rel.branch, "--commit", rel.commit, "--event", g.event, "--json", "databaseId", "--limit", "1"]);
+    if (l.status !== 0) return failed(`gh run list --workflow ${g.workflow} failed: ${errText(l)}`);
+    let runs: unknown[];
+    try {
+      runs = JSON.parse(l.stdout) as unknown[];
+    } catch {
+      return failed(`gh run list --workflow ${g.workflow} gave no JSON`);
+    }
+    if (runs.length > 0) continue;
+    const tip = deps.git(["ls-remote", "--heads", "origin", `refs/heads/${rel.branch}`]);
+    if (tip.status !== 0 || lines(tip.stdout)[0]?.split(/\s+/)[0] !== rel.commit) {
+      return failed(`origin/${rel.branch} is not at ${rel.commit}, so a dispatch of ${g.workflow} would test another commit`);
+    }
+    const d = deps.gh(["workflow", "run", g.workflow, "--ref", rel.branch]);
+    if (d.status !== 0) return failed(`gh workflow run ${g.workflow} --ref ${rel.branch} failed: ${errText(d)}`);
+    sent.push(g.workflow);
+  }
+  return { state: "done", detail: sent.length === 0 ? "nothing to dispatch" : `dispatched ${sent.join(", ")} on ${rel.branch}` };
+}
+
+/** The workflow files W03 and W05 need, and the trigger each must declare at the release commit. */
+export const GATE_TRIGGERS: readonly { readonly workflow: string; readonly why: string; readonly ok: (on: Record<string, unknown>) => boolean }[] = Object.freeze([
+  {
+    workflow: "web-client.yml", why: "a push trigger on web/releases-* (W03)",
+    ok: (on) => listOf((on.push as Record<string, unknown> | undefined)?.branches).includes("web/releases-*"),
+  },
+  { workflow: "e2e-web.yml", why: "a workflow_dispatch trigger (W03 dispatches it)", ok: (on) => "workflow_dispatch" in on },
+  {
+    workflow: TAG_GUARD_WORKFLOW, why: "a push trigger on web-v* tags (W05)",
+    ok: (on) => listOf((on.push as Record<string, unknown> | undefined)?.tags).includes("web-v*"),
+  },
+]);
+
+const listOf = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" ? [v] : []);
+
+/**
+ * Why the release commit's own workflow files cannot run W03 or W05: GitHub
+ * reads a workflow's triggers from the commit it runs on, and the release tree
+ * carries production's .github/. Empty when every gate can trigger.
+ */
+export function gateTriggerProblems(deps: Deps, commit: string): string[] {
+  const out: string[] = [];
+  for (const g of GATE_TRIGGERS) {
+    const r = deps.git(["show", `${commit}:.github/workflows/${g.workflow}`]);
+    let on: unknown;
+    try {
+      on = r.status === 0 ? (Bun.YAML.parse(r.stdout) as { on?: unknown }).on : undefined;
+    } catch {
+      on = undefined;
+    }
+    const map = typeof on === "object" && on !== null && !Array.isArray(on) ? (on as Record<string, unknown>) : {};
+    if (!g.ok(map)) {
+      out.push(`.github/workflows/${g.workflow} at the release commit ${short(commit)} (production's copy) lacks ${g.why}, so the gate could never run: ship the workflow change in a platform release first`);
+    }
+  }
+  return out;
+}
+
+/** W03's write: dispatch what has no run yet, then poll every gate run. */
+async function gateStep(rel: Release, deps: Deps, maxMinutes: number, id: string, rerun: string): Promise<StepResult> {
+  const d = dispatchGate(rel, deps);
+  if (d.state !== "done") return d;
+  deps.log(`[${id}] ${d.detail}`);
+  return poll(() => readGate(rel, deps), maxMinutes, deps, id, rerun);
+}
 
 // ── W04: tag ─────────────────────────────────────────────────────────────────
 
@@ -949,7 +1051,7 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
     if (inputs.dryRun) { deps.log(`[${step.id}] not done${step.irreversible ? " (IRREVERSIBLE, would write)" : ""}: ${check.detail}`); continue; }
     const result: StepResult =
       step.kind === "branch" ? runBranch(rel, deps)
-      : step.kind === "gate" ? await poll(() => readGate(rel, deps), step.maxMinutes!, deps, step.id, rerun)
+      : step.kind === "gate" ? await gateStep(rel, deps, step.maxMinutes!, step.id, rerun)
       : step.kind === "tag" ? runTagStep(rel, deps)
       : step.kind === "tag-guard" ? await poll(() => readTagGuard(rel, deps), step.maxMinutes!, deps, step.id, rerun)
       : step.kind === "checkout" ? await runCheckout(rel, t, deps)

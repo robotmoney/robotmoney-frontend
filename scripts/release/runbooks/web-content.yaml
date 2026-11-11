@@ -15,7 +15,7 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a test (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and test paths; a rolled-back tag is refused; the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W05; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a rolled-back tag is refused; the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
@@ -23,7 +23,7 @@ steps:
     irreversible: true
   - id: "W03-gate"
     kind: "gate"
-    description: "The push runs of web-client.yml (job web-client) and e2e-web.yml (job e2e-web, a live stack built from the release tree, whose backend is production's API commit) on the release branch at the commit concluded success"
+    description: "The web-client.yml push run (job web-client) and an e2e-web.yml run the runner dispatches once (workflow_dispatch; job e2e-web, a live stack built from the release tree, whose backend is production's API commit) on the release branch at the commit concluded success"
     irreversible: false
     maxMinutes: 90
   - id: "W04-tag"
