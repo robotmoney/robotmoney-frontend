@@ -1143,6 +1143,20 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
     expect(identityProblems(null, null, null, SHA).length).toBe(2);
   });
 
+  // The web template (owner 2026-11-11): the backend is not restarted, so --site-only compares
+  // only /version.json's commit; /api/version must still answer, clean, and /version's tag is not read.
+  test("identity --site-only: the site names the release commit; the running api's commit and tag are not compared", () => {
+    const site = `{"commit":"${SHA.slice(0, 8)}"}`;
+    const runningApi = JSON.stringify({ api: "0.5.1", commit: OTHER_SHA });
+    expect(identityProblems(runningApi, null, site, SHA, TAG, true)).toEqual([]);
+    expect(identityProblems(runningApi, null, site, SHA, SHA, true)).toEqual([]);
+    // red controls: without the flag the same bodies fail; the flag still needs the site's commit, a served api and no +dirty.
+    expect(identityProblems(runningApi, null, site, SHA, SHA).join()).toContain(`/api/version commit is ${OTHER_SHA}`);
+    expect(identityProblems(runningApi, null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA, TAG, true)).toHaveLength(1);
+    expect(identityProblems(null, null, site, SHA, TAG, true)).toEqual(["/api/version did not answer 200"]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: `${OTHER_SHA}+dirty` }), null, site, SHA, TAG, true)).toEqual(["/api/version carries +dirty or +unknown"]);
+  });
+
   // D64: with the rc tag as the ref, the tag is read from /version (buildIdentityJson, the
   // resolver /health uses). /api/version is {api, commit} (D55 (1)) and never carries it (issue 1389).
   test("identity: an rc ref reads the tag from /version, built from the real api bodies", () => {

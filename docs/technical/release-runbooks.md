@@ -480,15 +480,29 @@ exists on the release branch.
 There are two kinds of file, and the runner runs only the second:
 
 - **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
-  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default and
-  the only template. A content-only website release has no template here: it runs on its own
-  release line (§12).
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default.
+  `web` is the web-only subset (below). A content-only website release cut from `main` runs on its
+  own release line instead (§12).
 - **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
   anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
   absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required), its
   `notes:` (identity, migrations, exceptions and owner decisions), and its `scope:`.
+
+**The `web` template (owner, 2026-11-11: "The web release is a variation of the kitchen sink
+release").** `scripts/release/runbooks/templates/web.yaml` is for a platform release that ships only
+the website through `bun run release:run` (v0.7.4 is the first). It is an ordered subset of
+kitchen-sink, each kept step copied unchanged: stage's preparation (Q01 to Q05), the checkout,
+host identity and install, the log baseline, the website probe around the site switch
+(`bun smoke:web`), the version tag (C06), and the identity, product and log checks after it. It
+drops every database and backend step: capture, state baseline, backups and restore proof,
+migrate and the breaking steps, env rewrite, identity and tokens, the boots and READY, the soak and
+its checks, the analytics load, and the archive, SDK and database checks. Its one adjustment is
+`--site-only` on Q26/C14-verify-version: the backend is not restarted, so `/version.json` must name
+the release commit while `/api/version`'s commit and `/version`'s tag stay the running release's.
+A unit test holds web.yaml to that subset, and each release runbook to the template it names.
+Recovery from a failed web release is `bun smoke:web --rollback` to the previous site.
 
 **Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
 `check: <step>`, the version step that proves it landed, or `none: <reason>` (docs only, CI only,
@@ -510,8 +524,8 @@ hash are unchanged. The probe grade (Q25, C13) allows exactly the window from th
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
 keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is
 unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
-step, and a unit test holds every in-flight release runbook to the current template, so a step
-added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
+step, and a unit test holds every in-flight release runbook to the current version of the
+template it names, so a step added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
 is irreversible; a step a tool cannot perform is a `gap`.
 
