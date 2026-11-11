@@ -733,12 +733,34 @@ boot. It changes only what `website-server` serves, through `bun smoke:web` (D54
 production runs does not advance.
 
 **Eligibility.** A release is content-only when its tree differs from the commit production's API
-runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS`
+runs (`{publicOrigin}/api/version`) only inside `WEB_CONTENT_PATHS` and test paths (below)
 (`scripts/lib/website-release.ts`): `frontend/` and the scripts `scripts/static-assembly.sh` runs,
 with every relative import they reach. The site build scripts count as content (owner,
 2026-11-04). The same list is `bun smoke:web`'s source identity. Any other path, such as
 `backend/`, `contract/`, `website-server/nginx.conf`, `bun.lock` or `docker-compose.yml`, makes the
 release a platform release: the runner lists every such path and names `bun run release:run`.
+
+**What a named commit may carry beside content.** A main commit often carries a test or a doc
+beside its web content (issue 1603). The runner cherry-picks each named commit's
+`WEB_CONTENT_PATHS` part and its test paths under `scripts/tests/`. Tests are carried because they
+deploy nothing and the web client's own gate runs them: `frontend/test/unit.list` names files under
+`scripts/tests/unit`, so leaving one out fails W03 or runs a stale copy. No image copies `scripts/`
+wholesale, and `scripts/checks/check-no-test-imports-in-runtime.sh` refuses a runtime import of
+it. Other test directories are not carried: `backend/tests/fixtures/regime/*` is seed data the
+backend image reads, so a path under `backend/tests/` counts as runtime. It leaves a path out only
+when the content cannot depend on it:
+
+- a doc path: `docs/**`;
+- a comment-only edit of a JS or TS file that exists before and after the commit: Bun's
+  transpiler, which drops comments, gives the same output for both sides. Macros are disabled:
+  a macro import never runs and counts as a change.
+
+So the release tree equals production's API commit outside the content and test paths, byte for
+byte: production's backend is untouched and the served site equals the tag. Any other path outside
+`WEB_CONTENT_PATHS` (runtime code, config, a lockfile, an added or deleted runtime file) refuses the
+release at W01, since the content may depend on it. A commit that touches no content path is
+refused too. Every carried and left-out path is listed in the run log and in the GitHub release
+notes; the left-out ones are also named in the release commit's message.
 
 **Runner.** The executable form of this section is `scripts/release/runbooks/web-content.yaml`, run by
 `bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]`
@@ -748,21 +770,36 @@ ship, cherry-picked in the given order. `--target` names the platform target fil
 origin. No target key is added. `--target stage` exists for optional use only. The steps run in
 order:
 
-- **W01-preflight** (read only). Each named commit is on `origin/main` and its own diff is
-  content-only. The runner reads production's API commit and cherry-picks the commits (`-x`) in a
-  scratch worktree onto `web/releases-A.B.x`, or onto the base when the branch is absent. A
-  conflict stops the run. The version is `--version`, else `frontend/package.json` at the last named
+- **W01-preflight** (read only). Each named commit is on `origin/main`, touches a content path,
+  and carries nothing else but tests and the paths the rule above leaves out. The runner reads
+  production's API commit and cherry-picks the content and test part of each commit in a scratch
+  worktree onto `web/releases-A.B.x`, or onto the base when the branch is absent. The commit
+  message keeps the `(cherry picked from commit <sha>)` line and names the left-out paths. A
+  conflict in a content or test path stops the run. A conflict in a left-out path is resolved to
+  the base's content. The version is `--version`, else `frontend/package.json` at the last named
   commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
   tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
-  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS`. A tag that W08
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W08
   rolled back is refused (below). The operator must hold the admin permission on the repository.
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
-  fast-forward. A missing branch is created at the base: the platform tag production runs, or the
-  last web tag on top of it, so content already shipped stays shipped. No pull request, never a
+  fast-forward. A missing branch is created at the base: the commit production's API runs, or the
+  last web tag on top of it, so content already shipped stays shipped. After a platform release
+  moves production's API commit, the old branch no longer descends from it and W01 refuses it: the
+  next web release bumps A.B in `frontend/package.json` on `main` and names that commit too. No pull request, never a
   force push.
-- **W03-gate.** The `web-client.yml` push run on the branch at the commit (job `web-client`) concludes
-  success. `web-client.yml` carries `web/releases-*` in its push branches for this.
+- **W03-gate.** The `web-client.yml` push run (job `web-client`) and an `e2e-web.yml`
+  `workflow_dispatch` run (job `e2e-web`) on the branch at the commit conclude success. `web-client`
+  builds the site and runs the view specs against goldens. `e2e-web` boots a live stack from the
+  release tree, whose backend is production's API commit, so it is the one check of the new content
+  against the backend it will be served beside. GitHub reads a workflow's triggers from the commit
+  it runs on, and the release tree carries production's `.github/`. Production's `web-client.yml`
+  has carried `web/releases-*` in its push branches since issue 1561. Its `e2e-web.yml` has no such
+  push trigger, but it has `workflow_dispatch`, so the runner dispatches it on the branch once (`gh
+  workflow run e2e-web.yml --ref web/releases-A.B.x`) after checking the branch tip is the release
+  commit. A dry run never dispatches. W01 refuses up front when the release tree's `web-client.yml`
+  lacks the push trigger, its `e2e-web.yml` lacks `workflow_dispatch`, or its `web-tag-guard.yml`
+  lacks the `web-v*` tag trigger.
 - **W04-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
   `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
 - **W05-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
@@ -774,16 +811,20 @@ order:
   database row, runs no migration and restarts no backend service.
 - **W08-live-check.** `{publicOrigin}/version.json` reports the tag's version and commit, every
   sitemap route answers 200, and the `api` and worker container ids and `/api/version` are
-  unchanged. On a failure the runner runs `bun run smoke:web --rollback` and exits non-zero.
-- **W09-release** (irreversible). The GitHub release for the tag lists the main commits and the
-  changed content paths. It is never marked latest: the platform's release keeps that.
+  unchanged. On a failure the runner runs `bun run smoke:web --rollback`, reads `/version.json`
+  again to report what production now serves, and exits non-zero. The branch and the tag stay; no
+  GitHub release is created.
+- **W09-release** (irreversible). The GitHub release for the tag lists the main commits, the
+  changed paths and each commit's paths outside the content paths, carried or left out. It is never marked latest: the platform's release keeps that.
 
 The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
 reports the steps already done and continues at the first one that is not. `--dry-run` runs the
 preflight and every step's read-only done check, and writes nothing to `origin`, GitHub or the host.
 
 **Branch.** A web content release ships from `web/releases-A.B.x`, where A.B comes from
-`frontend/package.json`'s own semver. The `web/` prefix keeps it off the platform's `releases-*`
+`frontend/package.json`'s own semver. `--version` does not override it: W01 requires the version in
+the cherry-picked tree to equal it, so a new version is a `frontend/package.json` bump merged to
+`main` and named with `--commit`. The `web/` prefix keeps it off the platform's `releases-*`
 glob. Changes reach it from `main` only, by the runner's cherry-picks. Feature PRs never target it.
 
 **Tag.** A release is the tag `web-vA.B.C`, only on a commit of `web/releases-A.B.x`. Its version
@@ -792,5 +833,6 @@ The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-we
 a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
 
 **Rollback.** A tag is never moved, deleted or cut again. When W08 rolls the site back, the host's
-web receipt records it, and a rerun of the same version stops at W01. The fix ships as
+web receipt records it, and a rerun of the same version stops at W01, including when `bun
+smoke:web` installed the site under a digest-suffixed id. The fix ships as
 `web-vA.B.(C+1)`.
