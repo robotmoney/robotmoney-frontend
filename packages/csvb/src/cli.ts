@@ -5,7 +5,7 @@
 //
 //   bun run csvb backup  [--repo DIR] [--part-mb 64] [--pause-ms 50] [--max-seconds 3600] [--statement-timeout-s 90]
 //                        [--max-rss-mb 1500] [--only table,table] [--env-file PATH]
-//   bun run csvb serve   [--repo DIR] [--remote URL] [--branch main] [--once] [--env-file PATH] [--max-rss-mb 3000]
+//   bun run csvb serve   [--repo DIR] [--remote URL] [--branch main] [--once] [--env-file PATH] [--max-rss-mb 3000] [--pause-ms 250] [--max-seconds 1800]
 //                        [--stale-days 3] [--interval-s 3600] [--health-port 8091] [--push-key PATH]
 //                        (the scheduled backup, issue 1608: fast-forward the clone, cut every sealed UTC boundary,
 //                        verify, commit csv/** only, push without force; also answers GET /health)
@@ -36,7 +36,7 @@ import { replayRun } from "./audit/replay.ts";
 import { analyseRevisions } from "./audit/revisions.ts";
 import { analyseRuns, loadRuns } from "./audit/runs.ts";
 import { verifyRepo } from "./verify.ts";
-import { serveForever, serveOnce, sshEnvForKey, staleness } from "./serve.ts";
+import { SERVE_MAX_SECONDS, SERVE_PAUSE_MS, serveForever, serveOnce, sshEnvForKey, staleness } from "./serve.ts";
 
 interface Args {
   cmd: string;
@@ -138,7 +138,7 @@ async function main(): Promise<number> {
       return reportAnomalies(recs);
     }
     case "serve": {
-      known(a, ["--repo", "--remote", "--branch", "--once", "--env-file", "--max-rss-mb", "--stale-days", "--interval-s", "--health-port", "--push-key"]);
+      known(a, ["--repo", "--remote", "--branch", "--once", "--env-file", "--max-rss-mb", "--pause-ms", "--max-seconds", "--stale-days", "--interval-s", "--health-port", "--push-key"]);
       const envFile = one(a, "--env-file") ?? process.env.CSVB_ENV_FILE ?? homeEnvFilePath();
       const connect = (): ReturnType<typeof postgres> => {
         let url = process.env.RM_REPLICA_URL;
@@ -157,6 +157,8 @@ async function main(): Promise<number> {
         branch: one(a, "--branch") ?? "main",
         nowMs: () => Date.now(),
         maxRssMb: num(a, "--max-rss-mb", Number(process.env.CSVB_MAX_RSS_MB ?? 3000)),
+        pauseMs: num(a, "--pause-ms", Number(process.env.CSVB_PAUSE_MS ?? SERVE_PAUSE_MS)),
+        maxSeconds: num(a, "--max-seconds", Number(process.env.CSVB_MAX_SECONDS ?? SERVE_MAX_SECONDS)),
         gitEnv: pushKey ? sshEnvForKey(pushKey) : undefined,
         log: (l: string) => console.log(l),
       };

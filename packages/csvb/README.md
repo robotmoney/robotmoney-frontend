@@ -144,6 +144,11 @@ The container holds one read-only mount, its credential directory: `replica.env`
 deploy key with write access to robotmoney/csv-backups only, placed by the operator). The serve reader refuses a file
 that also holds an `rm_owner`, `rm_app` or `doadmin` line. An instance without the two files runs idle.
 
+The container is optional and non-gating: no boot, rollout or readiness check waits on it, and a failed wake (backup,
+verify or push) is caught, leaves the clone clean and is retried after a bounded wait of at least 60 seconds. Wakes use
+one replica connection, a statement timeout, a 250 ms pause between pages (`--pause-ms`), a time budget
+(`--max-seconds`, 1800) and a lock, so they never overlap.
+
 Health is 200 while the newest backup is within `CSVB_STALE_DAYS` (default 3) and 503 after. `bun smoke:status` prints
 the container's health and the reason. Settings: `CSVB_REMOTE`, `CSVB_INTERVAL_S` (3600), `CSVB_MAX_RSS_MB` (3000, with
 `mem_limit: 4g`), `CSVB_HEALTH_PORT` (8091).

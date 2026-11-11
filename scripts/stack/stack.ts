@@ -36,6 +36,7 @@ import {
   portArgs,
   POSTGRES_CONTAINER_PORT,
   serviceTokenFile,
+  OPTIONAL_SERVICES,
   servicesFor,
   upArgs,
   WEBSITE_SERVER_CONTAINER_PORT,
@@ -865,6 +866,15 @@ export function createStack(
       }
     }
     emit({ phase: "services", status: "done", detail: rest.join(", ") });
+    // OPTIONAL SERVICES (csvb-backup, D82): started after the stack, never waited on, never able to fail the boot.
+    if (cfg.profile === "full") {
+      try {
+        const r = compose([...upArgs([...OPTIONAL_SERVICES], { noBuild: shippedImages }), "--no-deps"], { stdout: "pipe", stderr: "pipe" });
+        if (r.exitCode !== 0) emit({ phase: "log", message: `optional services (${OPTIONAL_SERVICES.join(", ")}) did not start: ${decode(r.stderr).slice(-300)}; the boot continues` });
+      } catch (e) {
+        emit({ phase: "log", message: `optional services did not start: ${e instanceof Error ? e.message : String(e)}; the boot continues` });
+      }
+    }
 
     // Only NOW do the host ports exist. Everything downstream — the health
     // check below, the caller's READY banner, its state file — takes them from

@@ -698,6 +698,12 @@ services:
   #
   # An instance with no files in that directory (a stage or local boot) runs the container idle: its health says
   # "not provisioned" and nothing is backed up or pushed.
+  #
+  # OPTIONAL AND NON-GATING (owner rule, D82). It is not in the stack's service lists (scripts/stack/config.ts
+  # FULL_SERVICES), so no `up --wait`, rolling replace or readiness check waits on it. Nothing lists it in
+  # `depends_on`, and it lists nothing: it starts and idles without the api. A failed wake is caught inside the
+  # process, so the container never exits non-zero for a backup failure (restart: unless-stopped never loops it).
+  # It reads the replica on ONE connection, with a statement timeout, a pause between pages and a time budget.
   csvb-backup:
     build:
       context: .
@@ -721,6 +727,8 @@ services:
       # The clone of the data repo, so a restart does not re-fetch the archive. Not a credential.
       - csvb_backup_clone:/data
     mem_limit: 4g
+    # Optional and non-gating (D82): it must never starve the api, so it is capped on CPU as well as memory.
+    cpus: 1
     restart: unless-stopped
     init: true
     stop_grace_period: 60s

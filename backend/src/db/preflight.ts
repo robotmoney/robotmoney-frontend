@@ -1135,7 +1135,7 @@ export const ENV_FILE_ALLOWED_KEYS: readonly string[] = Object.freeze([
   "database",
   "dbname",
   "sslmode",
-  // The read replica's host, for the csvb-backup container's own connection file (issue 1608, D82). `host` names the
+  // The read replica's host, for the archive-backup container's own connection file (issue 1608, D82). `host` names the
   // primary on production; the container reads the replica as rm_readonly and nothing else.
   "replica_host",
   "rm_app",

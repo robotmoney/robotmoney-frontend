@@ -11,6 +11,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { looksLikeConnectionString } from "../../lib/db-credential-keys.ts";
+import { DB_WRITER_SERVICES } from "../../lib/smoke-failure.ts";
+import { buildServicesFor, FULL_SERVICES, servicesFor } from "../../stack/config.ts";
+import { ROLLING_ORDER, rollingReplaceOrder } from "../../stack/stack.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 
@@ -27,6 +30,9 @@ interface Svc {
   init?: boolean;
   stop_grace_period?: string;
   healthcheck?: { test?: string[] };
+  cpus?: number | string;
+  depends_on?: Record<string, unknown> | string[];
+  restart?: string;
   build?: { context?: string; dockerfile?: string };
 }
 
@@ -55,6 +61,9 @@ export function problemsOf(svc: Svc): string[] {
   if (svc.mem_limit === undefined) out.push("has no mem_limit");
   if (svc.init !== true) out.push("does not run under an init");
   if (svc.stop_grace_period === undefined) out.push("has no stop_grace_period");
+  if (svc.cpus === undefined) out.push("has no cpus cap");
+  if (svc.restart !== "unless-stopped") out.push(`restart policy is ${svc.restart}, expected unless-stopped`);
+  if (svc.depends_on !== undefined && Object.keys(svc.depends_on).length > 0) out.push("depends on another service: it must start and idle without the api");
   if (svc.healthcheck?.test === undefined) out.push("has no healthcheck");
   const binds = (svc.volumes ?? []).filter((v) => v.type === "bind");
   if (binds.length !== 1) out.push(`has ${binds.length} bind mounts, expected exactly one credential mount`);
@@ -115,6 +124,41 @@ describe("the rendered csvb-backup service", () => {
     expect(Object.values(env).filter((v) => looksLikeConnectionString(v ?? undefined))).toEqual([]);
     expect(env.CSVB_ENV_FILE).toBe("/run/csvb-credentials/replica.env");
     expect(env.CSVB_PUSH_KEY).toBe("/run/csvb-credentials/push-key");
+  });
+});
+
+// OPTIONAL AND NON-GATING (D82): nothing waits on it and it waits on nothing.
+describe("csvb-backup gates nothing", () => {
+  const dependsOn = (s: Svc): string[] => (Array.isArray(s.depends_on) ? s.depends_on : Object.keys(s.depends_on ?? {}));
+
+  test("no other service lists it in depends_on, and it lists none", () => {
+    const dependents = Object.entries(SERVICES).filter(([, s]) => dependsOn(s).includes("csvb-backup")).map(([n]) => n);
+    expect(dependents).toEqual([]);
+    expect(dependsOn(svc())).toEqual([]);
+  });
+
+  test("it is absent from every stack service list a boot waits on or rolls", () => {
+    for (const profile of ["core", "full"] as const) {
+      expect(servicesFor(profile)).not.toContain("csvb-backup");
+      expect(servicesFor(profile, { externalPostgres: true })).not.toContain("csvb-backup");
+      expect(buildServicesFor(profile)).not.toContain("csvb-backup");
+    }
+    expect([...FULL_SERVICES]).not.toContain("csvb-backup");
+    expect([...ROLLING_ORDER]).not.toContain("csvb-backup");
+    expect([...DB_WRITER_SERVICES]).not.toContain("csvb-backup");
+    expect(rollingReplaceOrder(servicesFor("full"))).not.toContain("csvb-backup");
+  });
+
+  test("no readiness, preflight or release-boot module names it", () => {
+    const files = ["scripts/lib/smoke-readiness-scheduler.ts", "scripts/lib/smoke-readiness-probes.ts", "scripts/lib/smoke-failure.ts", "backend/src/db/preflight.ts"];
+    for (const f of files) expect({ f, names: readFileSync(join(repoRoot, f), "utf8").includes("csvb-backup") }).toEqual({ f, names: false });
+  });
+
+  test("red control: a planted depends_on on it is caught", () => {
+    const planted: Record<string, Svc> = { ...SERVICES, api: { ...SERVICES.api, depends_on: { "csvb-backup": { condition: "service_healthy" } } } };
+    expect(Object.entries(planted).filter(([, s]) => dependsOn(s).includes("csvb-backup")).map(([n]) => n)).toEqual(["api"]);
+    const dep = { ...svc(), depends_on: { api: { condition: "service_healthy" } } };
+    expect(problemsOf(dep).some((x) => x.includes("depends on another service"))).toBe(true);
   });
 });
 

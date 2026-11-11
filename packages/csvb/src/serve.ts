@@ -8,7 +8,7 @@
 // The data repo holds data only (D80 item 1). Nothing in the clone is ever run: the image holds this tool, and the
 // clone is read and written as files. Stray tooling files in a clone are neither run nor staged.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, chmodSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
@@ -53,6 +53,7 @@ const git = (repo: string, args: string[], env?: Record<string, string>): string
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env },
+    timeout: 600_000, // a hung network never wedges a wake
   }).trim();
 
 const tryGit = (repo: string, args: string[]): string | null => {
@@ -62,6 +63,23 @@ const tryGit = (repo: string, args: string[]): string | null => {
     return null;
   }
 };
+
+// ── what keeps the scheduled backup gentle (D82: optional, non-gating) ──────────────────────────
+/** Pause between pages: a real, non-zero default (a hand run's is 50). */
+export const SERVE_PAUSE_MS = 250;
+/** Time budget of one wake: under the wake interval, so wakes cannot pile up. */
+export const SERVE_MAX_SECONDS = 1800;
+/** No tight loop, whatever the setting: wakes are at least this far apart. */
+export const MIN_INTERVAL_S = 60;
+/** After repeated failures the wait doubles, up to this. */
+export const MAX_BACKOFF_S = 6 * 3600;
+
+/** Seconds to sleep after a wake: the interval (never under the minimum), doubled per consecutive failure, bounded. */
+export function nextDelayS(intervalS: number, failures: number): number {
+  const base = Math.max(MIN_INTERVAL_S, intervalS);
+  if (failures <= 0) return base;
+  return Math.min(base * 2 ** Math.min(failures, 20), Math.max(base, MAX_BACKOFF_S));
+}
 
 export interface ServeOptions {
   /** The clone of the data repo. Cloned from `remote` when it does not exist. */
@@ -73,11 +91,54 @@ export interface ServeOptions {
   sql: Sql;
   nowMs: () => number;
   maxRssMb: number;
+  /** Pause between pages (default {@link SERVE_PAUSE_MS}) and the time budget of one wake (default {@link SERVE_MAX_SECONDS}). */
+  pauseMs?: number;
+  maxSeconds?: number;
   /** Tests only: replaces fields of the backup options (the tables, the replica requirement, the junction). */
   backup?: Partial<BackupOptions>;
   /** Extra environment for git (the ssh command carrying the push key). */
   gitEnv?: Record<string, string>;
   log: (line: string) => void;
+}
+
+/**
+ * The backup options one wake runs with: the replica only (the command line cannot turn that off), ONE connection (the
+ * caller's `sql`, opened with max 1), a statement timeout, a real pause between pages and a time budget.
+ */
+export function serveBackupOptions(o: Pick<ServeOptions, "sql" | "repo" | "maxRssMb" | "pauseMs" | "maxSeconds" | "log" | "backup">, nowMs: number): BackupOptions {
+  return { ...defaultOptions(o.sql, o.repo), maxRssMb: o.maxRssMb, pauseMs: o.pauseMs ?? SERVE_PAUSE_MS, maxSeconds: o.maxSeconds ?? SERVE_MAX_SECONDS, nowMs, log: o.log, ...o.backup };
+}
+
+/** Wakes never overlap: an exclusive lock file beside the clone. A lock whose process is gone is taken over. */
+async function withLock<T>(repo: string, fn: () => Promise<T>): Promise<T> {
+  const lock = `${repo}.lock`;
+  mkdirSync(dirname(lock), { recursive: true });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const fd = openSync(lock, "wx");
+      writeSync(fd, String(process.pid));
+      closeSync(fd);
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const pid = Number(readFileSync(lock, "utf8").trim());
+      let alive = pid > 0;
+      if (alive) {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+      }
+      if (alive || attempt > 0) throw new Error(`another wake holds the lock ${lock} (pid ${pid}); this wake does nothing`);
+      rmSync(lock, { force: true });
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(lock, { force: true });
+  }
 }
 
 export interface ServeResult {
@@ -87,7 +148,11 @@ export interface ServeResult {
 }
 
 /** One wake. Throws on any failure; the remote is then unchanged and the clone holds nothing new. */
-export async function serveOnce(o: ServeOptions): Promise<ServeResult> {
+export function serveOnce(o: ServeOptions): Promise<ServeResult> {
+  return withLock(o.repo, () => wake(o));
+}
+
+async function wake(o: ServeOptions): Promise<ServeResult> {
   const remote = o.remote ?? "origin";
   const branch = o.branch ?? "main";
   const genv = o.gitEnv;
@@ -123,7 +188,7 @@ export async function serveOnce(o: ServeOptions): Promise<ServeResult> {
   try {
     const ids: string[] = [];
     if (cutsDue) {
-      const opts: BackupOptions = { ...defaultOptions(o.sql, o.repo), maxRssMb: o.maxRssMb, nowMs: now, log: o.log, ...o.backup };
+      const opts = serveBackupOptions(o, now);
       const recs = await runBackup(opts);
       ids.push(...recs.map((r) => r.backup));
     }
@@ -177,50 +242,71 @@ export function sshEnvForKey(keyPath: string): Record<string, string> {
   return { GIT_SSH_COMMAND: `ssh -i ${copy} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${known}` };
 }
 
+export interface LoopState {
+  lastError: string | null;
+  hold: string | null;
+  failures: number;
+}
+
+/**
+ * The wake loop. NOTHING a wake does can end it: a failed connect, backup, verify or push is caught, logged, left to
+ * the stale alarm and retried at the next wake after a bounded, doubling wait. `ctl` is the clock and the stop flag.
+ */
+export async function serveLoop(o: LoopOptions, state: LoopState, ctl: { sleep: (ms: number) => Promise<void>; stopped: () => boolean }): Promise<void> {
+  while (!ctl.stopped()) {
+    const missing = o.provisioned();
+    if (missing) {
+      state.hold = `not provisioned: ${missing}; nothing is backed up by this instance`;
+      state.failures = 0;
+      o.log(state.hold);
+    } else {
+      let sql: Sql | null = null;
+      try {
+        sql = o.connect();
+        const r = await serveOnce({ ...o, sql });
+        state.lastError = null;
+        state.failures = 0;
+        if (r.ids.length === 0) o.log("woke; nothing sealed");
+      } catch (e) {
+        state.lastError = (e as Error).message.split("\n")[0]!;
+        state.failures += 1;
+        o.log(`run failed, nothing added, will retry: ${(e as Error).message}`);
+      } finally {
+        await sql?.end({ timeout: 5 }).catch(() => {});
+      }
+      state.hold = null; // the first wake is over: from here the stale window decides
+    }
+    if (ctl.stopped()) break;
+    await ctl.sleep(nextDelayS(o.intervalS, state.failures) * 1000);
+  }
+}
+
 export async function serveForever(o: LoopOptions): Promise<void> {
-  let lastError: string | null = null;
-  let hold: string | null = "starting: the first wake has not finished";
+  const state: LoopState = { lastError: null, hold: "starting: the first wake has not finished", failures: 0 };
   const server = Bun.serve({
     port: o.healthPort,
     fetch: (req) => {
       if (new URL(req.url).pathname !== "/health") return new Response("not found", { status: 404 });
-      const h = health(o.repo, o.staleDays, o.nowMs(), lastError, hold);
+      const h = health(o.repo, o.staleDays, o.nowMs(), state.lastError, state.hold);
       return new Response(h.body + "\n", { status: h.status });
     },
   });
   let stop = false;
-  let wake: (() => void) | null = null;
+  let wakeNow: (() => void) | null = null;
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, () => {
       stop = true;
       requestAbort(sig);
-      wake?.();
+      wakeNow?.();
     });
   }
-  while (!stop) {
-    const missing = o.provisioned();
-    if (missing) {
-      hold = `not provisioned: ${missing}; nothing is backed up by this instance`;
-      o.log(hold);
-    } else {
-      const sql = o.connect();
-      try {
-        const r = await serveOnce({ ...o, sql });
-        lastError = null;
-        if (r.ids.length === 0) o.log("woke; nothing sealed");
-      } catch (e) {
-        lastError = (e as Error).message.split("\n")[0]!;
-        o.log(`run failed, nothing added: ${(e as Error).message}`);
-      } finally {
-        await sql.end({ timeout: 5 }).catch(() => {});
-      }
-      hold = null; // the first wake is over: from here the stale window decides
-    }
-    if (stop) break;
-    await new Promise<void>((r) => {
-      wake = r;
-      setTimeout(r, o.intervalS * 1000);
-    });
-  }
+  await serveLoop(o, state, {
+    stopped: () => stop,
+    sleep: (ms) =>
+      new Promise<void>((r) => {
+        wakeNow = r;
+        setTimeout(r, ms);
+      }),
+  });
   server.stop(true);
 }

@@ -7,10 +7,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import postgres from "postgres";
 import type { AppendOnlyTable, RevisedTable } from "../src/config.ts";
 import { rssMb } from "../src/backup.ts";
 import { parseEnvFile, replicaUrlFromEnvFile } from "../src/env.ts";
-import { health, newestBackupId, serveOnce, staleness, type ServeOptions } from "../src/serve.ts";
+import { health, MIN_INTERVAL_S, newestBackupId, nextDelayS, serveBackupOptions, serveLoop, serveOnce, SERVE_MAX_SECONDS, SERVE_PAUSE_MS, staleness, type LoopOptions, type LoopState, type ServeOptions } from "../src/serve.ts";
 import { startPg, type TestPg } from "./pg.ts";
 
 let pg: TestPg;
@@ -327,5 +328,150 @@ describe("the scheduled backup's credential and its command", () => {
     expect(p.status).toBe(1);
     expect(p.stderr).toContain("not a replica");
     expect(remoteRef(e.remote)).toBe(before);
+  }, 120_000);
+});
+
+// The scheduled backup is OPTIONAL and NON-GATING (D82): nothing a wake does may end the loop, crash the container
+// or hurt the database. A failed backup, verify or push is caught, leaves the clone clean and is retried later.
+describe("the wake loop never ends and never hurts", () => {
+  test("a failed backup, then a failed verify, then a failed push: the loop survives, stays healthy-idle, retries with a bounded wait and recovers", async () => {
+    await makeTables("s_l");
+    for (let k = 0; k < 3; k++) await addRows("s_l", D0 + k * DAY, 3);
+    const e = env("s_l");
+    let clock = D0 + 3 * DAY + 2 * HOUR;
+    const base = e.opts(clock);
+    const loop: LoopOptions = {
+      ...base,
+      nowMs: () => clock,
+      connect: () => postgres(pg.url, { max: 1, onnotice: () => {} }),
+      provisioned: () => null,
+      staleDays: 36500,
+      intervalS: 1,
+      healthPort: 0,
+      backup: { ...base.backup, requireReplica: true }, // wake 1 refuses this primary
+    };
+    const state: LoopState = { lastError: null, hold: "starting: the first wake has not finished", failures: 0 };
+    const delays: number[] = [];
+    const refs = (): string => remoteRef(e.remote);
+    let ref0 = refs();
+    let wakes = 0;
+    const clean = (): void => expect(gitIn(e.repo, "status", "--porcelain", "--", "csv")).toBe("");
+    const after: Array<() => Promise<void> | void> = [
+      // wake 1: not a replica
+      () => {
+        expect(state.lastError).toContain("not a replica");
+        expect(refs()).toBe(ref0);
+        loop.backup = { ...base.backup, requireReplica: false };
+      },
+      // wake 2: succeeds, pushes the 3 backups
+      async () => {
+        expect(state.lastError).toBeNull();
+        expect(refs()).not.toBe(ref0);
+        ref0 = refs();
+        await addRows("s_l", D0 + 3 * DAY, 2);
+        clock = D0 + 4 * DAY + 2 * HOUR;
+        const victim = join(e.repo, "csv", csvIds(e.repo)[0]!, "backup.json");
+        writeFileSync(victim, '{ "tampered": true }\n'); // wake 3: verify fails
+      },
+      // wake 3
+      () => {
+        expect(state.lastError).not.toBeNull();
+        expect(refs()).toBe(ref0);
+        clean();
+        writeFileSync(join(e.repo, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 1\n", { mode: 0o755 }); // wake 4: push fails
+      },
+      // wake 4
+      () => {
+        expect(state.lastError).not.toBeNull();
+        expect(refs()).toBe(ref0);
+        expect(gitIn(e.repo, "rev-parse", "HEAD")).toBe(ref0);
+        clean();
+        rmSync(join(e.repo, ".git", "hooks", "pre-push")); // wake 5: recovers
+      },
+      // wake 5
+      () => {
+        expect(state.lastError).toBeNull();
+        expect(refs()).not.toBe(ref0);
+        expect(csvIds(e.repo)).toContain(idOf(D0 + 4 * DAY));
+      },
+    ];
+    await serveLoop(loop, state, {
+      stopped: () => wakes >= after.length,
+      sleep: async (ms) => {
+        delays.push(ms / 1000);
+        const h = health(e.repo, 36500, clock, state.lastError, state.hold);
+        // A failed wake never turns the container unhealthy by itself: only the stale window does (an empty clone is
+        // stale, so wake 1, which cut nothing, is the one exception).
+        if (wakes >= 1) expect(h.status).toBe(200);
+        await after[wakes++]!();
+      },
+    });
+    expect(wakes).toBe(5);
+    // minimum interval, doubling per consecutive failure, back to the base after a success
+    expect(delays).toEqual([120, 60, 120, 240, 60]);
+  }, 240_000);
+
+  test("the wait never drops under the minimum interval and never grows past the bound", () => {
+    expect(nextDelayS(1, 0)).toBe(MIN_INTERVAL_S);
+    expect(nextDelayS(0, 3)).toBe(MIN_INTERVAL_S * 8);
+    expect(nextDelayS(3600, 1)).toBe(7200);
+    expect(nextDelayS(3600, 50)).toBe(6 * 3600);
+  });
+
+  test("a wake runs on the replica only, on one connection, with a statement timeout, a real pause and a time budget; a primary is refused", async () => {
+    const e = env("s_l");
+    const opts = serveBackupOptions({ sql: pg.sql, repo: e.repo, maxRssMb: 3000, log: () => {} }, Date.now());
+    expect(opts.requireReplica).toBe(true);
+    expect(opts.pauseMs).toBe(SERVE_PAUSE_MS);
+    expect(opts.pauseMs).toBeGreaterThan(0);
+    expect(opts.maxSeconds).toBe(SERVE_MAX_SECONDS);
+    expect(opts.maxSeconds).toBeLessThan(3600);
+    expect(opts.statementTimeoutS).toBeGreaterThan(0);
+    // The loop opens one connection per wake, one at a time, and a primary fails the wake without ending the loop.
+    const maxes: number[] = [];
+    const state: LoopState = { lastError: null, hold: null, failures: 0 };
+    let wakes = 0;
+    const loop: LoopOptions = {
+      repo: e.repo, remoteUrl: e.remote, nowMs: () => Date.now(), maxRssMb: 3000, log: () => {},
+      connect: () => {
+        const s = postgres(`${pg.url}`, { max: 1, onnotice: () => {} });
+        maxes.push(s.options.max as number);
+        return s;
+      },
+      provisioned: () => null, staleDays: 3, intervalS: 1, healthPort: 0,
+    };
+    const delays: number[] = [];
+    await serveLoop(loop, state, { stopped: () => wakes >= 2, sleep: async (ms) => { delays.push(ms / 1000); wakes++; } });
+    expect(maxes).toEqual([1, 1]);
+    expect(state.lastError).toContain("not a replica");
+    expect(delays.every((d) => d >= MIN_INTERVAL_S)).toBe(true);
+    expect(remoteRef(e.remote)).toBe(gitIn(e.remote, "rev-parse", "main"));
+  }, 120_000);
+
+  test("an instance with no credential files is idle and healthy: it connects to nothing and the loop goes on", async () => {
+    const e = env("s_l");
+    const state: LoopState = { lastError: null, hold: "starting", failures: 0 };
+    let wakes = 0;
+    const loop: LoopOptions = {
+      repo: e.repo, remoteUrl: e.remote, nowMs: () => Date.now(), maxRssMb: 3000, log: () => {},
+      connect: () => { throw new Error("must not connect while unprovisioned"); },
+      provisioned: () => "no replica.env and no push-key", staleDays: 3, intervalS: 3600, healthPort: 0,
+    };
+    await serveLoop(loop, state, { stopped: () => wakes >= 2, sleep: async () => { wakes++; } });
+    expect(state.lastError).toBeNull();
+    expect(health(e.repo, 3, Date.now(), state.lastError, state.hold).status).toBe(200);
+    expect(existsSync(e.repo)).toBe(false); // not even cloned
+  });
+
+  test("wakes never overlap: a second wake while one holds the lock does nothing and fails loudly", async () => {
+    const e = env("s_l");
+    mkdirSync(join(e.repo, ".."), { recursive: true });
+    writeFileSync(`${e.repo}.lock`, String(process.pid)); // this process is alive: the lock is held
+    await expect(serveOnce(e.opts(D0 + 3 * DAY + 2 * HOUR))).rejects.toThrow("another wake holds the lock");
+    expect(existsSync(e.repo)).toBe(false);
+    writeFileSync(`${e.repo}.lock`, "2147483646"); // a dead holder is taken over
+    const r = await serveOnce(e.opts(D0 + 3 * DAY + 2 * HOUR));
+    expect(r.pushed).toBe(true);
+    expect(existsSync(`${e.repo}.lock`)).toBe(false);
   }, 120_000);
 });

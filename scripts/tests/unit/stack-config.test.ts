@@ -35,7 +35,7 @@ import {
   upArgs,
   WORKER_LANE_SERVICES,
   PRODUCER_SERVICES,
-  BACKUP_SERVICES,
+  OPTIONAL_SERVICES,
   SCHEDULER_SERVICES,
   serviceTokenFile,
   type StackConfig,
@@ -65,9 +65,12 @@ describe("stack profiles", () => {
     expect(servicesFor("core")).not.toContain("member-agent");
   });
 
-  test("full is core plus worker lanes, the clock, the independent producer and the archive backup, in order", () => {
+  test("full is core plus worker lanes, the clock and the independent producer, in order", () => {
     expect(servicesFor("full"))
-      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES, ...BACKUP_SERVICES]);
+      .toEqual([...CORE_SERVICES, ...WORKER_LANE_SERVICES, ...SCHEDULER_SERVICES, ...PRODUCER_SERVICES]);
+    // csvb-backup is optional and non-gating (D82): never in a list anything waits on.
+    expect(servicesFor("full")).not.toContain("csvb-backup");
+    expect([...OPTIONAL_SERVICES]).toEqual(["csvb-backup"]);
     expect(servicesFor("full")).not.toContain("member-agent");
   });
 
