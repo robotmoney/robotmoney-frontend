@@ -205,7 +205,9 @@ export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, ta
  * The kitchen-sink template's steps, in order: the general runbook every
  * full-stack release copies (./runbooks/templates/kitchen-sink.yaml, read by
  * ./runbook.ts). A release runs its own runbook, which only adds to it
- * (loadReleaseRunbook). The policy is docs/technical/release-runbooks.md.
+ * (loadReleaseRunbook). A release may name another template (`web`); the
+ * runner then runs that release's runbook, never this list. The policy is
+ * docs/technical/release-runbooks.md.
  */
 export const RELEASE_STEPS: readonly StepTemplate[] = loadTemplate(DEFAULT_TEMPLATE).steps;
 

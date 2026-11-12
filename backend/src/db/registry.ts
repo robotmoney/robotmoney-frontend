@@ -612,13 +612,6 @@ export const PROVISIONING_SHAPES = Object.freeze({
   appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
   /** DDL: rm_readonly's password and nothing else. `$1` is a vetted SCRAM verifier literal. */
   readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
-  /** CATALOG: is pg_stat_statements installed here, and does rm_readonly hold pg_read_all_stats's privileges (issue 1581)? */
-  statsState:
-    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS extension, pg_has_role('rm_readonly', 'pg_read_all_stats', 'USAGE') AS readonly_stats",
-  /** DDL: install query statistics. Untrusted, so only the provider's admin may (issue 1581). */
-  statsExtensionCreate: "CREATE EXTENSION IF NOT EXISTS pg_stat_statements",
-  /** DDL: let rm_readonly read every role's statistics. INHERIT TRUE: rm_readonly is NOINHERIT, and a membership it does not inherit grants nothing (issue 1581). */
-  readonlyStatsGrant: "GRANT pg_read_all_stats TO rm_readonly WITH INHERIT TRUE",
 } as const);
 
 export type ProvisioningShape = keyof typeof PROVISIONING_SHAPES;

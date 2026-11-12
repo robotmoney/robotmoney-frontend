@@ -315,27 +315,6 @@ $$;
 
 
 --
--- Name: rm_swarm_briefs_allocation(); Type: FUNCTION; Schema: public; Owner: -
---
-
-CREATE FUNCTION public.rm_swarm_briefs_allocation() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  NEW.allocation := NEW.body -> 'allocation';
-  RETURN NEW;
-END
-$$;
-
-
---
--- Name: FUNCTION rm_swarm_briefs_allocation(); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.rm_swarm_briefs_allocation() IS 'Keeps swarm_briefs.allocation equal to body -> ''allocation'' on every write (migration 0130, issue 1584).';
-
-
---
 -- Name: rm_text_array_is_canonical_set(text[]); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -2471,8 +2450,7 @@ CREATE TABLE public.swarm_briefs (
     body jsonb,
     created_at timestamp with time zone DEFAULT now() CONSTRAINT committee_briefs_created_at_not_null NOT NULL,
     session_id uuid,
-    report_snapshot_id bigint,
-    allocation jsonb
+    report_snapshot_id bigint
 );
 
 
@@ -3616,14 +3594,6 @@ ALTER TABLE ONLY public.job_schedules ALTER COLUMN id SET DEFAULT nextval('publi
 --
 
 ALTER TABLE ONLY public.jobs ALTER COLUMN id SET DEFAULT nextval('public.jobs_id_seq'::regclass);
-
-
---
--- Name: jobs status, kind; Type: STATISTICS TARGET (issue 1581, migration 0130); Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.jobs ALTER COLUMN status SET STATISTICS 1000;
-ALTER TABLE ONLY public.jobs ALTER COLUMN kind SET STATISTICS 1000;
 
 
 --
@@ -4968,13 +4938,6 @@ CREATE INDEX audit_log_at_idx ON public.audit_log USING btree (at DESC);
 
 
 --
--- Name: audit_log_job_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX audit_log_job_idx ON public.audit_log USING btree (job_id) WHERE (job_id IS NOT NULL);
-
-
---
 -- Name: audit_log_request_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5059,13 +5022,6 @@ CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) 
 
 
 --
--- Name: jobs_live_kind_locked_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX jobs_live_kind_locked_idx ON public.jobs USING btree (kind, locked_at) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]));
-
-
---
 -- Name: jobs_pending_run_after_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5112,13 +5068,6 @@ CREATE INDEX openclaw_agents_project_idx ON public.openclaw_agents USING btree (
 --
 
 CREATE UNIQUE INDEX openclaw_agents_project_name_idx ON public.openclaw_agents USING btree (project_id, name);
-
-
---
--- Name: pipeline_ingest_receipts_job_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX pipeline_ingest_receipts_job_idx ON public.pipeline_ingest_receipts USING btree (job_id) WHERE (job_id IS NOT NULL);
 
 
 --
@@ -5370,13 +5319,6 @@ CREATE INDEX swarm_recommendations_session_member_latest_idx ON public.swarm_rec
 --
 
 CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision);
-
-
---
--- Name: swarm_session_events_job_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX swarm_session_events_job_idx ON public.swarm_session_events USING btree (job_id) WHERE (job_id IS NOT NULL);
 
 
 --
@@ -6007,15 +5949,6 @@ ALTER TABLE public.swarm_brief_revisions ENABLE ALWAYS TRIGGER swarm_brief_revis
 CREATE TRIGGER swarm_briefs_append_only BEFORE DELETE OR TRUNCATE ON public.swarm_briefs FOR EACH STATEMENT EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.swarm_briefs ENABLE ALWAYS TRIGGER swarm_briefs_append_only;
-
-
---
--- Name: swarm_briefs swarm_briefs_allocation; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER swarm_briefs_allocation BEFORE INSERT OR UPDATE ON public.swarm_briefs FOR EACH ROW EXECUTE FUNCTION public.rm_swarm_briefs_allocation();
-
-ALTER TABLE public.swarm_briefs ENABLE ALWAYS TRIGGER swarm_briefs_allocation;
 
 
 --

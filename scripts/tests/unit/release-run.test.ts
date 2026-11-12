@@ -354,7 +354,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
-    expect(ids.slice(-7)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats"]);
+    expect(ids.slice(-6)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]);
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"], ["Q35-archive-routes", "Q23-ready", "watchHours"], ["Q36-sdk-quickstart", "Q23-ready", "watchHours"], ["Q37-sdk-tests", "Q23-ready", "watchHours"], ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"], ["C23-archive-routes", "C11-ready", "watchHours"], ["C24-sdk-quickstart", "C11-ready", "watchHours"], ["C25-sdk-tests", "C11-ready", "watchHours"]]);
     // red control: C20-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!.cmds[0]!;
@@ -1143,6 +1143,20 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
     expect(identityProblems(null, null, null, SHA).length).toBe(2);
   });
 
+  // The web template (owner 2026-11-11): the backend is not restarted, so --site-only compares
+  // only /version.json's commit; /api/version must still answer, clean, and /version's tag is not read.
+  test("identity --site-only: the site names the release commit; the running api's commit and tag are not compared", () => {
+    const site = `{"commit":"${SHA.slice(0, 8)}"}`;
+    const runningApi = JSON.stringify({ api: "0.5.1", commit: OTHER_SHA });
+    expect(identityProblems(runningApi, null, site, SHA, TAG, true)).toEqual([]);
+    expect(identityProblems(runningApi, null, site, SHA, SHA, true)).toEqual([]);
+    // red controls: without the flag the same bodies fail; the flag still needs the site's commit, a served api and no +dirty.
+    expect(identityProblems(runningApi, null, site, SHA, SHA).join()).toContain(`/api/version commit is ${OTHER_SHA}`);
+    expect(identityProblems(runningApi, null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA, TAG, true)).toHaveLength(1);
+    expect(identityProblems(null, null, site, SHA, TAG, true)).toEqual(["/api/version did not answer 200"]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: `${OTHER_SHA}+dirty` }), null, site, SHA, TAG, true)).toEqual(["/api/version carries +dirty or +unknown"]);
+  });
+
   // D64: with the rc tag as the ref, the tag is read from /version (buildIdentityJson, the
   // resolver /health uses). /api/version is {api, commit} (D55 (1)) and never carries it (issue 1389).
   test("identity: an rc ref reads the tag from /version, built from the real api bodies", () => {
@@ -1216,14 +1230,12 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
       "Q34a-analytics-load",
       // The analyst SDK checks (since v0.7.0), on the control machine: read-only against the target, after the soak.
       "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests",
-      // Query statistics and the jobs-table plans (issue 1581, since v0.7.4); the plans are stage only.
-      "Q37a-db-stats", "Q37b-jobs-plans",
     ]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline"]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "cutover").map((s) => s.id)).toEqual([
       "C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C06-version-tag", "C07-env-rewrite", "C08-set-identity", "C09-tokens", "C10-rolling-boot", "C10a-full-boot", "C11-ready", "C12-site", "C12a-maintenance-off", "C13-probe-grade",
       "C14-verify-version", "C15-verify-product", "C16-log-verdict", "C17-soak-record", "C18-compare-baseline", "C19-host-guards", "C20-soak-gate", "C21-soak-checks", "C22-collect-logs",
-      "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats",
+      "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests",
     ]);
     // The backup and its restore proof are the cutover's first steps, before the first irreversible one.
     const ids = stepIds();

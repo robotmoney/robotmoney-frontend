@@ -43,11 +43,6 @@ const PINNED_PROVISIONING_SHAPES: Readonly<Record<string, string>> = {
   ownerPasswordSet: "ALTER ROLE rm_owner WITH LOGIN PASSWORD $1",
   appPasswordSet: "ALTER ROLE rm_app WITH PASSWORD $1",
   readonlyPasswordSet: "ALTER ROLE rm_readonly WITH PASSWORD $1",
-  // Query statistics (issue 1581): the catalog read, the extension, the grant.
-  statsState:
-    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements') AS extension, pg_has_role('rm_readonly', 'pg_read_all_stats', 'USAGE') AS readonly_stats",
-  statsExtensionCreate: "CREATE EXTENSION IF NOT EXISTS pg_stat_statements",
-  readonlyStatsGrant: "GRANT pg_read_all_stats TO rm_readonly WITH INHERIT TRUE",
 };
 
 /** The four roles of spec §3. There is no `rm_migrator` (D46/D47) and `doadmin`
@@ -1140,7 +1135,7 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
     expect(existsSync(join(BACKEND, "scripts", "enable-owner-login.ts"))).toBe(false);
   });
 
-  test("the doadmin declarations a process holds are exactly the eight role-passwords sites", () => {
+  test("the doadmin declarations a process holds are exactly the five role-passwords sites", () => {
     const script = join(mkdtempSync(join(tmpdir(), "rm-registry-doadmin-")), "enumerate.ts");
     writeFileSync(script, [
       `await import(${JSON.stringify(join(BACKEND, "scripts", "role-passwords.ts"))});`,
@@ -1158,10 +1153,6 @@ describe("doadmin is used by one command only (D61) — the provisioning shapes"
         ["scripts/role-passwords:setOwnerPassword", "ownerPasswordSet", ["scripts/role-passwords"]],
         ["scripts/role-passwords:setAppPassword", "appPasswordSet", ["scripts/role-passwords"]],
         ["scripts/role-passwords:setReadonlyPassword", "readonlyPasswordSet", ["scripts/role-passwords"]],
-        // Query statistics (issue 1581).
-        ["scripts/role-passwords:readStatsState", "statsState", ["scripts/role-passwords"]],
-        ["scripts/role-passwords:createStatsExtension", "statsExtensionCreate", ["scripts/role-passwords"]],
-        ["scripts/role-passwords:grantReadonlyStats", "readonlyStatsGrant", ["scripts/role-passwords"]],
       ]);
     } finally {
       rmSync(dirname(script), { recursive: true, force: true });

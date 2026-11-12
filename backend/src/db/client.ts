@@ -73,24 +73,12 @@ export function assertRequestTimeouts(t: PoolTimeouts): void {
   }
 }
 
-// ── No JIT on the app's pools (issue 1579) ─────────────────────────────────
-// Every app query is OLTP-sized, so JIT compilation never pays for itself. It
-// did cost: an unanalyzed 1-row table (swarm_dormancy_baseline) pushed the
-// readSeatSilence plan past jit_inline/optimize_above_cost, and each member
-// page compiled 68 functions for 1-3 s (0.8 ms without JIT), which crossed the
-// request pool's statement timeout when every house agent asked at once.
-// A startup parameter, like the timeouts, so every session the app's pools open
-// (general, request, batch, health probe) runs with jit off. Short-lived
-// guard, check, lock and preflight clients built elsewhere are out of scope.
-export const NO_JIT = { jit: "off" } as const;
-
 function makePool(url: string, max: number, t: PoolTimeouts): postgresTypes.Sql<{}> {
   return postgres(url, {
     max,
     onnotice: () => {}, // silence NOTICE spam (e.g. "table already exists")
     connect_timeout: t.connectMs / 1000,
     connection: {
-      ...NO_JIT,
       statement_timeout: t.statementMs,
       idle_in_transaction_session_timeout: t.idleInTxnMs,
       ...(t.lockMs === null ? {} : { lock_timeout: t.lockMs }),
@@ -146,7 +134,7 @@ export function createApiPools(url: string, budget: ConnectionBudget, options: A
     max: budget.guard,
     onnotice: () => {},
     connect_timeout: 1,
-    connection: { ...NO_JIT, statement_timeout: 1_000 },
+    connection: { statement_timeout: 1_000 },
   });
   return {
     request: gatedPool(rawRequest, gates.request),

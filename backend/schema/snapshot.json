@@ -130,9 +130,7 @@
     "0126_pipeline_worker_token_and_receipts.sql",
     "0127_rm_worker_retired.sql",
     "0128_asset_prices_overwrite_events.sql",
-    "0129_allocation_framework_hard_assets.sql",
-    "0130_jobs_live_index_brief_allocation_stats.sql",
-    "0131_swarm_briefs_allocation_backfill.sql"
+    "0129_allocation_framework_hard_assets.sql"
   ],
   "exclusions": {
     "roles": [
@@ -140,12 +138,11 @@
       "postgres"
     ],
     "extensions": [
-      "pg_stat_statements",
       "pgcrypto",
       "plpgsql"
     ]
   },
-  "contentHash": "e57a3f71f78c250b1a1d56e15d15411da6211f6ce646975e983898fbad164fdd",
+  "contentHash": "a5913f6d1678712c9e7af80ce33edeca92a42d42aeeac33bf59d642491503a1d",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -2367,10 +2364,6 @@
     "column public.swarm_brief_revisions.session_id": {
       "type": "uuid",
       "notnull": "yes"
-    },
-    "column public.swarm_briefs.allocation": {
-      "type": "jsonb",
-      "notnull": "no"
     },
     "column public.swarm_briefs.body": {
       "type": "jsonb",
@@ -5048,10 +5041,6 @@
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_stream_head_forward_only()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.seq < OLD.seq THEN\n    RAISE EXCEPTION 'swarm_stream_head only moves forward: % -> % refused', OLD.seq, NEW.seq\n      USING ERRCODE = 'check_violation';\n  END IF;\n  RETURN NEW;\nEND\n$function$\n"
     },
-    "function public.rm_swarm_briefs_allocation()": {
-      "owner": "rm_owner",
-      "definition": "CREATE OR REPLACE FUNCTION public.rm_swarm_briefs_allocation()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.allocation := NEW.body -> 'allocation';\n  RETURN NEW;\nEND\n$function$\n"
-    },
     "function public.rm_text_array_is_canonical_set(text[])": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_text_array_is_canonical_set(input_values text[])\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT NOT EXISTS (\n           SELECT 1 FROM unnest(input_values) AS value\n            WHERE value IS NULL OR btrim(value) = ''\n         )\n     AND cardinality(input_values) = (\n           SELECT count(DISTINCT value COLLATE \"C\") FROM unnest(input_values) AS value\n         )\n     AND input_values = COALESCE(\n           (SELECT array_agg(value ORDER BY value COLLATE \"C\")\n              FROM unnest(input_values) AS value),\n           '{}'::text[]\n         );\n$function$\n"
@@ -5248,9 +5237,6 @@
     "index public.audit_log_at_idx": {
       "definition": "CREATE INDEX audit_log_at_idx ON public.audit_log USING btree (at DESC)"
     },
-    "index public.audit_log_job_idx": {
-      "definition": "CREATE INDEX audit_log_job_idx ON public.audit_log USING btree (job_id) WHERE (job_id IS NOT NULL)"
-    },
     "index public.audit_log_pkey": {
       "definition": "CREATE UNIQUE INDEX audit_log_pkey ON public.audit_log USING btree (id)"
     },
@@ -5347,9 +5333,6 @@
     "index public.jobs_dedupe_key_idx": {
       "definition": "CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) WHERE (dedupe_key IS NOT NULL)"
     },
-    "index public.jobs_live_kind_locked_idx": {
-      "definition": "CREATE INDEX jobs_live_kind_locked_idx ON public.jobs USING btree (kind, locked_at) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]))"
-    },
     "index public.jobs_pending_run_after_idx": {
       "definition": "CREATE INDEX jobs_pending_run_after_idx ON public.jobs USING btree (run_after) WHERE (status = 'pending'::text)"
     },
@@ -5382,9 +5365,6 @@
     },
     "index public.openclaw_agents_project_name_idx": {
       "definition": "CREATE UNIQUE INDEX openclaw_agents_project_name_idx ON public.openclaw_agents USING btree (project_id, name)"
-    },
-    "index public.pipeline_ingest_receipts_job_idx": {
-      "definition": "CREATE INDEX pipeline_ingest_receipts_job_idx ON public.pipeline_ingest_receipts USING btree (job_id) WHERE (job_id IS NOT NULL)"
     },
     "index public.pipeline_ingest_receipts_pkey": {
       "definition": "CREATE UNIQUE INDEX pipeline_ingest_receipts_pkey ON public.pipeline_ingest_receipts USING btree (idempotency_key)"
@@ -5613,9 +5593,6 @@
     },
     "index public.swarm_recommendations_session_member_revision_key": {
       "definition": "CREATE UNIQUE INDEX swarm_recommendations_session_member_revision_key ON public.swarm_recommendations USING btree (session_id, member_id, revision)"
-    },
-    "index public.swarm_session_events_job_idx": {
-      "definition": "CREATE INDEX swarm_session_events_job_idx ON public.swarm_session_events USING btree (job_id) WHERE (job_id IS NOT NULL)"
     },
     "index public.swarm_session_events_pkey": {
       "definition": "CREATE UNIQUE INDEX swarm_session_events_pkey ON public.swarm_session_events USING btree (id)"
@@ -6679,10 +6656,6 @@
     },
     "trigger public.swarm_brief_revisions.swarm_brief_revisions_immutable_row": {
       "definition": "CREATE TRIGGER swarm_brief_revisions_immutable_row BEFORE DELETE OR UPDATE ON public.swarm_brief_revisions FOR EACH ROW EXECUTE FUNCTION public.rm_analytics_output_ledger_immutable()",
-      "fires": "always"
-    },
-    "trigger public.swarm_briefs.swarm_briefs_allocation": {
-      "definition": "CREATE TRIGGER swarm_briefs_allocation BEFORE INSERT OR UPDATE ON public.swarm_briefs FOR EACH ROW EXECUTE FUNCTION public.rm_swarm_briefs_allocation()",
       "fires": "always"
     },
     "trigger public.swarm_briefs.swarm_briefs_append_only": {

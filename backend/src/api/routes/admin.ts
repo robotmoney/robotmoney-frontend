@@ -13,7 +13,6 @@
 import { randomUUID } from "node:crypto";
 import { sql, jsonValue } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
-import { jobCountsByKind, jobCountsByStatus } from "../../admin/job-counts.ts";
 import { INDICATORS } from "../../analytics/analyze/indicators.ts";
 import { computeRegimeStaleness } from "../../analytics/report/regime-projection.ts";
 import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
@@ -148,6 +147,22 @@ const listSchedules = registerQuery({
   purpose: "List every schedule beside the jobs page.",
   callers: ROUTE_CALLERS,
   probe: { statement: "SELECT id, kind, cron, timezone, enabled, last_enqueued_at, next_run_at FROM job_schedules ORDER BY kind" },
+});
+
+const jobsByStatus = registerQuery({
+  role: "rm_app", object: "jobs", privileges: ["SELECT"],
+  site: "src/api/routes/admin:listJobs.byStatus",
+  purpose: "Count jobs per status for the jobs page summary.",
+  callers: ROUTE_CALLERS,
+  probe: { statement: "SELECT status, count(*)::int AS n FROM jobs GROUP BY status" },
+});
+
+const jobsByKind = registerQuery({
+  role: "rm_app", object: "jobs", privileges: ["SELECT"],
+  site: "src/api/routes/admin:listJobs.byKind",
+  purpose: "Count jobs per kind for the jobs page summary.",
+  callers: ROUTE_CALLERS,
+  probe: { statement: "SELECT kind, count(*)::int AS n FROM jobs GROUP BY kind" },
 });
 
 const lockJob = registerQuery({
@@ -640,10 +655,12 @@ export async function handleAdmin(
         SELECT id, kind, cron, timezone, enabled, last_enqueued_at, next_run_at
           FROM job_schedules
          ORDER BY kind`;
-      // Exact on a small table; on a large one, live statuses exact and the
-      // rest estimated, with no heap scan (src/admin/job-counts.ts, issue 1581).
-      const byStatus = await jobCountsByStatus(sql);
-      const byKind = await jobCountsByKind(sql);
+      const byStatusRows = await on(sql, jobsByStatus)<Row>`SELECT status, count(*)::int AS n FROM jobs GROUP BY status`;
+      const byKindRows = await on(sql, jobsByKind)<Row>`SELECT kind, count(*)::int AS n FROM jobs GROUP BY kind`;
+      const byStatus: Record<string, number> = {};
+      for (const r of byStatusRows) byStatus[r.status] = r.n;
+      const byKind: Record<string, number> = {};
+      for (const r of byKindRows) byKind[r.kind] = r.n;
       return { status: 200, body: { jobs, schedules, summary: { byStatus, byKind }, nextCursor } };
     } catch (e) {
       if (e instanceof ValidationError) return BAD(e.message);
