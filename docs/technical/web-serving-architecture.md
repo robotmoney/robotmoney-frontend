@@ -1,7 +1,7 @@
 # Web serving architecture: signed bundles in one immutable container
 
 Status: decided 2026-11-12 (owner design review). **Not implemented yet.** Today's mechanism (section 2) stays in
-force until the work in section 9 lands. Open questions are in section 10.
+force until the work in section 10 lands. Open questions are in section 11.
 
 ## 1. Why this changes now
 
@@ -46,18 +46,18 @@ Each line is an owner decision from the 2026-11-12 review.
    no second front-door container.
 6. **One external server component.** Not nginx plus another server.
 7. **No change to the Cloudflare tunnel.** It keeps forwarding to the same origin port.
-8. **A short gap per release is accepted.** Swapping the container drops requests for a moment (section 6).
+8. **A short gap per release is accepted.** Swapping the container drops requests for a moment (section 7).
 9. **The API owns its own cache.** The analytics response cache moves out of the web server and into the API. The
    cache empties on every API start, and that is wanted.
 
 The proposed server is **Caddy**, pinned by image digest, with its admin API and automatic HTTPS turned off. It is
 one Go binary, so the image still carries no Bun or Node runtime (issue 892). This choice is a proposal until the
-route and header test in section 9 passes against it.
+route and header test in section 10 passes against it.
 
 ## 4. The design
 
 ```
-CI (web-v* tag)                      production host
+CI (release commit)                  production host
 ┌──────────────────────┐            ┌───────────────────────────────────────┐
 │ static-assembly.sh   │            │ verify signature + digest + apiRange  │
 │ pack bundle          │  bundle    │ build image (bundle baked in)         │
@@ -77,7 +77,8 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 - Built in CI from the output of `scripts/static-assembly.sh`. Never built on the production host.
 - Deterministic: packing the same tree twice gives the same bytes.
 - Its `version.json` names the version, commit and `apiRange`. The file name must match it.
-- Published with its digest and signature on the `web-vA.B.C` release.
+- Built for the release commit, before stage runs, so stage and production deploy the same bytes (section 6.2).
+- Attached with its digest and signature to the `web-vA.B.C` release once the tag is cut.
 
 ### 4.2 The container
 
@@ -96,7 +97,7 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 | Proxy of `/api/`, `/health`, `/version` (keeps the Host header for WebAuthn) | The new server's config |
 | Client IP headers (`X-Client-IP`, `CF-Connecting-IP`) | The new server's config |
 | Maintenance answer and 503 with `Retry-After` when the api is down | The new server's config |
-| Response cache for `/api/public/analytics/*` | **The API** (section 7) |
+| Response cache for `/api/public/analytics/*` | **The API** (section 8) |
 | Graceful reload on a site switch | Replaced by the container swap (section 5) |
 
 ## 5. Release and rollback
@@ -117,7 +118,105 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 Why the throwaway copy is a valid check: it runs the same image as the container that will serve. The image cannot
 change between the check and the swap.
 
-## 6. The accepted gap
+## 6. The runbook: how an agent ships it
+
+Releases here are run by an agent from a runbook, not by a person from memory. That is how we ship, and this design
+is built to fit it. The rules live in [release-runbooks.md](./release-runbooks.md). The ones that shape this design:
+
+- **An agent executes every step** (D61). The operator gives one recorded go before the run. No step asks a person
+  to log in to a host. Everything runs from the control machine over SSH.
+- **The runbook is a YAML step list.** Each step has an id, a command, an expected exit and receipts. A run keeps a
+  journal. A rerun continues at the first step that is not done.
+- **Stage first, with the same steps.** Production runs what stage passed, unchanged.
+- **A check with no tool is a gap.** A gap is closed by a pull request to the runbook, never by a hand-run command.
+- **A failure reverts by a step,** not by judgement: the runbook names the rollback command.
+
+A design that needs a person to inspect, decide or type on a host does not fit. Each part of this design is
+therefore a command with a pass or fail answer and a receipt.
+
+### 6.1 The two web runbooks today
+
+| Runbook | Runner | Used for |
+|---|---|---|
+| `scripts/release/runbooks/web-content.yaml` (W01 to W12) | `bun run release:web` | A content-only release cut from `main` commits (D81) |
+| `scripts/release/runbooks/templates/web.yaml` (Q and C steps) | `bun run release:run` | A platform release that ships only the website (v0.7.4 was the first) |
+
+The full platform template, `kitchen-sink.yaml`, also switches the site (Q24-site on stage, C12-site on
+production). All three call `bun smoke:web`, so one change to that command reaches all of them.
+
+### 6.2 What the new design gives the runbook
+
+1. **Stage tests the exact bytes production gets.** Today stage and production each build the site on their own
+   host, so the two builds can differ. With a bundle, stage deploys a digest, and production deploys the same
+   digest. The stage pass is recorded for that digest.
+2. **Checks compare against a signed reference.** Today the live check compares served files with the host's own
+   copy. After the change it compares them with the signed bundle's manifest.
+3. **The agent can prove what runs.** The container's labels name the tag, the commit and the bundle digest. One
+   read-only command answers "what is production serving".
+4. **Rollback is one command with a known target.** The previous image already passed its checks.
+5. **No build on a host.** The site build and its dependency install leave the production host.
+
+### 6.3 How the web content steps change
+
+This table is a proposal. The step ids stay; the work inside each step changes.
+
+| Step | Today | After the change |
+|---|---|---|
+| W01-preflight | Reads `web/current` and `web/previous` on the host. Refuses with no rollback target | Reads the running container's labels and the kept previous image. Refuses with no rollback target |
+| W02-branch | Pushes the cherry-picked commit to `web/releases-A.B.x` | Unchanged |
+| W03-gate | `web-client` and `e2e-web` pass on the release commit | The same, and CI packs, signs and publishes the bundle for the release commit |
+| W04-stage-up | Stage target at production's commit, from a fresh production dump | Unchanged |
+| W05-stage-deploy | Checkout, `bun install`, then `smoke:web` builds the site on the stage host | `smoke:web` verifies the bundle, builds the image, checks a copy and swaps the container |
+| W06-stage-check | Live check against the stage origin. Records a pass for the commit | Live check against the bundle's manifest. Records a pass for the bundle digest |
+| W07-tag | Pushes `web-vA.B.C` | Unchanged. The tag's release carries the stage-passed bundle, digest and signature |
+| W08-tag-guard | Tag rule passes | The same, and the attached bundle's digest equals the stage-passed digest |
+| W09-checkout | Checkout and `bun install` on the production host | Checkout of the release tooling only. No site build |
+| W10-deploy | `smoke:web` builds the site, swaps the symlink, reloads nginx | The release flow in section 5, with the gap measured and recorded |
+| W11-live-check | `/version.json`, served bytes against the host's copy, sitemap routes, backend unchanged | `/version.json`, served bytes against the bundle's manifest, container labels equal the bundle digest, the header table, sitemap routes, `api` and workers unchanged |
+| W12-release | GitHub release notes | The same, naming the bundle digest |
+
+A failure in W11 runs `bun smoke:web --rollback`, as today. No step from W07 on writes unless a stage pass is
+recorded for the same bundle digest.
+
+### 6.4 What changes in the platform runbooks
+
+- **Site step (Q24-site, C12-site).** It deploys a named bundle through the same `smoke:web`. Which bundle a
+  platform release deploys is an open question (section 11).
+- **Probe (Q17 and Q25, C04 and C13).** The probe runs around the swap. Its grade excuses exactly the declared
+  swap gap, read from the release receipt, and fails any failed request outside it.
+- **Breaking cutover (C05b-smoke-down).** It stops every service except `website-server`, so the probe sees the
+  maintenance answer and not a 502. The grade requires that answer inside the window.
+- **Log verdict.** The gate's nginx access-log classes are replaced by the new server's log format.
+
+### 6.5 Faults the runbook must catch
+
+Each row is a check the runbook runs. A row with no tool today is a gap to close before the design ships.
+
+| Fault | Step that catches it | Tool today |
+|---|---|---|
+| The bundle was changed after CI built it | Signature and digest check before the image is built | Gap |
+| The site needs a newer API than production runs | `apiRange` check in `smoke:web` | Exists |
+| The new image serves wrong routes or headers | Check of the throwaway copy, before any traffic | Gap |
+| A CSP change blocks a dapp page | The header table in the live check | Gap |
+| Production serves bytes that differ from the release | Served bytes against the bundle manifest | Exists, against the host's copy |
+| The running container is not the released version | Container labels against the bundle digest | Gap |
+| The swap takes too long | Measured gap over three seconds fails the step | Gap |
+| A web release restarted the backend | `api` and worker container ids unchanged | Exists |
+| The public check fails after the swap | Automatic rollback, then a non-zero exit | Exists, by symlink |
+
+### 6.6 Runner defects to fix first
+
+The runbook is only as good as its runner. Recent runs failed more often on the runner than on the product, and
+each false failure ends in an accepted step. These are open and should land before this design:
+
+- The probe grade on production reads the skipped stage step and excuses nothing (issue 1502).
+- A breaking cutover serves a 502 where the maintenance page should be (issue 1501).
+- A stage resume at a new commit leaves the old checkout in place (issue 1585).
+- `analytics-load-check.ts` passes and then never exits (issue 1597).
+
+Two were fixed on 2026-11-12 (PR 1618): a retried run's stale probe, and the web template's log window.
+
+## 7. The accepted gap
 
 Docker gives a published port to one container at a time. So between "stop old" and "start new" nothing listens, and
 requests fail. API calls fail in that gap too, because the same container proxies them.
@@ -130,7 +229,7 @@ requests fail. API calls fail in that gap too, because the same container proxie
 If the measured gap proves harmful to member agents, a small port-holding proxy can be added later. The image does
 not change in that case.
 
-## 7. The API owns its cache
+## 8. The API owns its cache
 
 nginx stores answers for `/api/public/analytics/*` on disk for up to seven days. It also makes identical cold
 requests wait for one database query. The API already sets `Cache-Control` and `ETag` on these routes; nginx only
@@ -147,7 +246,7 @@ serve answers computed by the old code.
 
 This work ships in a platform release **before** nginx is removed.
 
-## 8. Options considered and rejected
+## 9. Options considered and rejected
 
 | Option | Why not |
 |---|---|
@@ -159,13 +258,13 @@ This work ships in a platform release **before** nginx is removed.
 | Host networking with a shared port | Loses Docker's network isolation. Both versions would answer during the overlap |
 | A firewall redirect on the host | Needs root on the production host |
 
-## 9. Order of work
+## 10. Order of work
 
 1. **API cache.** The API caches its public analytics answers; the nginx cache is removed (platform release).
 2. **Route and header test.** One table test that passes against today's nginx image. It is the contract the new
    server must meet unchanged: `/`, a prerendered route, a client route from `_shell.html`, an asset, a missing
    asset, `/version.json`, `/sitemap.xml`, the CSP and the security headers.
-3. **Bundle.** Pack, digest, sign and verify in CI on a `web-v*` tag.
+3. **Bundle.** Pack, digest, sign and verify in CI for the release commit.
 4. **New server.** It replaces nginx in the image and passes the test from step 2.
 5. **Baked bundle and swap.** The image bakes the bundle; `bun smoke:web` swaps containers, measures the gap and
    reverts on a failed check.
@@ -174,16 +273,18 @@ This work ships in a platform release **before** nginx is removed.
 A breaking platform cutover must keep this container running while the rest of the stack is down, so visitors get
 the maintenance page and not a 502 (issue 1501).
 
-## 10. Open questions
+## 11. Open questions
 
 - **Signing scheme.** Proposed: cosign keyless through GitHub OIDC, so no private key is stored. Not decided.
 - **How many old images to keep for rollback.** Proposed: one. Not decided.
+- **The release tooling still installs on the host.** `bun smoke:web` runs from a checkout on the host after
+  `bun install`. The site build leaves the host; the tooling install does not. Whether to remove it is not decided.
 - **Does a platform release still deploy the site?** Today its site step redeploys the platform tree's `frontend/`
   and can undo a newer web release. Tracked by the research issue on platform and web tags (1598).
 - **Headers and routes are not web content today.** The server config is outside `WEB_CONTENT_PATHS`, so a CSP
   change needs a platform release. Whether the config ships with the bundle is not decided.
 
-## 11. Related
+## 12. Related
 
 - `docs/decisions.md` D54 (the site is its own release unit), D61, D70, D81 (the web release line)
 - `docs/technical/static-asset-cache.md` (cache layers and header values)
