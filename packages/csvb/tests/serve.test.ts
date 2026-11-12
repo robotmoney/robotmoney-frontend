@@ -475,3 +475,48 @@ describe("the wake loop never ends and never hurts", () => {
     expect(existsSync(`${e.repo}.lock`)).toBe(false);
   }, 120_000);
 });
+
+describe("the container process itself", () => {
+  test("`csvb serve` started with a missing push key and connection file stays up, idle and healthy, and never exits", async () => {
+    const probe = Bun.serve({ port: 0, fetch: () => new Response("x") });
+    const port = probe.port!;
+    probe.stop(true);
+    const dir = tmp();
+    const proc = Bun.spawn(["bun", "run", join(import.meta.dir, "..", "src", "cli.ts"), "serve", "--repo", join(dir, "clone"), "--remote", join(dir, "none.git")], {
+      env: { ...process.env, CSVB_PUSH_KEY: join(dir, "missing-push-key"), CSVB_ENV_FILE: join(dir, "missing-replica.env"), CSVB_HEALTH_PORT: String(port), CSVB_INTERVAL_S: "3600" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    try {
+      let body = "";
+      for (let i = 0; i < 60; i++) {
+        try {
+          const r = await fetch(`http://127.0.0.1:${port}/health`);
+          body = await r.text();
+          expect(r.status).toBe(200);
+          if (body.includes("not provisioned")) break;
+        } catch {
+          // not listening yet
+        }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      expect(body).toContain("not provisioned");
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(proc.exitCode).toBeNull(); // still running: restart: unless-stopped has nothing to loop
+      const again = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(again.status).toBe(200);
+      expect(existsSync(join(dir, "clone"))).toBe(false);
+    } finally {
+      proc.kill();
+      await proc.exited;
+    }
+  }, 60_000);
+
+  test("a push key that vanishes after a wake began is a failed wake, not a crash: the ssh environment is built per wake", async () => {
+    const { sshEnvForKey } = await import("../src/serve.ts");
+    expect(() => sshEnvForKey(join(tmp(), "absent"))).toThrow(); // it can throw, so it must only ever run inside a wake
+    const e = env("s_a");
+    const r = serveOnce({ ...e.opts(D0 + 3 * DAY + 2 * HOUR), gitEnv: () => sshEnvForKey(join(tmp(), "absent")) });
+    await expect(r).rejects.toThrow();
+  });
+});

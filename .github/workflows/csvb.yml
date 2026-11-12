@@ -84,4 +84,4 @@ jobs:
           tests/audit.test.ts:9
           tests/verify-legacy.test.ts:3
           tests/boundary.test.ts:2
-          tests/serve.test.ts:23
+          tests/serve.test.ts:25

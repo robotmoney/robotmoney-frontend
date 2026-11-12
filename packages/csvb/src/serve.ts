@@ -96,8 +96,11 @@ export interface ServeOptions {
   maxSeconds?: number;
   /** Tests only: replaces fields of the backup options (the tables, the replica requirement, the junction). */
   backup?: Partial<BackupOptions>;
-  /** Extra environment for git (the ssh command carrying the push key). */
-  gitEnv?: Record<string, string>;
+  /**
+   * Extra environment for git (the ssh command carrying the push key). A function is called inside each wake, after
+   * the credentials are known to be in place, so a missing or rotated key never breaks startup.
+   */
+  gitEnv?: Record<string, string> | (() => Record<string, string>);
   log: (line: string) => void;
 }
 
@@ -155,7 +158,7 @@ export function serveOnce(o: ServeOptions): Promise<ServeResult> {
 async function wake(o: ServeOptions): Promise<ServeResult> {
   const remote = o.remote ?? "origin";
   const branch = o.branch ?? "main";
-  const genv = o.gitEnv;
+  const genv = typeof o.gitEnv === "function" ? o.gitEnv() : o.gitEnv;
   if (!existsSync(join(o.repo, ".git"))) {
     if (!o.remoteUrl) throw new Error(`${o.repo} is not a clone and no remote URL was given`);
     mkdirSync(dirname(o.repo), { recursive: true });

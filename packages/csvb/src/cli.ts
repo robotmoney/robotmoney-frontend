@@ -159,7 +159,7 @@ async function main(): Promise<number> {
         maxRssMb: num(a, "--max-rss-mb", Number(process.env.CSVB_MAX_RSS_MB ?? 3000)),
         pauseMs: num(a, "--pause-ms", Number(process.env.CSVB_PAUSE_MS ?? SERVE_PAUSE_MS)),
         maxSeconds: num(a, "--max-seconds", Number(process.env.CSVB_MAX_SECONDS ?? SERVE_MAX_SECONDS)),
-        gitEnv: pushKey ? sshEnvForKey(pushKey) : undefined,
+        gitEnv: pushKey ? () => sshEnvForKey(pushKey) : undefined, // lazy: built per wake, never at startup
         log: (l: string) => console.log(l),
       };
       if (one(a, "--once")) {
