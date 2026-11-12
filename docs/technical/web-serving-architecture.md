@@ -171,8 +171,12 @@ requests fail. API calls fail in that gap too, because the same container proxie
 
 ### 4.2 A breaking platform cutover
 
-A platform release that declares a maintenance window stops every service except `website-server`. Visitors get
-the maintenance answer for the whole window, never a 502.
+A platform release that declares a maintenance window stops every service except `website-server`
+(`bun smoke:down --keep-web`, issue 1501). During the window the site keeps answering 200 on `/` and
+`/version.json`. The API answers the maintenance JSON: `/api/status/maintenance` serves `maintenance.json`, and
+every other `/api/` path gets a 503 maintenance body with `Retry-After: 60`. A visitor never gets a 502. The
+release probe grade fails any non-200 site answer inside the window, and fails a window in which no answer
+announced the active maintenance window.
 
 ## 5. The runbook
 
