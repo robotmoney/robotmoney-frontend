@@ -9,6 +9,7 @@
 // answer 200, and no gap between receipts over 15 s (plus a small jitter
 // allowance), across the whole window.
 import { readFileSync } from "node:fs";
+import { maintenanceProblems } from "./maintenance-file.ts";
 
 export type RolloutUnit = "website" | "api-workers" | "migrate" | "participants";
 
@@ -66,7 +67,24 @@ export interface ProbeReceipt {
   at: number;
   /** HTTP status of the answer; 0 when there was none. */
   status: number;
+  /**
+   * Set only on an answer from the maintenance status route (issue 1501): true
+   * when it was a 200 whose body is a valid active MaintenanceStatus. A receipt
+   * that carries it is not a site answer, so the status and gap rules skip it.
+   */
+  maintenance?: boolean;
 }
+
+/** PURE. Whether an answer of the maintenance status route announces an active window: a 200 whose body is a valid MaintenanceStatus with state active. */
+export function maintenanceAnswer(status: number, body: string): boolean {
+  if (status !== 200) return false;
+  let value: unknown;
+  try { value = JSON.parse(body); } catch { return false; }
+  return maintenanceProblems(value).length === 0 && (value as { state: string }).state === "active";
+}
+
+/** A receipt the site answered (`/`, `/version.json`), not the maintenance status route. */
+const isSiteAnswer = (r: ProbeReceipt): boolean => r.maintenance === undefined;
 
 export interface ProbeGrade {
   ok: boolean;
@@ -88,7 +106,7 @@ export function gradeProbeReceipts(
   intervalMs: number = PROBE_INTERVAL_MS,
   jitterMs: number = PROBE_JITTER_MS,
 ): ProbeGrade {
-  const sorted = [...receipts].sort((a, b) => a.at - b.at);
+  const sorted = receipts.filter(isSiteAnswer).sort((a, b) => a.at - b.at);
   const limit = intervalMs + jitterMs;
   const nonOk = sorted.filter((r) => r.status !== 200);
   const gaps: Array<[number, number]> = [];
@@ -103,12 +121,14 @@ export function gradeProbeReceipts(
 
 /**
  * Grade the receipts of a window that holds one declared maintenance window
- * (a breaking cutover: the stack is down between the maintenance page going
- * on and off). Inside `declared` (epoch ms, on to off) a non-200 answer and
- * the gaps that start and end within one interval of it are the window, and
- * pass. Outside it, the grade is `gradeProbeReceipts` unchanged: any non-200
- * or gap fails. A receipt still counts toward the window when it falls
- * between its edges, so a probe that died before the window opened fails.
+ * (a breaking cutover: every service but website-server is down between the
+ * maintenance page going on and off, issue 1501). The site never goes down, so
+ * any non-200 site answer fails, inside the window or out. Only the gaps that
+ * start and end within one interval of the window pass. And the window must
+ * show the maintenance page was served: at least one maintenance receipt
+ * inside it is true, or the grade fails. A receipt still counts toward the
+ * window when it falls between its edges, so a probe that died before the
+ * window opened fails.
  */
 export function gradeProbeWithDeclaredWindow(
   receipts: readonly ProbeReceipt[],
@@ -120,13 +140,13 @@ export function gradeProbeWithDeclaredWindow(
   const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs);
   const limit = intervalMs + jitterMs;
   const inWindow = (at: number) => at >= declared.start && at <= declared.end;
-  const nonOk = base.nonOk.filter((r) => !inWindow(r.at));
   const gaps = base.gaps.filter(([from, to]) => !(from >= declared.start - limit && to <= declared.end + limit));
   const problems: string[] = [];
   if (base.receipts === 0) problems.push("no probe receipts in the window");
-  if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) outside the declared maintenance window were not 200`);
+  if (base.nonOk.length > 0) problems.push(`${base.nonOk.length} probe answer(s) of the site were not 200 (the site stays up through a declared maintenance window)`);
   if (gaps.length > 0) problems.push(`${gaps.length} gap(s) outside the declared maintenance window exceeded ${intervalMs / 1000} s`);
-  return { ok: problems.length === 0, receipts: base.receipts, nonOk, gaps, problems };
+  if (!receipts.some((r) => r.maintenance === true && inWindow(r.at))) problems.push("no answer inside the declared maintenance window announced an active maintenance window (/api/status/maintenance)");
+  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, gaps, problems };
 }
 
 /** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}. */
@@ -137,7 +157,7 @@ export function parseProbeReceipts(text: string): ProbeReceipt[] {
     .map((l) => {
       const r = JSON.parse(l) as Partial<ProbeReceipt>;
       if (typeof r.at !== "number" || typeof r.status !== "number") throw new Error(`bad probe receipt line: ${l}`);
-      return { at: r.at, status: r.status };
+      return typeof r.maintenance === "boolean" ? { at: r.at, status: r.status, maintenance: r.maintenance } : { at: r.at, status: r.status };
     });
 }
 
@@ -153,5 +173,16 @@ export async function probeOnce(url: string, fetchImpl: typeof fetch = fetch, no
     return { at, status: res.status };
   } catch {
     return { at, status: 0 };
+  }
+}
+
+/** One ask of the maintenance status route (issue 1501): the receipt records whether it announced an active window. Never throws. */
+export async function probeMaintenance(url: string, fetchImpl: typeof fetch = fetch, now: () => number = Date.now): Promise<ProbeReceipt> {
+  const at = now();
+  try {
+    const res = await fetchImpl(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    return { at, status: res.status, maintenance: maintenanceAnswer(res.status, await res.text()) };
+  } catch {
+    return { at, status: 0, maintenance: false };
   }
 }

@@ -1,4 +1,7 @@
-// With the api stopped, website-server keeps answering (issue 1220 (b)).
+// With the api stopped, website-server keeps answering (issue 1220 (b)). This is
+// the breaking cutover's window (issue 1501): smoke:down --keep-web stops every
+// service but website-server, and a visitor gets the site and the maintenance
+// answers, never a 502.
 // Real image, real Docker network, a stand-in api under the alias `api`. The
 // web directory is mounted at /srv/web as docker-compose.yml mounts it, with a
 // `current` site beside maintenance.json. Docker is a hard dependency of this
@@ -9,6 +12,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearMaintenanceFile, writeMaintenanceFile } from "../../lib/maintenance-file.ts";
+import { KEPT_WEB_SERVICE, makeDockerRunner, stopProjectExcept } from "../../lib/smoke-volumes.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const RUN = `${process.pid}-${Date.now().toString(36)}`;
@@ -16,6 +20,9 @@ const IMAGE = `rm-website-server-maint-test:${RUN}`;
 const NETWORK = `rm-wsm-net-${RUN}`;
 const API_CONTAINER = `rm-wsm-api-${RUN}`;
 const WEB_CONTAINER = `rm-wsm-web-${RUN}`;
+/** Both containers carry the compose labels a stack's do, so smoke:down --keep-web's own helper picks what to stop. */
+const PROJECT = `rm_wsm_${RUN.replace(/-/g, "_")}`;
+const labels = (service: string) => ["--label", `com.docker.compose.project=${PROJECT}`, "--label", `com.docker.compose.service=${service}`];
 const UPSTREAM_STATUS = { state: "none", startsAt: null, expectedEnd: null, message: null };
 const FILE_STATUS = { state: "active" as const, startsAt: "2030-01-01T10:00:00.000Z", expectedEnd: "2030-01-01T11:00:00.000Z", message: `window-${RUN}` };
 
@@ -27,7 +34,7 @@ const tryDocker = (args: string[]): void => { try { docker(args); } catch { /* a
 
 function startApi(): void {
   docker([
-    "run", "-d", "--name", API_CONTAINER, "--network", NETWORK, "--network-alias", "api",
+    "run", "-d", "--name", API_CONTAINER, "--network", NETWORK, "--network-alias", "api", ...labels("api"),
     "oven/bun:1.4.4", "bun", "-e",
     `Bun.serve({ port: 8787, hostname: "0.0.0.0", fetch(req) {
        const u = new URL(req.url);
@@ -40,13 +47,15 @@ function startApi(): void {
 beforeAll(() => {
   mkdirSync(join(webDir, "current"));
   writeFileSync(join(webDir, "current", "index.html"), "<!doctype html><title>site</title>");
+  writeFileSync(join(webDir, "current", "version.json"), JSON.stringify({ version: `test-${RUN}` }));
   chmodSync(webDir, 0o755);
   chmodSync(join(webDir, "current"), 0o755);
   chmodSync(join(webDir, "current", "index.html"), 0o644);
+  chmodSync(join(webDir, "current", "version.json"), 0o644);
   docker(["build", "-t", IMAGE, "website-server"]);
   docker(["network", "create", NETWORK]);
   startApi();
-  docker(["run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK, "-v", `${webDir}:/srv/web:ro`, "-p", "127.0.0.1::8080", IMAGE]);
+  docker(["run", "-d", "--name", WEB_CONTAINER, ...labels(KEPT_WEB_SERVICE), "--network", NETWORK, "-v", `${webDir}:/srv/web:ro`, "-p", "127.0.0.1::8080", IMAGE]);
   webPort = Number(docker(["port", WEB_CONTAINER, "8080/tcp"]).split("\n")[0]!.split(":").pop());
 }, 300_000);
 
@@ -79,16 +88,23 @@ test("api running: the status route is proxied to the api", async () => {
 test("api stopped: the site answers 200, the status route serves maintenance.json, other /api/ is a 503 maintenance body", async () => {
   writeMaintenanceFile(webDir, FILE_STATUS);
   chmodSync(join(webDir, "maintenance.json"), 0o644);
-  docker(["stop", API_CONTAINER]);
+  // What bun smoke:down --keep-web does to the instance (issue 1501): every container but website-server goes.
+  const stopped = stopProjectExcept(makeDockerRunner(), PROJECT, [KEPT_WEB_SERVICE]);
+  expect(stopped).toEqual({ removed: [API_CONTAINER], kept: [WEB_CONTAINER] });
 
   const site = await get("/", () => true);
   expect(site.status).toBe(200);
+  expect(await site.text()).toContain("<title>site</title>");
+  const version = await get("/version.json", () => true);
+  expect(version.status).toBe(200);
+  expect(await version.json()).toEqual({ version: `test-${RUN}` });
 
   const status = await get("/api/status/maintenance", (r) => r.status === 200 && r.headers.get("content-type")!.includes("json"));
   expect(await status.json()).toEqual(FILE_STATUS);
 
   const other = await get("/api/swarm/anything", () => true);
   expect(other.status).toBe(503);
+  expect(other.headers.get("retry-after")).toBe("60");
   expect(other.headers.get("content-type")).toContain("application/json");
   expect((await other.json()).error).toBe("maintenance");
 
@@ -99,7 +115,7 @@ test("api stopped: the site answers 200, the status route serves maintenance.jso
 }, 120_000);
 
 test("api restarted: the proxied answer returns", async () => {
-  docker(["rm", "-f", API_CONTAINER]);
+  tryDocker(["rm", "-f", API_CONTAINER]);
   startApi();
   const res = await get("/api/status/maintenance", (r) => r.status === 200);
   expect(await res.json()).toEqual(UPSTREAM_STATUS);

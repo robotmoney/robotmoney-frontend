@@ -161,6 +161,11 @@ jobs:
           scripts/tests/unit/web-release.test.ts:31
           scripts/tests/unit/check-web-tag.test.ts:9
           scripts/tests/unit/web-content-paths.test.ts:3
+      - name: Breaking cutover tests ran (issue 1501)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/release-runbook.test.ts:42
+          scripts/tests/unit/release-breaking-cutover.test.ts:28
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

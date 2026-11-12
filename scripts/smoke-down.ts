@@ -1,4 +1,12 @@
-// `bun smoke:down [--instance <name>]` — stop one deployment instance's stack.
+// `bun smoke:down [--keep-web] [--instance <name>]` — stop one deployment instance's stack.
+//
+// `--keep-web` (issue 1501) stops and removes every container of the instance
+// EXCEPT website-server, and keeps the network it holds. A breaking cutover
+// (release runbook steps Q18b and C05b) runs it after the maintenance page is
+// on: no previous-release service runs against the breaking state, while the
+// site keeps answering 200 and nginx serves maintenance.json for
+// /api/status/maintenance and a 503 maintenance body for every other /api/
+// path. Without it, Cloudflare had no origin and visitors got a 502.
 //
 // Spec §1: `bun smoke` brings the stack up and EXITS; "`bun smoke:down` is the
 // only way to stop them". It acts on ONE named instance (§1.1): the one named
@@ -27,7 +35,7 @@
 // too); the next boot of the instance overwrites it.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { makeDockerRunner, purgeSmokeEvalContainers } from "./lib/smoke-volumes.ts";
+import { KEPT_WEB_SERVICE, makeDockerRunner, purgeSmokeEvalContainers, stopProjectExcept } from "./lib/smoke-volumes.ts";
 import { buildSmokeLifecycleComposeEnv, dbModeFromState } from "./lib/smoke-lifecycle-env.ts";
 import {
   deploymentLockHolder,
@@ -52,6 +60,7 @@ try {
   process.exit(1);
 }
 const instance = paths.dir.split("/").at(-1)!;
+const keepWeb = process.argv.slice(2).includes("--keep-web");
 
 // A run still DEPLOYING this instance is not stopped from here. Its writer
 // holds the journal in memory, so tearing its stack down and closing the
@@ -132,7 +141,7 @@ console.log(
     ? `[smoke:down] tearing down instance ${instance} (project=${s.project}, created ${s.createdAt}) — its database is EXTERNAL and is not touched…`
     : `[smoke:down] tearing down instance ${instance} (project=${s.project}, created ${s.createdAt}) — keeping postgres data…`,
 );
-if (s.stage) {
+if (s.stage && !keepWeb) {
   // Worth saying out loud: this is the smoke the tunnel points at, so tearing it
   // down takes stage.robotmoney-labs.dev offline until a `--static-port` boot returns.
   console.log(`[smoke:down] this smoke was booted with --static-port (web pinned to :${s.webPort}, the cloudflared origin) — the stage site goes down with it.`);
@@ -147,23 +156,41 @@ if (purged.skipped.length > 0) {
   console.log(`[smoke:down] WARNING: failed to purge evaluation container(s): ${purged.skipped.map((sk) => `${sk.name} (${sk.reason})`).join(", ")}`);
 }
 
-// NO `-v`: keep the volume. `--env-file /dev/null`: compose must not read the
-// checkout's `.env` for interpolation (scripts/stack/config.ts composeArgs()).
-// `--remove-orphans`: the participant containers (smoke spec §6.2) are this
-// project's too, defined by the generated participants overlay the boot adds,
-// not by the files here — without it they would outlive the stack they call,
-// and hold its network so `down` could not remove it (§1: `smoke:down` stops
-// everything).
-const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "down", "--remove-orphans"], {
-  cwd: repoRoot,
-  env: dockerEnv,
-  stdout: "inherit",
-  stderr: "inherit",
-});
+if (keepWeb) {
+  // Issue 1501: every container but website-server goes; the network and the volume stay.
+  let kept;
+  try {
+    const r = stopProjectExcept(run, s.project, [KEPT_WEB_SERVICE]);
+    console.log(`[smoke:down] --keep-web: stopped and removed ${r.removed.length} container(s): ${r.removed.join(", ") || "(none)"}`);
+    kept = r.kept;
+  } catch (err) {
+    console.error(`[smoke:down] ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  console.log(
+    kept.length > 0
+      ? `[smoke:down] --keep-web: kept ${kept.join(", ")}; the site keeps answering and nginx serves maintenance.json while the api is down.`
+      : `[smoke:down] WARNING: --keep-web found no ${KEPT_WEB_SERVICE} container of ${s.project}; the site is not being served.`,
+  );
+} else {
+  // NO `-v`: keep the volume. `--env-file /dev/null`: compose must not read the
+  // checkout's `.env` for interpolation (scripts/stack/config.ts composeArgs()).
+  // `--remove-orphans`: the participant containers (smoke spec §6.2) are this
+  // project's too, defined by the generated participants overlay the boot adds,
+  // not by the files here — without it they would outlive the stack they call,
+  // and hold its network so `down` could not remove it (§1: `smoke:down` stops
+  // everything).
+  const r = Bun.spawnSync(["docker", "compose", "--env-file", "/dev/null", "down", "--remove-orphans"], {
+    cwd: repoRoot,
+    env: dockerEnv,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
 
-if (r.exitCode !== 0) {
-  console.error(`[smoke:down] docker compose down exited ${r.exitCode}`);
-  process.exit(r.exitCode ?? 1);
+  if (r.exitCode !== 0) {
+    console.error(`[smoke:down] docker compose down exited ${r.exitCode}`);
+    process.exit(r.exitCode ?? 1);
+  }
 }
 
 // The instance's service-token files STAY (smoke spec §5): `--local volume`
@@ -186,17 +213,17 @@ if (closeOpenJournal(paths, "stopped by bun smoke:down")) {
 }
 
 if (mode === "smoke-twin") {
-  console.log(`[smoke:down] containers + network removed for ${s.project}; the smoke-twin's restored copy of production is KEPT in volume ${s.smokeTwinVolume ?? "(unrecorded)"}`);
+  console.log(`[smoke:down] ${keepWeb ? `every container but ${KEPT_WEB_SERVICE} removed` : "containers + network removed"} for ${s.project}; the smoke-twin's restored copy of production is KEPT in volume ${s.smokeTwinVolume ?? "(unrecorded)"}`);
   console.log(`[smoke:down]   that copy holds real credential material — reclaim it with: bun run smoke:clean`);
   console.log(`[smoke:down]   re-run (restores a FRESH copy from backup ${s.smokeTwinBackupStamp ?? "?"}):  bun smoke --local dump --instance ${instance}`);
 } else if (mode === "external") {
   // Nothing here ever owned the data. Say which server the (now stopped) stack
   // was writing to so the operator knows where its rows actually went.
-  console.log(`[smoke:down] containers + network removed for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
+  console.log(`[smoke:down] ${keepWeb ? `every container but ${KEPT_WEB_SERVICE} removed` : "containers + network removed"} for ${s.project}; the EXTERNAL database is untouched (${s.databaseUrl})`);
   console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --instance ${instance}   (same server)`);
 } else {
   const volume = s.pgVolume ?? `${s.project}_pgdata`;
-  console.log(`[smoke:down] containers + network removed for ${s.project}; postgres data kept (volume ${volume})`);
+  console.log(`[smoke:down] ${keepWeb ? `every container but ${KEPT_WEB_SERVICE} removed` : "containers + network removed"} for ${s.project}; postgres data kept (volume ${volume})`);
   console.log(`[smoke:down]   resume:  bun smoke${s.stage ? " --static-port" : ""} --local volume --instance ${instance}`);
   console.log(`[smoke:down]   reclaim smoke volumes when done: bun run smoke:clean`);
 }

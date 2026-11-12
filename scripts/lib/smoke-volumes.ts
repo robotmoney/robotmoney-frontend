@@ -199,3 +199,34 @@ export function purgeSmokeEvalContainers(
   return { removed, skipped };
 }
 
+
+/** The one service `bun smoke:down --keep-web` leaves running (issue 1501). */
+export const KEPT_WEB_SERVICE = "website-server";
+
+/**
+ * Stop and remove every container of compose `project` except those of `keep`
+ * (issue 1501): `bun smoke:down --keep-web` in a breaking cutover, so the site
+ * keeps answering and nginx serves maintenance.json while nothing else of the
+ * previous release runs. Participant containers (the generated overlay, not
+ * the compose files here) are this project's too, so they go as well. The
+ * network stays, since the kept container holds it, and no volume is touched.
+ * `docker stop` first (SIGTERM, the compose grace), then `docker rm`.
+ * Throws when the daemon cannot list or stop them: an unknown stack is not a stopped one.
+ */
+export function stopProjectExcept(run: DockerRunner, project: string, keep: readonly string[]): { removed: string[]; kept: string[] } {
+  const ps = run(["ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", '{{.Names}}\t{{.Label "com.docker.compose.service"}}']);
+  if (ps.exitCode !== 0) throw new Error(`could not list project ${project}'s containers: ${ps.stderr.trim()}`);
+  const removed: string[] = [];
+  const kept: string[] = [];
+  for (const line of ps.stdout.split("\n")) {
+    const [name, service] = line.trim().split("\t");
+    if (!name) continue;
+    (keep.includes(service ?? "") ? kept : removed).push(name);
+  }
+  if (removed.length === 0) return { removed, kept };
+  for (const args of [["stop", ...removed], ["rm", ...removed]]) {
+    const r = run(args);
+    if (r.exitCode !== 0) throw new Error(`docker ${args[0]} failed for project ${project}: ${r.stderr.trim()}`);
+  }
+  return { removed, kept };
+}
