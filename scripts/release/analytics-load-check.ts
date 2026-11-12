@@ -293,8 +293,19 @@ async function followTick(container: string, boundary: Date, capMinutes: number)
     }
   };
   const cap = new Date(boundary.getTime() + capMinutes * 60_000);
-  await Promise.race([read(proc.stdout, 0), read(proc.stderr, 1), Bun.sleep(Math.max(0, cap.getTime() - Date.now()))]);
-  proc.kill();
+  // The cap timer must be cleared when a stream wins the race: a `Bun.sleep(cap)`
+  // left pending keeps the event loop alive to the cap (up to 120 minutes), so the
+  // process never exited after its PASS (issue 1597).
+  let capTimer: ReturnType<typeof setTimeout> | undefined;
+  const capped = new Promise<void>((resolve) => {
+    capTimer = setTimeout(resolve, Math.max(0, cap.getTime() - Date.now()));
+  });
+  try {
+    await Promise.race([read(proc.stdout, 0), read(proc.stderr, 1), capped]);
+  } finally {
+    clearTimeout(capTimer);
+    proc.kill();
+  }
   const result = windowEnd(boundary, texts.join("\n"), capMinutes);
   if (found) console.log(`[analytics-load-check] the tick logged regime asof at ${result.regimeAt}; the window closes at ${result.end.toISOString()}`);
   await Bun.sleep(Math.max(0, result.end.getTime() - Date.now()));
@@ -366,7 +377,13 @@ async function main(): Promise<number> {
         console.error(`[analytics-load-check] compose project ${record.project} has no running analytics-producer container`);
         return 1;
       }
-      const start = nextScheduledRun(new Date());
+      // `--boundary <iso>` follows a tick that already began (rehearsal and tests); without it, the next one.
+      const boundary = flag("--boundary");
+      if (boundary !== undefined && Number.isNaN(Date.parse(boundary))) {
+        console.error("[analytics-load-check] --boundary is an ISO instant");
+        return 2;
+      }
+      const start = boundary !== undefined ? new Date(boundary) : nextScheduledRun(new Date());
       const cap = new Date(start.getTime() + minutes * 60_000);
       console.log(`[analytics-load-check] waiting for the scheduled run at ${start.toISOString()}; the window closes ${REGIME_MARGIN_MINUTES} minutes after its regime asof line, at ${cap.toISOString()} at the latest`);
       await Bun.sleep(Math.max(0, start.getTime() - Date.now()));
@@ -395,4 +412,11 @@ async function main(): Promise<number> {
   return report.ok ? 0 : 1;
 }
 
-if (import.meta.main) process.exitCode = await main();
+if (import.meta.main) {
+  const code = await main();
+  process.exitCode = code;
+  // Belt and braces (issue 1597): the receipt is written and stdout is flushed
+  // by now, so end the process even if a handle (a docker child, a stream) is
+  // still open. The step must never hang on an exit that does not come.
+  process.stdout.write("", () => process.exit(code));
+}
