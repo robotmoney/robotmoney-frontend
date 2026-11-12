@@ -33,7 +33,7 @@ import { join } from "node:path";
 import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
 import { CHECK_ONLY_PATHS, checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
-import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, fill, renderStep, stepIds, stepListHash, templateValues, type StepTemplate } from "../../release/steps.ts";
+import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, WINDOW_START_PENDING, fill, renderStep, stepIds, stepListHash, templateValues, windowStartIsoOf, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
 import { newestFreshDump, STAGE_TARGET } from "../../release/stage-target-lib.ts";
 import { parseArgs, receiptPathsInOutput, resolveGo, runRelease, type RunnerDeps } from "../../release/run.ts";
@@ -1141,6 +1141,37 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
     expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `{"commit":"${SHA.slice(0, 6)}"}`, SHA)).toHaveLength(1);
     expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: SHA }), null, `<html>${SHA}</html>`, SHA)).toHaveLength(1);
     expect(identityProblems(null, null, null, SHA).length).toBe(2);
+  });
+
+  // The web template (owner 2026-11-11): the backend is not restarted, so --site-only compares
+  // only /version.json's commit; /api/version must still answer, clean, and /version's tag is not read.
+  test("identity --site-only: the site names the release commit; the running api's commit and tag are not compared", () => {
+    const site = `{"commit":"${SHA.slice(0, 8)}"}`;
+    const runningApi = JSON.stringify({ api: "0.5.1", commit: OTHER_SHA });
+    expect(identityProblems(runningApi, null, site, SHA, TAG, true)).toEqual([]);
+    expect(identityProblems(runningApi, null, site, SHA, SHA, true)).toEqual([]);
+    // red controls: without the flag the same bodies fail; the flag still needs the site's commit, a served api and no +dirty.
+    expect(identityProblems(runningApi, null, site, SHA, SHA).join()).toContain(`/api/version commit is ${OTHER_SHA}`);
+    expect(identityProblems(runningApi, null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA, TAG, true)).toHaveLength(1);
+    expect(identityProblems(null, null, site, SHA, TAG, true)).toEqual(["/api/version did not answer 200"]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: `${OTHER_SHA}+dirty` }), null, site, SHA, TAG, true)).toEqual(["/api/version carries +dirty or +unknown"]);
+  });
+
+  // Issue 1613: {windowStartIso} is the run's probe-start step's start, from the journal, for stage and production.
+  test("{windowStartIso} resolves from Q17-probe-start on stage and C04-probe-start on production, pending before it ran", () => {
+    const steps = { "Q17-probe-start": { startedAt: "2026-11-12T15:00:00.000Z" }, "C04-probe-start": { startedAt: "2026-11-12T15:30:00.000Z" }, "C11-ready": { startedAt: "2026-11-12T16:00:00.000Z" } };
+    expect(windowStartIsoOf(steps, "stage")).toBe("2026-11-12T15:00:00.000Z");
+    expect(windowStartIsoOf(steps, "prod")).toBe("2026-11-12T15:30:00.000Z");
+    expect(windowStartIsoOf({}, "prod")).toBe(WINDOW_START_PENDING);
+    const prod = loadTarget(join(targetsDir, "prod.json"));
+    const stage = loadTarget(join(targetsDir, "stage.json"));
+    const step = { id: "Q28-log-verdict", standing: [], description: "d", host: "target", phase: "qa", cmds: [["bun", "run", "prod:gate", "--since", "{windowStartIso}"]], expectExit: 0, receipts: [], irreversible: false } as unknown as StepTemplate;
+    for (const [target, iso] of [[stage, steps["Q17-probe-start"].startedAt], [prod, steps["C04-probe-start"].startedAt]] as const) {
+      const values = templateValues(target, SHA, "20261008T000000Z", READY_PENDING, SHA, windowStartIsoOf(steps, target.rmEnv));
+      expect(renderStep(step, target, values).remote).toContain(`--since ${iso}`);
+    }
+    // red control: with no journal record the plan shows the pending marker, not a date.
+    expect(renderStep(step, prod, templateValues(prod, SHA, "20261008T000000Z")).remote).toContain(`--since ${WINDOW_START_PENDING}`);
   });
 
   // D64: with the rc tag as the ref, the tag is read from /version (buildIdentityJson, the

@@ -362,6 +362,14 @@ at}`), and each step record names the `commit` it ran at; steps already ok keep 
 SP.8 then also requires every earlier commit in `commits` to differ from the production commit only
 in `CHECK_ONLY_PATHS`. Production never resumes at a new commit.
 
+**A retried run's probe.** `--run <ts> --from <step>` from a step before Q17-probe-start or
+C04-probe-start leaves the first attempt's `probe/` folder in place, and that attempt's Q25 or C13
+grade stopped its probe. `probe.ts start` treats a `probe.json` as live only when its pid still runs
+and no `grade.json` is newer than it. Otherwise it moves `probe.json`, `probe.jsonl` and `grade.json`
+aside (suffix `.<ms>.old`) and starts a fresh probe, so the retried run grades a probe that ran during
+its own site switch (issue 1612). A live probe still prints "already running" and starts nothing.
+`probe.ts` is not in `CHECK_ONLY_PATHS`, so a fix to it needs a new run.
+
 ### 4.7. Production execution: a rolling upgrade
 
 The owner writes the go once a stage run of the same step list passed on the same tree (SP.8) and
@@ -470,6 +478,13 @@ distinct error in every log must match a classification in
 `scripts/lib/gate/log-classifications.json` with a written reason. A session that publishes
 `no_consensus` is a warning, never a good session (owner, 2026-10-06).
 
+**The window of a post-release grade.** Without `--since`, `--mode post-release` grades since the
+run's READY, and falls back to the previous release's READY when the run has none. A release with no
+READY therefore needs an explicit window (the `web` template passes `--since {windowStartIso}`, §5).
+Stage's Q28 can pass while production's C16 fails on the same release, because stage's stack is
+freshly built and its logs are short, while production's carry the running release's errors from
+before the cutover. A template without a restart must set its own window rather than lean on stage.
+
 ### 4.8. Recovery
 
 The recovery decision is the release YAML's `recovery:` text (SC.1). The preflight's `P.recovery`
@@ -491,15 +506,35 @@ exists on the release branch.
 There are two kinds of file, and the runner runs only the second:
 
 - **A template** (`scripts/release/runbooks/templates/<name>.yaml`) is a general runbook: every step
-  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default and
-  the only template. A content-only website release has no template here: it runs on its own
-  release line (§12).
+  a kind of release runs, in order. `kitchen-sink`, the full-stack release, is the default.
+  `web` is the web-only subset (below). A content-only website release cut from `main` runs on its
+  own release line instead (§12).
 - **A release runbook** (`scripts/release/runbooks/releases/vA.B.C.yaml`) names its template
   (`template: kitchen-sink` when omitted), holds a full copy of the template's steps, and **only
   adds**. Every template step stays, unchanged and in order. An added step or check may sit
   anywhere, and carries `added: vA.B.C`. A one-time action is an added step gated on a receipt's
   absence (`gateAbsent`). The file also holds the release's `recovery:` decision (required), its
   `notes:` (identity, migrations, exceptions and owner decisions), and its `scope:`.
+
+**The `web` template (owner, 2026-11-11: "The web release is a variation of the kitchen sink
+release").** `scripts/release/runbooks/templates/web.yaml` is for a platform release that ships only
+the website through `bun run release:run` (v0.7.4 is the first). It is an ordered subset of
+kitchen-sink, each kept step copied unchanged: stage's preparation (Q01 to Q05), the checkout,
+host identity and install, the log baseline, the website probe around the site switch
+(`bun smoke:web`), the version tag (C06), and the identity, product and log checks after it. It
+drops every database and backend step: capture, state baseline, backups and restore proof,
+migrate and the breaking steps, env rewrite, identity and tokens, the boots and READY, the soak and
+its checks, the analytics load, and the archive, SDK and database checks. It has two adjustments.
+`--site-only` on Q26/C14-verify-version: the backend is not restarted, so `/version.json` must name
+the release commit while `/api/version`'s commit and `/version`'s tag stay the running release's.
+`--since {windowStartIso}` on Q28/C16-log-verdict (issue 1613): the template has no restart and no
+READY, so `prod:gate --mode post-release` would fall back to the previous release's READY and grade
+that release's whole runtime, as v0.7.4's C16 did on six days of logs. `{windowStartIso}` is the
+start of the run's first irreversible step, Q17-probe-start on stage and C04-probe-start on
+production, read from the run's journal when the step renders. A template with no READY must set its
+own log window this way (§4.7.2). A unit test holds web.yaml to that subset, and each release runbook
+to the template it names. Recovery from a failed web release is `bun smoke:web --rollback` to the
+previous site.
 
 **Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
 `check: <step>`, the version step that proves it landed, or `none: <reason>` (docs only, CI only,

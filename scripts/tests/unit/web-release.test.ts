@@ -316,7 +316,9 @@ describe("the committed runbook", () => {
   test("sits outside templates/ and releases/, so the platform loader never reads it", () => {
     expect(WEB_RUNBOOK_PATH).not.toMatch(/\/(templates|releases)\//);
     expect(releaseRunbookNames()).not.toContain("web-content");
-    expect([...TEMPLATE_NAMES]).toEqual(["kitchen-sink"]);
+    // The platform loader's templates: kitchen-sink and its web-only subset `web` (owner 2026-11-11), never web-content.
+    expect([...TEMPLATE_NAMES]).toEqual(["kitchen-sink", "web"]);
+    expect([...TEMPLATE_NAMES]).not.toContain("web-content");
   });
 });
 
