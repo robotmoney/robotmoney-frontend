@@ -60,8 +60,12 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 - It carries `version.json`, which names the version, the commit and the `apiRange`. The file name matches it.
 - It carries a manifest that lists every file with its sha256.
 - It is built on the control machine, the machine every release runs from.
-- It has a sha256 digest and a signature. The signing key is held on the control machine and nowhere else.
-- The public key is committed to the repository. A host verifies a bundle against the committed key only.
+- It has a sha256 digest and a signature.
+- The signature is an SSH signature made with an ed25519 key (`ssh-keygen -Y sign`), in a namespace used only
+  for web bundles.
+- The private key is held on the control machine and nowhere else. It signs bundles and does nothing else.
+- The public key is committed to the repository as an allowed-signers file. A host verifies a bundle against
+  that file only (`ssh-keygen -Y verify`).
 - It reaches a host from the control machine over SSH.
 - CI builds, signs and deploys nothing. It runs the checks that gate a release commit.
 - It is built for the release commit before stage runs (R13).
@@ -225,13 +229,13 @@ W06 and W11 run the same check:
 | A measured gap, not zero downtime | Zero downtime needs a second component that holds the port, or a change to the tunnel or the host firewall |
 | The API owns its cache | Caching is the API's business logic. A cache in the web server can outlive a deploy and serve old answers |
 | Build on the control machine, not on the host | A dependency install must not run beside live services, and stage and production must get the same bytes |
+| SSH signatures with an ed25519 key | OpenSSH is already on the control machine and every host, so signing adds no component |
 | Sign on the control machine, not in CI | The control machine already holds release authority. CI holds no signing key and no deploy credential |
 
 ## 7. Open decisions
 
 These must be settled before this specification is final.
 
-- **Signature tool.** Which tool signs and verifies with the control machine's key.
 - **Server config and the bundle.** Whether headers and routes ship inside the bundle or with the platform. This
   decides whether a CSP change is a web release.
 - **Platform releases and the site.** Whether a platform release deploys a bundle at all, and which one.
