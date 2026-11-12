@@ -262,9 +262,14 @@ steps:
     phase: "qa"
     since: "v0.7.0"
     breakingOnly: true
-    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    description: "Breaking cutover: bun smoke:down --keep-web stops every service of the instance except website-server, so no previous-release service runs against the breaking state while the site keeps answering and nginx serves maintenance.json (issue 1501; the data volume is kept). Runs only for a release that declares breaking:"
     cmds:
-      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+      - ["bun", "run", "smoke:down", "--keep-web", "--instance", "{instance}"]
+    changedSince: "v0.7.5"
+    before:
+      description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+      cmds:
+        - ["bun", "run", "smoke:down", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -793,9 +798,14 @@ steps:
     phase: "cutover"
     since: "v0.7.0"
     breakingOnly: true
-    description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+    description: "Breaking cutover: bun smoke:down --keep-web stops every service of the instance except website-server, so no previous-release service runs against the breaking state while the site keeps answering and nginx serves maintenance.json (issue 1501; the data volume is kept). Runs only for a release that declares breaking:"
     cmds:
-      - ["bun", "run", "smoke:down", "--instance", "{instance}"]
+      - ["bun", "run", "smoke:down", "--keep-web", "--instance", "{instance}"]
+    changedSince: "v0.7.5"
+    before:
+      description: "Breaking cutover: bun smoke:down stops the whole stack, so no previous-release service runs against the breaking state (the data volume is kept). Runs only for a release that declares breaking:"
+      cmds:
+        - ["bun", "run", "smoke:down", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false

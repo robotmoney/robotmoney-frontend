@@ -161,3 +161,13 @@ jobs:
           test -f "$f" || { echo "::error::$f is missing"; exit 1; }
           grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::$f did not run in the integration suite"; exit 1; }
+      # Issue 1501: the breaking cutover keeps website-server up with the api
+      # stopped; this proof runs against the real image. Its absence or
+      # exclusion is a red job, not a green one.
+      - name: Website-server maintenance proof ran (issue 1501)
+        shell: bash
+        run: |
+          f=scripts/tests/integration/website-server-maintenance.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }

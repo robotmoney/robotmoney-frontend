@@ -6,9 +6,13 @@
 //   bun scripts/release/probe.ts start --origin <url> --target <name> --run <run-ts>   start probing in the background, record the window start
 //   bun scripts/release/probe.ts grade --target <name> --run <run-ts>                  stop the probe; exit 1 on any non-200 or gap
 //
-// Every PROBE_EVERY_MS the probe asks `/` and `/version.json`. The grade fails
-// on any answer that is not 200, on a gap between ticks over the interval plus
-// jitter, and on a probe that died (scripts/lib/rollout-probe.ts). `start` leaves a
+// Every PROBE_EVERY_MS the probe asks `/` and `/version.json`, and
+// `/api/status/maintenance`, whose receipt records `maintenance: true` only for
+// a 200 with a valid active MaintenanceStatus body (issue 1501). The grade fails
+// on any site answer that is not 200, on a gap between ticks over the interval
+// plus jitter, and on a probe that died (scripts/lib/rollout-probe.ts). In a
+// declared maintenance window the site still answers 200 (website-server stays
+// up), and the window must hold a receipt with `maintenance: true`. `start` leaves a
 // live probe alone ("already running"); a probe.json whose pid is dead, or that a
 // newer grade.json already stopped, is a retried run's leftover (issue 1612): it
 // is moved aside and a fresh probe starts. Files live
@@ -20,14 +24,16 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readJournal, type RunJournal } from "./journal.ts";
-import { gradeProbeReceipts, gradeProbeWithDeclaredWindow, parseProbeReceipts, probeOnce, type ProbeGrade, type ProbeReceipt } from "../lib/rollout-probe.ts";
+import { gradeProbeReceipts, gradeProbeWithDeclaredWindow, parseProbeReceipts, probeMaintenance, probeOnce, type ProbeGrade, type ProbeReceipt } from "../lib/rollout-probe.ts";
 
 /** How often the release probe asks. Far tighter than the 15 s rollout default: a release must show no gap a visitor would see. */
 export const PROBE_EVERY_MS = 2_000;
 /** Timer and network jitter allowed on top of the interval. */
 export const PROBE_SLACK_MS = 3_000;
-/** The paths each tick asks: the page and the identity file a page fetches. */
-export const PROBE_PATHS = Object.freeze(["/", "/version.json"]);
+/** The maintenance status route: answered by the api, or by nginx from maintenance.json while the api is down. */
+export const MAINTENANCE_STATUS_PATH = "/api/status/maintenance";
+/** The paths each tick asks: the page, the identity file a page fetches, and the maintenance status route. */
+export const PROBE_PATHS = Object.freeze(["/", "/version.json", MAINTENANCE_STATUS_PATH]);
 
 interface ProbeState { readonly pid: number; readonly startMs: number; readonly origin: string; readonly everyMs: number }
 
@@ -106,7 +112,10 @@ function flag(name: string): string | undefined {
 async function loop(origin: string, out: string): Promise<never> {
   for (;;) {
     const tick = Date.now();
-    for (const path of PROBE_PATHS) appendFileSync(out, `${JSON.stringify({ ...(await probeOnce(new URL(path, origin).toString())), path })}\n`);
+    for (const path of PROBE_PATHS) {
+      const url = new URL(path, origin).toString();
+      appendFileSync(out, `${JSON.stringify({ ...(await (path === MAINTENANCE_STATUS_PATH ? probeMaintenance(url) : probeOnce(url))), path })}\n`);
+    }
     await Bun.sleep(Math.max(0, PROBE_EVERY_MS - (Date.now() - tick)));
   }
 }

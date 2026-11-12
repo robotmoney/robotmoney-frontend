@@ -172,6 +172,14 @@ export interface StepTemplate {
    * after (./runbook.ts checkAddOnly). Like `since`, the hash never sees it.
    */
   readonly afterSince?: string;
+  /**
+   * The first release whose runbook must carry this template step as it now
+   * reads (`vA.B.C`, issue 1501). An earlier release's runbook keeps the step
+   * as it ran: `before` holds the description and commands it ran with
+   * (./runbook.ts checkAddOnly). Like `since`, the hash never sees either.
+   */
+  readonly changedSince?: string;
+  readonly before?: { readonly description: string; readonly cmds: readonly (readonly string[])[] };
 }
 
 /** The repository every checkout fetches from; P01-checkout and P04-capture-checkout clone a missing checkout from it. */

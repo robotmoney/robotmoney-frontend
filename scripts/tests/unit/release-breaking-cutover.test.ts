@@ -1,6 +1,8 @@
 // The breaking-migration cutover (issue 1484; smoke spec section 8.5): a release whose runbook declares
 // `breaking:` runs maintenance page on, bun smoke:down, migrate, a full boot, maintenance page off, in place
 // of the rolling migrate and boot, and its probe grade allows exactly that declared window.
+// Issue 1501: from v0.7.5 the smoke-down step keeps website-server, so the site answers 200 through the
+// window, and the grade requires that and a probe receipt announcing the active maintenance window.
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,7 +13,9 @@ import { loadReleaseRunbook, loadTemplate, stepNameOf, twinProblems, type Runboo
 import { skipReason } from "../../release/run.ts";
 import { BREAKING_SKIPS, stepListHash } from "../../release/steps.ts";
 import type { ReleaseTarget } from "../../release/target.ts";
-import { gradeProbeWithDeclaredWindow, type ProbeReceipt } from "../../lib/rollout-probe.ts";
+import { gradeProbeWithDeclaredWindow, maintenanceAnswer, parseProbeReceipts, probeMaintenance, type ProbeReceipt } from "../../lib/rollout-probe.ts";
+import { KEPT_WEB_SERVICE, stopProjectExcept, type DockerRunResult } from "../../lib/smoke-volumes.ts";
+import { MAINTENANCE_STATUS_PATH, PROBE_PATHS } from "../../release/probe.ts";
 import { activeWindow, setMaintenance } from "../../release/maintenance.ts";
 
 const stage = { rmEnv: "stage" } as ReleaseTarget;
@@ -77,6 +81,91 @@ describe("the breaking cutover order", () => {
   });
 });
 
+describe("smoke-down keeps website-server through the breaking window (issue 1501)", () => {
+  const template = loadTemplate();
+  const KEEP_WEB = ["bun", "run", "smoke:down", "--keep-web", "--instance", "{instance}"];
+
+  test("Q18b and C05b stop every service of the instance except website-server, from v0.7.5 on", () => {
+    for (const id of ["Q18b-smoke-down", "C05b-smoke-down"]) {
+      const step = template.steps.find((s) => s.id === id)!;
+      expect(step.cmds, id).toEqual([KEEP_WEB]);
+      expect(step.changedSince, id).toBe("v0.7.5");
+      // what v0.7.0 ran stays its record
+      expect(step.before?.cmds, id).toEqual([["bun", "run", "smoke:down", "--instance", "{instance}"]]);
+      expect(v070.steps.find((s) => s.id === id)!.cmds).toEqual(step.before!.cmds);
+    }
+    expect(twinProblems(template.steps, "template")).toEqual([]);
+  });
+
+  test("red control: no other template step runs a plain smoke:down", () => {
+    const plain = template.steps.filter((s) => s.cmds.some((c) => c.includes("smoke:down") && !c.includes("--keep-web")));
+    expect(plain.map((s) => s.id)).toEqual([]);
+  });
+
+  const fakeDocker = (ps: string, fail: string | null = null) => {
+    const calls: string[][] = [];
+    const run = (args: string[]): DockerRunResult => {
+      calls.push(args);
+      if (args[0] === fail) return { exitCode: 1, stdout: "", stderr: "daemon said no" };
+      return { exitCode: 0, stdout: args[0] === "ps" ? ps : "", stderr: "" };
+    };
+    return { run, calls };
+  };
+
+  test("--keep-web stops then removes every container of the project but website-server's, participants included", () => {
+    const ps = ["rm_prod-api-1\tapi", "rm_prod-website-server-1\twebsite-server", "rm_prod-postgres-1\tpostgres", "rm_prod-participant-a-1\tparticipant-a", ""].join("\n");
+    const { run, calls } = fakeDocker(ps);
+    const r = stopProjectExcept(run, "rm_prod", [KEPT_WEB_SERVICE]);
+    expect(r.kept).toEqual(["rm_prod-website-server-1"]);
+    expect(r.removed).toEqual(["rm_prod-api-1", "rm_prod-postgres-1", "rm_prod-participant-a-1"]);
+    expect(calls[0]).toContain("label=com.docker.compose.project=rm_prod");
+    expect(calls.slice(1)).toEqual([["stop", ...r.removed], ["rm", ...r.removed]]);
+    // nothing touches the network or a volume
+    expect(calls.flat().some((a) => a === "network" || a === "volume" || a === "-v")).toBe(false);
+  });
+
+  test("red control: a daemon that cannot list or stop the containers fails the step", () => {
+    expect(() => stopProjectExcept(fakeDocker("", "ps").run, "rm_prod", [KEPT_WEB_SERVICE])).toThrow("could not list");
+    expect(() => stopProjectExcept(fakeDocker("rm_prod-api-1\tapi\n", "stop").run, "rm_prod", [KEPT_WEB_SERVICE])).toThrow("docker stop failed");
+  });
+});
+
+describe("the probe's maintenance receipt (issue 1501)", () => {
+  const ACTIVE = { state: "active", startsAt: "2026-10-27T10:00:00.000Z", expectedEnd: "2026-10-27T10:30:00.000Z", message: null };
+
+  test("the probe asks the site paths and the maintenance status route", () => {
+    expect(PROBE_PATHS).toEqual(["/", "/version.json", MAINTENANCE_STATUS_PATH]);
+    expect(MAINTENANCE_STATUS_PATH).toBe("/api/status/maintenance");
+  });
+
+  test("only a 200 with a valid active MaintenanceStatus records maintenance: true", () => {
+    expect(maintenanceAnswer(200, JSON.stringify(ACTIVE))).toBe(true);
+    // the 503 maintenance body nginx gives other /api/ paths
+    expect(maintenanceAnswer(503, JSON.stringify({ error: "maintenance" }))).toBe(false);
+    expect(maintenanceAnswer(503, JSON.stringify(ACTIVE))).toBe(false);
+    expect(maintenanceAnswer(404, "not found")).toBe(false);
+    expect(maintenanceAnswer(200, JSON.stringify({ ...ACTIVE, state: "none" }))).toBe(false);
+    expect(maintenanceAnswer(200, JSON.stringify({ ...ACTIVE, state: "scheduled" }))).toBe(false);
+    // an active window without its end, an extra key, or no JSON at all is not a valid MaintenanceStatus
+    expect(maintenanceAnswer(200, JSON.stringify({ ...ACTIVE, expectedEnd: null }))).toBe(false);
+    expect(maintenanceAnswer(200, JSON.stringify({ ...ACTIVE, extra: 1 }))).toBe(false);
+    expect(maintenanceAnswer(200, "<html>")).toBe(false);
+  });
+
+  test("probeMaintenance reads the body, and a failed fetch records false", async () => {
+    const answering = (status: number, body: string) => (async () => new Response(body, { status })) as unknown as typeof fetch;
+    expect(await probeMaintenance("http://x/api/status/maintenance", answering(200, JSON.stringify(ACTIVE)), () => 5)).toEqual({ at: 5, status: 200, maintenance: true });
+    expect(await probeMaintenance("http://x/api/status/maintenance", answering(503, JSON.stringify({ error: "maintenance" })), () => 5)).toEqual({ at: 5, status: 503, maintenance: false });
+    const failing = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
+    expect(await probeMaintenance("http://x/api/status/maintenance", failing, () => 5)).toEqual({ at: 5, status: 0, maintenance: false });
+  });
+
+  test("the receipt line keeps the maintenance field, and a site line carries none", () => {
+    const lines = [JSON.stringify({ at: 1, status: 200, path: "/" }), JSON.stringify({ at: 2, status: 200, maintenance: true, path: MAINTENANCE_STATUS_PATH })].join("\n");
+    expect(parseProbeReceipts(lines)).toEqual([{ at: 1, status: 200 }, { at: 2, status: 200, maintenance: true }]);
+  });
+});
+
 describe("a release that does not declare breaking is unchanged", () => {
   test("v0.6.2 has none of the breaking steps and its recorded step-list hash is the value it had before", () => {
     expect(v062.breaking).toBeUndefined();
@@ -124,6 +213,15 @@ const probes = (from: number, to: number, skip: (at: number) => boolean = () => 
 };
 const WINDOW = { start: T0, end: T0 + 600_000 };
 const DECL = { start: T0 + 100_000, end: T0 + 300_000 };
+/** The maintenance route's receipts every 2 s over [from, to]: true inside the declared window, as nginx serves maintenance.json there. */
+const maint = (from: number, to: number, inside = true): ProbeReceipt[] => {
+  const out: ProbeReceipt[] = [];
+  for (let at = from + 1; at <= to; at += 2_000) {
+    const open = at >= DECL.start && at <= DECL.end;
+    out.push({ at, status: 200, maintenance: open && inside });
+  }
+  return out;
+};
 
 describe("the declared window in the probe grade", () => {
   test("declaredWindow reads maintenance-on start to maintenance-off end, by step name, on either side", () => {
@@ -145,16 +243,43 @@ describe("the declared window in the probe grade", () => {
 
   const steps = journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start + 1000), rec("C12a-maintenance-off", "ok", DECL.end - 1000, DECL.end)]);
 
-  test("a gap and non-200 answers inside the declared window pass", () => {
-    const receipts = probes(WINDOW.start, WINDOW.end, (at) => at > DECL.start + 4_000 && at < DECL.end - 4_000);
-    const withErrors = [...receipts, { at: DECL.start + 10_000, status: 503 }];
-    expect(gradeRun(withErrors, WINDOW, steps, 2_000, 3_000).ok).toBe(true);
-    // the same receipts fail when no window was declared: the rolling grade is unchanged
-    expect(gradeRun(withErrors, WINDOW, journalSteps([]), 2_000, 3_000).ok).toBe(false);
+  test("passes where the site answered 200 throughout and the maintenance receipts inside the window are true", () => {
+    const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end)];
+    expect(gradeRun(receipts, WINDOW, steps, 2_000, 3_000)).toMatchObject({ ok: true, problems: [] });
+    // the maintenance receipts are not site answers: a 503 from the status route outside the window fails nothing
+    const statusDown = [...receipts, { at: T0 + 30_001, status: 503, maintenance: false }];
+    expect(gradeRun(statusDown, WINDOW, steps, 2_000, 3_000).ok).toBe(true);
+    // and a rolling run (no window) grades only the site, as before
+    expect(gradeRun(statusDown, WINDOW, journalSteps([]), 2_000, 3_000).ok).toBe(true);
+  });
+
+  test("a gap inside the declared window still passes", () => {
+    const receipts = [...probes(WINDOW.start, WINDOW.end, (at) => at > DECL.start + 4_000 && at < DECL.end - 4_000), ...maint(WINDOW.start, WINDOW.end)];
+    expect(gradeRun(receipts, WINDOW, steps, 2_000, 3_000).ok).toBe(true);
+  });
+
+  test("red control: a non-200 on / or /version.json inside the declared window fails (issue 1501)", () => {
+    for (const status of [502, 503, 0]) {
+      const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end), { at: DECL.start + 10_000, status }];
+      const g = gradeRun(receipts, WINDOW, steps, 2_000, 3_000);
+      expect(g.ok, String(status)).toBe(false);
+      expect(g.problems.join(), String(status)).toContain("not 200");
+    }
+  });
+
+  test("red control: a declared window with no receipt carrying maintenance: true fails", () => {
+    const none = gradeProbeWithDeclaredWindow([...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end, false)], WINDOW, DECL, 2_000, 3_000);
+    expect(none.ok).toBe(false);
+    expect(none.problems.join()).toContain("announced an active maintenance window");
+    // a true receipt outside the window does not count
+    const outside = gradeProbeWithDeclaredWindow([...probes(WINDOW.start, WINDOW.end), { at: DECL.end + 10_000, status: 200, maintenance: true }], WINDOW, DECL, 2_000, 3_000);
+    expect(outside.ok).toBe(false);
+    // the site alone, with no maintenance receipts at all, fails too
+    expect(gradeProbeWithDeclaredWindow(probes(WINDOW.start, WINDOW.end), WINDOW, DECL, 2_000, 3_000).ok).toBe(false);
   });
 
   test("red control: a gap outside the declared window fails, before it and after it", () => {
-    const hole = (a: number, b: number) => probes(WINDOW.start, WINDOW.end, (at) => at > a && at < b && !(at > DECL.start + 4_000 && at < DECL.end - 4_000));
+    const hole = (a: number, b: number) => [...probes(WINDOW.start, WINDOW.end, (at) => at > a && at < b && !(at > DECL.start + 4_000 && at < DECL.end - 4_000)), ...maint(DECL.start, DECL.end)];
     const before = hole(T0 + 20_000, T0 + 50_000);
     expect(gradeRun(before, WINDOW, steps, 2_000, 3_000).ok).toBe(false);
     const after = hole(DECL.end + 20_000, DECL.end + 50_000);
@@ -162,10 +287,10 @@ describe("the declared window in the probe grade", () => {
   });
 
   test("red control: a non-200 outside the window fails", () => {
-    const receipts = [...probes(WINDOW.start, WINDOW.end), { at: T0 + 30_001, status: 502 }];
+    const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end), { at: T0 + 30_001, status: 502 }];
     const g = gradeProbeWithDeclaredWindow(receipts, WINDOW, DECL, 2_000, 3_000);
     expect(g.ok).toBe(false);
-    expect(g.problems.join()).toContain("outside the declared maintenance window");
+    expect(g.problems.join()).toContain("were not 200");
   });
 
   test("red control: a window that never closed fails the grade even with clean receipts", () => {

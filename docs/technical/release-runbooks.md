@@ -399,8 +399,8 @@ that earned the rc.
 The cutover backs up and proves the restore (C01-backup to C03-restore-proof), then never takes the
 website down:
 
-1. **C04-probe-start** starts the website probe on the control machine: the public origin's `/` and
-   `/version.json` every 2 s.
+1. **C04-probe-start** starts the website probe on the control machine: the public origin's `/`,
+   `/version.json` and `/api/status/maintenance` every 2 s.
 2. **C05-migrate** migrates while the previous release still serves. Only `compat: additive` migrations
    may run this way; P07-state-baseline refused anything else. A breaking migration needs its own plan.
 3. **C06-version-tag** tags `vA.B.C` (production only).
@@ -550,12 +550,25 @@ when that release's runbook names it. Such a release cuts over in the breaking o
 production alike: the runner skips the rolling `migrate` and `rolling-boot` steps and runs the template's `breakingOnly: true`
 steps instead, in this order: `maintenance-on` (Q18a, C05a), `smoke-down` (Q18b, C05b), `migrate-breaking` (Q18c, C05c),
 `full-boot` (Q22a, C10a) and `maintenance-off` (Q24a, C12a). Any other release records those steps skipped, so its step list and
-hash are unchanged. The probe grade (Q25, C13) allows exactly the window from the start of `maintenance-on` to the end of
-`maintenance-off`, read from the run journal, and still fails a gap outside it or a window that never closed.
+hash are unchanged.
+
+`smoke-down` runs `bun smoke:down --keep-web` from release v0.7.5 on (issue 1501). It stops and removes every
+container of the instance except `website-server`, and keeps the network and the data volume. The site keeps
+answering 200 on `/` and `/version.json`. nginx answers `/api/status/maintenance` with `maintenance.json`, and every
+other `/api/` path with a 503 maintenance body and `Retry-After: 60`. A visitor never gets a 502. v0.7.0 ran the plain
+`bun smoke:down`, which removed `website-server` too, and its runbook keeps that step as it ran.
+
+The probe also asks `/api/status/maintenance` every tick. Its receipt records `maintenance: true` only for a 200 whose
+body is a valid `MaintenanceStatus` with `state: "active"`. The probe grade (Q25, C13) reads the declared window from the
+start of `maintenance-on` to the end of `maintenance-off` in the run journal. Inside it, the grade still fails any
+non-200 answer on `/` or `/version.json`, and fails a window in which no receipt has `maintenance: true`. Only a gap
+inside the window passes. The grade fails a gap outside it, and a window that never closed.
 
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
 keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is
-unchanged). `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+unchanged). A template step whose commands change carries `changedSince: vA.B.C` and `before: {description, cmds}`,
+the step as earlier releases ran it. A release before `changedSince` may keep `before`, and a later one carries the
+step as it now reads (Q18b and C05b, `changedSince: v0.7.5`, issue 1501). The hash sees neither key. `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it

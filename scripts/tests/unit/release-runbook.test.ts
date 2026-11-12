@@ -493,13 +493,41 @@ describe("a step's after list", () => {
     }
   });
 
+  test("add-only under changedSince (issue 1501): a release before v0.7.5 keeps the smoke-down steps as it ran, a later one carries the change", () => {
+    const changed = template.steps.filter((s) => s.changedSince !== undefined).map((s) => s.id);
+    expect(changed).toEqual(["Q18b-smoke-down", "C05b-smoke-down"]);
+    const asRan = (steps: readonly RunbookStep[]) => steps.map((s) => (s.before === undefined ? s : ({ ...s, ...s.before } as RunbookStep)));
+    // v0.7.0 ran the plain smoke:down and still only adds; so may any release before v0.7.5.
+    expect(checkAddOnly(template, loadReleaseRunbook("v0.7.0"))).toEqual([]);
+    expect(checkAddOnly(template, runbook(asRan(boundBy("v0.7.4")), "v0.7.4"))).toEqual([]);
+    // A release before v0.7.5 may also adopt the change early.
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.4"), "v0.7.4"))).toEqual([]);
+    // red: from v0.7.5 on, a copy with the old commands edits the template.
+    expect(checkAddOnly(template, runbook(asRan(boundBy("v0.7.5")), "v0.7.5")).join()).toContain("Q18b-smoke-down differs from the template's step");
+    expect(checkAddOnly(template, runbook(boundBy("v0.7.5"), "v0.7.5"))).toEqual([]);
+    // changedSince and before never reach the hash.
+    expect(stepListHash(template.steps.map((s) => (({ changedSince: _c, before: _b, ...rest }) => rest)(s) as RunbookStep))).toBe(stepListHash(template.steps));
+  });
+
+  test("red: changedSince without before, a malformed before, or a non-release changedSince refuses", () => {
+    const raw = { ...template.steps.find((s) => s.id === "Q18b-smoke-down")! } as Record<string, unknown>;
+    const errs = (over: Record<string, unknown>) => { const p = parseStep({ ...raw, ...over }, "t"); return "errors" in p ? p.errors.join() : ""; };
+    expect(errs({ before: undefined })).toContain("changedSince and before go together");
+    expect(errs({ before: { cmds: [["x"]] } })).toContain("before is {description, cmds}");
+    expect(errs({ before: { description: "d", cmds: [] } })).toContain("before is {description, cmds}");
+    expect(errs({ changedSince: "next" })).toContain("changedSince is a release name");
+    expect(errs({})).toBe("");
+  });
+
   test("stepListHash: a list with no after hashes as before the key existed (pinned); adding after changes it", () => {
     // Pinned before issue 1557: the v0.6.2 and v0.7.0 runbooks, which declare no after.
     expect(stepListHash(loadReleaseRunbook("v0.6.2").steps)).toBe("063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925");
     expect(stepListHash(loadReleaseRunbook("v0.7.0").steps)).toBe("1728492c5abbb19728e64bddbb22e7cd791ac99888f4c9f1454a0f2d1807234f");
     // The template without its after lists hashes as the template did before
-    // them (and before the v0.7.4 steps of issue 1581, which bind later releases only).
-    const noAfter = boundBy("v0.7.3").map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
+    // them (and before the v0.7.4 steps of issue 1581, which bind later releases only,
+    // and with the smoke-down steps issue 1501 changed as they read before it).
+    const asRan = (s: RunbookStep): RunbookStep => (s.before === undefined ? s : (({ changedSince: _c, before: _b, ...rest }) => ({ ...rest, ...s.before }))(s) as RunbookStep);
+    const noAfter = boundBy("v0.7.3").map(asRan).map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
     expect(stepListHash(noAfter)).toBe("d57de38d4dd3b30c97b76870fb60e05d4eb30a27d30bdda9a1f19d2703e079c3");
     // red: one after changes it, and afterSince alone never does.
     const v070 = loadReleaseRunbook("v0.7.0").steps;
