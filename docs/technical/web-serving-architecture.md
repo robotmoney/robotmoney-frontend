@@ -73,11 +73,13 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 
 ### 3.2 The image and the container
 
-- The `website-server` image bakes exactly one verified bundle.
+- The `website-server` image is the platform's server image plus exactly one verified bundle.
+- The server image holds the server and its config. It belongs to the platform release the host runs.
 - The image carries no Bun or Node runtime.
 - The base image is pinned by digest.
 - The container has no volume.
-- The container's labels name the web tag, the commit and the bundle digest (R5).
+- The container's labels name the web tag, the commit, the bundle digest and the platform commit of the server
+  image (R5).
 - The served root of a running container never differs from its image (R4).
 - The container listens on port 8080 and holds the published origin port.
 
@@ -97,6 +99,9 @@ The server is Caddy, with its admin API and automatic HTTPS turned off. It has t
 | Client identity | `X-Client-IP` and `CF-Connecting-IP` are set on every proxied request. A caller-sent value is replaced |
 | Maintenance | With the API down, `/api/status/maintenance` answers the maintenance body. Other `/api/` paths answer 503 JSON with `Retry-After: 60` |
 | Health | The container health check reads `/` on port 8080 |
+
+The server config belongs to the platform. A bundle holds site files only, never a header or a route rule. A
+change to a header, such as a dapp page's CSP, is a platform release.
 
 Scripts load only from our own origin. A third-party library is vendored into the bundle.
 
@@ -130,9 +135,10 @@ Rules:
 
 - A bundle that fails step 1 or step 3 never reaches the public port.
 - The throwaway copy is a valid check because it runs the same image that will serve.
-- A host always holds one previous image. A release is refused when there is none.
+- A host always holds exactly one previous image. A release is refused when there is none.
 - Every run writes a receipt: the bundle digest, the old and new container ids, each check's result and the gap.
 - A web release restarts no backend service and writes no database row.
+- A web release installs no dependency on a serving host. It needs Docker and OpenSSH there, and nothing else.
 
 ### 4.1 The gap
 
@@ -178,7 +184,7 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 | W06-stage-check | Runs the live check against the stage origin. Records a pass for the bundle digest |
 | W07-tag | Pushes the tag `web-vA.B.C`. The tag is never moved or deleted |
 | W08-tag-guard | The tag rule passes. The bundle on the release has the stage-passed digest |
-| W09-checkout | Checks out the release tooling on the production host. It builds no site |
+| W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a previous image. It installs nothing |
 | W10-deploy | Sends the same bundle to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
 | W12-release | Publishes the release notes with the bundle, its digest and its signature |
@@ -192,13 +198,17 @@ W06 and W11 run the same check:
 1. `/version.json` names the release's version and commit.
 2. The running container's labels equal the bundle's tag, commit and digest.
 3. Every served file equals its entry in the bundle's manifest, by sha256.
-4. The route and header table passes through the origin, including each dapp page's CSP.
+4. The route and header table passes through the origin, including each dapp page's CSP. A web release leaves
+   every header unchanged.
 5. Every sitemap route answers 200.
 6. The `api` and worker container ids and `/api/version` are unchanged.
 
 ### 5.3 Platform releases
 
-- A platform release changes the site only through `bun smoke:web` with a named bundle.
+- A platform release keeps the bundle the host serves, unless its runbook names a signed bundle to deploy.
+- A platform release that changes the server image rebuilds `website-server` with the bundle already serving,
+  by the same swap and the same checks.
+- Every change to the site goes through `bun smoke:web`.
 - A probe runs around every swap. Its grade excuses exactly the gap in the release receipt.
 - In a declared maintenance window the grade requires the maintenance answer, and fails any other failure.
 - The log verdict classifies the server's access log in its own format.
@@ -227,22 +237,14 @@ W06 and W11 run the same check:
 | One container role, not a front door plus web containers | One role is simpler to run and to reason about. The cost is the gap, which is short |
 | A swap, not a copy into a running container | A container must map to one version (R5) |
 | A measured gap, not zero downtime | Zero downtime needs a second component that holds the port, or a change to the tunnel or the host firewall |
+| Server config belongs to the platform | Headers and routes are a security boundary. They take the full platform rehearsal |
+| A platform release keeps the serving bundle | The site ships on its own schedule. A platform release must not undo a web release |
 | The API owns its cache | Caching is the API's business logic. A cache in the web server can outlive a deploy and serve old answers |
 | Build on the control machine, not on the host | A dependency install must not run beside live services, and stage and production must get the same bytes |
 | SSH signatures with an ed25519 key | OpenSSH is already on the control machine and every host, so signing adds no component |
 | Sign on the control machine, not in CI | The control machine already holds release authority. CI holds no signing key and no deploy credential |
 
-## 7. Open decisions
-
-These must be settled before this specification is final.
-
-- **Server config and the bundle.** Whether headers and routes ship inside the bundle or with the platform. This
-  decides whether a CSP change is a web release.
-- **Platform releases and the site.** Whether a platform release deploys a bundle at all, and which one.
-- **Release tooling on the host.** Whether `bun smoke:web` may install its own dependencies on a serving host.
-- **Previous images kept.** One is required. Whether to keep more.
-
-## 8. Related
+## 7. Related
 
 - `docs/decisions.md` D54 (the site is its own release unit), D61 (agent-executed releases), D70, D81 (the web
   release line)
