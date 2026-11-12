@@ -47,7 +47,8 @@ control machine (release commit)     serving host
                                     └───────────────────────────────────────┘
 
 Cloudflare tunnel ─► website-server (one container, immutable)
-                       ├─ static files and headers, from the baked bundle
+                       ├─ static files, from the baked bundle
+                       ├─ headers and routes, from the platform's server config
                        ├─ /api/, /health, /version ─► api
                        └─ maintenance answer when the api is down
 ```
@@ -66,10 +67,16 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 - The private key is held on the control machine and nowhere else. It signs bundles and does nothing else.
 - The public key is committed to the repository as an allowed-signers file. A host verifies a bundle against
   that file only (`ssh-keygen -Y verify`).
+- A host's allowed-signers file comes from the platform release the host runs. A web release never sends or
+  changes it. Changing the signing key is a platform release.
 - It reaches a host from the control machine over SSH.
 - CI builds, signs and deploys nothing. It runs the checks that gate a release commit.
 - It is built for the release commit before stage runs (R13).
 - The `web-vA.B.C` release carries the bundle, its digest and its signature.
+
+What the signature proves: the bytes a host serves are the bytes the control machine signed, and they did not
+change in transit or at rest. What it does not prove: that the control machine itself is honest. The control
+machine holds both the signing key and the deploy access, so it is the root of trust for a release.
 
 ### 3.2 The image and the container
 
@@ -117,25 +124,29 @@ The web server stores no API response (R12). The API caches its public analytics
 
 ## 4. Release and rollback
 
-`bun smoke:web` is the one command that changes what a host serves. For a named bundle it runs these steps in
-order:
+`bun smoke:web` is the one command that changes what a host serves. It runs on the control machine and drives
+the host over SSH. One run holds the host's deployment lock, so two runs never overlap. For a named bundle it
+runs these steps in order:
 
 1. Verify the signature, the digest and `version.json`. Refuse a bundle whose `apiRange` excludes the running API.
 2. Build the image.
 3. Start a throwaway copy on a spare port. Check that `/version.json` names the release and that the route and
    header table passes. Remove the copy.
 4. Stop the running container. Start the new one on the public port.
-5. Check through the public origin.
+5. Check that `/version.json`, read through the public origin, names the release.
 6. If step 5 fails, start the previous image on the public port and exit non-zero.
 7. If step 5 passes, keep the previous image as the rollback target.
 
-`bun smoke:web --rollback` runs steps 3 to 5 with the previous image.
+`bun smoke:web --rollback` refuses a previous image whose `apiRange` excludes the running API. Otherwise it
+runs steps 3 to 5 with the previous image.
 
 Rules:
 
 - A bundle that fails step 1 or step 3 never reaches the public port.
 - The throwaway copy is a valid check because it runs the same image that will serve.
-- A host always holds exactly one previous image. A release is refused when there is none.
+- A host always holds exactly one previous image: the image that served before the last swap, whatever caused
+  that swap. A release is refused when there is none.
+- A container that restarts, or a host that reboots, serves the same image again.
 - Every run writes a receipt: the bundle digest, the old and new container ids, each check's result and the gap.
 - A web release restarts no backend service and writes no database row.
 - A web release installs no dependency on a serving host. It needs Docker and OpenSSH there, and nothing else.
@@ -145,6 +156,7 @@ Rules:
 Docker gives a published port to one container at a time. Between step 4's stop and start nothing listens, so
 requests fail. API calls fail in that gap too, because the same container proxies them. This is accepted (R11).
 
+- The gap runs from the stop of the old container to the first good answer from the new one on the public port.
 - The gap is measured on every swap and recorded in the receipt, in milliseconds.
 - A gap over three seconds fails the release.
 - A failed request outside the gap fails the release.
@@ -183,9 +195,9 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 | W05-stage-deploy | Sends the bundle to stage and runs `bun smoke:web` with it |
 | W06-stage-check | Runs the live check against the stage origin. Records a pass for the bundle digest |
 | W07-tag | Pushes the tag `web-vA.B.C`. The tag is never moved or deleted |
-| W08-tag-guard | The tag rule passes. The bundle on the release has the stage-passed digest |
+| W08-tag-guard | The tag rule passes for the tag |
 | W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a previous image. It installs nothing |
-| W10-deploy | Sends the same bundle to production and runs `bun smoke:web` with it |
+| W10-deploy | Refuses a bundle whose digest is not the stage-passed digest. Sends it to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
 | W12-release | Publishes the release notes with the bundle, its digest and its signature |
 
@@ -206,6 +218,7 @@ W06 and W11 run the same check:
 ### 5.3 Platform releases
 
 - A platform release keeps the bundle the host serves, unless its runbook names a signed bundle to deploy.
+- A bundle a platform release names passes that release's own stage run, by digest, before production gets it.
 - A platform release that changes the server image rebuilds `website-server` with the bundle already serving,
   by the same swap and the same checks.
 - Every change to the site goes through `bun smoke:web`.
@@ -223,7 +236,7 @@ W06 and W11 run the same check:
 | A CSP change blocks a dapp page | Header table through the origin | Live check 4 |
 | The host serves bytes that differ from the release | Served bytes against the manifest | Live check 3 |
 | The running container is not the released version | Labels against the bundle digest | Live check 2 |
-| Stage and production got different bytes | Stage pass recorded by digest | W06, W08 |
+| Stage and production got different bytes | Stage pass recorded by digest | W06, W10 |
 | The swap takes too long | Gap limit of three seconds | `smoke:web` step 4 |
 | Requests fail outside the swap | Probe grade | Probe |
 | A web release restarted the backend | Container ids unchanged | Live check 6 |
