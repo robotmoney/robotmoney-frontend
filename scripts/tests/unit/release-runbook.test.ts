@@ -487,7 +487,7 @@ describe("a step's after list", () => {
     expect(checkAddOnly(template, runbook(noAfter, "v0.7.3")).join()).toContain("Q35-archive-routes differs from the template's step");
     expect(checkAddOnly(template, runbook(boundBy("v0.7.3"), "v0.7.3"))).toEqual([]);
     // The committed runbooks of releases that ran carry no after and still load.
-    for (const release of releaseRunbookNames()) {
+    for (const release of releaseRunbookNames().filter((r) => releaseBefore(r, "v0.7.3"))) {
       const rb = loadReleaseRunbook(release);
       expect(rb.steps.filter((s) => s.after !== undefined).map((s) => s.id), release).toEqual([]);
     }
