@@ -85,6 +85,8 @@ machine holds both the signing key and the deploy access, so it is the root of t
 - The image carries no Bun or Node runtime.
 - The base image is pinned by digest.
 - The container has no volume.
+- The container's root filesystem is read-only. The server's scratch paths are in-memory mounts.
+- The container runs as a non-root user, with every capability dropped and no privilege escalation.
 - The container's labels name the web tag, the commit, the bundle digest and the platform commit of the server
   image (R5).
 - The served root of a running container never differs from its image (R4).
@@ -105,12 +107,15 @@ The server is Caddy, with its admin API and automatic HTTPS turned off. It has t
 | API proxy | `/api/`, `/health` and `/version` go to the API with the original Host header |
 | Client identity | `X-Client-IP` and `CF-Connecting-IP` are set on every proxied request. A caller-sent value is replaced |
 | Maintenance | With the API down, `/api/status/maintenance` answers the maintenance body. Other `/api/` paths answer 503 JSON with `Retry-After: 60` |
+| Compression | The server does not compress. The Cloudflare edge does |
 | Health | The container health check reads `/` on port 8080 |
 
 The server config belongs to the platform. A bundle holds site files only, never a header or a route rule. A
 change to a header, such as a dapp page's CSP, is a platform release.
 
-Scripts load only from our own origin. A third-party library is vendored into the bundle.
+Scripts load only from our own origin, and a third-party library is vendored into the bundle. Two exceptions
+apply to every page, dapp pages included: `'unsafe-eval'`, which Alpine needs, and Cloudflare's challenge script
+(`https://challenges.cloudflare.com`). No other script source is allowed.
 
 ### 3.4 The API cache boundary
 
@@ -147,6 +152,8 @@ Rules:
 - A host always holds exactly one previous image: the image that served before the last swap, whatever caused
   that swap. A release is refused when there is none.
 - A container that restarts, or a host that reboots, serves the same image again.
+- Any signed bundle can be deployed again by name. That is how a host returns to a version older than its
+  previous image.
 - Every run writes a receipt: the bundle digest, the old and new container ids, each check's result and the gap.
 - A web release restarts no backend service and writes no database row.
 - A web release installs no dependency on a serving host. It needs Docker and OpenSSH there, and nothing else.
@@ -241,7 +248,7 @@ W06 and W11 run the same check:
 | Requests fail outside the swap | Probe grade | Probe |
 | A web release restarted the backend | Container ids unchanged | Live check 6 |
 | The public site is broken after the swap | Automatic rollback, non-zero exit | `smoke:web` step 6, W11 |
-| A file in the container changed after start | Served root equals the image | Live check 3 |
+| A file in the container changed after start | Read-only root filesystem. Served bytes against the manifest | Container, live check 3 |
 
 ## 6. Design rationale
 
@@ -257,7 +264,13 @@ W06 and W11 run the same check:
 | SSH signatures with an ed25519 key | OpenSSH is already on the control machine and every host, so signing adds no component |
 | Sign on the control machine, not in CI | The control machine already holds release authority. CI holds no signing key and no deploy credential |
 
-## 7. Related
+## 7. Deferred review
+
+- **Script policy on dapp pages.** Dapp pages keep the two script exceptions in section 3.3. Whether a page that
+  signs transactions should forbid `eval` and every third-party script is reviewed once the wallet kit's needs
+  are known.
+
+## 8. Related
 
 - `docs/decisions.md` D54 (the site is its own release unit), D61 (agent-executed releases), D70, D81 (the web
   release line)
