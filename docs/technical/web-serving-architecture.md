@@ -20,7 +20,7 @@ Three goals follow:
 | Id | Requirement |
 |---|---|
 | R1 | Each web release is one signed, versioned bundle |
-| R2 | The bundle is built in CI, never on a serving host |
+| R2 | The bundle is built and signed on the control machine, never on a serving host |
 | R3 | The served files live inside the serving container. There is no host mount |
 | R4 | A container is static. Nothing is copied into it after it starts |
 | R5 | A container maps to exactly one web version, readable from the container |
@@ -37,12 +37,12 @@ Three goals follow:
 ## 3. Components
 
 ```
-CI (release commit)                  serving host
+control machine (release commit)     serving host
 ┌──────────────────────┐            ┌───────────────────────────────────────┐
 │ assemble the site    │            │ verify signature + digest + apiRange  │
 │ pack the bundle      │  bundle    │ build the image (bundle baked in)     │
 │ digest + sign        │ ─────────► │ check a throwaway copy                │
-│ publish              │            │ swap the container on the public port │
+│ send over SSH        │            │ swap the container on the public port │
 └──────────────────────┘            │ check the public site, revert if bad  │
                                     └───────────────────────────────────────┘
 
@@ -59,7 +59,11 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 - It is deterministic. Packing the same tree twice gives the same bytes.
 - It carries `version.json`, which names the version, the commit and the `apiRange`. The file name matches it.
 - It carries a manifest that lists every file with its sha256.
-- It is published with a sha256 digest and a signature.
+- It is built on the control machine, the machine every release runs from.
+- It has a sha256 digest and a signature. The signing key is held on the control machine and nowhere else.
+- The public key is committed to the repository. A host verifies a bundle against the committed key only.
+- It reaches a host from the control machine over SSH.
+- CI builds, signs and deploys nothing. It runs the checks that gate a release commit.
 - It is built for the release commit before stage runs (R13).
 - The `web-vA.B.C` release carries the bundle, its digest and its signature.
 
@@ -164,16 +168,16 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 |---|---|
 | W01-preflight | Checks each named commit is eligible. Reads the running container's labels and the previous image. Refuses with no rollback target |
 | W02-branch | Pushes the release commit to `web/releases-A.B.x` as a fast-forward |
-| W03-gate | The web client checks and the end-to-end checks pass on the release commit. CI packs, signs and publishes the bundle |
+| W03-gate | The web client checks and the end-to-end checks pass on the release commit. The runner then packs and signs the bundle on the control machine |
 | W04-stage-up | Brings the stage target up at production's running commit, from a fresh production dump |
-| W05-stage-deploy | Runs `bun smoke:web` on stage with the bundle |
+| W05-stage-deploy | Sends the bundle to stage and runs `bun smoke:web` with it |
 | W06-stage-check | Runs the live check against the stage origin. Records a pass for the bundle digest |
 | W07-tag | Pushes the tag `web-vA.B.C`. The tag is never moved or deleted |
 | W08-tag-guard | The tag rule passes. The bundle on the release has the stage-passed digest |
 | W09-checkout | Checks out the release tooling on the production host. It builds no site |
-| W10-deploy | Runs `bun smoke:web` on production with the same bundle |
+| W10-deploy | Sends the same bundle to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
-| W12-release | Publishes the release notes, naming the bundle digest |
+| W12-release | Publishes the release notes with the bundle, its digest and its signature |
 
 No step from W07 on writes unless a stage pass is recorded for the same bundle digest.
 
@@ -199,7 +203,7 @@ W06 and W11 run the same check:
 
 | Fault | Check | Where |
 |---|---|---|
-| The bundle changed after CI built it | Signature and digest | `smoke:web` step 1 |
+| The bundle changed after it was signed | Signature and digest | `smoke:web` step 1 |
 | The site needs a newer API than the host runs | `apiRange` against `/api/version` | `smoke:web` step 1 |
 | The image serves wrong routes or headers | Route and header table on the throwaway copy | `smoke:web` step 3 |
 | A CSP change blocks a dapp page | Header table through the origin | Live check 4 |
@@ -220,13 +224,14 @@ W06 and W11 run the same check:
 | A swap, not a copy into a running container | A container must map to one version (R5) |
 | A measured gap, not zero downtime | Zero downtime needs a second component that holds the port, or a change to the tunnel or the host firewall |
 | The API owns its cache | Caching is the API's business logic. A cache in the web server can outlive a deploy and serve old answers |
-| Build in CI, not on the host | A dependency install must not run beside live services, and stage and production must get the same bytes |
+| Build on the control machine, not on the host | A dependency install must not run beside live services, and stage and production must get the same bytes |
+| Sign on the control machine, not in CI | The control machine already holds release authority. CI holds no signing key and no deploy credential |
 
 ## 7. Open decisions
 
 These must be settled before this specification is final.
 
-- **Signing scheme.** Keyless signing through the CI identity, or a stored key.
+- **Signature tool.** Which tool signs and verifies with the control machine's key.
 - **Server config and the bundle.** Whether headers and routes ship inside the bundle or with the platform. This
   decides whether a CSP change is a web release.
 - **Platform releases and the site.** Whether a platform release deploys a bundle at all, and which one.
