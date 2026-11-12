@@ -33,6 +33,8 @@ import {
   instanceStackProject,
   listInstances,
   PRODUCTION_INSTANCE,
+  provisionReplicaEnv,
+  replicaEnvText,
   readRolePasswords,
   readStackState,
   resolveInstance,
@@ -48,6 +50,7 @@ import {
 } from "../../lib/smoke-state.ts";
 import { computePlanId, openJournal, readArchivedJournals, readJournal, type DeploymentPlan } from "../../lib/smoke-journal.ts";
 import type { StackEnvironment } from "../../stack/naming.ts";
+import { parseEnvFile, replicaUrlFromEnvFile } from "../../../packages/csvb/src/env.ts";
 import { deadDockerEnv } from "../support/dead-docker";
 
 const MODULE = join(import.meta.dir, "..", "..", "lib", "smoke-state.ts");
@@ -874,4 +877,68 @@ describe("two instances on one host: each command acts only on the named one (cr
     expect(snapshot(b)).toEqual(before);
     expect(computePlanId(planFor("rm_local_bravo"))).toBe(readJournal(b)!.planId);
   }, 90_000);
+});
+
+// The csvb-backup holder's credential directory (issue 1608, D82, spec §3): replica.env holds the rm_readonly line
+// and the connection tokens only, made from ~/.env's replica_host. Never an rm_owner, rm_app or doadmin line.
+describe("the csvb-backup credential directory", () => {
+  const HOME_ENV = "host=primary.example\nreplica_host=replica.example\nport=25060\ndatabase=defaultdb\nsslmode=require\nrm_app=APPPW\nrm_readonly=ROPW\nrm_owner=OWNERPW\ndoadmin=ADMINPW\nRM_ENV=prod\nCOINGECKO_API_KEY=CG\n";
+  const dirs: string[] = [];
+  const fresh = (): InstancePaths => {
+    const root = mkdtempSync(join(tmpdir(), "smoke-state-csvb-"));
+    dirs.push(root);
+    return instancePaths(root, "rm_local_csvb", { create: true });
+  };
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  test("the instance owns a csvb-backup directory, 0700, beside the token directories, holding no file until one is provisioned", () => {
+    const p = fresh();
+    expect(p.csvbBackupDir).toBe(join(p.dir, "csvb-backup"));
+    expect(statSync(p.csvbBackupDir).mode & 0o777).toBe(0o700);
+    expect(readdirSync(p.csvbBackupDir)).toEqual([]);
+    expect(p.replicaEnvFile).toBe(join(p.csvbBackupDir, "replica.env"));
+    expect(p.pushKeyFile).toBe(join(p.csvbBackupDir, "push-key"));
+  });
+
+  test("a ~/.env holding rm_owner, rm_app and doadmin lines yields a replica.env with none of them, naming the replica host", () => {
+    const made = replicaEnvText(parseEnvFile(HOME_ENV));
+    expect("text" in made).toBe(true);
+    const text = (made as { text: string }).text;
+    expect(Object.keys(parseEnvFile(text)).sort()).toEqual(["database", "host", "port", "rm_readonly", "sslmode"]);
+    for (const secret of ["OWNERPW", "APPPW", "ADMINPW", "primary.example", "CG"]) expect(text).not.toContain(secret);
+    expect(parseEnvFile(text).host).toBe("replica.example");
+  });
+
+  test("the provisioned file is 0600, csvb's strict reader accepts it as rm_readonly on the replica, and a rerun changes nothing", () => {
+    const p = fresh();
+    expect(provisionReplicaEnv(p, parseEnvFile(HOME_ENV))).toBe("written");
+    expect(statSync(p.replicaEnvFile).mode & 0o777).toBe(0o600);
+    expect(readdirSync(p.csvbBackupDir)).toEqual(["replica.env"]);
+    const url = replicaUrlFromEnvFile(p.replicaEnvFile, { strict: true });
+    expect("url" in url && url.url).toContain("rm_readonly:ROPW@replica.example:25060/defaultdb");
+    expect(provisionReplicaEnv(p, parseEnvFile(HOME_ENV))).toBe("unchanged");
+  });
+
+  test("a rotated rm_readonly password is rewritten in place, and a file an operator planted with an extra role line is refused by csvb", () => {
+    const p = fresh();
+    provisionReplicaEnv(p, parseEnvFile(HOME_ENV));
+    expect(provisionReplicaEnv(p, parseEnvFile(HOME_ENV.replace("ROPW", "NEWPW")))).toBe("written");
+    expect(readFileSync(p.replicaEnvFile, "utf8")).toContain("rm_readonly=NEWPW");
+    writeFileSync(p.replicaEnvFile, readFileSync(p.replicaEnvFile, "utf8") + "rm_app=APPPW\n");
+    const refused = replicaUrlFromEnvFile(p.replicaEnvFile, { strict: true });
+    expect("refuse" in refused && refused.refuse).toContain("rm_app");
+  });
+
+  test("without a replica_host, an rm_readonly line or a database there is no file, and the reason names what is missing", () => {
+    const p = fresh();
+    for (const [drop, reason] of [["replica_host", "replica_host"], ["rm_readonly", "rm_readonly"], ["database", "database"]] as const) {
+      const env = parseEnvFile(HOME_ENV);
+      delete env[drop];
+      const r = provisionReplicaEnv(p, env);
+      expect(typeof r === "object" && r.reason).toContain(reason);
+    }
+    expect(existsSync(p.replicaEnvFile)).toBe(false);
+  });
 });

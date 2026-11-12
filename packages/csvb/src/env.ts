@@ -25,14 +25,18 @@ export function parseEnvFile(text: string): Record<string, string> {
 
 export const homeEnvFilePath = (): string => join(homedir(), ".env");
 
-export function replicaUrlFromEnvFile(path: string): { url: string } | { refuse: string } {
+/**
+ * `strict` is the scheduled backup's reader (issue 1608): its connection file holds the ${ROLE} line and the
+ * connection tokens only, so an rm_app line is refused too. A hand run reads the whole ~/.env, which may hold one.
+ */
+export function replicaUrlFromEnvFile(path: string, opts: { strict?: boolean } = {}): { url: string } | { refuse: string } {
   let env: Record<string, string>;
   try {
     env = parseEnvFile(readFileSync(path, "utf8"));
   } catch {
     return { refuse: `no readable env file at ${path}` };
   }
-  const forbidden = ["rm_owner", "doadmin"].filter((k) => env[k] !== undefined);
+  const forbidden = (opts.strict ? ["rm_owner", "rm_app", "doadmin"] : ["rm_owner", "doadmin"]).filter((k) => env[k] !== undefined);
   if (forbidden.length) return { refuse: `${path} holds a ${forbidden.join(" and a ")} line; remove it (the backup only needs ${ROLE})` };
   const host = env.host;
   const database = env.database ?? env.dbname;

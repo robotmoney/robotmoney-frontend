@@ -79,6 +79,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -86,6 +87,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { resolveStackEnvironment, stackProjectName, type StackEnvironment } from "../stack/naming.ts";
+import { databaseName } from "./env-role.ts";
 import { WEB_DIR_NAME } from "./smoke-site.ts";
 
 /** A legal compose project name, which is also the instance's directory name. */
@@ -351,6 +353,60 @@ export type ServiceTokenHolder = (typeof SERVICE_TOKEN_HOLDERS)[number];
 export const TOKEN_FILE_NAME = "token";
 
 /**
+ * The csvb-backup holder's credential directory and its two files (issue 1608, D82, spec §3). Not a service token:
+ * the container holds no API credential. `replica.env` is the read replica's connection (the boot writes it from
+ * `~/.env`); `push-key` is the GitHub deploy key (the operator places it).
+ */
+export const CSVB_BACKUP_DIR_NAME = "csvb-backup";
+export const REPLICA_ENV_FILE_NAME = "replica.env";
+export const PUSH_KEY_FILE_NAME = "push-key";
+
+/**
+ * PURE. The text of `replica.env` from a parsed `~/.env`, or the reason there is none. It holds the connection
+ * tokens and the `rm_readonly` line, nothing else: `rm_owner`, `rm_app` and `doadmin` are never copied. The host is
+ * `replica_host`: production's `host` names the primary, which csvb refuses.
+ */
+export function replicaEnvText(homeEnv: Record<string, string | undefined>): { text: string } | { reason: string } {
+  const host = homeEnv.replica_host;
+  const database = databaseName(homeEnv);
+  const password = homeEnv.rm_readonly;
+  if (!host) return { reason: "~/.env has no replica_host line" };
+  if (!database) return { reason: "~/.env names no database" };
+  if (!password) return { reason: "~/.env has no rm_readonly line" };
+  const port = homeEnv.port && homeEnv.port !== "" ? homeEnv.port : "5432";
+  return { text: `host=${host}\nport=${port}\ndatabase=${database}\nsslmode=${homeEnv.sslmode || "require"}\nrm_readonly=${password}\n` };
+}
+
+/**
+ * Reconcile `csvb-backup/replica.env` with `~/.env`: written when absent or different (write and rename, so the
+ * container never reads half a file), left alone when equal, never removed. Returns what happened; the value is never
+ * returned. The directory is created by {@link instancePaths}.
+ */
+export function provisionReplicaEnv(paths: InstancePaths, homeEnv: Record<string, string | undefined>): "written" | "unchanged" | { reason: string } {
+  const made = replicaEnvText(homeEnv);
+  if ("reason" in made) return made;
+  let current: string | null = null;
+  try {
+    current = readFileSync(paths.replicaEnvFile, "utf8");
+  } catch {
+    current = null;
+  }
+  if (current === made.text) return "unchanged";
+  mkdirSync(paths.csvbBackupDir, { recursive: true, mode: 0o700 });
+  const tmp = `${paths.replicaEnvFile}.tmp`;
+  writeFileSync(tmp, made.text, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, paths.replicaEnvFile);
+  return "written";
+}
+
+/** One log line for {@link provisionReplicaEnv}'s outcome (never a value). */
+export function reconcileReplicaEnv(paths: InstancePaths, homeEnv: Record<string, string | undefined>): string {
+  const r = provisionReplicaEnv(paths, homeEnv);
+  return typeof r === "string" ? `csvb-backup replica.env ${r} (${paths.csvbBackupDir})` : `csvb-backup replica.env not written: ${r.reason}; the container runs idle`;
+}
+
+/**
  * The per-instance layout. One interface so every W1 module agrees on where its
  * file lives, and so the set of files an instance owns can be read in one place
  * — which is what `smoke:down`, `smoke:clean` and the incident case need.
@@ -401,6 +457,10 @@ export interface InstancePaths {
   readonly tokenDirs: Readonly<Record<ServiceTokenHolder, string>>;
   /** Each holder's token file: `tokens/<holder>/token`, the only file in {@link tokenDirs}[holder]. */
   readonly tokenFiles: Readonly<Record<ServiceTokenHolder, string>>;
+  /** The csvb-backup holder's directory, mounted read-only into that container alone, holding only the two files below. */
+  readonly csvbBackupDir: string;
+  readonly replicaEnvFile: string;
+  readonly pushKeyFile: string;
   /** The phase journal (§1.3). */
   readonly journalFile: string;
   /**
@@ -478,8 +538,9 @@ export function instancePaths(root: string, instance: string, options?: { readon
   ) as Record<ServiceTokenHolder, string>;
   const overlaysDir = join(dir, "overlays");
   const webDir = join(dir, WEB_DIR_NAME);
+  const csvbBackupDir = join(dir, CSVB_BACKUP_DIR_NAME);
   if (options?.create === true) {
-    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir, overlaysDir]) {
+    for (const inner of [tokensDir, ...Object.values(tokenDirs), journalArchiveDir, overlaysDir, csvbBackupDir]) {
       mkdirSync(inner, { recursive: true, mode: 0o700 });
       chmodSync(inner, 0o700);
     }
@@ -495,6 +556,9 @@ export function instancePaths(root: string, instance: string, options?: { readon
     tokensDir,
     tokenDirs,
     tokenFiles,
+    csvbBackupDir,
+    replicaEnvFile: join(csvbBackupDir, REPLICA_ENV_FILE_NAME),
+    pushKeyFile: join(csvbBackupDir, PUSH_KEY_FILE_NAME),
     journalFile: join(dir, "journal.jsonl"),
     journalArchiveDir,
     receiptFile: join(dir, "receipt.json"),

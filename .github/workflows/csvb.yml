@@ -72,13 +72,16 @@ jobs:
       - name: csvb tests (Postgres in Docker)
         working-directory: packages/csvb
         run: bun test --timeout=120000 --reporter=junit --reporter-outfile="$RUNNER_TEMP/csvb.junit.xml"
-      # Issue 1477: the ported backup and audit suites ran with at least their
+      # Issues 1477 and 1608: the ported backup and audit suites ran with at least their
       # case counts in robotmoney/csv-backups (26 and 9), the legacy-layout
-      # verify and the import boundary ran, and none was skipped.
-      - name: csvb suites ran (issue 1477)
+      # verify and the import boundary ran, and none was skipped. Issue 1608:
+      # the scheduled backup's suite (serve against Docker Postgres and a bare
+      # git remote, the stale alarm, the credential refusals) ran its cases.
+      - name: csvb suites ran (issues 1477, 1608)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/csvb.junit.xml"
           tests/backup.test.ts:28
           tests/audit.test.ts:9
           tests/verify-legacy.test.ts:3
           tests/boundary.test.ts:2
+          tests/serve.test.ts:25

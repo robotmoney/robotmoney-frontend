@@ -1419,7 +1419,7 @@ describe("check 4 — ~/.env holds only the keys §3 lists", () => {
     // env-role.ts is the one resolver the host-side tools use, so its
     // CONNECTION_TOKENS and ROLES are pinned here; `dbname` is §3's own
     // spelling of `database` and is accepted beside it.
-    const expected = [...CONNECTION_TOKENS, "dbname", ...ROLES, "rm_owner", "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
+    const expected = [...CONNECTION_TOKENS, "dbname", "replica_host", ...ROLES, "rm_owner", "RM_ENV", "RM_CREDENTIALS", "COINGECKO_API_KEY"];
     expect([...ENV_FILE_ALLOWED_KEYS].sort()).toEqual([...new Set(expected)].sort());
   });
 

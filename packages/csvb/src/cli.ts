@@ -5,6 +5,11 @@
 //
 //   bun run csvb backup  [--repo DIR] [--part-mb 64] [--pause-ms 50] [--max-seconds 3600] [--statement-timeout-s 90]
 //                        [--max-rss-mb 1500] [--only table,table] [--env-file PATH]
+//   bun run csvb serve   [--repo DIR] [--remote URL] [--branch main] [--once] [--env-file PATH] [--max-rss-mb 3000] [--pause-ms 250] [--max-seconds 1800]
+//                        [--stale-days 3] [--interval-s 3600] [--health-port 8091] [--push-key PATH]
+//                        (the scheduled backup, issue 1608: fast-forward the clone, cut every sealed UTC boundary,
+//                        verify, commit csv/** only, push without force; also answers GET /health)
+//   bun run csvb stale   [--repo DIR] --max-days N     (exit 1 naming the newest backup id and its age when older)
 //   bun run csvb finish  [--repo DIR]     (verify and add a backup that was staged but not finished)
 //   bun run csvb verify  [--repo DIR] [--backup ID]
 //   bun run csvb list    [--repo DIR]
@@ -15,6 +20,7 @@
 //                        (--sdk defaults to ../analyst-sdk, the SDK package beside this one)
 //                        writes a report (never committed) to --out, default <repo>/reports/<backup id>
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import postgres from "postgres";
 import { ALL_TABLE_NAMES, APPEND_ONLY, REVISED } from "./config.ts";
@@ -30,6 +36,7 @@ import { replayRun } from "./audit/replay.ts";
 import { analyseRevisions } from "./audit/revisions.ts";
 import { analyseRuns, loadRuns } from "./audit/runs.ts";
 import { verifyRepo } from "./verify.ts";
+import { SERVE_MAX_SECONDS, SERVE_PAUSE_MS, serveForever, serveOnce, sshEnvForKey, staleness } from "./serve.ts";
 
 interface Args {
   cmd: string;
@@ -42,6 +49,10 @@ function parse(argv: string[]): Args {
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i]!;
     if (!a.startsWith("--")) throw new Error(`unexpected argument ${a}`);
+    if (a === "--once") {
+      flags.set(a, ["1"]); // the one option with no value
+      continue;
+    }
     const v = rest[++i];
     if (v === undefined || v.startsWith("--")) throw new Error(`${a} needs a value`);
     flags.set(a, [...(flags.get(a) ?? []), v]);
@@ -126,6 +137,64 @@ async function main(): Promise<number> {
       }
       return reportAnomalies(recs);
     }
+    case "serve": {
+      known(a, ["--repo", "--remote", "--branch", "--once", "--env-file", "--max-rss-mb", "--pause-ms", "--max-seconds", "--stale-days", "--interval-s", "--health-port", "--push-key"]);
+      const envFile = one(a, "--env-file") ?? process.env.CSVB_ENV_FILE ?? homeEnvFilePath();
+      const connect = (): ReturnType<typeof postgres> => {
+        let url = process.env.RM_REPLICA_URL;
+        if (!url) {
+          const r = replicaUrlFromEnvFile(envFile, { strict: true });
+          if ("refuse" in r) throw new Error(r.refuse);
+          url = r.url;
+        }
+        console.log(`connecting as ${redactedTarget(url)}`);
+        return postgres(url, { max: 1, ssl: new URL(url).searchParams.get("sslmode") === "disable" ? false : "require", onnotice: () => {}, connect_timeout: 20 });
+      };
+      const pushKey = one(a, "--push-key") ?? process.env.CSVB_PUSH_KEY;
+      const base = {
+        repo,
+        remoteUrl: one(a, "--remote") ?? process.env.CSVB_REMOTE,
+        branch: one(a, "--branch") ?? "main",
+        nowMs: () => Date.now(),
+        maxRssMb: num(a, "--max-rss-mb", Number(process.env.CSVB_MAX_RSS_MB ?? 3000)),
+        pauseMs: num(a, "--pause-ms", Number(process.env.CSVB_PAUSE_MS ?? SERVE_PAUSE_MS)),
+        maxSeconds: num(a, "--max-seconds", Number(process.env.CSVB_MAX_SECONDS ?? SERVE_MAX_SECONDS)),
+        gitEnv: pushKey ? () => sshEnvForKey(pushKey) : undefined, // lazy: built per wake, never at startup
+        log: (l: string) => console.log(l),
+      };
+      if (one(a, "--once")) {
+        for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => requestAbort(sig));
+        const sql = connect();
+        try {
+          await serveOnce({ ...base, sql });
+        } finally {
+          await sql.end({ timeout: 5 });
+        }
+        return 0;
+      }
+      await serveForever({
+        ...base,
+        connect,
+        provisioned: () => {
+          const missing = [envFile, pushKey].filter((f): f is string => !!f && !existsSync(f));
+          return missing.length ? `no ${missing.join(" and no ")}` : null;
+        },
+        staleDays: num(a, "--stale-days", Number(process.env.CSVB_STALE_DAYS ?? 3)),
+        intervalS: num(a, "--interval-s", Number(process.env.CSVB_INTERVAL_S ?? 3600)),
+        healthPort: num(a, "--health-port", Number(process.env.CSVB_HEALTH_PORT ?? 8091)),
+      });
+      return 0;
+    }
+    case "stale": {
+      known(a, ["--repo", "--max-days"]);
+      const s = staleness(repo, num(a, "--max-days", 3), Date.now());
+      if (s.stale) {
+        console.error(s.message);
+        return 1;
+      }
+      console.log(s.message);
+      return 0;
+    }
     case "finish": {
       known(a, ["--repo"]);
       return reportAnomalies(await finishStaged(repo, (l) => console.log(l)));
@@ -201,7 +270,7 @@ async function main(): Promise<number> {
       return 0;
     }
     default:
-      console.error("usage: csvb <backup|finish|verify|list|resolve|history|diff|audit> [options]  (see the header of src/cli.ts)");
+      console.error("usage: csvb <backup|serve|stale|finish|verify|list|resolve|history|diff|audit> [options]  (see the header of src/cli.ts)");
       return a.cmd ? 2 : 0;
   }
 }
