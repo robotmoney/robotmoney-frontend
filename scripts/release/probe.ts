@@ -8,12 +8,15 @@
 //
 // Every PROBE_EVERY_MS the probe asks `/` and `/version.json`. The grade fails
 // on any answer that is not 200, on a gap between ticks over the interval plus
-// jitter, and on a probe that died (scripts/lib/rollout-probe.ts). Files live
+// jitter, and on a probe that died (scripts/lib/rollout-probe.ts). `start` leaves a
+// live probe alone ("already running"); a probe.json whose pid is dead, or that a
+// newer grade.json already stopped, is a retried run's leftover (issue 1612): it
+// is moved aside and a fresh probe starts. Files live
 // in the run's control journal, `<journal root>/<target>/<run-ts>/probe/`:
 // probe.json (pid, window start), probe.jsonl (one line per answer) and
 // grade.json.
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readJournal, type RunJournal } from "./journal.ts";
@@ -63,6 +66,38 @@ export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: num
   return gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs);
 }
 
+/** Whether a pid is a running process (signal 0 only checks; EPERM still means it exists). */
+export function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/**
+ * The probe a run folder holds (issue 1612). `none`: no probe.json. `live`: its pid runs and no
+ * grade.json is newer than it. `stale`: its pid is dead, or a grade.json newer than it already
+ * stopped it, as an earlier attempt of a retried run left it (`--run <ts> --from <step>`).
+ */
+export function probeStatus(dir: string, alive: (pid: number) => boolean = pidAlive): "none" | "live" | "stale" {
+  const stateFile = join(dir, "probe.json");
+  if (!existsSync(stateFile)) return "none";
+  let pid = -1;
+  try { pid = (JSON.parse(readFileSync(stateFile, "utf8")) as ProbeState).pid; } catch { return "stale"; }
+  const graded = join(dir, "grade.json");
+  if (existsSync(graded) && statSync(graded).mtimeMs > statSync(stateFile).mtimeMs) return "stale";
+  return Number.isInteger(pid) && alive(pid) ? "live" : "stale";
+}
+
+/** Move a stale probe's probe.json, probe.jsonl and grade.json aside (suffix `.<ms>.old`), so a fresh window grades only its own answers. */
+export function moveStaleProbeAside(dir: string, nowMs: number = Date.now()): string[] {
+  const moved: string[] = [];
+  for (const name of ["probe.json", "probe.jsonl", "grade.json"]) {
+    const from = join(dir, name);
+    if (!existsSync(from)) continue;
+    renameSync(from, `${from}.${nowMs}.old`);
+    moved.push(`${name}.${nowMs}.old`);
+  }
+  return moved;
+}
+
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
   return at >= 0 ? process.argv[at + 1] : undefined;
@@ -92,7 +127,9 @@ if (import.meta.main) {
   if (mode === "start") {
     const origin = flag("--origin");
     if (!origin) { console.error("probe start needs --origin"); process.exit(2); }
-    if (existsSync(stateFile)) { console.log(`[probe] already running for ${target} ${runTs} (${stateFile})`); process.exit(0); }
+    const existing = probeStatus(dir);
+    if (existing === "live") { console.log(`[probe] already running for ${target} ${runTs} (${stateFile})`); process.exit(0); }
+    if (existing === "stale") console.log(`[probe] an earlier attempt's probe is stale (dead pid or already graded); moved aside: ${moveStaleProbeAside(dir).join(", ")}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const out = join(dir, "probe.jsonl");
     const startMs = Date.now();

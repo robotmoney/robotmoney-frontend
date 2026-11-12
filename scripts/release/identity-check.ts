@@ -2,7 +2,7 @@
 // scripts/release/identity-check.ts — release step Q26-verify-version/C14-verify-version, run ON THE TARGET HOST.
 // Standing check SV.1.
 //
-//   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] --receipt-dir <dir>
+//   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] [--site-only] --receipt-dir <dir>
 //
 // GET <origin>/api/version must carry the release commit; GET
 // <origin>/version.json must name it too. Neither may say `+dirty` or
@@ -11,6 +11,12 @@
 // from the tag Q06-checkout/P01-checkout fetched. /version is buildIdentityJson(), the
 // resolver /health reads; /api/version stays `{api, commit}` (D55 (1)) and
 // never serves the tag. Writes identity-check.json to --receipt-dir.
+//
+// `--site-only` is the web template's (runbooks/templates/web.yaml, owner
+// 2026-11-11): a web-only release restarts no backend, so /api/version keeps
+// the running release's commit and /version its tag. Then only /version.json
+// must name the release commit; /api/version must still answer 200 as JSON
+// with no +dirty or +unknown, and neither its commit nor /version's tag is compared.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -19,14 +25,14 @@ import { join } from "node:path";
  * ref; a tag must be served as `tag` at /version (`versionText`). A commit ref
  * (stage) compares no tag, so /version is not read.
  */
-export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit): string[] {
+export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit, siteOnly = false): string[] {
   const out: string[] = [];
-  const tag = ref === commit ? undefined : ref;
+  const tag = ref === commit || siteOnly ? undefined : ref;
   if (apiText === null) out.push("/api/version did not answer 200");
   else {
     let body: { api?: unknown; commit?: unknown } | null = null;
     try { body = JSON.parse(apiText) as { api?: unknown; commit?: unknown }; } catch { out.push("/api/version is not JSON"); }
-    if (body && body.commit !== commit) out.push(`/api/version commit is ${String(body.commit)}, expected ${commit}`);
+    if (body && !siteOnly && body.commit !== commit) out.push(`/api/version commit is ${String(body.commit)}, expected ${commit}`);
     if (/\+(dirty|unknown)/.test(apiText)) out.push("/api/version carries +dirty or +unknown");
   }
   if (tag !== undefined) {
@@ -71,17 +77,18 @@ async function main(): Promise<number> {
   const commit = flag("--commit");
   const ref = flag("--ref") ?? commit;
   const receiptDir = flag("--receipt-dir");
+  const siteOnly = process.argv.includes("--site-only");
   if (!origin || !commit || !/^[0-9a-f]{40}$/.test(commit) || !receiptDir || !ref) {
-    console.error("usage: bun scripts/release/identity-check.ts --origin <url> --commit <sha> [--ref <tag|sha>] --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/identity-check.ts --origin <url> --commit <sha> [--ref <tag|sha>] [--site-only] --receipt-dir <dir>");
     return 2;
   }
   const apiText = await get(`${origin}/api/version`);
   const versionText = await get(`${origin}/version`);
   const siteText = await get(`${origin}/version.json`);
-  const problems = identityProblems(apiText, versionText, siteText, commit, ref);
+  const problems = identityProblems(apiText, versionText, siteText, commit, ref, siteOnly);
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
-  writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, siteOnly, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[identity-check] ${origin}/api/version: ${apiText ?? "(no answer)"}`);
   console.log(`[identity-check] ${origin}/version: ${versionText ?? "(no answer)"}`);
   console.log(`[identity-check] receipt: ${file}`);

@@ -205,7 +205,9 @@ export function notBeforeOf(step: { readonly notBefore?: NotBeforeTemplate }, ta
  * The kitchen-sink template's steps, in order: the general runbook every
  * full-stack release copies (./runbooks/templates/kitchen-sink.yaml, read by
  * ./runbook.ts). A release runs its own runbook, which only adds to it
- * (loadReleaseRunbook). The policy is docs/technical/release-runbooks.md.
+ * (loadReleaseRunbook). A release may name another template (`web`); the
+ * runner then runs that release's runbook, never this list. The policy is
+ * docs/technical/release-runbooks.md.
  */
 export const RELEASE_STEPS: readonly StepTemplate[] = loadTemplate(DEFAULT_TEMPLATE).steps;
 
@@ -218,6 +220,20 @@ export const BASE_ENV: Readonly<Record<string, string>> = Object.freeze({ PATH: 
 /** What the not-yet-known READY instant renders as in a plan. */
 export const READY_PENDING = "READY-ISO-FROM-R6.9";
 
+/** What the not-yet-known window start renders as in a plan (the probe-start step has not run). */
+export const WINDOW_START_PENDING = "WINDOW-START-ISO-FROM-PROBE-START";
+
+/** The run's first irreversible step, which opens its log window: the website probe's start (issue 1613). */
+export const WINDOW_START_STEP: Readonly<Record<"stage" | "prod", string>> = { stage: "Q17-probe-start", prod: "C04-probe-start" };
+
+/**
+ * PURE. The `{windowStartIso}` of a run: when its probe-start step began, from the journal; pending
+ * until that step has run. A template with no READY of its own (`web`) grades its logs since this.
+ */
+export function windowStartIsoOf(steps: Readonly<Record<string, { readonly startedAt?: string } | undefined>>, side: "stage" | "prod"): string {
+  return steps[WINDOW_START_STEP[side]]?.startedAt ?? WINDOW_START_PENDING;
+}
+
 /** The values a template may name. */
 export interface TemplateValues {
   readonly [key: string]: string;
@@ -228,9 +244,10 @@ export interface TemplateValues {
  * (the rc tag on prod, the commit on stage, D64); P01-checkout and P04-capture-checkout detach at it,
  * C14-verify-version checks it. It defaults to the commit.
  */
-export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit): TemplateValues {
+export function templateValues(target: ReleaseTarget, commit: string, runTs: string, readyIso: string = READY_PENDING, ref: string = commit, windowStartIso: string = WINDOW_START_PENDING): TemplateValues {
   return {
     readyIso,
+    windowStartIso,
     target: target.name,
     release: target.release,
     commit,

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DEFAULT_TEMPLATE, checkAddOnly, loadReleaseRunbook, loadTemplate, parseReleaseRunbook, parseTemplate, releaseBefore, releaseRunbookNames,
-  releaseRunbookPath, templatePath, type ReleaseRunbook, type RunbookStep,
+  releaseRunbookPath, templatePath, TEMPLATE_NAMES, type ReleaseRunbook, type RunbookStep,
   scopeProblems, parseStep, twinProblems,
 } from "../../release/runbook.ts";
 import { prsOf, scopeCoverage } from "../../release/scope.ts";
@@ -132,7 +132,7 @@ describe("a release runbook only adds", () => {
     const body = readFileSync(templatePath("kitchen-sink"), "utf8");
     const steps = body.slice(body.indexOf("\nsteps:") + 1);
     expect(parseReleaseRunbook(`release: v9.9.9\nrecovery: fix forward\n${SCOPE}${steps}`, "v9.9.9").template).toBe("kitchen-sink");
-    expect(() => parseReleaseRunbook(`release: v9.9.9\nrecovery: fix forward\ntemplate: website-only\n${SCOPE}${steps}`, "v9.9.9")).toThrow("template website-only is not one of kitchen-sink");
+    expect(() => parseReleaseRunbook(`release: v9.9.9\nrecovery: fix forward\ntemplate: website-only\n${SCOPE}${steps}`, "v9.9.9")).toThrow("template website-only is not one of kitchen-sink, web");
     expect(() => parseReleaseRunbook(`release: v9.9.8\nrecovery: fix forward\n${SCOPE}${steps}`, "v9.9.9")).toThrow("names release v9.9.8");
   });
 
@@ -168,6 +168,71 @@ describe("the committed release runbooks", () => {
       expect(() => loadReleaseRunbook(release)).not.toThrow();
     });
   }
+
+  // Each release runbook is held to the template it names, not to kitchen-sink.
+  for (const release of releaseRunbookNames()) {
+    test(`${release} names a known template and only adds to that one`, () => {
+      const rb = loadReleaseRunbook(release);
+      expect(TEMPLATE_NAMES).toContain(rb.template);
+      expect(checkAddOnly(loadTemplate(rb.template), rb)).toEqual([]);
+    });
+  }
+});
+
+// ── the web template (owner, 2026-11-11: "The web release is a variation of the kitchen sink release") ──
+describe("the web template", () => {
+  const web = loadTemplate("web");
+  /** The identity check reads the site only (the backend is not restarted). */
+  const SITE_ONLY = ["Q26-verify-version", "C14-verify-version"];
+  /** The log verdict grades since the run's window start: a web-only release has no READY (issue 1613). */
+  const SINCE_WINDOW = ["Q28-log-verdict", "C16-log-verdict"];
+  const KEPT = [
+    "Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "Q06-checkout", "Q07-host-identity", "Q08-install",
+    "Q13-log-baseline", "Q17-probe-start", "Q24-site", "Q25-probe-grade", "Q26-verify-version", "Q27-verify-product", "Q28-log-verdict",
+    "P01-checkout", "P02-host-identity", "P03-install", "P08-log-baseline",
+    "C04-probe-start", "C06-version-tag", "C12-site", "C13-probe-grade", "C14-verify-version", "C15-verify-product", "C16-log-verdict",
+  ];
+
+  test("is an ordered subset of kitchen-sink, every step identical but the documented adjustments", () => {
+    expect(web.steps.map((s) => s.id)).toEqual(KEPT);
+    const at = web.steps.map((s) => template.steps.findIndex((t) => t.id === s.id));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    for (const s of web.steps) {
+      const k = template.steps.find((t) => t.id === s.id)!;
+      if (!SITE_ONLY.includes(s.id) && !SINCE_WINDOW.includes(s.id)) {
+        expect(s).toEqual(k);
+        continue;
+      }
+      const { cmds, description, ...rest } = s;
+      const { cmds: kCmds, description: _kDescription, ...kRest } = k;
+      expect(rest).toEqual(kRest);
+      if (SITE_ONLY.includes(s.id)) {
+        // the same step but for --site-only before --receipt-dir, and a description that says so.
+        const flag = kCmds[0]!.indexOf("--receipt-dir");
+        expect(cmds).toEqual([[...kCmds[0]!.slice(0, flag), "--site-only", ...kCmds[0]!.slice(flag)]]);
+        expect(description).toContain("site only");
+      } else {
+        // the same step but for --since {windowStartIso} before --report (issue 1613).
+        const flag = kCmds[0]!.indexOf("--report");
+        expect(cmds).toEqual([[...kCmds[0]!.slice(0, flag), "--since", "{windowStartIso}", ...kCmds[0]!.slice(flag)]]);
+        expect(description).toContain("window start");
+      }
+    }
+  });
+
+  test("the log verdicts pass --since the window start; kitchen-sink's carry none (they grade since their own READY)", () => {
+    for (const id of SINCE_WINDOW) {
+      const cmd = web.steps.find((s) => s.id === id)!.cmds[0]!;
+      expect(cmd[cmd.indexOf("--since") + 1]).toBe("{windowStartIso}");
+      expect(template.steps.find((s) => s.id === id)!.cmds[0]).not.toContain("--since");
+    }
+  });
+
+  test("carries no database or backend step: no migrate, boot, READY, backup, soak or irreversible step", () => {
+    expect(web.steps.some((s) => /migrate|boot|ready|backup|restore|soak|env-rewrite|tokens|capture|state-baseline|archive|sdk/.test(s.id))).toBe(false);
+    expect(web.steps.some((s) => s.irreversible || s.breakingOnly === true || s.after !== undefined || s.notBefore !== undefined)).toBe(false);
+  });
 });
 
 // ── scope: every PR a release ships, each with its check or a reason (owner, 2026-10-15) ──

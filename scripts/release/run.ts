@@ -53,7 +53,7 @@ import { executeStep, prefixedDeps, readRecovery, TIMED_OUT, type RunnerDeps } f
 import { endNote, labelRefusal, stopRecorder } from "./liveness.ts";
 import { notify } from "./notify.ts";
 import {
-  BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, type RenderedStep, type StepTemplate,
+  BREAKING_SKIPS, CONTROL_HOST, CONTROL_REPO, notBeforeOf, READY_PENDING, renderStep, shellQuote, stepIds, stepListHash, templateValues, windowStartIsoOf, type RenderedStep, type StepTemplate,
 } from "./steps.ts";
 import { loadReleaseRunbook, stepNameOf } from "./runbook.ts";
 import { confirmTargetFilled, loadTarget, type ReleaseTarget } from "./target.ts";
@@ -492,7 +492,7 @@ async function runReleaseOnce(
       pending.delete(id);
       const readyStep = journal.steps[READY_STEP[target.rmEnv]];
       const readyIso = readyStep?.status === "ok" ? readyStep.endedAt : undefined;
-      const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref));
+      const step = renderStep(template, target, templateValues(target, commit, runTs, readyIso ?? READY_PENDING, go.ref, windowStartIsoOf(journal.steps, target.rmEnv)));
       const started = deps.now();
       const record: StepRecord = {
         id, status: "running", exit: null, expectExit: step.expectExit, startedAt: started.toISOString(),

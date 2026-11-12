@@ -1,0 +1,343 @@
+# scripts/release/runbooks/templates/web.yaml — the web release runbook
+# template (D61, D70): a release that ships only the website. It is a subset of
+# kitchen-sink.yaml: the steps a web-only release needs, each copied unchanged
+# and in kitchen-sink's order (scripts/tests/unit/release-runbook.test.ts holds
+# it to that), save the one documented adjustment below.
+#
+# Owner decision (lucky-tensor, 2026-11-11): "The web release is a variation of
+# the kitchen sink release." A web-only release runs through the same
+# `bun run release:run`, with this template in place of kitchen-sink.
+#
+# Removed, because a web-only release changes no database and no backend: the
+# capture checkout, identity and install; the state baseline; the backups and
+# restore proof; the migrate and every breaking-only step; the env rewrite,
+# identity and tokens; the rolling and full boot and READY; the soak, its
+# checks, its log collection and the analytics load; the archive routes, SDK
+# and database checks. Kept: stage's preparation, the release checkout and
+# install, the log baseline, the website probe around the site switch, the
+# version tag, and the identity, product and log checks after it.
+#
+# The one adjustment: Q26/C14-verify-version pass --site-only to
+# identity-check.ts. The backend is not restarted, so /api/version keeps the
+# running release's commit and /version its tag; the check then requires
+# /version.json to name the release commit and /api/version to answer, clean,
+# without comparing its commit or tag.
+#
+# A release's own runbook (../releases/vA.B.C.yaml) names `template: web` and
+# only ADDS to it, as with kitchen-sink (scripts/release/runbook.ts). Fields
+# are scripts/release/steps.ts StepTemplate's. Every P and C step has a Q twin
+# of the same name and commands; the version tag (C06) has none.
+template: web
+steps:
+  # ── QA: stage only, as often as needed. Stage's preparation (Q01 to Q05), then the release
+  # checkout and install, the log baseline, the website probe, the site switch, and the checks.
+  # No backup, migrate or backend boot: the backend production runs keeps serving.
+  - id: "Q01-lockfile"
+    standing: ["SP.9"]
+    host: "control"
+    phase: "qa"
+    description: "Fresh lockfile: every committed bun.lock equals a fresh resolve at the QA commit, so the rc carries one (owner, 2026-10-14); hosts then install it frozen"
+    cmds:
+      - ["bun", "scripts/release/lockfile.ts", "check", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q02-dump"
+    standing: ["SR.0"]
+    host: "control"
+    phase: "qa"
+    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "dump"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
+  - id: "Q03-stage-up"
+    standing: ["SR.0"]
+    host: "control"
+    phase: "qa"
+    description: "Stage target: replace it with a production-shaped copy restored from that dump, running the version production runs (the running tag, its ledger, its grants); the release checkout is made by Q06-checkout"
+    cmds:
+      - ["bun", "scripts/release/stage-target.ts", "up", "--dump", "newest", "--replace"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 60
+  - id: "Q04-role-passwords"
+    standing: ["SR.1"]
+    host: "control"
+    phase: "qa"
+    description: "Stage's role passwords: the stage database sets its own doadmin password and role-passwords writes the roles' passwords to the stage host's ~/.env, so the rest of the list reads stage exactly as it reads production (doadmin stays in no file)"
+    cmds:
+      - ["bash", "-c", "set -o pipefail && bun scripts/release/stage-target.ts doadmin | bun run role-passwords --target {target} --doadmin-stdin"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 10
+  - id: "Q05-scope"
+    standing: ["SR.2"]
+    host: "control"
+    phase: "qa"
+    description: "Scope: every PR between the version the target runs (on stage, production's tag, which Q03-stage-up booted) and the QA commit is in the release runbook's scope, each with the step that checks it or a reason none does; and nothing the scope lists is missing from the range"
+    cmds:
+      - ["bun", "scripts/release/scope.ts", "--release", "{release}", "--commit", "{commit}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q06-checkout"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "Q07-host-identity"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its identity is absent or matches RM_ENV, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no production step reads doadmin. The ledger reconciliation is Q12-state-baseline's"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q08-install"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "qa"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree Q07-host-identity proved clean)"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q13-log-baseline"
+    standing: ["SP.5"]
+    host: "target"
+    phase: "qa"
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-baseline.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+    triage: true
+  - id: "Q17-probe-start"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "qa"
+    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until Q25-probe-grade grades it"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "start", "--origin", "{publicOrigin}", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q24-site"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    cmds:
+      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q25-probe-grade"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "qa"
+    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from Q17-probe-start to now, or the release fails"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "grade", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q26-verify-version"
+    standing: ["SV.1"]
+    host: "target"
+    phase: "qa"
+    description: "Identity, site only (web template): /version.json carries the release commit; /api/version answers 200, and neither it nor /version.json carries +dirty or +unknown. The backend is not restarted, so /api/version's commit and /version's tag stay the running release's and are not compared"
+    cmds:
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--site-only", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q27-verify-product"
+    standing: ["SV.3"]
+    host: "target"
+    phase: "qa"
+    description: "Product verification, readonly tier"
+    cmds:
+      - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+  - id: "Q28-log-verdict"
+    standing: ["SV.4"]
+    host: "target"
+    phase: "qa"
+    description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
+    irreversible: false
+    onlyFor: "stage"
+  # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
+  # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
+  - id: "P01-checkout"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target checkout: clone it when missing, fetch the tags, then detach at the go's ref (the rc tag on prod, the commit on stage), so the host holds the tag the boot reports (D64)"
+    cmds:
+      - ["git", "fetch", "--tags", "origin"]
+      - ["git", "-c", "advice.detachedHead=false", "checkout", "--detach", "{ref}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    cloneFrom: "git@github.com:robotmoney/robotmoney-frontend.git"
+  - id: "P02-host-identity"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target identity and precondition: HEAD is the commit, the tree is clean, the tools exist, ~/.env resolves to confirmTarget, the database answers, its identity is absent or matches RM_ENV, ~/.env holds non-empty rm_owner and RM_CREDENTIALS lines and rm_owner logs in (SELECT 1, read-only; refuses with \"run bun run role-passwords --target <target> first\"); no production step reads doadmin. The ledger reconciliation is P07-state-baseline's"
+    cmds:
+      - ["bun", "scripts/release/host-identity.ts", "--commit", "{commit}", "--confirm-target", "{confirmTarget}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "host-identity.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P03-install"
+    standing: ["SP.1"]
+    host: "target"
+    phase: "preflight"
+    description: "Target install: bun install --frozen-lockfile, root and backend (an install never rewrites the tree P02-host-identity proved clean)"
+    cmds:
+      - ["bun", "install", "--frozen-lockfile"]
+      - ["bun", "install", "--frozen-lockfile", "--cwd", "backend"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "P08-log-baseline"
+    standing: ["SP.5"]
+    host: "target"
+    phase: "preflight"
+    description: "Log baseline of the running stack the instance's smoke state names, graded by prod:gate from the release checkout"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "baseline", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-baseline.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-baseline.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+    triage: true
+  # ── Cutover: production only. The version tag, the site switch under the website probe,
+  # then the checks, as stage ran them.
+  - id: "C04-probe-start"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "cutover"
+    description: "Start the website probe on the control machine: the public origin's / and /version.json every 2 s, from before the first irreversible step until C13-probe-grade grades it"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "start", "--origin", "{publicOrigin}", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C06-version-tag"
+    standing: ["SW.3"]
+    host: "control"
+    phase: "cutover"
+    description: "The cutover has started: tag the rc's commit with the version tag and push it (prod only, D70). A later failed check or a rollback never withholds or moves it"
+    cmds:
+      - ["bun", "scripts/release/tag.ts", "final", "--release", "{release}", "--commit", "{commit}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C12-site"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    cmds:
+      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C13-probe-grade"
+    standing: ["SC.4"]
+    host: "control"
+    phase: "cutover"
+    description: "Stop and grade the website probe: every answer 200 and no gap over the interval from C04-probe-start to now, or the release fails"
+    cmds:
+      - ["bun", "scripts/release/probe.ts", "grade", "--target", "{target}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C14-verify-version"
+    standing: ["SV.1"]
+    host: "target"
+    phase: "cutover"
+    description: "Identity, site only (web template): /version.json carries the release commit; /api/version answers 200, and neither it nor /version.json carries +dirty or +unknown. The backend is not restarted, so /api/version's commit and /version's tag stay the running release's and are not compared"
+    cmds:
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--site-only", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C15-verify-product"
+    standing: ["SV.3"]
+    host: "target"
+    phase: "cutover"
+    description: "Product verification, readonly tier"
+    cmds:
+      - ["bun", "run", "verify:live", "--instance", "{instance}", "--emit-receipt=R7.verify"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+  - id: "C16-log-verdict"
+    standing: ["SV.4"]
+    host: "target"
+    phase: "cutover"
+    description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
+    cmds:
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+    expectExit: 0
+    receipts:
+      - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
+    irreversible: false
+    onlyFor: "prod"

@@ -6,7 +6,9 @@
 // (runbooks/releases/vA.B.C.yaml) names one template and holds a full copy of
 // its steps, plus the steps and checks only that release needs. It only adds:
 // every template step stays, unchanged and in the template's order. An added
-// step may sit anywhere, and carries `added: <its release>`.
+// step may sit anywhere, and carries `added: <its release>`. `web` is the
+// kitchen-sink subset a web-only release runs (owner, 2026-11-11): each release
+// runbook is held to the template it names.
 //
 // The runner runs the release's runbook (./run.ts). It refuses one that drops,
 // edits or reorders a template step, so a release can never silently skip a
@@ -22,11 +24,14 @@ import type { NotBeforeTemplate, ReceiptSpec, StepHost, StepPhase, StepTemplate 
 export const RUNBOOKS_DIR = join(dirname(fileURLToPath(import.meta.url)), "runbooks");
 
 /**
- * The templates a release may name. The planned `website-only` template (issue
- * 1305, gap Z4) is replaced by ./runbooks/web-content.yaml, run by
- * ./web-release.ts on its own release line (D81); this loader never reads it.
+ * The templates a release may name. `kitchen-sink` is the full-stack release.
+ * `web` is the kitchen-sink subset for a release that ships only the website
+ * through this runner (owner, 2026-11-11: "The web release is a variation of
+ * the kitchen sink release"). ./runbooks/web-content.yaml, run by
+ * ./web-release.ts on its own release line (D81), is no template: this loader
+ * never reads it.
  */
-export const TEMPLATE_NAMES = ["kitchen-sink"] as const;
+export const TEMPLATE_NAMES = ["kitchen-sink", "web"] as const;
 export type TemplateName = (typeof TEMPLATE_NAMES)[number];
 
 /** The template a release runbook uses when it names none. */
