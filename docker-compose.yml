@@ -448,6 +448,13 @@ services:
   # and nginx serves `/srv/web/current`. A site switch is then a symlink rename
   # that touches no container, and a rebuild of `_static` in the checkout can no
   # longer change what a running stack serves underneath it.
+  #
+  # THIS IS THE BOOTSTRAP SERVER (issue 1631). Once a host has swapped a signed
+  # bundle in (`bun smoke:web --host`), docker-compose.website-image.yml runs
+  # website-server from the immutable Caddy site image instead, with no volume.
+  # nginx and this web/ mount stay for every host before its first swap, for
+  # every CI stack, and for the stopped `<name>-first-rollout` container the
+  # first swap keeps as its rollback target (web-serving-architecture.md §4).
   website-server:
     build:
       context: ./website-server
