@@ -266,7 +266,8 @@ jobs:
         shell: bash
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
-          tests/regime-frozen-publications.test.ts:16
+          tests/regime-frozen-publications.test.ts:11
+          tests/swarm-brief-regime-door.test.ts:5
           tests/analytics-offline-replay.test.ts:5
           tests/analytics-parity-sql-equivalence.test.ts:14
           tests/analytics-ledger-dual-write.test.ts:14
