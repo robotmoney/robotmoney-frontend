@@ -16,7 +16,9 @@
 //   - the P1 route and header table passes against it, api up and api down;
 //   - `docker diff` lists nothing under the served root after all of that;
 //   - a bundle signed by an unlisted key, or labelled with another commit,
-//     fails the build.
+//     fails the build;
+//   - a correctly signed bundle that carries a hardlink fails the build
+//     (issue 1628: BusyBox tar lists a hardlink as a regular file).
 //
 // Every table run prints `route-table server=bundle-image phase=<phase>: N/N
 // rows passed`, which integration.yml greps, so a skipped run is never green.
@@ -31,7 +33,8 @@ import { dirname, join } from "node:path";
 import { MAINTENANCE_FILE } from "../../lib/maintenance-file.ts";
 import { KEPT_WEB_SERVICE, makeDockerRunner, stopProjectExcept } from "../../lib/smoke-volumes.ts";
 import { packBundle, signBundle } from "../../lib/web-bundle.ts";
-import { WEB_BUNDLE_SIGNATURE_NAMESPACE } from "../../lib/web-bundle-manifest.ts";
+import { WEB_BUNDLE_SIGNATURE_NAMESPACE, bundleFileName, digestStatement } from "../../lib/web-bundle-manifest.ts";
+import { createHash } from "node:crypto";
 import {
   WEBSITE_IMAGE_LABELS,
   WEBSITE_SERVED_ROOT,
@@ -61,6 +64,7 @@ const ECHO_API = `Bun.serve({ port: 8787, hostname: "0.0.0.0", fetch(req) {
 
 const work = mkdtempSync(join(tmpdir(), "rm-wsb-"));
 let bundle = { dir: "", sha256: "" };
+let signerKey = "";
 let webPort = 0;
 
 const docker = (args: string[]): string => execFileSync("docker", args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
@@ -134,6 +138,7 @@ async function waitFor(url: string, ok: (r: Response) => boolean, deadlineMs = 6
 beforeAll(() => {
   // The server image, trusting only this test's key.
   const key = keypair("p4-signer");
+  signerKey = key;
   const serverDir = join(work, "website-server");
   cpSync(join(repoRoot, "website-server"), serverDir, { recursive: true });
   const pub = readFileSync(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
@@ -238,4 +243,29 @@ test("a correctly signed bundle labelled with another commit fails the build", (
   tryDocker(["rmi", "-f", `${IMAGE}-mislabelled`]);
   expect(r.code).not.toBe(0);
   expect(r.out).toContain(`web bundle refused: the bundle context holds no robotmoney-web-${SITE_VERSION.version}-fedcba9.tar.gz`);
+}, 300_000);
+
+test("a correctly signed bundle that carries a hardlink fails the build", () => {
+  // GNU tar stores the second name of a hardlinked file as a link entry. The
+  // packer never writes one, so the tarball is made by hand and then signed by
+  // the key the server image trusts: only the verifier's own checks stand
+  // between it and the served root.
+  const site = join(work, "hardlink-site");
+  for (const [rel, body] of Object.entries(SITE_FILES)) {
+    mkdirSync(dirname(join(site, rel)), { recursive: true });
+    writeFileSync(join(site, rel), body);
+  }
+  execFileSync("ln", [join(site, "index.html"), join(site, "linked.html")]);
+  const dir = join(work, "hardlink-bundle");
+  mkdirSync(dir, { recursive: true });
+  const name = bundleFileName(SITE_VERSION);
+  execFileSync("tar", ["-C", site, "-czf", join(dir, name), ...Object.keys(SITE_FILES), "linked.html"]);
+  expect(execFileSync("tar", ["-tvzf", join(dir, name)]).toString()).toMatch(/^h|link to/m);
+  const sha256 = createHash("sha256").update(readFileSync(join(dir, name))).digest("hex");
+  writeFileSync(join(dir, `${name}.sha256`), digestStatement(sha256, name));
+  signBundle(join(dir, name), signerKey);
+  const r = buildImage(`${IMAGE}-hardlink`, dir, { commit: SITE_VERSION.commit, sha256 });
+  tryDocker(["rmi", "-f", `${IMAGE}-hardlink`]);
+  expect(r.code).not.toBe(0);
+  expect(r.out).toContain("web bundle refused: the tarball holds a link");
 }, 300_000);
