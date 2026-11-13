@@ -13,6 +13,8 @@
 // The fixture site is part of the contract: the rows name its files.
 // static-asset-cache.md C1 and C7 set the Cache-Control values.
 
+import { WEBSITE_ASSET_CACHE, WEBSITE_CSP, WEBSITE_HTML_CACHE, WEBSITE_SECURITY_HEADERS } from "../../lib/website-image.ts";
+
 export type Duty =
   | "static"
   | "fallback"
@@ -60,18 +62,13 @@ export type Row = {
   echoHeaders?: Record<string, string>;
 };
 
-export const CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+/** The header values live with the server image (scripts/lib/website-image.ts), so `bun smoke:web`'s check and this table cannot drift apart. */
+export const CSP = WEBSITE_CSP;
 
-export const SECURITY_HEADERS: Record<string, string> = {
-  "content-security-policy": CSP,
-  "permissions-policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
-  "referrer-policy": "strict-origin-when-cross-origin",
-  "x-content-type-options": "nosniff",
-};
+export const SECURITY_HEADERS: Record<string, string> = { ...WEBSITE_SECURITY_HEADERS };
 
-const HTML_CACHE = "no-cache";
-const ASSET_CACHE = "public, max-age=300";
+const HTML_CACHE = WEBSITE_HTML_CACHE;
+const ASSET_CACHE = WEBSITE_ASSET_CACHE;
 
 /**
  * The fixture site's identity. A real bundle identity (a hex commit), so the

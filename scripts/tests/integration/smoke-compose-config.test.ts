@@ -49,6 +49,7 @@ interface ComposeConfig {
     secrets?: Array<{ source: string; target: string }>;
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
     image?: string;
+    pull_policy?: string;
     read_only?: boolean;
     user?: string;
     cap_drop?: string[];
@@ -1546,6 +1547,8 @@ describe("website-server from its immutable image (issue 1627)", () => {
     expect(svc.volumes ?? []).toEqual([]);
     expect(svc.build).toBeUndefined();
     expect(svc.image).toBe(WEBSITE_IMAGE_KNOBS.RM_WEBSITE_IMAGE);
+    // Built on the host from a signed bundle, never pulled (issue 1628).
+    expect(svc.pull_policy).toBe("never");
     // The scratch paths are in memory and none is under the served root.
     expect(svc.tmpfs).toEqual(["/config:uid=65534,gid=65534", "/data:uid=65534,gid=65534", "/srv/maintenance:uid=65534,gid=65534"]);
   });

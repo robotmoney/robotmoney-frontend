@@ -1,3 +1,7 @@
+// THE DIRECTORY MODE of `bun smoke:web` (nginx and the web/ mount), kept until
+// P8 (issue 1631) removes it. The image mode's proof is smoke-web-rolling.test.ts
+// (issue 1628).
+//
 // Rolling the site under live traffic (issue #1026 W7, criterion 164; smoke
 // spec §13.2, D54): switching the site between two versions while the API
 // serves traffic fails no request, and restarts no container.
@@ -108,6 +112,6 @@ test("the api container is unchanged, and no worker or website-server restarted"
   for (const steady of Object.keys(before).filter((s) => s === "api" || s === "website-server" || s.startsWith("worker-"))) {
     expect(restartingBefore).not.toContain(steady);
   }
-  if (restartingBefore.length > 0) console.warn(`[smoke-web-rolling] already restarting before the roll (id compared only): ${restartingBefore.join(", ")}`);
+  if (restartingBefore.length > 0) console.warn(`[smoke-web-dir-rolling] already restarting before the roll (id compared only): ${restartingBefore.join(", ")}`);
   expect(changes).toEqual([]);
 });

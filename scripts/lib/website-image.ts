@@ -8,7 +8,8 @@
 // served root, the run flags as `docker run` arguments, and the boot check
 // that a running container's served root still equals its image.
 //
-// Nothing here deploys. The swap that uses it is P5 (issue 1628).
+// Nothing here deploys. The swap that uses it is scripts/lib/website-release.ts
+// (issue 1628).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WEBSITE_IMAGE_COMPOSE_FILE } from "../stack/config.ts";
@@ -25,12 +26,36 @@ export const WEBSITE_IMAGE_LABELS = {
   serverCommit: "robotmoney.web.server-commit",
 } as const;
 
+/**
+ * The headers the server sends on every page answer (§3.3). They belong to the
+ * server config, never to a bundle, so a web release leaves them unchanged:
+ * `bun smoke:web` checks them on its throwaway copy, and the route and header
+ * table (scripts/tests/support/website-routes-table.ts) reads them from here.
+ */
+export const WEBSITE_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+
+export const WEBSITE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "content-security-policy": WEBSITE_CSP,
+  "permissions-policy": "publickey-credentials-get=(self), publickey-credentials-create=(self)",
+  "referrer-policy": "strict-origin-when-cross-origin",
+  "x-content-type-options": "nosniff",
+};
+
+/** Cache-Control on an HTML answer and on an asset answer (static-asset-cache.md C1, C7). */
+export const WEBSITE_HTML_CACHE = "no-cache";
+export const WEBSITE_ASSET_CACHE = "public, max-age=300";
+
 /** Where the image holds the site. `current` is the served root. */
 export const WEBSITE_SERVED_ROOT = "/srv/web";
+
+/** The in-memory directory the server reads maintenance.json from (a tmpfs, wiped on every start). */
+export const WEBSITE_MAINTENANCE_DIR = "/srv/maintenance";
 
 /** The website-server settings the overlay declares. */
 export interface WebsiteImageService {
   image?: string;
+  pull_policy?: string;
   read_only?: boolean;
   user?: string;
   cap_drop?: string[];

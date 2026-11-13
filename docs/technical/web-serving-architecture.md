@@ -181,6 +181,16 @@ Rules:
 - A web release restarts no backend service and writes no database row.
 - A web release installs no dependency on a serving host. It needs Docker and OpenSSH there, and nothing else.
 
+`bun smoke:web --host <ssh-dest> --instance <name> --bundle <file or web-vA.B.C> --server-image <ref>` runs these
+steps, and `--rollback` in place of `--bundle` runs the rollback. The logic is the image mode of
+`scripts/lib/website-release.ts`. `scripts/lib/website-host.ts` sends every host command over one SSH connection
+and reads host ports through an SSH forward. The host lock is a Docker network named
+`robotmoney-web-lock-<instance>`. The image tags `robotmoney-website:<instance>-current` and `-previous` name the
+serving image and the one previous image. The site image is built from the server image's id, pinned by the tag
+`robotmoney-website-server-pin:<id>`. The receipt is `web-image/<instance>/receipt.json` under the control
+machine's state root, and each receipt is also a line of `journal.jsonl` beside it. An active `maintenance.json`
+is carried into the container that serves after a swap or a rollback.
+
 ### 4.1 The gap
 
 Docker gives a published port to one container at a time. Between step 4's stop and start nothing listens, so

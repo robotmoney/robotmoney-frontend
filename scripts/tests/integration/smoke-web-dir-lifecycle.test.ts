@@ -1,3 +1,7 @@
+// THE DIRECTORY MODE of `bun smoke:web` (nginx and the web/ mount), kept until
+// P8 (issue 1631) removes it. The image mode's proof is smoke-web-lifecycle.test.ts
+// (issue 1628).
+//
 // `bun smoke:web` against a REAL running stack (issue #1026 W7, criterion 161;
 // smoke spec §13.2, D54).
 //
@@ -172,7 +176,7 @@ describe("bun smoke:web deploys a site version onto a running stack", () => {
     for (const steady of Object.keys(before).filter((s) => s === "api" || s === "website-server" || s.startsWith("worker-"))) {
       expect(restartingBefore).not.toContain(steady);
     }
-    if (restartingBefore.length > 0) console.warn(`[smoke-web-lifecycle] already restarting before smoke:web (id compared only): ${restartingBefore.join(", ")}`);
+    if (restartingBefore.length > 0) console.warn(`[smoke-web-dir-lifecycle] already restarting before smoke:web (id compared only): ${restartingBefore.join(", ")}`);
     expect(changes).toEqual([]);
   });
 });

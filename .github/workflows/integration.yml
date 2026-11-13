@@ -218,6 +218,23 @@ jobs:
             grep -qE "^route-table server=bundle-image phase=$phase: ([1-9][0-9]*)/\1 rows passed" "$RUNNER_TEMP/integration-bun-test.log" \
               || { echo "::error::the immutable image did not pass every $phase row of the route and header table"; exit 1; }
           done
+      # Issue 1628: `bun smoke:web`'s image mode swapped site images on real
+      # Docker inside the integration suite: the lifecycle proof (copy check,
+      # host verification, revert, deploy by name, the CLI) and the rolling
+      # proof (four swaps under a 10 rps probe, no failure outside a gap, one
+      # previous image). Their absence or exclusion is a red job.
+      - name: Web image swap proofs ran (issue 1628)
+        shell: bash
+        run: |
+          for f in scripts/tests/integration/smoke-web-lifecycle.test.ts scripts/tests/integration/smoke-web-rolling.test.ts; do
+            test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+            grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::$f did not run in the integration suite"; exit 1; }
+          done
+          grep -qE "^smoke-web-lifecycle deploy: gap [0-9]+ ms" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::the image-mode deploy did not swap in the integration suite"; exit 1; }
+          grep -qE "^smoke-web-rolling: [1-9][0-9]* requests .*, 0 outside a gap" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::the rolling swap proof did not run, or a request failed outside a gap"; exit 1; }
       # Issue 1624 red control: one Cache-Control value, one fallback and one
       # 404 rule, each changed in a scratch copy of nginx.conf, must each turn
       # the table red on the row that guards it.

@@ -10,8 +10,11 @@
 #
 # SERVER_IMAGE is the platform's own server image, built on the host from
 # Dockerfile.caddy, whose registry base is pinned by digest. A local image has
-# no registry digest, so it is named by tag; one build resolves it once for
-# both stages. The verify stage runs the server image's own verifier against
+# no registry digest, and BuildKit refuses a bare image id as FROM, so
+# `bun smoke:web` names it by a tag made from its id
+# (robotmoney-website-server-pin:<id>) and checks that the built image's
+# layers start with that id's layers (issue 1628). One build resolves it once
+# for both stages. The verify stage runs the server image's own verifier against
 # the server image's own allowed-signers file. A bundle that fails it,
 # or whose name does not match the tag and commit below, fails the build, so
 # the labels always name the bytes the image serves.

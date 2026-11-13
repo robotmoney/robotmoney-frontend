@@ -1,6 +1,21 @@
 // `bun smoke:web [--instance <name>] [--rollback]` — deploy the static website
 // and nothing else (D54; smoke spec §13.2, issue #1026 W7).
 //
+// IMAGE MODE (issue 1628, docs/technical/web-serving-architecture.md §4):
+//
+//   bun smoke:web --host <ssh-dest|local> --instance <name> --bundle <file|web-vA.B.C> --server-image <ref> [--origin <url>]
+//   bun smoke:web --host <ssh-dest|local> --instance <name> --rollback [--origin <url>]
+//
+// `--host` selects it. It runs here, on the control machine, and drives the
+// host over SSH (`local` runs the host's commands on this machine). It
+// deploys one signed bundle as an immutable website-server image, swapped on
+// the public port, and writes its receipt under
+// `<state root>/web-image/<instance>/`. The logic is the image-mode half of
+// scripts/lib/website-release.ts. A `web-vA.B.C` bundle is downloaded from
+// that tag's GitHub release (`gh release download`). Without `--host`, the
+// directory mode below runs, unchanged, until the runbooks and the platform
+// boots move to image mode (issues 1630, 1632).
+//
 // Builds the site from this checkout into the instance's `web/` directory,
 // refuses when the running API's version is outside the site's range, switches
 // `website-server` to it and reloads nginx, and writes a journal and receipt
@@ -26,7 +41,19 @@ import { homeEnvFilePath, loadEnvFile } from "./lib/env-role.ts";
 import { resolveRmEnv } from "./lib/smoke-env-policy.ts";
 import { buildSmokeLifecycleComposeEnv } from "./lib/smoke-lifecycle-env.ts";
 import { instanceFlag, readStackState, stateRoot, type InstancePaths, type StackStateRecord } from "./lib/smoke-state.ts";
-import { deploySite, resolveWebInstance, rollbackSite, WEB_CONTENT_PATHS, type WebReleaseDeps } from "./lib/website-release.ts";
+import { WEB_BUNDLE_ALLOWED_SIGNERS } from "./lib/web-bundle.ts";
+import { localHost, sshHost } from "./lib/website-host.ts";
+import {
+  deployImage,
+  deploySite,
+  resolveWebInstance,
+  rollbackImage,
+  rollbackSite,
+  WEB_CONTENT_PATHS,
+  type ImageReceipt,
+  type ImageReleaseDeps,
+  type WebReleaseDeps,
+} from "./lib/website-release.ts";
 import { resolveBuildIdentityEnv } from "./stack/build-identity.ts";
 import { instanceComposeEnv } from "./stack/config.ts";
 import { resolveStackEnvironment } from "./stack/naming.ts";
@@ -40,17 +67,65 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+const USAGE =
+  "Usage: bun smoke:web [--instance <name>] [--rollback] | bun smoke:web --host <ssh-dest|local> --instance <name> " +
+  "(--bundle <file|web-vA.B.C> --server-image <ref> | --rollback) [--origin <url>]";
+const VALUE_FLAGS = ["--instance", "--host", "--bundle", "--server-image", "--origin"] as const;
 const argv = process.argv.slice(2);
+const values: Partial<Record<(typeof VALUE_FLAGS)[number], string>> = {};
 for (let i = 0; i < argv.length; i++) {
   const token = argv[i]!;
-  if (token === "--rollback" || token.startsWith("--instance=")) continue;
-  if (token === "--instance") {
-    i++;
-    continue;
-  }
-  fail(`Refusing: unknown argument ${token}. Usage: bun smoke:web [--instance <name>] [--rollback]`);
+  if (token === "--rollback") continue;
+  const flag = VALUE_FLAGS.find((f) => token === f || token.startsWith(`${f}=`));
+  if (flag === undefined) fail(`Refusing: unknown argument ${token}. ${USAGE}`);
+  const value = token === flag ? argv[++i] : token.slice(flag.length + 1);
+  if (value === undefined || value === "") fail(`Refusing: ${flag} needs a value. ${USAGE}`);
+  values[flag] = value;
 }
 const rollback = argv.includes("--rollback");
+
+if (values["--host"] !== undefined) {
+  await imageMode(values["--host"]);
+  process.exit(0);
+}
+for (const flag of ["--bundle", "--server-image", "--origin"] as const) {
+  if (values[flag] !== undefined) fail(`Refusing: ${flag} deploys a signed bundle image and needs --host. ${USAGE}`);
+}
+
+/** Image mode: one signed bundle, one immutable container, swapped on the host's public port. */
+async function imageMode(hostName: string): Promise<void> {
+  const instance = values["--instance"];
+  if (instance === undefined) fail(`Refusing: image mode needs --instance (the host's instance). ${USAGE}`);
+  if (rollback === (values["--bundle"] !== undefined)) fail(`Refusing: name exactly one of --bundle and --rollback. ${USAGE}`);
+  if (!rollback && values["--server-image"] === undefined) fail(`Refusing: --bundle needs --server-image, the host's server image. ${USAGE}`);
+  const host = hostName === "local" ? localHost() : sshHost(hostName);
+  const deps: ImageReleaseDeps = {
+    host,
+    instance,
+    receiptDir: join(stateRoot(process.env), "web-image", instance),
+    repoRoot,
+    allowedSigners: WEB_BUNDLE_ALLOWED_SIGNERS,
+    publicOrigin: values["--origin"],
+    async fetchRelease(tag, dir) {
+      const r = Bun.spawnSync(["gh", "release", "download", tag, "--pattern", "robotmoney-web-*", "--dir", dir], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+      if (r.exitCode !== 0) throw new Error(`gh release download ${tag} failed: ${r.stderr.toString().trim()}`);
+    },
+    log: (line) => console.log(`${TAG} ${line}`),
+  };
+  console.log(`${TAG} host ${host.name}, instance ${instance}: ${rollback ? "rolling back to the previous image" : `deploying ${values["--bundle"]}`}`);
+  let receipt: ImageReceipt;
+  try {
+    receipt = rollback ? await rollbackImage(deps) : await deployImage({ bundle: values["--bundle"]!, serverImage: values["--server-image"]! }, deps);
+  } catch (err) {
+    console.error(`${TAG} receipt: ${join(deps.receiptDir, "receipt.json")}`);
+    fail(err instanceof Error ? err.message : String(err));
+  } finally {
+    host.close();
+  }
+  const gap = receipt.gap?.ms === null || receipt.gap === null ? "no swap" : `gap ${receipt.gap.ms} ms`;
+  console.log(`${TAG} ${receipt.outcome}: ${receipt.release?.tag ?? "?"} (${receipt.newContainer?.id.slice(0, 12) ?? "no new container"}), ${gap}`);
+  console.log(`${TAG} receipt: ${join(deps.receiptDir, "receipt.json")}`);
+}
 
 let paths: InstancePaths;
 let stack: StackStateRecord | null;
