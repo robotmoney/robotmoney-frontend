@@ -225,43 +225,61 @@ const maint = (from: number, to: number, inside = true): ProbeReceipt[] => {
 
 describe("the declared window in the probe grade", () => {
   test("declaredWindow reads maintenance-on start to maintenance-off end, by step name, on either side", () => {
-    for (const [on, off] of [["Q18a-maintenance-on", "Q24a-maintenance-off"], ["C05a-maintenance-on", "C12a-maintenance-off"]] as const) {
-      const w = declaredWindow(journalSteps([rec(on, "ok", DECL.start, DECL.start + 1000), rec(off, "ok", DECL.end - 1000, DECL.end)]));
+    for (const [on, off, env] of [["Q18a-maintenance-on", "Q24a-maintenance-off", "stage"], ["C05a-maintenance-on", "C12a-maintenance-off", "prod"]] as const) {
+      const w = declaredWindow(journalSteps([rec(on, "ok", DECL.start, DECL.start + 1000), rec(off, "ok", DECL.end - 1000, DECL.end)]), env);
       expect(w).toEqual({ window: DECL });
     }
   });
 
   test("a rolling run declares none, and a skipped maintenance-on declares none", () => {
-    expect(declaredWindow(journalSteps([]))).toBe("none");
-    expect(declaredWindow(journalSteps([rec("Q18a-maintenance-on", "skipped", T0, T0)]))).toBe("none");
+    expect(declaredWindow(journalSteps([]), "prod")).toBe("none");
+    expect(declaredWindow(journalSteps([rec("Q18a-maintenance-on", "skipped", T0, T0)]), "stage")).toBe("none");
+  });
+
+  // Issue 1502: a production journal holds the stage twins Q18a and Q24a first, skipped. The window is the run's own target's.
+  const SKIPPED_TWINS = [rec("Q18a-maintenance-on", "skipped", T0, T0), rec("Q24a-maintenance-off", "skipped", T0, T0)];
+  test("a production journal with skipped Q18a and Q24a and ok C05a and C12a declares C05a's start to C12a's end", () => {
+    const steps = journalSteps([...SKIPPED_TWINS, rec("C05a-maintenance-on", "ok", DECL.start, DECL.start + 1000), rec("C12a-maintenance-off", "ok", DECL.end - 1000, DECL.end)]);
+    expect(declaredWindow(steps, "prod")).toEqual({ window: DECL });
+  });
+
+  test("a stage journal declares Q18a's start to Q24a's end, whatever the production steps hold", () => {
+    const steps = journalSteps([rec("Q18a-maintenance-on", "ok", DECL.start, DECL.start + 1000), rec("Q24a-maintenance-off", "ok", DECL.end - 1000, DECL.end), rec("C05a-maintenance-on", "skipped", T0, T0), rec("C12a-maintenance-off", "skipped", T0, T0)]);
+    expect(declaredWindow(steps, "stage")).toEqual({ window: DECL });
+  });
+
+  test("red control: a journal whose target's maintenance-on is skipped declares none, even when the other target's ran", () => {
+    const ranStage = [rec("Q18a-maintenance-on", "ok", DECL.start, DECL.start + 1000), rec("Q24a-maintenance-off", "ok", DECL.end - 1000, DECL.end)];
+    expect(declaredWindow(journalSteps([...ranStage, rec("C05a-maintenance-on", "skipped", T0, T0), rec("C12a-maintenance-off", "skipped", T0, T0)]), "prod")).toBe("none");
+    expect(declaredWindow(journalSteps([...SKIPPED_TWINS, rec("C05a-maintenance-on", "ok", DECL.start, DECL.start)]), "stage")).toBe("none");
   });
 
   test("red control: a window opened and never closed is a problem, and so is one whose off step failed", () => {
-    expect(declaredWindow(journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start)]))).toHaveProperty("problem");
-    expect(declaredWindow(journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start), rec("C12a-maintenance-off", "failed", DECL.end, DECL.end)]))).toHaveProperty("problem");
+    expect(declaredWindow(journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start)]), "prod")).toHaveProperty("problem");
+    expect(declaredWindow(journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start), rec("C12a-maintenance-off", "failed", DECL.end, DECL.end)]), "prod")).toHaveProperty("problem");
   });
 
   const steps = journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start + 1000), rec("C12a-maintenance-off", "ok", DECL.end - 1000, DECL.end)]);
 
   test("passes where the site answered 200 throughout and the maintenance receipts inside the window are true", () => {
     const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end)];
-    expect(gradeRun(receipts, WINDOW, steps, 2_000, 3_000)).toMatchObject({ ok: true, problems: [] });
+    expect(gradeRun(receipts, WINDOW, steps, "prod", 2_000, 3_000)).toMatchObject({ ok: true, problems: [] });
     // the maintenance receipts are not site answers: a 503 from the status route outside the window fails nothing
     const statusDown = [...receipts, { at: T0 + 30_001, status: 503, maintenance: false }];
-    expect(gradeRun(statusDown, WINDOW, steps, 2_000, 3_000).ok).toBe(true);
+    expect(gradeRun(statusDown, WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(true);
     // and a rolling run (no window) grades only the site, as before
-    expect(gradeRun(statusDown, WINDOW, journalSteps([]), 2_000, 3_000).ok).toBe(true);
+    expect(gradeRun(statusDown, WINDOW, journalSteps([]), "prod", 2_000, 3_000).ok).toBe(true);
   });
 
   test("a gap inside the declared window still passes", () => {
     const receipts = [...probes(WINDOW.start, WINDOW.end, (at) => at > DECL.start + 4_000 && at < DECL.end - 4_000), ...maint(WINDOW.start, WINDOW.end)];
-    expect(gradeRun(receipts, WINDOW, steps, 2_000, 3_000).ok).toBe(true);
+    expect(gradeRun(receipts, WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(true);
   });
 
   test("red control: a non-200 on / or /version.json inside the declared window fails (issue 1501)", () => {
     for (const status of [502, 503, 0]) {
       const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end), { at: DECL.start + 10_000, status }];
-      const g = gradeRun(receipts, WINDOW, steps, 2_000, 3_000);
+      const g = gradeRun(receipts, WINDOW, steps, "prod", 2_000, 3_000);
       expect(g.ok, String(status)).toBe(false);
       expect(g.problems.join(), String(status)).toContain("not 200");
     }
@@ -281,9 +299,9 @@ describe("the declared window in the probe grade", () => {
   test("red control: a gap outside the declared window fails, before it and after it", () => {
     const hole = (a: number, b: number) => [...probes(WINDOW.start, WINDOW.end, (at) => at > a && at < b && !(at > DECL.start + 4_000 && at < DECL.end - 4_000)), ...maint(DECL.start, DECL.end)];
     const before = hole(T0 + 20_000, T0 + 50_000);
-    expect(gradeRun(before, WINDOW, steps, 2_000, 3_000).ok).toBe(false);
+    expect(gradeRun(before, WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(false);
     const after = hole(DECL.end + 20_000, DECL.end + 50_000);
-    expect(gradeRun(after, WINDOW, steps, 2_000, 3_000).ok).toBe(false);
+    expect(gradeRun(after, WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(false);
   });
 
   test("red control: a non-200 outside the window fails", () => {
@@ -295,12 +313,12 @@ describe("the declared window in the probe grade", () => {
 
   test("red control: a window that never closed fails the grade even with clean receipts", () => {
     const open = journalSteps([rec("C05a-maintenance-on", "ok", DECL.start, DECL.start + 1000)]);
-    const g = gradeRun(probes(WINDOW.start, WINDOW.end), WINDOW, open, 2_000, 3_000);
+    const g = gradeRun(probes(WINDOW.start, WINDOW.end), WINDOW, open, "prod", 2_000, 3_000);
     expect(g.ok).toBe(false);
     expect(g.problems.join()).toContain("never closed");
   });
 
   test("a run with no receipts at all fails even inside a declared window", () => {
-    expect(gradeRun([], WINDOW, steps, 2_000, 3_000).ok).toBe(false);
+    expect(gradeRun([], WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(false);
   });
 });
