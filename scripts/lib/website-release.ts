@@ -487,22 +487,30 @@ export async function rollbackSite(paths: InstancePaths, deps: WebReleaseDeps): 
 //      (checkServedSite), and remove it. A failure never touches the public port;
 //   4. stop the running container and start the new one, created beforehand
 //      with the old one's port, networks, aliases, labels, restart policy, log
-//      and health settings plus the overlay's isolation flags. The gap runs
+//      and health settings plus the overlay's isolation flags. The stop, the
+//      start and a fallback start of the old one are ONE host command
+//      (handoverScript) whose body survives a dropped SSH link. The gap runs
 //      from the stop to the first answer on the public port that names the
 //      release, and must be at most GAP_LIMIT_MS;
 //   5. check that /version.json, read through the public origin, names the
 //      release;
-//   6. on a failure in 4 or 5, remove the new container, start the old one
-//      again (it was only stopped) and exit non-zero, with the revert's own gap;
-//   7. on a pass, remove the old container, give the new one its name, and
-//      keep the old image as the one previous image.
+//   6. on any failure or throw after the stop, remove the new container,
+//      start the old one again (it was only stopped), put back the tags step 7
+//      moved, and exit non-zero, with the revert's own gap;
+//   7. on a pass, park the old container's name, give the new one its name,
+//      keep the old image as the one previous image, and remove the old
+//      container: except on the first swap from nginx, whose container is
+//      kept stopped as `<name>-first-rollout` (the first-rollout rule, §4).
 //
 // THE ONE PREVIOUS IMAGE. Every site image this builds carries the label
 // `robotmoney.web.instance=<instance>`. After a swap, `<repo>:<instance>-current`
 // names the serving image and `<repo>:<instance>-previous` the one that served
 // before it, whatever caused the swap. Every other labelled image of the
-// instance is removed. `--rollback` swaps to the previous image with steps 3
-// to 7, after the same apiRange refusal.
+// instance is removed, and a failed run never removes the image `-current` or
+// `-previous` names. `--rollback` swaps to the previous image with steps 3 to
+// 7, after the same apiRange refusal. With no previous image it starts the
+// kept first-rollout container again; with nothing running it starts the
+// stopped container that served last.
 //
 // MAINTENANCE. The immutable container reads maintenance.json from a tmpfs,
 // which a stop wipes. An active file in the old container is read before the
@@ -726,6 +734,43 @@ export function replacementCreateArgs(old: ContainerInspect, name: string, image
   });
   args.push(image);
   return { create: args, connect };
+}
+
+/**
+ * The name suffix of a first rollout's rollback target (§4, the first-rollout
+ * rule): the nginx container that served before a host's first image swap,
+ * kept stopped under `<its name>-first-rollout` until a swap from one site
+ * image to another succeeds.
+ */
+export const FIRST_ROLLOUT_SUFFIX = "-first-rollout";
+
+/** PURE. Whether a container runs a site image (its labels name a web release). An nginx container does not. */
+export function runsSiteImage(c: Pick<ContainerInspect, "Config">): boolean {
+  return Boolean((c.Config.Labels ?? {})[WEBSITE_IMAGE_LABELS.tag]);
+}
+
+/** What a swap puts on the public port: a new container of a site image, or a kept container started again. */
+export type SwapTarget = { readonly kind: "image"; readonly image: string } | { readonly kind: "kept"; readonly container: ContainerInspect };
+
+/**
+ * PURE. One host command that runs `docker <first…>`, then `docker start
+ * <start>`, and on a failed start `docker start <fallback>`. The body runs in a
+ * background subshell that ignores SIGHUP and SIGPIPE, and the command waits
+ * for it: a dropped SSH link ends the wait, never the body, so the host is
+ * never left with the old container stopped and nothing started. It prints
+ * `started`, or `failed: <docker's error>`. One docker command per line.
+ */
+export function handoverScript(first: readonly (readonly string[])[], start: string, fallback: string | null): string {
+  const docker = (args: readonly string[]) => ["docker", ...args].map(shellQuote).join(" ");
+  return [
+    "trap '' HUP PIPE",
+    "(",
+    "trap '' HUP PIPE",
+    ...first.map((args) => `${docker(args)} >/dev/null 2>&1`),
+    `if err=$(${docker(["start", start])} 2>&1 >/dev/null); then echo started; else ${fallback === null ? "" : `${docker(["start", fallback])} >/dev/null 2>&1; `}echo "failed: $err"; fi`,
+    ") </dev/null &",
+    "wait $!",
+  ].join("\n");
 }
 
 /** One answer from `${origin}/version.json`, or null. */
@@ -1023,103 +1068,277 @@ class ImageRun {
     return null;
   }
 
-  private async writeMaintenance(id: string, body: string | null): Promise<void> {
-    if (body === null) return;
-    await this.docker.ok(["exec", "-i", id, "sh", "-c", `cat > ${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`], "carrying maintenance.json across the swap", body);
-    this.log("carried the active maintenance.json into the serving container");
+  /**
+   * Carry an active maintenance.json into the container that serves now. Never
+   * throws: a file that cannot be carried is logged and recorded, and never
+   * masks the swap's own result. Only a site image reads it from its tmpfs; a
+   * first-rollout nginx container reads it from its web/ mount, which a stop
+   * does not wipe, so nothing is written there.
+   */
+  private async writeMaintenance(target: { id: string; site: boolean }, body: string | null): Promise<void> {
+    if (body === null || !target.site) return;
+    const r = await this.docker.try(["exec", "-i", target.id, "sh", "-c", `cat > ${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`], body);
+    if (r.code === 0) {
+      this.log("carried the active maintenance.json into the serving container");
+    } else {
+      this.check("maintenance", false, `the active maintenance.json was not carried into ${target.id.slice(0, 12)}: ${r.stderr || r.stdout}`);
+    }
   }
 
   /**
-   * Steps 4 to 7: replace `old` with a container of `image` on the same public
-   * port. Throws, after reverting to `old`, when the new one never answers, the
-   * gap is over the limit, or the public origin does not name the release.
+   * Run `script` (handoverScript) on the host as one command. Its body runs in
+   * a background subshell that ignores SIGHUP and SIGPIPE, so a dropped SSH
+   * link cannot stop it halfway. Returns `started`, or why the start failed.
    */
-  async swap(old: ContainerInspect, image: string, release: SiteRelease): Promise<void> {
+  private async handover(script: string): Promise<string> {
+    const r = await this.deps.host.run(["sh", "-c", script]);
+    const out = r.stdout.trim();
+    return out === "started" ? out : out.replace(/^failed: /, "") || r.stderr || `the host command exited ${r.code}`;
+  }
+
+  /** The images `-current` and `-previous` name now, so a revert can put them back. */
+  private async siteTags(): Promise<{ current: string | null; previous: string | null }> {
+    const instance = this.deps.instance;
+    return { current: await this.docker.imageId(siteImageTag(instance, "current")), previous: await this.docker.imageId(siteImageTag(instance, "previous")) };
+  }
+
+  private async restoreTags(tags: { current: string | null; previous: string | null }): Promise<void> {
+    for (const slot of ["current", "previous"] as const) {
+      const id = tags[slot];
+      await this.docker.try(id === null ? ["rmi", siteImageTag(this.deps.instance, slot)] : ["tag", id, siteImageTag(this.deps.instance, slot)]);
+    }
+  }
+
+  /**
+   * Steps 4 to 7: replace `old` with `target` on the same public port. The
+   * target is a new container of a site image, or a kept container started
+   * again (the first-rollout rule's nginx, §4). Throws, after reverting to
+   * `old`, when the target never answers, the gap is over the limit, the
+   * public origin does not name `want`, or any later step throws.
+   *
+   * The stop, the start and the fallback to `old` are one host command, so a
+   * dropped link never leaves the port with nothing behind it. Every error
+   * after that command goes through the revert.
+   */
+  async swap(old: ContainerInspect, target: SwapTarget, want: Pick<SiteRelease, "tag" | "version" | "commit">): Promise<void> {
     const local = await this.deps.host.openPort(this.publicPort!);
     try {
       const publicOrigin = this.deps.publicOrigin ?? local.origin;
       const before = await servedIdentity(local.origin);
       const maintenance = await this.readMaintenance(old.Id);
       const oldName = old.Name.replace(/^\//, "");
-      const nextName = `${oldName}-next-${randomBytes(3).toString("hex")}`;
-      const { create, connect } = replacementCreateArgs(old, nextName, image, websiteImageRunFlags(readWebsiteImageService(this.deps.repoRoot)));
-      const newId = await this.docker.ok(create, "creating the new website-server");
-      this.newContainer = { id: newId, image };
-      for (const c of connect) await this.docker.ok(c, "connecting the new website-server to its networks");
-
-      const limit = this.deps.gapLimitMs ?? GAP_LIMIT_MS;
-      let failure: string | null = null;
-      const stopAt = Date.now();
-      await this.docker.ok(["stop", "-t", String(this.deps.stopTimeoutSeconds ?? 10), old.Id], "stopping the old website-server");
-      const started = await this.docker.try(["start", newId]);
-      if (started.code !== 0) failure = `the new website-server did not start: ${started.stderr}`;
-      const goodAt = failure === null ? await this.firstGoodAnswer(local.origin, release) : null;
-      this.gap = this.gapOf(stopAt, goodAt);
-      if (failure === null && goodAt === null) failure = `the public port never named ${release.tag}`;
-      if (failure === null) {
-        await this.writeMaintenance(newId, maintenance);
-        const ok = this.gap.ms! <= limit;
-        this.check("gap", ok, `${this.gap.ms} ms from the stop to the first good answer (limit ${limit} ms)`);
-        if (!ok) failure = `the gap was ${this.gap.ms} ms, over the ${limit} ms limit`;
-      } else {
-        this.check("gap", false, failure);
-      }
-      if (failure === null) {
-        let served: { version: string; commit: string } | null = null;
-        const deadline = Date.now() + 5_000;
-        for (;;) {
-          served = await servedIdentity(publicOrigin, 2_000);
-          if (sameIdentity(served, release) || Date.now() > deadline) break;
-          await Bun.sleep(200);
+      const suffix = randomBytes(3).toString("hex");
+      const stopTimeout = String(this.deps.stopTimeoutSeconds ?? 10);
+      let newId: string;
+      let keptName: string | null = null;
+      if (target.kind === "image") {
+        const { create, connect } = replacementCreateArgs(old, `${oldName}-next-${suffix}`, target.image, websiteImageRunFlags(readWebsiteImageService(this.deps.repoRoot)));
+        newId = await this.docker.ok(create, "creating the new website-server");
+        this.newContainer = { id: newId, image: target.image };
+        try {
+          for (const c of connect) await this.docker.ok(c, "connecting the new website-server to its networks");
+        } catch (e) {
+          await this.docker.try(["rm", "-f", newId]);
+          throw e;
         }
-        const ok = sameIdentity(served, release);
-        this.check("public", ok, `${publicOrigin}/version.json names ${served ? `${served.version} at ${served.commit}` : "nothing"}`);
-        if (!ok) failure = `${publicOrigin}/version.json does not name ${release.tag}`;
+      } else {
+        newId = target.container.Id;
+        keptName = target.container.Name.replace(/^\//, "");
+        this.newContainer = { id: newId, image: target.container.Image };
+      }
+      const priorTags = await this.siteTags();
+      const limit = this.deps.gapLimitMs ?? GAP_LIMIT_MS;
+      const oldIsSite = runsSiteImage(old);
+      let failure: string | null = null;
+      let retagged = false;
+      const stopAt = Date.now();
+      try {
+        const started = await this.handover(handoverScript([["stop", "-t", stopTimeout, old.Id]], newId, old.Id));
+        if (started !== "started") failure = `the new website-server did not start: ${started}`;
+        const goodAt = failure === null ? await this.firstGoodAnswer(local.origin, want) : null;
+        this.gap = this.gapOf(stopAt, goodAt);
+        if (failure === null && goodAt === null) failure = `the public port never named ${want.tag}`;
+        if (failure === null) {
+          await this.writeMaintenance({ id: newId, site: target.kind === "image" }, maintenance);
+          const ok = this.gap.ms! <= limit;
+          this.check("gap", ok, `${this.gap.ms} ms from the stop to the first good answer (limit ${limit} ms)`);
+          if (!ok) failure = `the gap was ${this.gap.ms} ms, over the ${limit} ms limit`;
+        } else {
+          this.check("gap", false, failure);
+        }
+        if (failure === null) {
+          let served: { version: string; commit: string } | null = null;
+          const deadline = Date.now() + 5_000;
+          for (;;) {
+            served = await servedIdentity(publicOrigin, 2_000);
+            if (sameIdentity(served, want) || Date.now() > deadline) break;
+            await Bun.sleep(200);
+          }
+          const ok = sameIdentity(served, want);
+          this.check("public", ok, `${publicOrigin}/version.json names ${served ? `${served.version} at ${served.commit}` : "nothing"}`);
+          if (!ok) failure = `${publicOrigin}/version.json does not name ${want.tag}`;
+        }
+        if (failure === null) {
+          // Step 7. The old container is parked under another name first, so
+          // every step here can still be undone by the revert.
+          await this.docker.ok(["rename", old.Id, `${oldName}-old-${suffix}`], "parking the old website-server's name");
+          await this.docker.ok(["rename", newId, oldName], "naming the new website-server");
+          retagged = true;
+          if (target.kind === "image") await this.retag(target.image, old);
+          else await this.retagBackToKept(target.container, old);
+          if (oldIsSite) {
+            await this.docker.ok(["rm", old.Id], "removing the old website-server");
+          } else {
+            // The first-rollout rule (§4): the nginx container that served before
+            // the first image swap is kept, stopped, as the rollback target.
+            await this.docker.ok(["rename", old.Id, `${oldName}${FIRST_ROLLOUT_SUFFIX}`], "keeping the first-rollout container as the rollback target");
+            this.log(`kept ${oldName}${FIRST_ROLLOUT_SUFFIX} (${old.Image}), stopped, as the first rollout's rollback target`);
+          }
+        }
+      } catch (e) {
+        failure = `${failure === null ? "" : `${failure}; then `}${(e as Error).message}`;
       }
 
       if (failure !== null) {
-        // Step 6: the old container was only stopped. Start it again.
+        // Step 6: the old container was only stopped. Start it again, by one host command.
         const revertAt = Date.now();
-        await this.docker.try(["rm", "-f", newId]);
-        await this.docker.ok(["start", old.Id], "starting the previous website-server again");
-        const backAt = await this.firstGoodAnswer(local.origin, before);
+        const undo: string[][] =
+          target.kind === "image"
+            ? [["rm", "-f", newId]]
+            : [["stop", "-t", stopTimeout, newId], ["rename", newId, keptName!]];
+        const back = await this.handover(handoverScript([...undo, ["rename", old.Id, oldName]], old.Id, null));
+        const backAt = back === "started" ? await this.firstGoodAnswer(local.origin, before) : null;
         this.revertGap = this.gapOf(revertAt, backAt);
-        await this.writeMaintenance(old.Id, maintenance);
+        if (retagged) await this.restoreTags(priorTags);
+        await this.writeMaintenance({ id: old.Id, site: oldIsSite }, maintenance);
         const revertOk = backAt !== null && this.revertGap.ms! <= limit;
-        this.check("revert", revertOk, backAt === null ? "the previous site never answered again" : `${this.revertGap.ms} ms from the revert to the previous site's first good answer`);
+        this.check(
+          "revert",
+          revertOk,
+          back !== "started" ? `the previous website-server did not start: ${back}` : backAt === null ? "the previous site never answered again" : `${this.revertGap.ms} ms from the revert to the previous site's first good answer`,
+        );
         this.currentImage = old.Image;
-        throw new Error(`The swap to ${release.tag} failed: ${failure}. The previous website-server was started again${backAt === null ? ", but it has not answered yet" : ""}.`);
+        this.previousImage = priorTags.previous;
+        throw new Error(`The swap to ${want.tag} failed: ${failure}. The previous website-server was started again${backAt === null ? ", but it has not answered yet" : ""}.`);
       }
-
-      // Step 7.
-      await this.docker.ok(["rm", old.Id], "removing the old website-server");
-      await this.docker.ok(["rename", newId, oldName], "naming the new website-server");
-      await this.keepOnePrevious(image, old.Image);
+      await this.prune(target.kind === "image" && oldIsSite);
     } finally {
       local.close();
     }
   }
 
-  /** After a swap: `-current` names `current`, `-previous` the image that served before, and no other image of the instance is kept. */
-  private async keepOnePrevious(current: string, previous: string): Promise<void> {
+  /** Step 7 for a site image: `-current` names it, `-previous` the image that served before, if that was a site image (§4). */
+  private async retag(current: string, old: ContainerInspect): Promise<void> {
     const instance = this.deps.instance;
     await this.docker.ok(["tag", current, siteImageTag(instance, "current")], "tagging the current image");
-    const prevLabels = await this.docker.imageLabels(previous).catch(() => ({}) as Record<string, string>);
-    if (prevLabels[WEBSITE_IMAGE_LABELS.tag]) {
-      await this.docker.ok(["tag", previous, siteImageTag(instance, "previous")], "tagging the previous image");
-      this.previousImage = previous;
+    if (runsSiteImage(old)) {
+      await this.docker.ok(["tag", old.Image, siteImageTag(instance, "previous")], "tagging the previous image");
+      this.previousImage = old.Image;
     } else {
-      // The old container was no site image (the nginx stack before its first swap): there is no previous image.
+      // The first swap from nginx: no previous image yet. The kept nginx container is the rollback target.
       await this.docker.try(["rmi", siteImageTag(instance, "previous")]);
       this.previousImage = null;
     }
     this.currentImage = current;
+  }
+
+  /**
+   * Step 7 for a rollback to the first-rollout container: no site image
+   * serves, so there is no `-current` and platform boots run nginx again. The
+   * site image that served before is the one previous image.
+   */
+  private async retagBackToKept(kept: ContainerInspect, old: ContainerInspect): Promise<void> {
+    const instance = this.deps.instance;
+    await this.docker.ok(["tag", old.Image, siteImageTag(instance, "previous")], "tagging the previous image");
+    await this.docker.ok(["rmi", siteImageTag(instance, "current")], "untagging the current image");
+    this.previousImage = old.Image;
+    this.currentImage = kept.Image;
+  }
+
+  /**
+   * After a swap, never undone and never failing it: drop the candidate tag
+   * and every other image of the instance, so the host holds exactly one
+   * previous image. After a swap from a site image to a site image, the
+   * first-rollout container has served its purpose and is removed too.
+   */
+  private async prune(normalRule: boolean): Promise<void> {
+    const instance = this.deps.instance;
     await this.docker.try(["rmi", siteImageTag(instance, "candidate")]);
-    const keep = new Set([current, this.previousImage]);
-    const labelled = (await this.docker.ok(["images", "-q", "--no-trunc", "--filter", `label=${SITE_IMAGE_INSTANCE_LABEL}=${instance}`], "listing the instance's site images"))
-      .split("\n")
-      .filter((l) => l !== "");
-    for (const id of new Set(labelled)) if (!keep.has(id)) await this.docker.try(["rmi", "-f", id]);
+    const keep = new Set([this.currentImage, this.previousImage]);
+    const labelled = await this.docker.try(["images", "-q", "--no-trunc", "--filter", `label=${SITE_IMAGE_INSTANCE_LABEL}=${instance}`]);
+    for (const id of new Set(labelled.stdout.split("\n").filter((l) => l !== ""))) if (!keep.has(id)) await this.docker.try(["rmi", "-f", id]);
+    if (normalRule) for (const id of await this.firstRolloutIds()) await this.docker.try(["rm", "-f", id]);
+  }
+
+  /** The ids of the instance's kept first-rollout containers. */
+  async firstRolloutIds(): Promise<string[]> {
+    const r = await this.docker.try([
+      "ps", "-aq", "--no-trunc", "--filter", `label=${INSTANCE_LABEL}=${this.deps.instance}`, "--filter", `label=${SERVICE_LABEL}=${WEBSITE_SERVICE}`,
+      "--filter", `name=${FIRST_ROLLOUT_SUFFIX}$`,
+    ]);
+    return r.code === 0 ? r.stdout.split("\n").filter((l) => l !== "") : [];
+  }
+
+  /** What a kept first-rollout container serves: its web/ mount's version.json, read without starting it. */
+  async releaseOfKept(kept: ContainerInspect): Promise<SiteRelease> {
+    const text = await this.docker.ok(
+      ["run", "--rm", "--network", "none", "--volumes-from", kept.Id, "--entrypoint", "cat", kept.Image, IMAGE_VERSION_JSON],
+      `reading the first-rollout container's version.json`,
+    );
+    let v: { version?: unknown; commit?: unknown } = {};
+    try {
+      v = JSON.parse(text) as typeof v;
+    } catch {
+      throw new WebRefusal("Refusing: the first-rollout container's version.json is not JSON.");
+    }
+    if (typeof v.version !== "string" || typeof v.commit !== "string") throw new WebRefusal("Refusing: the first-rollout container's version.json names no version and commit.");
+    return { tag: `web-v${v.version}`, version: v.version, commit: v.commit, sha256: "", apiRange: readSiteApiRange(v) };
+  }
+
+  /**
+   * `--rollback` with nothing running (a run that died between its stop and
+   * its start): start the stopped container that served last, the one
+   * `-current` names, or else the first-rollout container. Returns false when
+   * a website-server runs.
+   */
+  async restartStopped(): Promise<boolean> {
+    const filters = ["--filter", `label=${INSTANCE_LABEL}=${this.deps.instance}`, "--filter", `label=${SERVICE_LABEL}=${WEBSITE_SERVICE}`];
+    const running = (await this.docker.ok(["ps", "-q", "--no-trunc", ...filters], "listing the running website-server")).split("\n").filter((l) => l !== "");
+    if (running.length > 0) return false;
+    const all = (await this.docker.ok(["ps", "-aq", "--no-trunc", ...filters], "listing the stopped website-servers")).split("\n").filter((l) => l !== "");
+    if (all.length === 0) return false;
+    const current = await this.docker.imageId(siteImageTag(this.deps.instance, "current"));
+    const stopped = await Promise.all(all.map((id) => this.docker.inspectContainer(id)));
+    const pick = stopped.find((c) => current !== null && c.Image === current && !c.Name.endsWith(FIRST_ROLLOUT_SUFFIX)) ?? stopped.find((c) => c.Name.endsWith(FIRST_ROLLOUT_SUFFIX));
+    if (!pick) throw new WebRefusal(`Refusing: no website-server runs for ${this.deps.instance}, and no stopped one is the current image or the first-rollout container.`);
+    this.oldContainer = { id: pick.Id, image: pick.Image };
+    const started = await this.handover(handoverScript([], pick.Id, null));
+    if (started !== "started") {
+      this.check("restart", false, started);
+      throw new Error(`Nothing served, and the stopped website-server ${pick.Id.slice(0, 12)} did not start: ${started}`);
+    }
+    const now = await this.docker.inspectContainer(pick.Id);
+    if (pick.Name.endsWith(FIRST_ROLLOUT_SUFFIX)) await this.docker.try(["rename", pick.Id, pick.Name.replace(/^\//, "").slice(0, -FIRST_ROLLOUT_SUFFIX.length)]);
+    this.newContainer = { id: pick.Id, image: pick.Image };
+    this.publicPort = publicPortBinding(now).port;
+    const forward = await this.deps.host.openPort(this.publicPort);
+    try {
+      const at = Date.now();
+      const goodAt = await this.firstGoodAnswer(forward.origin, null);
+      this.gap = this.gapOf(at, goodAt);
+      this.check("restart", goodAt !== null, goodAt === null ? `${pick.Id.slice(0, 12)} started but never answered` : `started the stopped ${pick.Id.slice(0, 12)} (${pick.Image})`);
+      if (goodAt === null) throw new Error(`The stopped website-server ${pick.Id.slice(0, 12)} started but never answered on port ${this.publicPort}.`);
+    } finally {
+      forward.close();
+    }
+    this.currentImage = pick.Image;
+    return true;
+  }
+
+  /** Whether `image`'s layers start with `serverId`'s: the site image was built FROM that server image. */
+  async builtFrom(image: string, serverId: string): Promise<boolean> {
+    const [server, site] = await Promise.all([this.docker.imageLayers(serverId), this.docker.imageLayers(image)]);
+    return server.length > 0 && server.every((l, i) => site[i] === l);
   }
 
   /** What a site image serves: its labels, and its version.json's identity and range. */
@@ -1199,19 +1418,30 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       const old = await run.serving();
       await run.checkApiRange(release);
       if ((old.Config.Labels ?? {})[WEBSITE_IMAGE_LABELS.bundleSha256] === release.sha256) {
-        run.currentImage = old.Image;
-        run.log(`${release.tag} (sha256 ${release.sha256}) is already serving; nothing to swap`);
-        return "unchanged";
+        // The same bundle on the same server image is already serving. On
+        // another server image (a platform release that changes it, §5.3) the
+        // same bundle is rebuilt and swapped in with every check.
+        const serverId = await run.docker.imageId(opts.serverImage);
+        if (serverId !== null && (await run.builtFrom(old.Image, serverId))) {
+          run.currentImage = old.Image;
+          run.log(`${release.tag} (sha256 ${release.sha256}) is already serving on server image ${serverId}; nothing to swap`);
+          return "unchanged";
+        }
+        run.log(`${release.tag} (sha256 ${release.sha256}) serves on another server image; rebuilding it FROM ${opts.serverImage}`);
       }
 
       // Step 1, on the host, then step 2.
       const image = await buildOnHost(run, bundlePath, release, opts.serverImage);
       try {
         await run.checkCopy(image, release);
-        await run.swap(old, image, release);
+        await run.swap(old, { kind: "image", image }, release);
       } catch (e) {
         // A candidate that never kept the port is not kept: the host holds exactly one previous image.
-        await run.docker.try(["rmi", "-f", image]);
+        // A build can reproduce an image the host already keeps (the same bundle on the same
+        // server image): that id is the current or the previous image, and is never removed.
+        const kept = await run.docker.imageId(siteImageTag(deps.instance, "current"));
+        const previous = await run.docker.imageId(siteImageTag(deps.instance, "previous"));
+        if (image !== kept && image !== previous && image !== old.Image) await run.docker.try(["rmi", "-f", image]);
         throw e;
       }
       return "swapped";
@@ -1290,15 +1520,34 @@ async function buildOnHost(run: ImageRun, bundlePath: string, release: SiteRelea
 export async function rollbackImage(deps: ImageReleaseDeps): Promise<ImageReceipt> {
   const run = new ImageRun("rollback", deps);
   return run.locked(async () => {
+    // A run that died between its stop and its start left nothing serving: start what served last.
+    if (await run.restartStopped()) return "swapped";
     const old = await run.serving();
     const previous = await run.docker.imageId(siteImageTag(deps.instance, "previous"));
-    if (previous === null) throw new WebRefusal(`Refusing: ${deps.host.name} holds no previous image for ${deps.instance} (${siteImageTag(deps.instance, "previous")}).`);
+    if (previous === null) {
+      // The first-rollout rule (§4): until a swap from one site image to another
+      // succeeds, the nginx container that served before the first swap is the
+      // rollback target. It is started again as it was: its own image, its own
+      // web/ mount. There is no throwaway copy of it to check.
+      const [keptId] = await run.firstRolloutIds();
+      if (keptId === undefined || !runsSiteImage(old)) {
+        throw new WebRefusal(
+          `Refusing: ${deps.host.name} holds no previous image for ${deps.instance} (${siteImageTag(deps.instance, "previous")}) and no first-rollout container.`,
+        );
+      }
+      const kept = await run.docker.inspectContainer(keptId);
+      const release = await run.releaseOfKept(kept);
+      run.release = release;
+      await run.checkApiRange(release);
+      await run.swap(old, { kind: "kept", container: kept }, release);
+      return "swapped";
+    }
     if (previous === old.Image) throw new WebRefusal(`Refusing: the previous image ${previous} is the one already serving.`);
     const release = await run.releaseOfImage(previous);
     run.release = release;
     await run.checkApiRange(release);
     await run.checkCopy(previous, release);
-    await run.swap(old, previous, release);
+    await run.swap(old, { kind: "image", image: previous }, release);
     return "swapped";
   });
 }

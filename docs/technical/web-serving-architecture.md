@@ -174,7 +174,15 @@ Rules:
 - The throwaway copy is a valid check because it runs the same image that will serve.
 - A host always holds exactly one previous image: the image that served before the last swap, whatever caused
   that swap. A release is refused when there is none.
+- The first-rollout rule. A host's first swap replaces nginx, so it has no previous image. Until one swap from a
+  site image to a site image succeeds, the nginx container that served before the first swap is the rollback
+  target. The first swap keeps it, stopped, as `<its name>-first-rollout`. A forced failure of the first swap
+  starts it again. `--rollback` starts it again, with its own image and its own `web/` mount, and the site image
+  becomes the one previous image. The next swap from a site image to a site image removes it, and the normal
+  one-previous-image rule applies.
 - A container that restarts, or a host that reboots, serves the same image again.
+- A platform boot (`bun smoke`) starts `website-server` from the image `-current` names, and never builds one. A
+  running one is kept as it is. A host with no `-current` image runs nginx, as before its first swap.
 - Any signed bundle can be deployed again by name. That is how a host returns to a version older than its
   previous image.
 - Every run writes a receipt: the bundle digest, the old and new container ids, each check's result and the gap.
@@ -190,6 +198,11 @@ serving image and the one previous image. The site image is built from the serve
 `robotmoney-website-server-pin:<id>`. The receipt is `web-image/<instance>/receipt.json` under the control
 machine's state root, and each receipt is also a line of `journal.jsonl` beside it. An active `maintenance.json`
 is carried into the container that serves after a swap or a rollback.
+
+Step 4's stop and start, and step 6's start of the old container, each run as one host command whose body ignores
+a dropped SSH link. Every error after the stop goes through step 6. A failed run never removes the image
+`-current` or `-previous` names. `--rollback` on a host where nothing runs starts the stopped container that
+`-current` names, or else the first-rollout container.
 
 ### 4.1 The gap
 
@@ -264,7 +277,8 @@ W06 and W11 run the same check:
 - A platform release keeps the bundle the host serves, unless its runbook names a signed bundle to deploy.
 - A bundle a platform release names passes that release's own stage run, by digest, before production gets it.
 - A platform release that changes the server image rebuilds `website-server` with the bundle already serving,
-  by the same swap and the same checks.
+  by the same swap and the same checks: `bun smoke:web --bundle <the serving web-vA.B.C> --server-image <new>`.
+  The same bundle on the same server image is unchanged. On another server image it is rebuilt and swapped in.
 - Every change to the site goes through `bun smoke:web`.
 - A probe runs around every swap. Its grade excuses exactly the gap in the release receipt.
 - In a declared maintenance window the grade requires the maintenance answer, and fails any other failure.

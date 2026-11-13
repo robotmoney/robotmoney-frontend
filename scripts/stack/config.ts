@@ -141,9 +141,10 @@ export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml"];
 export const STAGE_COMPOSE_FILE = "docker-compose.stage.yml";
 
 // The overlay that runs website-server from its immutable image (issue 1627):
-// read-only, non-root, no capability, no volume. No boot appends it yet: the
-// swap that starts that image is P5 (issue 1628), and nginx keeps serving from
-// docker-compose.yml alone until then. scripts/lib/website-image.ts reads it.
+// read-only, non-root, no capability, no volume. scripts/stack/stack.ts
+// appends it, with RM_WEBSITE_IMAGE, once the host serves a site image (issue
+// 1632); before a host's first swap nginx serves from docker-compose.yml
+// alone. scripts/lib/website-image.ts reads it.
 export const WEBSITE_IMAGE_COMPOSE_FILE = "docker-compose.website-image.yml";
 
 // ── Container-internal ports ────────────────────────────────────────────────

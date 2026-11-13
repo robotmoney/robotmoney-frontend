@@ -22,9 +22,12 @@ LABEL robotmoney.web.server-commit="${PLATFORM_COMMIT}"
 # container with every capability dropped (§3.2) then refuses to exec it at
 # all ("operation not permitted"). Port 8080 needs no capability, so remove it.
 # ssh-keygen is what Dockerfile.bundle's build stage verifies a bundle's
-# signature with (verify-bundle.sh). It is a key tool, not a runtime.
+# signature with (verify-bundle.sh). It is a key tool, not a runtime. Pinned to
+# an exact package version (issue 1632), like the base's digest: the verifier
+# of every bundle changes only by a commit here. When Alpine drops this
+# revision from its index the build fails loudly, and the pin moves by a commit.
 RUN setcap -r /usr/bin/caddy \
-  && apk add --no-cache openssh-keygen \
+  && apk add --no-cache openssh-keygen=10.0_p1-r11 \
   && mkdir -p /srv/web /srv/maintenance
 
 COPY Caddyfile /etc/caddy/Caddyfile

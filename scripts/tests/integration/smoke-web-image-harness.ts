@@ -1,5 +1,6 @@
 // Shared by the image-mode `bun smoke:web` integration tests (issue 1628):
-// smoke-web-lifecycle.test.ts and smoke-web-rolling.test.ts.
+// smoke-web-lifecycle.test.ts and smoke-web-rolling.test.ts, and the first
+// rollout from nginx (issue 1632): smoke-web-first-rollout.test.ts.
 //
 // A real Docker "host" on this machine (website-host.ts localHost), shaped
 // like one instance of a `bun smoke` stack as far as website-server is
@@ -11,6 +12,10 @@
 //   - a running website-server: a site image of the first bundle, run with the
 //     overlay's flags, the compose and instance labels `bun smoke` gives it, a
 //     Docker-assigned loopback port, a restart policy and a healthcheck.
+//     With `firstServer: "nginx"` it is instead the nginx website-server
+//     (website-server/Dockerfile) serving a web/ directory mounted from the
+//     host, as a host runs before its first image swap, on a fixed loopback
+//     port as a standing host's stage overlay fixes 48787.
 //
 // Bundles are the fixture site with a version, a commit and a range of the
 // test's choosing, packed and signed by web-bundle.ts. Everything is removed
@@ -19,7 +24,7 @@
 // LOUD, NEVER SKIPPED: Docker and ssh-keygen are hard dependencies. Without
 // them `createImageHost` throws and every test in the file fails.
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { packBundle, signBundle } from "../../lib/web-bundle.ts";
@@ -90,11 +95,12 @@ function keypair(work: string, name: string): string {
 }
 
 /** Build the server image and bring up the instance's api and its first website-server, serving `first`. */
-export function createImageHost(label: string, first: BundleSpec): ImageHost {
+export function createImageHost(label: string, first: BundleSpec, opts: { firstServer?: "site" | "nginx" } = {}): ImageHost {
   const run = `${label}-${process.pid}-${Date.now().toString(36)}`;
   const instance = `rm_swt_${run.replace(/-/g, "_")}`;
   const project = instance;
   const serverImage = `rm-website-server-swap-test:${run}`;
+  const nginxImage = `rm-website-nginx-swap-test:${run}`;
   const network = `rm-swt-net-${run}`;
   const work = mkdtempSync(join(tmpdir(), "rm-swt-"));
   const key = keypair(work, "swap-signer");
@@ -177,6 +183,7 @@ export function createImageHost(label: string, first: BundleSpec): ImageHost {
       const serverId = hostApi.imageId(serverImage);
       if (serverId !== null) tryDocker(["rmi", `${SERVER_PIN_REPO}:${serverId.replace(/^sha256:/, "")}`]);
       tryDocker(["rmi", "-f", serverImage]);
+      tryDocker(["rmi", "-f", nginxImage]);
       rmSync(work, { recursive: true, force: true });
     },
   };
@@ -196,6 +203,29 @@ export function createImageHost(label: string, first: BundleSpec): ImageHost {
       BUN_IMAGE, "bun", "-e", STAND_IN_API,
     ]);
     containers.push(api);
+
+    if (opts.firstServer === "nginx") {
+      // Before the first swap: nginx serving web/current, a symlink to the site's directory (smoke-site.ts).
+      const web = join(work, "web");
+      const site = join(web, `${first.version}-${first.commit}`);
+      mkdirSync(site, { recursive: true });
+      writeFileSync(join(site, "index.html"), `<!doctype html><title>home ${first.version}</title>`);
+      writeFileSync(join(site, "_shell.html"), `<!doctype html><title>shell ${first.version}</title>`);
+      writeFileSync(join(site, "version.json"), JSON.stringify({ version: first.version, commit: first.commit, apiRange: first.apiRange === undefined ? "^0.2.0" : first.apiRange }));
+      symlinkSync(`${first.version}-${first.commit}`, join(web, "current"));
+      docker(["build", "-q", "-t", nginxImage, "-f", join(repoRoot, "website-server", "Dockerfile"), join(repoRoot, "website-server")]);
+      const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+      const port = probe.port;
+      probe.stop(true);
+      docker([
+        "run", "-d", "--name", `${project}-website-server-1`, "--network", network, "--network-alias", "website-server",
+        "--label", `com.docker.compose.project=${project}`, "--label", "com.docker.compose.service=website-server",
+        "--label", `robotmoney.instance=${instance}`, "--restart", "unless-stopped",
+        "--health-cmd", "wget -q -O /dev/null http://127.0.0.1:8080/", "--health-interval", "15s",
+        "-v", `${web}:/srv/web:ro`, "-p", `127.0.0.1:${port}:8080`, nginxImage,
+      ]);
+      return hostApi;
+    }
 
     // The first site image, built the way smoke:web builds one, and run the way a stack runs website-server.
     const first1 = bundle(first);

@@ -235,6 +235,21 @@ jobs:
             || { echo "::error::the image-mode deploy did not swap in the integration suite"; exit 1; }
           grep -qE "^smoke-web-rolling: [1-9][0-9]* requests .*, 0 outside a gap" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::the rolling swap proof did not run, or a request failed outside a gap"; exit 1; }
+      # Issue 1632: a host's first image swap, from nginx, on real Docker: a
+      # forced failure returns to the nginx container, the first swap keeps it
+      # as the rollback target, a restarted site container serves the same
+      # release, and --rollback starts nginx again. Absence or exclusion is red.
+      - name: First rollout and restart proofs ran (issue 1632)
+        shell: bash
+        run: |
+          f=scripts/tests/integration/smoke-web-first-rollout.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }
+          for line in "forced failure: gap" "first swap: gap" "restart: [0-9a-f]{12} serves" "rollback: gap"; do
+            grep -qE "^smoke-web-first-rollout $line" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::the first-rollout proof did not reach: $line"; exit 1; }
+          done
       # Issue 1624 red control: one Cache-Control value, one fallback and one
       # 404 rule, each changed in a scratch copy of nginx.conf, must each turn
       # the table red on the row that guards it.

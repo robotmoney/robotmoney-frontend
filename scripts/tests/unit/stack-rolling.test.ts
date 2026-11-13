@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { createStack, dryRunRecreates, parseConfigHash, rollingReplaceOrder, WEBSITE_NGINX_CONF, type StackRuntime } from "../../stack/stack.ts";
 import { API_CONTAINER_PORT, type StackConfig } from "../../stack/config.ts";
+import { siteImageTag } from "../../lib/website-release.ts";
 
 const config: StackConfig = {
   repoRoot: "/nonexistent-by-design",
@@ -109,6 +110,100 @@ describe("the non-rolling paths are unchanged", () => {
     const calls: string[] = [];
     await createStack(config, { runtime: runtime(calls, { websiteRunning: true, dryRun: "" }) }).up();
     expect(ups(calls).filter((c) => !c.includes("postgres"))).toEqual(["up -d api website-server"]);
+  });
+});
+
+// Issue 1632: once `bun smoke:web` has swapped a site image in, a platform
+// boot keeps serving that image. The host's `-current` tag names it; the fake
+// runtime below answers it, the running container's image and `docker diff`.
+describe("a host that serves a site image (issue 1632)", () => {
+  const SITE_IMAGE = `sha256:${"5".repeat(64)}`;
+  const SITE_ID = "f00d".repeat(16);
+  const imageConfig: StackConfig = { ...config, instance: { name: "rm_stage_target", stateDir: "/nonexistent-by-design/state" } };
+
+  interface ImageHostOpts {
+    websiteRunning: boolean;
+    runningImage?: string;
+    diff?: string;
+  }
+
+  /** Every call the boot makes, whole, so the compose file list and the touched services can be read back. */
+  function imageRuntime(lines: string[], opts: ImageHostOpts): StackRuntime {
+    let started = opts.websiteRunning;
+    return {
+      runSync(argv) {
+        const line = argv.join(" ");
+        lines.push(line);
+        if (argv.includes("port")) return { exitCode: 0, stdout: `0.0.0.0:${argv.includes(String(API_CONTAINER_PORT)) ? "40001" : "40002"}\n`, stderr: "" };
+        if (line === `docker image inspect --format {{.Id}} ${siteImageTag("rm_stage_target", "current")}`) return { exitCode: 0, stdout: `${SITE_IMAGE}\n`, stderr: "" };
+        if (line.includes("ps -q --status running website-server")) return { exitCode: 0, stdout: started ? `${SITE_ID}\n` : "", stderr: "" };
+        if (line === `docker inspect --format {{.Image}} ${SITE_ID}`) return { exitCode: 0, stdout: `${opts.runningImage ?? SITE_IMAGE}\n`, stderr: "" };
+        if (line === `docker diff ${SITE_ID}`) return { exitCode: 0, stdout: opts.diff ?? "", stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      async run(argv) {
+        const line = argv.join(" ");
+        lines.push(line);
+        if (line.includes(" up ") && line.includes("website-server")) started = true;
+        return { exitCode: 0, outputTail: "" };
+      },
+      async probe() {
+        return { ok: true, detail: "ok" };
+      },
+    };
+  }
+
+  // `bun smoke` passes its own database half and no in-stack migrate (smoke-main.ts); so do these boots.
+  const noDatabase = { prepareDatabase: async () => {}, migrate: false };
+  const composeUps = (lines: readonly string[]) => lines.filter((l) => l.startsWith("docker compose ") && / up /.test(l) && !l.includes(" postgres"));
+  const touchesWebsite = (lines: readonly string[]) =>
+    lines.filter((l) => l.startsWith("docker compose ") && l.includes("website-server") && !l.includes(" ps -q --status running website-server") && !l.includes(" port "));
+
+  test("a rolling boot leaves the website-server container and its image unchanged: no up, no dry run, no reload, no recreate", async () => {
+    const lines: string[] = [];
+    const stack = createStack(imageConfig, { runtime: imageRuntime(lines, { websiteRunning: true }) });
+    await stack.up({ rolling: true, ...noDatabase });
+    expect(stack.websiteImage).toBe(SITE_IMAGE);
+    expect(touchesWebsite(lines)).toEqual([]);
+    expect(lines.filter((l) => / (exec|cp|stop|rm|restart|kill) /.test(l) && l.includes("website-server"))).toEqual([]);
+    expect(composeUps(lines).map((l) => l.slice(l.indexOf(" up ") + 1))).toEqual(["up -d --wait --wait-timeout 300 api --no-deps"]);
+    // The container it keeps runs the host's current site image, and its served root equals that image.
+    expect(lines).toContain(`docker inspect --format {{.Image}} ${SITE_ID}`);
+    expect(lines).toContain(`docker diff ${SITE_ID}`);
+  });
+
+  test("a full boot over a running website-server keeps it too: the services start without it", async () => {
+    const lines: string[] = [];
+    await createStack(imageConfig, { runtime: imageRuntime(lines, { websiteRunning: true }) }).up(noDatabase);
+    expect(composeUps(lines).map((l) => l.slice(l.indexOf(" up ") + 1))).toEqual(["up -d api"]);
+    expect(touchesWebsite(lines)).toEqual([]);
+  });
+
+  test("a full boot with no website-server running starts it from the image the host served before the boot", async () => {
+    const lines: string[] = [];
+    const stack = createStack(imageConfig, { runtime: imageRuntime(lines, { websiteRunning: false }) });
+    await stack.up(noDatabase);
+    const [up] = composeUps(lines);
+    expect(up).toEndWith(" up -d api website-server");
+    // The site image overlay is appended last, and RM_WEBSITE_IMAGE names the image `-current` names.
+    expect(up).toContain("-f docker-compose.yml -f docker-compose.website-image.yml up ");
+    expect(stack.composeEnv.RM_WEBSITE_IMAGE).toBe(SITE_IMAGE);
+    // Its served root is checked against the image once it runs.
+    expect(lines.indexOf(`docker diff ${SITE_ID}`)).toBeGreaterThan(lines.indexOf(up!));
+  });
+
+  test("a website-server running another image than -current refuses before anything is replaced", async () => {
+    const lines: string[] = [];
+    const boot = createStack(imageConfig, { runtime: imageRuntime(lines, { websiteRunning: true, runningImage: `sha256:${"6".repeat(64)}` }) }).up({ rolling: true, ...noDatabase });
+    await expect(boot).rejects.toThrow(/but this host's current site image is sha256:5{64}/);
+    expect(composeUps(lines)).toEqual([]);
+  });
+
+  test("a served root that differs from its image refuses the boot (R4)", async () => {
+    const lines: string[] = [];
+    const boot = createStack(imageConfig, { runtime: imageRuntime(lines, { websiteRunning: true, diff: "C /srv/web\nA /srv/web/current/evil.js\n" }) }).up({ rolling: true, ...noDatabase });
+    await expect(boot).rejects.toThrow(/the served root differs from its image:\nC \/srv\/web\nA \/srv\/web\/current\/evil\.js/);
+    expect(composeUps(lines)).toEqual([]);
   });
 });
 
