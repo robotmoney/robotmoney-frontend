@@ -4757,6 +4757,17 @@ one transaction ends. It verifies that every vintage keeps its member count and
 every coordinate keeps exactly one chain, and raises (rolling back, guards never
 observed off) if either would change.
 
+The repair's rule for `raw_indicator_history` overwrite events is cumulative
+(issue 1049, folded into issue 1182). Each rewrite is judged against the value
+the fixed writer last kept, not against the event's own previous row. A
+staircase of steps that are each inside the tolerance is kept at the step
+where its sum leaves the tolerance, so the row never drifts further than the
+tolerance unrecorded (`backend/tests/analytics-ledger-repair.test.ts`, "issue
+1049"). A post-migration reclaim (`VACUUM FULL`, `RECLAIM_AFTER_MIGRATION` in
+`backend/src/db/migrate.ts`) that fails does not fail `migrate()`: it logs the
+exact command that finishes it by hand, and the boot's seed step still runs
+(`backend/tests/migrate-reclaim.test.ts`).
+
 **Per-source tolerances.** Every source_key the extractors write:
 
 | source_key | provider | tolerance |

@@ -257,15 +257,22 @@ jobs:
       # each day's published figure, no writer changes a past day, a replay
       # publishes a day nothing published, migration 0132 repairs the table,
       # every report surface is held to the rule, and the factor panel is
-      # reproducible from what a run records. Absent, excluded or skipped is red.
+      # reproducible from what a run records. The folded-in issues: the provider
+      # regime door and the brief (999), every regime column in parity (995),
+      # the raw-history settle window (1004), the cumulative overwrite rule and
+      # a failed reclaim that still lets seed run (1049). Absent, excluded or
+      # skipped is red.
       - name: Frozen publication proofs ran (issue 1182)
         shell: bash
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
-          tests/regime-frozen-publications.test.ts:11
+          tests/regime-frozen-publications.test.ts:16
           tests/analytics-offline-replay.test.ts:5
           tests/analytics-parity-sql-equivalence.test.ts:14
-          tests/analytics-ledger-dual-write.test.ts:7
+          tests/analytics-ledger-dual-write.test.ts:14
+          tests/analytics-ledger-cutover.test.ts:19
+          tests/analytics-ledger-repair.test.ts:12
+          tests/migrate-reclaim.test.ts:1
       # Issue 1477: format 1 has one writer. csvb and the archive store write the
       # same day-cut backups byte for byte, the planted junction cases of the
       # archive routes ran, and the api-recorded fixture is reproduced unchanged.
