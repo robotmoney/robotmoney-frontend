@@ -59,16 +59,20 @@ Cloudflare tunnel ─► website-server (one container, immutable)
 - Its content is the output of `scripts/static-assembly.sh` for the release commit.
 - It is deterministic. Packing the same tree twice gives the same bytes.
 - It carries `version.json`, which names the version, the commit and the `apiRange`. The file name matches it.
-- It carries a manifest that lists every file with its sha256.
+- It carries a manifest, `.rm-bundle-manifest.json`, that lists every other file with its sha256.
 - It is built on the control machine, the machine every release runs from.
 - It has a sha256 digest and a signature.
-- The signature is an SSH signature made with an ed25519 key (`ssh-keygen -Y sign`), in a namespace used only
-  for web bundles.
+- Its digest is the file `<bundle>.sha256`, which names the tarball's sha256 and its file name.
+- The signature is `<bundle>.sha256.sig`, an SSH signature over the digest file made with an ed25519 key
+  (`ssh-keygen -Y sign`) in the namespace `robotmoney-web-bundle@v1`. That namespace is used only for web
+  bundles. A signature in any other namespace fails verification.
+- `scripts/lib/web-bundle.ts` packs, signs and verifies a bundle. Verification writes nothing unless the name,
+  the digest, the signature, the manifest and `version.json` all check out.
 - The private key is held on the control machine and nowhere else. It signs bundles and does nothing else.
-- The public key is committed to the repository as an allowed-signers file. A host verifies a bundle against
-  that file only (`ssh-keygen -Y verify`).
+- The public key is committed to the repository as `website-server/allowed-signers`. Each line in it is scoped
+  to `robotmoney-web-bundle@v1`. A host verifies a bundle against that file only (`ssh-keygen -Y verify`).
 - A host's allowed-signers file comes from the platform release the host runs. A web release never sends or
-  changes it. Changing the signing key is a platform release.
+  changes it. A key is added, replaced or removed only by a platform release.
 - It reaches a host from the control machine over SSH.
 - CI builds, signs and deploys nothing. It runs the checks that gate a release commit.
 - It is built for the release commit before stage runs (R13).

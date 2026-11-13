@@ -1,0 +1,20 @@
+# The trust root for web bundles. PUBLIC KEYS ONLY.
+#
+# OpenSSH allowed_signers format. A host verifies a bundle against this file
+# and nothing else (`ssh-keygen -Y verify`, through scripts/lib/web-bundle.ts).
+# Every line is scoped to the web-bundle namespace, so a key listed here
+# verifies web bundles and nothing else.
+#
+# ROTATION. This file belongs to the platform release a host runs. A web
+# release never sends or changes it. Adding, replacing or removing a key is a
+# platform release (docs/technical/web-serving-architecture.md §3.1).
+#
+# BOOTSTRAP ENTRY. The key below was generated when this file was created and
+# its private half was discarded, so nothing can sign a bundle yet. Registering
+# the control machine's real key means replacing this line with its `.pub`
+# contents in a reviewed platform-release commit.
+#
+# NEVER a private key. scripts/tests/unit/web-bundle.test.ts reads this file on
+# every PR to say so.
+
+web-bundle@robotmoney namespaces="robotmoney-web-bundle@v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPNcM9dzbTx++mry/yCw93vNhBGDTZuA/xldBqBt/t1V
