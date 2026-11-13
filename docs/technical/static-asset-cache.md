@@ -19,7 +19,7 @@ copy of it.
 |---|---|---|
 | Browser | Keeps files for the `max-age` it is told | The `Cache-Control` header it receives |
 | Cloudflare edge | `robotmoney.network` and `.net` are proxied DNS names and all traffic enters through a Cloudflare Tunnel (`cloudflared` on the production host forwards to `127.0.0.1:48787`). So every request passes through Cloudflare's edge, which applies its caching defaults | The Cloudflare zone's settings (not in this repo) |
-| nginx (`website-server`) | The origin. Serves the assembled `_static/` from a read-only bind mount. Sends `Cache-Control` | `website-server/nginx.conf` (in this repo) |
+| nginx (`website-server`) | The origin. Serves the assembled `_static/` from a read-only bind mount. Sends `Cache-Control`. Stores no API response: the API keeps its own public analytics answers in process (`web-serving-architecture.md` §3.4) | `website-server/nginx.conf` (in this repo) |
 
 The tunnel configuration (`cloudflared.config.example.yml`) routes hostnames to an origin port and contains **no caching
 settings**. Caching is a property of the zone, not of the tunnel.

@@ -19,6 +19,7 @@ import { PUBLIC_ANALYTICS_SCHEMAS, ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
 import { withCors } from "../../src/api/cors.ts";
 import {
+  _resetPublicAnalyticsCacheForTests,
   _resetPublicAnalyticsRateLimitForTests,
   handlePublicAnalytics,
   OVERWRITE_PAGE_STORED_BYTES,
@@ -116,7 +117,11 @@ beforeAll(async () => {
            ('2000-01-02', 'YAHOOPX2', 'utc-daily-close', 5, 'USD', 'Yahoo-Finance', now(), now(), 'cfg')`;
 }, 60_000);
 
-beforeEach(() => _resetPublicAnalyticsRateLimitForTests());
+// Each case starts with an empty answer store, as a new api process does (issue 1629).
+beforeEach(() => {
+  _resetPublicAnalyticsRateLimitForTests();
+  _resetPublicAnalyticsCacheForTests();
+});
 
 describe("every route: 200 with no Authorization header, a body that validates against its contract schema", () => {
   test("raw-history", async () => {

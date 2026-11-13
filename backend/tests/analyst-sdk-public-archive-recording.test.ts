@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { ROUTES } from "@robotmoney/contract";
-import { _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../src/api/routes/public-analytics.ts";
+import { _resetPublicAnalyticsCacheForTests, _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../src/api/routes/public-analytics.ts";
 import {
   _resetArchiveForTests,
   _setArchiveClockForTests,
@@ -142,6 +142,7 @@ afterAll(() => {
 async function get(path: string): Promise<Uint8Array> {
   for (let i = 0; i < 60; i++) {
     _resetPublicAnalyticsRateLimitForTests();
+    _resetPublicAnalyticsCacheForTests();
     const req = new Request(`http://api.test${path}`);
     const res = await handlePublicAnalytics(req, new URL(req.url), "192.0.2.14");
     if (res.status === 503) {

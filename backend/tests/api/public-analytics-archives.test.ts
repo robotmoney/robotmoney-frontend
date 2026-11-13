@@ -6,7 +6,7 @@
 //     and `asof` gives exactly the versions in force then;
 //   - reports serves each run's published report byte for byte, by run or by
 //     vintage, with its checksum as a strong ETag, and a conditional request is
-//     answered from the checksum alone (the TOAST'd bytes are never read);
+//     answered from the stored answer (the TOAST'd bytes are not read again);
 //   - vintages name their members and their published report;
 //   - the archive routes list sealed backups only, serve a format 1 record
 //     that validates against the contract, and serve every archive it lists
@@ -29,7 +29,7 @@ import { Transform } from "node:stream";
 import { createGzip, gunzipSync, gzipSync } from "node:zlib";
 import { ARCHIVE_BACKUP_RECORD_SCHEMA, ARCHIVE_PART_BYTES, PUBLIC_ANALYTICS_SCHEMAS, ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
-import { _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../../src/api/routes/public-analytics.ts";
+import { _resetPublicAnalyticsCacheForTests, _resetPublicAnalyticsRateLimitForTests, handlePublicAnalytics } from "../../src/api/routes/public-analytics.ts";
 import { publicQueryGate } from "../../src/api/public-analytics-limits.ts";
 import {
   _resetArchiveForTests,
@@ -179,7 +179,11 @@ afterAll(() => {
   _setArchivePartBytesForTests(null);
   _resetArchiveForTests();
 });
-beforeEach(() => _resetPublicAnalyticsRateLimitForTests());
+// Each case starts with an empty answer store, as a new api process does (issue 1629).
+beforeEach(() => {
+  _resetPublicAnalyticsRateLimitForTests();
+  _resetPublicAnalyticsCacheForTests();
+});
 
 /** Postgres's own COPY CSV of a select, in UTC: what csvb writes for the same rows. */
 async function copyCsv(select: string): Promise<string> {
@@ -336,11 +340,13 @@ describe("reports", () => {
     expect((await get(`${P.reports}?run=${RUN_A}&vintage=${vintageA}`)).status).toBe(400);
   });
 
-  test("a matching If-None-Match is 304 from the checksum alone: the report's stored bytes are never read", async () => {
+  test("a matching If-None-Match is 304 from the stored answer: the report's bytes are not read again", async () => {
     // REPORT_A is TOAST'd (over 2 KB), so reading its bytes reads the table's
     // TOAST relation. Backends flush their I/O counters to the cumulative
     // statistics within ~10 s of going idle, so the counter is read once
-    // settled, after the 304s, and once more after a 200 to prove it moves.
+    // settled, after the 304s, and once more after a 200 from an empty store
+    // to prove it moves. Issue 1629: the api reads a report's bytes once per
+    // process and keeps the answer, so the first request fills the store.
     const toast = async (): Promise<number> => {
       const [r] = await fixtureDb<{ n: string }[]>`
         SELECT (coalesce(toast_blks_read, 0) + coalesce(toast_blks_hit, 0))::text AS n
@@ -358,14 +364,17 @@ describe("reports", () => {
       return last;
     };
     const etag = `"${sha256(REPORT_A)}"`;
+    expect((await get(`${P.reports}?run=${RUN_A}`)).headers.get("X-Cache-Status")).toBe("MISS");
     const base = await settled();
     for (let i = 0; i < 5; i++) {
       const res = await get(`${P.reports}?run=${RUN_A}`, { headers: { "If-None-Match": etag } });
       expect(res.status).toBe(304);
       expect(res.headers.get("ETag")).toBe(etag);
+      expect(res.headers.get("X-Cache-Status")).toBe("HIT");
       expect((await bytesOf(res)).length).toBe(0);
     }
     expect(await settled()).toBe(base);
+    _resetPublicAnalyticsCacheForTests();
     expect((await get(`${P.reports}?run=${RUN_A}`)).status).toBe(200);
     expect(await settled()).toBeGreaterThan(base);
   }, 120_000);
@@ -893,6 +902,8 @@ describe("archive: the legacy junction", () => {
     return out;
   }
   async function served(): Promise<{ ids: string[]; records: Map<string, { body: any; bytes: Uint8Array }> }> {
+    // The junction is boot configuration: each read here is a fresh api process's, with an empty answer store.
+    _resetPublicAnalyticsCacheForTests();
     const ids = ((await (await get(P.archiveBackups)).json()) as any).backups.map((b: any) => b.backup) as string[];
     const records = new Map<string, { body: any; bytes: Uint8Array }>();
     for (const id of ids) records.set(id, await record(id));

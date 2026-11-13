@@ -26,6 +26,7 @@ import { sql } from "../../src/db/client.ts";
 import {
   _chargePublicAnalyticsBytesForTests,
   _publicAnalyticsBudgetForTests,
+  _resetPublicAnalyticsCacheForTests,
   _resetPublicAnalyticsRateLimitForTests,
   handlePublicAnalytics,
 } from "../../src/api/routes/public-analytics.ts";
@@ -70,7 +71,11 @@ afterAll(() => {
   _setArchiveClockForTests(null);
   _resetArchiveForTests();
 });
-beforeEach(() => _resetPublicAnalyticsRateLimitForTests());
+// Each case starts with an empty answer store, as a new api process does (issue 1629).
+beforeEach(() => {
+  _resetPublicAnalyticsRateLimitForTests();
+  _resetPublicAnalyticsCacheForTests();
+});
 
 describe("the budgets as specified (fake clock)", () => {
   test("constants: 2 queries, 5 s, 100 tokens a minute at 1 and 10, 50 MB a minute", () => {
@@ -239,13 +244,14 @@ describe("the concurrency gate and the statement timeout, with real held queries
     await lockTaken;
     try {
       const started = performance.now();
-      const held = [get(P.rawHistory, "198.18.3.1"), get(P.rawHistory, "198.18.3.2")];
+      // Two different URLs: identical ones would share one query (issue 1629).
+      const held = [get(`${P.rawHistory}?limit=1`, "198.18.3.1"), get(`${P.rawHistory}?limit=2`, "198.18.3.2")];
       for (let i = 0; i < 100 && (await waitingLocks()) < 2; i++) await Bun.sleep(50);
       expect(await waitingLocks()).toBe(2);
       expect(publicQueryGate.inUse()).toBe(2);
 
       // A third public request is refused at once, on every route.
-      for (const path of [P.rawHistory, P.reports, P.sourceVersions, `${P.reports}?run=${RUN}`]) {
+      for (const path of [`${P.rawHistory}?limit=3`, P.reports, P.sourceVersions, `${P.reports}?run=${RUN}`]) {
         const t = performance.now();
         const busy = await get(path, "198.18.3.3");
         expect(busy.status, path).toBe(503);

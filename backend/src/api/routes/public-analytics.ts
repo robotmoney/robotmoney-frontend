@@ -50,10 +50,20 @@
 //
 // CACHING. Lists carry `Cache-Control: public, max-age=300` and a weak ETag of
 // the body. A report and an archive file are immutable: a strong ETag that is
-// their SHA-256, read before any bytes (a report's checksum column, a built
-// backup record), so a matching If-None-Match answers 304 without reading or
-// regenerating the body, and `Cache-Control: public, max-age=31536000,
-// immutable`. Errors and refusals carry `no-store`.
+// their SHA-256 and `Cache-Control: public, max-age=31536000, immutable`. An
+// archive body's ETag is read before any bytes (a built backup record), so a
+// matching If-None-Match answers 304 without reading or regenerating it.
+// Errors and refusals carry `no-store`.
+//
+// THE ANSWER STORE (issue 1629, web-serving-architecture.md §3.4). Every
+// buffered answer (the lists, a report's bytes, a backup's record) is kept in
+// this process, keyed by URL, for the max-age it carries, and identical cold
+// requests share one computation (../public-analytics-limits.ts). A stored
+// answer meets each request on the way out: its ETag answers If-None-Match
+// with 304 and its body is gzip-encoded for a client that accepts it. An
+// archive body streams from the database and is never stored. Every answer
+// carries `X-Cache-Status`: HIT when it came from the store, else MISS. The
+// budgets above are spent before the store is asked, so a HIT still counts.
 import { promisify } from "node:util";
 import { gzip as gzipCb } from "node:zlib";
 import type { TransactionSql } from "postgres";
@@ -74,13 +84,21 @@ import { classifyDbFailure } from "../../db/client.ts";
 import {
   archiveBodyStream,
   BACKUP_ID_RE,
+  type BuiltRecord,
   cachedRecord,
   fileIn,
   isServedBackup,
   listBackupIds,
   recordFor,
 } from "../../analytics/store/public-archive-store.ts";
-import { createClientBudgets, PublicBusyError, publicQueryGate, publicRead } from "../public-analytics-limits.ts";
+import {
+  type CachedAnswer,
+  createAnswerCache,
+  createClientBudgets,
+  PublicBusyError,
+  publicQueryGate,
+  publicRead,
+} from "../public-analytics-limits.ts";
 
 const gzipAsync = promisify(gzipCb);
 type Tx = TransactionSql<{}>;
@@ -100,6 +118,19 @@ export const OVERWRITE_PAGE_STORED_BYTES = 1024 * 1024;
 const OVERWRITE_PAGE_BYTE_BUDGET = 8 * 1024 * 1024;
 
 const budgets = createClientBudgets();
+let answers = createAnswerCache();
+/**
+ * Start the answer store over, as a new api process would, optionally with a
+ * fake clock or a smaller cap. For tests.
+ */
+export function _resetPublicAnalyticsCacheForTests(opts: { maxBytes?: number; now?: () => number } = {}): void {
+  answers.clear();
+  answers = createAnswerCache(opts);
+}
+/** Entries and bytes the answer store holds. For tests. */
+export function _publicAnalyticsCacheForTests(): { size: number; bytes: number } {
+  return { size: answers.size(), bytes: answers.bytes() };
+}
 /** Forget every client's token and byte windows. For tests. */
 export function _resetPublicAnalyticsRateLimitForTests(): void {
   budgets.reset();
@@ -778,11 +809,17 @@ function reportSelector(url: URL): { run: string } | { vintage: string } | null 
 
 // ── Transport ───────────────────────────────────────────────────────────────
 
-function problem(status: number, error: string, extra: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify({ error }), {
+function problemAnswer(status: number, error: string, extra: Record<string, string> = {}): CachedAnswer {
+  return {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...extra },
-  });
+    body: new TextEncoder().encode(JSON.stringify({ error })),
+  };
+}
+
+function problem(status: number, error: string, extra: Record<string, string> = {}): Response {
+  const a = problemAnswer(status, error, extra);
+  return new Response(new Uint8Array(a.body), { status: a.status, headers: { ...a.headers, "X-Cache-Status": "MISS" } });
 }
 
 function etagOf(bytes: Uint8Array): string {
@@ -820,24 +857,35 @@ interface Sent {
   bytes: number;
 }
 
-async function okJson(req: Request, body: unknown, cacheControl = PUBLIC_ANALYTICS_CACHE_CONTROL): Promise<Sent> {
+function jsonAnswer(body: unknown, cacheControl = PUBLIC_ANALYTICS_CACHE_CONTROL): CachedAnswer {
   const identity = new TextEncoder().encode(JSON.stringify(body));
-  const etag = etagOf(identity);
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Cache-Control": cacheControl,
-    ETag: etag,
-    Vary: "Accept-Encoding",
+  return {
+    status: 200,
+    headers: { "Content-Type": "application/json", "Cache-Control": cacheControl, ETag: etagOf(identity), Vary: "Accept-Encoding" },
+    body: identity,
   };
-  if (matchesEtag(req.headers.get("if-none-match"), etag)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
-  const sent = await encoded(req, identity, headers);
+}
+
+/** An answer as one request receives it: 304 for a matching If-None-Match, gzip when accepted, and its X-Cache-Status. */
+async function render(req: Request, a: CachedAnswer, hit = false, age = 0): Promise<Sent> {
+  const headers: Record<string, string> = { ...a.headers, "X-Cache-Status": hit ? "HIT" : "MISS" };
+  if (hit) headers.Age = String(age);
+  if (a.status !== 200) return { res: new Response(new Uint8Array(a.body), { status: a.status, headers }), bytes: 0 };
+  if (headers.ETag && matchesEtag(req.headers.get("if-none-match"), headers.ETag)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
+  const sent = await encoded(req, a.body, headers);
   return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
+}
+
+/** The answer for `url` from the store, else computed once for every identical request in flight. */
+async function stored(req: Request, url: URL, compute: () => Promise<CachedAnswer>): Promise<Sent> {
+  const { answer, hit, age } = await answers.get(url.pathname + url.search, compute);
+  return render(req, answer, hit, age);
 }
 
 const strongEtag = (sha256: string): string => `"${sha256}"`;
 
-/** A report's exact stored bytes, or 304 from its checksum alone. */
-async function reportBytes(req: Request, sel: { run: string } | { vintage: string }): Promise<Sent> {
+/** A report's exact stored bytes: its checksum and length, then the bytes, in one public read. */
+async function reportAnswer(sel: { run: string } | { vintage: string }): Promise<CachedAnswer> {
   const found = await publicRead(async (tx) => {
     const [meta] = "run" in sel
       ? await on(tx, readReportByRun, readReportByRunRuns)<{ report_id: string; checksum: string; byte_length: string }>`SELECT rs.id::text AS report_id, rs.checksum, rs.byte_length::text AS byte_length
@@ -849,23 +897,22 @@ async function reportBytes(req: Request, sel: { run: string } | { vintage: strin
       JOIN analytics_data_vintages v ON v.run_id = rs.run_id
       WHERE v.id = ${sel.vintage}::bigint`;
     if (!meta) return null;
-    // A matching If-None-Match is answered from the checksum alone: the bytes are never read.
-    if (matchesEtag(req.headers.get("if-none-match"), strongEtag(meta.checksum))) return { meta, bytes: null };
     const [row] = await on(tx, readReportBytes)<{ report_bytes: Uint8Array }>`SELECT report_bytes FROM analytics_report_snapshots WHERE id = ${meta.report_id}::bigint`;
     return { meta, bytes: row ? new Uint8Array(row.report_bytes) : null };
   });
-  if (!found) return { res: problem(404, "no published report for that run or vintage"), bytes: 0 };
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
-    ETag: strongEtag(found.meta.checksum),
-    "X-Content-SHA256": found.meta.checksum,
-    "X-Report-Id": found.meta.report_id,
-    Vary: "Accept-Encoding",
+  if (!found?.bytes) return problemAnswer(404, "no published report for that run or vintage");
+  return {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
+      ETag: strongEtag(found.meta.checksum),
+      "X-Content-SHA256": found.meta.checksum,
+      "X-Report-Id": found.meta.report_id,
+      Vary: "Accept-Encoding",
+    },
+    body: found.bytes,
   };
-  if (found.bytes === null) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
-  const sent = await encoded(req, found.bytes, headers);
-  return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
 }
 
 const R = ROUTES.publicAnalytics;
@@ -883,14 +930,14 @@ const LISTS: Record<string, (url: URL, tx: Tx) => Promise<unknown>> = {
 const RECORD_WAIT_MS = 4_000;
 const RECORD_RETRY_AFTER = "10";
 
-async function archiveBackups(req: Request, url: URL): Promise<Sent> {
+async function archiveBackups(url: URL): Promise<CachedAnswer> {
   const limit = limitParam(url);
   const after = url.searchParams.get("cursor");
   if (after !== null && !BACKUP_ID_RE.test(after)) throw new BadRequest("cursor is not valid");
   const all = await listBackupIds();
   const rest = after === null ? all : all.filter((id) => id > after);
   const page = rest.slice(0, limit);
-  return okJson(req, {
+  return jsonAnswer({
     schemaVersion: PUBLIC_ANALYTICS_SCHEMA_VERSION,
     limit,
     format: 1,
@@ -918,28 +965,41 @@ async function awaitRecord(id: string) {
 // A backup id of either shape: a day cut, or the legacy junction (issue 1477); isServedBackup decides which exist.
 const ARCHIVE_PATH_RE = /^csv\/(\d{4}-\d{2}-\d{2}T\d{6}Z)\/(backup\.json|data\/[a-z_]+\.\d{4}-\d{2}-\d{2}T\d{6}Z_\d{4}-\d{2}-\d{2}T\d{6}Z(?:-\d+)?\.csv\.gz)$/;
 
-function building(): Response {
-  return problem(503, "this backup's record is being prepared; retry after the interval", { "Retry-After": RECORD_RETRY_AFTER });
+function building(): CachedAnswer {
+  return problemAnswer(503, "this backup's record is being prepared; retry after the interval", { "Retry-After": RECORD_RETRY_AFTER });
 }
 
-async function archiveFile(req: Request, path: string, clientIp: string): Promise<Sent> {
+/** What an archive path names: a refusal (404, or 503 while its record builds), else the built record. */
+async function archiveTarget(path: string): Promise<{ refusal: CachedAnswer } | { built: BuiltRecord; name: string }> {
   const m = ARCHIVE_PATH_RE.exec(path);
-  if (!m || !(await isServedBackup(m[1]!))) return { res: problem(404, "no such backup or archive"), bytes: 0 };
+  if (!m || !(await isServedBackup(m[1]!))) return { refusal: problemAnswer(404, "no such backup or archive") };
   const built = await awaitRecord(m[1]!);
-  if (!built) return { res: building(), bytes: 0 };
-  if (m[2] === "backup.json") {
-    const headers: Record<string, string> = {
+  if (!built) return { refusal: building() };
+  return { built, name: m[2]! };
+}
+
+/** A backup's record (`backup.json`): a buffered answer, so the store keeps it. */
+async function backupRecord(path: string): Promise<CachedAnswer> {
+  const t = await archiveTarget(path);
+  if ("refusal" in t) return t.refusal;
+  return {
+    status: 200,
+    headers: {
       "Content-Type": "application/json",
       "Cache-Control": PUBLIC_ANALYTICS_IMMUTABLE_CACHE_CONTROL,
-      ETag: strongEtag(built.sha256),
-      "X-Content-SHA256": built.sha256,
+      ETag: strongEtag(t.built.sha256),
+      "X-Content-SHA256": t.built.sha256,
       Vary: "Accept-Encoding",
-    };
-    if (matchesEtag(req.headers.get("if-none-match"), headers.ETag!)) return { res: new Response(null, { status: 304, headers }), bytes: 0 };
-    const sent = await encoded(req, built.bytes, headers);
-    return { res: new Response(sent, { status: 200, headers }), bytes: sent.length };
-  }
-  const hit = fileIn(built, path);
+    },
+    body: t.built.bytes,
+  };
+}
+
+/** An archive body: streamed from the database, never stored. */
+async function archiveFile(req: Request, path: string, clientIp: string): Promise<Sent> {
+  const t = await archiveTarget(path);
+  if ("refusal" in t) return render(req, t.refusal);
+  const hit = fileIn(t.built, path);
   if (!hit) return { res: problem(404, "no such archive in this backup"), bytes: 0 };
   const headers: Record<string, string> = {
     "Content-Type": "application/gzip",
@@ -970,14 +1030,18 @@ function costOf(url: URL): number {
 async function dispatch(req: Request, url: URL, clientIp: string): Promise<Sent | null> {
   const p = url.pathname;
   const list = LISTS[p];
-  if (list) return okJson(req, await publicRead((tx) => list(url, tx)));
+  if (list) return stored(req, url, async () => jsonAnswer(await publicRead((tx) => list(url, tx))));
   if (p === R.reports) {
     const sel = reportSelector(url);
-    if (sel) return reportBytes(req, sel);
-    return okJson(req, await publicRead((tx) => reportList(url, tx)));
+    if (sel) return stored(req, url, () => reportAnswer(sel));
+    return stored(req, url, async () => jsonAnswer(await publicRead((tx) => reportList(url, tx))));
   }
-  if (p === R.archiveBackups) return archiveBackups(req, url);
-  if (p.startsWith(R.archiveFiles)) return archiveFile(req, p.slice(R.archiveFiles.length), clientIp);
+  if (p === R.archiveBackups) return stored(req, url, () => archiveBackups(url));
+  if (p.startsWith(R.archiveFiles)) {
+    const path = p.slice(R.archiveFiles.length);
+    if (path.endsWith("/backup.json")) return stored(req, url, () => backupRecord(path));
+    return archiveFile(req, path, clientIp);
+  }
   return null;
 }
 
@@ -1002,6 +1066,7 @@ export async function handlePublicAnalytics(req: Request, url: URL, clientIp: st
     const sent = await dispatch(req, url, clientIp);
     if (!sent) return problem(404, "not found");
     budgets.chargeBytes(clientIp, sent.bytes);
+    if (!sent.res.headers.has("X-Cache-Status")) sent.res.headers.set("X-Cache-Status", "MISS");
     return sent.res;
   } catch (err) {
     if (err instanceof BadRequest) return problem(400, err.message);

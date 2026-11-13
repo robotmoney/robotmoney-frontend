@@ -220,3 +220,142 @@ export async function publicRead<T>(fn: (tx: TransactionSql<{}>) => Promise<T>, 
     release();
   }
 }
+
+// ── The answer store (issue 1629) ───────────────────────────────────────────
+// The api keeps its own public analytics answers in process
+// (docs/technical/web-serving-architecture.md §3.4); website-server stores no
+// api response. The store is keyed by request URL and holds an answer for the
+// max-age its route set, never longer. An answer whose Cache-Control has no
+// max-age, or says no-store or private, is never stored: errors and refusals
+// carry no-store. Identical cold requests that arrive together share one
+// computation, so twenty of them run one database query and take one gate
+// slot. The store is bounded by bytes and evicts the least recently used
+// entry first. It lives in this process's memory, so it is empty after every
+// api start and no answer outlives the code that computed it.
+
+/** The store's cap: the bytes of every stored body, key and header together. */
+export const PUBLIC_ANALYTICS_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+
+/** An answer before it meets a request: status, headers and the identity body. */
+export interface CachedAnswer {
+  status: number;
+  headers: Record<string, string>;
+  body: Uint8Array;
+}
+
+export interface AnswerLookup {
+  answer: CachedAnswer;
+  /** True when the answer came from the store, with no computation. */
+  hit: boolean;
+  /** Whole seconds the answer has been stored; 0 on a miss. */
+  age: number;
+}
+
+export interface AnswerCache {
+  /** The stored answer for `key`, else the result of `compute` (shared with every identical request in flight). */
+  get(key: string, compute: () => Promise<CachedAnswer>): Promise<AnswerLookup>;
+  /** Bytes held now. */
+  bytes(): number;
+  /** Entries held now. */
+  size(): number;
+  /** Forget every entry and every request in flight. */
+  clear(): void;
+}
+
+/** Seconds a 200 answer may be stored, or null when it may not be stored at all. */
+export function storableSeconds(answer: CachedAnswer): number | null {
+  if (answer.status !== 200) return null;
+  const cc = (answer.headers["Cache-Control"] ?? "").toLowerCase();
+  if (/(^|,)\s*(no-store|private|no-cache)\s*(,|$)/.test(cc)) return null;
+  const m = /(?:^|,)\s*max-age=(\d+)\s*(?:,|$)/.exec(cc);
+  if (!m) return null;
+  const seconds = Number(m[1]);
+  return seconds > 0 ? seconds : null;
+}
+
+function costOfEntry(key: string, a: CachedAnswer): number {
+  let n = key.length + a.body.byteLength;
+  for (const [k, v] of Object.entries(a.headers)) n += k.length + v.length;
+  return n;
+}
+
+interface StoredAnswer {
+  answer: CachedAnswer;
+  storedAt: number;
+  expiresAt: number;
+  cost: number;
+}
+
+export function createAnswerCache(opts: { maxBytes?: number; now?: () => number } = {}): AnswerCache {
+  const maxBytes = opts.maxBytes ?? PUBLIC_ANALYTICS_CACHE_MAX_BYTES;
+  const now = opts.now ?? Date.now;
+  // Insertion order is recency order (a hit deletes and re-sets), so the first key is the least recently used.
+  const entries = new Map<string, StoredAnswer>();
+  const inFlight = new Map<string, Promise<CachedAnswer>>();
+  let held = 0;
+  // A clear() while a computation runs must not let that computation store its answer afterwards.
+  let generation = 0;
+
+  const drop = (key: string): void => {
+    const e = entries.get(key);
+    if (!e) return;
+    entries.delete(key);
+    held -= e.cost;
+  };
+
+  const store = (key: string, answer: CachedAnswer): void => {
+    const seconds = storableSeconds(answer);
+    if (seconds === null) return;
+    const cost = costOfEntry(key, answer);
+    if (cost > maxBytes) return;
+    drop(key);
+    while (held + cost > maxBytes) {
+      const oldest = entries.keys().next();
+      if (oldest.done) break;
+      drop(oldest.value);
+    }
+    const at = now();
+    entries.set(key, { answer, storedAt: at, expiresAt: at + seconds * 1000, cost });
+    held += cost;
+  };
+
+  return {
+    async get(key, compute) {
+      const e = entries.get(key);
+      if (e) {
+        const at = now();
+        if (at < e.expiresAt) {
+          entries.delete(key);
+          entries.set(key, e);
+          return { answer: e.answer, hit: true, age: Math.floor((at - e.storedAt) / 1000) };
+        }
+        drop(key);
+      }
+      let pending = inFlight.get(key);
+      if (!pending) {
+        const gen = generation;
+        pending = compute();
+        inFlight.set(key, pending);
+        const settle = (): void => {
+          if (inFlight.get(key) === pending) inFlight.delete(key);
+        };
+        pending.then(
+          (answer) => {
+            settle();
+            if (gen === generation) store(key, answer);
+          },
+          settle,
+        );
+      }
+      return { answer: await pending, hit: false, age: 0 };
+    },
+    bytes: () => held,
+    size: () => entries.size,
+    clear() {
+      entries.clear();
+      inFlight.clear();
+      held = 0;
+      generation += 1;
+    },
+  };
+}
