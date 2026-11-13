@@ -229,8 +229,11 @@ proxy). Refines D8's prod mode to a managed HA cluster. The single-box
   marketing is reached DNS-only so DO owns its delivery.
 - **Keeping the single box for prod** — no isolation between failure domains, no DB HA.
 
-**Amendment (2026-11-13, issue 1625) — Caddy is the one web server.** The web
-serving architecture
+**Amendment (2026-11-13, issue 1625) — Caddy is the one web server.**
+
+**Status:** proposed. Drafted by the agent with issue 1625 (pr 1637); the owner accepts it.
+
+The web serving architecture
 ([web-serving-architecture.md §3.3](technical/web-serving-architecture.md#33-the-server))
 puts one container role in front of the site: it serves the static files,
 proxies `/api/`, `/health` and `/version` to the api, and holds the public

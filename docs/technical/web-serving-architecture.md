@@ -98,7 +98,7 @@ The server is Caddy 2.10.2, with its admin API and automatic HTTPS turned off. T
 1625, 2026-11-13) chose it: the image built from `website-server/Dockerfile.caddy` passes the route and header
 table (`scripts/tests/support/website-routes-table.ts`) unchanged. It does so with no Bun or Node binary, a
 read-only root, tmpfs scratch paths (`/config`, `/data`), every capability dropped and a non-root user. That image
-is 38,438,443 bytes, as `docker image inspect` reports its size. The server trusts `CF-Connecting-IP` from the
+is 38,438,442 bytes in the PR's integration CI run, as `docker image inspect` reports it. The size varies by a few bytes per build. The server trusts `CF-Connecting-IP` from the
 same peers as today's nginx: loopback, the host's private ranges and Cloudflare's published ranges.
 
 Caddy sends the security headers on every answer: pages, assets, 404s, proxied answers and maintenance answers.
