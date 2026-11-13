@@ -18,7 +18,7 @@ import { CURRENT_SITE_LINK, currentSite, placeSite, PREVIOUS_SITE_LINK, previous
 import { acquireDeploymentLock, instancePaths, resolveInstance, type InstancePaths } from "../../lib/smoke-state.ts";
 import { packBundle, signBundle } from "../../lib/web-bundle.ts";
 import { WEB_BUNDLE_SIGNATURE_NAMESPACE } from "../../lib/web-bundle-manifest.ts";
-import { shellQuote, sshArgv, sshHost, type HostResult, type WebHost } from "../../lib/website-host.ts";
+import { localHost, shellQuote, sshArgv, sshHost, type HostResult, type WebHost } from "../../lib/website-host.ts";
 import {
   readWebsiteImageService,
   WEBSITE_ASSET_CACHE,
@@ -1176,6 +1176,12 @@ describe("image mode: pure parts", () => {
     ]);
     expect(shellQuote("robotmoney-website:stage_target-current")).toBe("robotmoney-website:stage_target-current");
     expect(() => sshHost("-oProxyCommand=x")).toThrow(/not an ssh destination/);
+  });
+
+  test("a command missing on the local host is a failed command (exit 127), as over ssh, never a throw", async () => {
+    const r = await localHost().run(["rm-no-such-binary-1630", "ps"]);
+    expect(r.code).toBe(127);
+    expect(r.stderr).toContain("rm-no-such-binary-1630");
   });
 
   test("names: tags, the lock, release names and instance names", () => {
