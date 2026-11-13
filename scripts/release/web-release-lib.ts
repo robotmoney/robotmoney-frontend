@@ -418,7 +418,7 @@ export function envCommand(t: WebTarget, argv: readonly string[]): string {
 export const deployArgv = (t: WebTarget, bundle: string): string[] =>
   ["bun", "run", "smoke:web", "--host", t.host, "--instance", t.instance, "--bundle", bundle, "--server-image", t.serverImage, "--origin", t.publicOrigin];
 
-/** PURE. W11's rollback, from the control machine: the host's one previous image goes back on the public port. */
+/** PURE. W11's rollback, from the control machine: the previous image, or on a first rollout the kept nginx container, goes back on the public port. */
 export const rollbackArgv = (t: WebTarget): string[] =>
   ["bun", "run", "smoke:web", "--host", t.host, "--instance", t.instance, "--rollback", "--origin", t.publicOrigin];
 
@@ -620,8 +620,9 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   }
   if (errors.length > 0) return { errors };
 
-  // The rollback target: W10's swap keeps the image that serves now as the previous image (on a host's
-  // first rollout, the running nginx image, issue 1632), so a running website-server is all W01 needs.
+  // The rollback target: W10's swap keeps what serves now. A site image becomes the previous image; on a
+  // host's first rollout the nginx container is kept, stopped, as <name>-first-rollout (spec §4, issue
+  // 1632). So a running website-server is all W01 needs.
   const web = await readHostWeb(t, deps);
   if ("error" in web) return { errors: [web.error] };
   const noTarget = rollbackTargetProblem(t, web.web);
@@ -638,19 +639,20 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
 
 /**
  * PURE. Why production would have no rollback target after W10's swap: no website-server runs for the
- * instance. The swap keeps the image serving now as the one previous image, whatever it is: a site image,
- * or nginx on a host's first rollout (issue 1632). So W01 needs a serving container, not a previous image.
+ * instance. The swap keeps what serves now: a site image as the one previous image, or on a host's first
+ * rollout the nginx container, stopped, as <name>-first-rollout (spec §4, issue 1632). So W01 needs a
+ * serving container, not a previous image.
  */
 export function rollbackTargetProblem(t: WebTarget, web: HostWeb): string | undefined {
   if (web.container !== undefined) return undefined;
-  return `no website-server runs for ${t.instance} on ${t.host}, so W10's swap would keep no previous image and a failed W11 could not roll back ` +
-    "(bun smoke:web --rollback refuses with no previous image). Bring the instance's stack up with its platform release first";
+  return `no website-server runs for ${t.instance} on ${t.host}, so W10's swap would keep no rollback target and a failed W11 could not roll back ` +
+    "(bun smoke:web --rollback refuses with neither a previous image nor a first-rollout container). Bring the instance's stack up with its platform release first";
 }
 
 /** PURE. The run log's line for what a host's website-server serves. */
 export function servingLine(t: Pick<WebTarget, "name">, web: HostWeb | undefined): string {
   if (web === undefined) return `[web-release] ${t.name}'s website-server: not read`;
-  const now = web.tag !== undefined ? `${web.tag} (sha256 ${web.digest ?? "?"})` : `${web.image ?? "(nothing)"}, no signed bundle (first rollout: it stays the rollback target, issue 1632)`;
+  const now = web.tag !== undefined ? `${web.tag} (sha256 ${web.digest ?? "?"})` : `${web.image ?? "(nothing)"}, no signed bundle (first rollout: the swap keeps its container, stopped, as the rollback target, issue 1632)`;
   return `[web-release] ${t.name} serves ${now}; previous image ${web.previous ?? "(none)"}; after the swap a W11 rollback returns to what serves now`;
 }
 
@@ -1058,7 +1060,8 @@ export const STAGE_DOWN_COMMAND: readonly string[] = Object.freeze(["bun", "scri
 /**
  * PURE. W04's deploy of production's serving bundle to stage, by name, so stage holds a previous image
  * before W05's swap, as production will at W10. None while production serves no signed bundle (its first
- * rollout): stage then keeps its own running image as the rollback target, as production does (issue 1632).
+ * rollout): W05's swap then keeps stage's nginx container, stopped, as <name>-first-rollout, the rollback
+ * target, as production's W10 does (spec §4, issue 1632).
  */
 export const stagePriorArgv = (inputs: Pick<Inputs, "stage">, rel: Pick<Release, "serving">): string[] | undefined =>
   rel.serving?.tag === undefined ? undefined : deployArgv(inputs.stage, rel.serving.tag);
@@ -1073,7 +1076,7 @@ export async function checkStageUp(rel: Release, inputs: Inputs, deps: Deps): Pr
     return { state: "todo", detail: `the stage target runs ${String(api.body.commit).slice(0, 12)}, not production's API commit ${short(rel.apiCommit)}: rebuild it from a fresh production dump` };
   }
   const want = rel.serving?.tag;
-  if (want === undefined) return { state: "done", detail: `the stage target runs production's API commit ${short(rel.apiCommit)}; production serves no signed bundle yet, so stage keeps its running image as the rollback target` };
+  if (want === undefined) return { state: "done", detail: `the stage target runs production's API commit ${short(rel.apiCommit)}; production serves no signed bundle yet, so W05's swap keeps stage's nginx container as the rollback target` };
   const web = await readHostWeb(inputs.stage, deps);
   if ("error" in web) return failed(web.error);
   if (web.web.digest !== rel.serving?.digest) {
@@ -1513,7 +1516,7 @@ export async function runLive(rel: Release, inputs: Inputs, deps: Deps, judged?:
   const after = await readLiveSite(t, deps);
   const serves = "error" in after ? `${t.publicOrigin}/version.json could not be read after it (${after.error})` : `${t.publicOrigin} now serves ${after.version}-${after.commit}`;
   const rolled = r.status === 0
-    ? `rolled back to the previous image (bun smoke:web --rollback); ${serves}`
+    ? `rolled back (bun smoke:web --rollback: the previous image, or the first-rollout nginx container); ${serves}`
     : `THE ROLLBACK FAILED (exit ${r.status}: ${errText(r)}); ${serves}: run ${argv.join(" ")} from the control machine by hand`;
   return failed(`the live check failed: ${problems.join("; ")}. ${rolled}. ${rel.tag} stays where it is: ship the fix as ${next}`);
 }

@@ -176,7 +176,7 @@ describe("a web content release's W10 and W11 against a real website-server", ()
     expect(served.deployed2).toBe(`9.9.2-${C2}`);
     expect(steps.live2!.state).toBe("failed");
     expect(steps.live2!.detail).toContain(`GET ${FAILING_ROUTE} answered 500`);
-    expect(steps.live2!.detail).toContain("rolled back to the previous image (bun smoke:web --rollback)");
+    expect(steps.live2!.detail).toContain("rolled back (bun smoke:web --rollback: the previous image, or the first-rollout nginx container)");
     expect(steps.live2!.detail).toContain("ship the fix as web-v9.9.3");
     expect(runs.at(-1)).toEqual(rollbackArgv(target));
     expect(served.rolledBack).toBe(`9.9.1-${C1}`);

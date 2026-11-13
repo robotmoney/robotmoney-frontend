@@ -247,7 +247,7 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 
 | Step | What it does |
 |---|---|
-| W01-preflight | Checks each named commit is eligible. Reads the running container's labels and the previous image. Refuses with no rollback target: no running `website-server`, whose image the swap keeps as the previous image |
+| W01-preflight | Checks each named commit is eligible. Reads the running container's labels and the previous image. Refuses with no rollback target: no running `website-server`, which the swap keeps as the rollback target (§4) |
 | W02-branch | Pushes the release commit to `web/releases-A.B.x` as a fast-forward |
 | W03-gate | The web client checks and the end-to-end checks pass on the release commit. The runner then packs and signs the bundle on the control machine |
 | W04-stage-up | Brings the stage target up at production's running commit, from a fresh production dump. Deploys production's serving bundle there by name, so stage holds a previous image before W05 |
@@ -255,17 +255,20 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 | W06-stage-check | Runs the live check against the stage origin. Records a pass for the bundle digest |
 | W07-tag | Pushes the tag `web-vA.B.C`. The tag is never moved or deleted |
 | W08-tag-guard | The tag rule passes for the tag |
-| W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a rollback target: the serving image, which the swap keeps as the previous image. It installs nothing |
+| W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a rollback target: a running `website-server`, which the swap keeps as the rollback target (§4). It installs nothing |
 | W10-deploy | Refuses a bundle whose digest is not the stage-passed digest. Sends it to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
 | W12-release | Publishes the release notes with the bundle, its digest and its signature |
 
 No step from W07 on writes unless a stage pass is recorded for the same bundle digest.
 
-On a host's first rollout no signed bundle serves yet: nginx serves, and its image is the rollback target
-(issue 1632). W01 and W09 accept it as the rollback target. W04 then deploys nothing by name, and stage keeps
-its own running image as the rollback target, as production does. After the first swap the host holds a site
-image, and every later release follows the table as written.
+On a host's first rollout no signed bundle serves yet: nginx serves. The first-rollout rule of §4 applies: the
+swap keeps the nginx container, stopped, as `<its name>-first-rollout`, and that container is the rollback
+target, not an image. W01 and W09 accept a running nginx `website-server` for that reason. W04 then deploys
+nothing by name: stage's W05 swap keeps stage's nginx container the same way, as production's W10 does. W11's
+`--rollback` starts that container again, and `-current` is untagged, so a platform boot runs nginx. After a
+swap from a site image to a site image the host holds a previous image, and every later release follows the
+table as written.
 
 The runbook names the host's server image `robotmoney-website-server:<instance>`, which the platform release
 builds. The steps run `bun smoke:web` from the control machine with `--host` and `--origin`, so step 5 of §4

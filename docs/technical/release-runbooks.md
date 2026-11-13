@@ -414,8 +414,9 @@ website down:
 6. **C12-site** runs `bun smoke:web`'s image mode from the control machine (`--host {host}
    --bundle serving --origin {publicOrigin}`, issue 1630): it keeps the bundle the instance serves
    and swaps it onto the platform's server image, checked through the public origin, and a failed
-   check puts the previous image back. While no signed bundle serves yet (a host's first rollout) it
-   changes nothing. Releases before v0.7.5 keep the directory-mode command they ran (`changedSince`).
+   check puts the previous image back. On another server image the bundle is rebuilt and swapped in
+   (`--server-image robotmoney-website-server:{instance}`); on the same one it is unchanged. While no
+   signed bundle serves yet (a host's first rollout) it changes nothing. Releases before v0.7.5 keep the directory-mode command they ran (`changedSince`).
 7. **C13-probe-grade** stops the probe and fails the release on any answer that is not 200, or on any gap.
    The one excuse is a website-server swap's measured gap: a failed site answer asked inside a gap that
    a `bun smoke:web` receipt on the control machine recorded during the window passes, and nothing else
@@ -541,7 +542,8 @@ start of the run's first irreversible step, Q17-probe-start on stage and C04-pro
 production, read from the run's journal when the step renders. A template with no READY must set its
 own log window this way (§4.7.2). A unit test holds web.yaml to that subset, and each release runbook
 to the template it names. Recovery from a failed web release is `bun smoke:web --rollback` to the
-previous image. A web content release (§12) is the path that ships new site content; this template's
+previous image, or on a host's first rollout to the stopped nginx container `<name>-first-rollout`
+(web-serving-architecture.md §4). A web content release (§12) is the path that ships new site content; this template's
 site step keeps the serving bundle, as kitchen-sink's does.
 
 **Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
@@ -846,9 +848,10 @@ platform release builds. The steps run in order:
   tag that W11 rolled back is refused (below). The operator must hold the admin permission on the
   repository. The runner reads production's running `website-server` over ssh (its labels: the web
   tag, the commit and the bundle digest) and the instance's previous image, and reports them. W10's
-  swap keeps the image that serves now as the previous image, so W01 refuses only when no
-  `website-server` runs. On a host's first rollout nginx serves, and its image is the rollback
-  target (issue 1632).
+  swap keeps what serves now as the rollback target, so W01 refuses only when no `website-server`
+  runs. A site image becomes the previous image. On a host's first rollout nginx serves, and the swap
+  keeps the nginx container, stopped, as `<name>-first-rollout`: that container is the rollback
+  target, not an image (web-serving-architecture.md §4, issue 1632).
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
@@ -878,8 +881,8 @@ platform release builds. The steps run in order:
   scripts/release/stage-target.ts dump`, then `up --dump newest --replace`, from the control machine.
   Then production's serving bundle is deployed there by name (`bun smoke:web --bundle web-vX.Y.Z`),
   so stage holds a previous image before W05, as production does at W10. While production serves no
-  signed bundle (its first rollout) nothing is deployed by name: stage keeps its running image as the
-  rollback target, as production does. A stage stack that already runs production's API commit and
+  signed bundle (its first rollout) nothing is deployed by name: W05's swap keeps stage's nginx
+  container, stopped, as `<name>-first-rollout`, the rollback target, as production's W10 does. A stage stack that already runs production's API commit and
   serves production's bundle is reused on a rerun. Q04-role-passwords is not run: a web release
   migrates nothing.
 - **W05-stage-deploy.** The runner records the stage `api` and worker container ids and
@@ -900,8 +903,9 @@ platform release builds. The steps run in order:
 - **W08-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
 - **W09-host-ready.** Over ssh from the control machine (D61 (4)), read only: the production host
   holds the server image `robotmoney-website-server:{instance}`, the allowed-signers file inside it
-  has a line for the `robotmoney-web-bundle@v1` namespace, and a `website-server` runs (the rollback
-  target). It installs nothing, builds nothing and runs no `git` or `bun` there. A host that is not
+  has a line for the `robotmoney-web-bundle@v1` namespace, and a `website-server` runs, which the
+  swap keeps as the rollback target (on a host's first rollout, the stopped nginx container
+  `<name>-first-rollout`). It installs nothing, builds nothing and runs no `git` or `bun` there. A host that is not
   ready fails the step: its platform release provides these.
 - **W10-deploy** (irreversible). It refuses a bundle whose sha256 is not the stage-passed digest,
   read just before the send. Then it records the `api` and worker container ids and the
@@ -927,7 +931,9 @@ platform release builds. The steps run in order:
   6. The `api` and worker container ids and `/api/version` are unchanged.
   A dry run prints the number of files W06 and W11 would compare, and reads no label and hashes no
   file even when W10's record exists. On a failure the runner runs `bun run smoke:web --host {host}
-  --instance {instance} --rollback --origin {publicOrigin}`, reads `/version.json` again to report
+  --instance {instance} --rollback --origin {publicOrigin}`, which starts the previous image, or on a
+  host's first rollout the stopped nginx container `<name>-first-rollout` with `-current` untagged so a
+  platform boot runs nginx. It reads `/version.json` again to report
   what production now serves, and exits non-zero. The branch and the tag stay; no GitHub release is
   created.
 - **W12-release** (irreversible). The GitHub release for the tag carries the bundle, its digest and

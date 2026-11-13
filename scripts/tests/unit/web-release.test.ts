@@ -883,7 +883,7 @@ describe("runWebRelease", () => {
     const tagged = remoteRef(f, "refs/tags/web-v0.2.0^{commit}")!;
     const log = h.out.join("\n");
     expect(log).toContain("FAILED at W11-live-check: the live check failed: GET /swarm answered 500");
-    expect(log).toContain(`rolled back to the previous image (bun smoke:web --rollback); ${ORIGIN} now serves 0.1.0-${f.c0.slice(0, 9)}`);
+    expect(log).toContain(`rolled back (bun smoke:web --rollback: the previous image, or the first-rollout nginx container); ${ORIGIN} now serves 0.1.0-${f.c0.slice(0, 9)}`);
     expect(log).toContain("ship the fix as web-v0.2.1");
     expect(h.state.execCalls).toContainEqual(["bun", "run", "smoke:web", "--host", PROD.host, "--instance", "rm_prod", "--rollback", "--origin", ORIGIN]);
     expect(h.state.bundle).toBeUndefined();
@@ -949,7 +949,7 @@ describe("W01 refuses when production would have no rollback target", () => {
     const f = fixture();
     const h = harness(f);
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2], { dryRun: true }), h.deps)).toBe(0);
-    expect(h.out.join("\n")).toContain("[web-release] prod serves sha256:nginx, no signed bundle (first rollout: it stays the rollback target, issue 1632); previous image (none)");
+    expect(h.out.join("\n")).toContain("[web-release] prod serves sha256:nginx, no signed bundle (first rollout: the swap keeps its container, stopped, as the rollback target, issue 1632); previous image (none)");
   });
 });
 
@@ -1075,7 +1075,7 @@ describe("the live check: labels, served bytes against the manifest, the header 
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     const log = h.out.join("\n");
     expect(log).toMatch(/FAILED at W11-live-check: the live check failed: GET \/ serves sha256 [0-9a-f]{16}, not the manifest's index\.html \([0-9a-f]{16}\)/);
-    expect(log).toContain("rolled back to the previous image (bun smoke:web --rollback)");
+    expect(log).toContain("rolled back (bun smoke:web --rollback: the previous image, or the first-rollout nginx container)");
     expect(h.state.bundle).toBeUndefined();
     // Every comparison read the served copy past any cache.
     expect(h.httpBytes.every((u) => /\?rm-live-check=[0-9a-f]{12}-\d+$/.test(u))).toBe(true);
@@ -1178,7 +1178,7 @@ describe("W04 to W06: stage QA before any production step writes", () => {
     // When W05's swap ran, stage's previous image was production's bundle.
     expect(h.state.stage.previous?.bundle?.tag).toBe("web-v0.1.0");
     expect(stagePriorArgv(inputs(f, []), { serving: { container: "c", tag: "web-v0.1.0" } })?.slice(7, 9)).toEqual(["--bundle", "web-v0.1.0"]);
-    // On production's first rollout (nginx serves) stage keeps its own running image: nothing is deployed by name.
+    // On production's first rollout (nginx serves) W05's swap keeps stage's nginx container: nothing is deployed by name.
     expect(stagePriorArgv(inputs(f, []), { serving: { container: "c", image: "sha256:nginx" } })).toBeUndefined();
   });
 
