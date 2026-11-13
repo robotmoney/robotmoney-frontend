@@ -102,6 +102,10 @@ jobs:
               # compose environment, so a compose-only change must select this
               # job rather than skip the assertions that cover it.
               - 'docker-compose*.yml'
+              # Issue 1624: the route and header table and the other
+              # website-server proofs run against an image built from here, so
+              # a change to the server config selects them.
+              - 'website-server/**'
 
   integration:
     needs: [changes]
@@ -171,3 +175,23 @@ jobs:
           test -f "$f" || { echo "::error::$f is missing"; exit 1; }
           grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::$f did not run in the integration suite"; exit 1; }
+      # Issue 1624: the route and header table ran against the real image, with
+      # rows executed in both api states. Its absence or exclusion is a red
+      # job, not a green one.
+      - name: Website-server route and header table ran (issue 1624)
+        shell: bash
+        run: |
+          f=scripts/tests/integration/website-server-routes.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }
+          for phase in api-up api-down; do
+            grep -qE "^[1-9][0-9]*/[1-9][0-9]* rows passed \($phase\)" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::no $phase rows of the route and header table ran"; exit 1; }
+          done
+      # Issue 1624 red control: one Cache-Control value, one fallback and one
+      # 404 rule, each changed in a scratch copy of nginx.conf, must each turn
+      # the table red on the row that guards it.
+      - name: Website-server route and header table red control (issue 1624)
+        shell: bash
+        run: bash scripts/tests/support/website-routes-red-control.sh
