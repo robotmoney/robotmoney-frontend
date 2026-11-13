@@ -277,7 +277,8 @@ bundle the instance serves now, by the web tag its labels name (§5.3).
 W06 and W11 run the same check:
 
 1. `/version.json` names the release's version and commit.
-2. The running container's labels equal the bundle's tag, commit and digest.
+2. The running container's labels equal the bundle's tag, commit and digest. Its healthcheck, which the swap
+   carries over from the container compose started, reports healthy.
 3. Every served file equals its entry in the bundle's manifest, by sha256.
 4. The route and header table passes through the origin, including each dapp page's CSP. A web release leaves
    every header unchanged.

@@ -912,7 +912,9 @@ platform release builds. The steps run in order:
   (`web-image/<instance>/receipt.json` and `journal.jsonl`).
 - **W11-live-check.** The live check of web-serving-architecture.md §5.2, in order:
   1. `{publicOrigin}/version.json` reports the tag's version and commit.
-  2. The running `website-server`'s labels name the bundle's tag, commit and sha256 digest.
+  2. The running `website-server`'s labels name the bundle's tag, commit and sha256 digest, and the
+     healthcheck it inherited from the container compose started reports healthy (the check waits up
+     to 90 s while it reports starting). On stage, W06 is that proof.
   3. **Served content equals the bundle.** Every file in the bundle's manifest
      (`.rm-bundle-manifest.json`) is fetched through the origin at the URL it is served at
      (`index.html` at `/`, `<dir>/index.html` at `/<dir>`, any other file at its path, each with a

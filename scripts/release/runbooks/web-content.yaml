@@ -66,7 +66,7 @@ steps:
     irreversible: true
   - id: "W11-live-check"
     kind: "live-check"
-    description: "{publicOrigin}/version.json names the tag's version and commit; the running website-server's labels name the bundle's tag, commit and digest; every file in the bundle's manifest is served from {publicOrigin} with its manifest sha256; the platform's header table (security headers and Cache-Control) holds on / and every sitemap route, each answering 200; and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --host {host} --instance {instance} --rollback --origin {publicOrigin}, read {publicOrigin}/version.json again to report what production serves, and fail"
+    description: "{publicOrigin}/version.json names the tag's version and commit; the running website-server's labels name the bundle's tag, commit and digest, and the healthcheck it inherited reports healthy; every file in the bundle's manifest is served from {publicOrigin} with its manifest sha256; the platform's header table (security headers and Cache-Control) holds on / and every sitemap route, each answering 200; and the api and worker container ids and /api/version are unchanged; otherwise bun run smoke:web --host {host} --instance {instance} --rollback --origin {publicOrigin}, read {publicOrigin}/version.json again to report what production serves, and fail"
     irreversible: false
   - id: "W12-release"
     kind: "release"

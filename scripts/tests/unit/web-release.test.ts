@@ -26,7 +26,7 @@ import { IMAGE_JOURNAL_FILE, type ImageReceipt } from "../../lib/website-release
 import {
   classifyContentDiff, GATE_RUNS, gateTriggerProblems, isCommentOnlyChange, isDocPath, isTestPath, loadWebRunbook, parseWebRunbook, preflight, rerunCommand, runWebRelease,
   WEB_RUNBOOK_PATH, webTargetOf,
-  bundleCommands, bundleDigest, bundlePathOf, checkReleaseStep, deployArgv, deployDigestProblem, headerProblems, hostReadyCommand, labelProblems, manifestUrlPath,
+  bundleCommands, bundleDigest, bundlePathOf, checkReleaseStep, deployArgv, deployDigestProblem, headerProblems, healthProblem, hostReadyCommand, labelProblems, manifestUrlPath,
   parseHostWeb, releaseAssets, rollbackArgv, rollbackTargetProblem, runReleaseStep, stageGateProblem, stagePassed, stagePriorArgv, wasRolledBack,
   type Deps, type ExecResult, type Inputs, type WebTarget,
 } from "../../release/web-release-lib.ts";
@@ -145,6 +145,8 @@ interface HostState {
   signers: string;
   /** Whether a website-server container runs at all. */
   running: boolean;
+  /** Its healthcheck's state as `docker ps` prints it, read once per ask (a list plays out over successive reads). */
+  health?: string[];
   apiId: string;
 }
 
@@ -251,7 +253,8 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
   /** What a hostWebCommand prints for a fake host. */
   const webLines = (h: HostState): string => {
     const b = h.bundle;
-    const serving = h.running ? `serving\tc-${h.image.slice(-6)}\t${h.image}\t${b?.tag ?? ""}\t${b?.commit ?? ""}\t${b?.digest ?? ""}\n` : "";
+    const health = (h.health && h.health.length > 1 ? h.health.shift() : h.health?.[0]) ?? "Up 2 minutes (healthy)";
+    const serving = h.running ? `serving\tc-${h.image.slice(-6)}\t${h.image}\t${b?.tag ?? ""}\t${b?.commit ?? ""}\t${b?.digest ?? ""}\t${health}\n` : "";
     return `${serving}${h.previous ? `previous\t${h.previous.image}\n` : ""}`;
   };
   const ssh = async (host: string, remote: string): Promise<ExecResult> => {
@@ -1099,6 +1102,30 @@ describe("the live check: labels, served bytes against the manifest, the header 
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps)).toBe(1);
     expect(h.out.join("\n")).toContain(`FAILED at W11-live-check: the live check failed: the website-server's label robotmoney.web.bundle-sha256 is ${"f".repeat(64)}, not the bundle's`);
     expect(h.state.bundle).toBeUndefined();
+  });
+
+  test("healthProblem: the swapped container's inherited healthcheck must report healthy", () => {
+    expect(healthProblem("Up 3 minutes (healthy)")).toBeUndefined();
+    expect(healthProblem("Up 2 seconds (health: starting)")).toBe("starting");
+    expect(healthProblem("Up 1 minute (unhealthy)")).toContain("inherited healthcheck reports unhealthy");
+    expect(healthProblem("Up 1 minute")).toContain("runs with no healthcheck");
+  });
+
+  test("W11 waits while the healthcheck is starting, and an unhealthy one fails W11 and rolls back", async () => {
+    const f = fixture();
+    const waits = harness(f, { health: ["Up 1 second (health: starting)", "Up 1 second (health: starting)", "Up 8 seconds (healthy)"] });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), waits.deps), waits.out.join("\n")).toBe(0);
+    const g = fixture();
+    const sick = harness(g);
+    const exec = sick.deps.exec;
+    sick.deps.exec = (argv) => {
+      const r = exec(argv);
+      if (argv.includes(PROD.host) && argv.includes("--bundle")) sick.state.health = ["Up 1 minute (unhealthy)"];
+      return r;
+    };
+    expect(await runWebRelease(runbook, inputs(g, [g.m1, g.m2]), sick.deps)).toBe(1);
+    expect(sick.out.join("\n")).toContain("FAILED at W11-live-check: the live check failed: the website-server's inherited healthcheck reports unhealthy");
+    expect(sick.state.bundle).toBeUndefined();
   });
 
   test("a passing W11 compares every manifest file and the header table on every sitemap route", async () => {

@@ -10,8 +10,8 @@
 //
 //   W10  records the api container and /api/version, then sends the release's
 //        bundle with `bun smoke:web`'s image mode (deployArgv);
-//   W11  checks /version.json, the website-server's labels against the bundle,
-//        every manifest file through the origin by sha256, the platform's
+//   W11  checks /version.json, the website-server's labels against the bundle
+//        and its inherited healthcheck (healthy), every manifest file through the origin by sha256, the platform's
 //        header table on / and every sitemap route (the real Caddy answers),
 //        and the api unchanged.
 //

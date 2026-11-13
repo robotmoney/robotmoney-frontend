@@ -316,6 +316,8 @@ export interface HostWeb {
   readonly digest?: string;
   /** `robotmoney-website:<instance>-previous`'s image id, when the host holds one. */
   readonly previous?: string;
+  /** The container's `docker ps` status, with its healthcheck's state: `Up 3 minutes (healthy)`. */
+  readonly status?: string;
 }
 
 /**
@@ -437,7 +439,7 @@ export function hostWebCommand(t: WebTarget): string {
   const L = WEBSITE_IMAGE_LABELS;
   const ps = envCommand(t, [
     "docker", "ps", "--no-trunc", "--filter", `label=${INSTANCE_LABEL}=${t.instance}`, "--filter", `label=${SERVICE_LABEL}=${WEBSITE_SERVICE}`,
-    "--format", `{{.ID}}\t{{.Image}}\t{{.Label "${L.tag}"}}\t{{.Label "${L.commit}"}}\t{{.Label "${L.bundleSha256}"}}`,
+    "--format", `{{.ID}}\t{{.Image}}\t{{.Label "${L.tag}"}}\t{{.Label "${L.commit}"}}\t{{.Label "${L.bundleSha256}"}}\t{{.Status}}`,
   ]);
   const previous = envCommand(t, ["docker", "image", "inspect", "--format", "{{.Id}}", siteImageTag(t.instance, "previous")]);
   return `${tagged("serving", ps)} && { if p=$(${previous} 2>/dev/null); then printf 'previous\\t%s\\n' "$p"; fi; }`;
@@ -453,9 +455,9 @@ export function parseHostWeb(stdout: string): { web: HostWeb } | { error: string
     else if (key === "previous" && rest[0]) previous = rest[0];
   }
   if (serving.length > 1) return { error: `${serving.length} website-server containers run for the instance, not one` };
-  const [id, image, tag, commit, digest] = serving[0] ?? [];
+  const [id, image, tag, commit, digest, status] = serving[0] ?? [];
   const web: Record<string, string> = {};
-  for (const [k, v] of Object.entries({ container: id, image, tag, commit, digest, previous })) if (v) web[k] = v;
+  for (const [k, v] of Object.entries({ container: id, image, tag, commit, digest, previous, status })) if (v) web[k] = v;
   return { web: web as HostWeb };
 }
 
@@ -1305,7 +1307,11 @@ export async function runDeploy(rel: Release, inputs: Inputs, deps: Deps): Promi
 //      every page, Cache-Control on pages and assets) holds through the origin,
 //      unchanged by the web release;
 //   5. every sitemap route answers 200;
-//   6. the api and worker container ids and /api/version are unchanged.
+//   6. the api and worker container ids and /api/version are unchanged;
+//
+// and that the running website-server's healthcheck, which the swap's
+// container inherits from the one compose started (the overlay's run flags),
+// reports healthy (issue 1630, the 1628 follow-up): W06 proves it on stage.
 
 /** PURE. The URL a manifest path is served at: `index.html` at `/`, `<dir>/index.html` at `/<dir>` (the server's index fallback), any other file at its own path. */
 export function manifestUrlPath(path: string): string {
@@ -1341,6 +1347,29 @@ export function labelProblems(t: Pick<WebTarget, "host" | "instance">, web: Host
   if (web.commit !== rel.commit) out.push(`the website-server's label ${WEBSITE_IMAGE_LABELS.commit} is ${web.commit ?? "(absent)"}, not ${rel.commit}`);
   if (web.digest !== digest) out.push(`the website-server's label ${WEBSITE_IMAGE_LABELS.bundleSha256} is ${web.digest ?? "(absent)"}, not the bundle's ${digest}`);
   return out;
+}
+
+/** How long the live check waits for a swapped container's inherited healthcheck to leave `health: starting`. */
+export const HEALTH_WAIT_MS = 90_000;
+const HEALTH_POLL_MS = 5_000;
+
+/** PURE. Why a container's status is not a passing inherited healthcheck: none ran, or it is unhealthy. Undefined when healthy; "starting" while it has not decided. */
+export function healthProblem(status: string | undefined): string | "starting" | undefined {
+  if (status === undefined) return "the website-server's status could not be read";
+  if (/\(healthy\)/.test(status)) return undefined;
+  if (/health: starting/.test(status)) return "starting";
+  if (/\(unhealthy\)/.test(status)) return `the website-server's inherited healthcheck reports unhealthy (${status})`;
+  return `the website-server runs with no healthcheck (${status}): the swap must keep the one compose gave it`;
+}
+
+/** The website-server once its inherited healthcheck has decided, polling while it is starting. */
+async function settledHostWeb(t: WebTarget, deps: Deps): Promise<{ web: HostWeb } | { error: string }> {
+  const deadline = deps.clock() + HEALTH_WAIT_MS;
+  for (;;) {
+    const web = await readHostWeb(t, deps);
+    if ("error" in web || healthProblem(web.web.status) !== "starting" || deps.clock() >= deadline) return web;
+    await deps.sleep(HEALTH_POLL_MS);
+  }
 }
 
 /** Live check 3: every manifest file is served through the origin with its manifest sha256. Each URL carries a one-off query so no cache answers. */
@@ -1406,12 +1435,17 @@ export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Prom
   else if (!liveIs(live, rel)) out.push(`${t.publicOrigin}/version.json reports ${live.version}-${live.commit}, not ${rel.version}-${short(rel.commit)}`);
   // A dry run reads no label and hashes no file, even when the deploy's record exists (a rerun after a deploy).
   if (inputs.dryRun) return { problems: [...out, "a dry run does not compare the served files"], summary: "" };
-  // 2. The labels.
+  // 2. The labels, and the inherited healthcheck.
   const digest = bundleDigest(inputs, rel, deps);
-  const web = await readHostWeb(t, deps);
-  if (digest === undefined) out.push(`${bundlePathOf(inputs, rel)} has no signed digest`);
-  else if ("error" in web) out.push(web.error);
-  else out.push(...labelProblems(t, web.web, rel, digest));
+  const web = await settledHostWeb(t, deps);
+  if ("error" in web) out.push(web.error);
+  else {
+    if (digest === undefined) out.push(`${bundlePathOf(inputs, rel)} has no signed digest`);
+    else out.push(...labelProblems(t, web.web, rel, digest));
+    const health = healthProblem(web.web.status);
+    if (health === "starting") out.push(`the website-server's inherited healthcheck still reports starting after ${HEALTH_WAIT_MS / 1000} s (${web.web.status})`);
+    else if (health !== undefined) out.push(health);
+  }
   // 3. The served bytes against the manifest.
   const manifest = bundleManifest(inputs, rel, deps);
   let compared = 0;
@@ -1444,7 +1478,7 @@ export async function liveResult(rel: Release, inputs: Inputs, deps: Deps): Prom
     }
     if (now.apiVersion !== before.apiVersion) out.push(`/api/version changed: ${before.apiVersion} -> ${now.apiVersion}`);
   }
-  const summary = `${t.publicOrigin} serves ${rel.tag} from a website-server labelled sha256 ${digest}, ${compared} file(s) served as the manifest lists, ` +
+  const summary = `${t.publicOrigin} serves ${rel.tag} from a healthy website-server labelled sha256 ${digest}, ${compared} file(s) served as the manifest lists, ` +
     "the header table holds on / and every sitemap route (each 200), the api and workers are unchanged";
   return { problems: out, summary };
 }
