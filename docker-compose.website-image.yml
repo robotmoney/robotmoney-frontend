@@ -4,12 +4,15 @@
 # Dockerfile.bundle: the Caddy server image plus exactly one verified bundle)
 # instead of nginx with the instance's web/ directory mounted in.
 #
-# NOT APPLIED BY ANY BOOT YET. `bun smoke` and every CI stack still run nginx
-# from docker-compose.yml alone. `bun smoke:web --host` (issue 1628,
-# scripts/lib/website-release.ts) swaps a site image onto the public port with
-# `docker create`, reading its isolation flags from this file
-# (websiteImageRunFlags), and the platform boots that keep it are P9 (issue
-# 1632). Until a host's first swap, nginx keeps serving.
+# APPLIED BY A PLATFORM BOOT ONCE THE HOST SERVES A SITE IMAGE (issue 1632).
+# `bun smoke:web --host` (issue 1628, scripts/lib/website-release.ts) swaps a
+# site image onto the public port with `docker create`, reading its isolation
+# flags from this file (websiteImageRunFlags), and tags it
+# `robotmoney-website:<instance>-current`. From then on scripts/stack/stack.ts
+# appends this file with RM_WEBSITE_IMAGE set to that image's id: a running
+# website-server is kept as it is, and a stopped one is started from that
+# image. A host with no `-current` image (every CI stack, and every host
+# before its first swap) still runs nginx from docker-compose.yml alone.
 #
 # WHAT IT SETS, AND WHY EACH IS HERE RATHER THAN IN THE IMAGE. An image cannot
 # make its own root read-only, drop its own capabilities or refuse a volume, so

@@ -80,6 +80,11 @@ describe("the website-server images", () => {
     for (const b of bases) expect(b).toMatch(/@sha256:[0-9a-f]{64}$/);
   });
 
+  test("every package the server image installs is pinned to an exact version (issue 1632)", () => {
+    const adds = [...server.matchAll(/apk add\s+(?:--\S+\s+)*([^\\\n&]+)/g)].flatMap((m) => m[1]!.trim().split(/\s+/));
+    expect(adds).toEqual(["openssh-keygen=10.0_p1-r11"]);
+  });
+
   test("the website-server image is built FROM the server image only, in both stages", () => {
     expect(froms(bundle)).toEqual(["${SERVER_IMAGE}", "${SERVER_IMAGE}"]);
   });

@@ -39,6 +39,7 @@ import {
   OPTIONAL_SERVICES,
   servicesFor,
   upArgs,
+  WEBSITE_IMAGE_COMPOSE_FILE,
   WEBSITE_SERVER_CONTAINER_PORT,
   type StackConfig,
   type StackHostPorts,
@@ -52,6 +53,8 @@ import { parseComposePortOutput, PortDiscoveryError } from "./ports.ts";
 import { inspectArgs, missingImageRefs, parseImagesOverrideRefs, assertOverrideOutsideCheckout } from "./images.ts";
 import { ensureContractInstallFresh } from "../lib/contract-freshness.ts";
 import { placeSite, WEB_DIR_NAME } from "../lib/smoke-site.ts";
+import { assertServedRootUnchanged } from "../lib/website-image.ts";
+import { siteImageTag } from "../lib/website-release.ts";
 import { prepareThrowawayDatabase } from "./throwaway-database.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -219,6 +222,11 @@ export interface StackUpOptions {
    * Recreate: its image or configuration changed) refuses before replacing
    * anything. With no website-server running there is nothing to keep up, and
    * the boot starts the services as it always has.
+   *
+   * Once the host serves a site image (issue 1632: `-current` names one, see
+   * {@link Stack.websiteImage}), no boot recreates website-server, rolling or
+   * not: a running one is kept as it is, and a stopped or absent one is
+   * started from that image. The nginx.conf reload is for nginx alone.
    */
   rolling?: boolean;
 }
@@ -252,6 +260,14 @@ export function dryRunRecreates(output: string): boolean {
 
 export interface Stack {
   readonly config: StackConfig;
+  /**
+   * The site image website-server runs from (issue 1632,
+   * docs/technical/web-serving-architecture.md §4): the image id
+   * `robotmoney-website:<instance>-current` names on this host, read by up().
+   * Null before up(), and on a host that has never swapped a site image in:
+   * there nginx still serves the instance's web/ directory.
+   */
+  readonly websiteImage: string | null;
   readonly composeEnv: Record<string, string>;
   readonly spawnEnv: Record<string, string>;
   /**
@@ -356,7 +372,10 @@ export function createStack(
   const defaultIo: StackIo = opts.io ?? { stdout: "pipe", stderr: "pipe" };
   const emit = (e: StackEvent) => opts.hooks?.onEvent?.(e);
 
-  const composeEnv = buildComposeEnv(cfg);
+  // MUTABLE FOR ONE MORE REASON (issue 1632): up() appends the site image
+  // overlay and its RM_WEBSITE_IMAGE once it has read the host's `-current`
+  // image (resolveWebsiteImage). Reading it here would spawn on construction.
+  let composeEnv = buildComposeEnv(cfg);
   // MUTABLE FOR EXACTLY ONE REASON (AC-ID-03): `build()` resolves the tree's
   // commit/tag through `runtime.runSync` and folds them in as compose build
   // args, so the identity baked into an image is the identity of the source it
@@ -384,9 +403,10 @@ export function createStack(
   // is appended HERE rather than by each caller so that every consumer of this
   // module — smoke, evals, the rails check — gets the same topology from the
   // same field.
-  const composeFiles = composeFilesWithImagesOverride(cfg.composeFiles, cfg.imagesOverride);
+  let composeFiles = composeFilesWithImagesOverride(cfg.composeFiles, cfg.imagesOverride);
   const shippedImages = Boolean(cfg.imagesOverride);
-  const prefix = composeArgs(cfg.project, composeFiles);
+  let prefix = composeArgs(cfg.project, composeFiles);
+  let websiteImage: string | null = null;
 
   // NON-INTERACTIVE, ALWAYS. `docker compose` has questions it will ask on a
   // terminal — the volume-recreate confirmation most of all, which blocks
@@ -475,6 +495,38 @@ export function createStack(
     }
     step(["exec", "-T", "website-server", "nginx", "-s", "reload"], "the graceful nginx reload");
     emit({ phase: "log", message: "rolling: website-server reloaded its new nginx.conf gracefully" });
+  }
+
+  /**
+   * Issue 1632: once `bun smoke:web` has swapped a site image in, the host
+   * serves the image `robotmoney-website:<instance>-current` names, and every
+   * boot must keep serving it: never nginx with the checkout's site, never a
+   * fresh build with no bundle. Reads that image's id and, when there is one,
+   * appends docker-compose.website-image.yml (after the images override, so
+   * it wins for website-server) with RM_WEBSITE_IMAGE set to the id. A host
+   * with no such image still serves nginx, as before its first swap.
+   */
+  function resolveWebsiteImage(): void {
+    if (websiteImage !== null || !cfg.instance || !services.includes("website-server")) return;
+    const r = runtime.runSync(["docker", "image", "inspect", "--format", "{{.Id}}", siteImageTag(cfg.instance.name, "current")], { stdout: "pipe", stderr: "pipe" });
+    const id = r.exitCode === 0 ? r.stdout.trim() : "";
+    if (!/^sha256:[0-9a-f]{64}$/.test(id)) return;
+    websiteImage = id;
+    composeFiles = [...composeFiles, WEBSITE_IMAGE_COMPOSE_FILE];
+    prefix = composeArgs(cfg.project, composeFiles);
+    composeEnv = { ...composeEnv, RM_WEBSITE_IMAGE: id };
+    spawnEnv = { ...spawnEnv, RM_WEBSITE_IMAGE: id };
+    emit({ phase: "log", message: `website-server serves the site image ${id} (${siteImageTag(cfg.instance.name, "current")}); no boot rebuilds or replaces it` });
+  }
+
+  /** Issue 1632, R4: the running website-server's served root still equals its image. Throws with every changed path. */
+  function assertWebsiteServedRoot(id: string): void {
+    assertServedRootUnchanged((args) => {
+      const r = runtime.runSync(["docker", ...args], { stdout: "pipe", stderr: "pipe" });
+      if (r.exitCode !== 0) throw new Error(`docker ${args.join(" ")} failed: ${r.stderr.trim()}`);
+      return r.stdout;
+    }, id);
+    emit({ phase: "log", message: `website-server ${id.slice(0, 12)}: the served root equals its image` });
   }
 
   /** The ids of `service`'s running containers in this project; empty when none runs. */
@@ -567,7 +619,9 @@ export function createStack(
     emit({ phase: "build", status: "done", detail: `shipped images verified: ${refs.join(", ")}` });
   }
 
-  async function build(buildServices: string[] = defaultBuildServices): Promise<void> {
+  async function build(requested: string[] = defaultBuildServices): Promise<void> {
+    // A site image is built by `bun smoke:web` from a signed bundle, never by compose (issue 1632).
+    const buildServices = websiteImage === null ? requested : requested.filter((s) => s !== "website-server");
     if (shippedImages) {
       throw new Error(
         `this stack was given an images-override (${cfg.imagesOverride}), so it builds NOTHING here: its images ` +
@@ -733,6 +787,7 @@ export function createStack(
     // Both the static manifest (T26) and any build below report the identity of
     // THIS tree, and they must not be able to disagree about it.
     resolveIdentityOnce();
+    resolveWebsiteImage();
     const boundary = async (step: StackStep): Promise<void> => {
       if (upOpts.beforeStep) await upOpts.beforeStep(step);
     };
@@ -753,11 +808,17 @@ export function createStack(
       // module gets it, so an eval's website-server serves the same bytes a
       // smoke's does. Idempotent: an unchanged site is neither copied nor swapped.
       await boundary("site");
-      const site = placeSite(join(cfg.instance.stateDir, WEB_DIR_NAME), join(cfg.repoRoot, "_static"));
-      emit({
-        phase: "log",
-        message: `site ${site.siteId}: ${site.copied ? "placed" : "already placed"}${site.swapped ? `, now current (was ${site.previous ?? "none"})` : ", already current"}`,
-      });
+      if (websiteImage !== null) {
+        // The site is the image's. web/ is left exactly as it was: it is what a
+        // kept first-rollout nginx container serves if the host rolls back to it.
+        emit({ phase: "log", message: `site: not placed; website-server serves the site image ${websiteImage}` });
+      } else {
+        const site = placeSite(join(cfg.instance.stateDir, WEB_DIR_NAME), join(cfg.repoRoot, "_static"));
+        emit({
+          phase: "log",
+          message: `site ${site.siteId}: ${site.copied ? "placed" : "already placed"}${site.swapped ? `, now current (was ${site.previous ?? "none"})` : ", already current"}`,
+        });
+      }
     }
     await boundary("build");
     if (shippedImages) assertShippedImagesPresent();
@@ -814,11 +875,30 @@ export function createStack(
     if (unknownDeferred.length > 0) {
       throw new Error(`deferred services are not in the ${cfg.profile} profile: ${unknownDeferred.join(", ")}`);
     }
-    const rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
+    let rest = services.filter((s) => s !== "postgres" && !requestedDeferred.has(s));
     assertContainerTokenFiles(cfg);
     await boundary("services");
-    const keepWebsite = upOpts.rolling === true && services.includes("website-server") && runningServiceIds("website-server").length > 0;
-    if (keepWebsite) {
+    const websiteRunning = services.includes("website-server") ? runningServiceIds("website-server") : [];
+    // A host that serves a site image keeps a running website-server as it
+    // is, rolling or not (issue 1632). A server-image change goes through
+    // `bun smoke:web`'s swap and its checks, never through compose.
+    const keepImage = websiteImage !== null && websiteRunning.length > 0;
+    if (keepImage) {
+      const id = websiteRunning[0]!;
+      const image = runtime.runSync(["docker", "inspect", "--format", "{{.Image}}", id], { stdout: "pipe", stderr: "pipe" }).stdout.trim();
+      if (image !== websiteImage) {
+        throw new Error(
+          `website-server ${id.slice(0, 12)} runs ${image || "an unreadable image"}, but this host's current site image is ${websiteImage}. ` +
+            "A swap did not finish: run `bun smoke:web --rollback` or deploy the bundle again before booting; nothing was replaced.",
+        );
+      }
+      assertWebsiteServedRoot(id);
+      rest = rest.filter((s) => s !== "website-server");
+      emit({ phase: "log", message: `website-server ${id.slice(0, 12)} keeps serving ${websiteImage}` });
+    }
+    // The rolling replace: one service at a time, website-server never recreated.
+    const keepWebsite = upOpts.rolling === true && websiteRunning.length > 0;
+    if (keepWebsite && !keepImage) {
       // Refuse before the first replacement: a rolling release never takes the site down.
       const dry = compose([...upArgs(["website-server"], { noBuild: shippedImages }), "--no-deps", "--dry-run"], { stdout: "pipe", stderr: "pipe" });
       if (dry.exitCode !== 0) throw new Error(failureMessage("rolling: the website-server dry run failed", `${dry.stdout}${dry.stderr}`));
@@ -897,6 +977,12 @@ export function createStack(
     // Then website-server itself (issue #892) — the origin backendUrl actually
     // resolves to, and what every page-load/BACKEND_URL consumer needs up.
     await waitForHttp(`${hostBackendUrl(ports.webPort)}/health`, upOpts.healthTimeoutMs ?? 60_000);
+    // A website-server this boot started from the site image: its served root equals the image (R4).
+    if (websiteImage !== null && !keepImage) {
+      const id = runningServiceIds("website-server")[0];
+      if (id === undefined) throw new Error("website-server is not running after the boot started it from the site image");
+      assertWebsiteServedRoot(id);
+    }
     emit({ phase: "health", status: "done" });
 
     // Initialization runs LAST, after the API answers /health — never merely
@@ -950,7 +1036,13 @@ export function createStack(
 
   return {
     config: cfg,
-    composeEnv,
+    get websiteImage() {
+      return websiteImage;
+    },
+    get composeEnv() {
+      return composeEnv;
+    },
+    // A snapshot taken at construction, as before (stack-build-identity.test.ts pins it).
     spawnEnv,
     // A getter so `stack.backendUrl` stays a plain property read at every call
     // site while still reflecting a port that is only known after up().

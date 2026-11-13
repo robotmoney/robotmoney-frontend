@@ -31,6 +31,8 @@ import {
   BUILD_DIR_PREFIX,
   deployImage,
   deploySite,
+  FIRST_ROLLOUT_SUFFIX,
+  handoverScript,
   GAP_LIMIT_MS,
   hostLockName,
   IMAGE_JOURNAL_FILE,
@@ -433,17 +435,38 @@ const PUBLIC_PORT = 48787;
 const COPY_PORT = 40001;
 const OLD_RELEASE = { version: "0.1.0", commit: "aaaa111" };
 const IMAGE_INSTANCE = "stage_target";
+const KEPT_ID = "c".repeat(64);
+const NGINX_IMAGE = `sha256:${"5".repeat(64)}`;
+const KEPT_RELEASE = { version: "0.0.1", commit: "nginx01" };
 
 interface FakeHostState {
   api: string;
   /** Which container answers on the public port. */
-  serving: "old" | "new" | "none";
+  serving: "old" | "new" | "kept" | "none";
   newRelease: { version: string; commit: string };
   previousRelease: { version: string; commit: string; apiRange: string | null };
   hostVerifyFails: boolean;
   copyBroken: boolean;
   lockHeld: boolean;
   hasPrevious: boolean;
+  /** The old container runs nginx (no site image yet): the host's first swap. */
+  oldIsNginx: boolean;
+  /** A stopped first-rollout nginx container is kept (§4 first-rollout rule). */
+  keptNginx: boolean;
+  /** The new container fails to start. */
+  newStartFails: boolean;
+  /** These docker sub-commands (by their first two words, e.g. "rename"), fail. */
+  failing: string[];
+  /** The serving bundle's digest (labels of the old container), when it equals the deployed one. */
+  servingSha: string | null;
+  /** The server image's layers (a different first layer = a new server image). */
+  serverLayers: string[];
+  /** Nothing runs: every website-server is stopped. */
+  allStopped: boolean;
+  /** The image `-current` names, or null. */
+  currentTag: string | null;
+  /** The id the build gives the candidate. */
+  candidateImage: string;
 }
 
 interface FakeHost extends WebHost {
@@ -484,6 +507,20 @@ function oldInspect(): ContainerInspect {
   };
 }
 
+/** The kept first-rollout nginx container: stopped, no site labels, its own web/ mount. */
+function keptInspect(): ContainerInspect {
+  const o = oldInspect();
+  return {
+    ...o,
+    Id: KEPT_ID,
+    Name: `/rm_stage_target-website-server-1${FIRST_ROLLOUT_SUFFIX}`,
+    Image: NGINX_IMAGE,
+    State: { Running: false },
+    Config: { ...o.Config, Labels: Object.fromEntries(Object.entries(o.Config.Labels!).filter(([k]) => !k.startsWith("robotmoney.web."))) },
+    NetworkSettings: { ...o.NetworkSettings, Ports: {} },
+  };
+}
+
 const servers: { stop(force?: boolean): void }[] = [];
 afterEach(() => {
   for (const s of servers.splice(0)) s.stop(true);
@@ -499,6 +536,15 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
     copyBroken: false,
     lockHeld: false,
     hasPrevious: true,
+    oldIsNginx: false,
+    keptNginx: false,
+    newStartFails: false,
+    failing: [],
+    servingSha: null,
+    serverLayers: ["sha256:l1"],
+    allStopped: false,
+    currentTag: null,
+    candidateImage: NEW_IMAGE,
     ...over,
   };
   let copyRelease = state.newRelease;
@@ -510,7 +556,7 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
       const path = new URL(req.url).pathname;
       if (state.serving === "none") return new Response("down", { status: 502 });
       if (path === "/api/version") return json({ api: state.api, commit: "c0ffee0" });
-      if (path === "/version.json") return json(state.serving === "old" ? OLD_RELEASE : copyRelease, securityHeaders(false));
+      if (path === "/version.json") return json(state.serving === "old" ? OLD_RELEASE : state.serving === "kept" ? KEPT_RELEASE : copyRelease, securityHeaders(false));
       return new Response("<!doctype html>", { headers: securityHeaders(true) });
     },
   });
@@ -530,11 +576,11 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
   const no = (stderr: string) => ({ code: 1, stdout: "", stderr });
   const labelsOf = (ref: string) => {
-    if (ref === PREV_IMAGE || ref === siteImageTag(IMAGE_INSTANCE, "previous")) {
+    if (ref !== state.candidateImage && (ref === PREV_IMAGE || ref === siteImageTag(IMAGE_INSTANCE, "previous"))) {
       return { "robotmoney.web.tag": `web-v${state.previousRelease.version}`, "robotmoney.web.commit": state.previousRelease.commit, "robotmoney.web.bundle-sha256": "e".repeat(64) };
     }
     if (ref === OLD_IMAGE) return { "robotmoney.web.tag": "web-v0.1.0", "robotmoney.web.commit": OLD_RELEASE.commit };
-    if (ref === NEW_IMAGE || ref.endsWith("-candidate")) {
+    if (ref === state.candidateImage || ref === NEW_IMAGE || ref.endsWith("-candidate")) {
       return { "robotmoney.web.tag": `web-v${state.newRelease.version}`, "robotmoney.web.commit": state.newRelease.commit, "robotmoney.web.bundle-sha256": built.sha256 };
     }
     return {};
@@ -548,22 +594,38 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         if (a[1] === "inspect") return ok(new Date().toISOString());
         return ok();
       case "ps":
+        if (joined.includes(`name=${FIRST_ROLLOUT_SUFFIX}`)) return ok(state.keptNginx ? KEPT_ID : "");
+        if (state.allStopped) return a.includes("-aq") ? ok(OLD_ID) : ok("");
         return ok(OLD_ID);
-      case "inspect":
-        return ok(JSON.stringify([oldInspect()]));
+      case "inspect": {
+        if (a[1] === KEPT_ID) return ok(JSON.stringify([keptInspect()]));
+        const o = oldInspect();
+        if (state.oldIsNginx) {
+          o.Image = NGINX_IMAGE;
+          o.Config.Labels = Object.fromEntries(Object.entries(o.Config.Labels!).filter(([k]) => !k.startsWith("robotmoney.web.")));
+        }
+        if (state.servingSha !== null) o.Config.Labels!["robotmoney.web.bundle-sha256"] = state.servingSha;
+        return ok(JSON.stringify([o]));
+      }
       case "image": {
         const ref = a.at(-1)!;
         if (joined.includes("{{.Id}}")) {
           if (ref === siteImageTag(IMAGE_INSTANCE, "previous")) return state.hasPrevious ? ok(PREV_IMAGE) : no("No such image");
-          if (ref.endsWith("-candidate")) return ok(NEW_IMAGE);
+          if (ref.endsWith("-candidate")) return ok(state.candidateImage);
+          if (ref === siteImageTag(IMAGE_INSTANCE, "current")) return state.currentTag === null ? no("No such image") : ok(state.currentTag);
           if (ref === "robotmoney-website-server:platform") return ok(SERVER_ID);
           return no("No such image");
         }
-        if (joined.includes("RootFS")) return ok(JSON.stringify(ref === SERVER_ID ? ["sha256:l1"] : ["sha256:l1", "sha256:l2"]));
+        if (joined.includes("RootFS")) {
+          if (ref === SERVER_ID) return ok(JSON.stringify(state.serverLayers));
+          if (ref === state.candidateImage) return ok(JSON.stringify([...state.serverLayers, "sha256:l2"]));
+          return ok(JSON.stringify(["sha256:l1", "sha256:l2"]));
+        }
         return ok(JSON.stringify(labelsOf(ref)));
       }
       case "run":
         if (joined.includes("rm-verify-web-bundle")) return state.hostVerifyFails ? no("web bundle refused: no key in /etc/robotmoney/allowed-signers signed it") : ok("verified");
+        if (joined.includes("--volumes-from")) return ok(JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" }));
         if (joined.includes("--entrypoint cat")) return ok(JSON.stringify({ ...state.previousRelease }));
         // The throwaway copy serves the image it was started from.
         copyRelease = a.at(-1) === PREV_IMAGE ? state.previousRelease : state.newRelease;
@@ -579,7 +641,8 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         state.serving = "none";
         return ok();
       case "start":
-        state.serving = a[1] === NEW_ID ? "new" : "old";
+        if (a[1] === NEW_ID && state.newStartFails) return no("Error response from daemon: driver failed programming external connectivity");
+        state.serving = a[1] === NEW_ID ? "new" : a[1] === KEPT_ID ? "kept" : "old";
         return ok();
       case "exec":
         return no("cat: can't open: No such file");
@@ -589,6 +652,34 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         return ok();
     }
   };
+  const dockerOrFail = (a: string[]): HostResult => (state.failing.includes(a[0]!) ? no(`docker ${a[0]} failed by the test`) : docker(a));
+  // The one-command handover (handoverScript): each docker line is recorded as if sent alone, in order.
+  const words = (line: string) => line.split(" ").map((w) => w.replace(/^'|'$/g, ""));
+  const handover = (script: string): string => {
+    for (const line of script.split("\n")) {
+      const plain = /^docker (.*) >\/dev\/null 2>&1$/.exec(line);
+      if (plain) {
+        const a = words(plain[1]!);
+        commands.push(["docker", ...a]);
+        dockerOrFail(a);
+        continue;
+      }
+      const branch = /^if err=\$\(docker (start \S+) 2>&1 >\/dev\/null\); then echo started; else (?:docker (start \S+) >\/dev\/null 2>&1; )?/.exec(line);
+      if (branch) {
+        const a = words(branch[1]!);
+        commands.push(["docker", ...a]);
+        const r = dockerOrFail(a);
+        if (r.code === 0) return "started";
+        if (branch[2]) {
+          const f = words(branch[2]);
+          commands.push(["docker", ...f]);
+          dockerOrFail(f);
+        }
+        return `failed: ${r.stderr}`;
+      }
+    }
+    throw new Error(`the fake host cannot read the handover script:\n${script}`);
+  };
   return {
     name: "fake-host",
     commands,
@@ -597,8 +688,9 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
     async run(argv) {
       commands.push([...argv]);
       if (argv[0] === "mktemp") return ok("/host/work");
+      if (argv[0] === "sh" && argv[2]?.includes("echo started")) return ok(handover(argv[2]));
       if (argv[0] !== "docker") return ok();
-      return docker(argv.slice(1));
+      return dockerOrFail(argv.slice(1));
     },
     async openPort(port) {
       if (port === PUBLIC_PORT) return { origin: `http://127.0.0.1:${publicServer.port}`, close() {} };
@@ -704,12 +796,15 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
       at(new RegExp(`^docker build .*--build-arg SERVER_IMAGE=${SERVER_PIN_REPO}:${"4".repeat(64)} `)),
       at(/^docker run -d --rm --name robotmoney-web-check-stage_target-\S+ .*-p 127\.0\.0\.1::8080 /),
       at(/^docker create --name rm_stage_target-website-server-1-next-/),
+      // The stop and the start are one host command (handoverScript), recorded line by line.
+      at(/^sh -c trap '' HUP PIPE\n/),
       at(new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
       at(new RegExp(`^docker start ${NEW_ID}$`)),
-      at(new RegExp(`^docker rm ${OLD_ID}$`)),
+      at(new RegExp(`^docker rename ${OLD_ID} rm_stage_target-website-server-1-old-[0-9a-f]{6}$`)),
       at(new RegExp(`^docker rename ${NEW_ID} rm_stage_target-website-server-1$`)),
       at(new RegExp(`^docker tag ${NEW_IMAGE} robotmoney-website:stage_target-current$`)),
       at(new RegExp(`^docker tag ${OLD_IMAGE} robotmoney-website:stage_target-previous$`)),
+      at(new RegExp(`^docker rm ${OLD_ID}$`)),
       at(/^docker network rm robotmoney-web-lock-stage_target$/),
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -835,7 +930,219 @@ describe("image mode: rollback (smoke:web --host --rollback)", () => {
   });
 });
 
+describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)", () => {
+  const KEPT_NAME = `rm_stage_target-website-server-1${FIRST_ROLLOUT_SUFFIX}`;
+
+  test("a first swap from nginx keeps the stopped nginx container as the rollback target, and tags no previous image", async () => {
+    const host = fakeHost({ oldIsNginx: true, hasPrevious: false });
+    const { receipt, error } = await deployFake(host);
+    expect(error).toBeNull();
+    expect(receipt).toMatchObject({ outcome: "swapped", oldContainer: { id: OLD_ID, image: NGINX_IMAGE }, currentImage: NEW_IMAGE, previousImage: null });
+    const lines = host.lines();
+    expect(lines).toContain(`docker rename ${OLD_ID} ${KEPT_NAME}`);
+    expect(lines).not.toContain(`docker rm ${OLD_ID}`);
+    expect(lines).toContain("docker rmi robotmoney-website:stage_target-previous");
+    expect(lines.filter((l) => l.startsWith("docker tag ") && l.endsWith("-previous"))).toEqual([]);
+    // The kept container is not a site image, so no image is pruned for it.
+    expect(lines).not.toContain(`docker rmi -f ${NGINX_IMAGE}`);
+  });
+
+  test("a forced failure on the first swap returns to the running nginx container, and writes no maintenance file into it", async () => {
+    const wrong = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ version: "9.9.9", commit: "deadbee" }) });
+    servers.push(wrong);
+    const host = fakeHost({ oldIsNginx: true, hasPrevious: false });
+    const { receipt, error } = await deployFake(host, "^0.2.0", { publicOrigin: `http://127.0.0.1:${wrong.port}` });
+    expect(error?.message).toMatch(/The swap to web-v0\.2\.0 failed: .*The previous website-server was started again\./);
+    expect(receipt.outcome).toBe("reverted");
+    expect(receipt.checks.find((c) => c.name === "revert")).toMatchObject({ ok: true });
+    expect(host.state.serving).toBe("old");
+    const lines = host.lines();
+    // The revert is one host command: remove the new container, give the old one its name back, start it.
+    const revert = lines.findLastIndex((l) => l.startsWith("sh -c trap "));
+    expect(lines.slice(revert + 1, revert + 4)).toEqual([`docker rm -f ${NEW_ID}`, `docker rename ${OLD_ID} rm_stage_target-website-server-1`, `docker start ${OLD_ID}`]);
+    expect(lines.some((l) => l.startsWith("docker exec -i"))).toBe(false);
+    expect(lines).not.toContain(`docker rename ${OLD_ID} ${KEPT_NAME}`);
+  }, 20_000);
+
+  test("--rollback after the first swap starts the kept nginx container again, and the site image becomes the one previous image", async () => {
+    const host = fakeHost({ hasPrevious: false, keptNginx: true, currentTag: OLD_IMAGE });
+    const deps = imageDeps(host);
+    const receipt = await rollbackImage(deps);
+    expect(receipt).toMatchObject({
+      action: "rollback",
+      outcome: "swapped",
+      release: { tag: `web-v${KEPT_RELEASE.version}`, ...KEPT_RELEASE, apiRange: "^0.2.0" },
+      oldContainer: { id: OLD_ID, image: OLD_IMAGE },
+      newContainer: { id: KEPT_ID, image: NGINX_IMAGE },
+      currentImage: NGINX_IMAGE,
+      previousImage: OLD_IMAGE,
+    });
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["api-range", true], ["gap", true], ["public", true]]);
+    expect(host.state.serving).toBe("kept");
+    const lines = host.lines();
+    expect(lines.some((l) => l.includes(`--volumes-from ${KEPT_ID}`))).toBe(true);
+    const order = [
+      index(lines, new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
+      index(lines, new RegExp(`^docker start ${KEPT_ID}$`)),
+      index(lines, new RegExp(`^docker rename ${KEPT_ID} rm_stage_target-website-server-1$`)),
+      index(lines, new RegExp(`^docker tag ${OLD_IMAGE} robotmoney-website:stage_target-previous$`)),
+      index(lines, /^docker rmi robotmoney-website:stage_target-current$/),
+      index(lines, new RegExp(`^docker rm ${OLD_ID}$`)),
+    ];
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // No throwaway copy, no build: the kept container starts as it was.
+    expect(lines.filter((l) => /^docker (build|run -d|create)\b/.test(l))).toEqual([]);
+  });
+
+  test("a swap from one site image to another ends the first rollout: the kept nginx container is removed", async () => {
+    const host = fakeHost({ keptNginx: true });
+    const { error } = await deployFake(host);
+    expect(error).toBeNull();
+    expect(host.lines()).toContain(`docker rm -f ${KEPT_ID}`);
+  });
+
+  test("no previous image and no first-rollout container: --rollback refuses", async () => {
+    const host = fakeHost({ hasPrevious: false, keptNginx: false });
+    await expect(rollbackImage(imageDeps(host))).rejects.toThrow(/holds no previous image for stage_target .* and no first-rollout container/);
+  });
+
+  test("a new container that does not start: the same host command starts the old one again, and the run reverts", async () => {
+    const host = fakeHost({ newStartFails: true });
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/the new website-server did not start: Error response from daemon/);
+    expect(receipt.outcome).toBe("reverted");
+    expect(host.state.serving).toBe("old");
+    const lines = host.lines();
+    const first = index(lines, /^sh -c trap /);
+    expect(lines.slice(first + 1, first + 4)).toEqual([`docker stop -t 10 ${OLD_ID}`, `docker start ${NEW_ID}`, `docker start ${OLD_ID}`]);
+  });
+
+  test("a throw in step 7 reverts: the old container gets its name back and serves, and the tags are restored", async () => {
+    const host = fakeHost({ currentTag: OLD_IMAGE });
+    const realRun = host.run.bind(host);
+    let renames = 0;
+    host.run = async (argv, stdin) => {
+      // The second rename (the new container taking the old name) fails.
+      if (argv[0] === "docker" && argv[1] === "rename" && ++renames === 2) {
+        host.commands.push([...argv]);
+        return { code: 1, stdout: "", stderr: "Error response from daemon: name in use" };
+      }
+      return realRun(argv, stdin);
+    };
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/The swap to web-v0\.2\.0 failed: naming the new website-server failed .*name in use.*The previous website-server was started again\./);
+    expect(receipt.outcome).toBe("reverted");
+    expect(receipt.checks.find((c) => c.name === "public")).toMatchObject({ ok: true });
+    expect(receipt.checks.find((c) => c.name === "revert")).toMatchObject({ ok: true });
+    expect(host.state.serving).toBe("old");
+    const lines = host.lines();
+    expect(lines).not.toContain(`docker rm ${OLD_ID}`);
+    expect(lines).toContain(`docker rename ${OLD_ID} rm_stage_target-website-server-1`);
+    // Step 7 never reached the tags, so none is touched.
+    expect(lines.filter((l) => l.startsWith("docker tag ") && l.includes("robotmoney-website:"))).toEqual([]);
+  });
+
+  test("a throw after the tags moved restores -current and -previous to what they named before the swap", async () => {
+    const host = fakeHost({ currentTag: OLD_IMAGE });
+    const realRun = host.run.bind(host);
+    host.run = async (argv, stdin) => {
+      if (argv[0] === "docker" && argv[1] === "rm" && argv[2] === OLD_ID) {
+        host.commands.push([...argv]);
+        return { code: 1, stdout: "", stderr: "Error response from daemon: removal in progress" };
+      }
+      return realRun(argv, stdin);
+    };
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/removing the old website-server failed/);
+    expect(receipt.outcome).toBe("reverted");
+    const lines = host.lines();
+    const moved = index(lines, new RegExp(`^docker tag ${NEW_IMAGE} robotmoney-website:stage_target-current$`));
+    expect(moved).toBeGreaterThan(0);
+    expect(lines.slice(moved)).toContain(`docker tag ${OLD_IMAGE} robotmoney-website:stage_target-current`);
+    expect(lines.slice(moved)).toContain(`docker tag ${PREV_IMAGE} robotmoney-website:stage_target-previous`);
+    expect(receipt).toMatchObject({ currentImage: OLD_IMAGE, previousImage: PREV_IMAGE });
+  });
+
+  test("a failed deploy never removes an image the host keeps: a candidate equal to -previous stays", async () => {
+    const host = fakeHost({ candidateImage: PREV_IMAGE });
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/throwaway copy .* failed its check/);
+    expect(receipt.outcome).toBe("refused");
+    expect(host.lines()).not.toContain(`docker rmi -f ${PREV_IMAGE}`);
+  });
+
+  test("a maintenance file that cannot be carried is recorded and never fails the swap", async () => {
+    const host = fakeHost({ failing: ["exec"] });
+    const { receipt, error } = await deployFake(host);
+    expect(error).toBeNull();
+    expect(receipt.outcome).toBe("swapped");
+  });
+
+  test("--rollback with nothing running starts the stopped container -current names", async () => {
+    const host = fakeHost({ allStopped: true, serving: "none", currentTag: OLD_IMAGE });
+    const deps = imageDeps(host);
+    const receipt = await rollbackImage(deps);
+    expect(receipt).toMatchObject({ action: "rollback", outcome: "swapped", oldContainer: { id: OLD_ID }, newContainer: { id: OLD_ID }, currentImage: OLD_IMAGE });
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["restart", true]]);
+    expect(host.state.serving).toBe("old");
+    expect(host.lines().filter((l) => /^docker (stop|create|build)\b/.test(l))).toEqual([]);
+  });
+});
+
+describe("image mode: a server-image change rebuilds the serving bundle through the swap (§5.3, issue 1632)", () => {
+  test("the same bundle on the same server image is unchanged: nothing is built", async () => {
+    const host = fakeHost();
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    host.state.servingSha = b.sha256;
+    const deps = imageDeps(host, { allowedSigners: b.allowedSigners });
+    const receipt = await deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform" }, deps);
+    expect(receipt.outcome).toBe("unchanged");
+    expect(host.lines().filter((l) => /^docker (build|create|stop)\b/.test(l))).toEqual([]);
+  });
+
+  test("the same bundle on a new server image is rebuilt FROM it with the serving digest, checked on a copy and swapped in", async () => {
+    const host = fakeHost({ serverLayers: ["sha256:l9"] });
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    host.state.servingSha = b.sha256;
+    const deps = imageDeps(host, { allowedSigners: b.allowedSigners });
+    const receipt = await deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform" }, deps);
+    expect(receipt.outcome).toBe("swapped");
+    expect(receipt.release?.sha256).toBe(b.sha256);
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
+      ["verify-local", true],
+      ["api-range", true],
+      ["verify-host", true],
+      ["build", true],
+      ["copy", true],
+      ["gap", true],
+      ["public", true],
+    ]);
+    const build = host.lines().find((l) => l.startsWith("docker build "))!;
+    expect(build).toContain(`BUNDLE_SHA256=${b.sha256}`);
+    expect(build).toContain(`SERVER_IMAGE=${SERVER_PIN_REPO}:${"4".repeat(64)}`);
+  });
+});
+
 describe("image mode: pure parts", () => {
+  test("the handover script runs in a real shell: stop, start, and the fallback start when the start fails", () => {
+    const bin = mkdtempSync(join(tmpdir(), "rm-handover-"));
+    roots.push(bin);
+    const log = join(bin, "log");
+    // A stand-in docker: records its argv, and `start bad` fails.
+    writeFileSync(join(bin, "docker"), `#!/bin/sh\necho "$*" >> ${log}\n[ "$1 $2" = "start bad" ] && { echo "no such container: bad" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 });
+    const run = (script: string) => {
+      writeFileSync(log, "");
+      const r = Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${bin}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" });
+      return { out: r.stdout.toString().trim(), calls: readFileSync(log, "utf8").trim().split("\n") };
+    };
+    expect(run(handoverScript([["stop", "-t", "10", "old"]], "new", "old"))).toEqual({ out: "started", calls: ["stop -t 10 old", "start new"] });
+    expect(run(handoverScript([["stop", "-t", "10", "old"]], "bad", "old"))).toEqual({ out: "failed: no such container: bad", calls: ["stop -t 10 old", "start bad", "start old"] });
+    expect(run(handoverScript([], "bad", null))).toEqual({ out: "failed: no such container: bad", calls: ["start bad"] });
+    // The body ignores SIGHUP and SIGPIPE, so a dropped link cannot stop it halfway.
+    expect(handoverScript([], "x", null).split("\n").filter((l) => l === "trap '' HUP PIPE")).toHaveLength(2);
+  });
+
   test("the replacement keeps the old container's port, networks, aliases, labels, restart, log and health, with the overlay's flags", () => {
     const flags = websiteImageRunFlags(readWebsiteImageService(repoRoot));
     const { create, connect } = replacementCreateArgs(oldInspect(), "next", NEW_IMAGE, flags);
