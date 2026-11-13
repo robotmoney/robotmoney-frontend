@@ -157,3 +157,42 @@ async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise
         extras = EXCLUDED.extras
       WHERE regime_snapshots.date >= (clock_timestamp() AT TIME ZONE 'UTC')::date`;
 }
+
+// ── The provider's submission door (issue 1182, folded-in issue 999) ─────────
+// POST /api/swarm/regime writes regime_snapshots with no run behind it. A row
+// it wrote for a day a frozen run already published would put numbers in the
+// brief (publishBrief reads the newest row) that the report it binds to does
+// not contain. Every run's frozen regime artifact publishes its whole history
+// up to its as-of day, so every day up to the newest such run's as-of day is
+// owned by a frozen run, and the door refuses it.
+const OWNED_THROUGH_PROBE = {
+  statement: `SELECT max(r.asof)::text AS asof FROM analytics_output_snapshots aos
+       JOIN analytics_ledger_runs r ON r.id = aos.run_id
+      WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0`,
+} as const;
+const ownedThroughOutputs = registerQuery({
+  role: "rm_app",
+  object: "analytics_output_snapshots",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/regime-store:frozenRegimeOwnedThrough.outputs",
+  purpose: "Find the newest day a frozen run's regime artifact publishes, so the provider door never rewrites it.",
+  callers: ["src/api/routes/swarm"],
+  probe: OWNED_THROUGH_PROBE,
+});
+const ownedThroughRuns = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/regime-store:frozenRegimeOwnedThrough.runs",
+  purpose: "Read the as-of day of the runs that froze a regime artifact.",
+  callers: ["src/api/routes/swarm"],
+  probe: OWNED_THROUGH_PROBE,
+});
+
+/** The newest day a frozen run's regime artifact publishes (YYYY-MM-DD), or null when no run froze one. */
+export async function frozenRegimeOwnedThrough(db: DbHandle = sql): Promise<string | null> {
+  const [row] = await on(db, ownedThroughOutputs, ownedThroughRuns)<{ asof: string | null }>`SELECT max(r.asof)::text AS asof FROM analytics_output_snapshots aos
+       JOIN analytics_ledger_runs r ON r.id = aos.run_id
+      WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0`;
+  return row?.asof ?? null;
+}
