@@ -140,6 +140,12 @@ export const DEFAULT_COMPOSE_FILES = ["docker-compose.yml"];
 // `ports: !override` rather than a plain `ports:`.
 export const STAGE_COMPOSE_FILE = "docker-compose.stage.yml";
 
+// The overlay that runs website-server from its immutable image (issue 1627):
+// read-only, non-root, no capability, no volume. No boot appends it yet: the
+// swap that starts that image is P5 (issue 1628), and nginx keeps serving from
+// docker-compose.yml alone until then. scripts/lib/website-image.ts reads it.
+export const WEBSITE_IMAGE_COMPOSE_FILE = "docker-compose.website-image.yml";
+
 // ── Container-internal ports ────────────────────────────────────────────────
 // The CONTAINER side of each publish — fixed literals, not knobs (each
 // container has its own network namespace, so nothing can contend for a port

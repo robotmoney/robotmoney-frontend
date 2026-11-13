@@ -96,6 +96,14 @@ machine holds both the signing key and the deploy access, so it is the root of t
 - The served root of a running container never differs from its image (R4).
 - The container listens on port 8080 and holds the published origin port.
 
+The server image is built from `website-server/Dockerfile.caddy`. It holds Caddy, the Caddyfile, the
+allowed-signers file and the bundle verifier `website-server/verify-bundle.sh`. The `website-server` image is
+built from `website-server/Dockerfile.bundle`. Its build stage runs that verifier against the server image's
+allowed-signers file before any bundle file reaches the final image. The run flags are in
+`docker-compose.website-image.yml`. The labels are `robotmoney.web.tag`, `robotmoney.web.commit`,
+`robotmoney.web.bundle-sha256` and `robotmoney.web.server-commit`. The served root is `/srv/web/current`. The
+maintenance file is read from `/srv/maintenance`, an in-memory mount outside the served root.
+
 ### 3.3 The server
 
 The server is Caddy 2.10.2, with its admin API and automatic HTTPS turned off. The web serving P2 spike (issue

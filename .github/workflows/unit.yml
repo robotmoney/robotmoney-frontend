@@ -165,6 +165,11 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/web-bundle.test.ts:14
+      - name: Immutable website-server config and log class tests ran (issue 1627)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/smoke-compose-config.test.ts:12
+          scripts/tests/unit/gate-log-inventory.test.ts:19
       - name: Breaking cutover tests ran (issue 1501)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml

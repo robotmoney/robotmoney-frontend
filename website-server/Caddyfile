@@ -1,8 +1,10 @@
 # Caddy spike (issue 1625, docs/technical/web-serving-architecture.md §3.3).
 # The same duties as nginx.conf beside it, graded by the same route and header
 # table (scripts/tests/support/website-routes-table.ts). The site is read from
-# /srv/web/current and the maintenance file from /srv/web, as nginx reads them
-# today; how the bundle reaches the image is P3/P4, not this spike.
+# /srv/web/current, which the website-server image bakes in from one verified
+# bundle (Dockerfile.bundle, issue 1627). The maintenance file is read from
+# /srv/maintenance, an in-memory mount outside the served root: the image is
+# read-only, and a maintenance window is announced while the container runs.
 {
 	# No admin API, no automatic HTTPS: TLS ends at the Cloudflare edge, and
 	# nothing changes this server's config after it starts.
@@ -31,6 +33,12 @@
 
 http://:8080 {
 	root * /srv/web/current
+	# The access log, one JSON line per request on stderr, which the release
+	# gate's log verdict classifies (scripts/lib/gate/log-classifications.json,
+	# issue 1627). Caddy redacts the Cookie and Authorization headers itself.
+	log {
+		format json
+	}
 	# Deferred, so the server's value replaces any the api sent rather than
 	# adding a second one.
 	header {
@@ -82,12 +90,12 @@ http://:8080 {
 			path /api/status/maintenance
 			expression `{err.status_code} in [502, 503, 504]`
 			file {
-				root /srv/web
+				root /srv/maintenance
 				try_files /maintenance.json
 			}
 		}
 		handle @status_file {
-			root * /srv/web
+			root * /srv/maintenance
 			rewrite * /maintenance.json
 			header Cache-Control "no-store"
 			file_server {

@@ -26,7 +26,7 @@ import { resolveSmokeEnv } from "../../smoke.ts";
 import { COMMITTED_REGIME_CRON, COMMITTED_RESEARCH_CRON, resolveSmokeCadence } from "../../lib/smoke-cadence.ts";
 import { scenarioPlan } from "../../lib/smoke-mode.ts";
 import { instancePaths } from "../../lib/smoke-state.ts";
-import { SERVICE_BUILD_CONTEXTS } from "../../stack/config.ts";
+import { SERVICE_BUILD_CONTEXTS, WEBSITE_IMAGE_COMPOSE_FILE } from "../../stack/config.ts";
 import { randomBytes } from "node:crypto";
 import { planParticipants, type CredentialFile } from "../../lib/swarm/credential-file.ts";
 import { applyParticipantPlan, listRunningParticipants, type DockerRun } from "../../lib/participant-compose.ts";
@@ -48,6 +48,12 @@ interface ComposeConfig {
     environment?: Record<string, string | null>;
     secrets?: Array<{ source: string; target: string }>;
     volumes?: Array<{ source?: string; target?: string; read_only?: boolean }>;
+    image?: string;
+    read_only?: boolean;
+    user?: string;
+    cap_drop?: string[];
+    security_opt?: string[];
+    tmpfs?: string[];
     logging?: { driver?: string; options?: Record<string, string> };
     healthcheck?: { test?: string[]; interval?: string; timeout?: string; retries?: number; start_period?: string; disable?: boolean };
     deploy?: { replicas?: number };
@@ -86,6 +92,8 @@ function baseEnv(): Record<string, string> {
       // The checkout-.env settings delivered by shell export (issue #1113).
       "PROJECTS_SOURCE", "WEBAUTHN_ORIGIN", "WEBAUTHN_RP_ID", "BASE_RPC_MAX_CALLS_PER_SEC", "BASE_RPC_RATE_BURST",
       "WALLET_BACKFILL_MAX_DAYS_PER_RUN", "WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY", "GECKO_OHLCV_MIN_INTERVAL_MS",
+      // The immutable website-server image (issue 1627), set per render below.
+      "RM_WEBSITE_IMAGE",
     ].includes(k)) continue;
     env[k] = v;
   }
@@ -114,6 +122,10 @@ const BASE_COMPOSE_FILES = ["docker-compose.yml"] as const;
 // asked for "the smoke composition" asks for the base file.
 const DEMO_COMPOSE_FILES = BASE_COMPOSE_FILES;
 const STAGE_COMPOSE_FILES = [...DEMO_COMPOSE_FILES, "docker-compose.stage.yml"] as const;
+// The immutable website-server overlay (issue 1627). No boot appends it yet
+// (P5 does), so it is not one of the compositions iterated below.
+const WEBSITE_IMAGE_COMPOSE_FILES = [...BASE_COMPOSE_FILES, WEBSITE_IMAGE_COMPOSE_FILE] as const;
+const WEBSITE_IMAGE_KNOBS = { RM_WEBSITE_IMAGE: "rm-website-server:compose-config-test" };
 // The three compositions this repo actually boots, in the order the describes
 // below iterate them.
 const ALL_COMPOSITIONS: ReadonlyArray<readonly string[]> = [
@@ -286,6 +298,8 @@ const PREWARM: readonly RenderArgs[] = [
   { knobs: { RM_ALLOW_HANDLE_NAMESPACE_VIOLATION: "1" }, files: DEMO_COMPOSE_FILES },
   // Issue #973: a shell that still exports the retired RM_ALLOW_INSECURE delivers it to no service.
   { knobs: { RM_ALLOW_INSECURE: "1" }, files: DEMO_COMPOSE_FILES },
+  // Issue 1627: website-server from its immutable image.
+  { knobs: WEBSITE_IMAGE_KNOBS, files: WEBSITE_IMAGE_COMPOSE_FILES },
 ];
 
 // The whole file's Docker cost, paid once, outside any case's budget.
@@ -1516,6 +1530,32 @@ describe("participant services: N agents and M judges render exactly N+M, each h
       if (images.length > 0) docker(["rmi", "-f", ...images]);
     }
   }, 900_000);
+});
+
+// Issue 1627 (docs/technical/web-serving-architecture.md §3.2): the REAL
+// `docker compose config` of the base file plus the immutable-image overlay
+// runs website-server read-only, non-root, with every capability dropped, no
+// privilege escalation and no volume, from an image and never a build.
+describe("website-server from its immutable image (issue 1627)", () => {
+  test("docker compose config shows read_only, cap_drop ALL, no-new-privileges, a non-root user and no volume", () => {
+    const svc = composeConfig(WEBSITE_IMAGE_KNOBS, WEBSITE_IMAGE_COMPOSE_FILES).services["website-server"]!;
+    expect(svc.read_only).toBe(true);
+    expect(svc.cap_drop).toEqual(["ALL"]);
+    expect(svc.security_opt).toContain("no-new-privileges:true");
+    expect(svc.user).toBe("65534:65534");
+    expect(svc.volumes ?? []).toEqual([]);
+    expect(svc.build).toBeUndefined();
+    expect(svc.image).toBe(WEBSITE_IMAGE_KNOBS.RM_WEBSITE_IMAGE);
+    // The scratch paths are in memory and none is under the served root.
+    expect(svc.tmpfs).toEqual(["/config:uid=65534,gid=65534", "/data:uid=65534,gid=65534", "/srv/maintenance:uid=65534,gid=65534"]);
+  });
+
+  test("without the overlay, website-server is still nginx with the web/ mount: nginx serves until the swap (P5)", () => {
+    const svc = composeConfig({}, BASE_COMPOSE_FILES).services["website-server"]!;
+    expect(svc.build?.dockerfile).toBe("Dockerfile");
+    expect((svc.volumes ?? []).map((v) => v.target)).toEqual(["/srv/web"]);
+    expect(svc.read_only).toBeUndefined();
+  });
 });
 
 // Issue #809's regression guard. Every case above reads its compose

@@ -1,0 +1,49 @@
+# THE IMMUTABLE website-server (issue 1627, docs/technical/web-serving-
+# architecture.md §3.2). Appended to docker-compose.yml, this overlay runs
+# `website-server` from a built website-server image (website-server/
+# Dockerfile.bundle: the Caddy server image plus exactly one verified bundle)
+# instead of nginx with the instance's web/ directory mounted in.
+#
+# NOT APPLIED BY ANY BOOT YET. `bun smoke` and every CI stack still run nginx
+# from docker-compose.yml alone. The swap that starts this container on the
+# public port is P5 (issue 1628), and the platform boots that keep it are P9
+# (issue 1632). Until then nginx keeps serving.
+#
+# WHAT IT SETS, AND WHY EACH IS HERE RATHER THAN IN THE IMAGE. An image cannot
+# make its own root read-only, drop its own capabilities or refuse a volume, so
+# every one of those is a run flag:
+#
+#   - `image:` names the built image. `build:` is reset: a website-server image
+#     is built only from a signed bundle, never by `compose build` from a bare
+#     context.
+#   - `volumes: !reset []` drops the base file's web/ bind mount. The container
+#     has no volume: the served root is in the image (R3, R4).
+#   - `read_only: true`. The root filesystem cannot change after start.
+#   - `tmpfs:` gives Caddy its scratch paths (/config, /data) and the
+#     maintenance file's directory (/srv/maintenance), in memory and owned by
+#     the server's user. None is under the served root (/srv/web), so `docker
+#     diff` stays empty there.
+#   - `user`, `cap_drop: [ALL]` and `no-new-privileges`: a non-root server with
+#     no capability and no way to gain one. Port 8080 needs none.
+#
+# `!reset` replaces the base file's value outright instead of merging with it
+# (a plain `volumes:` would APPEND, keeping the bind mount). scripts/tests/unit/
+# smoke-compose-config.test.ts reads these values from this file, and
+# scripts/tests/integration/smoke-compose-config.test.ts asserts them from real
+# `docker compose config` output. scripts/tests/integration/website-server-
+# bundle-image.test.ts runs the image with exactly these flags.
+services:
+  website-server:
+    build: !reset null
+    image: ${RM_WEBSITE_IMAGE:?RM_WEBSITE_IMAGE is required; it names the website-server image built from a signed bundle}
+    volumes: !reset []
+    read_only: true
+    user: "65534:65534"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /config:uid=65534,gid=65534
+      - /data:uid=65534,gid=65534
+      - /srv/maintenance:uid=65534,gid=65534

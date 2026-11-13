@@ -1,0 +1,38 @@
+# The website-server image (issue 1627, docs/technical/web-serving-architecture.md
+# §3.2): the platform's server image (Dockerfile.caddy) plus exactly one
+# verified bundle. Nothing else is added, and nothing is copied in after start.
+#
+#   docker build -f website-server/Dockerfile.bundle \
+#     --build-context bundle=<dir holding the bundle, .sha256 and .sha256.sig> \
+#     --build-arg SERVER_IMAGE=<the host's server image tag> \
+#     --build-arg WEB_TAG=web-vA.B.C --build-arg WEB_COMMIT=<commit> \
+#     --build-arg BUNDLE_SHA256=<sha256> website-server
+#
+# SERVER_IMAGE is the platform's own server image, built on the host from
+# Dockerfile.caddy, whose registry base is pinned by digest. A local image has
+# no registry digest, so it is named by tag; one build resolves it once for
+# both stages. The verify stage runs the server image's own verifier against
+# the server image's own allowed-signers file. A bundle that fails it,
+# or whose name does not match the tag and commit below, fails the build, so
+# the labels always name the bytes the image serves.
+ARG SERVER_IMAGE
+
+FROM ${SERVER_IMAGE} AS verify
+ARG WEB_TAG
+ARG WEB_COMMIT
+ARG BUNDLE_SHA256
+USER 0:0
+COPY --from=bundle . /in/
+RUN rm-verify-web-bundle /in /out "$WEB_TAG" "$WEB_COMMIT" "$BUNDLE_SHA256"
+
+FROM ${SERVER_IMAGE}
+ARG WEB_TAG
+ARG WEB_COMMIT
+ARG BUNDLE_SHA256
+# The served root. Owned by root and read-only to the server's user.
+COPY --from=verify /out/ /srv/web/current/
+# The web tag, commit and bundle digest (§3.2). The platform commit label comes
+# from the server image.
+LABEL robotmoney.web.tag="${WEB_TAG}" \
+      robotmoney.web.commit="${WEB_COMMIT}" \
+      robotmoney.web.bundle-sha256="${BUNDLE_SHA256}"
