@@ -18,7 +18,7 @@ import { CURRENT_SITE_LINK, currentSite, placeSite, PREVIOUS_SITE_LINK, previous
 import { acquireDeploymentLock, instancePaths, resolveInstance, type InstancePaths } from "../../lib/smoke-state.ts";
 import { packBundle, signBundle } from "../../lib/web-bundle.ts";
 import { WEB_BUNDLE_SIGNATURE_NAMESPACE } from "../../lib/web-bundle-manifest.ts";
-import { shellQuote, sshArgv, sshHost, type HostResult, type WebHost } from "../../lib/website-host.ts";
+import { localHost, shellQuote, sshArgv, sshHost, type HostResult, type WebHost } from "../../lib/website-host.ts";
 import {
   readWebsiteImageService,
   WEBSITE_ASSET_CACHE,
@@ -1178,6 +1178,12 @@ describe("image mode: pure parts", () => {
     expect(() => sshHost("-oProxyCommand=x")).toThrow(/not an ssh destination/);
   });
 
+  test("a command missing on the local host is a failed command (exit 127), as over ssh, never a throw", async () => {
+    const r = await localHost().run(["rm-no-such-binary-1630", "ps"]);
+    expect(r.code).toBe(127);
+    expect(r.stderr).toContain("rm-no-such-binary-1630");
+  });
+
   test("names: tags, the lock, release names and instance names", () => {
     expect(siteImageTag("rm_prod", "previous")).toBe("robotmoney-website:rm_prod-previous");
     expect(hostLockName("rm_prod")).toBe("robotmoney-web-lock-rm_prod");
@@ -1194,5 +1200,21 @@ describe("image mode: pure parts", () => {
     const r = Bun.spawnSync(["bun", join(repoRoot, "scripts", "smoke-web.ts"), "--bundle", "web-v1.0.0"], { stdout: "pipe", stderr: "pipe" });
     expect(r.exitCode).toBe(1);
     expect(r.stderr.toString()).toContain("--bundle deploys a signed bundle image and needs --host");
+  });
+
+  test("an ssh host needs --origin, so the swap's public check never reads the loopback port (issue 1630); local may omit it", () => {
+    const entry = (args: string[]) => Bun.spawnSync(["bun", join(repoRoot, "scripts", "smoke-web.ts"), ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, RM_SMOKE_STATE_ROOT: "/nonexistent-1630" } });
+    for (const args of [
+      ["--host", "rm-frontend-prod-1", "--instance", "rm_prod", "--bundle", "web-v1.0.0", "--server-image", "robotmoney-website-server:rm_prod"],
+      ["--host", "rm-frontend-prod-1", "--instance", "rm_prod", "--rollback"],
+    ]) {
+      const r = entry(args);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr.toString()).toContain("Refusing: an ssh host needs --origin");
+    }
+    // `--bundle serving` on a host with no website-server for the instance refuses: it never guesses a bundle.
+    const serving = entry(["--host", "local", "--instance", "rm_no_such_instance_1630", "--bundle", "serving", "--server-image", "x"]);
+    expect(serving.exitCode).toBe(1);
+    expect(serving.stderr.toString()).toMatch(/Refusing: (local runs 0 website-server containers for rm_no_such_instance_1630, not one|listing rm_no_such_instance_1630's website-server on local failed)/);
   });
 });

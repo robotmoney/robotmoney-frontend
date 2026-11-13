@@ -153,11 +153,17 @@ steps:
     onlyFor: "stage"
   - id: "Q24-site"
     standing: ["SC.5"]
-    host: "target"
+    host: "control"
     phase: "qa"
-    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    description: "Site: bun smoke:web, from the control machine over ssh, keeps the bundle the instance serves (--bundle serving, by the web tag its labels name) and swaps it onto the platform's server image robotmoney-website-server:<instance>, checked through the public origin; a failed check puts the previous image back and exits non-zero (refuses a bundle whose apiRange excludes the api). While no signed bundle serves (a host's first rollout, issue 1632) it changes nothing (web-serving-architecture.md section 5.3, issue 1630)"
     cmds:
-      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+      - ["bun", "run", "smoke:web", "--host", "{host}", "--instance", "{instance}", "--bundle", "serving", "--server-image", "robotmoney-website-server:{instance}", "--origin", "{publicOrigin}"]
+    changedSince: "v0.7.5"
+    before:
+      host: "target"
+      description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+      cmds:
+        - ["bun", "run", "smoke:web", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -286,11 +292,17 @@ steps:
     onlyFor: "prod"
   - id: "C12-site"
     standing: ["SC.5"]
-    host: "target"
+    host: "control"
     phase: "cutover"
-    description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+    description: "Site: bun smoke:web, from the control machine over ssh, keeps the bundle the instance serves (--bundle serving, by the web tag its labels name) and swaps it onto the platform's server image robotmoney-website-server:<instance>, checked through the public origin; a failed check puts the previous image back and exits non-zero (refuses a bundle whose apiRange excludes the api). While no signed bundle serves (a host's first rollout, issue 1632) it changes nothing (web-serving-architecture.md section 5.3, issue 1630)"
     cmds:
-      - ["bun", "run", "smoke:web", "--instance", "{instance}"]
+      - ["bun", "run", "smoke:web", "--host", "{host}", "--instance", "{instance}", "--bundle", "serving", "--server-image", "robotmoney-website-server:{instance}", "--origin", "{publicOrigin}"]
+    changedSince: "v0.7.5"
+    before:
+      host: "target"
+      description: "Site: bun smoke:web switches web/current atomically and reloads nginx gracefully (refuses a site whose apiRange excludes the api)"
+      cmds:
+        - ["bun", "run", "smoke:web", "--instance", "{instance}"]
     expectExit: 0
     receipts: []
     irreversible: false

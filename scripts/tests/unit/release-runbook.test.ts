@@ -179,6 +179,35 @@ describe("the committed release runbooks", () => {
   }
 });
 
+// Issue 1630: the site step runs `bun smoke:web`'s image mode from the control machine, keeping the bundle the
+// instance serves and checking the swap through the public origin (web-serving-architecture.md §4, §5.3).
+describe("the site steps call the image-mode smoke:web (issue 1630)", () => {
+  const SITE = ["Q24-site", "C12-site"];
+  const WANT = ["bun", "run", "smoke:web", "--host", "{host}", "--instance", "{instance}", "--bundle", "serving", "--server-image", "robotmoney-website-server:{instance}", "--origin", "{publicOrigin}"];
+
+  test("kitchen-sink and web name the same command on the control machine, with --origin, never the directory mode", () => {
+    for (const t of [template, loadTemplate("web")]) {
+      for (const id of SITE) {
+        const step = t.steps.find((s) => s.id === id)!;
+        expect([t.name, id, step.host, step.cmds]).toEqual([t.name, id, "control", [WANT]]);
+        expect(step.changedSince).toBe("v0.7.5");
+        expect(step.before?.host).toBe("target");
+        expect(step.before?.cmds).toEqual([["bun", "run", "smoke:web", "--instance", "{instance}"]]);
+      }
+    }
+  });
+
+  test("renders against each target with the target's own ssh host, instance and origin", () => {
+    for (const name of ["prod", "stage"] as const) {
+      const target = loadTarget(join(import.meta.dir, "..", "..", "release", "targets", `${name}.json`));
+      const id = name === "prod" ? "C12-site" : "Q24-site";
+      const r = renderStep(template.steps.find((s) => s.id === id)!, target, templateValues(target, "a".repeat(40), "20261113T000000Z"));
+      expect(r.hostRole).toBe("control");
+      expect(r.remote).toContain(`bun run smoke:web --host ${target.host} --instance ${target.instance} --bundle serving --server-image robotmoney-website-server:${target.instance} --origin ${target.publicOrigin}`);
+    }
+  });
+});
+
 // ── the web template (owner, 2026-11-11: "The web release is a variation of the kitchen sink release") ──
 describe("the web template", () => {
   const web = loadTemplate("web");
@@ -493,9 +522,9 @@ describe("a step's after list", () => {
     }
   });
 
-  test("add-only under changedSince (issue 1501): a release before v0.7.5 keeps the smoke-down steps as it ran, a later one carries the change", () => {
+  test("add-only under changedSince (issues 1501, 1630): a release before v0.7.5 keeps the smoke-down and site steps as it ran, a later one carries the change", () => {
     const changed = template.steps.filter((s) => s.changedSince !== undefined).map((s) => s.id);
-    expect(changed).toEqual(["Q18b-smoke-down", "C05b-smoke-down"]);
+    expect(changed).toEqual(["Q18b-smoke-down", "Q24-site", "C05b-smoke-down", "C12-site"]);
     const asRan = (steps: readonly RunbookStep[]) => steps.map((s) => (s.before === undefined ? s : ({ ...s, ...s.before } as RunbookStep)));
     // v0.7.0 ran the plain smoke:down and still only adds; so may any release before v0.7.5.
     expect(checkAddOnly(template, loadReleaseRunbook("v0.7.0"))).toEqual([]);
@@ -504,7 +533,11 @@ describe("a step's after list", () => {
     expect(checkAddOnly(template, runbook(boundBy("v0.7.4"), "v0.7.4"))).toEqual([]);
     // red: from v0.7.5 on, a copy with the old commands edits the template.
     expect(checkAddOnly(template, runbook(asRan(boundBy("v0.7.5")), "v0.7.5")).join()).toContain("Q18b-smoke-down differs from the template's step");
+    expect(checkAddOnly(template, runbook(asRan(boundBy("v0.7.5")), "v0.7.5")).join()).toContain("C12-site differs from the template's step");
     expect(checkAddOnly(template, runbook(boundBy("v0.7.5"), "v0.7.5"))).toEqual([]);
+    // red: the site step's old commands on the new host are neither as it ran nor as it reads (issue 1630: before carries the host it ran on).
+    const halfMoved = boundBy("v0.7.4").map((s) => (s.id === "Q24-site" ? ({ ...s, cmds: s.before!.cmds } as RunbookStep) : s));
+    expect(checkAddOnly(template, runbook(halfMoved, "v0.7.4")).join()).toContain("Q24-site differs from the template's step");
     // changedSince and before never reach the hash.
     expect(stepListHash(template.steps.map((s) => (({ changedSince: _c, before: _b, ...rest }) => rest)(s) as RunbookStep))).toBe(stepListHash(template.steps));
   });
@@ -516,6 +549,8 @@ describe("a step's after list", () => {
     expect(errs({ before: { cmds: [["x"]] } })).toContain("before is {description, cmds}");
     expect(errs({ before: { description: "d", cmds: [] } })).toContain("before is {description, cmds}");
     expect(errs({ changedSince: "next" })).toContain("changedSince is a release name");
+    expect(errs({ before: { description: "d", cmds: [["x"]], host: "moon" } })).toContain("before is {description, cmds}");
+    expect(errs({ before: { description: "d", cmds: [["x"]], host: "target" } })).toBe("");
     expect(errs({})).toBe("");
   });
 

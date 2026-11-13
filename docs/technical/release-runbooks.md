@@ -411,8 +411,16 @@ website down:
    website-server is never recreated, and the boot refuses before replacing anything if compose's
    dry run says it would be. While the api swaps, nginx keeps serving the site and answers `/api/`
    from its maintenance fallback.
-6. **C12-site** switches the site atomically and reloads nginx gracefully (`bun smoke:web`).
+6. **C12-site** runs `bun smoke:web`'s image mode from the control machine (`--host {host}
+   --bundle serving --origin {publicOrigin}`, issue 1630): it keeps the bundle the instance serves
+   and swaps it onto the platform's server image, checked through the public origin, and a failed
+   check puts the previous image back. On another server image the bundle is rebuilt and swapped in
+   (`--server-image robotmoney-website-server:{instance}`); on the same one it is unchanged. While no
+   signed bundle serves yet (a host's first rollout) it changes nothing. Releases before v0.7.5 keep the directory-mode command they ran (`changedSince`).
 7. **C13-probe-grade** stops the probe and fails the release on any answer that is not 200, or on any gap.
+   The one excuse is a website-server swap's measured gap: a failed site answer asked inside a gap that
+   a `bun smoke:web` receipt on the control machine recorded during the window passes, and nothing else
+   does (web-serving-architecture.md §4.1).
 
 The privileged credential `rm_owner` is a line in the host's `~/.env`. `doadmin` is stored in no
 file: the admin types it into `bun run role-passwords` before the run, and no production step reads it
@@ -534,7 +542,9 @@ start of the run's first irreversible step, Q17-probe-start on stage and C04-pro
 production, read from the run's journal when the step renders. A template with no READY must set its
 own log window this way (§4.7.2). A unit test holds web.yaml to that subset, and each release runbook
 to the template it names. Recovery from a failed web release is `bun smoke:web --rollback` to the
-previous site.
+previous image, or on a host's first rollout to the stopped nginx container `<name>-first-rollout`
+(web-serving-architecture.md §4). A web content release (§12) is the path that ships new site content; this template's
+site step keeps the serving bundle, as kitchen-sink's does.
 
 **Scope (owner, 2026-10-15).** `scope:` lists every PR the release ships, each with
 `check: <step>`, the version step that proves it landed, or `none: <reason>` (docs only, CI only,
@@ -814,11 +824,15 @@ notes; the left-out ones are also named in the release commit's message.
 
 **Runner.** The executable form of this section is `scripts/release/runbooks/web-content.yaml`, run by
 `bun run release:web --commit <main sha> [--commit <main sha>]... [--target prod|stage] [--version A.B.C] [--dry-run]`
-(steps in `scripts/release/web-release-lib.ts`, issue 1561). Each `--commit` names a `main` commit to
-ship, cherry-picked in the given order. `--target` names the platform target file
-(`scripts/release/targets/<name>.json`, default `prod`) for the host, home, instance and public
-origin. No target key is added. `--target stage` exists for optional use only. The steps run in
-order:
+(steps in `scripts/release/web-release-lib.ts`, issues 1561 and 1630; the step table is
+[web-serving-architecture.md §5.1](./web-serving-architecture.md#51-web-content-release-steps)). Each
+`--commit` names a `main` commit to ship, cherry-picked in the given order. `--target` names the
+platform target file (`scripts/release/targets/<name>.json`, default `prod`) for the host, home,
+instance and public origin. No target key is added. `--target stage` exists for optional use only.
+A release ships as one signed bundle (web-serving-architecture.md §3.1), built on the control machine
+and deployed by `bun smoke:web`'s image mode (§4 there), which runs on the control machine and drives
+the host over ssh. The host's server image is `robotmoney-website-server:<instance>`, which its
+platform release builds. The steps run in order:
 
 - **W01-preflight** (read only). Each named commit is on `origin/main`, touches a content path,
   and carries nothing else but tests and the paths the rule above leaves out. The runner reads
@@ -830,12 +844,14 @@ order:
   commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
   tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
-  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A tag that W11
-  rolled back is refused (below). The operator must hold the admin permission on the repository.
-  The runner reads the instance's `web/current` and `web/previous` links on the host (read only)
-  and reports both. W10's switch makes today's `current` the `previous` that `bun smoke:web
-  --rollback` returns to, so W01 refuses when `current` is absent or names no site directory:
-  production would have no rollback target.
+  must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A
+  tag that W11 rolled back is refused (below). The operator must hold the admin permission on the
+  repository. The runner reads production's running `website-server` over ssh (its labels: the web
+  tag, the commit and the bundle digest) and the instance's previous image, and reports them. W10's
+  swap keeps what serves now as the rollback target, so W01 refuses only when no `website-server`
+  runs. A site image becomes the previous image. On a host's first rollout nginx serves, and the swap
+  keeps the nginx container, stopped, as `<name>-first-rollout`: that container is the rollback
+  target, not an image (web-serving-architecture.md §4, issue 1632).
 - **W02-branch** (irreversible). Push the cherry-picked commit to `web/releases-A.B.x` as a
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
@@ -853,55 +869,77 @@ order:
   workflow run e2e-web.yml --ref web/releases-A.B.x`) after checking the branch tip is the release
   commit. A dry run never dispatches. W01 refuses up front when the release tree's `web-client.yml`
   lacks the push trigger, its `e2e-web.yml` lacks `workflow_dispatch`, or its `web-tag-guard.yml`
-  lacks the `web-v*` tag trigger.
+  lacks the `web-v*` tag trigger. Once the gate passes, the runner packs and signs the bundle on the
+  control machine: a scratch worktree at the release commit, `bun install --frozen-lockfile`,
+  `scripts/static-assembly.sh`, then `scripts/lib/web-bundle.ts pack` and `sign` with the control
+  machine's bundle key (`~/.ssh/robotmoney-web-bundle`). It leaves
+  `robotmoney-web-A.B.C-<commit>.tar.gz`, its `.sha256` digest and its `.sha256.sig` signature in its
+  work directory. Stage and production get these same bytes.
 - **W04-stage-up.** The kitchen-sink stage target (`scripts/release/stage-target.ts`,
   [docs/runbooks/stage-target.md](../runbooks/stage-target.md)) is brought up at production's running
   commit from a fresh production dump, as the kitchen sink's Q02-dump and Q03-stage-up do: `bun
   scripts/release/stage-target.ts dump`, then `up --dump newest --replace`, from the control machine.
-  A stage stack that already runs production's API commit is reused on a rerun. Q04-role-passwords
-  is not run: a web release migrates nothing.
-- **W05-stage-deploy.** On the stage host, the runner clones `{stage home}/rm-web` when missing,
-  fetches `web/releases-*`, detaches at the release commit (no tag exists yet) and runs `bun install
-  --frozen-lockfile`. It records the stage `api` and worker container ids and `/api/version`, then
-  runs `bun run smoke:web --instance stage_target`: the same command W10 runs on production, so the
-  stage switch, its range check and its reload are the ones production will see.
+  Then production's serving bundle is deployed there by name (`bun smoke:web --bundle web-vX.Y.Z`),
+  so stage holds a previous image before W05, as production does at W10. While production serves no
+  signed bundle (its first rollout) nothing is deployed by name: W05's swap keeps stage's nginx
+  container, stopped, as `<name>-first-rollout`, the rollback target, as production's W10 does. A stage stack that already runs production's API commit and
+  serves production's bundle is reused on a rerun. Q04-role-passwords is not run: a web release
+  migrates nothing.
+- **W05-stage-deploy.** The runner records the stage `api` and worker container ids and
+  `/api/version`, then runs `bun run smoke:web --host <stage host> --instance stage_target --bundle
+  <W03's bundle> --server-image robotmoney-website-server:stage_target --origin <stage origin>` from
+  the control machine: the same command W10 runs on production. Nothing is cloned, installed or
+  built on the stage host.
 - **W06-stage-check.** W11's live check, all of it, against the stage origin
-  (`https://stage.robotmoney-labs.dev`): `/version.json`, the served bytes against stage's
-  `web/current`, every sitemap route, and the stage `api` and workers unchanged. It reads, as the
-  kitchen sink's product checks do; it writes nothing to stage. On a pass the
-  runner records it for the release commit (`<tag>-stage-pass.json` in its work directory) and tears
-  the stage target down (`stage-target.ts down`), as the kitchen sink does after a pass. On a
-  failure nothing has reached production; the stage target is left up for inspection, and the fix
-  ships from main. **No step from W07 on writes unless a stage pass is recorded for the same
-  release commit**; a pass recorded for another commit does not count.
+  (`https://stage.robotmoney-labs.dev`). It reads, as the kitchen sink's product checks do; it
+  writes nothing to stage. On a pass the runner records it for the release commit and the bundle's
+  sha256 digest (`<tag>-stage-pass.json` in its work directory) and tears the stage target down
+  (`stage-target.ts down`), as the kitchen sink does after a pass. On a failure nothing has reached
+  production; the stage target is left up for inspection, and the fix ships from main. **No step
+  from W07 on writes unless a stage pass is recorded for the same bundle digest**; a pass recorded
+  for another commit or another digest does not count.
 - **W07-tag** (irreversible). `scripts/check-web-tag.ts`'s rule passes, then the annotated tag
   `web-vA.B.C` is pushed. It is cut before the deploy and never moved or deleted.
 - **W08-tag-guard.** `.github/workflows/web-tag-guard.yml` passes for the tag.
-- **W09-checkout.** Over ssh from the control machine (D61 (4)): clone `{home}/rm-web` when missing,
-  fetch the tags, detach at the tag and run `bun install --frozen-lockfile`. It is the runner's own
-  checkout, never the platform release checkout.
-- **W10-deploy** (irreversible). Record the `api` and worker container ids and the `/api/version`
-  body, then run `bun run smoke:web --instance {instance}` from `{home}/rm-web`. It writes no
-  database row, runs no migration and restarts no backend service.
-- **W11-live-check.** Three checks, in order, and then the backend:
+- **W09-host-ready.** Over ssh from the control machine (D61 (4)), read only: the production host
+  holds the server image `robotmoney-website-server:{instance}`, the allowed-signers file inside it
+  has a line for the `robotmoney-web-bundle@v1` namespace, and a `website-server` runs, which the
+  swap keeps as the rollback target (on a host's first rollout, the stopped nginx container
+  `<name>-first-rollout`). It installs nothing, builds nothing and runs no `git` or `bun` there. A host that is not
+  ready fails the step: its platform release provides these.
+- **W10-deploy** (irreversible). It refuses a bundle whose sha256 is not the stage-passed digest,
+  read just before the send. Then it records the `api` and worker container ids and the
+  `/api/version` body, and runs `bun run smoke:web --host {host} --instance {instance} --bundle
+  <W03's bundle> --server-image robotmoney-website-server:{instance} --origin {publicOrigin}` from the
+  control machine. It writes no database row, runs no migration and restarts no backend service.
+  `bun smoke:web` writes its receipt under the control machine's smoke state root
+  (`web-image/<instance>/receipt.json` and `journal.jsonl`).
+- **W11-live-check.** The live check of web-serving-architecture.md §5.2, in order:
   1. `{publicOrigin}/version.json` reports the tag's version and commit.
-  2. **Served content equals the release.** Each changed path under `frontend/public/` is fetched
-     at the URL it is served at (`frontend/public/X` at `/X`, with a one-off query so no cache
-     answers) and its sha256 must equal the file in the host's `web/current`, which must name this
-     release's site. The host's copy is the reference, not git's: the assembly stamps imports with
-     `?v=` and prerenders routes, so a served file differs from its source by design. A path the
-     release removes must be absent from `web/current`. A changed path the site does not serve (a
-     build script, a test, `frontend/package.json`) is skipped and listed.
-  3. Every sitemap route answers 200. This is weak on its own: nginx answers an unknown path with
-     the SPA shell, 200.
-  A dry run prints the files W06 and W11 would compare and skip, from the release tree alone, and
-  hashes no file even when W10's record exists.
-
-  Last, the `api` and worker container ids and `/api/version` are unchanged. On a failure the
-  runner runs `bun run smoke:web --rollback`, reads `/version.json` again to report what production
-  now serves, and exits non-zero. The branch and the tag stay; no GitHub release is created.
-- **W12-release** (irreversible). The GitHub release for the tag lists the main commits, the
-  changed paths and each commit's paths outside the content paths, carried or left out. It is never marked latest: the platform's release keeps that.
+  2. The running `website-server`'s labels name the bundle's tag, commit and sha256 digest, and the
+     healthcheck it inherited from the container compose started reports healthy (the check waits up
+     to 90 s while it reports starting). On stage, W06 is that proof.
+  3. **Served content equals the bundle.** Every file in the bundle's manifest
+     (`.rm-bundle-manifest.json`) is fetched through the origin at the URL it is served at
+     (`index.html` at `/`, `<dir>/index.html` at `/<dir>`, any other file at its path, each with a
+     one-off query so no cache answers), and its sha256 must equal the manifest's.
+  4. The platform's header table holds through the origin on `/` and every sitemap route: the
+     security headers (`Content-Security-Policy`, `Permissions-Policy`, `Referrer-Policy`,
+     `X-Content-Type-Options`) and `Cache-Control: no-cache` on a page. A web release leaves every
+     header unchanged.
+  5. Every sitemap route answers 200.
+  6. The `api` and worker container ids and `/api/version` are unchanged.
+  A dry run prints the number of files W06 and W11 would compare, and reads no label and hashes no
+  file even when W10's record exists. On a failure the runner runs `bun run smoke:web --host {host}
+  --instance {instance} --rollback --origin {publicOrigin}`, which starts the previous image, or on a
+  host's first rollout the stopped nginx container `<name>-first-rollout` with `-current` untagged so a
+  platform boot runs nginx. It reads `/version.json` again to report
+  what production now serves, and exits non-zero. The branch and the tag stay; no GitHub release is
+  created.
+- **W12-release** (irreversible). The GitHub release for the tag carries the bundle, its digest and
+  its signature, and lists the bundle's sha256, the main commits, the changed paths and each
+  commit's paths outside the content paths, carried or left out. It is never marked latest: the
+  platform's release keeps that. `bun smoke:web --bundle web-vA.B.C` downloads these files by name.
 
 The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
 reports the steps already done and continues at the first one that is not. `--dry-run` runs the
@@ -918,7 +956,6 @@ equals `version` in `frontend/package.json` at that commit and is above every ot
 The guard is `.github/workflows/web-tag-guard.yml`, which runs `scripts/check-web-tag.ts` on a push of
 a `web-v*` tag. `/version.json` keeps reporting the web client's version and commit.
 
-**Rollback.** A tag is never moved, deleted or cut again. When W11 rolls the site back, the host's
-web receipt records it, and a rerun of the same version stops at W01, including when `bun
-smoke:web` installed the site under a digest-suffixed id. The fix ships as
-`web-vA.B.(C+1)`.
+**Rollback.** A tag is never moved, deleted or cut again. When W11 rolls the site back, the control
+machine's image journal for the instance records the deploy and the rollback, and a rerun of the same
+version stops at W01. The fix ships as `web-vA.B.(C+1)`.

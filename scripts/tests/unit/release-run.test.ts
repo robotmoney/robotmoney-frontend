@@ -345,7 +345,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(RELEASE_STEPS.every((s) => s.onlyFor !== undefined)).toBe(true);
     const tags = RELEASE_STEPS.filter((s) => s.id.endsWith("-version-tag")).map((s) => s.id);
     expect(tags).toEqual(["C06-version-tag"]);
-    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "Q17-probe-start", "Q25-probe-grade", "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C04-probe-start", "C06-version-tag", "C13-probe-grade", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]);
+    expect(RELEASE_STEPS.filter((s) => s.host === "control").map((s) => s.id)).toEqual(["Q01-lockfile", "Q02-dump", "Q03-stage-up", "Q04-role-passwords", "Q05-scope", "Q17-probe-start", "Q24-site", "Q25-probe-grade", "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C04-probe-start", "C06-version-tag", "C12-site", "C13-probe-grade", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]);
     expect(RELEASE_STEPS.some((s) => s.id === "R5.rc" || s.cmds.some((c) => c.includes("rc")))).toBe(false);
     const unmarked = RELEASE_STEPS.map((s) => (s.id === "C06-version-tag" ? { ...s, onlyFor: undefined } : s));
     expect(stepListHash(unmarked)).not.toBe(stepListHash());

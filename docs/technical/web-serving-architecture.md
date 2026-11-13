@@ -222,7 +222,9 @@ A platform release that declares a maintenance window stops every service except
 `/version.json`. The API answers the maintenance JSON: `/api/status/maintenance` serves `maintenance.json`, and
 every other `/api/` path gets a 503 maintenance body with `Retry-After: 60`. A visitor never gets a 502. The
 release probe grade fails any non-200 site answer inside the window, and fails a window in which no answer
-announced the active maintenance window.
+announced the active maintenance window. The one exception is a swap's own gap (§4.1): a site step inside the
+window, such as Q24-site or C12-site, may drop requests for the gap its `bun smoke:web` receipt recorded, and
+for no longer.
 
 ## 5. The runbook
 
@@ -245,27 +247,41 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 
 | Step | What it does |
 |---|---|
-| W01-preflight | Checks each named commit is eligible. Reads the running container's labels and the previous image. Refuses with no rollback target |
+| W01-preflight | Checks each named commit is eligible. Reads the running container's labels and the previous image. Refuses with no rollback target: no running `website-server`, which the swap keeps as the rollback target (§4) |
 | W02-branch | Pushes the release commit to `web/releases-A.B.x` as a fast-forward |
 | W03-gate | The web client checks and the end-to-end checks pass on the release commit. The runner then packs and signs the bundle on the control machine |
-| W04-stage-up | Brings the stage target up at production's running commit, from a fresh production dump |
+| W04-stage-up | Brings the stage target up at production's running commit, from a fresh production dump. Deploys production's serving bundle there by name, so stage holds a previous image before W05 |
 | W05-stage-deploy | Sends the bundle to stage and runs `bun smoke:web` with it |
 | W06-stage-check | Runs the live check against the stage origin. Records a pass for the bundle digest |
 | W07-tag | Pushes the tag `web-vA.B.C`. The tag is never moved or deleted |
 | W08-tag-guard | The tag rule passes for the tag |
-| W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a previous image. It installs nothing |
+| W09-host-ready | Confirms the production host holds the server image, the allowed-signers file and a rollback target: a running `website-server`, which the swap keeps as the rollback target (§4). It installs nothing |
 | W10-deploy | Refuses a bundle whose digest is not the stage-passed digest. Sends it to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
 | W12-release | Publishes the release notes with the bundle, its digest and its signature |
 
 No step from W07 on writes unless a stage pass is recorded for the same bundle digest.
 
+On a host's first rollout no signed bundle serves yet: nginx serves. The first-rollout rule of §4 applies: the
+swap keeps the nginx container, stopped, as `<its name>-first-rollout`, and that container is the rollback
+target, not an image. W01 and W09 accept a running nginx `website-server` for that reason. W04 then deploys
+nothing by name: stage's W05 swap keeps stage's nginx container the same way, as production's W10 does. W11's
+`--rollback` starts that container again, and `-current` is untagged, so a platform boot runs nginx. After a
+swap from a site image to a site image the host holds a previous image, and every later release follows the
+table as written.
+
+The runbook names the host's server image `robotmoney-website-server:<instance>`, which the platform release
+builds. The steps run `bun smoke:web` from the control machine with `--host` and `--origin`, so step 5 of §4
+reads the public origin. The platform's site steps (Q24-site, C12-site) run it with `--bundle serving`: the
+bundle the instance serves now, by the web tag its labels name (§5.3).
+
 ### 5.2 The live check
 
 W06 and W11 run the same check:
 
 1. `/version.json` names the release's version and commit.
-2. The running container's labels equal the bundle's tag, commit and digest.
+2. The running container's labels equal the bundle's tag, commit and digest. Its healthcheck, which the swap
+   carries over from the container compose started, reports healthy.
 3. Every served file equals its entry in the bundle's manifest, by sha256.
 4. The route and header table passes through the origin, including each dapp page's CSP. A web release leaves
    every header unchanged.
@@ -280,7 +296,9 @@ W06 and W11 run the same check:
   by the same swap and the same checks: `bun smoke:web --bundle <the serving web-vA.B.C> --server-image <new>`.
   The same bundle on the same server image is unchanged. On another server image it is rebuilt and swapped in.
 - Every change to the site goes through `bun smoke:web`.
-- A probe runs around every swap. Its grade excuses exactly the gap in the release receipt.
+- A probe runs around every swap. Its grade excuses exactly the gap in the release receipt: a failed site
+  answer asked inside a gap that a `bun smoke:web` receipt on the control machine recorded during the probe's
+  window passes, and any other failed answer fails the release.
 - In a declared maintenance window the grade requires the maintenance answer, and fails any other failure.
 - The log verdict classifies the server's access log in its own format.
 

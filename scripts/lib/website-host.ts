@@ -57,7 +57,14 @@ export function sshArgv(dest: string, controlPath: string, argv: readonly string
 }
 
 async function spawn(argv: readonly string[], stdin?: string | Uint8Array): Promise<HostResult> {
-  const proc = Bun.spawn([...argv], { stdin: stdin === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+  let proc;
+  try {
+    proc = Bun.spawn([...argv], { stdin: stdin === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+  } catch (err) {
+    // A command missing on this machine is a failed command, as it is over ssh
+    // (the remote shell exits 127): `run` never throws for it.
+    return { code: 127, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
+  }
   if (stdin !== undefined && proc.stdin) {
     proc.stdin.write(stdin);
     await proc.stdin.end();
