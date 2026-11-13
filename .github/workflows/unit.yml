@@ -173,12 +173,12 @@ jobs:
       - name: Web image swap tests ran (issue 1628)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
-          scripts/tests/unit/smoke-web.test.ts:42
+          scripts/tests/unit/smoke-web.test.ts:36
       - name: Platform boot and first-rollout tests ran (issue 1632)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/stack-rolling.test.ts:17
-          scripts/tests/unit/smoke-web.test.ts:56
+          scripts/tests/unit/smoke-web.test.ts:36
           scripts/tests/unit/smoke-compose-config.test.ts:13
       - name: Breaking cutover tests ran (issue 1501)
         run: >-

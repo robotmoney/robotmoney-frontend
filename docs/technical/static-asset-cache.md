@@ -19,14 +19,14 @@ copy of it.
 |---|---|---|
 | Browser | Keeps files for the `max-age` it is told | The `Cache-Control` header it receives |
 | Cloudflare edge | `robotmoney.network` and `.net` are proxied DNS names and all traffic enters through a Cloudflare Tunnel (`cloudflared` on the production host forwards to `127.0.0.1:48787`). So every request passes through Cloudflare's edge, which applies its caching defaults | The Cloudflare zone's settings (not in this repo) |
-| nginx (`website-server`) | The origin. Serves the assembled `_static/` from a read-only bind mount. Sends `Cache-Control`. Stores no API response: the API keeps its own public analytics answers in process (`web-serving-architecture.md` §3.4) | `website-server/nginx.conf` (in this repo) |
+| `website-server` | The origin. Caddy serves one signed bundle baked into an immutable image once a host has swapped one in (`web-serving-architecture.md` §3); before that, and on CI stacks, the bootstrap nginx serves the assembled `_static/` from a read-only bind mount. Both send the same `Cache-Control` (the route and header table). Stores no API response: the API keeps its own public analytics answers in process (`web-serving-architecture.md` §3.4) | `website-server/Caddyfile`, and `website-server/nginx.conf` for the bootstrap server (in this repo) |
 
 The tunnel configuration (`cloudflared.config.example.yml`) routes hostnames to an origin port and contains **no caching
 settings**. Caching is a property of the zone, not of the tunnel.
 
 ## 3. What we measured (2026-09-30)
 
-What nginx sends (asked on the host, bypassing Cloudflare) against what a reader receives:
+What the origin sends (asked on the host, bypassing Cloudflare; measured when nginx served) against what a reader receives:
 
 | Path | nginx sends | Cloudflare status | Browser is told |
 |---|---|---|---|

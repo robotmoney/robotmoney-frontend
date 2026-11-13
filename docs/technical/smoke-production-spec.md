@@ -438,7 +438,7 @@ Each is an executable release gate. Cutover requires all three workstreams green
 - `website-server` proxies `/api/version` to `api` (`scripts/tests/integration/website-server-api-version.test.ts`).
 - `web-client.yml` fails when `apiRange` excludes the contract version; `/version.json` carries the range; the page's matcher agrees with the Bun-side rule on every table row (`scripts/tests/unit/web-client-api-range.test.ts`).
 - An API outside the page's range shows the reload notice and makes zero other `/api/*` requests with a clean console; an in-range API renders normally (`frontend/test/browser/api-range-mismatch.spec.ts`).
-- `bun smoke:web` refuses a site whose range excludes the running API, switches `website-server` without restarting `api` or a worker, and `--rollback` returns to the previous directory.
+- `bun smoke:web` refuses a bundle whose range excludes the running API, swaps `website-server` without restarting `api` or a worker, and `--rollback` returns to the previous image.
 - `bun smoke` refuses an API outside the live site's range unless the same plan deploys a site that admits it, and refuses against a live site with no declared range.
 - Rolling: deploying the site and the API one after the other, in either order, never serves a page against an API outside its range.
 
@@ -481,20 +481,21 @@ Decided with the owner on 2026-09-24 and recorded as [D54](../decisions.md#d54).
 
 ### 13.2 `bun smoke:web`
 
-`bun smoke:web` deploys the site and nothing else.
+`bun smoke:web` deploys the site and nothing else. It deploys one signed bundle as an immutable `website-server`
+image, by the checked swap in [web-serving-architecture.md](./web-serving-architecture.md) §4
+(`bun smoke:web --host <ssh-dest|local>`, issue 1628).
 
-1. It builds the site into a versioned directory under the instance state directory (§1.1).
-2. It reads the running API's `/api/version` and refuses when that version is outside the new site's range.
-3. It points `website-server` at the new directory and reloads nginx. The switch is atomic. It restarts no `api` or worker container.
-4. It writes its own journal and receipt under the instance's `web/` directory, beside the stack's own (§1.3, §1.4).
+1. It refuses a bundle, or a previous image on `--rollback`, whose `apiRange` excludes the running API's `/api/version`.
+2. It swaps the site image on the public port. It restarts no `api` or worker container.
+3. It writes its own receipt and journal on the control machine (`web-image/<instance>/`), never the stack's own.
 
-`bun smoke:web --rollback` returns `website-server` to the previous directory, with the same reload and receipt.
+`bun smoke:web --rollback` returns `website-server` to the one previous image, or on a host's first rollout to the
+stopped nginx container that served before the first swap.
 
-**Image mode (issue 1628).** `bun smoke:web --host <ssh-dest|local>` deploys a signed bundle as an immutable
-`website-server` image instead, by the checked swap in [web-serving-architecture.md](./web-serving-architecture.md)
-§4. It refuses a bundle, or a previous image on `--rollback`, whose `apiRange` excludes the running API, as above.
-The directory mode above stays the default until the runbooks and the platform boots move to the image mode, and
-nginx is removed after that.
+**The directory mode is retired (issue 1631).** `bun smoke:web` without `--host`, which built the site into the
+instance's `web/` directory and reloaded nginx, refuses and changes nothing. nginx stays as the bootstrap server: it
+serves a host before its first swap and every CI stack, from the site a `bun smoke` boot places in `web/`, and the
+first-rollout container it leaves is a host's rollback target until one swap from a site image to a site image.
 
 ### 13.3 `bun smoke` and the live site
 

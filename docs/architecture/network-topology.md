@@ -178,8 +178,10 @@ subdomain:
   `analytics-producer`, `system-scheduler` (API credential only; it replaced the container
   formerly called `worker-swarm`), and the standing participant containers from the credential
   file; `website-server` (issue #892) co-serves this surface's SPA assets
-  (`STATIC_DIR`) same-origin at the subdomain root, proxying `/api/` through
-  to `api`.
+  same-origin at the subdomain root, proxying `/api/` through to `api`. It is
+  Caddy serving one signed bundle in an immutable image once a host has swapped
+  one in, and the bootstrap nginx before that
+  ([web-serving-architecture.md](../technical/web-serving-architecture.md) §3, §4).
 - **`app.`** — the `rmpc` daemon + on-chain gateway (`robotmoney-core`).
 
 Ingress is Cloudflare-proxied DNS locked to Cloudflare IPs by a DO Cloud Firewall

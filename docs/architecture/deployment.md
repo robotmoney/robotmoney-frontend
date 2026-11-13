@@ -12,7 +12,10 @@ Use [release policy](../technical/release-runbooks.md) for release gates and
 create an exact-SHA runbook when a release is scheduled and the required tools
 exist.
 
-The repository's Compose topology contains Postgres, API, static web server,
+The repository's Compose topology contains Postgres, API, the static web server
+(`website-server`: Caddy with one signed bundle in an immutable image, or the
+bootstrap nginx before a host's first swap;
+[web-serving-architecture.md](../technical/web-serving-architecture.md)),
 the pipeline worker (§7), `analytics-producer`, and `system-scheduler` (API
 credential only), which replaced `worker-swarm`. The smoke production spec
 governs every one of them. Standing participant

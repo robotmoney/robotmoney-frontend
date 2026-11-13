@@ -121,7 +121,7 @@ describe("currentSite — only placeSite writes `current`", () => {
   });
 });
 
-describe("installSite + switchSite — the two halves `bun smoke:web` runs with a range check between them", () => {
+describe("installSite + switchSite — the two halves placeSite runs", () => {
   test("installSite puts the site in place WITHOUT making it current", () => {
     const root = scratch();
     const web = join(root, "web");

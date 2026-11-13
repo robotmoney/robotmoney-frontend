@@ -40,16 +40,16 @@
 // be serving from.
 //
 //   web/previous      a relative symlink naming the site `current` named before
-//                     its last switch, so `bun smoke:web --rollback` can return
+//                     its last switch.
 //
-// Every switch records `previous` first and then swaps `current`, whichever
-// tool made it (`bun smoke` through placeSite, `bun smoke:web` through
-// installSite + switchSite). An interruption between the two renames leaves
-// `previous` equal to `current`, which a rollback refuses rather than guesses.
+// Every switch records `previous` first and then swaps `current` (placeSite
+// runs installSite + switchSite). An interruption between the two renames
+// leaves `previous` equal to `current`.
 //
-// Stable API: `bun smoke` (scripts/stack/stack.ts) calls placeSite; `bun
-// smoke:web` (scripts/lib/website-release.ts) calls installSite, switchSite,
-// currentSite and previousSite.
+// Stable API: `bun smoke` (scripts/stack/stack.ts) calls placeSite. It is the
+// one writer of web/ since `bun smoke:web`'s directory mode was retired (issue
+// 1631); web/ is what the bootstrap nginx serves before a host's first image
+// swap, and what its kept first-rollout container serves after one.
 
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
