@@ -33,6 +33,8 @@ describe("docker-compose.website-image.yml runs website-server immutable", () =>
   test("no volume, no build: the site is the image's, named by RM_WEBSITE_IMAGE", () => {
     expect(svc.volumes).toEqual([]);
     expect(svc.image).toMatch(/^\$\{RM_WEBSITE_IMAGE:\?/);
+    // The image is built on the host and never pulled (issue 1628).
+    expect(svc.pull_policy).toBe("never");
     // `!reset` replaces the base file's bind mount and build. A plain key would merge with them.
     const text = read("docker-compose.website-image.yml");
     expect(text).toMatch(/^ {4}volumes: !reset \[\]$/m);

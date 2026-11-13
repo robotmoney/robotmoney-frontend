@@ -170,6 +170,10 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/smoke-compose-config.test.ts:12
           scripts/tests/unit/gate-log-inventory.test.ts:19
+      - name: Web image swap tests ran (issue 1628)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/smoke-web.test.ts:42
       - name: Breaking cutover tests ran (issue 1501)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml

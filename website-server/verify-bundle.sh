@@ -17,8 +17,12 @@
 #      this tarball and that sha256;
 #   3. a key in the server image's allowed-signers file signed the statement in
 #      the web-bundle namespace (ssh-keygen -Y verify);
-#   4. every tar entry is a regular file at a relative path with no `..`;
-#   5. the extracted site carries version.json.
+#   4. every tar entry is a regular file at a relative path with no `..`.
+#      BusyBox tar lists a hardlink as a regular file (`-rw-r--r-- ... b -> a`),
+#      so a listing line with ` -> ` is refused too (issue 1628);
+#   5. after extraction, every path is a directory or a regular file with one
+#      link, so a hardlink the listing missed still fails;
+#   6. the extracted site carries version.json.
 #
 # Only then is the site extracted to <out-dir>. The manifest check and the
 # version.json identity check are web-bundle.ts's, run on the host before the
@@ -73,10 +77,13 @@ done
 
 listing=$(tar -tvzf "$name") || fail "the tarball is not a valid gzip tar"
 if echo "$listing" | grep -v '^-' | grep -q .; then fail "the tarball holds an entry that is not a regular file"; fi
+if echo "$listing" | grep -q ' -> '; then fail "the tarball holds a link"; fi
 unsafe=$(tar -tzf "$name" | grep -E '^/|(^|/)\.\.?(/|$)|//|^$' || true)
 [ -z "$unsafe" ] || fail "the tarball holds an unsafe path: $unsafe"
 
 mkdir -p "$out"
 tar -xzf "$name" -C "$out"
+odd=$(find "$out" ! -type d ! -type f; find "$out" -type f -links +1)
+[ -z "$odd" ] || { rm -rf "$out"; fail "the extracted bundle holds a link or a special file: $odd"; }
 [ -f "$out/version.json" ] || fail "the bundle carries no version.json"
 echo "verified $name (sha256 $actual, signer $signer)"

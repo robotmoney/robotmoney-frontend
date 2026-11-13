@@ -1,178 +1,209 @@
-// `bun smoke:web` against a REAL running stack (issue #1026 W7, criterion 161;
-// smoke spec §13.2, D54).
+// `bun smoke:web` image mode against real Docker (issue 1628,
+// docs/technical/web-serving-architecture.md §4). The host is this machine
+// (smoke-web-image-harness.ts): a server image trusting a key made here, a
+// stand-in api, and a running website-server built from a first signed bundle.
 //
-// One `bun smoke --local blank --migrate` boot of its own instance, then
-// `bun smoke:web` run as an operator runs it, as its own process, and graded
-// on what the running stack and the instance directory say afterwards:
+// In order, each against the state the one before left:
 //
-//   deploy     a second site version (a copy of this checkout with another
-//              frontend version, smoke-web-harness.ts) lands in
-//              web/<version>-<commit>/ under the instance state directory, and
-//              website-server serves it: /version.json through its published
-//              port reports the new version;
-//   refusal    a site whose range excludes the running API (^9.0.0 against
-//              contract 0.2.0) refuses naming both, and nothing moves: the
-//              served site, `current`, the receipt, and no directory for it;
-//   rollback   `--rollback` returns website-server to the previous site;
-//   records    the web journal and receipt read back with the plan ids and
-//              steps each run wrote; the stack's own deployment journal and
-//              receipt are byte-for-byte unchanged;
-//   no restart `api`, every worker and website-server itself keep their
-//              container id and start time across all of it: the switch is an
-//              nginx reload, never a restart.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { apiVersionInRange, readContractVersion, readFrontendApiRange } from "../../lib/api-range.ts";
-import { currentSite, previousSite } from "../../lib/smoke-site.ts";
-import { readStackState } from "../../lib/smoke-state.ts";
-import { readWebJournal, readWebReceipt, type WebReceipt } from "../../lib/website-release.ts";
-import { BOOT_TIMEOUT_MS, bootFailureReport, harness, spawnBoot, teardown, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
-import {
-  containerChanges,
-  servedSite,
-  serviceContainers,
-  smokeWeb,
-  variantTree,
-  type ServiceContainer,
-  type VariantTree,
-} from "./smoke-web-harness.ts";
+//   deploy      a second bundle swaps in: the public port now names it, the new
+//               container keeps the old one's name and host port, the throwaway
+//               copy ran on another port, and the first image is the one
+//               previous image. An active maintenance.json, written by
+//               scripts/release/maintenance.ts into the tmpfs, is carried over;
+//   bad copy    a bundle whose copy fails its check never reaches the public
+//               port: the serving container is untouched and nothing was stopped;
+//   host trust  a bundle the control machine trusts but the server image does
+//               not fails verification on the host and is never built;
+//   bad public  a failed public check starts the previous container again,
+//               fails with a non-zero result, and records the revert's gap;
+//   by name     `--bundle web-v<first>` fetched from its release deploys the
+//               older bundle with the same checks;
+//   CLI         `bun smoke:web --host local --instance <i> --rollback`, run as
+//               an operator runs it, returns to the previous image.
+//
+// LOUD, NEVER SKIPPED: Docker and ssh-keygen are hard dependencies.
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { copyFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { MAINTENANCE_FILE } from "../../lib/maintenance-file.ts";
+import { WEBSITE_MAINTENANCE_DIR } from "../../lib/website-image.ts";
+import { deployImage, GAP_LIMIT_MS, readImageReceipt, siteImageTag, type ImageReceipt } from "../../lib/website-release.ts";
+import { createImageHost, docker, repoRoot, waitServed, type ImageHost } from "./smoke-web-image-harness.ts";
 
-const API_VERSION = readContractVersion();
+const V1 = { version: "1.0.0", commit: "1111aaa" };
+const V2 = { version: "1.1.0", commit: "2222bbb" };
+const V3 = { version: "1.2.0", commit: "3333ccc" };
 
-let h: BootHarness;
-let boot: RunningBoot;
-let webPort = 0;
-let bootSite: string | null = null;
-let stackJournal = "";
-let stackReceipt = "";
-let before: Record<string, ServiceContainer> = {};
-let inRange: VariantTree;
-let outOfRange: VariantTree;
+let h: ImageHost;
+let v1Bundle = "";
+let v1Image = "";
 
-let deploy = { code: -1, out: "" };
-let afterDeploy: { current: string | null; previous: string | null; served: string; receipt: WebReceipt | null } | null = null;
-let refusal = { code: -1, out: "" };
-let afterRefusal: { current: string | null; served: string; receipt: WebReceipt | null; dirExists: boolean } | null = null;
-let rollback = { code: -1, out: "" };
-let afterRollback: { current: string | null; previous: string | null; served: string; receipt: WebReceipt | null } | null = null;
-let after: Record<string, ServiceContainer> = {};
-
-const served = async () => {
-  const site = await servedSite(webPort);
-  return `${site.version}-${site.commit}`;
-};
+/** A deploy that resolves to its receipt, or to the receipt it wrote before it threw. */
+async function deploy(bundle: string, extra: Parameters<ImageHost["deps"]>[0] = {}): Promise<{ receipt: ImageReceipt; error: Error | null; deps: ReturnType<ImageHost["deps"]> }> {
+  const deps = h.deps(extra);
+  try {
+    return { receipt: await deployImage({ bundle, serverImage: h.serverImage }, deps), error: null, deps };
+  } catch (error) {
+    return { receipt: readImageReceipt(deps.receiptDir)!, error: error as Error, deps };
+  }
+}
 
 beforeAll(async () => {
-  h = harness("smokeweb");
-  boot = spawnBoot(h);
-  const code = await boot.exited;
-  if (code !== 0) throw new Error(`bun smoke exited ${code}:\n${bootFailureReport(boot)}`);
-  webPort = readStackState(h.paths)!.webPort;
-  bootSite = currentSite(h.paths.webDir);
-  stackJournal = readFileSync(h.paths.journalFile, "utf8");
-  stackReceipt = readFileSync(h.paths.receiptFile, "utf8");
+  h = createImageHost("lifecycle", V1);
+  await waitServed(h, V1);
+  v1Image = h.serving().image;
+  // The release the `--bundle web-v1.0.0` case fetches.
+  v1Bundle = h.bundle(V1);
+}, 600_000);
 
-  inRange = variantTree("0.1.9-webdeploy", `^${API_VERSION}`);
-  outOfRange = variantTree("0.1.9-webrefused", "^9.0.0");
-  before = serviceContainers(h.project);
+afterAll(() => h?.dispose(), 120_000);
 
-  deploy = await smokeWeb(h, [], inRange.dir);
-  afterDeploy = {
-    current: currentSite(h.paths.webDir),
-    previous: previousSite(h.paths.webDir),
-    served: await served(),
-    receipt: readWebReceipt(h.paths),
-  };
+test("deploy: the new container takes the public port and the old one's name, the copy never binds it, and the first image is the one previous image", async () => {
+  const before = h.serving();
+  // An active maintenance window, announced into the tmpfs by the release step's own tool.
+  const env = { ...process.env, RM_SMOKE_STATE_ROOT: mkdtempSync(join(tmpdir(), "rm-swt-state-")) };
+  const on = Bun.spawnSync(["bun", join(repoRoot, "scripts/release/maintenance.ts"), "on", "--instance", h.instance], {
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(on.stdout.toString() + on.stderr.toString()).toContain(`maintenance page on in website-server ${before.id.slice(0, 12)}`);
+  expect(on.exitCode).toBe(0);
+  const announced = docker(["exec", before.id, "cat", `${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`]);
+  expect(JSON.parse(announced).state).toBe("active");
 
-  refusal = await smokeWeb(h, [], outOfRange.dir);
-  afterRefusal = {
-    current: currentSite(h.paths.webDir),
-    served: await served(),
-    receipt: readWebReceipt(h.paths),
-    dirExists: existsSync(join(h.paths.webDir, outOfRange.siteId)),
-  };
+  const { receipt, error } = await deploy(h.bundle(V2));
+  expect(error).toBeNull();
+  await waitServed(h, V2, 1_000);
+  const after = h.serving();
+  console.log(`smoke-web-lifecycle deploy: gap ${receipt.gap?.ms} ms, public port ${receipt.publicPort}, copy port ${receipt.copyPort}`);
 
-  rollback = await smokeWeb(h, ["--rollback"]);
-  afterRollback = {
-    current: currentSite(h.paths.webDir),
-    previous: previousSite(h.paths.webDir),
-    served: await served(),
-    receipt: readWebReceipt(h.paths),
-  };
-  after = serviceContainers(h.project);
-}, BOOT_TIMEOUT_MS);
-
-afterAll(() => {
-  if (h) teardown(h, boot);
-  inRange?.dispose();
-  outOfRange?.dispose();
+  expect(receipt.outcome).toBe("swapped");
+  expect(receipt.checks.every((c) => c.ok)).toBe(true);
+  expect(receipt.checks.map((c) => c.name)).toEqual(["verify-local", "api-range", "verify-host", "build", "copy", "gap", "public"]);
+  expect(receipt.oldContainer).toEqual({ id: before.id, image: before.image });
+  expect(receipt.newContainer?.id).toBe(after.id);
+  expect(after.id).not.toBe(before.id);
+  expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+  // The same host port, the same name; the throwaway copy had its own port.
+  expect(after.port).toBe(before.port);
+  expect(after.name).toBe(before.name);
+  expect(receipt.publicPort).toBe(before.port);
+  expect(receipt.copyPort).toBeGreaterThan(0);
+  expect(receipt.copyPort).not.toBe(before.port);
+  // The new container runs as the overlay says, with the old one's restart policy and healthcheck.
+  const hc = JSON.parse(docker(["inspect", "--format", "{{json .HostConfig}}", after.id])) as { ReadonlyRootfs: boolean; CapDrop: string[]; RestartPolicy: { Name: string } };
+  expect([hc.ReadonlyRootfs, hc.CapDrop, hc.RestartPolicy.Name]).toEqual([true, ["ALL"], "unless-stopped"]);
+  expect(docker(["inspect", "--format", "{{json .Config.Healthcheck.Test}}", after.id])).toContain("wget -q -O /dev/null http://127.0.0.1:8080/");
+  // Exactly one previous image: the first one.
+  expect(h.imageId(siteImageTag(h.instance, "previous"))).toBe(v1Image);
+  expect(h.imageId(siteImageTag(h.instance, "current"))).toBe(after.image);
+  expect(h.instanceImages()).toEqual([v1Image, after.image].sort());
+  // The maintenance window survived the swap, which wiped the old tmpfs.
+  expect(docker(["exec", after.id, "cat", `${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`])).toBe(announced);
+  const off = Bun.spawnSync(["bun", join(repoRoot, "scripts/release/maintenance.ts"), "off", "--instance", h.instance], { env, stdout: "pipe", stderr: "pipe" });
+  expect(off.exitCode).toBe(0);
+  expect(() => docker(["exec", after.id, "cat", `${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`])).toThrow();
 }, 300_000);
 
-describe("bun smoke:web deploys a site version onto a running stack", () => {
-  test("the boot placed a site, and it declares a range the running API is inside", async () => {
-    expect(bootSite).not.toBeNull();
-    const site = await servedSite(webPort);
-    // The site publishes the range frontend/package.json declares (not a string rebuilt from the
-    // contract version: a contract patch bump leaves a caret range valid, web-client.yml only
-    // requires the range to ADMIT the version), and that range admits the running API.
-    expect(site.apiRange).toBe(readFrontendApiRange());
-    expect(apiVersionInRange(API_VERSION, site.apiRange)).toBe(true);
-    const api = (await (await fetch(`http://127.0.0.1:${webPort}/api/version`)).json()) as { api: string };
-    expect(api.api).toBe(API_VERSION);
-  });
+test("a throwaway copy that fails its check never takes the public port", async () => {
+  const before = h.serving();
+  const images = h.instanceImages();
+  const { receipt, error, deps } = await deploy(h.bundle({ ...V3, broken: true }));
+  expect(error?.message).toMatch(/throwaway copy of web-v1\.2\.0 failed its check/);
+  expect(receipt).toMatchObject({ outcome: "refused", newContainer: null, gap: null });
+  expect(receipt.checks.find((c) => c.name === "copy")).toMatchObject({ ok: false });
+  // Nothing on the public port moved: the same container, never restarted, still serving V2.
+  const after = h.serving();
+  expect([after.id, after.startedAt]).toEqual([before.id, before.startedAt]);
+  await waitServed(h, V2, 1_000);
+  const sent = (deps.host.commands as string[][]).map((c) => c.join(" "));
+  expect(sent.filter((l) => /^docker (create|stop|start)\b/.test(l))).toEqual([]);
+  // The candidate that never served is gone: the host keeps one previous image.
+  expect(h.instanceImages()).toEqual(images);
+}, 300_000);
 
-  test("it builds into web/<version>-<commit>/ under the instance state directory and switches website-server to it", () => {
-    expect(deploy.code, deploy.out).toBe(0);
-    expect(existsSync(join(h.paths.webDir, inRange.siteId, "index.html"))).toBe(true);
-    expect(afterDeploy).toMatchObject({ current: inRange.siteId, previous: bootSite, served: inRange.siteId });
-    expect(afterDeploy!.receipt).toMatchObject({
-      action: "deploy",
-      instance: h.instance,
-      siteId: inRange.siteId,
-      previous: bootSite,
-      swapped: true,
-      reloaded: true,
-      apiVersion: API_VERSION,
-      apiRange: `^${API_VERSION}`,
-    });
-  });
+test("a bundle the server image does not trust fails verification on the host and is never built", async () => {
+  // The control machine trusts the rogue key too, so only the host's check stands in the way.
+  const rogue = h.rogueKey();
+  const bundle = h.bundle(V3, rogue);
+  const signers = join(h.work, "allowed-signers-with-rogue");
+  const pub = (await Bun.file(`${rogue}.pub`).text()).trim().split(/\s+/).slice(0, 2).join(" ");
+  await Bun.write(signers, `${await Bun.file(h.allowedSigners).text()}rogue namespaces="robotmoney-web-bundle@v1" ${pub}\n`);
+  const { receipt, error, deps } = await deploy(bundle, { allowedSigners: signers });
+  expect(error?.message).toMatch(/failed verification on local: web bundle refused: no key in \/etc\/robotmoney\/allowed-signers signed/);
+  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["api-range", true], ["verify-host", false]]);
+  const sent = (deps.host.commands as string[][]).map((c) => c.join(" "));
+  expect(sent.some((l) => l.includes("rm-verify-web-bundle"))).toBe(true);
+  expect(sent.filter((l) => /^docker build\b/.test(l))).toEqual([]);
+  await waitServed(h, V2, 1_000);
+}, 300_000);
 
-  test("a site whose range excludes the running API is refused naming both, and nothing moves", () => {
-    expect(refusal.code).not.toBe(0);
-    expect(refusal.out).toContain(`running API is ${API_VERSION}, outside site ${outOfRange.siteId}'s range ^9.0.0`);
-    expect(afterRefusal).toEqual({ current: inRange.siteId, served: inRange.siteId, receipt: afterDeploy!.receipt, dirExists: false });
-  });
+test("a failed public check starts the previous container again and exits non-zero", async () => {
+  const before = h.serving();
+  const wrongOrigin = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ version: "9.9.9", commit: "deadbee" }) });
+  try {
+    const { receipt, error } = await deploy(h.bundle(V3), { publicOrigin: `http://127.0.0.1:${wrongOrigin.port}` });
+    console.log(`smoke-web-lifecycle revert: gap ${receipt.gap?.ms} ms, revert gap ${receipt.revertGap?.ms} ms`);
+    expect(error?.message).toMatch(/The swap to web-v1\.2\.0 failed: .*does not name web-v1\.2\.0\. The previous website-server was started again\./);
+    expect(receipt.outcome).toBe("reverted");
+    expect(receipt.checks.find((c) => c.name === "public")).toMatchObject({ ok: false });
+    expect(receipt.checks.find((c) => c.name === "revert")).toMatchObject({ ok: true });
+    expect(receipt.revertGap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+  } finally {
+    wrongOrigin.stop(true);
+  }
+  // The previous container serves V2 again, on the same port; the V3 container and image are gone.
+  await waitServed(h, V2, 1_000);
+  const after = h.serving();
+  expect([after.id, after.port]).toEqual([before.id, before.port]);
+  expect(h.imageId(siteImageTag(h.instance, "previous"))).toBe(v1Image);
+  expect(h.instanceImages()).toEqual([v1Image, before.image].sort());
+}, 300_000);
 
-  test("--rollback returns website-server to the previous directory", () => {
-    expect(rollback.code, rollback.out).toBe(0);
-    expect(afterRollback).toMatchObject({ current: bootSite, previous: inRange.siteId, served: bootSite });
-    expect(afterRollback!.receipt).toMatchObject({ action: "rollback", siteId: bootSite, previous: inRange.siteId, swapped: true, reloaded: true });
+test("--bundle web-v1.0.0 deploys the older signed bundle by name, fetched from its release, with the same checks", async () => {
+  const v2Image = h.serving().image;
+  const fetched: string[] = [];
+  const { receipt, error } = await deploy("web-v1.0.0", {
+    async fetchRelease(tag, dir) {
+      fetched.push(tag);
+      for (const suffix of ["", ".sha256", ".sha256.sig"]) copyFileSync(`${v1Bundle}${suffix}`, join(dir, `${basename(v1Bundle)}${suffix}`));
+    },
   });
+  expect(error).toBeNull();
+  expect(fetched).toEqual(["web-v1.0.0"]);
+  expect(receipt.release).toMatchObject({ tag: "web-v1.0.0", ...V1 });
+  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
+    ["verify-local", true],
+    ["api-range", true],
+    ["verify-host", true],
+    ["build", true],
+    ["copy", true],
+    ["gap", true],
+    ["public", true],
+  ]);
+  await waitServed(h, V1, 1_000);
+  expect(h.imageId(siteImageTag(h.instance, "previous"))).toBe(v2Image);
+  expect(h.instanceImages().length).toBe(2);
+}, 300_000);
 
-  test("the web journal reads back every run under its plan id: deploy, refusal, rollback", () => {
-    const journal = readWebJournal(h.paths);
-    const byPlan = (planId: string) => journal.filter((e) => e.planId === planId).map((e) => e.step);
-    expect(byPlan(afterDeploy!.receipt!.planId)).toEqual(["begin", "range-checked", "built", "switched", "reloaded", "done"]);
-    expect(byPlan(afterRollback!.receipt!.planId)).toEqual(["begin", "range-checked", "switched", "reloaded", "done"]);
-    const refused = journal.filter((e) => e.step === "refused");
-    expect(refused).toHaveLength(1);
-    expect(refused[0]!.detail).toMatchObject({ apiVersion: API_VERSION, apiRange: "^9.0.0" });
+test("bun smoke:web --host local --rollback, run as an operator runs it, returns to the previous image", async () => {
+  const before = h.serving();
+  const stateRoot = mkdtempSync(join(tmpdir(), "rm-swt-cli-"));
+  const proc = Bun.spawnSync(["bun", "run", "smoke:web", "--host", "local", "--instance", h.instance, "--rollback"], {
+    cwd: repoRoot,
+    env: { ...process.env, RM_SMOKE_STATE_ROOT: stateRoot },
+    stdout: "pipe",
+    stderr: "pipe",
   });
-
-  test("the stack's own deployment journal and receipt are untouched", () => {
-    expect(readFileSync(h.paths.journalFile, "utf8")).toBe(stackJournal);
-    expect(readFileSync(h.paths.receiptFile, "utf8")).toBe(stackReceipt);
-  });
-
-  test("api, every worker and website-server keep their container and start time: a reload, never a restart", () => {
-    for (const service of ["api", "website-server", "worker-analytics"]) expect(Object.keys(before)).toContain(service);
-    const { changes, restartingBefore } = containerChanges(before, after);
-    // The relaxation for a service already crash-looping never covers these.
-    for (const steady of Object.keys(before).filter((s) => s === "api" || s === "website-server" || s.startsWith("worker-"))) {
-      expect(restartingBefore).not.toContain(steady);
-    }
-    if (restartingBefore.length > 0) console.warn(`[smoke-web-lifecycle] already restarting before smoke:web (id compared only): ${restartingBefore.join(", ")}`);
-    expect(changes).toEqual([]);
-  });
-});
+  const out = proc.stdout.toString() + proc.stderr.toString();
+  console.log(out);
+  expect(proc.exitCode).toBe(0);
+  expect(out).toContain("swapped: web-v1.1.0");
+  await waitServed(h, V2, 1_000);
+  const receipt = readImageReceipt(join(stateRoot, "web-image", h.instance))!;
+  expect(receipt).toMatchObject({ action: "rollback", outcome: "swapped", oldContainer: { id: before.id } });
+  expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+  expect(h.serving().port).toBe(before.port);
+}, 300_000);

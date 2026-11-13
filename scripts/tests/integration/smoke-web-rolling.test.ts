@@ -1,113 +1,142 @@
-// Rolling the site under live traffic (issue #1026 W7, criterion 164; smoke
-// spec §13.2, D54): switching the site between two versions while the API
-// serves traffic fails no request, and restarts no container.
+// Swapping the site image under live traffic (issue 1628,
+// docs/technical/web-serving-architecture.md §4.1). Real Docker on this
+// machine (smoke-web-image-harness.ts).
 //
-// A real `bun smoke --local blank --migrate` stack of its own instance. Steady
-// traffic goes through website-server's published port, the way a visitor's
-// browser reaches it: a prerendered page, a client route that falls back to
-// the shell, the site's /version.json, and — proxied to `api` — /api/version,
-// /health and one read route the home page loads. Meanwhile `bun smoke:web`
-// switches to a second built version, rolls back, switches to it again and
-// rolls back again: four nginx reloads mid-traffic.
+// A probe sends 10 requests a second to the public port, each on its own
+// clock, for the whole run: /version.json and, proxied to the stand-in api,
+// /api/version, alternately. Meanwhile `bun smoke:web`'s image mode runs four
+// swaps in a row: deploy a second bundle, roll back, roll back again, deploy a
+// third bundle.
 //
-// Graded: zero failed requests (every response 2xx, no connection error), both
-// site versions actually served during the run (so the traffic overlapped the
-// switches rather than finishing before them), and the `api` container — and
-// every worker's and website-server's — has the same id and start time after.
+// Graded:
+//   - every swap's gap, rollbacks included, is under the 3 second limit;
+//   - no request fails outside a gap the receipts recorded. A failed request
+//     whose time in flight overlaps no recorded gap fails the test;
+//   - after every swap the instance holds exactly two site images, the current
+//     one and one previous one, and the previous one is the image that served
+//     before that swap;
+//   - the probe saw every version it should have, so it overlapped the swaps.
+//
+// The test prints `smoke-web-rolling: ...` with the counts, which
+// integration.yml greps so a skipped run is never green.
+//
+// LOUD, NEVER SKIPPED: Docker and ssh-keygen are hard dependencies.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { readContractVersion } from "../../lib/api-range.ts";
-import { currentSite } from "../../lib/smoke-site.ts";
-import { readStackState } from "../../lib/smoke-state.ts";
-import { BOOT_TIMEOUT_MS, bootFailureReport, harness, spawnBoot, teardown, type BootHarness, type RunningBoot } from "./smoke-boot-harness.ts";
-import { containerChanges, serviceContainers, smokeWeb, variantTree, type ServiceContainer, type VariantTree } from "./smoke-web-harness.ts";
+import { deployImage, GAP_LIMIT_MS, rollbackImage, siteImageTag, type ImageReceipt, type SwapGap } from "../../lib/website-release.ts";
+import { createImageHost, waitServed, type ImageHost } from "./smoke-web-image-harness.ts";
 
-const API_VERSION = readContractVersion();
-/** Concurrent request loops; each issues its next request as soon as the last answers. */
-const LOOPS = 6;
-const PATHS = ["/", "/swarm/members/not-prerendered", "/version.json", "/api/version", "/health", "/api/dashboards/allocation"] as const;
+const V1 = { version: "2.0.0", commit: "aaaa001" };
+const V2 = { version: "2.1.0", commit: "bbbb002" };
+const V3 = { version: "2.2.0", commit: "cccc003" };
+const RATE_PER_SECOND = 10;
 
-let h: BootHarness;
-let boot: RunningBoot;
-let second: VariantTree;
-let bootSite: string | null = null;
-let before: Record<string, ServiceContainer> = {};
-let after: Record<string, ServiceContainer> = {};
-const runs: { args: string[]; code: number; out: string }[] = [];
-const failures: string[] = [];
-const servedVersions = new Set<string>();
-const perPath = new Map<string, number>();
-let total = 0;
+interface Probe {
+  readonly path: string;
+  readonly sent: number;
+  done: number;
+  ok: boolean;
+  version: string | null;
+}
+
+let h: ImageHost;
+const probes: Probe[] = [];
+const gaps: { op: string; gap: SwapGap }[] = [];
+const steps: { op: string; receipt: ImageReceipt; servedBefore: string; images: string[]; previous: string | null; current: string | null }[] = [];
 
 beforeAll(async () => {
-  h = harness("smokewebroll");
-  boot = spawnBoot(h);
-  const code = await boot.exited;
-  if (code !== 0) throw new Error(`bun smoke exited ${code}:\n${bootFailureReport(boot)}`);
-  const webPort = readStackState(h.paths)!.webPort;
-  bootSite = currentSite(h.paths.webDir);
-  second = variantTree("0.1.9-webroll", `^${API_VERSION}`);
-  before = serviceContainers(h.project);
-
+  h = createImageHost("rolling", V1);
+  await waitServed(h, V1);
+  const port = h.serving().port;
   let stop = false;
-  const loop = async (offset: number) => {
-    for (let i = offset; !stop; i++) {
-      const path = PATHS[i % PATHS.length]!;
-      total++;
-      perPath.set(path, (perPath.get(path) ?? 0) + 1);
-      try {
-        const res = await fetch(`http://127.0.0.1:${webPort}${path}`);
-        const body = await res.text();
-        if (res.status < 200 || res.status > 299) failures.push(`${path}: HTTP ${res.status} ${body.slice(0, 120)}`);
-        else if (path === "/version.json") servedVersions.add((JSON.parse(body) as { version: string }).version);
-      } catch (error) {
-        failures.push(`${path}: ${(error as Error).message}`);
-      }
+  let n = 0;
+  const timer = setInterval(() => {
+    if (stop) return;
+    const path = n++ % 2 === 0 ? "/version.json" : "/api/version";
+    const probe: Probe = { path, sent: Date.now(), done: 0, ok: false, version: null };
+    probes.push(probe);
+    fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(2_000) })
+      .then(async (res) => {
+        const body = (await res.json()) as { version?: string; api?: string };
+        probe.ok = res.ok && (path === "/api/version" ? typeof body.api === "string" : typeof body.version === "string");
+        probe.version = body.version ?? null;
+      })
+      .catch(() => {
+        probe.ok = false;
+      })
+      .finally(() => {
+        probe.done = Date.now();
+      });
+  }, 1_000 / RATE_PER_SECOND);
+
+  try {
+    await Bun.sleep(1_000);
+    const ops: [string, () => Promise<ImageReceipt>][] = [
+      ["deploy 2.1.0", () => deployImage({ bundle: h.bundle(V2), serverImage: h.serverImage }, h.deps())],
+      ["rollback to 2.0.0", () => rollbackImage(h.deps())],
+      ["rollback to 2.1.0", () => rollbackImage(h.deps())],
+      ["deploy 2.2.0", () => deployImage({ bundle: h.bundle(V3), serverImage: h.serverImage }, h.deps())],
+    ];
+    for (const [op, run] of ops) {
+      const servedBefore = h.serving().image;
+      const receipt = await run();
+      if (receipt.gap) gaps.push({ op, gap: receipt.gap });
+      if (receipt.revertGap) gaps.push({ op: `${op} (revert)`, gap: receipt.revertGap });
+      steps.push({
+        op,
+        receipt,
+        servedBefore,
+        images: h.instanceImages(),
+        previous: h.imageId(siteImageTag(h.instance, "previous")),
+        current: h.imageId(siteImageTag(h.instance, "current")),
+      });
+      await Bun.sleep(700);
     }
-  };
-  const loops = Array.from({ length: LOOPS }, (_, i) => loop(i));
-  // Traffic first, then the switches, then traffic after the last one.
-  await Bun.sleep(1_000);
-  for (const [args, tree] of [[[], second.dir], [["--rollback"], undefined], [[], second.dir], [["--rollback"], undefined]] as const) {
-    const r = await smokeWeb(h, args, tree);
-    runs.push({ args: [...args], ...r });
+  } finally {
+    stop = true;
+    clearInterval(timer);
+    // Let the last requests finish.
+    await Bun.sleep(2_500);
   }
-  await Bun.sleep(1_000);
-  stop = true;
-  await Promise.all(loops);
-  after = serviceContainers(h.project);
-}, BOOT_TIMEOUT_MS);
+}, 900_000);
 
-afterAll(() => {
-  if (h) teardown(h, boot);
-  second?.dispose();
-}, 300_000);
+afterAll(() => h?.dispose(), 120_000);
 
-test("all four switches ran, and each one switched", () => {
-  expect(runs.map((r) => [r.args.join(" "), r.code])).toEqual([["", 0], ["--rollback", 0], ["", 0], ["--rollback", 0]]);
-  for (const r of runs) expect(r.out).toMatch(/\[smoke:web\] now serving /);
-  expect(currentSite(h.paths.webDir)).toBe(bootSite);
-});
-
-test("the traffic overlapped the switches: both site versions were served, on every path", () => {
-  const bootVersion = (JSON.parse(readFileSync(join(h.paths.webDir, bootSite!, "version.json"), "utf8")) as { version: string }).version;
-  expect(bootVersion).not.toBe(second.version);
-  expect(servedVersions).toEqual(new Set([bootVersion, second.version]));
-  for (const path of PATHS) expect(perPath.get(path) ?? 0).toBeGreaterThan(20);
-});
-
-test("zero failed requests: no non-2xx answer and no connection error", () => {
-  expect(total).toBeGreaterThan(500);
-  expect(failures).toEqual([]);
-});
-
-test("the api container is unchanged, and no worker or website-server restarted", () => {
-  expect(after.api?.id).toBe(before.api!.id);
-  const { changes, restartingBefore } = containerChanges(before, after);
-  for (const steady of Object.keys(before).filter((s) => s === "api" || s === "website-server" || s.startsWith("worker-"))) {
-    expect(restartingBefore).not.toContain(steady);
+test("four swaps in a row each finish, each with a gap under the 3 second limit, rollbacks included", () => {
+  expect(steps.map((s) => [s.op, s.receipt.outcome])).toEqual([
+    ["deploy 2.1.0", "swapped"],
+    ["rollback to 2.0.0", "swapped"],
+    ["rollback to 2.1.0", "swapped"],
+    ["deploy 2.2.0", "swapped"],
+  ]);
+  for (const s of steps) {
+    expect({ op: s.op, ms: s.receipt.gap?.ms, within: (s.receipt.gap?.ms ?? Infinity) <= GAP_LIMIT_MS }).toEqual({ op: s.op, ms: s.receipt.gap!.ms, within: true });
   }
-  if (restartingBefore.length > 0) console.warn(`[smoke-web-rolling] already restarting before the roll (id compared only): ${restartingBefore.join(", ")}`);
-  expect(changes).toEqual([]);
+  expect(steps.map((s) => s.receipt.release?.version)).toEqual(["2.1.0", "2.0.0", "2.1.0", "2.2.0"]);
+});
+
+test("four swaps and rollbacks in a row keep exactly one previous image: the one that served before the swap", () => {
+  for (const s of steps) {
+    expect({ op: s.op, count: s.images.length }).toEqual({ op: s.op, count: 2 });
+    expect({ op: s.op, previous: s.previous }).toEqual({ op: s.op, previous: s.servedBefore });
+    expect({ op: s.op, current: s.current }).toEqual({ op: s.op, current: s.receipt.newContainer!.image });
+    expect(s.images).toEqual([s.previous!, s.current!].sort());
+  }
+});
+
+test("under a 10 requests per second probe, no request fails outside the gaps the receipts recorded", () => {
+  const windows = gaps.map(({ gap }) => [Date.parse(gap.startedAt), gap.endedAt === null ? Infinity : Date.parse(gap.endedAt)] as const);
+  const failed = probes.filter((p) => !p.ok);
+  const outside = failed.filter((p) => !windows.some(([start, end]) => p.sent <= end && p.done >= start));
+  const versions = new Set(probes.map((p) => p.version).filter((v) => v !== null));
+  const span = (probes.at(-1)!.sent - probes[0]!.sent) / 1_000;
+  console.log(
+    `smoke-web-rolling: ${probes.length} requests over ${span.toFixed(1)} s, ${failed.length} failed, ${outside.length} outside a gap; ` +
+      `gaps ${gaps.map((g) => `${g.op}=${g.gap.ms}ms`).join(", ")}`,
+  );
+  expect(outside.map((p) => ({ path: p.path, sent: new Date(p.sent).toISOString(), done: new Date(p.done).toISOString() }))).toEqual([]);
+  // The probe ran at the rate, through every swap, and saw each version served.
+  expect(probes.length).toBeGreaterThanOrEqual(Math.floor(span * RATE_PER_SECOND * 0.9));
+  expect(probes.every((p) => p.done > 0)).toBe(true);
+  expect([...versions].sort()).toEqual(["2.0.0", "2.1.0", "2.2.0"]);
+  expect(gaps.length).toBe(4);
 });

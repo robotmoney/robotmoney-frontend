@@ -490,6 +490,12 @@ Decided with the owner on 2026-09-24 and recorded as [D54](../decisions.md#d54).
 
 `bun smoke:web --rollback` returns `website-server` to the previous directory, with the same reload and receipt.
 
+**Image mode (issue 1628).** `bun smoke:web --host <ssh-dest|local>` deploys a signed bundle as an immutable
+`website-server` image instead, by the checked swap in [web-serving-architecture.md](./web-serving-architecture.md)
+§4. It refuses a bundle, or a previous image on `--rollback`, whose `apiRange` excludes the running API, as above.
+The directory mode above stays the default until the runbooks and the platform boots move to the image mode, and
+nginx is removed after that.
+
 ### 13.3 `bun smoke` and the live site
 
 Before it replaces `api`, `bun smoke` reads the live site's `/version.json`. It refuses when the new API version is outside the live site's range, unless the same plan deploys a site whose range includes that version. A live site with no declared range counts as outside every range.

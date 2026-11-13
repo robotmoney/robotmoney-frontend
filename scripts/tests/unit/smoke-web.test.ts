@@ -6,21 +6,48 @@
 // assembly, the API's version, the nginx reload) are stand-ins, recorded so a
 // test can say which ran. The running-stack half — a real website-server, a
 // real api, container ids read back from Docker — is
-// scripts/tests/integration/smoke-web-lifecycle.test.ts.
+// scripts/tests/integration/smoke-web-dir-lifecycle.test.ts.
+//
+// The image mode (issue 1628) is the second half of this file: a fake host
+// that records the command list, real HTTP ports, and a real signed bundle.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CURRENT_SITE_LINK, currentSite, placeSite, PREVIOUS_SITE_LINK, previousSite, switchSite } from "../../lib/smoke-site.ts";
 import { acquireDeploymentLock, instancePaths, resolveInstance, type InstancePaths } from "../../lib/smoke-state.ts";
+import { packBundle, signBundle } from "../../lib/web-bundle.ts";
+import { WEB_BUNDLE_SIGNATURE_NAMESPACE } from "../../lib/web-bundle-manifest.ts";
+import { shellQuote, sshArgv, sshHost, type HostResult, type WebHost } from "../../lib/website-host.ts";
 import {
+  readWebsiteImageService,
+  WEBSITE_ASSET_CACHE,
+  WEBSITE_HTML_CACHE,
+  WEBSITE_SECURITY_HEADERS,
+  websiteImageRunFlags,
+} from "../../lib/website-image.ts";
+import {
+  assertImageInstance,
   BUILD_DIR_PREFIX,
+  deployImage,
   deploySite,
+  GAP_LIMIT_MS,
+  hostLockName,
+  IMAGE_JOURNAL_FILE,
+  isReleaseName,
+  publicPortBinding,
+  readImageReceipt,
   readWebJournal,
   readWebReceipt,
+  replacementCreateArgs,
   resolveWebInstance,
+  rollbackImage,
   rollbackSite,
+  SERVER_PIN_REPO,
+  siteImageTag,
   webPlanId,
+  type ContainerInspect,
+  type ImageReleaseDeps,
   type WebReleaseDeps,
 } from "../../lib/website-release.ts";
 
@@ -383,5 +410,482 @@ describe("wiring", () => {
     const entry = readFileSync(join(repoRoot, "scripts", "smoke-web.ts"), "utf8");
     expect(entry).toContain('compose(["exec", "-T", "website-server", "nginx", "-s", "reload"])');
     expect(entry).not.toContain("docker.sock");
+  });
+});
+
+// ===========================================================================
+// IMAGE MODE (issue 1628; web-serving-architecture.md §4, §4.1). The host is
+// a fake: it answers each `docker …` command from a small state machine and
+// records the command list, and each port it publishes is a real local HTTP
+// server whose answers follow that state. The bundle is real: packed and
+// signed with a key made here, verified by web-bundle.ts. The real Docker
+// half is scripts/tests/integration/smoke-web-lifecycle.test.ts and
+// smoke-web-rolling.test.ts.
+// ===========================================================================
+
+const OLD_ID = "a".repeat(64);
+const NEW_ID = "b".repeat(64);
+const OLD_IMAGE = `sha256:${"1".repeat(64)}`;
+const NEW_IMAGE = `sha256:${"2".repeat(64)}`;
+const PREV_IMAGE = `sha256:${"3".repeat(64)}`;
+const SERVER_ID = `sha256:${"4".repeat(64)}`;
+const PUBLIC_PORT = 48787;
+const COPY_PORT = 40001;
+const OLD_RELEASE = { version: "0.1.0", commit: "aaaa111" };
+const IMAGE_INSTANCE = "stage_target";
+
+interface FakeHostState {
+  api: string;
+  /** Which container answers on the public port. */
+  serving: "old" | "new" | "none";
+  newRelease: { version: string; commit: string };
+  previousRelease: { version: string; commit: string; apiRange: string | null };
+  hostVerifyFails: boolean;
+  copyBroken: boolean;
+  lockHeld: boolean;
+  hasPrevious: boolean;
+}
+
+interface FakeHost extends WebHost {
+  readonly state: FakeHostState;
+  /** The commands, each joined with spaces, for matching. */
+  lines(): string[];
+}
+
+const securityHeaders = (html: boolean) => ({ ...WEBSITE_SECURITY_HEADERS, "cache-control": html ? WEBSITE_HTML_CACHE : WEBSITE_ASSET_CACHE });
+
+function oldInspect(): ContainerInspect {
+  return {
+    Id: OLD_ID,
+    Name: "/rm_stage_target-website-server-1",
+    Image: OLD_IMAGE,
+    State: { Running: true },
+    Config: {
+      Labels: {
+        "com.docker.compose.project": "rm_stage_target",
+        "com.docker.compose.service": "website-server",
+        "robotmoney.instance": IMAGE_INSTANCE,
+        "robotmoney.smoke": "1",
+        "robotmoney.web.tag": "web-v0.1.0",
+        "robotmoney.web.bundle-sha256": "f".repeat(64),
+        maintainer: "caddy",
+      },
+      Healthcheck: { Test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"], Interval: 15e9, Timeout: 5e9, Retries: 3, StartPeriod: 10e9 },
+    },
+    HostConfig: {
+      RestartPolicy: { Name: "unless-stopped", MaximumRetryCount: 0 },
+      LogConfig: { Type: "json-file", Config: { "max-size": "10m" } },
+      PortBindings: { "8080/tcp": [{ HostIp: "", HostPort: "48787" }] },
+    },
+    NetworkSettings: {
+      Ports: { "8080/tcp": [{ HostIp: "0.0.0.0", HostPort: "48787" }, { HostIp: "::", HostPort: "48787" }] },
+      Networks: { rm_stage_target_default: { Aliases: ["rm_stage_target-website-server-1", "website-server", OLD_ID.slice(0, 12)] } },
+    },
+  };
+}
+
+const servers: { stop(force?: boolean): void }[] = [];
+afterEach(() => {
+  for (const s of servers.splice(0)) s.stop(true);
+});
+
+function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
+  const state: FakeHostState = {
+    api: "0.2.0",
+    serving: "old",
+    newRelease: { version: "0.2.0", commit: "bbbb222" },
+    previousRelease: { version: "0.0.9", commit: "cccc333", apiRange: "^0.2.0" },
+    hostVerifyFails: false,
+    copyBroken: false,
+    lockHeld: false,
+    hasPrevious: true,
+    ...over,
+  };
+  let copyRelease = state.newRelease;
+  const json = (body: unknown, headers: Record<string, string> = {}) => Response.json(body, { headers });
+  const publicServer = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (state.serving === "none") return new Response("down", { status: 502 });
+      if (path === "/api/version") return json({ api: state.api, commit: "c0ffee0" });
+      if (path === "/version.json") return json(state.serving === "old" ? OLD_RELEASE : copyRelease, securityHeaders(false));
+      return new Response("<!doctype html>", { headers: securityHeaders(true) });
+    },
+  });
+  const copyServer = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path === "/version.json") return json(copyRelease, securityHeaders(false));
+      if (path.endsWith(".js")) return new Response("missing", { status: 404, headers: securityHeaders(false) });
+      if (state.copyBroken) return new Response("not found", { status: 404, headers: securityHeaders(true) });
+      return new Response("<!doctype html>", { headers: securityHeaders(true) });
+    },
+  });
+  servers.push(publicServer, copyServer);
+  const commands: string[][] = [];
+  const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+  const no = (stderr: string) => ({ code: 1, stdout: "", stderr });
+  const labelsOf = (ref: string) => {
+    if (ref === PREV_IMAGE || ref === siteImageTag(IMAGE_INSTANCE, "previous")) {
+      return { "robotmoney.web.tag": `web-v${state.previousRelease.version}`, "robotmoney.web.commit": state.previousRelease.commit, "robotmoney.web.bundle-sha256": "e".repeat(64) };
+    }
+    if (ref === OLD_IMAGE) return { "robotmoney.web.tag": "web-v0.1.0", "robotmoney.web.commit": OLD_RELEASE.commit };
+    if (ref === NEW_IMAGE || ref.endsWith("-candidate")) {
+      return { "robotmoney.web.tag": `web-v${state.newRelease.version}`, "robotmoney.web.commit": state.newRelease.commit, "robotmoney.web.bundle-sha256": built.sha256 };
+    }
+    return {};
+  };
+  const built = { sha256: "" };
+  const docker = (a: string[]): HostResult => {
+    const joined = a.join(" ");
+    switch (a[0]) {
+      case "network":
+        if (a[1] === "create") return state.lockHeld ? no("network with name robotmoney-web-lock-stage_target already exists") : ok("lockid");
+        if (a[1] === "inspect") return ok(new Date().toISOString());
+        return ok();
+      case "ps":
+        return ok(OLD_ID);
+      case "inspect":
+        return ok(JSON.stringify([oldInspect()]));
+      case "image": {
+        const ref = a.at(-1)!;
+        if (joined.includes("{{.Id}}")) {
+          if (ref === siteImageTag(IMAGE_INSTANCE, "previous")) return state.hasPrevious ? ok(PREV_IMAGE) : no("No such image");
+          if (ref.endsWith("-candidate")) return ok(NEW_IMAGE);
+          if (ref === "robotmoney-website-server:platform") return ok(SERVER_ID);
+          return no("No such image");
+        }
+        if (joined.includes("RootFS")) return ok(JSON.stringify(ref === SERVER_ID ? ["sha256:l1"] : ["sha256:l1", "sha256:l2"]));
+        return ok(JSON.stringify(labelsOf(ref)));
+      }
+      case "run":
+        if (joined.includes("rm-verify-web-bundle")) return state.hostVerifyFails ? no("web bundle refused: no key in /etc/robotmoney/allowed-signers signed it") : ok("verified");
+        if (joined.includes("--entrypoint cat")) return ok(JSON.stringify({ ...state.previousRelease }));
+        // The throwaway copy serves the image it was started from.
+        copyRelease = a.at(-1) === PREV_IMAGE ? state.previousRelease : state.newRelease;
+        return ok("copyid");
+      case "build":
+        built.sha256 = a.find((x) => x.startsWith("BUNDLE_SHA256="))!.slice("BUNDLE_SHA256=".length);
+        return ok(NEW_IMAGE);
+      case "port":
+        return ok(`127.0.0.1:${COPY_PORT}`);
+      case "create":
+        return ok(NEW_ID);
+      case "stop":
+        state.serving = "none";
+        return ok();
+      case "start":
+        state.serving = a[1] === NEW_ID ? "new" : "old";
+        return ok();
+      case "exec":
+        return no("cat: can't open: No such file");
+      case "images":
+        return ok([NEW_IMAGE, OLD_IMAGE, PREV_IMAGE].join("\n"));
+      default:
+        return ok();
+    }
+  };
+  return {
+    name: "fake-host",
+    commands,
+    state,
+    lines: () => commands.map((c) => c.join(" ")),
+    async run(argv) {
+      commands.push([...argv]);
+      if (argv[0] === "mktemp") return ok("/host/work");
+      if (argv[0] !== "docker") return ok();
+      return docker(argv.slice(1));
+    },
+    async openPort(port) {
+      if (port === PUBLIC_PORT) return { origin: `http://127.0.0.1:${publicServer.port}`, close() {} };
+      if (port === COPY_PORT) return { origin: `http://127.0.0.1:${copyServer.port}`, close() {} };
+      throw new Error(`the fake host publishes no port ${port}`);
+    },
+    close() {},
+  };
+}
+
+/** A real signed bundle for `release` with `apiRange`, and the allowed-signers file that trusts its key. */
+function signedTestBundle(release: { version: string; commit: string }, apiRange: string | null): { bundle: string; allowedSigners: string; sha256: string } {
+  const root = mkdtempSync(join(tmpdir(), "rm-smoke-web-image-"));
+  roots.push(root);
+  const key = join(root, "key");
+  const kg = Bun.spawnSync(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", key], { stdout: "pipe", stderr: "pipe" });
+  if (kg.exitCode !== 0) throw new Error(`ssh-keygen failed: ${kg.stderr.toString()}`);
+  const pub = readFileSync(`${key}.pub`, "utf8").trim().split(/\s+/).slice(0, 2).join(" ");
+  const allowedSigners = join(root, "allowed-signers");
+  writeFileSync(allowedSigners, `test namespaces="${WEB_BUNDLE_SIGNATURE_NAMESPACE}" ${pub}\n`);
+  const site = join(root, "site");
+  mkdirSync(site);
+  writeFileSync(join(site, "index.html"), "<!doctype html>");
+  writeFileSync(join(site, "version.json"), JSON.stringify({ ...release, apiRange }));
+  const packed = packBundle(site, join(root, "out"));
+  signBundle(packed.path, key);
+  return { bundle: packed.path, allowedSigners, sha256: packed.sha256 };
+}
+
+function imageDeps(host: FakeHost, extra: Partial<ImageReleaseDeps> = {}): ImageReleaseDeps & { receiptDir: string } {
+  const receiptDir = mkdtempSync(join(tmpdir(), "rm-smoke-web-receipt-"));
+  roots.push(receiptDir);
+  return { host, instance: IMAGE_INSTANCE, receiptDir, repoRoot, readyTimeoutMs: 3_000, ...extra };
+}
+
+async function deployFake(host: FakeHost, apiRange: string | null = "^0.2.0", extra: Partial<ImageReleaseDeps> = {}) {
+  const b = signedTestBundle(host.state.newRelease, apiRange);
+  const deps = imageDeps(host, { allowedSigners: b.allowedSigners, ...extra });
+  const result = await deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform" }, deps).then(
+    (receipt) => ({ receipt, error: null as Error | null }),
+    (error: Error) => ({ receipt: readImageReceipt(deps.receiptDir)!, error }),
+  );
+  return { ...result, deps, sha256: b.sha256 };
+}
+
+const index = (lines: string[], pattern: RegExp) => lines.findIndex((l) => pattern.test(l));
+
+describe("image mode: deploy (smoke:web --host --bundle)", () => {
+  test("a passing swap: the receipt records the old and new container ids, every check's result and the gap in ms", async () => {
+    const host = fakeHost();
+    const { receipt, error, deps, sha256 } = await deployFake(host);
+    expect(error).toBeNull();
+    expect(receipt).toMatchObject({
+      schema: 2,
+      mode: "image",
+      action: "deploy",
+      outcome: "swapped",
+      instance: IMAGE_INSTANCE,
+      host: "fake-host",
+      release: { tag: "web-v0.2.0", version: "0.2.0", commit: "bbbb222", sha256, apiRange: "^0.2.0" },
+      apiVersion: "0.2.0",
+      oldContainer: { id: OLD_ID, image: OLD_IMAGE },
+      newContainer: { id: NEW_ID, image: NEW_IMAGE },
+      publicPort: PUBLIC_PORT,
+      copyPort: COPY_PORT,
+      currentImage: NEW_IMAGE,
+      previousImage: OLD_IMAGE,
+      revertGap: null,
+      error: null,
+    });
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
+      ["verify-local", true],
+      ["api-range", true],
+      ["verify-host", true],
+      ["build", true],
+      ["copy", true],
+      ["gap", true],
+      ["public", true],
+    ]);
+    expect(typeof receipt.gap?.ms).toBe("number");
+    expect(receipt.gap!.ms!).toBeGreaterThanOrEqual(0);
+    expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+    expect(Date.parse(receipt.gap!.endedAt!) - Date.parse(receipt.gap!.startedAt)).toBe(receipt.gap!.ms!);
+    // Written on the control machine, and appended to the journal.
+    expect(readImageReceipt(deps.receiptDir)).toEqual(receipt);
+    expect(readFileSync(join(deps.receiptDir, IMAGE_JOURNAL_FILE), "utf8").trim().split("\n").map((l) => JSON.parse(l).outcome)).toEqual(["swapped"]);
+  });
+
+  test("the command list: lock, verify on the host, build FROM the pinned server id, check a copy, then stop, start, rename, keep one previous", async () => {
+    const host = fakeHost();
+    await deployFake(host);
+    const lines = host.lines();
+    const at = (p: RegExp) => {
+      const i = index(lines, p);
+      expect({ pattern: String(p), found: i >= 0 }).toEqual({ pattern: String(p), found: true });
+      return i;
+    };
+    const order = [
+      at(/^docker network create --internal .* robotmoney-web-lock-stage_target$/),
+      at(/^docker image inspect --format \{\{\.Id\}\} robotmoney-website-server:platform$/),
+      at(new RegExp(`^docker tag ${SERVER_ID} ${SERVER_PIN_REPO}:${"4".repeat(64)}$`)),
+      at(new RegExp(`^docker run --rm --network none --user 0:0 -v /host/work/bundle:/in:ro --entrypoint rm-verify-web-bundle ${SERVER_ID} /in \\S+ web-v0\\.2\\.0 bbbb222 [0-9a-f]{64}$`)),
+      at(new RegExp(`^docker build .*--build-arg SERVER_IMAGE=${SERVER_PIN_REPO}:${"4".repeat(64)} `)),
+      at(/^docker run -d --rm --name robotmoney-web-check-stage_target-\S+ .*-p 127\.0\.0\.1::8080 /),
+      at(/^docker create --name rm_stage_target-website-server-1-next-/),
+      at(new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
+      at(new RegExp(`^docker start ${NEW_ID}$`)),
+      at(new RegExp(`^docker rm ${OLD_ID}$`)),
+      at(new RegExp(`^docker rename ${NEW_ID} rm_stage_target-website-server-1$`)),
+      at(new RegExp(`^docker tag ${NEW_IMAGE} robotmoney-website:stage_target-current$`)),
+      at(new RegExp(`^docker tag ${OLD_IMAGE} robotmoney-website:stage_target-previous$`)),
+      at(/^docker network rm robotmoney-web-lock-stage_target$/),
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // Every other image of the instance is removed: exactly one previous is kept.
+    expect(lines).toContain(`docker rmi -f ${PREV_IMAGE}`);
+    expect(lines).not.toContain(`docker rmi -f ${OLD_IMAGE}`);
+    expect(lines).not.toContain(`docker rmi -f ${NEW_IMAGE}`);
+    // The throwaway copy never names the public port.
+    expect(lines.filter((l) => l.startsWith("docker run -d")).join("\n")).not.toContain(String(PUBLIC_PORT));
+    // Every command is docker, mktemp, mkdir, rm or a `sh -c cat` write: nothing else is needed on the host.
+    expect(new Set(host.commands.map((c) => c[0]))).toEqual(new Set(["docker", "mktemp", "mkdir", "sh", "rm"]));
+  });
+
+  test("a bundle that fails verification on the host is never built into an image", async () => {
+    const host = fakeHost({ hostVerifyFails: true });
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/failed verification on fake-host: web bundle refused/);
+    expect(receipt.outcome).toBe("refused");
+    expect(receipt.checks.find((c) => c.name === "verify-host")).toMatchObject({ ok: false });
+    const lines = host.lines();
+    expect(index(lines, /rm-verify-web-bundle/)).toBeGreaterThan(0);
+    expect(lines.filter((l) => /^docker (build|create|stop|start)\b/.test(l))).toEqual([]);
+    // The bundle's directory on the host is removed, and the lock released.
+    expect(lines).toContain("rm -rf /host/work");
+    expect(lines.at(-1)).toBe("docker network rm robotmoney-web-lock-stage_target");
+  });
+
+  test("refuses an apiRange the running API does not accept, before anything reaches the host's images", async () => {
+    const host = fakeHost({ api: "0.3.0" });
+    const { receipt, error } = await deployFake(host, "^0.2.0");
+    expect(error?.message).toBe("Refusing: the running API is 0.3.0, outside web-v0.2.0's range ^0.2.0. Nothing was changed.");
+    expect(receipt).toMatchObject({ outcome: "refused", apiVersion: "0.3.0", newContainer: null, gap: null });
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["api-range", false]]);
+    expect(host.lines().filter((l) => /^(docker (build|create|stop|start|tag)|mktemp)\b/.test(l))).toEqual([]);
+  });
+
+  test("a bundle with no declared range is outside every range", async () => {
+    const host = fakeHost();
+    const { error } = await deployFake(host, null);
+    expect(error?.message).toMatch(/no declared range \(outside every range, D54\)/);
+  });
+
+  test("a bundle signed by no listed key is refused here, and nothing is sent to the host", async () => {
+    const host = fakeHost();
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    const other = signedTestBundle(host.state.newRelease, "^0.2.0");
+    const deps = imageDeps(host, { allowedSigners: other.allowedSigners });
+    await expect(deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform" }, deps)).rejects.toThrow(/failed verification: no key in .* signed this bundle/);
+    expect(readImageReceipt(deps.receiptDir)?.outcome).toBe("refused");
+    expect(host.commands.map((c) => c.slice(0, 3).join(" "))).toEqual(["docker network create", "docker network rm"]);
+  });
+
+  test("a throwaway copy that fails its check never touches the public port", async () => {
+    const host = fakeHost({ copyBroken: true });
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/throwaway copy of web-v0\.2\.0 failed its check: \/: status 404/);
+    expect(receipt).toMatchObject({ outcome: "refused", newContainer: null, gap: null });
+    expect(host.lines().filter((l) => /^docker (create|stop|start)\b/.test(l))).toEqual([]);
+    expect(host.state.serving).toBe("old");
+    // The candidate image is removed: it never served, so it is not kept.
+    expect(host.lines()).toContain(`docker rmi -f ${NEW_IMAGE}`);
+  });
+
+  test("a failed public check starts the previous container again and fails, with the revert's gap", async () => {
+    const wrong = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ version: "9.9.9", commit: "deadbee" }) });
+    servers.push(wrong);
+    const host = fakeHost();
+    const { receipt, error } = await deployFake(host, "^0.2.0", { publicOrigin: `http://127.0.0.1:${wrong.port}` });
+    expect(error?.message).toMatch(/The swap to web-v0\.2\.0 failed: .*does not name web-v0\.2\.0\. The previous website-server was started again\./);
+    expect(receipt.outcome).toBe("reverted");
+    expect(receipt.checks.find((c) => c.name === "public")).toMatchObject({ ok: false });
+    expect(receipt.checks.find((c) => c.name === "revert")).toMatchObject({ ok: true });
+    expect(typeof receipt.revertGap?.ms).toBe("number");
+    expect(host.state.serving).toBe("old");
+    const lines = host.lines();
+    expect(index(lines, new RegExp(`^docker rm -f ${NEW_ID}$`))).toBeLessThan(index(lines, new RegExp(`^docker start ${OLD_ID}$`)));
+    expect(lines).not.toContain(`docker rm ${OLD_ID}`);
+    expect(lines.filter((l) => l.startsWith("docker tag ") && l.includes("robotmoney-website:"))).toEqual([]);
+  }, 20_000);
+
+  test("a held host lock refuses the run, and the lock is not released by the refused run", async () => {
+    const host = fakeHost({ lockHeld: true });
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/holds the web release lock for stage_target .*Another smoke:web is running/);
+    expect(receipt.outcome).toBe("refused");
+    expect(host.lines().filter((l) => l === "docker network rm robotmoney-web-lock-stage_target")).toEqual([]);
+  });
+});
+
+describe("image mode: rollback (smoke:web --host --rollback)", () => {
+  test("swaps to the one previous image and keeps the old one as the new previous", async () => {
+    const host = fakeHost();
+    const deps = imageDeps(host);
+    const receipt = await rollbackImage(deps);
+    expect(receipt).toMatchObject({
+      action: "rollback",
+      outcome: "swapped",
+      release: { tag: "web-v0.0.9", version: "0.0.9", commit: "cccc333", apiRange: "^0.2.0" },
+      oldContainer: { id: OLD_ID, image: OLD_IMAGE },
+      newContainer: { id: NEW_ID, image: PREV_IMAGE },
+      currentImage: PREV_IMAGE,
+      previousImage: OLD_IMAGE,
+    });
+    expect(receipt.checks.map((c) => c.name)).toEqual(["api-range", "copy", "gap", "public"]);
+    expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+    // A rollback builds nothing.
+    expect(host.lines().filter((l) => /^docker build\b|rm-verify-web-bundle/.test(l))).toEqual([]);
+  });
+
+  test("refuses a previous image whose apiRange the running API does not accept", async () => {
+    const host = fakeHost({ api: "0.2.0", previousRelease: { version: "0.0.9", commit: "cccc333", apiRange: "^0.1.0" } });
+    const deps = imageDeps(host);
+    await expect(rollbackImage(deps)).rejects.toThrow("Refusing: the running API is 0.2.0, outside web-v0.0.9's range ^0.1.0. Nothing was changed.");
+    expect(readImageReceipt(deps.receiptDir)).toMatchObject({ action: "rollback", outcome: "refused", apiVersion: "0.2.0" });
+    expect(host.lines().filter((l) => /^docker (run -d|create|stop|start)\b/.test(l))).toEqual([]);
+  });
+
+  test("refuses when the host holds no previous image", async () => {
+    const host = fakeHost({ hasPrevious: false });
+    const deps = imageDeps(host);
+    await expect(rollbackImage(deps)).rejects.toThrow(/holds no previous image for stage_target/);
+    expect(readImageReceipt(deps.receiptDir)?.outcome).toBe("refused");
+  });
+});
+
+describe("image mode: pure parts", () => {
+  test("the replacement keeps the old container's port, networks, aliases, labels, restart, log and health, with the overlay's flags", () => {
+    const flags = websiteImageRunFlags(readWebsiteImageService(repoRoot));
+    const { create, connect } = replacementCreateArgs(oldInspect(), "next", NEW_IMAGE, flags);
+    expect(create.slice(0, 3)).toEqual(["create", "--name", "next"]);
+    expect(create.at(-1)).toBe(NEW_IMAGE);
+    const labels = create.flatMap((a, i) => (a === "--label" ? [create[i + 1]] : []));
+    expect(labels).toEqual(["com.docker.compose.project=rm_stage_target", "com.docker.compose.service=website-server", "robotmoney.instance=stage_target", "robotmoney.smoke=1"]);
+    const joined = create.join(" ");
+    expect(joined).toContain("--restart unless-stopped");
+    expect(joined).toContain("--log-driver json-file --log-opt max-size=10m");
+    expect(joined).toContain("--health-cmd wget -q -O /dev/null http://127.0.0.1:8080/ --health-interval 15000ms --health-timeout 5000ms --health-start-period 10000ms --health-retries 3");
+    expect(joined).toContain(flags.join(" "));
+    expect(joined).toContain("-p 48787:8080");
+    expect(joined).toContain("--network rm_stage_target_default --network-alias rm_stage_target-website-server-1 --network-alias website-server ");
+    expect(joined).not.toContain(OLD_ID.slice(0, 12));
+    expect(connect).toEqual([]);
+  });
+
+  test("a loopback binding keeps its address and the port Docker gave the old container", () => {
+    const old = oldInspect();
+    old.HostConfig.PortBindings = { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "" }] };
+    old.NetworkSettings.Ports = { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "32799" }] };
+    expect(publicPortBinding(old)).toEqual({ port: 32799, args: ["-p", "127.0.0.1:32799:8080"] });
+    old.NetworkSettings.Networks = { a: { Aliases: ["website-server"] }, b: { Aliases: ["web"] } };
+    expect(replacementCreateArgs(old, "next", NEW_IMAGE, []).connect).toEqual([["network", "connect", "--alias", "web", "b", "next"]]);
+  });
+
+  test("ssh sends each host command as one quoted string over a multiplexed connection", () => {
+    expect(sshArgv("deploy@stage", "/s/c", ["sh", "-c", "cat > '/x y'"])).toEqual([
+      "ssh", "-o", "BatchMode=yes", "-o", "ControlMaster=auto", "-o", "ControlPath=/s/c", "-o", "ControlPersist=120", "deploy@stage", "--", `sh -c 'cat > '\\''/x y'\\'''`,
+    ]);
+    expect(shellQuote("robotmoney-website:stage_target-current")).toBe("robotmoney-website:stage_target-current");
+    expect(() => sshHost("-oProxyCommand=x")).toThrow(/not an ssh destination/);
+  });
+
+  test("names: tags, the lock, release names and instance names", () => {
+    expect(siteImageTag("rm_prod", "previous")).toBe("robotmoney-website:rm_prod-previous");
+    expect(hostLockName("rm_prod")).toBe("robotmoney-web-lock-rm_prod");
+    expect(isReleaseName("web-v1.2.3")).toBe(true);
+    expect(isReleaseName("/home/x/robotmoney-web-1.2.3-abc1234.tar.gz")).toBe(false);
+    expect(() => assertImageInstance("Bad Name")).toThrow(/must be lower-case/);
+    expect(GAP_LIMIT_MS).toBe(3000);
+  });
+
+  test("the smoke:web entry selects image mode with --host and still runs the directory mode without it", () => {
+    const entry = readFileSync(join(repoRoot, "scripts", "smoke-web.ts"), "utf8");
+    expect(entry).toContain('if (values["--host"] !== undefined)');
+    expect(entry).toContain('"gh", "release", "download", tag');
+    const r = Bun.spawnSync(["bun", join(repoRoot, "scripts", "smoke-web.ts"), "--bundle", "web-v1.0.0"], { stdout: "pipe", stderr: "pipe" });
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr.toString()).toContain("--bundle deploys a signed bundle image and needs --host");
   });
 });
