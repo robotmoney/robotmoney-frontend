@@ -1,17 +1,37 @@
-# Caddy spike image (issue 1625, docs/technical/web-serving-architecture.md
-# §3.2, §3.3). Caddy and the Caddyfile only: no Bun, no Node, no app layer.
+# The server image (issue 1625's Caddy spike, made the platform's server image
+# by issue 1627; docs/technical/web-serving-architecture.md §3.2, §3.3). Caddy,
+# the Caddyfile, the committed allowed-signers file and the bundle verifier
+# only: no Bun, no Node, no app layer, and no site. It belongs to the platform
+# release. Dockerfile.bundle builds the website-server image FROM it, adding
+# exactly one verified bundle.
+#
 # The base is pinned by digest. The container runs as a non-root user with a
-# read-only root; Caddy's scratch paths (/config, /data) are tmpfs mounts given
-# at run time. Not wired into docker-compose.yml or any release script: that
-# is P4 (issue 1623's plan).
+# read-only root; Caddy's scratch paths (/config, /data) and the maintenance
+# file's directory (/srv/maintenance) are tmpfs mounts given at run time
+# (docker-compose.website-image.yml). The image enforces none of those flags.
 FROM caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+
+# The platform commit this server image is built from (§3.2's labels). Every
+# website-server image built FROM this one inherits the label.
+ARG PLATFORM_COMMIT
+RUN echo "$PLATFORM_COMMIT" | grep -Eqx '[0-9a-f]{7,40}' \
+  || { echo "PLATFORM_COMMIT must be the platform's hex commit, got '$PLATFORM_COMMIT'" >&2; exit 1; }
+LABEL robotmoney.web.server-commit="${PLATFORM_COMMIT}"
 
 # The base grants the binary cap_net_bind_service as a file capability, and a
 # container with every capability dropped (§3.2) then refuses to exec it at
 # all ("operation not permitted"). Port 8080 needs no capability, so remove it.
-RUN setcap -r /usr/bin/caddy
+# ssh-keygen is what Dockerfile.bundle's build stage verifies a bundle's
+# signature with (verify-bundle.sh). It is a key tool, not a runtime.
+RUN setcap -r /usr/bin/caddy \
+  && apk add --no-cache openssh-keygen \
+  && mkdir -p /srv/web /srv/maintenance
 
 COPY Caddyfile /etc/caddy/Caddyfile
+# The trust root for web bundles, public keys only (§3.1). A web release never
+# changes it: it comes with this image, from the platform release.
+COPY allowed-signers /etc/robotmoney/allowed-signers
+COPY verify-bundle.sh /usr/local/bin/rm-verify-web-bundle
 
 # nobody:nobody. Port 8080 needs no privilege.
 USER 65534:65534

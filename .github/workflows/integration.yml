@@ -203,6 +203,21 @@ jobs:
             grep -qE "^route-table server=caddy phase=$phase: ([1-9][0-9]*)/\1 rows passed" "$log" \
               || { echo "::error::the Caddy image did not pass every $phase row of the route and header table"; exit 1; }
           done
+      # Issue 1627: the immutable website-server image (server image plus one
+      # signed bundle, verified in a build stage) ran inside the integration
+      # suite, and the route and header table passed against it with every row
+      # in both api states. Its absence or exclusion is a red job.
+      - name: Immutable website-server image proof ran (issue 1627)
+        shell: bash
+        run: |
+          f=scripts/tests/integration/website-server-bundle-image.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }
+          for phase in api-up api-down; do
+            grep -qE "^route-table server=bundle-image phase=$phase: ([1-9][0-9]*)/\1 rows passed" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::the immutable image did not pass every $phase row of the route and header table"; exit 1; }
+          done
       # Issue 1624 red control: one Cache-Control value, one fallback and one
       # 404 rule, each changed in a scratch copy of nginx.conf, must each turn
       # the table red on the row that guards it.

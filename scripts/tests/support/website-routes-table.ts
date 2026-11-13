@@ -73,13 +73,19 @@ export const SECURITY_HEADERS: Record<string, string> = {
 const HTML_CACHE = "no-cache";
 const ASSET_CACHE = "public, max-age=300";
 
+/**
+ * The fixture site's identity. A real bundle identity (a hex commit), so the
+ * same site packs into a signed bundle for the immutable image (issue 1627).
+ */
+export const SITE_VERSION = { version: "0.0.0-routes", commit: "0123abc" } as const;
+
 export const SITE_FILES: Record<string, string> = {
   "index.html": "<!doctype html><title>routes-home</title>",
   "regime/index.html": "<!doctype html><title>routes-prerendered-regime</title>",
   "_shell.html": "<!doctype html><title>routes-shell</title>",
   "assets/js/app/main.js": "export const routesTable = 1;\n",
   "assets/css/views.css": "body { color: black; }\n",
-  "version.json": JSON.stringify({ version: "0.0.0-routes", commit: "routes-table" }),
+  "version.json": JSON.stringify(SITE_VERSION),
   "sitemap.xml": '<?xml version="1.0" encoding="UTF-8"?><urlset><url><loc>/regime</loc></url></urlset>',
 };
 
@@ -97,7 +103,7 @@ export const TABLE: readonly Row[] = [
   // Static files.
   { id: "static-root", duty: "static", phase: "api-up", path: "/", status: 200, bodyIncludes: "<title>routes-home</title>" },
   { id: "static-prerendered", duty: "static", phase: "api-up", path: "/regime", status: 200, bodyIncludes: "<title>routes-prerendered-regime</title>" },
-  { id: "static-version-json", duty: "static", phase: "api-up", path: "/version.json", status: 200, json: { version: "0.0.0-routes", commit: "routes-table" } },
+  { id: "static-version-json", duty: "static", phase: "api-up", path: "/version.json", status: 200, json: { version: "0.0.0-routes", commit: "0123abc" } },
   { id: "static-sitemap", duty: "static", phase: "api-up", path: "/sitemap.xml", status: 200, bodyIncludes: "<loc>/regime</loc>" },
   { id: "static-asset", duty: "static", phase: "api-up", path: "/assets/js/app/main.js?v=abcd1234", status: 200, bodyIncludes: "routesTable" },
 

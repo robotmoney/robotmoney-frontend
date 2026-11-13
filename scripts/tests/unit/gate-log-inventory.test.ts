@@ -143,6 +143,33 @@ describe("main's services against the committed classifications (default deny, w
     expect(verdictOf("participant-agent-athena", [timeout], []).failures).toHaveLength(1);
   });
 
+  // Issue 1627: the immutable website-server's Caddy access log, one JSON line
+  // per request. The samples are real lines from the image, with the client's
+  // URI and user agent carrying error words.
+  const csp = "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; object-src 'none'";
+  const caddyAccess = (level: "info" | "error", uri: string, status: number, ua = "curl/8.5.0") =>
+    `{"level":"${level}","ts":1794548374.5513544,"logger":"http.log.access.log0","msg":"handled request","request":{"remote_ip":"172.17.0.1","remote_port":"57074","client_ip":"172.17.0.1","proto":"HTTP/1.1","method":"GET","host":"localhost:32809","uri":"${uri}","headers":{"Accept":["*/*"],"User-Agent":["${ua}"]}},"bytes_read":0,"user_id":"","duration":0.000119119,"size":0,"status":${status},"resp_headers":{"Cache-Control":["public, max-age=300"],"Content-Security-Policy":["${csp}"],"Referrer-Policy":["strict-origin-when-cross-origin"],"X-Content-Type-Options":["nosniff"],"Server":["Caddy"]}}`;
+
+  test("the Caddy website-server's access lines below 500 are expected, whatever words the client put in them", () => {
+    const lines = [
+      caddyAccess("info", "/regime?state=failed", 200),
+      caddyAccess("info", "/error.php?SERVER_NAME=fatal", 404),
+      caddyAccess("info", "/assets/js/app/missing.js", 404, "timeout-scanner/1.0 (invalid)"),
+    ];
+    for (const l of lines) expect(lineLevel(l)).toBe("ERROR");
+    const g = classify(inventory("rm_stage-website-server-1", lines.map((text) => ({ ts: null, text }))), committed);
+    expect(g.map((x) => x.rule?.id)).toEqual(lines.map(() => "expected-caddy-access-line-below-5xx"));
+    expect(verdictOf("rm_stage-website-server-1", lines).failures).toEqual([]);
+  });
+
+  test("RED CONTROL: a Caddy 5xx access line, a forged prefix and the same line from another container stay unclassified", () => {
+    expect(verdictOf("website-server", [caddyAccess("error", "/api/swarm/x", 502)]).failures).toHaveLength(1);
+    // A client cannot open a line: its words sit inside the request object, after the prefix.
+    const forgedUa = caddyAccess("error", "/x?failed", 500, '{\\"level\\":\\"info\\",\\"logger\\":\\"http.log.access\\"');
+    expect(verdictOf("website-server", [forgedUa]).failures).toHaveLength(1);
+    expect(verdictOf("api", [caddyAccess("info", "/x?state=failed", 200)]).failures).toHaveLength(1);
+  });
+
   test("lines of components main retired are no longer excused", () => {
     for (const line of [
       "swarm session failed (stack still running): independent analytics producer exited 1 for regime",

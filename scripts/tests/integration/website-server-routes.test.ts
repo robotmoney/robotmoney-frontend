@@ -7,7 +7,8 @@
 // Real image, real Docker network, and a stand-in api under the alias `api`
 // that echoes the path and headers it received. The web directory is mounted at
 // /srv/web as docker-compose.yml mounts it: the site in `current`, with
-// maintenance.json beside it. The api is stopped for the maintenance rows by
+// maintenance.json beside it. Caddy reads maintenance.json from
+// /srv/maintenance (issue 1627), so the same directory is mounted there too. The api is stopped for the maintenance rows by
 // the helper bun smoke:down --keep-web uses (stopProjectExcept).
 //
 // ROUTES_SERVER picks the image: `nginx` (default, website-server/Dockerfile)
@@ -107,11 +108,12 @@ beforeAll(() => {
   writeMaintenanceFile(webDir, MAINTENANCE_STATUS);
   // mkdtemp makes the directory 0700; the nginx worker runs as its own user.
   chmodSync(webDir, 0o755);
-  docker(["build", "-t", IMAGE, "-f", join(SERVER_DIR, SERVERS[SERVER].dockerfile), SERVER_DIR]);
+  // PLATFORM_COMMIT: the server image refuses to build without one (Dockerfile.caddy).
+  docker(["build", "-t", IMAGE, "--build-arg", "PLATFORM_COMMIT=0000000", "-f", join(SERVER_DIR, SERVERS[SERVER].dockerfile), SERVER_DIR]);
   docker(["network", "create", NETWORK]);
   docker(["network", "create", "--subnet", "198.51.100.0/24", UNTRUSTED_NET]);
   docker(["run", "-d", "--name", API_CONTAINER, "--network", NETWORK, "--network-alias", "api", ...labels("api"), BUN_IMAGE, "bun", "-e", ECHO_API]);
-  docker(["run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK, "--network-alias", "web", ...labels(KEPT_WEB_SERVICE), ...SERVERS[SERVER].run, "-v", `${webDir}:/srv/web:ro`, "-p", "127.0.0.1::8080", IMAGE]);
+  docker(["run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK, "--network-alias", "web", ...labels(KEPT_WEB_SERVICE), ...SERVERS[SERVER].run, "-v", `${webDir}:/srv/web:ro`, ...(SERVER === "caddy" ? ["-v", `${webDir}:/srv/maintenance:ro`] : []), "-p", "127.0.0.1::8080", IMAGE]);
   docker(["network", "connect", "--alias", "web", UNTRUSTED_NET, WEB_CONTAINER]);
   webPort = Number(docker(["port", WEB_CONTAINER, "8080/tcp"]).split("\n")[0]!.split(":").pop());
   expect(webPort).toBeGreaterThan(0);

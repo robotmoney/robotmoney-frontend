@@ -131,6 +131,13 @@
     "reason": "An nginx access-log line (combined format: addr - user [time] \"request\" status bytes \"referer\" \"agent\"; website-server/nginx.conf sets no log_format) for a request the website refused with a 4xx. The request, referrer and user agent are the client's words, so an access-log line is classified by its shape and status, never by words in it. On production the clients are internet scanners (GET /error.php?SERVER_NAME=<script>…, /admin/public/login.jsp?error=…, POST /rails/actions?error=ActiveRecord::PendingMigrationError…) and the onboarding dead-path control (GET /skills/swarm-onboarding/this-path-cannot-exist.md, scripts/production-drift-audit.ts), all 404 by design; seen on website-server-1 during the v0.6.1 production R2.5 baseline on 2026-10-10 (issue 1278). Held to 4xx on the website-server container: a 5xx is the website or its upstream failing a client and stays unclassified, an nginx error-log line has a different shape and stays unclassified, and 2xx/3xx keep expected-nginx-access-line-2xx-3xx."
   },
   {
+    "id": "expected-caddy-access-line-below-5xx",
+    "match": "^\\{\"level\":\"info\",\"ts\":[0-9.e+-]+,\"logger\":\"http\\.log\\.access(\\.[a-z0-9_]+)?\",\"msg\":\"handled request\",",
+    "source": "website-server",
+    "class": "expected",
+    "reason": "A Caddy access-log line (website-server/Caddyfile `log { format json }`, the immutable website-server of issue 1627) for a request the website answered below 500. Caddy writes an access line at level info for every status under 500 and at level error for a 5xx, and the level, logger and message lead the line before any client-supplied field, so the class is read from that prefix and never from words in the request: a URI like ?state=failed or a scanner's /error.php is the client's, as with expected-nginx-access-line-2xx-3xx and expected-website-access-line-4xx. Held to the website-server container. A 5xx access line (level error), a proxy error (logger http.log.error) and any other Caddy line stay unclassified."
+  },
+  {
     "id": "known-api-slow-request",
     "match": "\\[api\\] slow request:",
     "class": "known-issue",
