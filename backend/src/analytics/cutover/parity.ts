@@ -78,7 +78,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
     ),
     ledger AS (
       SELECT DISTINCT ON (svv.source_key COLLATE "C", svv.market_date)
-             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value
+             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value, svv.knowledge_time
         FROM source_value_versions svv
        WHERE svv.source_key LIKE 'raw_indicator_history:%' AND svv.market_date IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)
@@ -89,10 +89,15 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
              l.indicator IS NOT NULL AS in_legacy, r.indicator IS NOT NULL AS in_ledger,
              floor(l.value * 1e9 + 0.5) / 1e9 AS legacy_value, floor(r.value * 1e9 + 0.5) / 1e9 AS ledger_value,
              (l.value = r.value
-               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within
+               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within,
+             r.knowledge_time > clock_timestamp() - make_interval(secs => $3::float8 / 1000) AS recent
         FROM raw_indicator_history l
         FULL JOIN ledger r ON r.indicator = l.indicator AND r.date = l.date
         LEFT JOIN tolerance t ON t.indicator = coalesce(l.indicator, r.indicator)
+    ),
+    settled AS (
+      SELECT * FROM joined
+       WHERE NOT (in_ledger AND recent AND (NOT in_legacy OR NOT (within OR legacy_value = ledger_value)))
     ),
     compared AS (
       SELECT indicator, date, in_legacy, in_ledger,
@@ -101,7 +106,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
                || (CASE WHEN in_legacy AND within THEN legacy_value ELSE ledger_value END)::text AS ledger_text,
              CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
                   WHEN within OR legacy_value = ledger_value THEN NULL ELSE 'differs' END AS reason
-        FROM joined
+        FROM settled
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
            count(*) FILTER (WHERE in_ledger)::int AS ledger_rows,
@@ -113,7 +118,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
                      ORDER BY indicator COLLATE "C", date LIMIT $2) m) AS mismatches
       FROM compared`;
 
-const rawProbe = { statement: RAW_PARITY_SQL, params: ["{}", MAX_MISMATCH_DETAIL] };
+const rawProbe = { statement: RAW_PARITY_SQL, params: ["{}", MAX_MISMATCH_DETAIL, 3_600_000] };
 
 const rawLegacy = registerQuery({
   role: "rm_app",
@@ -579,13 +584,25 @@ function rawTolerances(): Record<string, number> {
 //
 // The ledger side is the head of each (source_key, market_date) chain: the
 // version no other version names as its prior.
-export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promise<ParityResult> {
+// SETTLED (issue 1182, folded-in issue 1004). A run writes a point's ledger
+// version during its fetch and its compatibility row later (analytics/index.ts,
+// and the producer's catch-up the same way), so a sweep between the two would
+// read a ledger head the compatibility table has not caught up with yet and
+// record a permanent matched:false. A point whose ledger head is younger than
+// RAW_PARITY_SETTLE_MS and does not match is therefore in flight: it is left
+// out of both sides, as the regime and research checks leave out an as-of day
+// no run package has settled yet. Once the window has passed, the same
+// divergence is compared and still blocks cutover. A compatibility row with no
+// ledger version is never in flight (the ledger is written first).
+export const RAW_PARITY_SETTLE_MS = 3_600_000;
+
+export async function checkRawIndicatorHistoryParity(db: DbHandle = sql, settleMs: number = RAW_PARITY_SETTLE_MS): Promise<ParityResult> {
   const [row] = await on(db, rawLegacy, rawLedger)<DomainRow>`WITH tolerance AS (
       SELECT key AS indicator, value::float8 AS relative FROM jsonb_each_text(${rawTolerances()}::jsonb)
     ),
     ledger AS (
       SELECT DISTINCT ON (svv.source_key COLLATE "C", svv.market_date)
-             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value
+             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value, svv.knowledge_time
         FROM source_value_versions svv
        WHERE svv.source_key LIKE 'raw_indicator_history:%' AND svv.market_date IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)
@@ -596,10 +613,15 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
              l.indicator IS NOT NULL AS in_legacy, r.indicator IS NOT NULL AS in_ledger,
              floor(l.value * 1e9 + 0.5) / 1e9 AS legacy_value, floor(r.value * 1e9 + 0.5) / 1e9 AS ledger_value,
              (l.value = r.value
-               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within
+               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within,
+             r.knowledge_time > clock_timestamp() - make_interval(secs => ${settleMs}::float8 / 1000) AS recent
         FROM raw_indicator_history l
         FULL JOIN ledger r ON r.indicator = l.indicator AND r.date = l.date
         LEFT JOIN tolerance t ON t.indicator = coalesce(l.indicator, r.indicator)
+    ),
+    settled AS (
+      SELECT * FROM joined
+       WHERE NOT (in_ledger AND recent AND (NOT in_legacy OR NOT (within OR legacy_value = ledger_value)))
     ),
     compared AS (
       SELECT indicator, date, in_legacy, in_ledger,
@@ -608,7 +630,7 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
                || (CASE WHEN in_legacy AND within THEN legacy_value ELSE ledger_value END)::text AS ledger_text,
              CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
                   WHEN within OR legacy_value = ledger_value THEN NULL ELSE 'differs' END AS reason
-        FROM joined
+        FROM settled
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
            count(*) FILTER (WHERE in_ledger)::int AS ledger_rows,

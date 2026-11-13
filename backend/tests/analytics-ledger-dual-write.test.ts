@@ -14,7 +14,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
-import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
+import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity, RAW_PARITY_SETTLE_MS, recordParityObservation } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { richRegimeRow, withoutPublicationGuards } from "./support/regime-publications.ts";
@@ -59,7 +59,7 @@ async function submitRawHistoryPoint(
   value: number,
   // `provenance: null` sends NO label at all — the shape of a writer that
   // stopped stamping one, which must never be confused with sending 'live'.
-  labels: { provenance?: string | null; source?: string } = {},
+  labels: { provenance?: string | null; source?: string; ledgerOnly?: boolean } = {},
 ) : Promise<void> {
   const provenance = labels.provenance === undefined ? LIVE : labels.provenance;
   const source = labels.source ?? LIVE;
@@ -93,6 +93,8 @@ async function submitRawHistoryPoint(
   };
   const acqRes = await call(req("POST", A.sourceAcquisitions, acquisitionBody));
   expect(acqRes!.status, JSON.stringify(acqRes)).toBe(200);
+  // The first half of a run's write only: the ledger version, before the run writes the compatibility row.
+  if (labels.ledgerOnly) return;
 
   const rawRes = await call(req("POST", A.rawHistory, { history: { [indicator]: [{ date, value }] }, source }));
   expect(rawRes!.status).toBe(200);
@@ -267,6 +269,54 @@ describe("dual-write parity: raw-history, regime, and research through the authe
   });
 });
 
+// Issue 1182, folded-in issue 1004: raw history's two writes are not atomic
+// either. A run writes the ledger version during its fetch and the
+// compatibility row later; a sweep between them reads a ledger head the
+// compatibility table has not caught up with. Like the regime and research
+// checks above, the raw check leaves such an in-flight point out instead of
+// recording a permanent matched:false, and still catches it once settled.
+describe("dual-write parity: raw-history mid-run race immunity (issue 1004)", () => {
+  test("RACE: a point whose ledger version landed and whose compatibility write has not yet is not compared, so it cannot false-mismatch", async () => {
+    const indicator = "DUALWRITE_RAW_RACE";
+    await submitRawHistoryPoint(indicator, "2024-07-01", 3);
+    const before = await checkRawIndicatorHistoryParity();
+    expect(before.matched).toBe(true);
+
+    // Mid-run: a revision of the old day and a new day, both in the ledger only.
+    await submitRawHistoryPoint(indicator, "2024-07-01", 4, { ledgerOnly: true });
+    await submitRawHistoryPoint(indicator, "2024-07-02", 5, { ledgerOnly: true });
+    // Not a no-op: the two tables really disagree now.
+    expect((await sql`SELECT value FROM raw_indicator_history WHERE indicator = ${indicator} ORDER BY date`).map((r) => Number(r.value))).toEqual([3]);
+
+    const inFlight = await checkRawIndicatorHistoryParity();
+    expect(inFlight.mismatches, JSON.stringify(inFlight.mismatches)).toEqual([]);
+    expect(inFlight.matched).toBe(true);
+    expect(inFlight.legacyChecksum).toBe(inFlight.ledgerChecksum);
+    // The sweep records it: the observation the cutover gate reads is matched.
+    const id = await recordParityObservation(inFlight);
+    const [obs] = await sql<{ matched: boolean }[]>`SELECT matched FROM analytics_parity_observations WHERE id = ${id}::bigint`;
+    expect(obs!.matched).toBe(true);
+    // The in-flight point is left out of both sides, not only its mismatch.
+    expect(inFlight.legacyRowCount).toBe(before.legacyRowCount - 1);
+    expect(inFlight.ledgerRowCount).toBe(before.ledgerRowCount - 1);
+
+    // Had the run never written its compatibility rows, the same divergence
+    // is compared once the settle window has passed, and still blocks cutover.
+    expect(RAW_PARITY_SETTLE_MS).toBeGreaterThan(0);
+    const settled = await checkRawIndicatorHistoryParity(sql, 0);
+    expect(settled.matched).toBe(false);
+    expect(settled.mismatches.map((m) => m.naturalKey)).toEqual([`${indicator}\u00002024-07-01`, `${indicator}\u00002024-07-02`]);
+
+    // The run's second write lands: both points are compared again, and match.
+    const rawRes = await call(req("POST", A.rawHistory, { history: { [indicator]: [{ date: "2024-07-01", value: 4 }, { date: "2024-07-02", value: 5 }] }, source: LIVE }));
+    expect(rawRes!.status).toBe(200);
+    const after = await checkRawIndicatorHistoryParity();
+    expect(after.mismatches).toEqual([]);
+    expect(after.matched).toBe(true);
+    expect(after.legacyRowCount).toBe(before.legacyRowCount + 1);
+  });
+});
+
 // Owner, 2026-09-29 (D56's amendment): raw-history parity compares VALUES, within
 // the tolerance both writers use, and does not compare `source`. These pin both
 // halves, and that a difference beyond tolerance is still caught.
@@ -293,18 +343,19 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
     const base = 0.4797323800499549;
     await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'IWF_IWD', ${base}, 'live')`;
     await fixtureDb`
-      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
-      VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline')`;
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
+      VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline', now() - interval '2 hours')`;
     const within = await checkRawIndicatorHistoryParity();
     expect(within.mismatches, JSON.stringify(within.mismatches)).toEqual([]);
     expect(within.matched).toBe(true);
     expect(within.legacyChecksum).toBe(within.ledgerChecksum);
 
     // An exact source has no tolerance: the same relative difference is real.
+    // (Its ledger version is older than the settle window, so it is compared.)
     await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'T10Y2Y', 1.25, 'live')`;
     await fixtureDb`
-      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
-      VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline')`;
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
+      VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline', now() - interval '2 hours')`;
     const beyond = await checkRawIndicatorHistoryParity();
     expect(beyond.matched).toBe(false);
     expect(beyond.mismatches.map((m) => m.naturalKey)).toEqual([`T10Y2Y\u0000${date}`]);

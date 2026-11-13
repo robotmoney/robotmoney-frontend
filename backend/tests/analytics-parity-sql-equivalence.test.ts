@@ -16,7 +16,8 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
-import { checkDomainParity, MAX_MISMATCH_DETAIL } from "../src/analytics/cutover/parity.ts";
+import { checkDomainParity, checkRawIndicatorHistoryParity, MAX_MISMATCH_DETAIL } from "../src/analytics/cutover/parity.ts";
+import { sql } from "../src/db/client.ts";
 import { ALL_PARITY_DOMAINS, type ParityDomain } from "../src/analytics/cutover/parity-domains.ts";
 import { ensureSubject, openSession } from "../src/swarm/domain.ts";
 import { oracleDomainParity } from "./support/parity-oracle.ts";
@@ -145,7 +146,10 @@ async function makeBrief(opts: { createdAt: Date; revisions: unknown[]; body?: u
 
 /** The SQL and the oracle agree on everything the observation records. */
 async function expectEquivalent(domain: ParityDomain, label: string): Promise<{ matched: boolean; mismatches: { naturalKey: string; reason: string; columns?: string[] }[] }> {
-  const sqlResult = await checkDomainParity(domain);
+  // The oracle has no settle window for raw points (issue 1004): these points
+  // were written a moment ago, so the statement is run with a window of zero.
+  // The window itself is held by analytics-ledger-dual-write.test.ts.
+  const sqlResult = domain === "raw_indicator_history" ? await checkRawIndicatorHistoryParity(sql, 0) : await checkDomainParity(domain);
   const oracle = await oracleDomainParity(domain);
   expect({ label, domain, sql: {
     matched: sqlResult.matched,
