@@ -144,7 +144,7 @@ async function makeBrief(opts: { createdAt: Date; revisions: unknown[]; body?: u
 }
 
 /** The SQL and the oracle agree on everything the observation records. */
-async function expectEquivalent(domain: ParityDomain, label: string): Promise<{ matched: boolean; mismatches: { naturalKey: string; reason: string }[] }> {
+async function expectEquivalent(domain: ParityDomain, label: string): Promise<{ matched: boolean; mismatches: { naturalKey: string; reason: string; columns?: string[] }[] }> {
   const sqlResult = await checkDomainParity(domain);
   const oracle = await oracleDomainParity(domain);
   expect({ label, domain, sql: {
@@ -294,8 +294,8 @@ describe("regime_snapshots and research_signals", () => {
       await tx`UPDATE research_signals SET payload = NULL WHERE signal_key = 'breadth' AND date = '2026-09-01'`;
     });
     expect((await expectEquivalent("regime_snapshots", "differs")).mismatches).toEqual([
-      { naturalKey: "2026-09-01", reason: DIFFERS },
-      { naturalKey: "2026-09-02", reason: DIFFERS },
+      { naturalKey: "2026-09-01", reason: DIFFERS, columns: ["regime"] },
+      { naturalKey: "2026-09-02", reason: DIFFERS, columns: ["composite"] },
     ]);
     expect((await expectEquivalent("research_signals", "differs")).mismatches).toEqual([
       { naturalKey: "breadth 2026-09-01", reason: DIFFERS },

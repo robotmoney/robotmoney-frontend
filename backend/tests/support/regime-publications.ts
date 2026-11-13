@@ -32,6 +32,30 @@ export function regimeRow(date: string, composite: number, regime = "risk_on"): 
   };
 }
 
+/**
+ * A regime row with every rich column populated (issue 1182, folded-in 995):
+ * backtest, correlations, indicators, percentiles, panels, panel weights,
+ * bucket thresholds and extras, plus every panel figure and label.
+ */
+export function richRegimeRow(date: string, composite: number): RegimeSnapshotRow {
+  return {
+    ...regimeRow(date, composite),
+    macroRegime: "neutral", onchainRegime: "risk_on", factorRegime: "risk_off",
+    macroIndex: 0.41, onchainIndex: 0.73, factorIndex: 0.22,
+    macroPercentile: 0.44, onchainPercentile: 0.81, factorPercentile: 0.19,
+    panelWeights: { macro: { VIX: 0.55 }, onchain: { DEFI_TVL: 0.45 } },
+    percentiles: { VIX: 0.31, DEFI_TVL: 0.88 },
+    indicators: [
+      { id: "VIX", raw_value: 17.2, raw_date: date, transformed_value: 17.2, percentile: 0.31, signed_percentile: 0.69, panel_weight: 0.12, sparkline: [16.9, 17.2] },
+    ],
+    panels: ["macro", "onchain"],
+    bucketThresholds: { risk_off: 0.35, risk_on: 0.6 },
+    backtest: { strategies: [{ id: "regime", cagr: 0.18, maxDrawdown: -0.31 }], asof: date },
+    correlations: { concurrent: { composite: { eth: { rho: 0.42, n: 900 } } } },
+    extras: { staleness: { VIX: 0 }, note: "issue-995 fixture" },
+  };
+}
+
 export function researchSignal(key: string, date: string, title: string): ResearchSignalArtifact {
   return { key, date, payload: { asof: date, title, question: "q", spec: {}, gauges: [] } } as unknown as ResearchSignalArtifact;
 }

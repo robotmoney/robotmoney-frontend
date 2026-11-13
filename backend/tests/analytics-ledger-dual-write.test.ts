@@ -17,7 +17,7 @@ import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { withoutPublicationGuards } from "./support/regime-publications.ts";
+import { richRegimeRow, withoutPublicationGuards } from "./support/regime-publications.ts";
 import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -139,6 +139,7 @@ async function submitRegimeAndResearch(
   composite: number,
   signalKey: string,
   marker: string,
+  regimeRow: ReturnType<typeof regimeFixture> | ReturnType<typeof richRegimeRow> = regimeFixture(date, composite),
 ): Promise<string> {
   const runKey = crypto.randomUUID();
   const beginRes = await call(
@@ -163,7 +164,7 @@ async function submitRegimeAndResearch(
         runId,
         asof: date,
         status: "succeeded",
-        regimeSnapshots: [regimeFixture(date, composite)],
+        regimeSnapshots: [regimeRow],
         researchSignals: [researchFixture(signalKey, date, marker)],
         reportBase64,
       },
@@ -310,6 +311,49 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
   });
 });
 
+// Issue 1182, folded-in issue 995: the regime comparison covers every
+// persisted column, not only composite and regime. A reconstruction that lost
+// a rich column must mismatch and name it. Runs before the race tests below,
+// whose persistent divergence stays in this file's database.
+describe("dual-write parity: every regime column is compared (issue 995)", () => {
+  const DATE = "2024-05-01";
+  const RICH = ["backtest", "correlations", "indicators", "percentiles", "panels"] as const;
+
+  test("a run whose backtest, correlations, indicators, percentiles, panels and extras are all populated reconstructs to matched:true", async () => {
+    const row = richRegimeRow(DATE, 0.64);
+    for (const k of [...RICH, "extras"] as const) {
+      expect({ k, populated: JSON.stringify(row[k]).length > 2 }).toEqual({ k, populated: true });
+    }
+    await submitRegimeAndResearch(DATE, 0.64, "dualwrite-rich-signal", "rich", row);
+    const [stored] = await sql<{ backtest: unknown }[]>`SELECT backtest FROM regime_snapshots WHERE date = ${DATE}`;
+    expect(stored!.backtest).toEqual(row.backtest);
+
+    const regime = await checkRegimeSnapshotsParity();
+    expect(regime.mismatches).toEqual([]);
+    expect(regime.matched).toBe(true);
+    expect(regime.legacyRowCount).toBeGreaterThan(0);
+    expect(regime.ledgerRowCount).toBe(regime.legacyRowCount);
+    expect(regime.legacyChecksum).toBe(regime.ledgerChecksum);
+  });
+
+  for (const column of RICH) {
+    test(`a ${column} that differs on the compatibility side only is a mismatch naming ${column}`, async () => {
+      const [before] = await fixtureDb<{ value: unknown }[]>`SELECT ${fixtureDb(column)} AS value FROM regime_snapshots WHERE date = ${DATE}`;
+      expect(before!.value).not.toBeNull();
+      const corrupt = column === "indicators" ? [{ id: "VIX", percentile: 0.99 }] : column === "panels" ? ["macro"] : { corrupted: column };
+      await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET ${tx(column)} = ${tx.json(corrupt)} WHERE date = ${DATE}`);
+      try {
+        const regime = await checkRegimeSnapshotsParity();
+        expect(regime.matched).toBe(false);
+        expect(regime.mismatches).toEqual([{ naturalKey: DATE, reason: "canonical value differs between compatibility and ledger", columns: [column] }]);
+      } finally {
+        await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET ${tx(column)} = ${tx.json(before!.value as never)} WHERE date = ${DATE}`);
+      }
+      expect((await checkRegimeSnapshotsParity()).matched).toBe(true);
+    });
+  }
+});
+
 // Issue #979 fix: the mid-run false-mismatch race. With issue #978's terminal
 // package, a regime/research CURRENT-VIEW row and its ledger freeze arrive in
 // ONE transaction (submitTerminalRunPackage → applyCurrentProjections), so the
@@ -337,9 +381,13 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
     // the rows publishBrief deliberately does NOT bind).
     // Since D83 the guard trigger refuses a past day no run published, so the
-    // out-of-band row is written the way such a row predates it.
+    // out-of-band row is written the way such a row predates it. The run that
+    // settles the day below cannot rewrite a past day either (D83), and every
+    // column is compared (issue 995), so the row carries the figures that run
+    // will freeze.
     await withoutPublicationGuards(async (tx) => {
-      await tx`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+      await tx`INSERT INTO regime_snapshots (date, composite, composite_percentile, regime, version, source, percentiles, indicators)
+               VALUES (${date}, 99, 0.5, 'risk_on', 'v-test', 'fixture', '{}'::jsonb, '[]'::jsonb)`;
       await tx`
         INSERT INTO research_signals (signal_key, date, payload)
         VALUES ('race-signal', ${date}, ${tx.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;

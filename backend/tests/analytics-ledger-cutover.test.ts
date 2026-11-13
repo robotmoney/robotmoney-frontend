@@ -11,7 +11,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { createHistoryDatabase } from "./support/history-database.ts";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { withoutPublicationGuards } from "./support/regime-publications.ts";
+import { richRegimeRow, withoutPublicationGuards } from "./support/regime-publications.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { handleAdmin } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
@@ -21,7 +21,7 @@ import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { catchUpMissedIndicatorDays, CATCH_UP_PROVENANCE } from "../src/producer/index.ts";
-import { checkRawIndicatorHistoryParity, recordParityObservation } from "../src/analytics/cutover/parity.ts";
+import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, recordParityObservation } from "../src/analytics/cutover/parity.ts";
 import { defaultCutoverGateConfig, evaluateCutoverGate, type CutoverGateConfig } from "../src/analytics/cutover/gate.ts";
 import { runCutoverGateCli } from "../scripts/analytics-ledger-cutover-gate.ts";
 import { getAnalyticsReadMode, setAnalyticsReadMode, CutoverGateNotPassedError } from "../src/analytics/cutover/read-mode.ts";
@@ -135,7 +135,13 @@ function regimeFixture(date: string, composite: number) {
   };
 }
 
-async function submitRegimeAndResearch(date: string, composite: number, signalKey: string, title: string): Promise<void> {
+async function submitRegimeAndResearch(
+  date: string,
+  composite: number,
+  signalKey: string,
+  title: string,
+  regimeRow: ReturnType<typeof regimeFixture> | ReturnType<typeof richRegimeRow> = regimeFixture(date, composite),
+): Promise<void> {
   const beginRes = await call(
     req("POST", A.runs, {
       run: {
@@ -151,7 +157,7 @@ async function submitRegimeAndResearch(date: string, composite: number, signalKe
     req("POST", A.runPackage, {
       package: {
         runId, asof: date, status: "succeeded",
-        regimeSnapshots: [regimeFixture(date, composite)],
+        regimeSnapshots: [regimeRow],
         researchSignals: [{ key: signalKey, date, payload: { asof: date, title, question: "q", spec: {}, gauges: [] } }],
         reportBase64: Buffer.from(`report ${runId} ${date}`, "utf8").toString("base64"),
       },
@@ -281,6 +287,39 @@ describe("issue #979 AC2: the cutover gate's observation window", () => {
     const result = await evaluateCutoverGate(sql, TEST_GATE, now);
     expect(result.ok).toBe(false);
     expect(result.reasons.some((r) => r.startsWith("insufficient count:"))).toBe(true);
+    await expectLedgerModeRefused();
+  });
+});
+
+// Issue 1182, folded-in issue 995: the gate reads the observations the real
+// regime comparison records, and that comparison covers every column. A
+// window whose only divergence is a rich regime column (backtest here, with
+// composite and regime unchanged) must not pass.
+describe("issue 995: the gate consumes the every-column regime comparison", () => {
+  test("a window that passes until one run's backtest diverges on the compatibility side, then exits nonzero", async () => {
+    const date = "2024-06-03";
+    await submitRegimeAndResearch(date, 0.58, "cutover-rich-signal", "rich", richRegimeRow(date, 0.58));
+    const now = new Date();
+    for (const domain of DOMAINS) {
+      await insertObservation(domain, new Date(now.getTime() - 60_000), true);
+      await insertObservation(domain, new Date(now.getTime() - 30_000), true);
+    }
+    for (const domain of DOMAINS.filter((d) => d !== "regime_snapshots")) await insertObservation(domain, now, true);
+    // The real sweep of the rich run matches, and the window passes: the control.
+    const clean = await checkRegimeSnapshotsParity();
+    expect(clean.matched).toBe(true);
+    await recordParityObservation(clean);
+    expect(await runCutoverGateCli([]), "a matching window built from the real sweep passes").toBe(0);
+
+    await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET backtest = ${tx.json({ strategies: [] })} WHERE date = ${date}`);
+    const [row] = await fixtureDb<{ composite: string; regime: string }[]>`SELECT composite::text AS composite, regime FROM regime_snapshots WHERE date = ${date}`;
+    expect({ composite: Number(row!.composite), regime: row!.regime }).toEqual({ composite: 0.58, regime: "risk_on" });
+    const diverged = await checkRegimeSnapshotsParity();
+    expect(diverged.matched).toBe(false);
+    expect(diverged.mismatches).toEqual([{ naturalKey: date, reason: "canonical value differs between compatibility and ledger", columns: ["backtest"] }]);
+    await recordParityObservation(diverged);
+    const result = await evaluateCutoverGate(sql, TEST_GATE, new Date());
+    expect(result.ok).toBe(false);
     await expectLedgerModeRefused();
   });
 });
