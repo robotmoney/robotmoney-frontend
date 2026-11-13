@@ -175,8 +175,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["scripts/web-client/browser.ts", ["integration.yml", "web-client.yml", "e2e-web.yml"]],
     ["scripts/static-assembly.sh", ["integration.yml", "web-client.yml", "e2e-web.yml"]],
     // The website-server origin: web serves the client through it, and swarm's
-    // verify-live reads /api through it.
-    ["website-server/nginx.conf", ["web-client.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    // verify-live reads /api through it. Integration grades its routes and
+    // headers against an image built from it (issue 1624).
+    ["website-server/nginx.conf", ["integration.yml", "web-client.yml", "e2e-swarm.yml", "e2e-web.yml"]],
     // Every frontend file runs e2e-web and no other e2e domain: a web-only
     // change boots one stack.
     ["frontend/public/assets/js/app.js", ["web-client.yml", "e2e-web.yml"]],
