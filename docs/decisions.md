@@ -4241,6 +4241,26 @@ route table and the response shapes.
 - **Check only in the browser.** A notice after a bad deploy is damage control.
   The deploy tools refuse the mismatch before any reader sees it.
 
+**Amendment (2026-11-13, issue 1631) — the site ships as a signed bundle.**
+
+**Status:** proposed. Drafted by the agent with issue 1631 (pr 1643); the owner accepts it.
+
+The bullet "`bun smoke:web` deploys the site alone" now reads: `bun smoke:web --host`
+deploys one signed bundle as an immutable `website-server` image, built on the host
+FROM the platform's Caddy server image, and swaps it onto the public port by the
+checked swap in [web-serving-architecture.md](technical/web-serving-architecture.md) §4.
+The bundle is the assembled site as `robotmoney-web-<version>-<commit>.tar.gz` with its
+`.sha256` digest and `.sha256.sig` signature.
+It refuses a bundle whose `apiRange` excludes the running API, as before, and restarts
+no `api` or worker container. Its receipt and journal live on the control machine under
+`web-image/<instance>/`. `--rollback` returns to the one previous image. The directory
+mode, which built the site into the instance's `web/` directory and reloaded nginx, is
+retired: a run without `--host` refuses. nginx and the `web/` mount stay as the
+bootstrap server for a host before its first swap and for every CI stack, and as the
+first-rollout rollback target (§4), until every standing host has done one swap from a
+site image to a site image. The version contract, the range checks and `bun smoke`'s
+live-site refusal are unchanged.
+
 
 <a id="d55"></a>
 
@@ -6381,6 +6401,22 @@ The largest absolute change is the stables-only Sharpe (56.3437433689583 to 56.3
 **Amendment (live check, 2026-11-11).** (5) The live check proves each change is served, not only that the site answers. W11 also compares the sha256 of every changed file the site serves, fetched from the public origin past any cache, with the copy in the host's `web/current` (the assembled site, not git: assembly stamps and prerenders); a file the release removes must be absent. Changed paths the site does not serve are skipped and listed. A mismatch fails the check and rolls the site back. W01 refuses when the host's `web/current` is absent, since after the switch production would have no rollback target. Section 12 holds the full rule.
 
 **Amendment (stage QA, owner, 2026-11-11).** This reverses (2) "no stage pass". The owner: "You already have the stage machine for doing QA as we do in the kitchen sink. Why would you use a different method when a good one exists?" A web content release now runs on the kitchen-sink stage target before any production step writes. W04-stage-up brings the stage target up at production's running commit from a fresh production dump (`stage-target.ts dump` and `up --dump newest --replace`, the kitchen sink's Q02 and Q03). W05-stage-deploy deploys the release commit there with the same `bun run smoke:web` W10 runs on production. W06-stage-check runs W11's live check (version.json, the served bytes, the sitemap, an unchanged api) against the stage origin, records the pass for the release commit and tears the stage target down. No step from W07-tag on writes without that record for the same commit. The runbook now has twelve steps (the earlier W04 to W09 are W07 to W12). Nothing in it needs a root step. Section 12 holds the full rule.
+
+**Amendment (2026-11-13, issue 1631) — the release is a signed bundle.**
+
+**Status:** proposed. Drafted by the agent with issue 1631 (pr 1643); the owner accepts it.
+
+(5) now reads: the runner builds, signs and publishes one bundle for the tag
+(`robotmoney-web-<version>-<commit>.tar.gz` with its `.sha256` digest and `.sha256.sig`
+signature, on the tag's GitHub release), and deploys it from the control machine with
+`bun smoke:web --host <host> --bundle <it> --server-image robotmoney-website-server:<instance>`,
+the immutable image swap of [web-serving-architecture.md](technical/web-serving-architecture.md)
+§4 and §5. It no longer deploys from a host checkout into `web/current`. Production
+refuses a bundle whose digest is not the one the stage run passed. The live check reads
+the served bytes against the bundle's manifest, not against `web/current`. A failure runs
+`bun smoke:web --rollback`, which starts the one previous image, or on a host's first
+rollout the stopped nginx container the first swap kept. The rest of the decision and
+its amendments stand.
 
 ---
 

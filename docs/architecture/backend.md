@@ -39,8 +39,14 @@ TypeScript sources directly).
   code at all** (issue #892) — see `website-server/` below.
 - `src/worker/` — the always-on task-queue worker (see §7).
 
-**`website-server/`** — a plain `nginx:alpine` image (`website-server/Dockerfile`
-+ `website-server/nginx.conf`), split out of the api image (issue #892). Serves
+**`website-server/`** — the site's one web server, split out of the api image
+(issue #892). Once a host has swapped a signed bundle in (`bun smoke:web --host`),
+it is an immutable Caddy image holding exactly one verified bundle
+(`website-server/Dockerfile.caddy` + `Dockerfile.bundle` + `Caddyfile`;
+[web-serving-architecture.md](../technical/web-serving-architecture.md) §3).
+Before that first swap, and on every CI stack, it is the bootstrap
+`nginx:alpine` image (`website-server/Dockerfile` + `website-server/nginx.conf`,
+kept by issue 1631 as the first-rollout rollback target). Either one serves
 the assembled `_static/` (bind-mounted, never baked into the image) with a
 `try_files` fallback rule replicating the old `routeShell()`'s order
 (`<route>/index.html` → `_shell.html` → `index.html`), and proxies `/api/` +
