@@ -1,0 +1,18 @@
+# Caddy spike image (issue 1625, docs/technical/web-serving-architecture.md
+# §3.2, §3.3). Caddy and the Caddyfile only: no Bun, no Node, no app layer.
+# The base is pinned by digest. The container runs as a non-root user with a
+# read-only root; Caddy's scratch paths (/config, /data) are tmpfs mounts given
+# at run time. Not wired into docker-compose.yml or any release script: that
+# is P4 (issue 1623's plan).
+FROM caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+
+# The base grants the binary cap_net_bind_service as a file capability, and a
+# container with every capability dropped (§3.2) then refuses to exec it at
+# all ("operation not permitted"). Port 8080 needs no capability, so remove it.
+RUN setcap -r /usr/bin/caddy
+
+COPY Caddyfile /etc/caddy/Caddyfile
+
+# nobody:nobody. Port 8080 needs no privilege.
+USER 65534:65534
+EXPOSE 8080

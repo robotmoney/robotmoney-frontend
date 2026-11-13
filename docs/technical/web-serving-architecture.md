@@ -94,7 +94,18 @@ machine holds both the signing key and the deploy access, so it is the root of t
 
 ### 3.3 The server
 
-The server is Caddy, with its admin API and automatic HTTPS turned off. It has these duties and no others:
+The server is Caddy 2.10.2, with its admin API and automatic HTTPS turned off. The web serving P2 spike (issue
+1625, 2026-11-13) chose it: the image built from `website-server/Dockerfile.caddy` passes the route and header
+table (`scripts/tests/support/website-routes-table.ts`) unchanged. It does so with no Bun or Node binary, a
+read-only root, tmpfs scratch paths (`/config`, `/data`), every capability dropped and a non-root user. That image
+is 38,438,443 bytes, as `docker image inspect` reports its size. The server trusts `CF-Connecting-IP` from the
+same peers as today's nginx: loopback, the host's private ranges and Cloudflare's published ranges.
+
+Caddy sends the security headers on every answer: pages, assets, 404s, proxied answers and maintenance answers.
+The table checks them on page answers only, as nginx sends them today, and
+`scripts/tests/integration/website-server-routes.test.ts` checks the other answers against the Caddy image.
+
+It has these duties and no others:
 
 | Duty | Rule |
 |---|---|

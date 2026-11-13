@@ -229,6 +229,20 @@ proxy). Refines D8's prod mode to a managed HA cluster. The single-box
   marketing is reached DNS-only so DO owns its delivery.
 - **Keeping the single box for prod** — no isolation between failure domains, no DB HA.
 
+**Amendment (2026-11-13, issue 1625) — Caddy is the one web server.** The web
+serving architecture
+([web-serving-architecture.md §3.3](technical/web-serving-architecture.md#33-the-server))
+puts one container role in front of the site: it serves the static files,
+proxies `/api/`, `/health` and `/version` to the api, and holds the public
+origin port (R6, R7). That role is the one routing component this decision
+allows, and Caddy is its server. The "reverse proxy (Caddy/nginx)" alternative
+rejected above is accepted for that one role, and only for it: there is still
+no second proxy or web server, and Cloudflare's scope stays DNS, TLS and
+observability. The evidence is the P2 spike: a digest-pinned Caddy image with
+no Bun or Node runtime, a read-only root and a non-root user passes the route
+and header table that today's nginx image passes, unchanged. nginx serves until
+the swap lands (web serving P4).
+
 ---
 
 ## D14 — Preview mode (goldens-backed) over the baked "frozen" single file

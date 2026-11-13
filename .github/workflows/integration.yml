@@ -176,8 +176,10 @@ jobs:
           grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::$f did not run in the integration suite"; exit 1; }
       # Issue 1624: the route and header table ran against the real image, with
-      # rows executed in both api states. Its absence or exclusion is a red
-      # job, not a green one.
+      # every row executed in both api states. Its absence or exclusion is a
+      # red job, not a green one. The summary line names the server, so the
+      # stub server's run cannot stand in for a skipped real-image run, and N/N
+      # means every row of the phase passed (issue 1625).
       - name: Website-server route and header table ran (issue 1624)
         shell: bash
         run: |
@@ -186,8 +188,20 @@ jobs:
           grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
             || { echo "::error::$f did not run in the integration suite"; exit 1; }
           for phase in api-up api-down; do
-            grep -qE "^[1-9][0-9]*/[1-9][0-9]* rows passed \($phase\)" "$RUNNER_TEMP/integration-bun-test.log" \
-              || { echo "::error::no $phase rows of the route and header table ran"; exit 1; }
+            grep -qE "^route-table server=nginx phase=$phase: ([1-9][0-9]*)/\1 rows passed" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::the nginx image did not pass every $phase row of the route and header table"; exit 1; }
+          done
+      # Issue 1625: the same table, unchanged, against the Caddy spike image
+      # (website-server/Dockerfile.caddy), run read-only as a non-root user.
+      - name: Website-server route and header table against Caddy (issue 1625)
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/routes-caddy.log"
+          ROUTES_SERVER=caddy bun test scripts/tests/integration/website-server-routes.test.ts 2>&1 | tee "$log"
+          for phase in api-up api-down; do
+            grep -qE "^route-table server=caddy phase=$phase: ([1-9][0-9]*)/\1 rows passed" "$log" \
+              || { echo "::error::the Caddy image did not pass every $phase row of the route and header table"; exit 1; }
           done
       # Issue 1624 red control: one Cache-Control value, one fallback and one
       # 404 rule, each changed in a scratch copy of nginx.conf, must each turn

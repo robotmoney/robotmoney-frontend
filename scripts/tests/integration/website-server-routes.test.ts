@@ -10,6 +10,14 @@
 // maintenance.json beside it. The api is stopped for the maintenance rows by
 // the helper bun smoke:down --keep-web uses (stopProjectExcept).
 //
+// ROUTES_SERVER picks the image: `nginx` (default, website-server/Dockerfile)
+// or `caddy` (the issue 1625 spike, website-server/Dockerfile.caddy). Both run
+// the table unchanged. The Caddy container also runs as §3.2 says a container
+// runs: read-only root, tmpfs scratch paths, every capability dropped, no
+// privilege escalation. Every table run prints one `route-table server=<name>
+// phase=<phase>: N/N rows passed` line, which integration.yml greps per
+// server, so a skipped real-image run is never hidden by the stub's run.
+//
 // Red control (CI, integration.yml): ROUTES_SERVER_DIR points the image build at
 // a scratch copy of website-server/ with one rule changed, and this file must
 // then exit non-zero (scripts/tests/support/website-routes-red-control.sh).
@@ -23,11 +31,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { MAINTENANCE_FILE, writeMaintenanceFile } from "../../lib/maintenance-file.ts";
 import { KEPT_WEB_SERVICE, makeDockerRunner, stopProjectExcept } from "../../lib/smoke-volumes.ts";
-import { MAINTENANCE_STATUS, SECURITY_HEADERS, SITE_FILES } from "../support/website-routes-table.ts";
+import { MAINTENANCE_STATUS, SECURITY_HEADERS, SITE_FILES, TABLE } from "../support/website-routes-table.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const RUNNER = join(repoRoot, "scripts/tests/support/website-routes-runner.ts");
 const SERVER_DIR = process.env.ROUTES_SERVER_DIR ?? join(repoRoot, "website-server");
+const SERVERS = {
+  nginx: { dockerfile: "Dockerfile", run: [] as string[] },
+  caddy: {
+    dockerfile: "Dockerfile.caddy",
+    // nobody owns the scratch mounts: Caddy writes its instance id and locks there.
+    run: ["--read-only", "--tmpfs", "/config:uid=65534,gid=65534", "--tmpfs", "/data:uid=65534,gid=65534", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"],
+  },
+};
+const SERVER = (process.env.ROUTES_SERVER ?? "nginx") as keyof typeof SERVERS;
+if (!(SERVER in SERVERS)) throw new Error(`ROUTES_SERVER must be one of ${Object.keys(SERVERS).join(", ")}, got ${SERVER}`);
 const RUN = `${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = `rm-website-server-routes-test:${RUN}`;
 const NETWORK = `rm-wsr-net-${RUN}`;
@@ -55,11 +73,19 @@ const tryDocker = (args: string[]): void => {
   }
 };
 
-/** Run the table's runner as its own process, as any caller would. Async: a stub served by this process must keep answering. */
-async function runTable(origin: string, phase: "api-up" | "api-down"): Promise<{ code: number; out: string }> {
+/**
+ * Run the table's runner as its own process, as any caller would. Async: a stub
+ * served by this process must keep answering. Every row of the phase must pass,
+ * and the run is reported under the server's name for integration.yml.
+ */
+async function runTable(origin: string, phase: "api-up" | "api-down", server: string): Promise<{ code: number; out: string }> {
   const proc = Bun.spawn(["bun", RUNNER, phase], { env: { ...process.env, ROUTES_TARGET_URL: origin }, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   console.log(out + err);
+  const rows = TABLE.filter((r) => r.phase === phase).length;
+  const summary = `${rows}/${rows} rows passed (${phase})`;
+  if (code === 0 && out.includes(summary)) console.log(`route-table server=${server} phase=${phase}: ${summary}`);
+  expect(out).toContain(summary);
   return { code, out };
 }
 
@@ -81,11 +107,11 @@ beforeAll(() => {
   writeMaintenanceFile(webDir, MAINTENANCE_STATUS);
   // mkdtemp makes the directory 0700; the nginx worker runs as its own user.
   chmodSync(webDir, 0o755);
-  docker(["build", "-t", IMAGE, SERVER_DIR]);
+  docker(["build", "-t", IMAGE, "-f", join(SERVER_DIR, SERVERS[SERVER].dockerfile), SERVER_DIR]);
   docker(["network", "create", NETWORK]);
   docker(["network", "create", "--subnet", "198.51.100.0/24", UNTRUSTED_NET]);
   docker(["run", "-d", "--name", API_CONTAINER, "--network", NETWORK, "--network-alias", "api", ...labels("api"), BUN_IMAGE, "bun", "-e", ECHO_API]);
-  docker(["run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK, "--network-alias", "web", ...labels(KEPT_WEB_SERVICE), "-v", `${webDir}:/srv/web:ro`, "-p", "127.0.0.1::8080", IMAGE]);
+  docker(["run", "-d", "--name", WEB_CONTAINER, "--network", NETWORK, "--network-alias", "web", ...labels(KEPT_WEB_SERVICE), ...SERVERS[SERVER].run, "-v", `${webDir}:/srv/web:ro`, "-p", "127.0.0.1::8080", IMAGE]);
   docker(["network", "connect", "--alias", "web", UNTRUSTED_NET, WEB_CONTAINER]);
   webPort = Number(docker(["port", WEB_CONTAINER, "8080/tcp"]).split("\n")[0]!.split(":").pop());
   expect(webPort).toBeGreaterThan(0);
@@ -100,10 +126,10 @@ afterAll(() => {
   rmSync(webDir, { recursive: true, force: true });
 }, 120_000);
 
-test("the table passes against the website-server image (api up)", async () => {
+test(`the table passes against the ${SERVER} website-server image (api up)`, async () => {
   const origin = `http://127.0.0.1:${webPort}`;
   await waitFor(`${origin}/health`, (r) => r.status === 200);
-  const { code, out } = await runTable(origin, "api-up");
+  const { code, out } = await runTable(origin, "api-up", SERVER);
   expect(out).not.toContain("FAIL");
   expect(code).toBe(0);
 }, 120_000);
@@ -133,16 +159,59 @@ test("the container health check command from docker-compose.yml exits 0", () =>
   docker(["exec", WEB_CONTAINER, ...check.slice(1)]);
 }, 60_000);
 
-test("the table passes against the website-server image with the api stopped (maintenance)", async () => {
+/** Every security header of the table, on one answer of the running server. */
+async function expectSecurityHeaders(path: string, status: number): Promise<void> {
+  const res = await fetch(`http://127.0.0.1:${webPort}${path}`, { redirect: "manual" });
+  await res.arrayBuffer();
+  expect({ path, status: res.status }).toEqual({ path, status });
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) expect({ path, [name]: res.headers.get(name) }).toEqual({ path, [name]: value });
+}
+
+// The Caddy image's own duties (issue 1625, §3.2), and the security header
+// decision recorded in §3.3: Caddy sends the headers on every answer, not only
+// on pages as nginx does. The table checks pages only, so it stays unchanged.
+if (SERVER === "caddy") {
+  test("the caddy image carries no bun or node binary", () => {
+    const history = docker(["history", "--no-trunc", IMAGE]);
+    expect(history.split("\n").filter((l) => /\b(bun|node|npm|npx)\b/i.test(l))).toEqual([]);
+    const found = docker(["run", "--rm", "--user", "0", "--entrypoint", "find", IMAGE, "/", "-xdev", "-type", "f", "(", "-name", "bun", "-o", "-name", "node", "-o", "-name", "npm", ")"]);
+    expect(found).toBe("");
+    // The size §3.3 records, as `docker image inspect` reports it.
+    console.log(`caddy image size: ${docker(["image", "inspect", "--format", "{{.Size}}", IMAGE])} bytes`);
+  }, 120_000);
+
+  test("the caddy container runs as a non-root user on a read-only root, writing only to its tmpfs scratch paths", () => {
+    expect(docker(["inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", WEB_CONTAINER])).toBe("true");
+    expect(docker(["exec", WEB_CONTAINER, "id", "-u"])).not.toBe("0");
+    expect(() => docker(["exec", WEB_CONTAINER, "touch", "/srv/probe"])).toThrow();
+    expect(() => docker(["exec", WEB_CONTAINER, "touch", "/probe"])).toThrow();
+    docker(["exec", WEB_CONTAINER, "touch", "/data/probe", "/config/probe"]);
+  }, 60_000);
+
+  test("caddy sends the security headers on asset, 404 and proxied answers too", async () => {
+    await expectSecurityHeaders("/assets/js/app/main.js", 200);
+    await expectSecurityHeaders("/assets/js/app/missing.js", 404);
+    await expectSecurityHeaders("/api/routes-echo", 200);
+  }, 60_000);
+}
+
+test(`the table passes against the ${SERVER} website-server image with the api stopped (maintenance)`, async () => {
   // What bun smoke:down --keep-web does to the instance (issue 1501).
   const stopped = stopProjectExcept(makeDockerRunner(), PROJECT, [KEPT_WEB_SERVICE]);
   expect(stopped).toEqual({ removed: [API_CONTAINER], kept: [WEB_CONTAINER] });
   const origin = `http://127.0.0.1:${webPort}`;
   await waitFor(`${origin}/api/anything`, (r) => r.status === 503);
-  const { code, out } = await runTable(origin, "api-down");
+  const { code, out } = await runTable(origin, "api-down", SERVER);
   expect(out).not.toContain("FAIL");
   expect(code).toBe(0);
 }, 120_000);
+
+if (SERVER === "caddy") {
+  test("caddy sends the security headers on the maintenance answers too", async () => {
+    await expectSecurityHeaders("/api/status/maintenance", 200);
+    await expectSecurityHeaders("/api/swarm/anything", 503);
+  }, 60_000);
+}
 
 const isFile = (p: string): boolean => existsSync(p) && statSync(p).isFile();
 
@@ -185,8 +254,8 @@ test("the same table passes against a stub server on another port", async () => 
   const down = stubServer(true);
   try {
     expect(up.port).not.toBe(webPort);
-    const a = await runTable(`http://127.0.0.1:${up.port}`, "api-up");
-    const b = await runTable(`http://127.0.0.1:${down.port}`, "api-down");
+    const a = await runTable(`http://127.0.0.1:${up.port}`, "api-up", "stub");
+    const b = await runTable(`http://127.0.0.1:${down.port}`, "api-down", "stub");
     expect(a.out + b.out).not.toContain("FAIL");
     expect([a.code, b.code]).toEqual([0, 0]);
   } finally {

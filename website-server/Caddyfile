@@ -1,0 +1,109 @@
+# Caddy spike (issue 1625, docs/technical/web-serving-architecture.md §3.3).
+# The same duties as nginx.conf beside it, graded by the same route and header
+# table (scripts/tests/support/website-routes-table.ts). The site is read from
+# /srv/web/current and the maintenance file from /srv/web, as nginx reads them
+# today; how the bundle reaches the image is P3/P4, not this spike.
+{
+	# No admin API, no automatic HTTPS: TLS ends at the Cloudflare edge, and
+	# nothing changes this server's config after it starts.
+	admin off
+	auto_https off
+	persist_config off
+	servers {
+		# WHO THE CLIENT IS: the same peers nginx.conf's geo block trusts
+		# (loopback, this host's private ranges for the cloudflared tunnel, and
+		# Cloudflare's published ranges, checked 2026-10-05). From one of them,
+		# a non-empty CF-Connecting-IP is the client; from anyone else the peer
+		# address is, whatever the caller wrote. {client_ip} below is that answer.
+		trusted_proxies static 127.0.0.0/8 ::1/128 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+# Security headers on every answer (§3.3): pages, assets, proxied answers and
+# error answers alike. The table checks them on pages only, as nginx sends them.
+(security_headers) {
+	Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+	Permissions-Policy "publickey-credentials-get=(self), publickey-credentials-create=(self)"
+	Referrer-Policy "strict-origin-when-cross-origin"
+	X-Content-Type-Options "nosniff"
+}
+
+http://:8080 {
+	root * /srv/web/current
+	# Deferred, so the server's value replaces any the api sent rather than
+	# adding a second one.
+	header {
+		defer
+		import security_headers
+	}
+
+	# API proxy. Caddy passes the original Host header, port included, which
+	# WebAuthn's origin check needs (see nginx.conf). The upstream name is
+	# resolved per connection, so the server starts before the api does.
+	@proxied path /health /version /api/*
+	handle @proxied {
+		reverse_proxy api:8787 {
+			header_up CF-Connecting-IP {client_ip}
+			header_up X-Client-IP {client_ip}
+		}
+	}
+
+	# An asset: a real file extension other than .html. A missing one is a
+	# plain 404, never the shell.
+	@asset {
+		path_regexp (?i)\.[a-z0-9]+$
+		not path_regexp (?i)\.html$
+	}
+	handle @asset {
+		header Cache-Control "public, max-age=300"
+		file_server
+	}
+
+	# A page: its own prerendered index.html, then the client-route shell.
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} {path}/index.html /_shell.html /index.html
+		file_server
+	}
+
+	# Caddy's own error answers: a missing asset's 404, and the api being
+	# unreachable. A 5xx the api itself returns is not an error here and reaches
+	# the client unchanged. Not deferred: an error answer with no body of its
+	# own is written without passing through a deferring handler.
+	handle_errors {
+		header {
+			import security_headers
+		}
+
+		# MAINTENANCE (issue 1220): only Caddy's own 502/503/504 (api
+		# unreachable) on an /api/ path.
+		@status_file {
+			path /api/status/maintenance
+			expression `{err.status_code} in [502, 503, 504]`
+			file {
+				root /srv/web
+				try_files /maintenance.json
+			}
+		}
+		handle @status_file {
+			root * /srv/web
+			rewrite * /maintenance.json
+			header Cache-Control "no-store"
+			file_server {
+				status 200
+			}
+		}
+
+		@api_down {
+			path /api/*
+			expression `{err.status_code} in [502, 503, 504]`
+		}
+		handle @api_down {
+			header Cache-Control "no-store"
+			header Content-Type "application/json"
+			header Retry-After "60"
+			respond `{"error":"maintenance","message":"Robot Money is briefly unavailable. Please try again shortly."}` 503
+		}
+	}
+}
