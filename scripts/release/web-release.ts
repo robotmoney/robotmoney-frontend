@@ -14,13 +14,18 @@
 // --dry-run runs the preflight and every step's read-only done check, and
 // writes nothing to origin, GitHub or the host.
 //
-// Host commands go over ssh the way ./run.ts runs a step (its realDeps, typed
-// by ./step-exec.ts RunnerDeps), from the control machine (D61 (4)).
+// Host reads go over ssh the way ./run.ts runs a step (its realDeps, typed by
+// ./step-exec.ts RunnerDeps), from the control machine (D61 (4)). W03 packs and
+// signs the bundle here with the key at WEB_SIGNING_KEY (~/.ssh/robotmoney-web-bundle,
+// the control machine's ed25519 bundle key, web-serving-architecture.md §3.1), and
+// `bun smoke:web` deploys it from here, writing its receipts under this
+// machine's smoke state root.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { stateRoot } from "../lib/smoke-state.ts";
 import { realDeps } from "./run.ts";
 import type { RunnerDeps } from "./step-exec.ts";
 import { loadTarget } from "./target.ts";
@@ -30,6 +35,8 @@ const USAGE = "usage: bun run release:web --commit <main sha> [--commit <main sh
 const TARGETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "targets");
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
+/** The control machine's web bundle signing key (§3.1: held there and nowhere else, it signs bundles and nothing else). */
+export const WEB_SIGNING_KEY = join(homedir(), ".ssh", "robotmoney-web-bundle");
 
 function run(cmd: string, args: string[], cwd?: string): ExecResult {
   const r = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, cwd });
@@ -79,7 +86,7 @@ async function main(): Promise<number> {
   const deps: Deps = {
     git: (a) => run("git", a),
     gh: (a) => run("gh", a),
-    // W04 and W06 run stage-target.ts from the repository root, as the kitchen sink's Q02 and Q03 do.
+    // From the repository root: W03 packs and signs the bundle, W04 and W06 run stage-target.ts as the kitchen sink's Q02 and Q03 do, and W04, W05, W10 and W11 run `bun run smoke:web`.
     exec: ([cmd, ...a]) => run(cmd!, a, REPO_ROOT),
     async ssh(host, remote) {
       let stdout = "";
@@ -89,7 +96,7 @@ async function main(): Promise<number> {
     },
     async http(url) {
       const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-      return { status: r.status, body: await r.text() };
+      return { status: r.status, body: await r.text(), headers: Object.fromEntries(r.headers.entries()) };
     },
     async httpBytes(url) {
       const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
@@ -98,12 +105,16 @@ async function main(): Promise<number> {
     readFile(path) {
       try { return readFileSync(path, "utf8"); } catch { return undefined; }
     },
+    readBytes(path) {
+      try { return new Uint8Array(readFileSync(path)); } catch { return undefined; }
+    },
     clock: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     writeFile: (path, text) => writeFileSync(path, text),
     log: (line) => console.log(line),
   };
-  return runWebRelease(loadWebRunbook(), { commits: args.commits, version: args.version, target, stage, dryRun: args.dryRun, workDir }, deps);
+  const inputs = { commits: args.commits, version: args.version, target, stage, dryRun: args.dryRun, workDir, signingKey: WEB_SIGNING_KEY, controlStateRoot: stateRoot(process.env) };
+  return runWebRelease(loadWebRunbook(), inputs, deps);
 }
 
 if (import.meta.main) process.exitCode = await main();

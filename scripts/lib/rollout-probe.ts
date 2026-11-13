@@ -89,34 +89,49 @@ const isSiteAnswer = (r: ProbeReceipt): boolean => r.maintenance === undefined;
 export interface ProbeGrade {
   ok: boolean;
   receipts: number;
+  /** Site answers that were not 200 and fall outside every excused span. */
   nonOk: ProbeReceipt[];
+  /** Site answers that were not 200 inside an excused span: a swap's measured gap (issue 1630). */
+  excused?: ProbeReceipt[];
   /** Gaps longer than the interval, as [from, to] epoch ms. */
   gaps: Array<[number, number]>;
   problems: string[];
 }
 
+/** An excused span in epoch ms, inclusive: a website-server swap's gap, from its receipt (web-serving-architecture.md §4.1). */
+export interface ExcusedSpan { readonly start: number; readonly end: number }
+
+/** PURE. Whether a receipt was asked inside an excused span. */
+const inSpan = (spans: readonly ExcusedSpan[], at: number): boolean => spans.some((s) => at >= s.start && at <= s.end);
+
 /**
  * Grade the receipts of one window. `windowStart` and `windowEnd` (epoch ms)
  * bound it: the first receipt must land within one interval of the start and
  * the last within one interval of the end, so a probe that died is a failure.
+ * A site answer that is not 200 fails the grade unless it was asked inside one
+ * of `excused`: the gaps a swap's receipt measured (issue 1630). Nothing else is
+ * excused, and an excused answer still counts toward the gap rule.
  */
 export function gradeProbeReceipts(
   receipts: readonly ProbeReceipt[],
   window: { start: number; end: number },
   intervalMs: number = PROBE_INTERVAL_MS,
   jitterMs: number = PROBE_JITTER_MS,
+  excused: readonly ExcusedSpan[] = [],
 ): ProbeGrade {
   const sorted = receipts.filter(isSiteAnswer).sort((a, b) => a.at - b.at);
   const limit = intervalMs + jitterMs;
-  const nonOk = sorted.filter((r) => r.status !== 200);
+  const failedAnswers = sorted.filter((r) => r.status !== 200);
+  const nonOk = failedAnswers.filter((r) => !inSpan(excused, r.at));
+  const excusedAnswers = failedAnswers.filter((r) => inSpan(excused, r.at));
   const gaps: Array<[number, number]> = [];
   const marks = [window.start, ...sorted.map((r) => r.at), window.end];
   for (let i = 1; i < marks.length; i++) if (marks[i]! - marks[i - 1]! > limit) gaps.push([marks[i - 1]!, marks[i]!]);
   const problems: string[] = [];
   if (sorted.length === 0) problems.push("no probe receipts in the window");
-  if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) were not 200`);
+  if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) were not 200${excused.length > 0 ? " outside the swap gap(s) the receipts recorded" : ""}`);
   if (gaps.length > 0) problems.push(`${gaps.length} gap(s) between receipts exceeded ${intervalMs / 1000} s`);
-  return { ok: problems.length === 0, receipts: sorted.length, nonOk, gaps, problems };
+  return { ok: problems.length === 0, receipts: sorted.length, nonOk, ...(excused.length > 0 ? { excused: excusedAnswers } : {}), gaps, problems };
 }
 
 /**
@@ -136,8 +151,9 @@ export function gradeProbeWithDeclaredWindow(
   declared: { start: number; end: number },
   intervalMs: number = PROBE_INTERVAL_MS,
   jitterMs: number = PROBE_JITTER_MS,
+  excused: readonly ExcusedSpan[] = [],
 ): ProbeGrade {
-  const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs);
+  const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs, excused);
   const limit = intervalMs + jitterMs;
   const inWindow = (at: number) => at >= declared.start && at <= declared.end;
   const gaps = base.gaps.filter(([from, to]) => !(from >= declared.start - limit && to <= declared.end + limit));
@@ -146,7 +162,7 @@ export function gradeProbeWithDeclaredWindow(
   if (base.nonOk.length > 0) problems.push(`${base.nonOk.length} probe answer(s) of the site were not 200 (the site stays up through a declared maintenance window)`);
   if (gaps.length > 0) problems.push(`${gaps.length} gap(s) outside the declared maintenance window exceeded ${intervalMs / 1000} s`);
   if (!receipts.some((r) => r.maintenance === true && inWindow(r.at))) problems.push("no answer inside the declared maintenance window announced an active maintenance window (/api/status/maintenance)");
-  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, gaps, problems };
+  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, ...(base.excused !== undefined ? { excused: base.excused } : {}), gaps, problems };
 }
 
 /** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}. */

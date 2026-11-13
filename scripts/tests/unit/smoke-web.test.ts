@@ -1195,4 +1195,20 @@ describe("image mode: pure parts", () => {
     expect(r.exitCode).toBe(1);
     expect(r.stderr.toString()).toContain("--bundle deploys a signed bundle image and needs --host");
   });
+
+  test("an ssh host needs --origin, so the swap's public check never reads the loopback port (issue 1630); local may omit it", () => {
+    const entry = (args: string[]) => Bun.spawnSync(["bun", join(repoRoot, "scripts", "smoke-web.ts"), ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, RM_SMOKE_STATE_ROOT: "/nonexistent-1630" } });
+    for (const args of [
+      ["--host", "rm-frontend-prod-1", "--instance", "rm_prod", "--bundle", "web-v1.0.0", "--server-image", "robotmoney-website-server:rm_prod"],
+      ["--host", "rm-frontend-prod-1", "--instance", "rm_prod", "--rollback"],
+    ]) {
+      const r = entry(args);
+      expect(r.exitCode).toBe(1);
+      expect(r.stderr.toString()).toContain("Refusing: an ssh host needs --origin");
+    }
+    // `--bundle serving` on a host with no website-server for the instance refuses: it never guesses a bundle.
+    const serving = entry(["--host", "local", "--instance", "rm_no_such_instance_1630", "--bundle", "serving", "--server-image", "x"]);
+    expect(serving.exitCode).toBe(1);
+    expect(serving.stderr.toString()).toMatch(/Refusing: (local runs 0 website-server containers for rm_no_such_instance_1630, not one|listing rm_no_such_instance_1630's website-server on local failed)/);
+  });
 });

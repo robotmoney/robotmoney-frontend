@@ -12,7 +12,13 @@
 // on any site answer that is not 200, on a gap between ticks over the interval
 // plus jitter, and on a probe that died (scripts/lib/rollout-probe.ts). In a
 // declared maintenance window the site still answers 200 (website-server stays
-// up), and the window must hold a receipt with `maintenance: true`. `start` leaves a
+// up), and the window must hold a receipt with `maintenance: true`. A
+// website-server swap may drop requests for its measured gap (web-serving-
+// architecture.md §4.1, R11): the grade excuses a failed site answer asked
+// inside a gap that `bun smoke:web`'s receipt recorded during the window, and
+// nothing else (issue 1630). It reads the receipts from the control machine's
+// journal for the target's instance (<smoke state root>/web-image/<instance>/
+// journal.jsonl). `start` leaves a
 // live probe alone ("already running"); a probe.json whose pid is dead, or that a
 // newer grade.json already stopped, is a retried run's leftover (issue 1612): it
 // is moved aside and a fresh probe starts. Files live
@@ -25,7 +31,10 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readJournal, type RunJournal } from "./journal.ts";
 import { PHASES, PHASE_PREFIX, PHASE_TARGET } from "./runbook.ts";
-import { gradeProbeReceipts, gradeProbeWithDeclaredWindow, parseProbeReceipts, probeMaintenance, probeOnce, type ProbeGrade, type ProbeReceipt } from "../lib/rollout-probe.ts";
+import { loadTarget } from "./target.ts";
+import { gradeProbeReceipts, gradeProbeWithDeclaredWindow, parseProbeReceipts, probeMaintenance, probeOnce, type ExcusedSpan, type ProbeGrade, type ProbeReceipt } from "../lib/rollout-probe.ts";
+import { stateRoot } from "../lib/smoke-state.ts";
+import { IMAGE_JOURNAL_FILE, type ImageReceipt } from "../lib/website-release.ts";
 
 /** How often the release probe asks. Far tighter than the 15 s rollout default: a release must show no gap a visitor would see. */
 export const PROBE_EVERY_MS = 2_000;
@@ -66,15 +75,45 @@ export function declaredWindow(steps: RunJournal["steps"], rmEnv: RunJournal["rm
   return { window: { start: Date.parse(on.startedAt), end: Date.parse(off.endedAt) } };
 }
 
-/** PURE. Grade a probe: a run that declared a maintenance window excuses exactly it, any other run excuses nothing. */
-export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: number; end: number }, steps: RunJournal["steps"], rmEnv: RunJournal["rmEnv"], everyMs: number, slackMs: number): ProbeGrade {
+/**
+ * PURE. The swap gaps `bun smoke:web`'s receipts measured inside a probe window, in epoch ms: each
+ * receipt's gap and revert gap that started and ended inside the window. A gap with no end (no good
+ * answer came) excuses nothing: that swap failed, and its receipt says so.
+ */
+export function swapGaps(journal: readonly ImageReceipt[], window: { start: number; end: number }): ExcusedSpan[] {
+  const out: ExcusedSpan[] = [];
+  for (const r of journal) {
+    for (const g of [r.gap, r.revertGap]) {
+      if (g === null || g === undefined || g.endedAt === null || g.ms === null) continue;
+      const span = { start: Date.parse(g.startedAt), end: Date.parse(g.endedAt) };
+      if (Number.isFinite(span.start) && Number.isFinite(span.end) && span.start >= window.start && span.end <= window.end) out.push(span);
+    }
+  }
+  return out;
+}
+
+/**
+ * PURE. Grade a probe: a run that declared a maintenance window excuses exactly it, any other run excuses
+ * nothing but the swap gaps its receipts recorded (`gaps`, from swapGaps): a failed site answer asked
+ * inside one passes, any other fails.
+ */
+export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: number; end: number }, steps: RunJournal["steps"], rmEnv: RunJournal["rmEnv"], everyMs: number, slackMs: number, gaps: readonly ExcusedSpan[] = []): ProbeGrade {
   const declared = declaredWindow(steps, rmEnv);
-  if (declared === "none") return gradeProbeReceipts(receipts, window, everyMs, slackMs);
+  if (declared === "none") return gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps);
   if ("problem" in declared) {
-    const base = gradeProbeReceipts(receipts, window, everyMs, slackMs);
+    const base = gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps);
     return { ...base, ok: false, problems: [declared.problem, ...base.problems] };
   }
-  return gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs);
+  return gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs, gaps);
+}
+
+/** The image receipts `bun smoke:web` journaled for a target's instance on this control machine, oldest first; none when there is no journal. */
+export function readSwapJournal(target: string, env: Record<string, string | undefined> = process.env): ImageReceipt[] {
+  const file = join(dirname(import.meta.path), "targets", `${target}.json`);
+  if (!existsSync(file)) return [];
+  const journal = join(stateRoot(env), "web-image", loadTarget(file).instance, IMAGE_JOURNAL_FILE);
+  if (!existsSync(journal)) return [];
+  return readFileSync(journal, "utf8").split("\n").flatMap((l) => { try { return l.trim() === "" ? [] : [JSON.parse(l) as ImageReceipt]; } catch { return []; } });
 }
 
 /** Whether a pid is a running process (signal 0 only checks; EPERM still means it exists). */
@@ -162,9 +201,12 @@ if (import.meta.main) {
     // The probe's directory is <run dir>/probe: the run's journal sits beside it and says whether a window was declared.
     // With no journal there are no steps, so the target passed with them declares nothing either way.
     const journal = readJournal(dirname(dir));
-    const grade = gradeRun(receipts, { start: state.startMs, end: endMs }, journal?.steps ?? {}, journal?.rmEnv ?? "prod", state.everyMs, PROBE_SLACK_MS);
-    writeFileSync(join(dir, "grade.json"), `${JSON.stringify({ ...grade, startMs: state.startMs, endMs }, null, 2)}\n`, { mode: 0o600 });
-    console.log(`[probe] ${grade.receipts} answers over ${Math.round((endMs - state.startMs) / 1000)} s: ${grade.ok ? "every answer 200, no gap" : grade.problems.join("; ")}`);
+    const window = { start: state.startMs, end: endMs };
+    const gaps = swapGaps(readSwapJournal(target), window);
+    const grade = gradeRun(receipts, window, journal?.steps ?? {}, journal?.rmEnv ?? "prod", state.everyMs, PROBE_SLACK_MS, gaps);
+    writeFileSync(join(dir, "grade.json"), `${JSON.stringify({ ...grade, swapGaps: gaps, startMs: state.startMs, endMs }, null, 2)}\n`, { mode: 0o600 });
+    const excused = grade.excused?.length ? `; ${grade.excused.length} failed answer(s) inside ${gaps.length} recorded swap gap(s) excused` : "";
+    console.log(`[probe] ${grade.receipts} answers over ${Math.round((endMs - state.startMs) / 1000)} s: ${grade.ok ? `every answer 200, no gap${excused}` : grade.problems.join("; ")}`);
     process.exit(grade.ok ? 0 : 1);
   } else {
     console.error(`unknown mode ${mode}`);

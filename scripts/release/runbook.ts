@@ -170,8 +170,9 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.afterSince !== undefined && raw.after === undefined) errors.push(`${at}: afterSince goes with after`);
   if (raw.changedSince !== undefined && !(typeof raw.changedSince === "string" && /^v\d+\.\d+\.\d+$/.test(raw.changedSince))) errors.push(`${at}: changedSince is a release name (vA.B.C)`);
   if ((raw.changedSince === undefined) !== (raw.before === undefined)) errors.push(`${at}: changedSince and before go together`);
-  if (raw.before !== undefined && !(isObject(raw.before) && Object.keys(raw.before).sort().join() === "cmds,description" && typeof raw.before.description === "string" && raw.before.description !== "" && Array.isArray(raw.before.cmds) && raw.before.cmds.length > 0 && raw.before.cmds.every((c) => isStringArray(c) && c.length > 0))) {
-    errors.push(`${at}: before is {description, cmds}, the step as an earlier release ran it`);
+  const beforeKeys = isObject(raw.before) ? Object.keys(raw.before).sort().join() : "";
+  if (raw.before !== undefined && !(isObject(raw.before) && (beforeKeys === "cmds,description" || beforeKeys === "cmds,description,host") && typeof raw.before.description === "string" && raw.before.description !== "" && Array.isArray(raw.before.cmds) && raw.before.cmds.length > 0 && raw.before.cmds.every((c) => isStringArray(c) && c.length > 0) && (raw.before.host === undefined || HOSTS.includes(raw.before.host as StepHost)))) {
+    errors.push(`${at}: before is {description, cmds} (and host when it moved), the step as an earlier release ran it`);
   }
   if (errors.length > 0) return { errors };
 

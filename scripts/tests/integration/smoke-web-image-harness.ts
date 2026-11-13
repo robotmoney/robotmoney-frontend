@@ -60,6 +60,8 @@ export interface BundleSpec {
   readonly apiRange?: string | null;
   /** Leave out index.html and _shell.html: the site builds and fails the copy check. */
   readonly broken?: boolean;
+  /** More site files, by path (web-content-release.test.ts adds a sitemap). */
+  readonly files?: Readonly<Record<string, string>>;
 }
 
 export interface ImageHost {
@@ -119,6 +121,10 @@ export function createImageHost(label: string, first: BundleSpec, opts: { firstS
       writeFileSync(join(site, "_shell.html"), `<!doctype html><title>shell ${spec.version}</title>`);
     }
     writeFileSync(join(site, "assets", "app.js"), `export const v = "${spec.version}";\n`);
+    for (const [path, text] of Object.entries(spec.files ?? {})) {
+      mkdirSync(join(site, path, ".."), { recursive: true });
+      writeFileSync(join(site, path), text);
+    }
     writeFileSync(join(site, "version.json"), JSON.stringify({ version: spec.version, commit: spec.commit, apiRange: spec.apiRange === undefined ? "^0.2.0" : spec.apiRange }));
     const out = join(work, `bundle-${spec.version}-${spec.commit}-${receipts++}`);
     const packed = packBundle(site, out);
@@ -199,7 +205,7 @@ export function createImageHost(label: string, first: BundleSpec, opts: { firstS
     docker(["network", "create", network]);
     const api = docker([
       "run", "-d", "--name", `rm-swt-api-${run}`, "--network", network, "--network-alias", "api",
-      "--label", `com.docker.compose.project=${project}`, "--label", "com.docker.compose.service=api",
+      "--label", `com.docker.compose.project=${project}`, "--label", "com.docker.compose.service=api", "--label", "com.docker.compose.oneoff=False",
       BUN_IMAGE, "bun", "-e", STAND_IN_API,
     ]);
     containers.push(api);

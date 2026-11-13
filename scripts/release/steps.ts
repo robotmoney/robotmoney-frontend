@@ -175,11 +175,13 @@ export interface StepTemplate {
   /**
    * The first release whose runbook must carry this template step as it now
    * reads (`vA.B.C`, issue 1501). An earlier release's runbook keeps the step
-   * as it ran: `before` holds the description and commands it ran with
-   * (./runbook.ts checkAddOnly). Like `since`, the hash never sees either.
+   * as it ran: `before` holds the description and commands it ran with, and
+   * its host when the step moved (issue 1630: the site step moved to the
+   * control machine) (./runbook.ts checkAddOnly). Like `since`, the hash never
+   * sees either.
    */
   readonly changedSince?: string;
-  readonly before?: { readonly description: string; readonly cmds: readonly (readonly string[])[] };
+  readonly before?: { readonly description: string; readonly cmds: readonly (readonly string[])[]; readonly host?: StepHost };
 }
 
 /** The repository every checkout fetches from; P01-checkout and P04-capture-checkout clone a missing checkout from it. */
@@ -257,6 +259,7 @@ export function templateValues(target: ReleaseTarget, commit: string, runTs: str
     readyIso,
     windowStartIso,
     target: target.name,
+    host: target.host,
     release: target.release,
     commit,
     ref,
