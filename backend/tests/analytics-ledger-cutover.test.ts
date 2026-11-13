@@ -11,6 +11,7 @@ import { ROUTES } from "@robotmoney/contract";
 import { createHistoryDatabase } from "./support/history-database.ts";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { withoutPublicationGuards } from "./support/regime-publications.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { handleAdmin } from "../src/api/routes/admin.ts";
 import { getRegimeSnapshots, getRegimeSnapshotsSummary, getResearchSignal } from "../src/api/routes/dashboards.ts";
@@ -425,7 +426,8 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
     // sentinel the ledger cannot know about: ledger mode must keep returning
     // the frozen value, and rollback must return the drifted one.
     const DRIFT = 424243;
-    await fixtureDb`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`;
+    // Out of band, past the guard trigger that skips any write to a past day (D83).
+    await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET composite = ${DRIFT} WHERE date = ${date}`);
     const stillLedger = await getRegimeSnapshots(new URL("http://x?range=10"));
     expect(JSON.stringify(stillLedger), "ledger mode must ignore a legacy-table edit").not.toContain(String(DRIFT));
     expect(stillLedger.source).toBe("ledger");
@@ -438,7 +440,7 @@ describe("issue #979 AC3/AC4: current-read consumer equivalence and non-destruct
 
     // Put the legacy fixture back and confirm the original DTO returns — the
     // AC's literal "reads use the legacy fixture again".
-    await fixtureDb`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`;
+    await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET composite = 55 WHERE date = ${date}`);
     const revertedRegime = await getRegimeSnapshots(new URL("http://x?range=10"));
     const revertedBrief = await getBriefBySession(session.id);
     expect(revertedRegime).toEqual(compatRegime);

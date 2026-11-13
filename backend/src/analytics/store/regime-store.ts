@@ -1,6 +1,15 @@
 // Store stage: persist regime snapshots to regime_snapshots, one row per date.
-// Upserts on the date primary key so re-running a slot overwrites rather than
-// duplicates. The only SQL write for the regime classifier.
+// The only SQL write for the regime classifier.
+//
+// PUBLISHED FIGURES ARE FROZEN (issue 1182, decision D83). The upsert replaces
+// a row only while its date is today or later (UTC): a run keeps updating the
+// current day, and never a day that is over. A run submits its whole
+// recomputed history; the rows for past days fill only a database that holds
+// none for them, and migration 0132's guard trigger (rm_regime_snapshots_
+// publication_guard) also refuses a past day after the ledger start that no
+// run with that as-of day froze, so a later run's recomputation never fills a
+// day nobody published. The trigger holds the rule for every writer; the
+// WHERE below states it where the write is made.
 //
 // The row carries the full computeRegime output: composite/percentile/regime,
 // per-panel indices + percentiles + regimes, the point-in-time
@@ -23,9 +32,8 @@ export async function saveRegimeSnapshots(
   // The orchestrator persists the full recomputed history (~3k rows) each run. Issue 1514
   // (v0.7.1): one statement per chunk of rows, with the rows as one jsonb document, instead of
   // one statement and 23 bound parameters per row. Binding 3k rows one by one kept the api's
-  // event loop busy for about a second of the run-package request. Upsert semantics
-  // (ON CONFLICT (date)) are unchanged. A date listed twice in a chunk keeps its last row,
-  // because one INSERT cannot touch a row twice.
+  // event loop busy for about a second of the run-package request. A date listed twice in a
+  // chunk keeps its last row, because one INSERT cannot touch a row twice.
   const CHUNK = 500;
   for (let i = 0; i < snapshots.length; i += CHUNK) {
     const byDate = new Map<string, RegimeSnapshotRow>();
@@ -54,13 +62,17 @@ const UPSERT_RECORD_TYPES = `date date, composite numeric, composite_percentile 
   panel_weights jsonb, version text, source text, percentiles jsonb, indicators jsonb,
   panels jsonb, bucket_thresholds jsonb, backtest jsonb, correlations jsonb, extras jsonb`;
 
+// The DO UPDATE condition: the row's day is not over yet (UTC). Exported so
+// the frozen-history test can hold every regime_snapshots writer to it.
+export const PUBLISHING_DAY_GUARD = "regime_snapshots.date >= (clock_timestamp() AT TIME ZONE 'UTC')::date";
+
 const upsertRegime = registerQuery({
   role: "rm_app",
   object: "regime_snapshots",
   // SELECT as well: ON CONFLICT (date) reads the arbiter column, which Postgres checks as a read.
   privileges: ["INSERT", "UPDATE", "SELECT"],
   site: "src/analytics/store/regime-store:saveRegimeSnapshots",
-  purpose: "Upsert regime snapshots on their date, so re-running a slot overwrites the row rather than duplicating it.",
+  purpose: "Upsert regime snapshots on their date; only today's row (UTC) is ever replaced, a past day stays as published.",
   // The swarm route and the analytics route (through output-snapshot-store) publish snapshots; the
   // one-shot importer writes the vendored fixture.
   callers: ["src/api/routes/swarm", "src/api/routes/analytics", "src/db/import-regime-eq"],
@@ -68,7 +80,8 @@ const upsertRegime = registerQuery({
     statement:
       `INSERT INTO regime_snapshots (${UPSERT_COLUMNS.join(", ")}) ` +
       `SELECT ${UPSERT_COLUMNS.join(", ")} FROM jsonb_to_recordset($1::text::jsonb) AS x(${UPSERT_RECORD_TYPES}) ` +
-      `ON CONFLICT (date) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== "date").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}`,
+      `ON CONFLICT (date) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== "date").map((c) => `${c} = EXCLUDED.${c}`).join(", ")} ` +
+      `WHERE ${PUBLISHING_DAY_GUARD}`,
     params: ["[]"],
   },
 });
@@ -141,5 +154,6 @@ async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise
         bucket_thresholds = EXCLUDED.bucket_thresholds,
         backtest = EXCLUDED.backtest,
         correlations = EXCLUDED.correlations,
-        extras = EXCLUDED.extras`;
+        extras = EXCLUDED.extras
+      WHERE regime_snapshots.date >= (clock_timestamp() AT TIME ZONE 'UTC')::date`;
 }

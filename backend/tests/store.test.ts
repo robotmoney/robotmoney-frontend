@@ -1,6 +1,7 @@
 // Store stage (DB round-trip; ephemeral Postgres via preload.ts — loud-fails if
 // Docker/Postgres is absent, never skips). Persist then read back; upsert on the
-// natural key overwrites rather than duplicates.
+// natural key overwrites rather than duplicates while the row's day is not over,
+// and leaves a past day as published (issue 1182, D83).
 import { test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { saveRegimeSnapshots, type RegimeSnapshotRow } from "../src/analytics/store/regime-store.ts";
@@ -14,6 +15,9 @@ import { useCleanDatabase } from "./support/clean-db.ts";
 useCleanDatabase(import.meta.file);
 
 const DATE = "1990-01-15"; // unique date, no collision with seeded/suite rows
+// The current UTC day and the next: the days a writer may still replace (D83).
+const TODAY = new Date().toISOString().slice(0, 10);
+const TOMORROW = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
 // Read one snapshot back as a typed row (numerics coerced from Postgres text).
 // It was the store's `loadRegimeSnapshot` until D55 (13) deleted registered
@@ -50,9 +54,9 @@ async function loadRegimeSnapshot(date: string): Promise<RegimeSnapshotRow | nul
   };
 }
 
-function snap(composite: number): RegimeSnapshot {
+function snap(composite: number, date = DATE): RegimeSnapshot {
   return {
-    date: DATE,
+    date,
     composite,
     compositePercentile: 0.42,
     regime: "neutral",
@@ -64,10 +68,10 @@ function snap(composite: number): RegimeSnapshot {
   };
 }
 
-test("saveRegimeSnapshots: round-trips and upserts (no duplicate on re-save)", async () => {
-  await saveRegimeSnapshots([snap(0.5)]);
+test("saveRegimeSnapshots: round-trips and upserts the current day (no duplicate on re-save); a past day keeps its publication", async () => {
+  await saveRegimeSnapshots([snap(0.5, TODAY)]);
 
-  const [row] = await sql`SELECT * FROM regime_snapshots WHERE date = ${DATE}`;
+  const [row] = await sql`SELECT * FROM regime_snapshots WHERE date = ${TODAY}`;
   expect(row).toBeDefined();
   expect(Number(row.composite)).toBeCloseTo(0.5, 9);
   expect(Number(row.composite_percentile)).toBeCloseTo(0.42, 9);
@@ -78,14 +82,21 @@ test("saveRegimeSnapshots: round-trips and upserts (no duplicate on re-save)", a
   expect(row.indicators).toEqual([{ id: "VIX", name: "vol", panel: "macro", sign: -1, value: 17, score: 0.3, weight: 1.1 }]);
 
   // re-save same date with a new composite → overwrite, still exactly one row.
-  await saveRegimeSnapshots([snap(0.9)]);
-  const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${DATE}`;
+  await saveRegimeSnapshots([snap(0.9, TODAY)]);
+  const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${TODAY}`;
   expect(rows.length).toBe(1);
   expect(Number(rows[0].composite)).toBeCloseTo(0.9, 9);
+
+  // A day that is over is published: a re-save leaves it, still exactly one row.
+  await saveRegimeSnapshots([snap(0.5)]);
+  await saveRegimeSnapshots([snap(0.9)]);
+  const past = await sql`SELECT composite FROM regime_snapshots WHERE date = ${DATE}`;
+  expect(past.length).toBe(1);
+  expect(Number(past[0].composite)).toBeCloseTo(0.5, 9);
 });
 
 test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, version, rich indicators)", async () => {
-  const RDATE = "1990-02-20"; // unique date, no collision with other tests/seeds
+  const RDATE = TOMORROW; // a day not yet over, so the re-save below may replace it
   const richIndicators = [
     {
       id: "T10Y2Y",
@@ -188,7 +199,7 @@ test("saveRegimeSnapshots: round-trips the full v2 row (panel fields, weights, v
   expect(rows[0].source).toBe("hermetic");
 });
 
-test("persistResearchSignal: round-trips and upserts on (signal_key, date)", async () => {
+test("persistResearchSignal: round-trips and upserts on (signal_key, date) while the day is not over; a past day keeps its publication", async () => {
   const KEY = "test-store-signal";
   await fixtureDb`DELETE FROM research_signals WHERE signal_key = ${KEY}`;
   const payload = (v: number): ResearchPayload => ({
@@ -205,9 +216,16 @@ test("persistResearchSignal: round-trips and upserts on (signal_key, date)", asy
   expect(row).toBeDefined();
   expect(row.payload).toEqual(payload(1) as any);
 
-  // upsert overwrites, no duplicate.
+  // A past day: the upsert leaves the published payload, no duplicate.
   await persistResearchSignal(KEY, DATE, payload(2), fixtureDb);
-  const rows = await sql`SELECT payload FROM research_signals WHERE signal_key = ${KEY} AND date = ${DATE}`;
+  const past = await sql`SELECT payload FROM research_signals WHERE signal_key = ${KEY} AND date = ${DATE}`;
+  expect(past.length).toBe(1);
+  expect((past[0].payload as any).spec.window).toBe(1);
+
+  // The current day: upsert overwrites, no duplicate.
+  await persistResearchSignal(KEY, TODAY, payload(1), fixtureDb);
+  await persistResearchSignal(KEY, TODAY, payload(2), fixtureDb);
+  const rows = await sql`SELECT payload FROM research_signals WHERE signal_key = ${KEY} AND date = ${TODAY}`;
   expect(rows.length).toBe(1);
   expect((rows[0].payload as any).spec.window).toBe(2);
 });

@@ -17,6 +17,7 @@ import { payloadChecksum } from "../src/analytics/source-ledger.ts";
 import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { withoutPublicationGuards } from "./support/regime-publications.ts";
 import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -225,16 +226,21 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     void runId1;
   });
 
-  test("REVISION: a genuinely changed value still converges to matching compatibility and ledger current rows", async () => {
+  test("REVISION: a genuinely changed value converges on the current day, and a past day keeps its publication, on both sides", async () => {
+    // Regime and research figures are published per day and frozen once the
+    // day is over (D83, issue 1182): a revision reaches the current day only.
+    const today = new Date().toISOString().slice(0, 10);
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 5);
-    await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-signal", "v1");
+    await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-past", "v1");
+    await submitRegimeAndResearch(today, 30, "dualwrite-revision-signal", "v1");
     expect((await checkRawIndicatorHistoryParity()).matched).toBe(true);
     expect((await checkRegimeSnapshotsParity()).matched).toBe(true);
     expect((await checkResearchSignalsParity()).matched).toBe(true);
 
     // A genuine revision: same natural keys, a DIFFERENT value.
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 7);
-    await submitRegimeAndResearch("2024-03-01", 42, "dualwrite-revision-signal", "v2");
+    await submitRegimeAndResearch("2024-03-01", 42, "dualwrite-revision-past", "v2");
+    await submitRegimeAndResearch(today, 42, "dualwrite-revision-signal", "v2");
 
     const raw = await checkRawIndicatorHistoryParity();
     expect(raw.mismatches).toEqual([]);
@@ -245,14 +251,18 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     const regime = await checkRegimeSnapshotsParity();
     expect(regime.mismatches).toEqual([]);
     expect(regime.matched).toBe(true);
-    const regimeRows = await sql`SELECT composite FROM regime_snapshots WHERE date = '2024-03-01'`;
+    const regimeRows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${today}`;
     expect(Number(regimeRows[0]!.composite)).toBe(42);
+    const pastRows = await sql`SELECT composite FROM regime_snapshots WHERE date = '2024-03-01'`;
+    expect(Number(pastRows[0]!.composite), "a day that is over keeps its publication").toBe(30);
 
     const research = await checkResearchSignalsParity();
     expect(research.mismatches).toEqual([]);
     expect(research.matched).toBe(true);
-    const researchRows = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-signal' AND date = '2024-03-01'`;
+    const researchRows = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-signal' AND date = ${today}`;
     expect((researchRows[0]!.payload as { title: string }).title).toBe("v2");
+    const pastResearch = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-past' AND date = '2024-03-01'`;
+    expect((pastResearch[0]!.payload as { title: string }).title).toBe("v1");
   });
 });
 
@@ -326,10 +336,14 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // honest shape in the merged model: a direct, out-of-band INSERT (the
     // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
     // the rows publishBrief deliberately does NOT bind).
-    await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
-    await fixtureDb`
-      INSERT INTO research_signals (signal_key, date, payload)
-      VALUES ('race-signal', ${date}, ${fixtureDb.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
+    // Since D83 the guard trigger refuses a past day no run published, so the
+    // out-of-band row is written the way such a row predates it.
+    await withoutPublicationGuards(async (tx) => {
+      await tx`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+      await tx`
+        INSERT INTO research_signals (signal_key, date, payload)
+        VALUES ('race-signal', ${date}, ${tx.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
+    });
 
     // The compat rows really landed — this is not a no-op test.
     const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
@@ -381,11 +395,14 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // Drift the COMPATIBILITY table only, out of band, after settlement — the
     // ledger keeps the frozen value. This is a real, persistent divergence,
     // not a timing artifact, and AC2 requires it to still block cutover.
-    await fixtureDb`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
-    await fixtureDb`
-      UPDATE research_signals SET payload = ${fixtureDb.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
-      WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
-    `;
+    // Out of band and past the guard trigger, which skips any write to a past day (D83).
+    await withoutPublicationGuards(async (tx) => {
+      await tx`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
+      await tx`
+        UPDATE research_signals SET payload = ${tx.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
+        WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
+      `;
+    });
 
     const regime = await checkRegimeSnapshotsParity();
     expect(regime.matched).toBe(false);

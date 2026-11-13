@@ -132,7 +132,8 @@
     "0128_asset_prices_overwrite_events.sql",
     "0129_allocation_framework_hard_assets.sql",
     "0130_jobs_live_index_brief_allocation_stats.sql",
-    "0131_swarm_briefs_allocation_backfill.sql"
+    "0131_swarm_briefs_allocation_backfill.sql",
+    "0132_regime_publications.sql"
   ],
   "exclusions": {
     "roles": [
@@ -145,7 +146,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "e57a3f71f78c250b1a1d56e15d15411da6211f6ce646975e983898fbad164fdd",
+  "contentHash": "368f127dadf8c0bf6995ac64acaa036260a0e625fe5fd147ca76bb275ad3b42c",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -1864,6 +1865,19 @@
     "column public.regime_indicators.value": {
       "type": "numeric",
       "notnull": "no"
+    },
+    "column public.regime_publication_baseline.date": {
+      "type": "date",
+      "notnull": "yes"
+    },
+    "column public.regime_publication_baseline.frozen_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "now()"
+    },
+    "column public.regime_publication_baseline.snapshot": {
+      "type": "jsonb",
+      "notnull": "yes"
     },
     "column public.regime_snapshots.backtest": {
       "type": "jsonb",
@@ -4053,7 +4067,7 @@
       "definition": "UNIQUE (run_key)"
     },
     "constraint public.analytics_ledger_runs.analytics_ledger_runs_source_label_check": {
-      "definition": "CHECK ((source_label = ANY (ARRAY['live'::text, 'hermetic'::text, 'fixture'::text])))"
+      "definition": "CHECK ((source_label = ANY (ARRAY['live'::text, 'hermetic'::text, 'fixture'::text, 'replay'::text])))"
     },
     "constraint public.analytics_ledger_runs.analytics_ledger_runs_tool_id_check": {
       "definition": "CHECK (((tool_id <> ''::text) AND (length(tool_id) <= 64)))"
@@ -4375,6 +4389,9 @@
     },
     "constraint public.regime_indicators.regime_indicators_pkey": {
       "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.regime_publication_baseline.regime_publication_baseline_pkey": {
+      "definition": "PRIMARY KEY (date)"
     },
     "constraint public.regime_snapshots.regime_snapshots_pkey": {
       "definition": "PRIMARY KEY (date)"
@@ -5040,6 +5057,14 @@
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_json_bytes_hash(body_bytes bytea)\n RETURNS bigint\n LANGUAGE plpgsql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RETURN jsonb_hash_extended(convert_from(body_bytes, 'UTF8')::jsonb, 0);\nEXCEPTION WHEN others THEN\n  RETURN NULL;\nEND;\n$function$\n"
     },
+    "function public.rm_regime_snapshots_publication_guard()": {
+      "owner": "rm_owner",
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_regime_snapshots_publication_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  today date := (clock_timestamp() AT TIME ZONE 'UTC')::date;\n  ledger_start date;\nBEGIN\n  IF TG_OP = 'UPDATE' THEN\n    -- Only today's row (or a later one) is still being published.\n    IF OLD.date >= today AND NEW.date >= today THEN\n      RETURN NEW;\n    END IF;\n    RETURN NULL;\n  END IF;\n  IF NEW.date >= today THEN\n    RETURN NEW;\n  END IF;\n  SELECT r.asof INTO ledger_start\n    FROM public.analytics_output_snapshots aos JOIN public.analytics_ledger_runs r ON r.id = aos.run_id\n   WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0\n   ORDER BY aos.run_id, aos.id LIMIT 1;\n  -- Before the ledger start a day's first writer publishes it.\n  IF ledger_start IS NULL OR NEW.date < ledger_start THEN\n    RETURN NEW;\n  END IF;\n  -- After it, only a run with that as-of day publishes it: never another run's\n  -- recomputation of a day nobody published.\n  IF EXISTS (\n    SELECT 1 FROM public.analytics_ledger_runs r\n      JOIN public.analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'\n     WHERE r.asof = NEW.date AND aos.natural_keys @> ARRAY[NEW.date::text]) THEN\n    RETURN NEW;\n  END IF;\n  RETURN NULL;\nEND;\n$function$\n"
+    },
+    "function public.rm_research_signals_publication_guard()": {
+      "owner": "rm_owner",
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_research_signals_publication_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  today date := (clock_timestamp() AT TIME ZONE 'UTC')::date;\nBEGIN\n  IF OLD.date >= today AND NEW.date >= today THEN\n    RETURN NEW;\n  END IF;\n  RETURN NULL;\nEND;\n$function$\n"
+    },
     "function public.rm_source_ledger_immutable()": {
       "owner": "rm_owner",
       "definition": "CREATE OR REPLACE FUNCTION public.rm_source_ledger_immutable()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nBEGIN\n  RAISE EXCEPTION 'source ledger is immutable: % is not permitted on %', TG_OP, TG_TABLE_NAME\n    USING ERRCODE = 'feature_not_supported';\nEND;\n$function$\n"
@@ -5421,6 +5446,9 @@
     },
     "index public.regime_indicators_pkey": {
       "definition": "CREATE UNIQUE INDEX regime_indicators_pkey ON public.regime_indicators USING btree (id)"
+    },
+    "index public.regime_publication_baseline_pkey": {
+      "definition": "CREATE UNIQUE INDEX regime_publication_baseline_pkey ON public.regime_publication_baseline USING btree (date)"
     },
     "index public.regime_snapshots_pkey": {
       "definition": "CREATE UNIQUE INDEX regime_snapshots_pkey ON public.regime_snapshots USING btree (date)"
@@ -6348,6 +6376,9 @@
     "table public.regime_indicators": {
       "owner": "rm_owner"
     },
+    "table public.regime_publication_baseline": {
+      "owner": "rm_owner"
+    },
     "table public.regime_snapshots": {
       "owner": "rm_owner"
     },
@@ -6617,12 +6648,20 @@
       "definition": "CREATE TRIGGER regime_snapshots_capture_overwrite AFTER UPDATE ON public.regime_snapshots FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION public.rm_capture_analytics_overwrite()",
       "fires": "always"
     },
+    "trigger public.regime_snapshots.regime_snapshots_publication_guard": {
+      "definition": "CREATE TRIGGER regime_snapshots_publication_guard BEFORE INSERT OR UPDATE ON public.regime_snapshots FOR EACH ROW EXECUTE FUNCTION public.rm_regime_snapshots_publication_guard()",
+      "fires": "always"
+    },
     "trigger public.research_signals.research_signals_capture_delete": {
       "definition": "CREATE TRIGGER research_signals_capture_delete AFTER DELETE ON public.research_signals FOR EACH ROW EXECUTE FUNCTION public.rm_capture_analytics_overwrite()",
       "fires": "always"
     },
     "trigger public.research_signals.research_signals_capture_overwrite": {
       "definition": "CREATE TRIGGER research_signals_capture_overwrite AFTER UPDATE ON public.research_signals FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION public.rm_capture_analytics_overwrite()",
+      "fires": "always"
+    },
+    "trigger public.research_signals.research_signals_publication_guard": {
+      "definition": "CREATE TRIGGER research_signals_publication_guard BEFORE UPDATE ON public.research_signals FOR EACH ROW EXECUTE FUNCTION public.rm_research_signals_publication_guard()",
       "fires": "always"
     },
     "trigger public.schema_migrations.schema_migrations_append_only": {

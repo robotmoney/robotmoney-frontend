@@ -24,9 +24,12 @@
 //     source_value_versions chain; values match within the source's tolerance
 //     (withinTolerance(), D56), else after rounding at 1e-9.
 //   - regime_snapshots, research_signals: the settled as-of days only (see
-//     SETTLED below); the ledger row is the newest artifact element for the
-//     natural key, by run_id, which is what replaying every artifact in run
-//     order ("last write wins") produces.
+//     SETTLED below); the ledger row is the day's PUBLISHED element (issue
+//     1182, D83): the last artifact written on or before the day (UTC) that
+//     carries it, else the first written after it. For regime after the ledger
+//     start only a run's own as-of row publishes a day, and a day frozen in
+//     regime_publication_baseline is compared with that row.
+//     cutover/ledger-current.ts states the same rule for the read path.
 //   - swarm_briefs: sessions whose compatibility row was written at or after
 //     migration 0059 (see BRIEF_LEDGER_MIGRATION), against each session's
 //     newest revision.
@@ -130,14 +133,34 @@ const rawLedger = registerQuery({
 const REGIME_PARITY_SQL = `WITH settled AS MATERIALIZED (
       SELECT DISTINCT asof::text AS date FROM analytics_report_snapshots
     ),
-    winner AS MATERIALIZED (
+    start AS (
+      SELECT r.asof FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
+       WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0
+       ORDER BY aos.run_id, aos.id LIMIT 1
+    ),
+    published AS (
+      SELECT DISTINCT ON (r.asof) r.asof::text AS date, aos.id
+        FROM analytics_ledger_runs r
+        JOIN analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'
+       CROSS JOIN start s
+       WHERE r.asof >= s.asof AND r.asof::text IN (SELECT date FROM settled) AND aos.natural_keys @> ARRAY[r.asof::text]
+       ORDER BY r.asof, ((aos.created_at AT TIME ZONE 'UTC')::date <= r.asof) DESC,
+                CASE WHEN (aos.created_at AT TIME ZONE 'UTC')::date <= r.asof THEN aos.run_id END DESC NULLS LAST,
+                aos.run_id, aos.id
+    ),
+    pre_ledger AS (
       SELECT s.date, w.id
-        FROM settled s
+        FROM settled s CROSS JOIN start st
        CROSS JOIN LATERAL (
          SELECT aos.id FROM analytics_output_snapshots aos
           WHERE aos.artifact_kind = 'regime_snapshots' AND aos.natural_keys @> ARRAY[s.date]
-          ORDER BY aos.run_id DESC, aos.id DESC
+          ORDER BY aos.run_id, aos.id
           LIMIT 1) w
+       WHERE s.date < st.asof::text
+    ),
+    winner AS MATERIALIZED (
+      SELECT x.date, x.id FROM (SELECT date, id FROM published UNION ALL SELECT date, id FROM pre_ledger) x
+       WHERE NOT EXISTS (SELECT 1 FROM regime_publication_baseline b WHERE b.date::text = x.date)
     ),
     element AS MATERIALIZED (
       SELECT aos.id, e.elem ->> 'date' AS date, e.ord, e.elem
@@ -150,6 +173,11 @@ const REGIME_PARITY_SQL = `WITH settled AS MATERIALIZED (
         FROM winner w JOIN element x ON x.id = w.id AND x.date = w.date
        ORDER BY w.date, x.ord DESC
     ),
+    frozen AS (
+      SELECT b.date::text AS date, (b.snapshot ->> 'composite')::float8 AS composite, b.snapshot -> 'regime' AS regime
+        FROM regime_publication_baseline b
+       WHERE b.date::text IN (SELECT date FROM settled)
+    ),
     legacy AS (
       SELECT rs.date::text AS date, rs.composite::float8 AS composite, coalesce(to_jsonb(rs.regime), 'null'::jsonb) AS regime
         FROM regime_snapshots rs
@@ -161,7 +189,7 @@ const REGIME_PARITY_SQL = `WITH settled AS MATERIALIZED (
                || chr(31) || coalesce(l.regime::text, '') AS legacy_text,
              coalesce(l.date, r.date) || chr(31) || coalesce((floor(r.composite * 1e9 + 0.5) / 1e9)::text, 'null')
                || chr(31) || coalesce(r.regime::text, '') AS ledger_text
-        FROM legacy l FULL JOIN ledger r ON r.date = l.date
+        FROM legacy l FULL JOIN (SELECT * FROM ledger UNION ALL SELECT * FROM frozen) r ON r.date = l.date
     ),
     compared AS (
       SELECT *, CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
@@ -202,6 +230,26 @@ const regimeArtifacts = registerQuery({
   probe: regimeProbe,
 });
 
+const regimeRuns = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkRegimeSnapshotsParity.runs",
+  purpose: "Read each regime artifact's run as-of day inside the regime parity statement, which decides the day it publishes.",
+  callers: [PARITY_ROUTE],
+  probe: regimeProbe,
+});
+
+const regimeBaseline = registerQuery({
+  role: "rm_app",
+  object: "regime_publication_baseline",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/parity:checkRegimeSnapshotsParity.baseline",
+  purpose: "Read the regime rows frozen at cut-over inside the regime parity statement.",
+  callers: [PARITY_ROUTE],
+  probe: regimeProbe,
+});
+
 const regimeLegacy = registerQuery({
   role: "rm_app",
   object: "regime_snapshots",
@@ -217,16 +265,20 @@ const RESEARCH_PARITY_SQL = `WITH settled AS MATERIALIZED (
     ),
     token AS (
       SELECT split_part(t.tok, chr(31), 1) AS date, split_part(t.tok, chr(31), 2) AS signal_key,
-             nullif(split_part(t.tok, chr(31), 3), '') AS hash, aos.run_id, aos.id, t.ord
+             nullif(split_part(t.tok, chr(31), 3), '') AS hash, aos.run_id, aos.id, t.ord,
+             (aos.created_at AT TIME ZONE 'UTC')::date AS written_on
         FROM analytics_output_snapshots aos
        CROSS JOIN LATERAL unnest(aos.natural_keys) WITH ORDINALITY AS t(tok, ord)
        WHERE aos.artifact_kind = 'research_signals'
     ),
+    dated AS (
+      SELECT *, written_on::text <= date AS on_day FROM token WHERE date IN (SELECT date FROM settled)
+    ),
     ledger AS (
       SELECT DISTINCT ON (signal_key, date) signal_key, date, hash
-        FROM token
-       WHERE date IN (SELECT date FROM settled)
-       ORDER BY signal_key, date, run_id DESC, id DESC, ord DESC
+        FROM dated
+       ORDER BY signal_key, date, on_day DESC, CASE WHEN on_day THEN run_id END DESC NULLS LAST,
+                CASE WHEN on_day THEN ord END DESC NULLS LAST, run_id, id, ord
     ),
     legacy AS (
       SELECT rs.signal_key, rs.date::text AS date, jsonb_hash_extended(coalesce(rs.payload, 'null'::jsonb), 0)::text AS hash
@@ -511,17 +563,37 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
 }
 
 export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<ParityResult> {
-  const [row] = await on(db, regimeArtifacts, regimeSettled, regimeLegacy)<DomainRow>`WITH settled AS MATERIALIZED (
+  const [row] = await on(db, regimeArtifacts, regimeSettled, regimeRuns, regimeBaseline, regimeLegacy)<DomainRow>`WITH settled AS MATERIALIZED (
       SELECT DISTINCT asof::text AS date FROM analytics_report_snapshots
     ),
-    winner AS MATERIALIZED (
+    start AS (
+      SELECT r.asof FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
+       WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0
+       ORDER BY aos.run_id, aos.id LIMIT 1
+    ),
+    published AS (
+      SELECT DISTINCT ON (r.asof) r.asof::text AS date, aos.id
+        FROM analytics_ledger_runs r
+        JOIN analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'
+       CROSS JOIN start s
+       WHERE r.asof >= s.asof AND r.asof::text IN (SELECT date FROM settled) AND aos.natural_keys @> ARRAY[r.asof::text]
+       ORDER BY r.asof, ((aos.created_at AT TIME ZONE 'UTC')::date <= r.asof) DESC,
+                CASE WHEN (aos.created_at AT TIME ZONE 'UTC')::date <= r.asof THEN aos.run_id END DESC NULLS LAST,
+                aos.run_id, aos.id
+    ),
+    pre_ledger AS (
       SELECT s.date, w.id
-        FROM settled s
+        FROM settled s CROSS JOIN start st
        CROSS JOIN LATERAL (
          SELECT aos.id FROM analytics_output_snapshots aos
           WHERE aos.artifact_kind = 'regime_snapshots' AND aos.natural_keys @> ARRAY[s.date]
-          ORDER BY aos.run_id DESC, aos.id DESC
+          ORDER BY aos.run_id, aos.id
           LIMIT 1) w
+       WHERE s.date < st.asof::text
+    ),
+    winner AS MATERIALIZED (
+      SELECT x.date, x.id FROM (SELECT date, id FROM published UNION ALL SELECT date, id FROM pre_ledger) x
+       WHERE NOT EXISTS (SELECT 1 FROM regime_publication_baseline b WHERE b.date::text = x.date)
     ),
     element AS MATERIALIZED (
       SELECT aos.id, e.elem ->> 'date' AS date, e.ord, e.elem
@@ -534,6 +606,11 @@ export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<Pa
         FROM winner w JOIN element x ON x.id = w.id AND x.date = w.date
        ORDER BY w.date, x.ord DESC
     ),
+    frozen AS (
+      SELECT b.date::text AS date, (b.snapshot ->> 'composite')::float8 AS composite, b.snapshot -> 'regime' AS regime
+        FROM regime_publication_baseline b
+       WHERE b.date::text IN (SELECT date FROM settled)
+    ),
     legacy AS (
       SELECT rs.date::text AS date, rs.composite::float8 AS composite, coalesce(to_jsonb(rs.regime), 'null'::jsonb) AS regime
         FROM regime_snapshots rs
@@ -545,7 +622,7 @@ export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<Pa
                || chr(31) || coalesce(l.regime::text, '') AS legacy_text,
              coalesce(l.date, r.date) || chr(31) || coalesce((floor(r.composite * 1e9 + 0.5) / 1e9)::text, 'null')
                || chr(31) || coalesce(r.regime::text, '') AS ledger_text
-        FROM legacy l FULL JOIN ledger r ON r.date = l.date
+        FROM legacy l FULL JOIN (SELECT * FROM ledger UNION ALL SELECT * FROM frozen) r ON r.date = l.date
     ),
     compared AS (
       SELECT *, CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
@@ -572,16 +649,20 @@ export async function checkResearchSignalsParity(db: DbHandle = sql): Promise<Pa
     ),
     token AS (
       SELECT split_part(t.tok, chr(31), 1) AS date, split_part(t.tok, chr(31), 2) AS signal_key,
-             nullif(split_part(t.tok, chr(31), 3), '') AS hash, aos.run_id, aos.id, t.ord
+             nullif(split_part(t.tok, chr(31), 3), '') AS hash, aos.run_id, aos.id, t.ord,
+             (aos.created_at AT TIME ZONE 'UTC')::date AS written_on
         FROM analytics_output_snapshots aos
        CROSS JOIN LATERAL unnest(aos.natural_keys) WITH ORDINALITY AS t(tok, ord)
        WHERE aos.artifact_kind = 'research_signals'
     ),
+    dated AS (
+      SELECT *, written_on::text <= date AS on_day FROM token WHERE date IN (SELECT date FROM settled)
+    ),
     ledger AS (
       SELECT DISTINCT ON (signal_key, date) signal_key, date, hash
-        FROM token
-       WHERE date IN (SELECT date FROM settled)
-       ORDER BY signal_key, date, run_id DESC, id DESC, ord DESC
+        FROM dated
+       ORDER BY signal_key, date, on_day DESC, CASE WHEN on_day THEN run_id END DESC NULLS LAST,
+                CASE WHEN on_day THEN ord END DESC NULLS LAST, run_id, id, ord
     ),
     legacy AS (
       SELECT rs.signal_key, rs.date::text AS date, jsonb_hash_extended(coalesce(rs.payload, 'null'::jsonb), 0)::text AS hash

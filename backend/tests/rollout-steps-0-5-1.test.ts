@@ -249,6 +249,7 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0129_allocation_framework_hard_assets.sql",
     "0130_jobs_live_index_brief_allocation_stats.sql",
     "0131_swarm_briefs_allocation_backfill.sql",
+    "0132_regime_publications.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {

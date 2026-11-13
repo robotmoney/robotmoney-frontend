@@ -21,6 +21,7 @@ import { ALL_PARITY_DOMAINS, type ParityDomain } from "../src/analytics/cutover/
 import { ensureSubject, openSession } from "../src/swarm/domain.ts";
 import { oracleDomainParity } from "./support/parity-oracle.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { withoutPublicationGuards } from "./support/regime-publications.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { provisionAnalyticsToken } from "./support/automation-auth.ts";
 
@@ -242,13 +243,14 @@ describe("regime_snapshots and research_signals", () => {
     await submitRun("2026-09-02", [regimeRow("2026-09-01", 0.3, "risk_off"), regimeRow("2026-09-02", 0.4)], [
       { key: "channel-divergence", date: "2026-09-02", payload: researchPayload("2026-09-02", "second") },
     ]);
-    // A later run for the same day rewrites it: the newest artifact wins.
+    // A later run for a day that is over publishes nothing for it (D83): the
+    // first publication stays, on both sides.
     await submitRun("2026-09-02", [regimeRow("2026-09-02", 0.45)], [
       { key: "channel-divergence", date: "2026-09-02", payload: researchPayload("2026-09-02", "second, revised") },
     ]);
   }
 
-  test("rows written by the real run-package route match, newest artifact winning", async () => {
+  test("rows written by the real run-package route match, each day's publication winning", async () => {
     await seed();
     for (const domain of ["regime_snapshots", "research_signals"] as const) {
       const r = await expectEquivalent(domain, "seeded");
@@ -265,7 +267,8 @@ describe("regime_snapshots and research_signals", () => {
     await seed();
     // 2026-09-03 settles through a run that froze no regime or research for it.
     await submitRun("2026-09-03", [], []);
-    await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-09-03', 0.5, 'risk_on')`;
+    // Out of band: the guard trigger refuses a past day no run published (D83).
+    await withoutPublicationGuards((tx) => tx`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-09-03', 0.5, 'risk_on')`);
     await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES ('breadth', '2026-09-03', ${fixtureDb.json({ x: 1 })})`;
     expect((await expectEquivalent("regime_snapshots", "legacy only")).mismatches).toEqual([{ naturalKey: "2026-09-03", reason: MISSING_FROM_LEDGER }]);
     expect((await expectEquivalent("research_signals", "legacy only")).mismatches).toEqual([{ naturalKey: "breadth 2026-09-03", reason: MISSING_FROM_LEDGER }]);
@@ -275,7 +278,7 @@ describe("regime_snapshots and research_signals", () => {
     await seed();
     // regime_snapshots refuses DELETE (append-only, 0032): the compat row moves
     // to a day no run settled, which neither side compares.
-    await fixtureDb`UPDATE regime_snapshots SET date = '2026-07-15' WHERE date = '2026-09-01'`;
+    await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET date = '2026-07-15' WHERE date = '2026-09-01'`);
     await fixtureDb`DELETE FROM research_signals WHERE signal_key = 'breadth' AND date = '2026-09-01'`;
     expect((await expectEquivalent("regime_snapshots", "ledger only")).mismatches).toEqual([{ naturalKey: "2026-09-01", reason: MISSING_FROM_COMPAT }]);
     expect((await expectEquivalent("research_signals", "ledger only")).mismatches).toEqual([{ naturalKey: "breadth 2026-09-01", reason: MISSING_FROM_COMPAT }]);
@@ -283,11 +286,13 @@ describe("regime_snapshots and research_signals", () => {
 
   test("a value that differs: an older artifact's value, a changed label, a changed payload, a null payload", async () => {
     await seed();
-    // The superseded run's composite for 2026-09-02: the newest artifact says 0.45.
-    await fixtureDb`UPDATE regime_snapshots SET composite = 0.4 WHERE date = '2026-09-02'`;
-    await fixtureDb`UPDATE regime_snapshots SET regime = 'risk_on' WHERE date = '2026-09-01'`;
-    await fixtureDb`UPDATE research_signals SET payload = ${fixtureDb.json(researchPayload("2026-09-02", "second"))} WHERE signal_key = 'channel-divergence' AND date = '2026-09-02'`;
-    await fixtureDb`UPDATE research_signals SET payload = NULL WHERE signal_key = 'breadth' AND date = '2026-09-01'`;
+    // The late run's composite for 2026-09-02, which never published it: the publication says 0.4.
+    await withoutPublicationGuards(async (tx) => {
+      await tx`UPDATE regime_snapshots SET composite = 0.45 WHERE date = '2026-09-02'`;
+      await tx`UPDATE regime_snapshots SET regime = 'risk_off' WHERE date = '2026-09-01'`;
+      await tx`UPDATE research_signals SET payload = ${tx.json(researchPayload("2026-09-02", "second, revised"))} WHERE signal_key = 'channel-divergence' AND date = '2026-09-02'`;
+      await tx`UPDATE research_signals SET payload = NULL WHERE signal_key = 'breadth' AND date = '2026-09-01'`;
+    });
     expect((await expectEquivalent("regime_snapshots", "differs")).mismatches).toEqual([
       { naturalKey: "2026-09-01", reason: DIFFERS },
       { naturalKey: "2026-09-02", reason: DIFFERS },
@@ -300,11 +305,13 @@ describe("regime_snapshots and research_signals", () => {
 
   test("a composite equal at 1e-9, a payload equal as jsonb, and an unsettled day do not mismatch", async () => {
     await seed();
-    await fixtureDb`UPDATE regime_snapshots SET composite = 0.3 + 1e-12 WHERE date = '2026-09-01'`;
-    // Key order and 1.0 vs 1 are the same jsonb value, as they are the same canonical JSON.
-    await fixtureDb.unsafe(`UPDATE research_signals
-        SET payload = '{"gauges":[{"value":0.123456789,"date":"2026-09-01"}],"spec":{"ratio":1.0,"window":30},"question":"q","title":"breadth","asof":"2026-09-01"}'::jsonb
-      WHERE signal_key = 'breadth' AND date = '2026-09-01'`);
+    await withoutPublicationGuards(async (tx) => {
+      await tx`UPDATE regime_snapshots SET composite = 0.25 + 1e-12 WHERE date = '2026-09-01'`;
+      // Key order and 1.0 vs 1 are the same jsonb value, as they are the same canonical JSON.
+      await tx.unsafe(`UPDATE research_signals
+          SET payload = '{"gauges":[{"value":0.123456789,"date":"2026-09-01"}],"spec":{"ratio":1.0,"window":30},"question":"q","title":"breadth","asof":"2026-09-01"}'::jsonb
+        WHERE signal_key = 'breadth' AND date = '2026-09-01'`);
+    });
     // Not an as-of day of any frozen run: compared on neither side.
     await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-01', 9, 'x')`;
     await fixtureDb`INSERT INTO research_signals (signal_key, date, payload) VALUES ('breadth', '2026-07-01', ${fixtureDb.json({ y: 2 })})`;

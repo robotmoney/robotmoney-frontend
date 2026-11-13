@@ -5402,6 +5402,8 @@ the axis or alignment primitives for regime inputs. Seam internals are pinned by
 `packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
 [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
 
+**Amended by [D83](#d83) (issue 1182).** The seam decides what one run computes, and a run computes the whole history from 2018. That recomputation is not what readers are served for a past day: each day shows the figure published that day, frozen once the day is over.
+
 <a id="d60"></a>
 
 ## D60 — The live-stack e2e gate is one workflow per domain, `e2e-*.yml`, sharing setup through composite actions (refines D26, D45)
@@ -6435,3 +6437,27 @@ its amendments stand.
 6. **Defaults the owner may veto.** Wake hourly. Stale after 3 days. `--max-rss-mb 3000` with `mem_limit: 4g`. The stale alarm is the container's health state and a line in `bun smoke:status`, not an admin-overview alert, because the container holds no API token.
 
 **Left alone.** Every other service keeps D75 unchanged. `csvb backup --source api` and `csvb inputs` stay issue 1436. No existing archive is rewritten.
+
+---
+
+<a id="d83"></a>
+## D83 — Every published report is frozen: a day shows the figure published that day, never a later recomputation (applies D73's rule to `GET /api/dashboards/regime-snapshots`; records PD10's intent; owner, 2026-10-20)
+
+**Status:** Accepted 2026-10-20 (owner, comment on issue 1182). Built by issue 1182: migration `0132_regime_publications.sql`, `backend/src/analytics/cutover/ledger-current.ts`, `backend/src/analytics/cutover/parity.ts`, `backend/src/analytics/store/regime-store.ts`, `backend/src/analytics/store/research-store.ts`. Run semantics in [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+**Decision.**
+
+1. **The rule.** Every report we publish, regime included, is published and frozen. A published figure is never revised because data changed. This is the intent of PD10 (`regime-engine.md` §11.8), which until now had no entry here.
+2. **A day's published figure (choice 1a).** The published figure of day D is the as-of-D row of the last run with as-of D written on or before D (UTC). While D is the current day it updates with each run. Once D is over it never changes. A run written after D (a replay, issue 1162, or a late run) publishes D only when nothing was published during D, and then the first such run does. A later run never replaces it.
+3. **The published line only (choice 2a).** `GET /api/dashboards/regime-snapshots` serves the published figure of every day, in both read modes (`regime_snapshots` and the ledger). A run still computes the whole history, and that recomputation is kept in its frozen artifact. If it is ever shown, it is a separate, labelled view, never the main line.
+4. **Days before the ledger start (choice 3).** The ledger starts on the as-of day of the first non-empty regime artifact (2026-09-21 on production). The days before it have no frozen record of their original publication. They are frozen as served when migration 0132 applied, in `regime_publication_baseline`. That is a reconstruction, not the original publications, and it never changes afterwards.
+5. **A day with no publication (choice 4a).** A day after the ledger start that no run with that as-of day published is a gap (2026-09-29 on production). A replay recorded as `source_label = 'replay'` fills it, and the replay is its publication. Another run's recomputation never fills it.
+6. **Corrections (choice 5).** A correction of a published figure, such as for the 2026-09-26/27 database incident, is never automatic. If one is wanted it is an explicit, recorded act (PD10's publish workflow, not built), and the chart says the figure was corrected.
+7. **Research signals.** The same rule holds for `research_signals`: a signal's payload for day D updates during D and is frozen after it.
+8. **Enforced in the database.** Migration 0132 repairs `regime_snapshots` and `research_signals` to what this rule would have produced (each repair recorded in `analytics_overwrite_events`), and installs two guard triggers that hold the rule for every writer, including an image still serving while a release migrates: an UPDATE of a row dated before today (UTC) is skipped, and an INSERT of a regime row dated between the ledger start and yesterday is skipped unless a run with that as-of day froze it. The writers' upserts state the same condition, and the parity sweep compares each settled day with its publication.
+
+**Why.** Readers of the regime page, the site's SEO data and the public API saw past figures move with every run: on the production replica every day from 2026-09-21 to 2026-10-04 served the newest run's recomputation, 2026-09-26 and 2026-09-27 were published `risk_on` and later served `neutral`, and `regime_snapshots` was rewritten 318,392 times in two weeks. An analyst can check a published regime only against the figure as it was published ([D73](#d73)).
+
+**Rejected.** Showing a later run's recomputation of a day with no run (choice 4b): it is a later recomputation and breaks the rule. Making each day's first run its publication (choice 1b): it is often computed before that day's data arrived. Refusing, rather than skipping, a write to a past day: every run submits its whole history, so a refusal would fail every run.
+
+**Left alone.** The regime methodology. The run artifacts and reports, which were already frozen (#986, #987). History readers already saw is not rewritten: the format 1 backups keep it as it was. `backfillRegimeHistory`'s synthetic rows on smoke databases (test seam only) never replace a row, and pass the same guard.

@@ -283,6 +283,68 @@ $$;
 
 
 --
+-- Name: rm_regime_snapshots_publication_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_regime_snapshots_publication_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+DECLARE
+  today date := (clock_timestamp() AT TIME ZONE 'UTC')::date;
+  ledger_start date;
+BEGIN
+  IF TG_OP = 'UPDATE' THEN
+    -- Only today's row (or a later one) is still being published.
+    IF OLD.date >= today AND NEW.date >= today THEN
+      RETURN NEW;
+    END IF;
+    RETURN NULL;
+  END IF;
+  IF NEW.date >= today THEN
+    RETURN NEW;
+  END IF;
+  SELECT r.asof INTO ledger_start
+    FROM public.analytics_output_snapshots aos JOIN public.analytics_ledger_runs r ON r.id = aos.run_id
+   WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0
+   ORDER BY aos.run_id, aos.id LIMIT 1;
+  -- Before the ledger start a day's first writer publishes it.
+  IF ledger_start IS NULL OR NEW.date < ledger_start THEN
+    RETURN NEW;
+  END IF;
+  -- After it, only a run with that as-of day publishes it: never another run's
+  -- recomputation of a day nobody published.
+  IF EXISTS (
+    SELECT 1 FROM public.analytics_ledger_runs r
+      JOIN public.analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'
+     WHERE r.asof = NEW.date AND aos.natural_keys @> ARRAY[NEW.date::text]) THEN
+    RETURN NEW;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: rm_research_signals_publication_guard(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.rm_research_signals_publication_guard() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'pg_catalog', 'pg_temp'
+    AS $$
+DECLARE
+  today date := (clock_timestamp() AT TIME ZONE 'UTC')::date;
+BEGIN
+  IF OLD.date >= today AND NEW.date >= today THEN
+    RETURN NEW;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
+
+--
 -- Name: rm_source_ledger_immutable(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -919,7 +981,7 @@ CREATE TABLE public.analytics_ledger_runs (
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     CONSTRAINT analytics_ledger_runs_build_identity_check CHECK (((build_identity <> ''::text) AND (length(build_identity) <= 256))),
     CONSTRAINT analytics_ledger_runs_run_key_check CHECK ((run_key ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
-    CONSTRAINT analytics_ledger_runs_source_label_check CHECK ((source_label = ANY (ARRAY['live'::text, 'hermetic'::text, 'fixture'::text]))),
+    CONSTRAINT analytics_ledger_runs_source_label_check CHECK ((source_label = ANY (ARRAY['live'::text, 'hermetic'::text, 'fixture'::text, 'replay'::text]))),
     CONSTRAINT analytics_ledger_runs_tool_id_check CHECK (((tool_id <> ''::text) AND (length(tool_id) <= 64)))
 );
 
@@ -2023,6 +2085,24 @@ CREATE SEQUENCE public.regime_indicators_id_seq
 --
 
 ALTER SEQUENCE public.regime_indicators_id_seq OWNED BY public.regime_indicators.id;
+
+
+--
+-- Name: regime_publication_baseline; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.regime_publication_baseline (
+    date date NOT NULL,
+    snapshot jsonb NOT NULL,
+    frozen_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE regime_publication_baseline; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.regime_publication_baseline IS 'Regime rows dated before the ledger start, frozen as served when migration 0132 applied (issue 1182, D83). Written by that migration alone.';
 
 
 --
@@ -4302,6 +4382,14 @@ ALTER TABLE ONLY public.regime_indicators
 
 
 --
+-- Name: regime_publication_baseline regime_publication_baseline_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.regime_publication_baseline
+    ADD CONSTRAINT regime_publication_baseline_pkey PRIMARY KEY (date);
+
+
+--
 -- Name: regime_snapshots regime_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5857,6 +5945,15 @@ ALTER TABLE public.regime_snapshots ENABLE ALWAYS TRIGGER regime_snapshots_captu
 
 
 --
+-- Name: regime_snapshots regime_snapshots_publication_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER regime_snapshots_publication_guard BEFORE INSERT OR UPDATE ON public.regime_snapshots FOR EACH ROW EXECUTE FUNCTION public.rm_regime_snapshots_publication_guard();
+
+ALTER TABLE public.regime_snapshots ENABLE ALWAYS TRIGGER regime_snapshots_publication_guard;
+
+
+--
 -- Name: research_signals research_signals_capture_delete; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -5872,6 +5969,15 @@ ALTER TABLE public.research_signals ENABLE ALWAYS TRIGGER research_signals_captu
 CREATE TRIGGER research_signals_capture_overwrite AFTER UPDATE ON public.research_signals FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION public.rm_capture_analytics_overwrite();
 
 ALTER TABLE public.research_signals ENABLE ALWAYS TRIGGER research_signals_capture_overwrite;
+
+
+--
+-- Name: research_signals research_signals_publication_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER research_signals_publication_guard BEFORE UPDATE ON public.research_signals FOR EACH ROW EXECUTE FUNCTION public.rm_research_signals_publication_guard();
+
+ALTER TABLE public.research_signals ENABLE ALWAYS TRIGGER research_signals_publication_guard;
 
 
 --
