@@ -1,6 +1,8 @@
 // Issue 1422 §4.8: website-server (nginx) is the one way in to the public
-// analytics API, it sets the client identity the api keys its limits on, and it
-// caches GET /api/public/analytics/* in a bounded edge cache.
+// analytics API, and it sets the client identity the api keys its limits on.
+// Issue 1629: it stores no api response. The api keeps its own answers in
+// process (backend/tests/api/public-analytics-cache.test.ts), so every request
+// reaches the api and the api's own X-Cache-Status reaches the client.
 //
 // Real image (built from website-server/Dockerfile), real Docker networks, and
 // a stand-in upstream under the network alias `api` that echoes the identity
@@ -44,7 +46,8 @@ function tryDocker(args: string[]): void {
 
 // The stand-in api. Every answer echoes the identity headers it saw; the
 // response's caching headers are chosen per path the way the real api chooses
-// them (a list for 5 minutes, an archive immutable, refusals no-store).
+// them (a list for 5 minutes, an archive immutable, refusals no-store), and a
+// list names its own X-Cache-Status, which nginx must pass through untouched.
 const STUB = `
 const hits = {};
 Bun.serve({ port: 8787, hostname: "0.0.0.0", async fetch(req) {
@@ -56,7 +59,8 @@ Bun.serve({ port: 8787, hostname: "0.0.0.0", async fetch(req) {
     cf: req.headers.get("cf-connecting-ip"), auth: req.headers.get("authorization") };
   if (u.pathname.endsWith("/list")) {
     const body = JSON.stringify({ ...echo, variant: ae.includes("gzip") ? "gzip" : "identity" });
-    const h = { "Content-Type": "application/json", "Cache-Control": "public, max-age=300", Vary: "Accept-Encoding" };
+    const h = { "Content-Type": "application/json", "Cache-Control": "public, max-age=300", Vary: "Accept-Encoding",
+      "X-Cache-Status": hits[u.pathname] === 1 ? "MISS" : "HIT" };
     if (ae.includes("gzip")) return new Response(Bun.gzipSync(body), { headers: { ...h, "Content-Encoding": "gzip" } });
     return new Response(body, { headers: h });
   }
@@ -69,8 +73,6 @@ Bun.serve({ port: 8787, hostname: "0.0.0.0", async fetch(req) {
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Retry-After": "30" } });
   if (u.pathname.endsWith("/busy")) return new Response('{"error":"public analytics is busy"}', { status: 503,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "Retry-After": "1" } });
-  if (u.pathname.endsWith("/short")) return new Response(JSON.stringify(echo), { headers: { "Content-Type": "application/json",
-    "Cache-Control": "public, max-age=1" } });
   return Response.json(echo);
 } });`;
 
@@ -170,64 +172,45 @@ describe("one way in, and an identity the caller cannot choose", () => {
   });
 });
 
-describe("the edge cache", () => {
-  test("the cache is bounded at 256 MB with a lock, and scoped to the public analytics location", () => {
+describe("no edge cache: every public analytics request reaches the api (issue 1629)", () => {
+  test("the running config has no proxy_cache directive", () => {
     const conf = docker(["exec", WEB_CONTAINER, "nginx", "-T"]);
-    expect(conf).toMatch(/proxy_cache_path\s+\S+\s+levels=1:2\s+keys_zone=public_analytics:10m\s+max_size=256m/);
-    expect(conf).toMatch(/proxy_cache_lock\s+on;/);
+    expect(conf).not.toMatch(/proxy_cache/);
   });
 
-  test("a list is a MISS then a HIT, reaching the api once, with gzip and identity variants kept apart", async () => {
+  test("a repeated list reaches the api every time, its gzip and identity variants intact, and the api's X-Cache-Status passes through", async () => {
     // Bun's fetch asks for gzip unless told otherwise.
     const identity = { headers: { "Accept-Encoding": "identity" } };
     const id1 = await through(`${BASE}/list?x=1`, identity);
     expect(id1.headers.get("x-cache-status")).toBe("MISS");
     expect(((await id1.json()) as any).variant).toBe("identity");
     const gz1 = await through(`${BASE}/list?x=1`, { headers: { "Accept-Encoding": "gzip" } });
-    expect(gz1.headers.get("x-cache-status")).toBe("MISS");
+    expect(gz1.headers.get("x-cache-status")).toBe("HIT");
+    expect(gz1.headers.get("cache-control")).toBe("public, max-age=300");
     expect(((await gz1.json()) as any).variant).toBe("gzip");
     const id2 = await through(`${BASE}/list?x=1`, identity);
-    expect(id2.headers.get("x-cache-status")).toBe("HIT");
-    expect(((await id2.json()) as any).variant).toBe("identity");
-    const gz2 = await through(`${BASE}/list?x=1`, { headers: { "Accept-Encoding": "gzip" } });
-    expect(gz2.headers.get("x-cache-status")).toBe("HIT");
-    expect(((await gz2.json()) as any).variant).toBe("gzip");
-    // A different query string is a different key.
-    expect((await through(`${BASE}/list?x=2`, identity)).headers.get("x-cache-status")).toBe("MISS");
+    expect(((await id2.json()) as any).n).toBe(3);
     expect((await hits())[`${BASE}/list`]).toBe(3);
   });
 
-  test("concurrent identical misses for an immutable archive reach the api once", async () => {
+  test("concurrent identical requests for an immutable archive each reach the api, and a conditional request is the api's to answer", async () => {
     const path = `${BASE}/archive/csv/2001-01-02T000000Z/data/t.2001-01-01T000000Z_2001-01-01T000000Z.csv.gz`;
-    const answers = await Promise.all(Array.from({ length: 6 }, () => through(path)));
+    const answers = await Promise.all(Array.from({ length: 3 }, () => through(path)));
     for (const res of answers) {
       expect(res.status).toBe(200);
-      expect(await res.text()).toBe("archive-bytes-1");
+      expect(await res.text()).toMatch(/^archive-bytes-[123]$/);
       expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
     }
-    expect((await hits())[path]).toBe(1);
-    const again = await through(path);
-    expect(again.headers.get("x-cache-status")).toBe("HIT");
-    // A conditional request is answered by nginx from the cache.
-    const cond = await through(path, { headers: { "If-None-Match": '"abc"' } });
-    expect(cond.status).toBe(304);
-    expect((await hits())[path]).toBe(1);
+    expect((await hits())[path]).toBe(3);
+    await through(path, { headers: { "If-None-Match": '"abc"' } });
+    expect((await hits())[path]).toBe(4);
   }, 60_000);
 
-  test("expiry follows the api's Cache-Control: max-age=1 is EXPIRED and refetched two seconds later", async () => {
-    expect((await through(`${BASE}/short`)).headers.get("x-cache-status")).toBe("MISS");
-    expect((await through(`${BASE}/short`)).headers.get("x-cache-status")).toBe("HIT");
-    await Bun.sleep(2200);
-    expect((await through(`${BASE}/short`)).headers.get("x-cache-status")).toBe("EXPIRED");
-    expect((await hits())[`${BASE}/short`]).toBe(2);
-  }, 30_000);
-
-  test("refusals are never cached: a 429 and the api's own 503 reach the client, with Retry-After, every time", async () => {
+  test("refusals reach the client unchanged: a 429 and the api's own 503, with Retry-After, every time", async () => {
     for (let i = 0; i < 2; i++) {
       const limited = await through(`${BASE}/limited`);
       expect(limited.status).toBe(429);
       expect(limited.headers.get("retry-after")).toBe("30");
-      expect(limited.headers.get("x-cache-status")).toBe("MISS");
       const busy = await through(`${BASE}/busy`);
       expect(busy.status).toBe(503);
       expect(busy.headers.get("retry-after")).toBe("1");
