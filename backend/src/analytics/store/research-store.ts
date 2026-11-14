@@ -1,8 +1,6 @@
 // Store stage: persist a research signal to research_signals, keyed by signal +
-// date. The only SQL write for research payloads. A published signal is frozen
-// once its day is over (issue 1182, decision D83): the upsert replaces a row
-// only while its date is today or later (UTC), and migration 0132's guard
-// trigger holds the same rule for every writer.
+// date. Upserts on the natural key so re-running a slot overwrites rather than
+// duplicates. The only SQL write for research payloads.
 //
 // API-OWNED (issue #106): only the API process (api/routes/analytics.ts +
 // store/direct.ts) may import this writer; updaters submit through the
@@ -22,12 +20,11 @@ const upsertSignal = registerQuery({
   // EXCLUDED are read.
   privileges: ["INSERT", "UPDATE", "SELECT"],
   site: "src/analytics/store/research-store:persistResearchSignal",
-  purpose: "Upsert one research signal payload on its (signal_key, date) natural key; a past day stays as published.",
+  purpose: "Upsert one research signal payload on its (signal_key, date) natural key.",
   callers: ["src/api/routes/analytics"],
   probe: {
     statement: `INSERT INTO research_signals (signal_key, date, payload) VALUES ($1, $2::date, $3::jsonb)
-      ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload
-      WHERE research_signals.date >= (clock_timestamp() AT TIME ZONE 'UTC')::date`,
+      ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload`,
     params: ["probe_signal", "2026-01-01", "{\"probe\":true}"],
   },
 });
@@ -54,8 +51,7 @@ export async function persistResearchSignal(
   await on(db, upsertSignal)`
     INSERT INTO research_signals (signal_key, date, payload)
     VALUES (${key}, ${asof}, ${db.json(jsonValue(payload))})
-    ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload
-    WHERE research_signals.date >= (clock_timestamp() AT TIME ZONE 'UTC')::date`;
+    ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload`;
 }
 
 // Which (signal_key, date) pairs exist on/after `sinceDate` — the read side of

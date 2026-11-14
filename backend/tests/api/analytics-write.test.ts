@@ -350,7 +350,7 @@ test("current-view projections stay idempotent on (date) / (signal_key, date) ac
   const runA = await beginLedgerRun(date, "idempotency-a");
   expect((await call(req("POST", A.runPackage, packageBody({ runId: runA, asof: date, regimeSnapshots: [snap], researchSignals: [signal] }), TOKEN)))?.status).toBe(200);
 
-  // A SECOND run for the same market date — a new immutable package,
+  // A SECOND run correcting the same market date — a new immutable package,
   // the same current-view natural keys.
   const runB = await beginLedgerRun(date, "idempotency-b");
   expect((await call(req("POST", A.runPackage, packageBody({
@@ -360,12 +360,11 @@ test("current-view projections stay idempotent on (date) / (signal_key, date) ac
   }), TOKEN)))?.status).toBe(200);
 
   const rows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
-  expect(rows.length).toBe(1); // not duplicated
-  // 1998-06-15 is long over: the first publication stays (issue 1182, D83).
-  expect(Number(rows[0].composite)).toBe(0.4);
+  expect(rows.length).toBe(1); // upserted, not duplicated
+  expect(Number(rows[0].composite)).toBe(0.9);
   const sigs = await sql`SELECT payload FROM research_signals WHERE signal_key = ${key} AND date = ${date}`;
   expect(sigs.length).toBe(1);
-  expect(sigs[0].payload).toEqual({ v: 1 });
+  expect(sigs[0].payload).toEqual({ v: 2 });
   // Both runs' evidence survives the current view converging.
   const [{ n }] = await sql`SELECT count(*)::int AS n FROM analytics_report_snapshots WHERE asof = ${date}::date`;
   expect(n).toBe(2);

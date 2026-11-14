@@ -111,15 +111,6 @@ const ALLOWED: Record<string, string> = {
   "backend/migrations/0059_swarm_framework_subject_snapshot_cleanup.sql":
     "cleans up fabricated snapshots on framework subjects (issue #960)",
 
-  // Migration 0132 repairs regime_snapshots to the published figures (issue
-  // 1182, D83): a day after the ledger start that no run published held a
-  // later run's recomputation, and the repair removes it (2026-09-29 on
-  // production), recorded in analytics_overwrite_events by 0056's capture
-  // trigger, with the guards re-armed before commit. Proved by
-  // tests/regime-frozen-publications.test.ts.
-  "backend/migrations/0132_regime_publications.sql":
-    "removes the recomputed rows of days no run published (issue 1182, D83)",
-
   // The one-time v0.5.2 ledger repair (issues #1035, #1050) rebuilds
   // source_value_versions, analytics_vintage_members and
   // analytics_overwrite_events by TRUNCATE and re-insert of the rows the fixed

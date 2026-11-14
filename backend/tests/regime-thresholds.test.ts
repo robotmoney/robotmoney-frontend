@@ -65,15 +65,17 @@ test("canonical thresholds are 0.33/0.67 and classifyRegime matches analyze/regi
 });
 
 test("swarm domain labeling path (buildRegimeSummary NULL-label fallback) uses the canonical classifier", async () => {
-  for (const [date, composite, expected] of [
-    ["2026-07-01", 0.6, "neutral"],
-    ["2026-07-02", 0.7, "risk_on"],
-    ["2026-07-03", 0.3, "risk_off"],
+  for (const [composite, expected] of [
+    [0.6, "neutral"],
+    [0.7, "risk_on"],
+    [0.3, "risk_off"],
   ] as const) {
-    // One day per case: a past day's row is published and never rewritten
-    // (issue 1182, D83), so the cases do not share a date.
-    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, ${composite}, NULL)`;
-    const summary = await buildRegimeSummary(date, 1);
+    // Upsert, because the loop deliberately reuses one date: correcting the day's
+    // composite is an UPDATE, which is what "append-only" leaves available (and
+    // what the production write path does anyway).
+    await sql`INSERT INTO regime_snapshots (date, composite, regime) VALUES ('2026-07-01', ${composite}, NULL)
+              ON CONFLICT (date) DO UPDATE SET composite = EXCLUDED.composite, regime = NULL`;
+    const summary = await buildRegimeSummary("2026-07-01", 1);
     expect(summary.regime).toBe(expected);
     // The stored (real) point in history is labeled by the same rule.
     expect(summary.history[summary.history.length - 1].regime).toBe(expected);

@@ -44,9 +44,7 @@ DECLARE
   ledger_guard_functions text[] := ARRAY[
     'rm_analytics_cutover_immutable()', 'rm_analytics_output_ledger_immutable()',
     'rm_analytics_overwrite_event_immutable()', 'rm_analytics_run_ledger_immutable()',
-    'rm_capture_analytics_overwrite()', 'rm_source_ledger_immutable()',
-    -- 0132's publication guards on regime_snapshots and research_signals (issue 1182, D83).
-    'rm_regime_snapshots_publication_guard()', 'rm_research_signals_publication_guard()'
+    'rm_capture_analytics_overwrite()', 'rm_source_ledger_immutable()'
   ];
   fn text;
   -- Tables a later migration narrowed on purpose; the sweep below must not hand them
@@ -75,11 +73,9 @@ DECLARE
   -- 0122 added `swarm_dormancy_baseline`, the instant missed sessions are
   -- counted from (issue 1269): the migration is its one writer, so the sweep
   -- must not hand rm_app INSERT or UPDATE on it.
-  -- 0132 added `regime_publication_baseline`, the regime rows frozen at cut-over
-  -- (issue 1182, D83): the migration is its one writer, for the same reason.
   read_only_for_runtime text[] := ARRAY[
     'analytics_overwrite_events', 'deployment_identity', 'schema_manifest', 'automation_tokens',
-    'schema_migrations', 'swarm_dormancy_baseline', 'regime_publication_baseline'
+    'schema_migrations', 'swarm_dormancy_baseline'
   ];
   -- The subset of `read_only_for_runtime` whose SELECT is restored to rm_app
   -- after the REVOKE ALL below. Not optional for `schema_migrations`: the
@@ -87,7 +83,7 @@ DECLARE
   -- and §7.2 has every database-holding container run preflight check 3, which
   -- reads the ledger and the manifest (src/db/schema-manifest.ts), under its own
   -- credential. Dropping a name from this list stops those boots.
-  select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations', 'swarm_dormancy_baseline', 'regime_publication_baseline'];
+  select_for_runtime text[] := ARRAY['deployment_identity', 'schema_manifest', 'automation_tokens', 'schema_migrations', 'swarm_dormancy_baseline'];
   -- SELECT restored to rm_app ALONE (migration 0112, issue #1095): the api serves
   -- GET /api/public/analytics/overwrite-events from `analytics_overwrite_events`,
   -- whose READ 0056's REVOKE ALL took along with the write.
