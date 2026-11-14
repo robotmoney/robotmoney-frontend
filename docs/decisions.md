@@ -4757,6 +4757,17 @@ one transaction ends. It verifies that every vintage keeps its member count and
 every coordinate keeps exactly one chain, and raises (rolling back, guards never
 observed off) if either would change.
 
+The repair's rule for `raw_indicator_history` overwrite events is cumulative
+(issue 1049, folded into issue 1182). Each rewrite is judged against the value
+the fixed writer last kept, not against the event's own previous row. A
+staircase of steps that are each inside the tolerance is kept at the step
+where its sum leaves the tolerance, so the row never drifts further than the
+tolerance unrecorded (`backend/tests/analytics-ledger-repair.test.ts`, "issue
+1049"). A post-migration reclaim (`VACUUM FULL`, `RECLAIM_AFTER_MIGRATION` in
+`backend/src/db/migrate.ts`) that fails does not fail `migrate()`: it logs the
+exact command that finishes it by hand, and the boot's seed step still runs
+(`backend/tests/migrate-reclaim.test.ts`).
+
 **Per-source tolerances.** Every source_key the extractors write:
 
 | source_key | provider | tolerance |
@@ -5401,6 +5412,8 @@ PR #1109). `scripts/tests/unit/regime-seam-guard.test.ts` fails on any other cal
 the axis or alignment primitives for regime inputs. Seam internals are pinned by
 `packages/analyst-sdk/tests/prepare.test.ts`. The run semantics are in
 [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+**Amended by [D83](#d83) (issue 1182).** The seam decides what one run computes, and a run computes the whole history from 2018. That recomputation is not what readers are served for a past day: each day shows the figure published that day, frozen once the day is over.
 
 <a id="d60"></a>
 
@@ -6435,3 +6448,30 @@ its amendments stand.
 6. **Defaults the owner may veto.** Wake hourly. Stale after 3 days. `--max-rss-mb 3000` with `mem_limit: 4g`. The stale alarm is the container's health state and a line in `bun smoke:status`, not an admin-overview alert, because the container holds no API token.
 
 **Left alone.** Every other service keeps D75 unchanged. `csvb backup --source api` and `csvb inputs` stay issue 1436. No existing archive is rewritten.
+
+---
+
+<a id="d83"></a>
+## D83 — Every published report is frozen: a day shows the figure published that day, never a later recomputation, selected at read time from the frozen ledger (applies D73's rule to `GET /api/dashboards/regime-snapshots`; records PD10's intent; owner, 2026-10-20 and 2026-11-14)
+
+**Status:** Accepted 2026-10-20 (owner, comment on issue 1182). Built by issue 1182 on the read path only (owner, 2026-11-14: no migration). `backend/src/analytics/cutover/ledger-current.ts` (the selection), `backend/src/analytics/report/projections.ts` (the endpoints), `backend/src/api/routes/swarm.ts` (the provider door). Run semantics in [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+**Decision.**
+
+1. **The rule.** Every report we publish, regime included, is published and frozen. A published figure is never revised because data changed. This is the intent of PD10 (`regime-engine.md` §11.8), which until now had no entry here.
+2. **No migration.** The frozen ledger (`analytics_output_snapshots`, append-only since #987) already holds every run's output. The published figure is selected from it when a reader asks. Nothing is rewritten, no table or trigger is added, and no production data is repaired. `regime_snapshots` and `research_signals` keep their writers (the newest run's rows win there) and are no longer what readers are served for a past day. A first build that repaired the table and added guard triggers in a migration (PR 1417) was rejected by the owner and reverted (PR 1645).
+3. **A day's published figure (choice 1a).** The published figure of day D is the D row of the last artifact written during D (UTC, by `analytics_output_snapshots.created_at`) that carries it. While D is the current day it updates with each run. Once D is over it never changes. A day nothing published during the day is published by the first artifact written after it that carries it (a late run, such as the first run after the 2026-09-28 outage, or a replay of issue 1162), and frozen from then on. The run's `source_label` plays no part, so a replay publishes a day exactly when no live run did, and nothing later replaces it.
+4. **The published line only (choice 2a).** `GET /api/dashboards/regime-snapshots` serves the published figure of every day, in both read modes. A run still computes the whole history, and that recomputation stays in its frozen artifact. If it is ever shown, it is a separate, labelled view, never the main line. `regime_snapshots` is read only on a database where no run has published anything.
+5. **Days before the ledger start (choice 3).** For regime, the ledger starts on the as-of day of the first regime artifact that carries rows (2026-09-21 on production). From then on only a run's own as-of row publishes a day. The days before it have no frozen record of their original publication. They are served from that first artifact, as they were served when the ledger began. That is a reconstruction, not the original publications, and it never changes afterwards.
+6. **A day with no publication (choice 4a).** A day from the ledger start that no run with that as-of day published is a gap (2026-09-29 on production). Another run's recomputation never fills it.
+7. **Corrections (choice 5).** A correction of a published figure, such as for the 2026-09-26/27 database incident, is never automatic. If one is wanted it is an explicit, recorded act (PD10's publish workflow, not built), and the chart says the figure was corrected.
+8. **Research signals.** The same rule holds for research signals: `GET /api/dashboards/research-signals/:key` serves the latest day's published payload, in both read modes.
+9. **Cost.** The selection reads artifact metadata only (run, as-of day, the day written, the checksum, and migration 0123's `natural_keys`). A payload is parsed only for a row the process has not cached. Cached facts are about immutable artifacts, keyed by checksum, so the cache never serves a stale selection. When `natural_keys` is NULL (a payload Postgres could not index), the payload itself decides what the artifact carries; it is never taken as publishing nothing.
+10. **The provider door.** `POST /api/swarm/regime` refuses with 409, and writes nothing, any day the selection publishes (folded-in issue 999).
+11. **Parity.** The parity sweep still compares the compatibility tables with their own semantics (the newest artifact wins), now on every regime column (folded-in issue 995), with a settle window for raw history (folded-in issue 1004). It checks the dual write, not what readers are served.
+
+**Why.** Readers of the regime page, the site's SEO data and the public API saw past figures move with every run: on the production replica every day from 2026-09-21 to 2026-10-04 served the newest run's recomputation, 2026-09-26 and 2026-09-27 were published `risk_on` (0.6174, 0.5777) and later served `neutral`, and `regime_snapshots` was rewritten 318,392 times in two weeks. An analyst can check a published regime only against the figure as it was published ([D73](#d73)).
+
+**Rejected.** Showing a later run's recomputation of a day with no run (choice 4b): it is a later recomputation and breaks the rule. Making each day's first run its publication (choice 1b): it is often computed before that day's data arrived. Repairing `regime_snapshots` and guarding it with triggers in a migration (PR 1417): fixing how past runs are displayed must not need a migration, and the ledger already holds what is needed.
+
+**Left alone.** The regime methodology. The run artifacts and reports, which were already frozen (#986, #987). The compatibility tables and their writers. History readers already saw is not rewritten: the format 1 backups keep it as it was.
