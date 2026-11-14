@@ -26,7 +26,16 @@
 //   - regime_snapshots, research_signals: the settled as-of days only (see
 //     SETTLED below); the ledger row is the newest artifact element for the
 //     natural key, by run_id, which is what replaying every artifact in run
-//     order ("last write wins") produces.
+//     order ("last write wins") produces. That is the compatibility tables'
+//     own semantics, which this sweep checks; it is not what readers are
+//     served since issue 1182 (D83: cutover/ledger-current.ts serves each
+//     day's publication in both read modes).
+//     A regime row is compared on EVERY persisted column (issue 1182,
+//     folded-in 995), not only composite and regime: numbers after rounding
+//     at 1e-9, labels and version/source as text, and the jsonb columns as
+//     jsonb (a NULL percentiles or indicators reads as {} or [], as the
+//     writer stores it). A row that differs names its differing columns in
+//     the bounded diff.
 //   - swarm_briefs: sessions whose compatibility row was written at or after
 //     migration 0059 (see BRIEF_LEDGER_MIGRATION), against each session's
 //     newest revision.
@@ -70,7 +79,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
     ),
     ledger AS (
       SELECT DISTINCT ON (svv.source_key COLLATE "C", svv.market_date)
-             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value
+             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value, svv.knowledge_time
         FROM source_value_versions svv
        WHERE svv.source_key LIKE 'raw_indicator_history:%' AND svv.market_date IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)
@@ -81,10 +90,15 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
              l.indicator IS NOT NULL AS in_legacy, r.indicator IS NOT NULL AS in_ledger,
              floor(l.value * 1e9 + 0.5) / 1e9 AS legacy_value, floor(r.value * 1e9 + 0.5) / 1e9 AS ledger_value,
              (l.value = r.value
-               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within
+               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within,
+             r.knowledge_time > clock_timestamp() - make_interval(secs => $3::float8 / 1000) AS recent
         FROM raw_indicator_history l
         FULL JOIN ledger r ON r.indicator = l.indicator AND r.date = l.date
         LEFT JOIN tolerance t ON t.indicator = coalesce(l.indicator, r.indicator)
+    ),
+    settled AS (
+      SELECT * FROM joined
+       WHERE NOT (in_ledger AND recent AND (NOT in_legacy OR NOT (within OR legacy_value = ledger_value)))
     ),
     compared AS (
       SELECT indicator, date, in_legacy, in_ledger,
@@ -93,7 +107,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
                || (CASE WHEN in_legacy AND within THEN legacy_value ELSE ledger_value END)::text AS ledger_text,
              CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
                   WHEN within OR legacy_value = ledger_value THEN NULL ELSE 'differs' END AS reason
-        FROM joined
+        FROM settled
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
            count(*) FILTER (WHERE in_ledger)::int AS ledger_rows,
@@ -105,7 +119,7 @@ const RAW_PARITY_SQL = `WITH tolerance AS (
                      ORDER BY indicator COLLATE "C", date LIMIT $2) m) AS mismatches
       FROM compared`;
 
-const rawProbe = { statement: RAW_PARITY_SQL, params: ["{}", MAX_MISMATCH_DETAIL] };
+const rawProbe = { statement: RAW_PARITY_SQL, params: ["{}", MAX_MISMATCH_DETAIL, 3_600_000] };
 
 const rawLegacy = registerQuery({
   role: "rm_app",
@@ -146,26 +160,73 @@ const REGIME_PARITY_SQL = `WITH settled AS MATERIALIZED (
        WHERE aos.id IN (SELECT id FROM winner)
     ),
     ledger AS (
-      SELECT DISTINCT ON (w.date) w.date, (x.elem ->> 'composite')::float8 AS composite, x.elem -> 'regime' AS regime
+      SELECT DISTINCT ON (w.date) w.date, x.elem AS doc
         FROM winner w JOIN element x ON x.id = w.id AND x.date = w.date
        ORDER BY w.date, x.ord DESC
     ),
+    ledger_rows AS (
+      SELECT d.date, jsonb_build_object(
+               'composite', to_jsonb(floor((d.doc ->> 'composite')::float8 * 1e9 + 0.5) / 1e9),
+               'composite_percentile', to_jsonb(floor((d.doc ->> 'compositePercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'macro_index', to_jsonb(floor((d.doc ->> 'macroIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_index', to_jsonb(floor((d.doc ->> 'onchainIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'factor_index', to_jsonb(floor((d.doc ->> 'factorIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'macro_percentile', to_jsonb(floor((d.doc ->> 'macroPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_percentile', to_jsonb(floor((d.doc ->> 'onchainPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'factor_percentile', to_jsonb(floor((d.doc ->> 'factorPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'regime', d.doc -> 'regime',
+               'macro_regime', d.doc -> 'macroRegime',
+               'onchain_regime', d.doc -> 'onchainRegime',
+               'factor_regime', d.doc -> 'factorRegime',
+               'version', d.doc -> 'version',
+               'source', d.doc -> 'source',
+               'panel_weights', coalesce(d.doc -> 'panelWeights', 'null'::jsonb),
+               'panels', coalesce(d.doc -> 'panels', 'null'::jsonb),
+               'bucket_thresholds', coalesce(d.doc -> 'bucketThresholds', 'null'::jsonb),
+               'backtest', coalesce(d.doc -> 'backtest', 'null'::jsonb),
+               'correlations', coalesce(d.doc -> 'correlations', 'null'::jsonb),
+               'extras', coalesce(d.doc -> 'extras', 'null'::jsonb),
+               'percentiles', coalesce(nullif(d.doc -> 'percentiles', 'null'::jsonb), '{}'::jsonb),
+               'indicators', coalesce(nullif(d.doc -> 'indicators', 'null'::jsonb), '[]'::jsonb)) AS doc
+        FROM ledger d
+    ),
     legacy AS (
-      SELECT rs.date::text AS date, rs.composite::float8 AS composite, coalesce(to_jsonb(rs.regime), 'null'::jsonb) AS regime
+      SELECT rs.date::text AS date, jsonb_build_object(
+               'composite', to_jsonb(floor(rs.composite::float8 * 1e9 + 0.5) / 1e9),
+               'composite_percentile', to_jsonb(floor(rs.composite_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'macro_index', to_jsonb(floor(rs.macro_index::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_index', to_jsonb(floor(rs.onchain_index::float8 * 1e9 + 0.5) / 1e9),
+               'factor_index', to_jsonb(floor(rs.factor_index::float8 * 1e9 + 0.5) / 1e9),
+               'macro_percentile', to_jsonb(floor(rs.macro_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_percentile', to_jsonb(floor(rs.onchain_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'factor_percentile', to_jsonb(floor(rs.factor_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'regime', to_jsonb(rs.regime),
+               'macro_regime', to_jsonb(rs.macro_regime),
+               'onchain_regime', to_jsonb(rs.onchain_regime),
+               'factor_regime', to_jsonb(rs.factor_regime),
+               'version', to_jsonb(rs.version),
+               'source', to_jsonb(rs.source),
+               'panel_weights', coalesce(rs.panel_weights, 'null'::jsonb),
+               'panels', coalesce(rs.panels, 'null'::jsonb),
+               'bucket_thresholds', coalesce(rs.bucket_thresholds, 'null'::jsonb),
+               'backtest', coalesce(rs.backtest, 'null'::jsonb),
+               'correlations', coalesce(rs.correlations, 'null'::jsonb),
+               'extras', coalesce(rs.extras, 'null'::jsonb),
+               'percentiles', coalesce(nullif(rs.percentiles, 'null'::jsonb), '{}'::jsonb),
+               'indicators', coalesce(nullif(rs.indicators, 'null'::jsonb), '[]'::jsonb)) AS doc
         FROM regime_snapshots rs
        WHERE rs.date::text IN (SELECT date FROM settled)
     ),
     joined AS (
       SELECT coalesce(l.date, r.date) AS date, l.date IS NOT NULL AS in_legacy, r.date IS NOT NULL AS in_ledger,
-             coalesce(l.date, r.date) || chr(31) || coalesce((floor(l.composite * 1e9 + 0.5) / 1e9)::text, 'null')
-               || chr(31) || coalesce(l.regime::text, '') AS legacy_text,
-             coalesce(l.date, r.date) || chr(31) || coalesce((floor(r.composite * 1e9 + 0.5) / 1e9)::text, 'null')
-               || chr(31) || coalesce(r.regime::text, '') AS ledger_text
-        FROM legacy l FULL JOIN ledger r ON r.date = l.date
+             l.doc AS legacy_doc, r.doc AS ledger_doc,
+             coalesce(l.date, r.date) || chr(31) || coalesce(l.doc::text, '') AS legacy_text,
+             coalesce(l.date, r.date) || chr(31) || coalesce(r.doc::text, '') AS ledger_text
+        FROM legacy l FULL JOIN ledger_rows r ON r.date = l.date
     ),
     compared AS (
       SELECT *, CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
-                     WHEN legacy_text = ledger_text THEN NULL ELSE 'differs' END AS reason
+                     WHEN legacy_doc = ledger_doc THEN NULL ELSE 'differs' END AS reason
         FROM joined
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
@@ -174,8 +235,11 @@ const REGIME_PARITY_SQL = `WITH settled AS MATERIALIZED (
            encode(sha256(convert_to(coalesce(string_agg(CASE WHEN reason IS NULL THEN legacy_text ELSE ledger_text END, chr(10) ORDER BY date COLLATE "C") FILTER (WHERE in_ledger), ''), 'UTF8')), 'hex') AS ledger_checksum,
            (count(*) FILTER (WHERE reason IS NOT NULL)
              + (SELECT count(*) FROM analytics_output_snapshots u WHERE u.artifact_kind = 'regime_snapshots' AND u.natural_keys IS NULL))::int AS mismatch_count,
-           (SELECT coalesce(jsonb_agg(jsonb_build_array(m.date, m.reason) ORDER BY m.date COLLATE "C"), '[]'::jsonb)
-              FROM (SELECT date, reason FROM compared WHERE reason IS NOT NULL ORDER BY date COLLATE "C" LIMIT $1) m) AS mismatches,
+           (SELECT coalesce(jsonb_agg(jsonb_build_array(m.date, m.reason, m.columns) ORDER BY m.date COLLATE "C"), '[]'::jsonb)
+              FROM (SELECT c.date, c.reason,
+                           (SELECT jsonb_agg(k ORDER BY k COLLATE "C") FROM jsonb_object_keys(c.legacy_doc) k
+                             WHERE c.reason = 'differs' AND c.legacy_doc -> k IS DISTINCT FROM c.ledger_doc -> k) AS columns
+                      FROM compared c WHERE c.reason IS NOT NULL ORDER BY c.date COLLATE "C" LIMIT $1) m) AS mismatches,
            (SELECT coalesce(jsonb_agg(u.id ORDER BY u.id), '[]'::jsonb) FROM analytics_output_snapshots u
              WHERE u.artifact_kind = 'regime_snapshots' AND u.natural_keys IS NULL) AS unindexed
       FROM compared`;
@@ -395,8 +459,9 @@ export interface ParityResult {
   mismatchCount: number;
   // Bounded (never the whole dataset): the first mismatching natural keys in
   // key order, for a human or a test assertion to read directly rather than
-  // re-deriving from two opaque checksums.
-  mismatches: { naturalKey: string; reason: string }[];
+  // re-deriving from two opaque checksums. A regime row that differs also
+  // names the regime_snapshots columns that differ (issue 1182, folded-in 995).
+  mismatches: { naturalKey: string; reason: string; columns?: string[] }[];
 }
 
 interface DomainRow {
@@ -405,7 +470,8 @@ interface DomainRow {
   legacy_checksum: string;
   ledger_checksum: string;
   mismatch_count: number;
-  mismatches: string[][];
+  /** [...naturalKeyParts, reason], and for regime a trailing array of differing columns (or null). */
+  mismatches: (string | string[] | null)[][];
   unindexed?: number[];
 }
 
@@ -416,7 +482,12 @@ const REASON: Record<string, string> = {
 };
 
 function toResult(domain: ParityDomain, row: DomainRow, naturalKey: (parts: string[]) => string): ParityResult {
-  const mismatches = row.mismatches.map((m) => ({ naturalKey: naturalKey(m.slice(0, -1)), reason: REASON[m[m.length - 1]!]! }));
+  const mismatches: ParityResult["mismatches"] = row.mismatches.map((entry) => {
+    const parts = [...entry];
+    const columns = typeof parts[parts.length - 1] === "string" ? null : (parts.pop() as string[] | null);
+    const reason = REASON[parts.pop() as string]!;
+    return columns ? { naturalKey: naturalKey(parts as string[]), reason, columns } : { naturalKey: naturalKey(parts as string[]), reason };
+  });
   // An artifact whose payload Postgres could not index (migration 0123) holds
   // keys this statement cannot see. That is never a match.
   for (const id of row.unindexed ?? []) {
@@ -465,13 +536,25 @@ function rawTolerances(): Record<string, number> {
 //
 // The ledger side is the head of each (source_key, market_date) chain: the
 // version no other version names as its prior.
-export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promise<ParityResult> {
+// SETTLED (issue 1182, folded-in issue 1004). A run writes a point's ledger
+// version during its fetch and its compatibility row later (analytics/index.ts,
+// and the producer's catch-up the same way), so a sweep between the two would
+// read a ledger head the compatibility table has not caught up with yet and
+// record a permanent matched:false. A point whose ledger head is younger than
+// RAW_PARITY_SETTLE_MS and does not match is therefore in flight: it is left
+// out of both sides, as the regime and research checks leave out an as-of day
+// no run package has settled yet. Once the window has passed, the same
+// divergence is compared and still blocks cutover. A compatibility row with no
+// ledger version is never in flight (the ledger is written first).
+export const RAW_PARITY_SETTLE_MS = 3_600_000;
+
+export async function checkRawIndicatorHistoryParity(db: DbHandle = sql, settleMs: number = RAW_PARITY_SETTLE_MS): Promise<ParityResult> {
   const [row] = await on(db, rawLegacy, rawLedger)<DomainRow>`WITH tolerance AS (
       SELECT key AS indicator, value::float8 AS relative FROM jsonb_each_text(${rawTolerances()}::jsonb)
     ),
     ledger AS (
       SELECT DISTINCT ON (svv.source_key COLLATE "C", svv.market_date)
-             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value
+             substr(svv.source_key, 23) AS indicator, svv.market_date AS date, svv.value, svv.knowledge_time
         FROM source_value_versions svv
        WHERE svv.source_key LIKE 'raw_indicator_history:%' AND svv.market_date IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM source_value_versions nxt WHERE nxt.prior_version_id = svv.id)
@@ -482,10 +565,15 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
              l.indicator IS NOT NULL AS in_legacy, r.indicator IS NOT NULL AS in_ledger,
              floor(l.value * 1e9 + 0.5) / 1e9 AS legacy_value, floor(r.value * 1e9 + 0.5) / 1e9 AS ledger_value,
              (l.value = r.value
-               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within
+               OR abs(r.value - l.value) <= coalesce(t.relative, 0) * greatest(abs(r.value), abs(l.value))) AS within,
+             r.knowledge_time > clock_timestamp() - make_interval(secs => ${settleMs}::float8 / 1000) AS recent
         FROM raw_indicator_history l
         FULL JOIN ledger r ON r.indicator = l.indicator AND r.date = l.date
         LEFT JOIN tolerance t ON t.indicator = coalesce(l.indicator, r.indicator)
+    ),
+    settled AS (
+      SELECT * FROM joined
+       WHERE NOT (in_ledger AND recent AND (NOT in_legacy OR NOT (within OR legacy_value = ledger_value)))
     ),
     compared AS (
       SELECT indicator, date, in_legacy, in_ledger,
@@ -494,7 +582,7 @@ export async function checkRawIndicatorHistoryParity(db: DbHandle = sql): Promis
                || (CASE WHEN in_legacy AND within THEN legacy_value ELSE ledger_value END)::text AS ledger_text,
              CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
                   WHEN within OR legacy_value = ledger_value THEN NULL ELSE 'differs' END AS reason
-        FROM joined
+        FROM settled
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
            count(*) FILTER (WHERE in_ledger)::int AS ledger_rows,
@@ -530,26 +618,73 @@ export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<Pa
        WHERE aos.id IN (SELECT id FROM winner)
     ),
     ledger AS (
-      SELECT DISTINCT ON (w.date) w.date, (x.elem ->> 'composite')::float8 AS composite, x.elem -> 'regime' AS regime
+      SELECT DISTINCT ON (w.date) w.date, x.elem AS doc
         FROM winner w JOIN element x ON x.id = w.id AND x.date = w.date
        ORDER BY w.date, x.ord DESC
     ),
+    ledger_rows AS (
+      SELECT d.date, jsonb_build_object(
+               'composite', to_jsonb(floor((d.doc ->> 'composite')::float8 * 1e9 + 0.5) / 1e9),
+               'composite_percentile', to_jsonb(floor((d.doc ->> 'compositePercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'macro_index', to_jsonb(floor((d.doc ->> 'macroIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_index', to_jsonb(floor((d.doc ->> 'onchainIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'factor_index', to_jsonb(floor((d.doc ->> 'factorIndex')::float8 * 1e9 + 0.5) / 1e9),
+               'macro_percentile', to_jsonb(floor((d.doc ->> 'macroPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_percentile', to_jsonb(floor((d.doc ->> 'onchainPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'factor_percentile', to_jsonb(floor((d.doc ->> 'factorPercentile')::float8 * 1e9 + 0.5) / 1e9),
+               'regime', d.doc -> 'regime',
+               'macro_regime', d.doc -> 'macroRegime',
+               'onchain_regime', d.doc -> 'onchainRegime',
+               'factor_regime', d.doc -> 'factorRegime',
+               'version', d.doc -> 'version',
+               'source', d.doc -> 'source',
+               'panel_weights', coalesce(d.doc -> 'panelWeights', 'null'::jsonb),
+               'panels', coalesce(d.doc -> 'panels', 'null'::jsonb),
+               'bucket_thresholds', coalesce(d.doc -> 'bucketThresholds', 'null'::jsonb),
+               'backtest', coalesce(d.doc -> 'backtest', 'null'::jsonb),
+               'correlations', coalesce(d.doc -> 'correlations', 'null'::jsonb),
+               'extras', coalesce(d.doc -> 'extras', 'null'::jsonb),
+               'percentiles', coalesce(nullif(d.doc -> 'percentiles', 'null'::jsonb), '{}'::jsonb),
+               'indicators', coalesce(nullif(d.doc -> 'indicators', 'null'::jsonb), '[]'::jsonb)) AS doc
+        FROM ledger d
+    ),
     legacy AS (
-      SELECT rs.date::text AS date, rs.composite::float8 AS composite, coalesce(to_jsonb(rs.regime), 'null'::jsonb) AS regime
+      SELECT rs.date::text AS date, jsonb_build_object(
+               'composite', to_jsonb(floor(rs.composite::float8 * 1e9 + 0.5) / 1e9),
+               'composite_percentile', to_jsonb(floor(rs.composite_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'macro_index', to_jsonb(floor(rs.macro_index::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_index', to_jsonb(floor(rs.onchain_index::float8 * 1e9 + 0.5) / 1e9),
+               'factor_index', to_jsonb(floor(rs.factor_index::float8 * 1e9 + 0.5) / 1e9),
+               'macro_percentile', to_jsonb(floor(rs.macro_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'onchain_percentile', to_jsonb(floor(rs.onchain_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'factor_percentile', to_jsonb(floor(rs.factor_percentile::float8 * 1e9 + 0.5) / 1e9),
+               'regime', to_jsonb(rs.regime),
+               'macro_regime', to_jsonb(rs.macro_regime),
+               'onchain_regime', to_jsonb(rs.onchain_regime),
+               'factor_regime', to_jsonb(rs.factor_regime),
+               'version', to_jsonb(rs.version),
+               'source', to_jsonb(rs.source),
+               'panel_weights', coalesce(rs.panel_weights, 'null'::jsonb),
+               'panels', coalesce(rs.panels, 'null'::jsonb),
+               'bucket_thresholds', coalesce(rs.bucket_thresholds, 'null'::jsonb),
+               'backtest', coalesce(rs.backtest, 'null'::jsonb),
+               'correlations', coalesce(rs.correlations, 'null'::jsonb),
+               'extras', coalesce(rs.extras, 'null'::jsonb),
+               'percentiles', coalesce(nullif(rs.percentiles, 'null'::jsonb), '{}'::jsonb),
+               'indicators', coalesce(nullif(rs.indicators, 'null'::jsonb), '[]'::jsonb)) AS doc
         FROM regime_snapshots rs
        WHERE rs.date::text IN (SELECT date FROM settled)
     ),
     joined AS (
       SELECT coalesce(l.date, r.date) AS date, l.date IS NOT NULL AS in_legacy, r.date IS NOT NULL AS in_ledger,
-             coalesce(l.date, r.date) || chr(31) || coalesce((floor(l.composite * 1e9 + 0.5) / 1e9)::text, 'null')
-               || chr(31) || coalesce(l.regime::text, '') AS legacy_text,
-             coalesce(l.date, r.date) || chr(31) || coalesce((floor(r.composite * 1e9 + 0.5) / 1e9)::text, 'null')
-               || chr(31) || coalesce(r.regime::text, '') AS ledger_text
-        FROM legacy l FULL JOIN ledger r ON r.date = l.date
+             l.doc AS legacy_doc, r.doc AS ledger_doc,
+             coalesce(l.date, r.date) || chr(31) || coalesce(l.doc::text, '') AS legacy_text,
+             coalesce(l.date, r.date) || chr(31) || coalesce(r.doc::text, '') AS ledger_text
+        FROM legacy l FULL JOIN ledger_rows r ON r.date = l.date
     ),
     compared AS (
       SELECT *, CASE WHEN NOT in_ledger THEN 'legacy_only' WHEN NOT in_legacy THEN 'ledger_only'
-                     WHEN legacy_text = ledger_text THEN NULL ELSE 'differs' END AS reason
+                     WHEN legacy_doc = ledger_doc THEN NULL ELSE 'differs' END AS reason
         FROM joined
     )
     SELECT count(*) FILTER (WHERE in_legacy)::int AS legacy_rows,
@@ -558,8 +693,11 @@ export async function checkRegimeSnapshotsParity(db: DbHandle = sql): Promise<Pa
            encode(sha256(convert_to(coalesce(string_agg(CASE WHEN reason IS NULL THEN legacy_text ELSE ledger_text END, chr(10) ORDER BY date COLLATE "C") FILTER (WHERE in_ledger), ''), 'UTF8')), 'hex') AS ledger_checksum,
            (count(*) FILTER (WHERE reason IS NOT NULL)
              + (SELECT count(*) FROM analytics_output_snapshots u WHERE u.artifact_kind = 'regime_snapshots' AND u.natural_keys IS NULL))::int AS mismatch_count,
-           (SELECT coalesce(jsonb_agg(jsonb_build_array(m.date, m.reason) ORDER BY m.date COLLATE "C"), '[]'::jsonb)
-              FROM (SELECT date, reason FROM compared WHERE reason IS NOT NULL ORDER BY date COLLATE "C" LIMIT ${MAX_MISMATCH_DETAIL}) m) AS mismatches,
+           (SELECT coalesce(jsonb_agg(jsonb_build_array(m.date, m.reason, m.columns) ORDER BY m.date COLLATE "C"), '[]'::jsonb)
+              FROM (SELECT c.date, c.reason,
+                           (SELECT jsonb_agg(k ORDER BY k COLLATE "C") FROM jsonb_object_keys(c.legacy_doc) k
+                             WHERE c.reason = 'differs' AND c.legacy_doc -> k IS DISTINCT FROM c.ledger_doc -> k) AS columns
+                      FROM compared c WHERE c.reason IS NOT NULL ORDER BY c.date COLLATE "C" LIMIT ${MAX_MISMATCH_DETAIL}) m) AS mismatches,
            (SELECT coalesce(jsonb_agg(u.id ORDER BY u.id), '[]'::jsonb) FROM analytics_output_snapshots u
              WHERE u.artifact_kind = 'regime_snapshots' AND u.natural_keys IS NULL) AS unindexed
       FROM compared`;
