@@ -387,11 +387,24 @@ result instead: no factor figures, no correlations or backtest pairs without SPX
 ETH, no cash yield without TBILL3M. `scripts/tests/unit/analyst-sdk-purity.test.ts`
 rejects any import path from a downstream module to an acquisition client.
 
-**`regime_snapshots` is a current view; the ledger is the record.** Every run
-recomputes the full history and rewrites the table. What an earlier run showed
-survives only in the ledger payloads (`analytics_output_snapshots`), which exist
-from 2026-09-21 (migrations `0058_analytics_run_ledger` and
-`0059_analytics_output_and_report_snapshots`). Before that there is no record.
+**Published figures are frozen ([D83](../decisions.md#d83), issue 1182).** Every run
+recomputes the full history. Its frozen artifact (`analytics_output_snapshots`, from
+2026-09-21, migrations `0058_analytics_run_ledger` and
+`0059_analytics_output_and_report_snapshots`) keeps that recomputation, and
+`regime_snapshots` still holds the newest run's rows. Neither is what readers are
+served for a past day. `GET /api/dashboards/regime-snapshots` serves each day's
+published figure in both read modes, selected from the frozen artifacts when it reads
+(`backend/src/analytics/cutover/ledger-current.ts`), with no migration and no rewrite.
+The figure of day D is the D row of the last artifact written during D (UTC) that
+carries it, so it updates during D and never after. A day nothing published during the
+day is published by the first artifact written after it (a late run, or a replay), and
+is frozen from then on. From the ledger start (the as-of day of the first regime
+artifact that carries rows) only a run's own as-of row publishes a day, so a day no run
+with that as-of day published is a gap. The days before the ledger start are served
+from that first artifact, as they were served when the ledger began; they are a
+reconstruction, not the original publications. The same rule holds for
+`research_signals`. Until issue 1182 both read paths served the newest run's
+recomputation for every day.
 
 **The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
@@ -1169,6 +1182,11 @@ recompute.
 **Decided by the product owner on 2026-08-15** (PD10). This is settled, not
 proposed. What follows states the model, what already exists, what it reverses,
 and why it is a verification instrument and not merely a publishing workflow.
+
+**Built in part by issue 1182 ([D83](../decisions.md#d83)).** Published figures are
+frozen: every day serves the figure published that day, never a later recomputation
+(§8.1). The versioning and the admin publish workflow below are not built; a
+correction of a published figure stays an explicit act, never an automatic rewrite.
 
 #### 11.8.1 The model
 

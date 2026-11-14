@@ -8,6 +8,7 @@ import { projectBriefResearchSignals } from "../../swarm/projections.ts";
 import { handleSwarmAdmin } from "./swarm-admin.ts";
 import { isRegistrablePublicKey, isValidEd25519PublicKey, PUBLIC_KEY_REFUSAL } from "../../lib/signing.ts";
 import { saveRegimeSnapshots } from "../../analytics/store/regime-store.ts";
+import { ledgerPublishedRegimeDays } from "../../analytics/cutover/ledger-current.ts";
 import { parseSnapshots } from "./analytics.ts";
 import { bearer, hasAnalyticsProviderRole, isPrivileged } from "../auth.ts";
 import {
@@ -336,11 +337,23 @@ export async function handleSwarm(req: Request, url: URL): Promise<{ status: num
   // ({ snapshots: RegimeSnapshotRow[] }, one shared parseSnapshots);
   // persistence is the same idempotent upsert on (date). This door predates
   // issue #978's snapshot layer and still writes the current view with no run
-  // behind it, unlike POST /api/analytics/run-packages.
+  // behind it, unlike POST /api/analytics/run-packages. So it refuses, with no
+  // write, any day a frozen run already published (issue 1182, D83, folded-in
+  // issue 999), selected from the ledger exactly as the regime endpoint
+  // selects it: a row it replaced there would put numbers in the brief that
+  // the report the brief binds to does not contain.
   if (m === "POST" && p === C.regime) {
     if (!(await hasAnalyticsProviderRole(req))) return { status: 403, body: { error: "analytics-provider role required" } };
     const parsed = parseSnapshots(await readJsonObject(req));
     if (!Array.isArray(parsed)) return { status: 400, body: { error: parsed.error } };
+    const published = new Set(await ledgerPublishedRegimeDays());
+    const owned = parsed.filter((s) => published.has(s.date)).map((s) => s.date);
+    if (owned.length > 0) {
+      return {
+        status: 409,
+        body: { error: "a frozen regime run already published these days; a published day is never rewritten (D83)", dates: owned.slice(0, 10) },
+      };
+    }
     await saveRegimeSnapshots(parsed);
     return { status: 200, body: { ok: true, saved: parsed.length } };
   }

@@ -7,12 +7,12 @@ import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
 import { rowToSnapshot, forHistory, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
-// Issue #979: once cutover is armed (analytics_read_mode = 'ledger'), these
-// two reads resolve from the immutable Phase A ledger instead of the mutable
-// regime_snapshots/research_signals tables — see cutover/ledger-current.ts's
-// header for the replay rule that makes the two reads equivalent.
+// Issue 1182 (D83): in BOTH read modes these two reads serve the PUBLISHED
+// figures, selected from the frozen run ledger (cutover/ledger-current.ts),
+// never the newest run's recomputation the compatibility tables hold. The
+// tables are read only on a database where no run has published anything.
 import { getAnalyticsReadMode } from "../cutover/read-mode.ts";
-import { ledgerCurrentLatestResearchSignal, ledgerCurrentRegimeSnapshots } from "../cutover/ledger-current.ts";
+import { ledgerCurrentLatestResearchSignal, ledgerPublishedRegimeHistory } from "../cutover/ledger-current.ts";
 import type { RegimeSnapshotRow } from "./regime-projection.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 
@@ -81,15 +81,15 @@ export function toRegimeSummary(latest: RegimeSnapshot | null, staleness: Regime
 
 // Latest research-signal payload for a key (or null).
 //
-// Issue #979: when analytics_read_mode is 'ledger', this is derived PURELY
-// from analytics_output_snapshots (never from research_signals) — see
-// cutover/ledger-current.ts's replay rule. The compatibility table keeps
-// being dual-written either way; only the READ resolves differently.
+// Issue 1182 (D83): the latest day's PUBLISHED payload, from the frozen
+// ledger in both read modes, so a run written after that day never replaces
+// what readers were shown. The research_signals table is read only when the
+// ledger holds no publication of the key (compatibility mode; a database no
+// run has written, or a key seeded outside the runs).
 export async function fetchLatestResearchSignal(key: string) {
-  if ((await getAnalyticsReadMode()) === "ledger") {
-    const signal = await ledgerCurrentLatestResearchSignal(key);
-    return signal ? { signalKey: signal.signalKey, date: signal.date, payload: signal.payload } : null;
-  }
+  const signal = await ledgerCurrentLatestResearchSignal(key);
+  if (signal) return { signalKey: signal.signalKey, date: signal.date, payload: signal.payload };
+  if ((await getAnalyticsReadMode()) === "ledger") return null;
   const rows = await on(sql, latestSignal)<{ signal_key: string; date: string | Date; payload: unknown }>`
     SELECT signal_key, date, payload FROM research_signals WHERE signal_key = ${key} ORDER BY date DESC LIMIT 1`;
   const r = rows[0];
@@ -168,17 +168,16 @@ export async function fetchRegimeSnapshots(
   source: RegimeReadSource;
 }> {
   const today = new Date().toISOString().slice(0, 10);
-  // Issue #979: ledger mode derives the exact same rows PURELY from
-  // analytics_output_snapshots (never from regime_snapshots) — see
-  // cutover/ledger-current.ts. The compatibility table keeps being
-  // dual-written either way; only the READ resolves differently.
-  const source: RegimeReadSource = (await getAnalyticsReadMode()) === "ledger" ? "ledger" : "regime_snapshots";
+  // Issue 1182 (D83): every day's PUBLISHED row, selected from the frozen
+  // ledger in both read modes (cutover/ledger-current.ts states the rule).
+  // regime_snapshots, which every run rewrites for every day, is read only
+  // when no run has published anything (compatibility mode).
+  const published = await ledgerPublishedRegimeHistory(today);
+  const mode = await getAnalyticsReadMode();
+  const source: RegimeReadSource = published !== null || mode === "ledger" ? "ledger" : "regime_snapshots";
   const full =
     source === "ledger"
-      ? (await ledgerCurrentRegimeSnapshots())
-          .filter((r) => r.date <= today)
-          .slice(-range)
-          .map(ledgerRowToSnapshot)
+      ? (published ?? []).slice(-range).map(ledgerRowToSnapshot)
       : (
           await on(sql, recentSnapshots)`
     SELECT * FROM regime_snapshots

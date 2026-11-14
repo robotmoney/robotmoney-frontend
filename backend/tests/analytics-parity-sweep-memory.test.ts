@@ -113,8 +113,12 @@ async function build(): Promise<void> {
     INSERT INTO analytics_output_snapshots (run_id, artifact_kind, payload_bytes, checksum)
     SELECT r.id, 'regime_snapshots', p.bytes, encode(sha256(p.bytes), 'hex')
       FROM analytics_ledger_runs r, fx_regime_payload p WHERE r.tool_id = 'parity-memory';
-    INSERT INTO regime_snapshots (date, composite, regime)
-    SELECT day::date, composite, 'risk_on' FROM fx_regime;
+    -- Every column the element carries (issue 995: the comparison covers them all).
+    INSERT INTO regime_snapshots (date, composite, composite_percentile, regime, macro_regime, onchain_regime, factor_regime,
+                                  macro_index, onchain_index, factor_index, macro_percentile, onchain_percentile, factor_percentile,
+                                  percentiles, indicators, source, version)
+    SELECT day::date, composite, 0.5, 'risk_on', 'risk_on', 'risk_on', 'risk_on', 0.49, 0.61, 0.84, 0.78, 0.75, 0.98,
+           '${JSON.stringify(percentiles)}'::jsonb, '[]'::jsonb, 'live', 'v1' FROM fx_regime;
   `);
   // Research: two keys per settled day, each payload about 450 KB; 183 runs carry them, 243 are empty.
   await db.unsafe(`

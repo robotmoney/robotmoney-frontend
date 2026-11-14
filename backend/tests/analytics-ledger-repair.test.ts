@@ -115,6 +115,10 @@ const base = (key: string, i: number) => (key === FRED_KEY ? 1.25 + i / 100 : 45
 const noisy = (v: number) => v * (1 + 1e-7);
 const revised = (v: number) => v * (1 + 1e-3);
 
+// Issue 1049's staircase: 100, then four steps of a relative 0.6e-6.
+const STAIR_DATE = "2024-02-02";
+const STAIR = [0, 1, 2, 3, 4].map((k) => 100 * (1 + k * 0.6e-6));
+
 const vintageIds: string[] = [];
 interface Snapshot {
   counts: { svv: number; members: number; events: number };
@@ -241,6 +245,10 @@ beforeAll(async () => {
   await db`UPDATE raw_indicator_history SET value = ${revised(18.719999313354492)} WHERE indicator = 'VIX'`;
   await db`UPDATE raw_indicator_history SET source = 'seed' WHERE indicator = 'VIX'`;
   await db`UPDATE raw_indicator_history SET value = ${noisy(1.25)} WHERE indicator = 'T10Y2Y'`; // exact key: material
+  // A staircase (issue 1049): four rewrites, each 0.6e-6 relative from the
+  // last, inside VIX's 1e-6 tolerance one by one but 2.4e-6 in all.
+  await db`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${STAIR_DATE}, 'VIX', ${STAIR[0]!}, 'live')`;
+  for (const v of STAIR.slice(1)) await db`UPDATE raw_indicator_history SET value = ${v} WHERE indicator = 'VIX' AND date = ${STAIR_DATE}`;
 
   // Raw response bodies as the pre-#1035 writer stored them: one
   // source_payloads blob per distinct body, each fetch pointing at it.
@@ -262,7 +270,7 @@ beforeAll(async () => {
 
   before = await snapshot(async (id) =>
     ((await db`SELECT source_value_version_id::text AS id FROM analytics_vintage_members WHERE vintage_id = ${id}::bigint`) as unknown as { id: string }[]).map((r) => r.id));
-  expect(before.counts.events).toBe(403);
+  expect(before.counts.events).toBe(407);
   sizesBefore = await relationSizes();
 
   // The deploy (0080 and anything after it), then the one-time repair.
@@ -282,7 +290,8 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     // Each vintage's membership is now a handful of runs, not one row a member.
     expect(after.counts.members).toBeLessThan(before.counts.members / 10);
     // The VIX revision and the exact key's change; the relabel alone is gone.
-    expect(after.counts.events).toBe(2);
+    // Plus the two staircase steps that reach the tolerance (issue 1049).
+    expect(after.counts.events).toBe(4);
   });
 
   test("the upgrade returns disk space: every compacted table is smaller on disk after the repair's rebuild", async () => {
@@ -359,6 +368,23 @@ describe("issue #1035 AC6: compaction keeps every vintage and every head, and dr
     // The irregular coordinate: three roots with one value become one version.
     const irregular = await chainOf(IRREGULAR_KEY, "2024-01-01");
     expect(irregular.map((v) => [v.kind, v.prior])).toEqual([["initial", null]]);
+  });
+});
+
+// Issue 1049: the overwrite-event rule is cumulative. Each rewrite is judged
+// against the value the fixed writer last KEPT, not against the event's own
+// previous row, so a staircase of sub-tolerance steps cannot drift the row by
+// more than the tolerance unrecorded.
+describe("issue 1049: overwrite events are compacted against the last kept value", () => {
+  test("of a four-step staircase inside tolerance step by step, the second and fourth steps are kept, and the row holds the last value", async () => {
+    const events = (await db`
+      SELECT (previous_row ->> 'value')::float8 AS previous, (replacement_row ->> 'value')::float8 AS replacement
+        FROM analytics_overwrite_events
+       WHERE table_name = 'raw_indicator_history' AND natural_key ->> 'indicator' = 'VIX' AND natural_key ->> 'date' = ${STAIR_DATE}
+       ORDER BY id`) as unknown as { previous: number; replacement: number }[];
+    expect(events.map((e) => [e.previous, e.replacement])).toEqual([[STAIR[0], STAIR[2]], [STAIR[2], STAIR[4]]]);
+    const [row] = (await db`SELECT value FROM raw_indicator_history WHERE indicator = 'VIX' AND date = ${STAIR_DATE}`) as unknown as { value: number }[];
+    expect(Number(row!.value)).toBe(STAIR[4]!);
   });
 });
 

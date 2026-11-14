@@ -3784,9 +3784,9 @@ const briefRegime = registerQuery({
   object: "regime_snapshots",
   privileges: ["SELECT"],
   site: "src/swarm/domain:buildBriefBody.regime",
-  purpose: "Read the newest regime snapshot the brief carries.",
+  purpose: "Read the newest regime snapshot dated no later than today (UTC) the brief carries.",
   callers: [ADMIN_ROUTE],
-  probe: { statement: "SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1" },
+  probe: { statement: "SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1" },
 });
 const briefRecent = registerQuery({
   role: "rm_app",
@@ -3859,7 +3859,10 @@ export async function buildBriefBody(
 ): Promise<{ body: Record<string, unknown>; reportSnapshotId: string | null }> {
   const sql = h;
   const sessionId = String(s.id);
-  const regimeRow = (await on(sql, briefRegime)<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  // `date <= today` (UTC), the same read-side boundary report/projections.ts
+  // applies (issue #382): a future-dated row never reaches a brief body the
+  // dashboard would not show (issue 1182, folded-in issue 999).
+  const regimeRow = (await on(sql, briefRegime)<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1`)[0] ?? null;
   const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
   // Each ref carries its session id (issue #965): a subject may convene more
   // than once a day, so date and subject alone cannot reach an earlier session

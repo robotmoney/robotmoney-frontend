@@ -11,11 +11,7 @@
 import { sql, type DbHandle } from "../../src/db/client.ts";
 import { canonicalStringify } from "../../src/analytics/run-ledger.ts";
 import { rawIndicatorSourceKey, withinTolerance } from "../../src/analytics/source-tolerance.ts";
-import {
-  ledgerCurrentRawIndicatorHistory,
-  ledgerCurrentRegimeSnapshots,
-  ledgerCurrentResearchSignals,
-} from "../../src/analytics/cutover/ledger-current.ts";
+import { ledgerCurrentRawIndicatorHistory } from "../../src/analytics/cutover/ledger-current.ts";
 import type { ParityDomain } from "../../src/analytics/cutover/parity-domains.ts";
 
 export interface OracleResult {
@@ -23,8 +19,40 @@ export interface OracleResult {
   legacyRowCount: number;
   ledgerRowCount: number;
   matched: boolean;
-  /** Every mismatching natural key (not capped), sorted. */
-  mismatches: { naturalKey: string; reason: string }[];
+  /** Every mismatching natural key (not capped), sorted. A regime row that differs names its differing columns. */
+  mismatches: { naturalKey: string; reason: string; columns?: string[] }[];
+}
+
+// The compatibility tables' own semantics, replayed from the ledger: every
+// artifact in run order, the last write winning on the natural key. This is
+// what the parity sweep compares the tables with. It is NOT what readers are
+// served since issue 1182 (D83): ledger-current.ts selects each day's
+// publication instead.
+async function artifactsInRunOrder(db: DbHandle, kind: string): Promise<unknown[][]> {
+  const rows = (await db`
+    SELECT payload_bytes FROM analytics_output_snapshots WHERE artifact_kind = ${kind} ORDER BY run_id, id`) as unknown as { payload_bytes: Buffer }[];
+  return rows.map((r) => {
+    const parsed = JSON.parse(Buffer.from(r.payload_bytes).toString("utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  });
+}
+
+export async function replayLatestRegimeSnapshots(db: DbHandle = sql): Promise<{ date: string; composite: number | null; regime: string | null }[]> {
+  const byDate = new Map<string, { date: string; composite: number | null; regime: string | null }>();
+  for (const artifact of await artifactsInRunOrder(db, "regime_snapshots")) {
+    for (const r of artifact as { date: string; composite: number | null; regime: string | null }[]) byDate.set(r.date, r);
+  }
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+export async function replayLatestResearchSignals(db: DbHandle = sql): Promise<{ signalKey: string; date: string; payload: unknown }[]> {
+  const byKey = new Map<string, { signalKey: string; date: string; payload: unknown }>();
+  for (const artifact of await artifactsInRunOrder(db, "research_signals")) {
+    for (const s of artifact as { key: string; date: string; payload: unknown }[]) {
+      byKey.set(`${s.key}\u0000${s.date}`, { signalKey: s.key, date: s.date, payload: s.payload });
+    }
+  }
+  return [...byKey.values()];
 }
 
 function canonicalNumber(n: number): number {
@@ -35,14 +63,17 @@ function compare(
   domain: ParityDomain,
   legacy: Map<string, Record<string, unknown>>,
   ledger: Map<string, Record<string, unknown>>,
+  namesColumns = false,
 ): OracleResult {
-  const mismatches: { naturalKey: string; reason: string }[] = [];
+  const mismatches: OracleResult["mismatches"] = [];
   for (const [key, legacyRow] of legacy) {
     const ledgerRow = ledger.get(key);
     if (ledgerRow === undefined) {
       mismatches.push({ naturalKey: key, reason: "present in compatibility table, missing from ledger" });
     } else if (canonicalStringify(legacyRow) !== canonicalStringify(ledgerRow)) {
-      mismatches.push({ naturalKey: key, reason: "canonical value differs between compatibility and ledger" });
+      const reason = "canonical value differs between compatibility and ledger";
+      const columns = Object.keys(legacyRow).filter((c) => canonicalStringify(legacyRow[c]) !== canonicalStringify(ledgerRow[c])).sort();
+      mismatches.push(namesColumns ? { naturalKey: key, reason, columns } : { naturalKey: key, reason });
     }
   }
   for (const key of ledger.keys()) {
@@ -80,22 +111,48 @@ async function rawIndicatorHistory(db: DbHandle): Promise<OracleResult> {
   return compare("raw_indicator_history", legacy, ledger);
 }
 
+// Every persisted regime_snapshots column, keyed by column name, from either
+// side (issue 1182, folded-in 995): numbers rounded at 1e-9, a NULL
+// percentiles or indicators as {} or [].
+const REGIME_NUMBERS = {
+  composite: "composite", composite_percentile: "compositePercentile",
+  macro_index: "macroIndex", onchain_index: "onchainIndex", factor_index: "factorIndex",
+  macro_percentile: "macroPercentile", onchain_percentile: "onchainPercentile", factor_percentile: "factorPercentile",
+} as const;
+const REGIME_VALUES = {
+  regime: "regime", macro_regime: "macroRegime", onchain_regime: "onchainRegime", factor_regime: "factorRegime",
+  version: "version", source: "source",
+  panel_weights: "panelWeights", panels: "panels", bucket_thresholds: "bucketThresholds",
+  backtest: "backtest", correlations: "correlations", extras: "extras",
+} as const;
+
+function canonicalRegimeRow(get: (column: string, key: string) => unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [column, key] of Object.entries(REGIME_NUMBERS)) {
+    const v = get(column, key);
+    out[column] = v == null ? null : canonicalNumber(Number(v));
+  }
+  for (const [column, key] of Object.entries(REGIME_VALUES)) out[column] = get(column, key) ?? null;
+  out.percentiles = get("percentiles", "percentiles") ?? {};
+  out.indicators = get("indicators", "indicators") ?? [];
+  return out;
+}
+
 async function regimeSnapshots(db: DbHandle): Promise<OracleResult> {
   const settled = await settledAsofDates(db);
-  const legacyRows = (await db`SELECT date::text AS date, composite, regime FROM regime_snapshots ORDER BY date`) as unknown as {
-    date: string; composite: string | number | null; regime: string | null;
-  }[];
+  const legacyRows = (await db`SELECT *, date::text AS day FROM regime_snapshots ORDER BY 1`) as unknown as Record<string, unknown>[];
   const legacy = new Map<string, Record<string, unknown>>();
   for (const r of legacyRows) {
-    if (!settled.has(r.date)) continue;
-    legacy.set(r.date, { date: r.date, composite: r.composite == null ? null : canonicalNumber(Number(r.composite)), regime: r.regime });
+    const date = r.day as string;
+    if (!settled.has(date)) continue;
+    legacy.set(date, canonicalRegimeRow((column) => r[column]));
   }
   const ledger = new Map<string, Record<string, unknown>>();
-  for (const r of await ledgerCurrentRegimeSnapshots(db)) {
+  for (const r of await replayLatestRegimeSnapshots(db)) {
     if (!settled.has(r.date)) continue;
-    ledger.set(r.date, { date: r.date, composite: r.composite == null ? null : canonicalNumber(r.composite), regime: r.regime });
+    ledger.set(r.date, canonicalRegimeRow((_column, key) => (r as unknown as Record<string, unknown>)[key]));
   }
-  return compare("regime_snapshots", legacy, ledger);
+  return compare("regime_snapshots", legacy, ledger, true);
 }
 
 async function researchSignals(db: DbHandle): Promise<OracleResult> {
@@ -109,7 +166,7 @@ async function researchSignals(db: DbHandle): Promise<OracleResult> {
     legacy.set(`${r.signal_key} ${r.date}`, { signalKey: r.signal_key, date: r.date, payload: r.payload });
   }
   const ledger = new Map<string, Record<string, unknown>>();
-  for (const r of await ledgerCurrentResearchSignals(db)) {
+  for (const r of await replayLatestResearchSignals(db)) {
     if (!settled.has(r.date)) continue;
     ledger.set(`${r.signalKey} ${r.date}`, { signalKey: r.signalKey, date: r.date, payload: r.payload });
   }
