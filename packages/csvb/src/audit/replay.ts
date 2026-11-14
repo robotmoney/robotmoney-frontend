@@ -16,8 +16,8 @@ import { loadTable, num, scanTable, type Ctx } from "./data.ts";
 
 type Point = { date: string; value: number };
 
-/** A stored source value, as the SDK's `inputHistoryFromStorage` takes it. */
-type Stored = { sourceKey: string; marketDate: string | null; value: number; versionId: string };
+/** The backtest ledger keys and the SDK input ids they feed (see LEDGER_EXTRA_KEYS in the SDK). */
+const EXTRA_KEYS: Record<string, string> = { "backtest:^GSPC": "SPX", "backtest:ETH-USD": "ETH", "backtest:DTB3": "TBILL3M" };
 
 export interface MetricStat {
   metric: string;
@@ -109,17 +109,15 @@ export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: 
   if (!payload || !(payload as unknown[]).length) throw new Error(`run ${run.id} has no published regime payload`);
   const published = new Map((payload as { date: string }[]).map((r) => [r.date, r as Record<string, unknown>]));
 
-  const sdkDir = resolve(o.sdkDir);
-  const sdk = (await import(join(sdkDir, "src/index.ts"))) as Record<string, any>;
-  if (typeof sdk.runRegime !== "function") throw new Error(`${sdkDir}/src/index.ts does not export runRegime; is --sdk the analyst-sdk package directory?`);
-  if (typeof sdk.inputHistoryFromStorage !== "function") throw new Error(`${sdkDir}/src/index.ts does not export inputHistoryFromStorage; the replay needs the SDK's storage mapping (D74)`);
-
-  const { raw, extras, found, expected, members } = await frozenInputs(ctx, vin, sdk.inputHistoryFromStorage, sdk.LEDGER_EXTRA_KEYS);
+  const { raw, extras, found, expected, members } = await frozenInputs(ctx, vin);
   if (found !== expected) notes.push(`the vintage says ${expected} members; ${found} source value versions were found in the backups for its ranges`);
   const tooRecent = Object.values(raw).some((pts) => pts.some((p) => p.date > run.asof));
   if (tooRecent) notes.push(`some inputs are dated after the run's as-of day ${run.asof}; the SDK ignores them for the regime`);
 
   // 4. Replay through the SDK.
+  const sdkDir = resolve(o.sdkDir);
+  const sdk = (await import(join(sdkDir, "src/index.ts"))) as Record<string, any>;
+  if (typeof sdk.runRegime !== "function") throw new Error(`${sdkDir}/src/index.ts does not export runRegime; is --sdk the analyst-sdk package directory?`);
   let sdkRun: any;
   try {
     sdkRun = sdk.runRegime(raw, { asof: run.asof, factor: true });
@@ -250,18 +248,10 @@ function referenceReplay(dir: string, raw: Record<string, Point[]>, asof: string
 
 /**
  * A run's exact inputs, rebuilt from its data vintage: the member id ranges of `analytics_vintage_members` select
- * rows of `source_value_versions`. Those rows become the raw history keyed by SDK input id (indicators, and
- * SPX/ETH/TBILL3M for the backtest) through the SDK's own `inputHistoryFromStorage`, the mapping the run itself reads
- * its ledger heads through. A second mapping here would drift from the run's: the vintage still holds the retired
- * `raw_indicator_history:DEFI_GROWTH` and `:STABLES_GROWTH` keys, which no consumer reads since D74's amendment
- * (the growth indicators read DEFI_TVL and STABLES), and feeding them in moved the on-chain index (issue 1182).
+ * rows of `source_value_versions`. Returns the raw history keyed by SDK input id (indicators, and SPX/ETH/TBILL3M for
+ * the backtest), as the SDK takes it.
  */
-export async function frozenInputs(
-  ctx: Ctx,
-  vin: Record<string, string | null>,
-  toInputs: (rows: Stored[]) => Record<string, Point[]>,
-  ledgerExtras: Record<string, { ledgerKey: string; inputId: string }>,
-): Promise<{ raw: Record<string, Point[]>; extras: Record<string, number>; found: number; expected: number; members: number }> {
+export async function frozenInputs(ctx: Ctx, vin: Record<string, string | null>): Promise<{ raw: Record<string, Point[]>; extras: Record<string, number>; found: number; expected: number; members: number }> {
   // The vintage's member ranges, as a bitmap over source value version ids.
   const members = await loadTable(ctx, "analytics_vintage_members", (m) => m.vintage_id === vin.id);
   const ranges = members.map((m) => [Number(m.source_value_version_id), Number(m.last_source_value_version_id ?? m.source_value_version_id)] as const);
@@ -275,21 +265,26 @@ export async function frozenInputs(
   for (const [a, b] of ranges) inVintage.fill(1, a - lo, b - lo + 1);
 
   // The source value versions in those ranges: the run's exact inputs.
-  const extraKeys = new Map(Object.values(ledgerExtras).map((x) => [x.ledgerKey, x.inputId]));
-  const rows: Stored[] = [];
+  const raw: Record<string, Point[]> = {};
   const extras: Record<string, number> = {};
   let found = 0;
   await scanTable(ctx, "source_value_versions", (r) => {
     const id = Number(r.id);
     if (id < lo || id > hi || !inVintage[id - lo]) return;
     found += 1;
+    const key = r.source_key!;
     const value = num(r.value);
     if (!r.market_date || !Number.isFinite(value)) return;
-    const extra = extraKeys.get(r.source_key!);
-    if (extra) extras[extra] = (extras[extra] ?? 0) + 1;
-    rows.push({ sourceKey: r.source_key!, marketDate: r.market_date, value, versionId: r.id! });
+    let sdkId: string | undefined;
+    if (key.startsWith("raw_indicator_history:")) sdkId = key.slice("raw_indicator_history:".length);
+    else if (EXTRA_KEYS[key]) {
+      sdkId = EXTRA_KEYS[key];
+      extras[sdkId!] = (extras[sdkId!] ?? 0) + 1;
+    }
+    if (!sdkId) return;
+    (raw[sdkId] ??= []).push({ date: r.market_date, value });
   });
-  // Version ids ascend with knowledge time; a repeated (key, date) keeps the last row, the loader's rule.
-  rows.sort((a, b) => Number(a.versionId) - Number(b.versionId));
-  return { raw: toInputs(rows), extras, found, expected: Number(vin.member_count), members: members.length };
+  for (const id in raw) raw[id]!.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  return { raw, extras, found, expected: Number(vin.member_count), members: members.length };
 }
+

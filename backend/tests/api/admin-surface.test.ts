@@ -16,7 +16,6 @@ import { MONITORED_KINDS, PRODUCTION_KINDS, RESEARCH_STALE_DAYS, SAMPLER_KINDS }
 import * as overviewModule from "../../src/admin/overview.ts";
 import { openEpoch } from "../../src/swarm/domain.ts";
 import { ensureProseSubject } from "../support/prose-subject.ts";
-import { withoutPublicationGuards } from "../support/regime-publications.ts";
 import { withFrozenClock } from "../support/fixed-clock.ts";
 import { provisionOperatorToken } from "../support/automation-auth.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
@@ -218,12 +217,9 @@ test("overview: regime + research freshness (RESEARCH_STALE_DAYS)", async () => 
       { id: "T10Y2Y", panel: "macro", raw_date: today },
       { id: "DEFI_TVL", panel: "onchain", raw_date: today },
     ]);
-    // The JS clock is frozen and the database's is not, so to the database this
-    // "today" is a past day, whose row its guard trigger never rewrites (issue
-    // 1182, D83): the fixture is written out of band.
-    await withoutPublicationGuards((tx) => tx`
-      INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${tx.json(indicators as never)})
-      ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`);
+    await sql`
+      INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${sql.json(indicators)})
+      ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`;
     await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('channel-divergence', ${today}, ${sql.json(jsonValue({}))}) ON CONFLICT (signal_key, date) DO NOTHING`;
     await sql`INSERT INTO research_signals (signal_key, date, payload) VALUES ('late-cycle-signals', ${today}, ${sql.json(jsonValue({}))}) ON CONFLICT (signal_key, date) DO NOTHING`;
 
@@ -254,12 +250,9 @@ test("overview: #398 regression — a today-dated regime_snapshots row with STAL
     ]);
     // The row's own `date` (today) mirrors the pipeline's forward-fill; only
     // the embedded indicators' raw_date is old. Pre-fix, this read as fresh.
-    // The JS clock is frozen and the database's is not, so to the database this
-    // "today" is a past day, whose row its guard trigger never rewrites (issue
-    // 1182, D83): the fixture is written out of band.
-    await withoutPublicationGuards((tx) => tx`
-      INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${tx.json(indicators as never)})
-      ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`);
+    await sql`
+      INSERT INTO regime_snapshots (date, indicators) VALUES (${today}, ${sql.json(indicators)})
+      ON CONFLICT (date) DO UPDATE SET indicators = EXCLUDED.indicators`;
 
     const res = await call(req("GET", "/api/admin/overview", OPERATOR));
     const body = res?.body as {

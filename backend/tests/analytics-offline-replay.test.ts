@@ -39,7 +39,6 @@ import {
   baseObservations,
   capturingTelemetry,
   committedAfterSecond,
-  factorJitterObservations,
   poisonedSource,
   secondObservations,
 } from "./support/committed-inputs.ts";
@@ -370,63 +369,4 @@ test(
     expect(artifact).toBeDefined();
   },
   { timeout: 300_000 },
-);
-
-// ── Issue 1182 Part B: the factor panel is reproducible from what a run records ──
-// Before issue 1421 a run computed from freshly fetched values, and a fetched
-// value within its D56 tolerance of the stored one was neither stored nor
-// recorded, so the factor panel (six Yahoo ratios and SPX_TREND) moved between
-// runs two minutes apart and could not be replayed from the run's own vintage.
-// Here the second provider moves every Yahoo factor input inside its tolerance:
-// the recorded inputs are identical, so the two runs must publish identical
-// factor panels, and each must equal the analyst SDK's replay of its vintage.
-test(
-  "two runs over the same recorded inputs, the second fetching every Yahoo factor input within its D56 tolerance, publish identical factor panels, each the SDK replay of its own vintage",
-  async () => {
-    const base = await baseObservations();
-    await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
-    const jittered = factorJitterObservations(base);
-    // Not vacuous: the second provider really serves different factor values.
-    expect(jittered.registry.IWM_SPY!.at(-1)!.value).not.toBe(base.registry.IWM_SPY!.at(-1)!.value);
-    expect(jittered.registry.SPX_TREND!.at(-1)!.value).not.toBe(base.registry.SPX_TREND!.at(-1)!.value);
-
-    const runs: { rows: TerminalRunPackageInput["regimeSnapshots"] & object; vintageId: string }[] = [];
-    for (const obs of [base, jittered]) {
-      const source = poisonedSource(obs, 3);
-      const submitted: TerminalRunPackageInput[] = [];
-      let results: Record<string, unknown>;
-      try {
-        results = await runAnalytics(COMMITTED_ASOF, undefined, source, {
-          ...directAnalyticsPersistence,
-          async submitTerminalRunPackage(input) {
-            submitted.push(input);
-            return directAnalyticsPersistence.submitTerminalRunPackage(input);
-          },
-        }, noopTelemetrySink);
-      } finally {
-        source.restore();
-      }
-      runs.push({ rows: submitted[0]!.regimeSnapshots!, vintageId: (results as any).__runLedger.vintage.vintageId as string });
-    }
-
-    const factor = (rows: typeof runs[number]["rows"]) => rows.map((r) => [r.date, r.factorIndex ?? null, r.factorPercentile ?? null, r.factorRegime]);
-    expect(runs[0]!.rows.filter((r) => r.factorIndex != null).length).toBeGreaterThan(1000);
-    expect(factor(runs[1]!.rows)).toEqual(factor(runs[0]!.rows));
-    // Every other figure too: the whole publication is the same bytes.
-    expect(JSON.stringify(runs[1]!.rows)).toBe(JSON.stringify(runs[0]!.rows));
-
-    const nn = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-    for (const run of runs) {
-      const vintage = await loadFrozenVintage(run.vintageId);
-      const replay = runRegime(inputHistoryFromStorage(vintage!.members), { asof: COMMITTED_ASOF, factor: true });
-      const at = new Map(replay.dateAxis.map((d, i) => [d, i]));
-      const f = replay.factor!;
-      const replayed = run.rows.map((r) => {
-        const i = at.get(r.date)!;
-        return [r.date, nn(f.panelIndices.factor?.[i]), nn(f.panelPercentiles.factor?.[i]), f.panelRegimes.factor?.[i] ?? null];
-      });
-      expect(factor(run.rows)).toEqual(replayed);
-    }
-  },
-  { timeout: 600_000 },
 );

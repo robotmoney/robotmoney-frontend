@@ -32,7 +32,7 @@ async function waitForDb(timeoutMs = 30_000): Promise<void> {
   }
 }
 
-export async function migrate(opts: { reclaim?: Readonly<Record<string, readonly string[]>> } = {}): Promise<void> {
+export async function migrate(): Promise<void> {
   // Deploy-time migrations have their own credential.  It is deliberately not
   // inherited from a long-lived API process.  Local/ephemeral environments
   // retain DATABASE_URL for bootstrap compatibility.
@@ -61,7 +61,7 @@ export async function migrate(opts: { reclaim?: Readonly<Record<string, readonly
     appliedNow.push(file);
   }
   console.log(`migrations up to date (${files.length} total)`);
-  await reclaimAfterMigrations(sql, appliedNow, opts.reclaim);
+  await reclaimAfterMigrations(sql, appliedNow);
 }
 
 // migrate() MIGRATES, and nothing else. Seeding is a separate concern with its
@@ -173,53 +173,27 @@ export const IN_TRANSACTION_AFTER_MIGRATION: Readonly<Record<string, (tx: postgr
 // a table's owner may VACUUM FULL it; no grant changes.
 //
 // Each table is held under ACCESS EXCLUSIVE for the length of its own rewrite,
-// which is proportional to its LIVE rows. A rewrite that fails is reported
-// with its manual command and does not fail migrate() (reclaimAfterMigrations).
+// which is proportional to its LIVE rows.
 //
 // Empty today: the ledger repair (issue #1035) rebuilds its tables with
 // TRUNCATE and re-insert, which returns the space at commit with no VACUUM.
 export const RECLAIM_AFTER_MIGRATION: Readonly<Record<string, readonly string[]>> = {};
 
-export async function reclaimAfterMigrations(
-  db: postgresTypes.Sql<{}>,
-  appliedNow: readonly string[],
-  reclaim: Readonly<Record<string, readonly string[]>> = RECLAIM_AFTER_MIGRATION,
-): Promise<string[]> {
-  const tables = appliedNow.flatMap((file) => reclaim[file] ?? []);
-  if (tables.length === 0) return [];
-  // A reclaim that fails never fails migrate() (issue 1182, folded-in 1049):
-  // the migrations have committed, and the caller's next step (seed on boot)
-  // must still run. Each failure is reported with the exact command that
-  // finishes it by hand; it is never retried silently on a later boot, because
-  // the runner reclaims only in the run that applied the file.
-  const failed: string[] = [];
+export async function reclaimAfterMigrations(db: postgresTypes.Sql<{}>, appliedNow: readonly string[]): Promise<void> {
+  const tables = appliedNow.flatMap((file) => RECLAIM_AFTER_MIGRATION[file] ?? []);
+  if (tables.length === 0) return;
   const conn = await db.reserve();
   try {
-    let asOwner = true;
-    try {
-      await conn.unsafe("SET ROLE rm_owner");
-    } catch {
-      asOwner = false;
-    }
+    await conn.unsafe("SET ROLE rm_owner");
     for (const table of tables) {
       const started = Date.now();
-      try {
-        if (!asOwner) throw new Error("could not SET ROLE rm_owner");
-        await conn.unsafe(`VACUUM (FULL, ANALYZE) public.${table}`);
-        console.log(`reclaimed: ${table} (VACUUM FULL, ${Date.now() - started}ms)`);
-      } catch (err) {
-        failed.push(table);
-        console.error(
-          `reclaim FAILED: ${table} (${err instanceof Error ? err.message : String(err)}); the migration is committed and its dead space remains. ` +
-            `Reclaim it by hand on the migration connection: SET ROLE rm_owner; VACUUM (FULL, ANALYZE) public.${table};`,
-        );
-      }
+      await conn.unsafe(`VACUUM (FULL, ANALYZE) public.${table}`);
+      console.log(`reclaimed: ${table} (VACUUM FULL, ${Date.now() - started}ms)`);
     }
   } finally {
     await conn.unsafe("RESET ROLE").catch(() => {});
     conn.release();
   }
-  return failed;
 }
 
 // Run directly: `bun run src/db/migrate.ts`

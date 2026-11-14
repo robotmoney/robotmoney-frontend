@@ -148,18 +148,11 @@ export const PUBLISHED_DAYS = 45;
 const EXTRA: Record<string, string> = { SPX: "backtest:^GSPC", ETH: "backtest:ETH-USD", TBILL3M: "backtest:DTB3" };
 
 export async function replayRepo(root: string, sdkDir: string): Promise<{ members: Record<number, number> }> {
-  const sdk = (await import(join(sdkDir, "src/index.ts"))) as {
-    runRegime: (raw: unknown, o: unknown) => any;
-    inputHistoryFromStorage: (rows: { sourceKey: string; marketDate: string | null; value: number }[]) => Record<string, { date: string; value: number }[]>;
-  };
+  const sdk = (await import(join(sdkDir, "src/index.ts"))) as { runRegime: (raw: unknown, o: unknown) => any };
   const lines = readFileSync(join(sdkDir, "tests/fixtures/raw-indicator-history.csv"), "utf8").split("\n").slice(1).filter(Boolean);
-  // As on production, the vintage still carries the retired DEFI_GROWTH and STABLES_GROWTH keys (D74 amendment: the
-  // growth indicators read DEFI_TVL and STABLES, and their own stored history reaches no consumer). Their stale
-  // values differ from the level series here, so a replay that fed them to the growth indicators would not match.
-  const RETIRED = new Set(["DEFI_GROWTH", "STABLES_GROWTH"]);
   const obs = lines
     .map((l) => l.split(","))
-    .map(([date, id, value], i) => ({ id: id!, key: EXTRA[id!] ?? `raw_indicator_history:${id}`, date: date!, value: RETIRED.has(id!) ? String(Number(value) * (1 + (i % 7) * 1e-3)) : value! }))
+    .map(([date, id, value]) => ({ id: id!, key: EXTRA[id!] ?? `raw_indicator_history:${id}`, date: date!, value: value! }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const svv: Cell[][] = obs.map((o, i) => [i + 1, o.key, o.date, o.value, "2026-08-15 23:00:00+00"]);
 
@@ -178,9 +171,9 @@ export async function replayRepo(root: string, sdkDir: string): Promise<{ member
     }
     members[run.id] = inVintage.length;
     vintages.push([100 + run.id, run.id, "regime", "2026-08-15 23:00:00+00", run.asof, inVintage.length, "digest", "2026-08-16 00:00:00+00"]);
-    // The payload the SDK computes from exactly this vintage, as the pipeline publishes it: the run reads its ledger
-    // heads through the SDK's storage mapping (backend/src/analytics/index.ts, loadCommittedInputs).
-    const raw = sdk.inputHistoryFromStorage(inVintage.map((o) => ({ sourceKey: o.key, marketDate: o.date, value: Number(o.value) })));
+    // The payload the SDK computes from exactly this vintage, as the pipeline publishes it.
+    const raw: Record<string, { date: string; value: number }[]> = {};
+    for (const o of inVintage) (raw[o.id] ??= []).push({ date: o.date, value: Number(o.value) });
     const r = sdk.runRegime(raw, { asof: run.asof, factor: true });
     const axis: string[] = r.dateAxis;
     const rows = axis.slice(-PUBLISHED_DAYS).map((date) => {

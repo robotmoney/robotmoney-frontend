@@ -14,10 +14,9 @@ import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { handleAnalytics } from "../src/api/routes/analytics.ts";
 import { payloadChecksum } from "../src/analytics/source-ledger.ts";
-import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity, RAW_PARITY_SETTLE_MS, recordParityObservation } from "../src/analytics/cutover/parity.ts";
+import { checkRawIndicatorHistoryParity, checkRegimeSnapshotsParity, checkResearchSignalsParity } from "../src/analytics/cutover/parity.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
-import { richRegimeRow, withoutPublicationGuards } from "./support/regime-publications.ts";
 import { provisionAnalyticsToken, provisionOperatorToken } from "./support/automation-auth.ts";
 
 useCleanDatabase(import.meta.file);
@@ -59,7 +58,7 @@ async function submitRawHistoryPoint(
   value: number,
   // `provenance: null` sends NO label at all — the shape of a writer that
   // stopped stamping one, which must never be confused with sending 'live'.
-  labels: { provenance?: string | null; source?: string; ledgerOnly?: boolean } = {},
+  labels: { provenance?: string | null; source?: string } = {},
 ) : Promise<void> {
   const provenance = labels.provenance === undefined ? LIVE : labels.provenance;
   const source = labels.source ?? LIVE;
@@ -93,8 +92,6 @@ async function submitRawHistoryPoint(
   };
   const acqRes = await call(req("POST", A.sourceAcquisitions, acquisitionBody));
   expect(acqRes!.status, JSON.stringify(acqRes)).toBe(200);
-  // The first half of a run's write only: the ledger version, before the run writes the compatibility row.
-  if (labels.ledgerOnly) return;
 
   const rawRes = await call(req("POST", A.rawHistory, { history: { [indicator]: [{ date, value }] }, source }));
   expect(rawRes!.status).toBe(200);
@@ -141,7 +138,6 @@ async function submitRegimeAndResearch(
   composite: number,
   signalKey: string,
   marker: string,
-  regimeRow: ReturnType<typeof regimeFixture> | ReturnType<typeof richRegimeRow> = regimeFixture(date, composite),
 ): Promise<string> {
   const runKey = crypto.randomUUID();
   const beginRes = await call(
@@ -166,7 +162,7 @@ async function submitRegimeAndResearch(
         runId,
         asof: date,
         status: "succeeded",
-        regimeSnapshots: [regimeRow],
+        regimeSnapshots: [regimeFixture(date, composite)],
         researchSignals: [researchFixture(signalKey, date, marker)],
         reportBase64,
       },
@@ -229,21 +225,16 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     void runId1;
   });
 
-  test("REVISION: a genuinely changed value converges on the current day, and a past day keeps its publication, on both sides", async () => {
-    // Regime and research figures are published per day and frozen once the
-    // day is over (D83, issue 1182): a revision reaches the current day only.
-    const today = new Date().toISOString().slice(0, 10);
+  test("REVISION: a genuinely changed value still converges to matching compatibility and ledger current rows", async () => {
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 5);
-    await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-past", "v1");
-    await submitRegimeAndResearch(today, 30, "dualwrite-revision-signal", "v1");
+    await submitRegimeAndResearch("2024-03-01", 30, "dualwrite-revision-signal", "v1");
     expect((await checkRawIndicatorHistoryParity()).matched).toBe(true);
     expect((await checkRegimeSnapshotsParity()).matched).toBe(true);
     expect((await checkResearchSignalsParity()).matched).toBe(true);
 
     // A genuine revision: same natural keys, a DIFFERENT value.
     await submitRawHistoryPoint("DUALWRITE_REVISED", "2024-03-01", 7);
-    await submitRegimeAndResearch("2024-03-01", 42, "dualwrite-revision-past", "v2");
-    await submitRegimeAndResearch(today, 42, "dualwrite-revision-signal", "v2");
+    await submitRegimeAndResearch("2024-03-01", 42, "dualwrite-revision-signal", "v2");
 
     const raw = await checkRawIndicatorHistoryParity();
     expect(raw.mismatches).toEqual([]);
@@ -254,66 +245,14 @@ describe("dual-write parity: raw-history, regime, and research through the authe
     const regime = await checkRegimeSnapshotsParity();
     expect(regime.mismatches).toEqual([]);
     expect(regime.matched).toBe(true);
-    const regimeRows = await sql`SELECT composite FROM regime_snapshots WHERE date = ${today}`;
+    const regimeRows = await sql`SELECT composite FROM regime_snapshots WHERE date = '2024-03-01'`;
     expect(Number(regimeRows[0]!.composite)).toBe(42);
-    const pastRows = await sql`SELECT composite FROM regime_snapshots WHERE date = '2024-03-01'`;
-    expect(Number(pastRows[0]!.composite), "a day that is over keeps its publication").toBe(30);
 
     const research = await checkResearchSignalsParity();
     expect(research.mismatches).toEqual([]);
     expect(research.matched).toBe(true);
-    const researchRows = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-signal' AND date = ${today}`;
+    const researchRows = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-signal' AND date = '2024-03-01'`;
     expect((researchRows[0]!.payload as { title: string }).title).toBe("v2");
-    const pastResearch = await sql`SELECT payload FROM research_signals WHERE signal_key = 'dualwrite-revision-past' AND date = '2024-03-01'`;
-    expect((pastResearch[0]!.payload as { title: string }).title).toBe("v1");
-  });
-});
-
-// Issue 1182, folded-in issue 1004: raw history's two writes are not atomic
-// either. A run writes the ledger version during its fetch and the
-// compatibility row later; a sweep between them reads a ledger head the
-// compatibility table has not caught up with. Like the regime and research
-// checks above, the raw check leaves such an in-flight point out instead of
-// recording a permanent matched:false, and still catches it once settled.
-describe("dual-write parity: raw-history mid-run race immunity (issue 1004)", () => {
-  test("RACE: a point whose ledger version landed and whose compatibility write has not yet is not compared, so it cannot false-mismatch", async () => {
-    const indicator = "DUALWRITE_RAW_RACE";
-    await submitRawHistoryPoint(indicator, "2024-07-01", 3);
-    const before = await checkRawIndicatorHistoryParity();
-    expect(before.matched).toBe(true);
-
-    // Mid-run: a revision of the old day and a new day, both in the ledger only.
-    await submitRawHistoryPoint(indicator, "2024-07-01", 4, { ledgerOnly: true });
-    await submitRawHistoryPoint(indicator, "2024-07-02", 5, { ledgerOnly: true });
-    // Not a no-op: the two tables really disagree now.
-    expect((await sql`SELECT value FROM raw_indicator_history WHERE indicator = ${indicator} ORDER BY date`).map((r) => Number(r.value))).toEqual([3]);
-
-    const inFlight = await checkRawIndicatorHistoryParity();
-    expect(inFlight.mismatches, JSON.stringify(inFlight.mismatches)).toEqual([]);
-    expect(inFlight.matched).toBe(true);
-    expect(inFlight.legacyChecksum).toBe(inFlight.ledgerChecksum);
-    // The sweep records it: the observation the cutover gate reads is matched.
-    const id = await recordParityObservation(inFlight);
-    const [obs] = await sql<{ matched: boolean }[]>`SELECT matched FROM analytics_parity_observations WHERE id = ${id}::bigint`;
-    expect(obs!.matched).toBe(true);
-    // The in-flight point is left out of both sides, not only its mismatch.
-    expect(inFlight.legacyRowCount).toBe(before.legacyRowCount - 1);
-    expect(inFlight.ledgerRowCount).toBe(before.ledgerRowCount - 1);
-
-    // Had the run never written its compatibility rows, the same divergence
-    // is compared once the settle window has passed, and still blocks cutover.
-    expect(RAW_PARITY_SETTLE_MS).toBeGreaterThan(0);
-    const settled = await checkRawIndicatorHistoryParity(sql, 0);
-    expect(settled.matched).toBe(false);
-    expect(settled.mismatches.map((m) => m.naturalKey)).toEqual([`${indicator}\u00002024-07-01`, `${indicator}\u00002024-07-02`]);
-
-    // The run's second write lands: both points are compared again, and match.
-    const rawRes = await call(req("POST", A.rawHistory, { history: { [indicator]: [{ date: "2024-07-01", value: 4 }, { date: "2024-07-02", value: 5 }] }, source: LIVE }));
-    expect(rawRes!.status).toBe(200);
-    const after = await checkRawIndicatorHistoryParity();
-    expect(after.mismatches).toEqual([]);
-    expect(after.matched).toBe(true);
-    expect(after.legacyRowCount).toBe(before.legacyRowCount + 1);
   });
 });
 
@@ -343,66 +282,22 @@ describe("dual-write parity: raw-history values within tolerance, labels not com
     const base = 0.4797323800499549;
     await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'IWF_IWD', ${base}, 'live')`;
     await fixtureDb`
-      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
-      VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline', now() - interval '2 hours')`;
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
+      VALUES ('raw_indicator_history:IWF_IWD', ${date}, ${base * (1 + 1.5e-6)}, 'legacy_baseline')`;
     const within = await checkRawIndicatorHistoryParity();
     expect(within.mismatches, JSON.stringify(within.mismatches)).toEqual([]);
     expect(within.matched).toBe(true);
     expect(within.legacyChecksum).toBe(within.ledgerChecksum);
 
     // An exact source has no tolerance: the same relative difference is real.
-    // (Its ledger version is older than the settle window, so it is compared.)
     await fixtureDb`INSERT INTO raw_indicator_history (date, indicator, value, source) VALUES (${date}, 'T10Y2Y', 1.25, 'live')`;
     await fixtureDb`
-      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind, knowledge_time)
-      VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline', now() - interval '2 hours')`;
+      INSERT INTO source_value_versions (source_key, market_date, value, revision_kind)
+      VALUES ('raw_indicator_history:T10Y2Y', ${date}, ${1.25 * (1 + 1.5e-6)}, 'legacy_baseline')`;
     const beyond = await checkRawIndicatorHistoryParity();
     expect(beyond.matched).toBe(false);
     expect(beyond.mismatches.map((m) => m.naturalKey)).toEqual([`T10Y2Y\u0000${date}`]);
   });
-});
-
-// Issue 1182, folded-in issue 995: the regime comparison covers every
-// persisted column, not only composite and regime. A reconstruction that lost
-// a rich column must mismatch and name it. Runs before the race tests below,
-// whose persistent divergence stays in this file's database.
-describe("dual-write parity: every regime column is compared (issue 995)", () => {
-  const DATE = "2024-05-01";
-  const RICH = ["backtest", "correlations", "indicators", "percentiles", "panels"] as const;
-
-  test("a run whose backtest, correlations, indicators, percentiles, panels and extras are all populated reconstructs to matched:true", async () => {
-    const row = richRegimeRow(DATE, 0.64);
-    for (const k of [...RICH, "extras"] as const) {
-      expect({ k, populated: JSON.stringify(row[k]).length > 2 }).toEqual({ k, populated: true });
-    }
-    await submitRegimeAndResearch(DATE, 0.64, "dualwrite-rich-signal", "rich", row);
-    const [stored] = await sql<{ backtest: unknown }[]>`SELECT backtest FROM regime_snapshots WHERE date = ${DATE}`;
-    expect(stored!.backtest).toEqual(row.backtest);
-
-    const regime = await checkRegimeSnapshotsParity();
-    expect(regime.mismatches).toEqual([]);
-    expect(regime.matched).toBe(true);
-    expect(regime.legacyRowCount).toBeGreaterThan(0);
-    expect(regime.ledgerRowCount).toBe(regime.legacyRowCount);
-    expect(regime.legacyChecksum).toBe(regime.ledgerChecksum);
-  });
-
-  for (const column of RICH) {
-    test(`a ${column} that differs on the compatibility side only is a mismatch naming ${column}`, async () => {
-      const [before] = await fixtureDb<{ value: unknown }[]>`SELECT ${fixtureDb(column)} AS value FROM regime_snapshots WHERE date = ${DATE}`;
-      expect(before!.value).not.toBeNull();
-      const corrupt = column === "indicators" ? [{ id: "VIX", percentile: 0.99 }] : column === "panels" ? ["macro"] : { corrupted: column };
-      await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET ${tx(column)} = ${tx.json(corrupt)} WHERE date = ${DATE}`);
-      try {
-        const regime = await checkRegimeSnapshotsParity();
-        expect(regime.matched).toBe(false);
-        expect(regime.mismatches).toEqual([{ naturalKey: DATE, reason: "canonical value differs between compatibility and ledger", columns: [column] }]);
-      } finally {
-        await withoutPublicationGuards((tx) => tx`UPDATE regime_snapshots SET ${tx(column)} = ${tx.json(before!.value as never)} WHERE date = ${DATE}`);
-      }
-      expect((await checkRegimeSnapshotsParity()).matched).toBe(true);
-    });
-  }
 });
 
 // Issue #979 fix: the mid-run false-mismatch race. With issue #978's terminal
@@ -431,18 +326,10 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // honest shape in the merged model: a direct, out-of-band INSERT (the
     // v0-seed archive / import-regime-eq / legacy smoke subject — precisely
     // the rows publishBrief deliberately does NOT bind).
-    // Since D83 the guard trigger refuses a past day no run published, so the
-    // out-of-band row is written the way such a row predates it. The run that
-    // settles the day below cannot rewrite a past day either (D83), and every
-    // column is compared (issue 995), so the row carries the figures that run
-    // will freeze.
-    await withoutPublicationGuards(async (tx) => {
-      await tx`INSERT INTO regime_snapshots (date, composite, composite_percentile, regime, version, source, percentiles, indicators)
-               VALUES (${date}, 99, 0.5, 'risk_on', 'v-test', 'fixture', '{}'::jsonb, '[]'::jsonb)`;
-      await tx`
-        INSERT INTO research_signals (signal_key, date, payload)
-        VALUES ('race-signal', ${date}, ${tx.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
-    });
+    await fixtureDb`INSERT INTO regime_snapshots (date, composite, regime) VALUES (${date}, 99, 'risk_on')`;
+    await fixtureDb`
+      INSERT INTO research_signals (signal_key, date, payload)
+      VALUES ('race-signal', ${date}, ${fixtureDb.json({ asof: date, title: "in-flight", question: "q", spec: {}, gauges: [] })})`;
 
     // The compat rows really landed — this is not a no-op test.
     const compatRegime = await sql`SELECT composite FROM regime_snapshots WHERE date = ${date}`;
@@ -494,14 +381,11 @@ describe("dual-write parity: mid-run race immunity (issue #979 fix)", () => {
     // Drift the COMPATIBILITY table only, out of band, after settlement — the
     // ledger keeps the frozen value. This is a real, persistent divergence,
     // not a timing artifact, and AC2 requires it to still block cutover.
-    // Out of band and past the guard trigger, which skips any write to a past day (D83).
-    await withoutPublicationGuards(async (tx) => {
-      await tx`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
-      await tx`
-        UPDATE research_signals SET payload = ${tx.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
-        WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
-      `;
-    });
+    await fixtureDb`UPDATE regime_snapshots SET composite = 424242 WHERE date = ${date}`;
+    await fixtureDb`
+      UPDATE research_signals SET payload = ${fixtureDb.json({ asof: date, title: "drifted-out-of-band", question: "q", spec: {}, gauges: [] })}
+      WHERE signal_key = 'persistent-mismatch-signal' AND date = ${date}
+    `;
 
     const regime = await checkRegimeSnapshotsParity();
     expect(regime.matched).toBe(false);

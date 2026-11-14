@@ -5,18 +5,14 @@
 // (analytics_read_mode = 'ledger'), the actual data source for production
 // reads (see report/projections.ts, api/routes/admin.ts, swarm/domain.ts).
 //
-// THE RECONSTRUCTION RULE. Raw history: the head of each source_value_versions
-// chain, the value the compatibility upsert holds. Regime and research: the
-// PUBLISHED figure of each day (issue 1182, decision D83), never a later run's
-// recomputation. A day's publication is the row for that day of the last run
-// written on or before the day (UTC) that carries it; once the day is over a
-// later run never replaces it, and a run written after the day publishes it
-// only when nothing did during the day (the first such run). For regime only a
-// run's own as-of row publishes a day after the ledger start; days before it
-// come from regime_publication_baseline (frozen at cut-over by migration 0132)
-// or, where that holds none, from the first artifact carrying the day. The
-// compatibility tables' writers and migration 0132's guard triggers hold the
-// same rule, so the two read modes serve the same rows.
+// THE RECONSTRUCTION RULE, uniform across all three analytics domains: replay
+// every ledger write IN THE SAME ORDER the compatibility writer applied it,
+// upserting into an in-memory map on the same natural key the real table is
+// keyed on. This exactly reproduces "last write wins" — the semantics
+// raw-history/regime/research's `ON CONFLICT ... DO UPDATE` upserts encode —
+// without assuming any single ledger row already holds the full table (a
+// regime run resubmits the whole recomputed history; a research run may
+// submit only the signals it recomputed that day; both replay correctly here).
 import { sql, type DbHandle } from "../../db/client.ts";
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
 import type { ResearchPayload } from "../analyze/research.ts";
@@ -61,80 +57,17 @@ const rawSeriesHeads = registerQuery({
   },
 });
 
-// The published regime row of every day, in one statement (D83). Only the
-// artifacts that publish a day are parsed; natural_keys (migration 0123) says
-// which days an artifact carries without parsing it.
-const REGIME_PUBLICATIONS_SQL = `WITH start AS (
-      SELECT r.asof FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
-       WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0
-       ORDER BY aos.run_id, aos.id LIMIT 1
-    ),
-    published AS (
-      SELECT DISTINCT ON (r.asof) r.asof::text AS date, aos.id
-        FROM analytics_ledger_runs r
-        JOIN analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'
-       CROSS JOIN start s
-       WHERE r.asof >= s.asof AND aos.natural_keys @> ARRAY[r.asof::text]
-       ORDER BY r.asof, ((aos.created_at AT TIME ZONE 'UTC')::date <= r.asof) DESC,
-                CASE WHEN (aos.created_at AT TIME ZONE 'UTC')::date <= r.asof THEN aos.run_id END DESC NULLS LAST,
-                aos.run_id, aos.id
-    ),
-    pre_ledger AS (
-      SELECT DISTINCT ON (k.date) k.date, aos.id
-        FROM analytics_output_snapshots aos CROSS JOIN start s CROSS JOIN LATERAL unnest(aos.natural_keys) AS k(date)
-       WHERE aos.artifact_kind = 'regime_snapshots' AND k.date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND k.date < s.asof::text
-       ORDER BY k.date, aos.run_id, aos.id
-    ),
-    unfrozen AS (
-      SELECT x.date, x.id FROM (SELECT date, id FROM published UNION ALL SELECT date, id FROM pre_ledger) x
-       WHERE NOT EXISTS (SELECT 1 FROM regime_publication_baseline b WHERE b.date::text = x.date)
-    ),
-    element AS MATERIALIZED (
-      SELECT aos.id, e.elem ->> 'date' AS date, e.ord, e.elem
-        FROM analytics_output_snapshots aos
-       CROSS JOIN LATERAL jsonb_array_elements(convert_from(aos.payload_bytes, 'UTF8')::jsonb) WITH ORDINALITY AS e(elem, ord)
-       WHERE aos.id IN (SELECT id FROM unfrozen)
-    )
-    SELECT date, snapshot FROM (
-      SELECT DISTINCT ON (u.date) u.date, x.elem::text AS snapshot
-        FROM unfrozen u JOIN element x ON x.id = u.id AND x.date = u.date
-       ORDER BY u.date, x.ord DESC
-    ) l
-    UNION ALL
-    SELECT b.date::text, b.snapshot::text FROM regime_publication_baseline b
-    ORDER BY date`;
-
-const regimePublicationsProbe = { statement: REGIME_PUBLICATIONS_SQL };
-const regimeCallers = ["src/api/routes/analytics", "src/api/routes/dashboards"];
-
 const regimeArtifacts = registerQuery({
   role: "rm_app",
   object: "analytics_output_snapshots",
   privileges: ["SELECT"],
   site: "src/analytics/cutover/ledger-current:ledgerCurrentRegimeSnapshots",
-  purpose: "Read each day's publishing regime artifact row, to serve the published regime history from the ledger.",
-  callers: regimeCallers,
-  probe: regimePublicationsProbe,
-});
-
-const regimeRuns = registerQuery({
-  role: "rm_app",
-  object: "analytics_ledger_runs",
-  privileges: ["SELECT"],
-  site: "src/analytics/cutover/ledger-current:ledgerCurrentRegimeSnapshots.runs",
-  purpose: "Read each regime artifact's run as-of day, which decides the day it publishes.",
-  callers: regimeCallers,
-  probe: regimePublicationsProbe,
-});
-
-const regimeBaseline = registerQuery({
-  role: "rm_app",
-  object: "regime_publication_baseline",
-  privileges: ["SELECT"],
-  site: "src/analytics/cutover/ledger-current:ledgerCurrentRegimeSnapshots.baseline",
-  purpose: "Read the regime rows frozen at cut-over for the days before the ledger start.",
-  callers: regimeCallers,
-  probe: regimePublicationsProbe,
+  purpose: "Read every regime-snapshot artifact in run order, to replay the regime table from the ledger.",
+  callers: ["src/api/routes/analytics", "src/api/routes/dashboards"],
+  probe: {
+    statement: `SELECT aos.payload_bytes FROM analytics_output_snapshots aos
+      WHERE aos.artifact_kind = 'regime_snapshots' ORDER BY aos.run_id ASC`,
+  },
 });
 
 const researchArtifacts = registerQuery({
@@ -142,12 +75,11 @@ const researchArtifacts = registerQuery({
   object: "analytics_output_snapshots",
   privileges: ["SELECT"],
   site: "src/analytics/cutover/ledger-current:ledgerCurrentResearchSignals",
-  purpose: "Read every research-signal artifact in run order with the day it was written, to rebuild the published research signals from the ledger.",
+  purpose: "Read every research-signal artifact in run order, to replay the research table from the ledger.",
   callers: ["src/api/routes/admin", "src/api/routes/analytics", "src/api/routes/dashboards"],
   probe: {
-    statement: `SELECT aos.payload_bytes, ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on
-      FROM analytics_output_snapshots aos
-      WHERE aos.artifact_kind = 'research_signals' ORDER BY aos.run_id ASC, aos.id ASC`,
+    statement: `SELECT aos.payload_bytes FROM analytics_output_snapshots aos
+      WHERE aos.artifact_kind = 'research_signals' ORDER BY aos.run_id ASC`,
   },
 });
 
@@ -273,50 +205,23 @@ function decodeArtifact<T>(bytes: Buffer | Uint8Array): T[] {
   return Array.isArray(parsed) ? (parsed as T[]) : [];
 }
 
-// Every day's published regime row (D83), from the ledger alone: the
-// baseline frozen at cut-over before the ledger start, and after it each
-// day's publishing run's as-of row. A day no run published is absent.
+// Replay every regime_snapshots artifact ever frozen, in run order, upserting
+// on `date` — reproducing saveRegimeSnapshots' own ON CONFLICT (date) DO
+// UPDATE semantics from the immutable ledger alone.
 export async function ledgerCurrentRegimeSnapshots(db: DbHandle = sql): Promise<RegimeSnapshotRow[]> {
-  const rows = await on(db, regimeArtifacts, regimeRuns, regimeBaseline)<{ date: string; snapshot: string }>`WITH start AS (
-      SELECT r.asof FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
-       WHERE aos.artifact_kind = 'regime_snapshots' AND cardinality(aos.natural_keys) > 0
-       ORDER BY aos.run_id, aos.id LIMIT 1
-    ),
-    published AS (
-      SELECT DISTINCT ON (r.asof) r.asof::text AS date, aos.id
-        FROM analytics_ledger_runs r
-        JOIN analytics_output_snapshots aos ON aos.run_id = r.id AND aos.artifact_kind = 'regime_snapshots'
-       CROSS JOIN start s
-       WHERE r.asof >= s.asof AND aos.natural_keys @> ARRAY[r.asof::text]
-       ORDER BY r.asof, ((aos.created_at AT TIME ZONE 'UTC')::date <= r.asof) DESC,
-                CASE WHEN (aos.created_at AT TIME ZONE 'UTC')::date <= r.asof THEN aos.run_id END DESC NULLS LAST,
-                aos.run_id, aos.id
-    ),
-    pre_ledger AS (
-      SELECT DISTINCT ON (k.date) k.date, aos.id
-        FROM analytics_output_snapshots aos CROSS JOIN start s CROSS JOIN LATERAL unnest(aos.natural_keys) AS k(date)
-       WHERE aos.artifact_kind = 'regime_snapshots' AND k.date ~ '^\\d{4}-\\d{2}-\\d{2}$' AND k.date < s.asof::text
-       ORDER BY k.date, aos.run_id, aos.id
-    ),
-    unfrozen AS (
-      SELECT x.date, x.id FROM (SELECT date, id FROM published UNION ALL SELECT date, id FROM pre_ledger) x
-       WHERE NOT EXISTS (SELECT 1 FROM regime_publication_baseline b WHERE b.date::text = x.date)
-    ),
-    element AS MATERIALIZED (
-      SELECT aos.id, e.elem ->> 'date' AS date, e.ord, e.elem
-        FROM analytics_output_snapshots aos
-       CROSS JOIN LATERAL jsonb_array_elements(convert_from(aos.payload_bytes, 'UTF8')::jsonb) WITH ORDINALITY AS e(elem, ord)
-       WHERE aos.id IN (SELECT id FROM unfrozen)
-    )
-    SELECT date, snapshot FROM (
-      SELECT DISTINCT ON (u.date) u.date, x.elem::text AS snapshot
-        FROM unfrozen u JOIN element x ON x.id = u.id AND x.date = u.date
-       ORDER BY u.date, x.ord DESC
-    ) l
-    UNION ALL
-    SELECT b.date::text, b.snapshot::text FROM regime_publication_baseline b
-    ORDER BY date`;
-  return rows.map((r) => JSON.parse(r.snapshot) as RegimeSnapshotRow);
+  const rows = await on(db, regimeArtifacts)<{ payload_bytes: Buffer }>`
+    SELECT aos.payload_bytes
+    FROM analytics_output_snapshots aos
+    WHERE aos.artifact_kind = 'regime_snapshots'
+    ORDER BY aos.run_id ASC
+  `;
+  const byDate = new Map<string, RegimeSnapshotRow>();
+  for (const row of rows) {
+    for (const snapshot of decodeArtifact<RegimeSnapshotRow>(row.payload_bytes)) {
+      byDate.set(snapshot.date, snapshot);
+    }
+  }
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
 export interface LedgerResearchSignalRow {
@@ -325,22 +230,20 @@ export interface LedgerResearchSignalRow {
   payload: ResearchPayload;
 }
 
-// Every (signal, day)'s published payload (D83): replayed in run order, a
-// later artifact replaces a day only when it was written on or before that
-// day (UTC), exactly as persistResearchSignal's guarded upsert does.
+// Replay every research_signals artifact ever frozen, in run order, upserting
+// on (signal_key, date) — reproducing persistResearchSignal's own
+// ON CONFLICT (signal_key, date) DO UPDATE semantics from the ledger alone.
 export async function ledgerCurrentResearchSignals(db: DbHandle = sql): Promise<LedgerResearchSignalRow[]> {
-  const rows = await on(db, researchArtifacts)<{ payload_bytes: Buffer; written_on: string }>`
-    SELECT aos.payload_bytes, ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on
+  const rows = await on(db, researchArtifacts)<{ payload_bytes: Buffer }>`
+    SELECT aos.payload_bytes
     FROM analytics_output_snapshots aos
     WHERE aos.artifact_kind = 'research_signals'
-    ORDER BY aos.run_id ASC, aos.id ASC
+    ORDER BY aos.run_id ASC
   `;
   const byKeyDate = new Map<string, LedgerResearchSignalRow>();
   for (const row of rows) {
     for (const signal of decodeArtifact<{ key: string; date: string; payload: ResearchPayload }>(row.payload_bytes)) {
-      const k = `${signal.key}\u0000${signal.date}`;
-      if (byKeyDate.has(k) && row.written_on > signal.date) continue; // the day is over: frozen
-      byKeyDate.set(k, { signalKey: signal.key, date: signal.date, payload: signal.payload });
+      byKeyDate.set(`${signal.key}\u0000${signal.date}`, { signalKey: signal.key, date: signal.date, payload: signal.payload });
     }
   }
   return [...byKeyDate.values()].sort((a, b) =>

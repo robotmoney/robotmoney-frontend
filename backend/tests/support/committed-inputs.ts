@@ -17,8 +17,6 @@ import { hermeticDataSource } from "../../src/analytics/access/hermetic-source.t
 import { captureSourceAcquisition, type AcquisitionSink, type CommittedSourceValue, type SourceAcquisitionEvidence } from "../../src/analytics/source-ledger.ts";
 import { TOP7 } from "../../src/analytics/analyze/research-signals.ts";
 import { STORED_UNDER } from "../../src/analytics/extras.ts";
-import { INDICATORS } from "../../src/analytics/analyze/indicators.ts";
-import { toleranceFor } from "../../src/analytics/source-tolerance.ts";
 import type { Point, RawIndicatorHistory } from "../../src/analytics/types.ts";
 import type { TelemetryRunSubmission, TelemetrySink } from "../../src/analytics/telemetry.ts";
 import { variantInputs } from "./originals-source.ts";
@@ -69,21 +67,6 @@ export function secondObservations(base: Observations): Observations {
     extras: { ...base.extras, spx: jitter(base.extras.spx), eth: bumpLast(base.extras.eth, (x) => x * 1.01) },
     research: { ...base.research, btc: jitter(base.research.btc), qqq: bumpLast(base.research.qqq, (x) => x * 1.01) },
   };
-}
-
-/**
- * Issue 1182 Part B: the second run's provider serves every factor-panel input
- * that has a D56 tolerance (the Yahoo series) moved inside it, and nothing
- * else. The recorded inputs of the two runs are therefore identical.
- */
-export function factorJitterObservations(base: Observations): Observations {
-  const registry = { ...base.registry };
-  for (const ind of INDICATORS) {
-    if (ind.panel !== "factor" || !registry[ind.id]) continue;
-    if (toleranceFor(`raw_indicator_history:${ind.id}`).relative === 0) continue;
-    registry[ind.id] = jitter(registry[ind.id]!);
-  }
-  return { ...base, registry };
 }
 
 /** What the ledger and floor hold after the second run: the base, plus only the material revisions. */

@@ -23,8 +23,8 @@ export interface OracleResult {
   legacyRowCount: number;
   ledgerRowCount: number;
   matched: boolean;
-  /** Every mismatching natural key (not capped), sorted. A regime row that differs names its differing columns. */
-  mismatches: { naturalKey: string; reason: string; columns?: string[] }[];
+  /** Every mismatching natural key (not capped), sorted. */
+  mismatches: { naturalKey: string; reason: string }[];
 }
 
 function canonicalNumber(n: number): number {
@@ -35,17 +35,14 @@ function compare(
   domain: ParityDomain,
   legacy: Map<string, Record<string, unknown>>,
   ledger: Map<string, Record<string, unknown>>,
-  namesColumns = false,
 ): OracleResult {
-  const mismatches: OracleResult["mismatches"] = [];
+  const mismatches: { naturalKey: string; reason: string }[] = [];
   for (const [key, legacyRow] of legacy) {
     const ledgerRow = ledger.get(key);
     if (ledgerRow === undefined) {
       mismatches.push({ naturalKey: key, reason: "present in compatibility table, missing from ledger" });
     } else if (canonicalStringify(legacyRow) !== canonicalStringify(ledgerRow)) {
-      const reason = "canonical value differs between compatibility and ledger";
-      const columns = Object.keys(legacyRow).filter((c) => canonicalStringify(legacyRow[c]) !== canonicalStringify(ledgerRow[c])).sort();
-      mismatches.push(namesColumns ? { naturalKey: key, reason, columns } : { naturalKey: key, reason });
+      mismatches.push({ naturalKey: key, reason: "canonical value differs between compatibility and ledger" });
     }
   }
   for (const key of ledger.keys()) {
@@ -83,48 +80,22 @@ async function rawIndicatorHistory(db: DbHandle): Promise<OracleResult> {
   return compare("raw_indicator_history", legacy, ledger);
 }
 
-// Every persisted regime_snapshots column, keyed by column name, from either
-// side (issue 1182, folded-in 995): numbers rounded at 1e-9, a NULL
-// percentiles or indicators as {} or [].
-const REGIME_NUMBERS = {
-  composite: "composite", composite_percentile: "compositePercentile",
-  macro_index: "macroIndex", onchain_index: "onchainIndex", factor_index: "factorIndex",
-  macro_percentile: "macroPercentile", onchain_percentile: "onchainPercentile", factor_percentile: "factorPercentile",
-} as const;
-const REGIME_VALUES = {
-  regime: "regime", macro_regime: "macroRegime", onchain_regime: "onchainRegime", factor_regime: "factorRegime",
-  version: "version", source: "source",
-  panel_weights: "panelWeights", panels: "panels", bucket_thresholds: "bucketThresholds",
-  backtest: "backtest", correlations: "correlations", extras: "extras",
-} as const;
-
-function canonicalRegimeRow(get: (column: string, key: string) => unknown): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [column, key] of Object.entries(REGIME_NUMBERS)) {
-    const v = get(column, key);
-    out[column] = v == null ? null : canonicalNumber(Number(v));
-  }
-  for (const [column, key] of Object.entries(REGIME_VALUES)) out[column] = get(column, key) ?? null;
-  out.percentiles = get("percentiles", "percentiles") ?? {};
-  out.indicators = get("indicators", "indicators") ?? [];
-  return out;
-}
-
 async function regimeSnapshots(db: DbHandle): Promise<OracleResult> {
   const settled = await settledAsofDates(db);
-  const legacyRows = (await db`SELECT *, date::text AS day FROM regime_snapshots ORDER BY 1`) as unknown as Record<string, unknown>[];
+  const legacyRows = (await db`SELECT date::text AS date, composite, regime FROM regime_snapshots ORDER BY date`) as unknown as {
+    date: string; composite: string | number | null; regime: string | null;
+  }[];
   const legacy = new Map<string, Record<string, unknown>>();
   for (const r of legacyRows) {
-    const date = r.day as string;
-    if (!settled.has(date)) continue;
-    legacy.set(date, canonicalRegimeRow((column) => r[column]));
+    if (!settled.has(r.date)) continue;
+    legacy.set(r.date, { date: r.date, composite: r.composite == null ? null : canonicalNumber(Number(r.composite)), regime: r.regime });
   }
   const ledger = new Map<string, Record<string, unknown>>();
   for (const r of await ledgerCurrentRegimeSnapshots(db)) {
     if (!settled.has(r.date)) continue;
-    ledger.set(r.date, canonicalRegimeRow((_column, key) => (r as unknown as Record<string, unknown>)[key]));
+    ledger.set(r.date, { date: r.date, composite: r.composite == null ? null : canonicalNumber(r.composite), regime: r.regime });
   }
-  return compare("regime_snapshots", legacy, ledger, true);
+  return compare("regime_snapshots", legacy, ledger);
 }
 
 async function researchSignals(db: DbHandle): Promise<OracleResult> {
