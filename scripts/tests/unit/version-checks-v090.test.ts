@@ -13,6 +13,9 @@ import { apiCacheProblems, probePath, type CacheAnswer } from "../../release/ver
 import { daysBetween, selectPublished, type ArtifactMeta, type Point } from "../../release/version-checks/v0.9.0/_regime.ts";
 import { pinnedProblems, publishedProblems } from "../../release/version-checks/v0.9.0/regime-published.ts";
 import { frozenProblems } from "../../release/version-checks/v0.9.0/regime-frozen.ts";
+import { deployArgv, productionBundleProblems, type StageDeploy } from "../../release/platform-bundle.ts";
+import { identityProblems } from "../../release/identity-check.ts";
+import { readFileSync } from "node:fs";
 
 describe("the v0.9.0 runbook", () => {
   const rb = loadReleaseRunbook("v0.9.0");
@@ -22,14 +25,14 @@ describe("the v0.9.0 runbook", () => {
     expect(rb.template).toBe("kitchen-sink");
     expect(rb.breaking).toBeUndefined();
     const qa = added.filter((s) => s.phase === "qa").map((s) => stepNameOf(s.id));
-    const prod = added.filter((s) => s.phase === "cutover").map((s) => stepNameOf(s.id));
-    expect(qa).toEqual(["server-image-build", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
+    const prod = added.filter((s) => s.phase !== "qa").map((s) => stepNameOf(s.id));
+    expect(qa).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
     expect(prod).toEqual(qa);
     for (const s of added) expect(s.irreversible).toBe(false);
   });
 
   test("every version check runs a v0.9.0 check file that exists, and reads only (no stageOnly write)", () => {
-    for (const s of added.filter((x) => !stepNameOf(x.id).endsWith("-build"))) {
+    for (const s of added.filter((x) => !/-build$|^site-bundle/.test(stepNameOf(x.id)))) {
       const argv = s.cmds[0]!;
       expect(argv.slice(0, 2)).toEqual(["bun", "scripts/release/version-check.ts"]);
       const name = argv[argv.indexOf("--check") + 1]!;
@@ -289,5 +292,58 @@ describe("Q44-regime-frozen/C32-regime-frozen (1646, issue 1182 release evidence
   });
   test("a range-capped history that dropped its oldest day is compared from its own first day", () => {
     expect(frozenProblems(a, [pt("2026-11-13", 0.52), pt("2026-11-14", 0.53)], "2026-11-14")).toEqual([]);
+  });
+});
+
+// ── The first rollout (owner decision 2026-11-15): platform-bundle.ts and identity-check ─────────────
+
+describe("the first rollout's steps: the bundle is built on stage and production deploys only the stage-passed bytes", () => {
+  const rb = loadReleaseRunbook("v0.9.0");
+  const ids = rb.steps.map((s) => s.id);
+  test("order: build before the backup, the server image before the site, the deploy after the template's site step and inside the probe", () => {
+    const at = (id: string) => ids.indexOf(id);
+    expect(at("Q13a-site-bundle")).toBeLessThan(at("Q14-backup"));
+    expect(at("Q23a-server-image-build")).toBeLessThan(at("Q24-site"));
+    expect(at("Q24-site")).toBeLessThan(at("Q24b-site-bundle-deploy"));
+    expect(at("Q24b-site-bundle-deploy")).toBeLessThan(at("Q25-probe-grade"));
+    expect(at("P08-log-baseline")).toBeLessThan(at("P08a-site-bundle"));
+    expect(at("C12-site")).toBeLessThan(at("C12b-site-bundle-deploy"));
+    expect(at("C12b-site-bundle-deploy")).toBeLessThan(at("C13-probe-grade"));
+    for (const id of ["Q13a-site-bundle", "P08a-site-bundle", "Q24b-site-bundle-deploy", "C12b-site-bundle-deploy"]) expect(rb.steps.find((s) => s.id === id)?.host).toBe("control");
+  });
+
+  const deployed: StageDeploy = { release: "v0.9.0", runTs: "20261115T000000Z", commit: "a".repeat(40), sha256: SHA, file: "/x/robotmoney-web-0.1.0-aaaaaaa.tar.gz", at: "t" };
+  const passed = { status: "passed" as const, tree: "T", commit: "b".repeat(40), commits: [{ commit: "a".repeat(40), tree: "T0", goSha256: "", fromStep: "", at: "" }, { commit: "b".repeat(40), tree: "T", goSha256: "", fromStep: "", at: "" }] };
+  test("production may deploy the bundle a passed stage run of the same tree deployed, with its digest unchanged", () => {
+    expect(productionBundleProblems(deployed, passed, "T", SHA)).toEqual([]);
+  });
+  test("red: no stage deploy, a failed or other-tree run, a bundle from a commit the run never ran, a changed or missing file", () => {
+    expect(productionBundleProblems(undefined, passed, "T", SHA).join()).toContain("no stage-deploy.json");
+    expect(productionBundleProblems(deployed, { ...passed, status: "failed" }, "T", SHA).join()).toContain("not passed");
+    expect(productionBundleProblems(deployed, passed, "OTHER", SHA).join()).toContain("not the production commit's tree");
+    expect(productionBundleProblems(deployed, { ...passed, commits: [] }, "T", SHA).join()).toContain("never ran at");
+    expect(productionBundleProblems(deployed, passed, "T", "c".repeat(64)).join()).toContain("not the stage-passed digest");
+    expect(productionBundleProblems(deployed, passed, "T", null).join()).toContain("gone from the store");
+    expect(productionBundleProblems(deployed, undefined, "T", SHA).join()).toContain("no readable run.json");
+  });
+  test("the deploy is web release W10's smoke:web command, with the bundle file and the instance's server image", () => {
+    expect(deployArgv("rm-frontend-prod-1", "rm_prod", "/s/b.tar.gz", "https://robotmoney.network")).toEqual(["bun", "run", "smoke:web", "--host", "rm-frontend-prod-1", "--instance", "rm_prod", "--bundle", "/s/b.tar.gz", "--server-image", "robotmoney-website-server:rm_prod", "--origin", "https://robotmoney.network"]);
+  });
+  test("the committed allowed-signers holds one key, scoped to the namespace, and no bootstrap entry", () => {
+    const lines = readFileSync(`${import.meta.dir}/../../../website-server/allowed-signers`, "utf8").split("\n").filter((l) => l.trim() && !l.startsWith("#"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain("AAAAC3NzaC1lZDI1NTE5AAAAIPNcM9dzbTx");
+  });
+});
+
+describe("identity-check: a signed bundle built at the QA commit names production's site (Q26/C14)", () => {
+  const RC = "b".repeat(40);
+  const api = JSON.stringify({ api: "x", commit: RC });
+  test("/version.json naming the QA commit passes only when the checkout says its site tree equals the rc's", () => {
+    const site = JSON.stringify({ version: "0.1.0", commit: "aaaaaaa" });
+    expect(identityProblems(api, null, site, RC, RC, false, (c) => c === "aaaaaaa")).toEqual([]);
+    expect(identityProblems(api, null, site, RC, RC, false, () => false).join()).toContain("does not name");
+    expect(identityProblems(api, null, site, RC).join()).toContain("does not name");
+    expect(identityProblems(api, null, JSON.stringify({ commit: "bbbbbbb" }), RC)).toEqual([]);
   });
 });

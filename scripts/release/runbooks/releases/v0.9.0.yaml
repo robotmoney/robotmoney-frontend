@@ -3,7 +3,8 @@
 # A full copy of the kitchen-sink template's steps: Q for stage, P and C for production, each
 # production step with a stage twin. A release only ADDS: every template step stays, unchanged and in
 # order, and each step this release adds carries `added: v0.9.0` (scripts/release/runbook.ts checks it).
-# Added (added: v0.9.0): Q23a/C11a-server-image-build, and the version checks Q38 to Q44 with their
+# Added (added: v0.9.0): the first rollout of the immutable web container (Q13a/P08a-site-bundle,
+# Q23a/C11a-server-image-build, Q24b/C12b-site-bundle-deploy) and the version checks Q38 to Q44 with their
 # production twins C26 to C32 (scripts/release/version-checks/v0.9.0/).
 # The policy is docs/technical/release-runbooks.md.
 release: v0.9.0
@@ -28,29 +29,44 @@ notes: |
   af3ec970 (0132 came with 1417 and left with 1645). C05-migrate applies nothing. No `breaking:` list; the
   rolling upgrade applies.
 
-  Web serving (epic 1623, P1 to P9). What a v0.9.0 host serves after this run, read from the code:
-    - The rolling boot keeps the running website-server (scripts/stack/stack.ts). A host with no
-      robotmoney-website:<instance>-current image (production and stage today) keeps nginx and its web/
-      bind mount; the boot ships the new nginx.conf by graceful reload, which no longer caches api answers
-      (P6). P8 kept nginx.conf, website-server/Dockerfile and the web/ mount on purpose: they are the
-      bootstrap server and the first-rollout rollback target.
+  Owner decision (2026-11-15, relayed on issue 1647): v0.9.0 itself moves the site off nginx. It registers
+  the control machine's bundle key and names a signed bundle that this release deploys, so each host's
+  first rollout happens in this release's own cutover (web-serving-architecture.md section 5.3).
+
+  Owner decision (2026-11-15): the owner makes one offline backup of the bundle signing private key,
+  kept somewhere only the owner controls. The key is ~/.ssh/robotmoney-web-bundle on the control machine
+  (pinza), ed25519 SHA256:nfotE6VAd/1wIcTlcmbsPto1W/T2IMvl58EEoZV8+ng. No step makes, checks or waits for
+  the backup; it is a release gate box on issue 1647, not a runbook step, and no agent copies, prints or
+  moves the key.
+
+  Web serving (epic 1623, P1 to P9). How this run moves a host from nginx to the immutable container:
+    - The key. The control machine (pinza, where release:run runs) holds the private key at
+      ~/.ssh/robotmoney-web-bundle (mode 600), the path scripts/release/web-release.ts already signs with.
+      Its public line, ed25519 SHA256:nfotE6VAd/1wIcTlcmbsPto1W/T2IMvl58EEoZV8+ng, replaces the bootstrap
+      entry in website-server/allowed-signers. The bootstrap line was removed: its private half was
+      discarded, so no bundle could ever verify against it, and the file's header said to replace it.
+    - Q13a-site-bundle (stage) packs and signs the bundle for the QA commit on the control machine with
+      W03's commands and records its sha256 (scripts/release/platform-bundle.ts, store
+      <journal root>/bundles/v0.9.0/). P08a-site-bundle (production preflight) builds nothing: it refuses
+      unless stage deployed that bundle in a run that passed with the rc commit's tree, and its bytes still
+      hash to the recorded digest and verify. Production deploys the stage-passed bytes or nothing (R13).
     - Q23a/C11a-server-image-build build robotmoney-website-server:<instance> from this release's
-      Dockerfile.caddy. release-runbooks.md section 12 and web-serving-architecture.md section 3.2 say the
-      platform release builds it; no code does, and smoke:web --server-image and a web release's W09 need it.
-    - Q24/C12-site run bun smoke:web --bundle serving. While nginx serves, it changes nothing and exits 0
-      (scripts/smoke-web.ts). So this release by itself does NOT perform a host's first rollout of the
-      immutable container. Per web-serving-architecture.md sections 4 and 5.1, the first rollout is the
-      first swap from nginx, made by a web content release (W05 on stage, W10 on production), which keeps
-      the nginx container, stopped, as <name>-first-rollout.
-    - website-server/allowed-signers still holds only the bootstrap key whose private half was discarded,
-      so no bundle can be signed and no first rollout can run anywhere until the control machine's key is
-      registered there by a reviewed platform-release commit (that file's header).
-  Consequence: Q40/C28-web-image and Q41/C29-web-bundle, which require the signed-bundle container to serve,
-  FAIL on a host where nginx still serves. Tracking issue 1647's objective ("no nginx, no bind mount" after
-  v0.9.0) needs an owner decision recorded here before the stage run: (a) register the bundle key and add
-  a first-rollout step to this runbook, or (b) ship v0.9.0 with nginx serving and record an exception for
-  Q40/C28 and Q41/C29, leaving the first rollout to the first web content release after it. No such
-  decision is recorded yet.
+      Dockerfile.caddy, with the new allowed-signers inside. release-runbooks.md section 12 and
+      web-serving-architecture.md section 3.2 say the platform release builds it; no boot does.
+    - Q24/C12-site (template, --bundle serving) change nothing while nginx serves. Q24b/C12b-site-bundle-deploy
+      then run bun smoke:web with the bundle file and the new server image, inside the probe's window, so
+      Q25/C13 excuse exactly the swap's recorded gap. The swap keeps the nginx container, stopped, as
+      <name>-first-rollout: the rollback target. From then on every boot serves the -current site image.
+    - Identity. The bundle's /version.json names the QA commit it was built at. Production runs the rc squash
+      commit with the same tree, so scripts/release/identity-check.ts (Q26/C14) now also accepts a
+      /version.json commit that differs from the release commit only in check-only paths (journal.ts).
+    - Q40/C28-web-image and Q41/C29-web-bundle then require the site image to serve and the served bytes to
+      be the signed bundle, verified against the new allowed-signers.
+  Gap (next release). A later platform release's Q24/C12-site runs smoke:web --bundle serving, which fetches
+  the serving tag's GitHub release (web-v<version> of frontend/package.json, 0.1.0 today). This release
+  publishes no such release: a web tag lives on web/releases-A.B.x and is guarded there (section 12). Before
+  v0.9.1 either the first web content release publishes web-v0.1.x, or smoke:web learns to keep a bundle
+  it cannot fetch when the server image is unchanged. Recorded on issue 1647.
 
   Regime history (PR 1646, issue 1182, D83). Read path only: each day serves its published figure,
   selected from analytics_output_snapshots when it is read; regime_snapshots keeps its writers. Q43/C31
@@ -77,15 +93,17 @@ recovery: |
     v0.8.0 is safe: run the rolling boot from the v0.8.0 checkout (/root/rm-080, bun smoke --static-port).
     It reloads v0.8.0's nginx.conf (its proxy_cache returns), the api serves the recomputed regime history
     again (no data was changed, so nothing is lost), and the api's answer store is gone with the process.
-    The server image robotmoney-website-server:<instance> that C11a tagged stays and is unused.
-  - The web serving change. While nginx serves (this release performs no first rollout, see notes) there
-    is no site image to roll back. A failed C12-site reverts by itself to the previous container and exits
-    non-zero (bun smoke:web step 6). Once a host serves a site image, the rollback is
-    `bun smoke:web --host <host> --instance <instance> --rollback --origin <public origin>` from the control
-    machine: it starts the -previous image, or on a host's first rollout the stopped nginx container
-    <name>-first-rollout, with its own web/ mount, and untags -current so a platform boot runs nginx
-    (web-serving-architecture.md section 4). It refuses a previous image whose apiRange excludes the
-    running api.
+    Roll the site back first (below); the server image C11a tagged stays and is unused.
+  - The web serving change (Q24b/C12b-site-bundle-deploy). A failed swap reverts by itself: smoke:web
+    starts the nginx container again and exits non-zero (web-serving-architecture.md section 4 step 6), and
+    the cutover stops there with nginx serving. After a successful swap, the rollback is, from the control
+    machine:
+      bun smoke:web --host rm-frontend-prod-1 --instance rm_prod --rollback --origin https://robotmoney.network
+    On this first rollout there is no -previous image, so it starts the stopped nginx container
+    <name>-first-rollout again, with its own web/ mount, makes the site image the one previous image, and
+    untags -current so a platform boot runs nginx. It refuses a target whose apiRange excludes the running
+    api, and its own gap is held to 3 s. A code rollback to v0.8.0 needs this first: v0.8.0's boot knows no
+    site image.
   - The regime fix is read-path only: rolling back the code restores the old served line; the frozen
     ledger and regime_snapshots are unchanged either way.
 scope:
@@ -284,6 +302,19 @@ steps:
     irreversible: false
     onlyFor: "stage"
     triage: true
+  - id: "Q13a-site-bundle"
+    standing: ["SC.5"]
+    host: "control"
+    phase: "qa"
+    added: "v0.9.0"
+    description: "The signed bundle this release deploys (owner decision 2026-11-15, web-serving-architecture.md section 5.3), on the control machine, which alone holds the bundle key (~/.ssh/robotmoney-web-bundle). Stage: pack and sign the bundle for the release commit with web release W03's commands (scratch worktree, frozen install, scripts/static-assembly.sh, web-bundle.ts pack and sign), verify it against the commit's website-server/allowed-signers and record its sha256 in <journal root>/bundles/<release>/bundle.json; a bundle already built for this commit that verifies is kept. Production: builds nothing and refuses unless the store holds the bundle stage deployed, in a stage run that passed with the production commit's tree, its bytes still hash to that digest and it verifies (R13). Touches no host"
+    cmds:
+      - ["bun", "scripts/release/platform-bundle.ts", "build", "--release", "{release}", "--target", "{target}", "--commit", "{commit}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 30
   - id: "Q14-backup"
     standing: ["SP.2"]
     host: "capture"
@@ -500,6 +531,19 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
+  - id: "Q24b-site-bundle-deploy"
+    standing: ["SC.5"]
+    host: "control"
+    phase: "qa"
+    added: "v0.9.0"
+    description: "The first rollout of the immutable container (owner decision 2026-11-15): from the control machine, re-read the bundle's sha256 (production: it must be the stage-passed digest), then bun run smoke:web --host {host} --instance {instance} --bundle <that file> --server-image robotmoney-website-server:{instance} --origin {publicOrigin}, the command web release W05/W10 run: verify, build the site image FROM the server image, check a throwaway copy, swap on the public port (measured gap, 3 s cap, inside the probe), check through the origin, revert on failure. On a host where nginx serves, the swap keeps the nginx container, stopped, as <name>-first-rollout, the rollback target. The same bundle already serving on the same server image is unchanged. Stage records the deployed digest for production"
+    cmds:
+      - ["bun", "scripts/release/platform-bundle.ts", "deploy", "--release", "{release}", "--target", "{target}", "--commit", "{commit}", "--run", "{runTs}", "--host", "{host}", "--instance", "{instance}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 15
   - id: "Q24a-maintenance-off"
     standing: ["SC.4", "SC.5"]
     host: "target"
@@ -944,6 +988,19 @@ steps:
     irreversible: false
     onlyFor: "prod"
     triage: true
+  - id: "P08a-site-bundle"
+    standing: ["SC.5"]
+    host: "control"
+    phase: "preflight"
+    added: "v0.9.0"
+    description: "The signed bundle this release deploys (owner decision 2026-11-15, web-serving-architecture.md section 5.3), on the control machine, which alone holds the bundle key (~/.ssh/robotmoney-web-bundle). Stage: pack and sign the bundle for the release commit with web release W03's commands (scratch worktree, frozen install, scripts/static-assembly.sh, web-bundle.ts pack and sign), verify it against the commit's website-server/allowed-signers and record its sha256 in <journal root>/bundles/<release>/bundle.json; a bundle already built for this commit that verifies is kept. Production: builds nothing and refuses unless the store holds the bundle stage deployed, in a stage run that passed with the production commit's tree, its bytes still hash to that digest and it verifies (R13). Touches no host"
+    cmds:
+      - ["bun", "scripts/release/platform-bundle.ts", "build", "--release", "{release}", "--target", "{target}", "--commit", "{commit}", "--run", "{runTs}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 30
   # ── Cutover: production only. Backup and restore proof, then the rolling upgrade (the
   # website never goes down), then the soak and the version checks, as stage ran them.
   - id: "C01-backup"
@@ -1173,6 +1230,19 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
+  - id: "C12b-site-bundle-deploy"
+    standing: ["SC.5"]
+    host: "control"
+    phase: "cutover"
+    added: "v0.9.0"
+    description: "The first rollout of the immutable container (owner decision 2026-11-15): from the control machine, re-read the bundle's sha256 (production: it must be the stage-passed digest), then bun run smoke:web --host {host} --instance {instance} --bundle <that file> --server-image robotmoney-website-server:{instance} --origin {publicOrigin}, the command web release W05/W10 run: verify, build the site image FROM the server image, check a throwaway copy, swap on the public port (measured gap, 3 s cap, inside the probe), check through the origin, revert on failure. On a host where nginx serves, the swap keeps the nginx container, stopped, as <name>-first-rollout, the rollback target. The same bundle already serving on the same server image is unchanged. Stage records the deployed digest for production"
+    cmds:
+      - ["bun", "scripts/release/platform-bundle.ts", "deploy", "--release", "{release}", "--target", "{target}", "--commit", "{commit}", "--run", "{runTs}", "--host", "{host}", "--instance", "{instance}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 15
   - id: "C12a-maintenance-off"
     standing: ["SC.4", "SC.5"]
     host: "target"
