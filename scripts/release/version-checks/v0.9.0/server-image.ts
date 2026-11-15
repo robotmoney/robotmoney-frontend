@@ -2,7 +2,7 @@
 // image, `robotmoney-website-server:<instance>`, which every site image is built FROM and which a web
 // release's W09 requires (release-runbooks.md §12, web-serving-architecture.md §3.2). Read-only: two
 // throwaway containers with no network read one file and one PATH lookup from the image; nothing is built
-// or tagged here (Q23a-server-image-build/C11a-server-image-build build it).
+// or tagged here (Q16a-server-image-build/C03a-server-image-build build it).
 //
 // WHAT IT REQUIRES:
 //   - the image exists, and its label robotmoney.web.server-commit is the release commit (--commit), so the
@@ -36,7 +36,7 @@ export function signerLines(text: string): string[] {
 
 /** PURE. Why the host's server image is not this release's; empty when it is. */
 export function serverImageProblems(image: string, r: ServerImageRead, commit: string, committedSigners: string): string[] {
-  if (r.id === null) return [`the host holds no server image ${image}: Q23a-server-image-build/C11a-server-image-build builds it from website-server/Dockerfile.caddy`];
+  if (r.id === null) return [`the host holds no server image ${image}: Q16a-server-image-build/C03a-server-image-build builds it from website-server/Dockerfile.caddy`];
   const out: string[] = [];
   const built = r.labels[WEBSITE_IMAGE_LABELS.serverCommit];
   if (built !== commit) out.push(`${image}'s label ${WEBSITE_IMAGE_LABELS.serverCommit} is ${JSON.stringify(built ?? null)}, not the release commit ${commit}`);

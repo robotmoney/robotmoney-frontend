@@ -780,6 +780,23 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
   });
 });
 
+describe("v0.9.0 review fixes: the only stopped website-server, and --bundle serving's digest", () => {
+  test("--rollback with nothing running and no -current image starts the only stopped website-server (a first swap whose revert could not restart nginx)", async () => {
+    const host = fakeHost({ allStopped: true, serving: "none", currentTag: null, oldIsNginx: true });
+    const receipt = await rollbackImage(imageDeps(host));
+    expect(receipt).toMatchObject({ action: "rollback", outcome: "swapped", newContainer: { id: OLD_ID } });
+    expect(host.state.serving).toBe("old");
+  });
+
+  test("a fetched bundle whose sha256 is not the serving label's is refused before anything reaches the host", async () => {
+    const host = fakeHost();
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    const deps = imageDeps(host, { allowedSigners: b.allowedSigners });
+    await expect(deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform", expectSha256: "0".repeat(64) }, deps)).rejects.toThrow(/serving container's robotmoney.web.bundle-sha256 label names 0{64}/);
+    expect(host.lines().filter((l) => /^docker (build|create|stop)\b/.test(l))).toEqual([]);
+  });
+});
+
 describe("image mode: a server-image change rebuilds the serving bundle through the swap (§5.3, issue 1632)", () => {
   test("the same bundle on the same server image is unchanged: nothing is built", async () => {
     const host = fakeHost();

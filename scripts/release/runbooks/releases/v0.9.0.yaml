@@ -4,7 +4,7 @@
 # production step with a stage twin. A release only ADDS: every template step stays, unchanged and in
 # order, and each step this release adds carries `added: v0.9.0` (scripts/release/runbook.ts checks it).
 # Added (added: v0.9.0): the first rollout of the immutable web container (Q13a/P08a-site-bundle,
-# Q23a/C11a-server-image-build, Q24b/C12b-site-bundle-deploy) and the version checks Q38 to Q44 with their
+# Q16a/C03a-server-image-build, Q24b/C12b-site-bundle-deploy, and the stage-only Q24c-site-rollback-rehearsal) and the version checks Q38 to Q44 with their
 # production twins C26 to C32 (scripts/release/version-checks/v0.9.0/).
 # The policy is docs/technical/release-runbooks.md.
 release: v0.9.0
@@ -50,9 +50,10 @@ notes: |
       <journal root>/bundles/v0.9.0/). P08a-site-bundle (production preflight) builds nothing: it refuses
       unless stage deployed that bundle in a run that passed with the rc commit's tree, and its bytes still
       hash to the recorded digest and verify. Production deploys the stage-passed bytes or nothing (R13).
-    - Q23a/C11a-server-image-build build robotmoney-website-server:<instance> from this release's
+    - Q16a/C03a-server-image-build build robotmoney-website-server:<instance> from this release's
       Dockerfile.caddy, with the new allowed-signers inside. release-runbooks.md section 12 and
-      web-serving-architecture.md section 3.2 say the platform release builds it; no boot does.
+      web-serving-architecture.md section 3.2 say the platform release builds it; no boot does. They run
+      before the probe and the migrate, so a registry failure stops the cutover before anything changes.
     - Q24/C12-site (template, --bundle serving) change nothing while nginx serves. Q24b/C12b-site-bundle-deploy
       then run bun smoke:web with the bundle file and the new server image, inside the probe's window, so
       Q25/C13 excuse exactly the swap's recorded gap. The swap keeps the nginx container, stopped, as
@@ -81,7 +82,8 @@ notes: |
   /api/status/maintenance every tick (1633), which a rolling run grades exactly as before.
 
   Known run hazards. Q44/C32-regime-frozen waits for the next regime run (every 3 h at :30 UTC; cap 200
-  minutes) alongside the soak. Q41/C29-web-bundle runs gh on the control machine. Q02-dump may hit a
+  minutes). Like every version check it starts once the soak's watch after READY has passed, alongside
+  the other checks, and may hold the run up to 200 more minutes. Q41/C29-web-bundle runs gh on the control machine. Q02-dump may hit a
   transient replica pg_dump conflict: retry.
 recovery: |
   v0.9.0 carries no migration, so every rollback is code only and the schema never changes.
@@ -90,10 +92,12 @@ recovery: |
   - C05-migrate applies nothing (no pending file). A failure there is a ledger or connection fault:
     resume at C05-migrate; v0.8.0 keeps serving.
   - After C05-migrate: a defect is an issue against v0.9.1 (policy section 3 step 8). A code rollback to
-    v0.8.0 is safe: run the rolling boot from the v0.8.0 checkout (/root/rm-080, bun smoke --static-port).
+    v0.8.0 is safe, once the site is back on nginx (the web serving item below; a v0.8.0 boot knows no
+    site image). Then, on rm-frontend-prod-1:
+      cd /root/rm-080 && PROJECTS_SOURCE=live bun run smoke --static-port --instance rm_prod
     It reloads v0.8.0's nginx.conf (its proxy_cache returns), the api serves the recomputed regime history
     again (no data was changed, so nothing is lost), and the api's answer store is gone with the process.
-    Roll the site back first (below); the server image C11a tagged stays and is unused.
+    The server image C03a tagged stays and is unused.
   - The web serving change (Q24b/C12b-site-bundle-deploy). A failed swap reverts by itself: smoke:web
     starts the nginx container again and exits non-zero (web-serving-architecture.md section 4 step 6), and
     the cutover stops there with nginx serving. After a successful swap, the rollback is, from the control
@@ -102,8 +106,10 @@ recovery: |
     On this first rollout there is no -previous image, so it starts the stopped nginx container
     <name>-first-rollout again, with its own web/ mount, makes the site image the one previous image, and
     untags -current so a platform boot runs nginx. It refuses a target whose apiRange excludes the running
-    api, and its own gap is held to 3 s. A code rollback to v0.8.0 needs this first: v0.8.0's boot knows no
-    site image.
+    api, and its own gap is held to 3 s. Q24c rehearses this on stage. Should the first swap's revert
+    have failed to restart nginx, nothing serves and nginx stays stopped under its own name: the same
+    --rollback command then starts that container, the instance's only stopped website-server, since no
+    -current image exists. Before C12b (no swap yet), there is no site to roll back.
   - The regime fix is read-path only: rolling back the code restores the old served line; the frozen
     ledger and regime_snapshots are unchanged either way.
 scope:
@@ -353,6 +359,19 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 20
+  - id: "Q16a-server-image-build"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "qa"
+    added: "v0.9.0"
+    description: "Build the platform's server image robotmoney-website-server:<instance> from this release's website-server/Dockerfile.caddy (Caddy, the Caddyfile, the allowed-signers file and the bundle verifier; label robotmoney.web.server-commit = the release commit). release-runbooks.md section 12 and web-serving-architecture.md section 3.2 say the platform release builds it, and no boot does: bun smoke:web --server-image and a web release's W09 need it. Tags an image only: no container starts, stops or changes, and a site image a host may serve is pinned by id"
+    cmds:
+      - ["docker", "build", "--pull", "-f", "website-server/Dockerfile.caddy", "--build-arg", "PLATFORM_COMMIT={commit}", "-t", "robotmoney-website-server:{instance}", "website-server"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 20
   - id: "Q17-probe-start"
     standing: ["SC.4"]
     host: "control"
@@ -501,19 +520,6 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
-  - id: "Q23a-server-image-build"
-    standing: ["SC.5"]
-    host: "target"
-    phase: "qa"
-    added: "v0.9.0"
-    description: "Build the platform's server image robotmoney-website-server:<instance> from this release's website-server/Dockerfile.caddy (Caddy, the Caddyfile, the allowed-signers file and the bundle verifier; label robotmoney.web.server-commit = the release commit). release-runbooks.md section 12 and web-serving-architecture.md section 3.2 say the platform release builds it, and no boot does: bun smoke:web --server-image and a web release's W09 need it. Tags an image only: no container starts, stops or changes, and a site image a host may serve is pinned by id"
-    cmds:
-      - ["docker", "build", "--pull", "-f", "website-server/Dockerfile.caddy", "--build-arg", "PLATFORM_COMMIT={commit}", "-t", "robotmoney-website-server:{instance}", "website-server"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: "stage"
-    maxMinutes: 20
   - id: "Q24-site"
     standing: ["SC.5"]
     host: "control"
@@ -544,6 +550,21 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 15
+  - id: "Q24c-site-rollback-rehearsal"
+    standing: ["SC.5"]
+    host: "control"
+    phase: "qa"
+    added: "v0.9.0"
+    stageOnly: true
+    description: "Stage only: rehearse the recovery the first rollout names. bun smoke:web --rollback starts the stopped <name>-first-rollout nginx container again (gap measured, inside the probe), then the stage-passed bundle is deployed again with the same platform-bundle.ts deploy command as Q24b, so stage ends serving the site image. Production never rolls back unless recovery calls for it"
+    cmds:
+      - ["bun", "run", "smoke:web", "--host", "{host}", "--instance", "{instance}", "--rollback", "--origin", "{publicOrigin}"]
+      - ["bun", "scripts/release/platform-bundle.ts", "deploy", "--release", "{release}", "--target", "{target}", "--commit", "{commit}", "--run", "{runTs}", "--host", "{host}", "--instance", "{instance}", "--origin", "{publicOrigin}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    maxMinutes: 20
   - id: "Q24a-maintenance-off"
     standing: ["SC.4", "SC.5"]
     host: "target"
@@ -1041,6 +1062,19 @@ steps:
     irreversible: false
     onlyFor: "prod"
     maxMinutes: 20
+  - id: "C03a-server-image-build"
+    standing: ["SC.5"]
+    host: "target"
+    phase: "cutover"
+    added: "v0.9.0"
+    description: "Build the platform's server image robotmoney-website-server:<instance> from this release's website-server/Dockerfile.caddy (Caddy, the Caddyfile, the allowed-signers file and the bundle verifier; label robotmoney.web.server-commit = the release commit). release-runbooks.md section 12 and web-serving-architecture.md section 3.2 say the platform release builds it, and no boot does: bun smoke:web --server-image and a web release's W09 need it. Tags an image only: no container starts, stops or changes, and a site image a host may serve is pinned by id"
+    cmds:
+      - ["docker", "build", "--pull", "-f", "website-server/Dockerfile.caddy", "--build-arg", "PLATFORM_COMMIT={commit}", "-t", "robotmoney-website-server:{instance}", "website-server"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
+    maxMinutes: 20
   - id: "C04-probe-start"
     standing: ["SC.4"]
     host: "control"
@@ -1200,19 +1234,6 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
-  - id: "C11a-server-image-build"
-    standing: ["SC.5"]
-    host: "target"
-    phase: "cutover"
-    added: "v0.9.0"
-    description: "Build the platform's server image robotmoney-website-server:<instance> from this release's website-server/Dockerfile.caddy (Caddy, the Caddyfile, the allowed-signers file and the bundle verifier; label robotmoney.web.server-commit = the release commit). release-runbooks.md section 12 and web-serving-architecture.md section 3.2 say the platform release builds it, and no boot does: bun smoke:web --server-image and a web release's W09 need it. Tags an image only: no container starts, stops or changes, and a site image a host may serve is pinned by id"
-    cmds:
-      - ["docker", "build", "--pull", "-f", "website-server/Dockerfile.caddy", "--build-arg", "PLATFORM_COMMIT={commit}", "-t", "robotmoney-website-server:{instance}", "website-server"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: "prod"
-    maxMinutes: 20
   - id: "C12-site"
     standing: ["SC.5"]
     host: "control"

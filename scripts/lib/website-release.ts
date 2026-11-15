@@ -240,6 +240,11 @@ export interface DeployImageOptions {
   readonly bundle: string;
   /** The host's server image (a tag or an id), which the site image is built FROM. */
   readonly serverImage: string;
+  /**
+   * `--bundle serving`: the sha256 the serving container's label names. A fetched bundle with any other
+   * digest is refused before anything reaches the host, so a tag name reused for other bytes never deploys.
+   */
+  readonly expectSha256?: string;
 }
 
 /** The parts of `docker inspect <container>` a swap reads. */
@@ -903,8 +908,12 @@ class ImageRun {
     if (all.length === 0) return false;
     const current = await this.docker.imageId(siteImageTag(this.deps.instance, "current"));
     const stopped = await Promise.all(all.map((id) => this.docker.inspectContainer(id)));
-    const pick = stopped.find((c) => current !== null && c.Image === current && !c.Name.endsWith(FIRST_ROLLOUT_SUFFIX)) ?? stopped.find((c) => c.Name.endsWith(FIRST_ROLLOUT_SUFFIX));
-    if (!pick) throw new WebRefusal(`Refusing: no website-server runs for ${this.deps.instance}, and no stopped one is the current image or the first-rollout container.`);
+    // With no -current image (a first swap whose revert could not restart nginx, which then stays stopped
+    // under its own name), the instance's only stopped website-server is what served last.
+    const pick = stopped.find((c) => current !== null && c.Image === current && !c.Name.endsWith(FIRST_ROLLOUT_SUFFIX))
+      ?? stopped.find((c) => c.Name.endsWith(FIRST_ROLLOUT_SUFFIX))
+      ?? (current === null && stopped.length === 1 ? stopped[0] : undefined);
+    if (!pick) throw new WebRefusal(`Refusing: no website-server runs for ${this.deps.instance}, and no stopped one is the current image, the first-rollout container, or (with no -current image) the only stopped website-server.`);
     this.oldContainer = { id: pick.Id, image: pick.Image };
     const started = await this.handover(handoverScript([], pick.Id, null));
     if (started !== "started") {
@@ -1006,6 +1015,10 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       run.release = release;
       if (isReleaseName(opts.bundle) && opts.bundle !== release.tag) {
         throw new WebRefusal(`Refusing: release ${opts.bundle} carries a bundle for ${release.tag}.`);
+      }
+      if (opts.expectSha256 !== undefined && verified.sha256 !== opts.expectSha256) {
+        run.check("verify-local", false, `sha256 ${verified.sha256}, the serving label names ${opts.expectSha256}`);
+        throw new WebRefusal(`Refusing: ${basename(bundlePath)} hashes to ${verified.sha256}, but the serving container's ${WEBSITE_IMAGE_LABELS.bundleSha256} label names ${opts.expectSha256}: ${release.tag} names other bytes than those serving. Nothing was sent to the host.`);
       }
       run.check("verify-local", true, `${basename(bundlePath)} signed by ${verified.principal}, sha256 ${verified.sha256}`);
 

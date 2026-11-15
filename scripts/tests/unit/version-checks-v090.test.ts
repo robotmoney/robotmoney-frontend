@@ -13,6 +13,7 @@ import { apiCacheProblems, probePath, type CacheAnswer } from "../../release/ver
 import { daysBetween, selectPublished, type ArtifactMeta, type Point } from "../../release/version-checks/v0.9.0/_regime.ts";
 import { pinnedProblems, publishedProblems } from "../../release/version-checks/v0.9.0/regime-published.ts";
 import { frozenProblems } from "../../release/version-checks/v0.9.0/regime-frozen.ts";
+import { servingVersionProblem } from "../../release/web-release-lib.ts";
 import { deployArgv, productionBundleProblems, type StageDeploy } from "../../release/platform-bundle.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { readFileSync } from "node:fs";
@@ -26,13 +27,14 @@ describe("the v0.9.0 runbook", () => {
     expect(rb.breaking).toBeUndefined();
     const qa = added.filter((s) => s.phase === "qa").map((s) => stepNameOf(s.id));
     const prod = added.filter((s) => s.phase !== "qa").map((s) => stepNameOf(s.id));
-    expect(qa).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
-    expect(prod).toEqual(qa);
+    expect(qa.filter((n) => n !== "site-rollback-rehearsal")).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
+    expect(prod).toEqual(qa.filter((n) => n !== "site-rollback-rehearsal"));
+    expect(qa).toContain("site-rollback-rehearsal");
     for (const s of added) expect(s.irreversible).toBe(false);
   });
 
   test("every version check runs a v0.9.0 check file that exists, and reads only (no stageOnly write)", () => {
-    for (const s of added.filter((x) => !/-build$|^site-bundle/.test(stepNameOf(x.id)))) {
+    for (const s of added.filter((x) => !/-build$|^site-/.test(stepNameOf(x.id)))) {
       const argv = s.cmds[0]!;
       expect(argv.slice(0, 2)).toEqual(["bun", "scripts/release/version-check.ts"]);
       const name = argv[argv.indexOf("--check") + 1]!;
@@ -303,7 +305,10 @@ describe("the first rollout's steps: the bundle is built on stage and production
   test("order: build before the backup, the server image before the site, the deploy after the template's site step and inside the probe", () => {
     const at = (id: string) => ids.indexOf(id);
     expect(at("Q13a-site-bundle")).toBeLessThan(at("Q14-backup"));
-    expect(at("Q23a-server-image-build")).toBeLessThan(at("Q24-site"));
+    expect(at("Q16a-server-image-build")).toBeLessThan(at("Q17-probe-start"));
+    expect(at("C03a-server-image-build")).toBeLessThan(at("C04-probe-start"));
+    expect(at("Q24b-site-bundle-deploy")).toBeLessThan(at("Q24c-site-rollback-rehearsal"));
+    expect(rb.steps.find((s) => s.id === "Q24c-site-rollback-rehearsal")?.cmds[0]).toContain("--rollback");
     expect(at("Q24-site")).toBeLessThan(at("Q24b-site-bundle-deploy"));
     expect(at("Q24b-site-bundle-deploy")).toBeLessThan(at("Q25-probe-grade"));
     expect(at("P08-log-baseline")).toBeLessThan(at("P08a-site-bundle"));
@@ -345,5 +350,16 @@ describe("identity-check: a signed bundle built at the QA commit names productio
     expect(identityProblems(api, null, site, RC, RC, false, () => false).join()).toContain("does not name");
     expect(identityProblems(api, null, site, RC).join()).toContain("does not name");
     expect(identityProblems(api, null, JSON.stringify({ commit: "bbbbbbb" }), RC)).toEqual([]);
+  });
+});
+
+describe("W01 refuses a web version that would reuse the tag name of a platform-deployed bundle (review finding 1)", () => {
+  test("a serving web-v0.1.0 with no git tag reserves 0.1.0 and below; a real tag leaves it to versionProblems", () => {
+    const serving = { tag: "web-v0.1.0", digest: SHA };
+    expect(servingVersionProblem(serving, "0.1.0", new Map())).toContain("not above it");
+    expect(servingVersionProblem(serving, "0.0.9", new Map())).toContain("not above it");
+    expect(servingVersionProblem(serving, "0.1.1", new Map())).toBeUndefined();
+    expect(servingVersionProblem(serving, "0.1.0", new Map([["web-v0.1.0", "abc"]]))).toBeUndefined();
+    expect(servingVersionProblem({}, "0.1.0", new Map())).toBeUndefined();
   });
 });

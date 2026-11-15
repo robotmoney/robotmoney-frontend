@@ -16,8 +16,9 @@
 //     presence, same composite, same regime. A served day never disappears. A gap that a late run of that
 //     as-of day publishes is allowed by D83 item 3 (`found.gapsPublished` lists it), since that is its
 //     first publication, not a revision.
-// `found.rewrittenByNewRun` counts the ended days on which the new run's own recomputation differs from
-// what is served: the days the run rewrote and readers did not see move.
+//   - the new run's own recomputation differs from what is served on at least one of the last 120 ended
+//     days (`found.rewrittenByNewRunOfLast120`): the run rewrote a day and readers did not see it move.
+//     A run that rewrote nothing proves nothing new, and the check says so and fails.
 import type { VersionCheck } from "../../version-check.ts";
 import { newestArtifactId, readArtifactRows, readServed, type Point } from "./_regime.ts";
 
@@ -67,6 +68,9 @@ export default (async (ctx) => {
   const rewrittenByNewRun = [...recomputed.values()].filter((r) => { const s = servedByDay.get(r.date); return s !== undefined && (s.composite !== r.composite || s.regime !== r.regime); }).length;
   return {
     found: { readAt: a.today, artifactBefore: startId, artifactAfter: newId, gapsPublished: b.history.filter((p) => p.date < a.today && p.date >= (a.history[0]?.date ?? "") && !a.history.some((x) => x.date === p.date)).map((p) => p.date), waitedMinutes: Math.round((Date.now() - startedAt) / 60_000), endedDays: endedDays.length, rewrittenByNewRunOfLast120: rewrittenByNewRun },
-    problems: frozenProblems(a.history, b.history, a.today),
+    problems: [
+      ...frozenProblems(a.history, b.history, a.today),
+      ...(rewrittenByNewRun > 0 ? [] : [`the new run (artifact ${newId}) recomputed none of the last ${Math.min(120, endedDays.length)} ended days differently from what is served, so this run proved nothing new: rerun the step at the next regime run`]),
+    ],
   };
 }) satisfies VersionCheck;
