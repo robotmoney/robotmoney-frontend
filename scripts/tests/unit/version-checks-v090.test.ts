@@ -8,7 +8,9 @@ import { webImageProblems, type WebImageRead } from "../../release/version-check
 import type { WebsiteInspect } from "../../release/version-checks/v0.9.0/_web.ts";
 import { serverImageProblems, signerLines, type ServerImageRead } from "../../release/version-checks/v0.9.0/server-image.ts";
 import { PROBE_SLUG, routeProblems, routeRows, sitemapPaths, type Answer } from "../../release/version-checks/v0.9.0/web-routes.ts";
-import { servedBundleProblems, webTagOf } from "../../release/version-checks/v0.9.0/web-bundle.ts";
+import webBundleCheck, { servedBundleProblems, webTagOf } from "../../release/version-checks/v0.9.0/web-bundle.ts";
+import { EDGE_EXCEPTIONS } from "../../release/version-checks/v0.9.0/web-bundle-edge.ts";
+import { makeContext } from "../../release/version-check.ts";
 import { apiCacheProblems, probePath, type CacheAnswer } from "../../release/version-checks/v0.9.0/api-cache.ts";
 import { daysBetween, selectPublished, type ArtifactMeta, type Point } from "../../release/version-checks/v0.9.0/_regime.ts";
 import { pinnedProblems, publishedProblems } from "../../release/version-checks/v0.9.0/regime-published.ts";
@@ -27,9 +29,10 @@ describe("the v0.9.0 runbook", () => {
     expect(rb.breaking).toBeUndefined();
     const qa = added.filter((s) => s.phase === "qa").map((s) => stepNameOf(s.id));
     const prod = added.filter((s) => s.phase !== "qa").map((s) => stepNameOf(s.id));
-    expect(qa.filter((n) => n !== "site-rollback-rehearsal")).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
-    expect(prod).toEqual(qa.filter((n) => n !== "site-rollback-rehearsal"));
-    expect(qa).toContain("site-rollback-rehearsal");
+    const STAGE_ONLY = ["site-rollback-rehearsal", "web-bundle-edge"];
+    expect(qa.filter((n) => !STAGE_ONLY.includes(n))).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
+    expect(prod).toEqual(qa.filter((n) => !STAGE_ONLY.includes(n)));
+    for (const n of STAGE_ONLY) expect(qa).toContain(n);
     for (const s of added) expect(s.irreversible).toBe(false);
   });
 
@@ -40,12 +43,33 @@ describe("the v0.9.0 runbook", () => {
       const name = argv[argv.indexOf("--check") + 1]!;
       expect(name).toBe(stepNameOf(s.id));
       expect(Bun.file(`${import.meta.dir}/../../release/version-checks/v0.9.0/${name}.ts`).size).toBeGreaterThan(0);
-      expect((s as RunbookStep & { stageOnly?: boolean }).stageOnly).toBeUndefined();
+      // The one stage-only version check reads only too: it is stage-only because it reads through Cloudflare (owner, 2026-11-15).
+      if (stepNameOf(s.id) !== "web-bundle-edge") expect((s as RunbookStep & { stageOnly?: boolean }).stageOnly).toBeUndefined();
     }
   });
 
-  test("its scope lists exactly the 15 PRs of v0.8.0..af3ec970, each version check naming a step of this runbook", () => {
-    expect(rb.scope.map((e) => e.pr).sort((a, b) => a - b)).toEqual([1417, 1620, 1633, 1634, 1635, 1636, 1637, 1638, 1639, 1640, 1641, 1642, 1643, 1645, 1646]);
+  test("Q41/C29-web-bundle read upstream of Cloudflare; Q41a-web-bundle-edge reads through it, stage only (owner, 2026-11-15)", () => {
+    for (const id of ["Q41-web-bundle", "C29-web-bundle"]) {
+      const s = rb.steps.find((x) => x.id === id)!;
+      expect(s.host).toBe("control");
+      const argv = s.cmds[0]!;
+      expect(argv[argv.indexOf("--host") + 1]).toBe("{host}");
+      expect(s.description).toContain("upstream of Cloudflare");
+    }
+    const edge = rb.steps.find((x) => x.id === "Q41a-web-bundle-edge")! as RunbookStep & { stageOnly?: boolean };
+    expect(edge.stageOnly).toBe(true);
+    expect(edge.onlyFor).toBe("stage");
+    expect(edge.added).toBe("v0.9.0");
+    expect(edge.cmds[0]).not.toContain("--host");
+    expect(rb.steps.some((x) => x.phase !== "qa" && stepNameOf(x.id) === "web-bundle-edge")).toBe(false);
+    const ids = rb.steps.map((x) => x.id);
+    expect(ids.indexOf("Q41a-web-bundle-edge")).toBe(ids.indexOf("Q41-web-bundle") + 1);
+    expect(rb.notes).toContain("Owner decision (2026-11-15, issue 1647): the bundle byte check reads upstream of Cloudflare");
+  });
+
+  test("its scope lists exactly the 15 PRs of v0.8.0..af3ec970 and the cherry-picked 1648, each version check naming a step of this runbook", () => {
+    expect(rb.scope.map((e) => e.pr).sort((a, b) => a - b)).toEqual([1417, 1620, 1633, 1634, 1635, 1636, 1637, 1638, 1639, 1640, 1641, 1642, 1643, 1645, 1646, 1648]);
+    expect(rb.scope.find((e) => e.pr === 1648)?.check).toBe("Q41a-web-bundle-edge");
     const ids = new Set(rb.steps.map((s) => s.id));
     for (const e of rb.scope) if (e.check !== undefined) expect(ids.has(e.check)).toBe(true);
     expect(rb.scope.find((e) => e.pr === 1646)?.check).toBe("Q43-regime-published");
@@ -174,7 +198,7 @@ describe("Q38-web-routes/C26-web-routes (P1 1636)", () => {
 
 // ── Q41-web-bundle ───────────────────────────────────────────────────────────
 
-describe("Q41-web-bundle/C29-web-bundle (P3 1638)", () => {
+describe("Q41-web-bundle/C29-web-bundle (P3 1638) and Q41a-web-bundle-edge", () => {
   test("the web tag of the served /version.json; none when it names no version", () => {
     expect(webTagOf('{"version":"0.9.0","commit":"0123abcd"}')).toEqual({ tag: "web-v0.9.0", version: "0.9.0", commit: "0123abcd" });
     expect("error" in webTagOf(null)).toBe(true);
@@ -188,6 +212,27 @@ describe("Q41-web-bundle/C29-web-bundle (P3 1638)", () => {
     expect(servedBundleProblems(manifest, [ok[0]!, { ...ok[1]!, status: 404, sha256: null }]).join()).toContain("answered 404");
     expect(servedBundleProblems(manifest, [ok[0]!]).join()).toContain("app.js: not fetched");
     expect(servedBundleProblems({ ...manifest, files: [] }, []).join()).toContain("lists no file");
+  });
+  test("an excepted path may differ but must still answer 200; every other path still fails (Q41a's robots.txt)", () => {
+    const manifest = { format: "robotmoney-web-bundle-manifest@v1" as const, files: [{ path: "robots.txt", sha256: SHA, size: 1 }, { path: "swarm/apply/index.html", sha256: "b".repeat(64), size: 1 }] };
+    const robots = { path: "robots.txt", url: "/robots.txt", status: 200, sha256: "c".repeat(64) };
+    const apply = { path: "swarm/apply/index.html", url: "/swarm/apply", status: 200, sha256: "b".repeat(64) };
+    expect(servedBundleProblems(manifest, [robots, apply], EDGE_EXCEPTIONS)).toEqual([]);
+    expect(servedBundleProblems(manifest, [robots, apply]).join()).toContain("not the manifest's robots.txt");
+    expect(servedBundleProblems(manifest, [{ ...robots, status: 404, sha256: null }, apply], EDGE_EXCEPTIONS).join()).toContain("answered 404");
+    expect(servedBundleProblems(manifest, [robots, { ...apply, sha256: "d".repeat(64) }], EDGE_EXCEPTIONS).join()).toContain("not the manifest's swarm/apply/index.html");
+    expect([...EDGE_EXCEPTIONS]).toEqual(["robots.txt"]);
+  });
+  test("Q41 refuses without --host: it never falls back to the public origin", async () => {
+    const r = await webBundleCheck({ host: undefined, commit: "a".repeat(40) } as never);
+    expect(r.problems.join()).toContain("no --host");
+  });
+  test("a version-check context without --host reads the target's loopback directly", async () => {
+    const ctx = makeContext({ release: "v0.9.0", instance: "x", origin: "https://example.invalid/", runTs: "t" });
+    expect(ctx.host).toBeUndefined();
+    expect(await ctx.hostOrigin(8123)).toBe("http://127.0.0.1:8123");
+    await ctx.close();
+    expect(() => makeContext({ release: "v0.9.0", instance: "x", origin: "o", runTs: "t", host: "-oProxyCommand=x" })).toThrow("not an ssh destination");
   });
 });
 

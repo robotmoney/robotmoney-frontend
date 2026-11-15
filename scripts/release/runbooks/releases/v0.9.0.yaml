@@ -5,7 +5,7 @@
 # order, and each step this release adds carries `added: v0.9.0` (scripts/release/runbook.ts checks it).
 # Added (added: v0.9.0): the first rollout of the immutable web container (Q13a/P08a-site-bundle,
 # Q16a/C03a-server-image-build, Q24b/C12b-site-bundle-deploy, and the stage-only Q24c-site-rollback-rehearsal) and the version checks Q38 to Q44 with their
-# production twins C26 to C32 (scripts/release/version-checks/v0.9.0/).
+# production twins C26 to C32 (scripts/release/version-checks/v0.9.0/), and the stage-only edge check Q41a-web-bundle-edge.
 # The policy is docs/technical/release-runbooks.md.
 release: v0.9.0
 template: kitchen-sink
@@ -23,7 +23,9 @@ notes: |
   on releases-0.8.x whose main base is 07eb2668, so the range v0.8.0..QA commit carries exactly the main
   commits 07eb2668..af3ec970: PRs 1620, 1633, 1634, 1635, 1636, 1637, 1638, 1639, 1640, 1642, 1641, 1643,
   1417, 1645 and 1646. 1417 (migration 0132 and its repair) and 1645 (its revert) cancel out: no file of
-  either remains in the tree.
+  either remains in the tree. The QA branch adds one cherry-pick from a PR to main, 1648 (served pages
+  carry no email address, robots.txt carries Cloudflare's block; owner, 2026-11-15), whose subject names
+  (#1648) so Q05-scope maps it to Q41a-web-bundle-edge.
 
   Migrations: none. Nothing under backend/migrations/ or backend/schema/ differs between 07eb2668 and
   af3ec970 (0132 came with 1417 and left with 1645). C05-migrate applies nothing. No `breaking:` list; the
@@ -63,6 +65,19 @@ notes: |
       /version.json commit that differs from the release commit only in check-only paths (journal.ts).
     - Q40/C28-web-image and Q41/C29-web-bundle then require the site image to serve and the served bytes to
       be the signed bundle, verified against the new allowed-signers.
+
+  Owner decision (2026-11-15, issue 1647): the bundle byte check reads upstream of Cloudflare. Stage run
+  20261115T082237Z failed only Q41-web-bundle: through https://stage.robotmoney-labs.dev, Cloudflare
+  rewrote 4 of 483 files (/robots.txt, where its Managed robots.txt prepends a block, and /swarm/apply,
+  /docs/investment-swarm/participation and /docs/investment-swarm/runbook, where its email obfuscation
+  rewrote addresses). The owner chose four changes:
+    (a) the served pages carry no email address (PR 1648 to main, cherry-picked onto the QA branch);
+    (d) robots.txt carries Cloudflare's managed block itself (same PR); Cloudflare may still prepend it;
+    (b) Q41/C29-web-bundle compare the bytes the host serves upstream of Cloudflare: over ssh (--host), the
+        running website-server's own loopback port for 8080, as Q38/C26 and Q40/C28 reach it;
+    (c) Q41a-web-bundle-edge, stage only with no production twin, still compares every bundle file through
+        the public Cloudflare address, with an explicit exception for /robots.txt only. Any other mismatch
+        through Cloudflare fails it.
   Gap (next release). A later platform release's Q24/C12-site runs smoke:web --bundle serving, which fetches
   the serving tag's GitHub release (web-v<version> of frontend/package.json, 0.1.0 today). This release
   publishes no such release: a web tag lives on web/releases-A.B.x and is guarded there (section 12). Before
@@ -83,7 +98,7 @@ notes: |
 
   Known run hazards. Q44/C32-regime-frozen waits for the next regime run (every 3 h at :30 UTC; cap 200
   minutes). Like every version check it starts once the soak's watch after READY has passed, alongside
-  the other checks, and may hold the run up to 200 more minutes. Q41/C29-web-bundle runs gh on the control machine. Q02-dump may hit a
+  the other checks, and may hold the run up to 200 more minutes. Q41/C29-web-bundle runs gh and ssh (a port forward to the host) on the control machine; Q41a-web-bundle-edge runs gh. Q02-dump may hit a
   transient replica pg_dump conflict: retry.
 recovery: |
   v0.9.0 carries no migration, so every rollback is code only and the schema never changes.
@@ -128,6 +143,7 @@ scope:
   - {pr: 1417, what: "fix(analytics): regime frozen publications by migration 0132 (reverted by 1645)", none: "reverted by PR 1645 in the same range; nothing of it ships"}
   - {pr: 1645, what: "revert: the regime frozen-publications fix 1417", none: "a revert of PR 1417 in the same range; together they change no file"}
   - {pr: 1646, what: "fix(analytics): the regime history serves each day's published figure from the frozen ledger (D83, issue 1182)", check: "Q43-regime-published"}
+  - {pr: 1648, what: "fix(web): served pages carry no email address; robots.txt carries Cloudflare's managed block (owner, 2026-11-15; cherry-picked onto the QA branch)", check: "Q41a-web-bundle-edge"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
 # refuses a deletion, an edit or a reorder).
@@ -853,9 +869,24 @@ steps:
     host: "control"
     phase: "qa"
     added: "v0.9.0"
-    description: "The served site is a signed bundle byte for byte (P3 1638; R1, R13), from the control machine: /version.json names the web version; the web-v<version> release's bundle verifies against the release commit's website-server/allowed-signers (namespace robotmoney-web-bundle@v1); its version.json matches the served one; every manifest file fetched through the public origin with a one-off query has the manifest's sha256. Reads only"
+    description: "The host serves a signed bundle byte for byte (P3 1638; R1, R13), from the control machine, read upstream of Cloudflare (owner, 2026-11-15): over ssh to the host, the one running website-server's own loopback port for 8080 (as Q38/C26 and Q40/C28 reach it), never the public Cloudflare address. /version.json on that port names the web version; the web-v<version> release's bundle verifies against the release commit's website-server/allowed-signers (namespace robotmoney-web-bundle@v1); its version.json matches the served one; every manifest file fetched on that port with a one-off query has the manifest's sha256. Reads only"
     cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "web-bundle", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--commit", "{commit}"]
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "web-bundle", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--commit", "{commit}", "--host", "{host}"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "stage"
+    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    maxMinutes: 20
+  - id: "Q41a-web-bundle-edge"
+    standing: ["SV.7"]
+    host: "control"
+    phase: "qa"
+    added: "v0.9.0"
+    stageOnly: true
+    description: "Stage only (owner, 2026-11-15): what the public Cloudflare address serves is the signed bundle byte for byte, with one explicit exception. From the control machine, with Q41's code: /version.json through the public origin names the web version; that bundle verifies against the release commit's website-server/allowed-signers; every manifest file fetched through the public origin with a one-off query has the manifest's sha256, except /robots.txt, to which Cloudflare's Managed robots.txt may prepend its block (it must still answer 200; its match is recorded). Any other mismatch through Cloudflare fails, email obfuscation in a page included. No production twin: production's byte-for-byte evidence is C29, upstream of Cloudflare. Reads only"
+    cmds:
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "web-bundle-edge", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--commit", "{commit}"]
     expectExit: 0
     receipts: []
     irreversible: false
@@ -1514,9 +1545,9 @@ steps:
     host: "control"
     phase: "cutover"
     added: "v0.9.0"
-    description: "The served site is a signed bundle byte for byte (P3 1638; R1, R13), from the control machine: /version.json names the web version; the web-v<version> release's bundle verifies against the release commit's website-server/allowed-signers (namespace robotmoney-web-bundle@v1); its version.json matches the served one; every manifest file fetched through the public origin with a one-off query has the manifest's sha256. Reads only"
+    description: "The host serves a signed bundle byte for byte (P3 1638; R1, R13), from the control machine, read upstream of Cloudflare (owner, 2026-11-15): over ssh to the host, the one running website-server's own loopback port for 8080 (as Q38/C26 and Q40/C28 reach it), never the public Cloudflare address. /version.json on that port names the web version; the web-v<version> release's bundle verifies against the release commit's website-server/allowed-signers (namespace robotmoney-web-bundle@v1); its version.json matches the served one; every manifest file fetched on that port with a one-off query has the manifest's sha256. Reads only"
     cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "web-bundle", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--commit", "{commit}"]
+      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "web-bundle", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--commit", "{commit}", "--host", "{host}"]
     expectExit: 0
     receipts: []
     irreversible: false
