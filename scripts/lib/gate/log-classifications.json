@@ -87,6 +87,13 @@
     "reason": "The judge participant's SSE subscribe (scripts/agent/participant/judge-client.ts runJudgeClient) could not reach the api; the client sleeps reconnectMs and subscribes again, exactly as it does after any stream drop, so one such line is a reconnect, not a dead judge. The same connect race as expected-scheduler-first-connect-retry and expected-worker-job-first-connect-retry, on the judge side. Seen once on participant-judge-themis-1 during the v0.6.1 production R2.5 baseline on 2026-10-10 (issue 1278), followed by 'subscribed'. Held to that one message and to judge participant containers: a refused token (HTTP 401/403) makes the client exit, which the participants check catches as a restart; 'judge subscription failed: HTTP <n>' and every other subscription error stay unclassified and fail; a judge that never reconnects fails the sessions check as an unjudged publish."
   },
   {
+    "id": "expected-judge-subscribe-stream-reset",
+    "match": "^\\[judge:[^\\]]+\\] subscription error: ECONNRESET: The socket connection was closed unexpectedly\\.",
+    "source": "participant-judge-",
+    "class": "expected",
+    "reason": "The judge participant's open SSE stream was reset by the peer (Bun fetch: ECONNRESET). runJudgeClient (scripts/agent/participant/judge-client.ts) logs it, sleeps reconnectMs and subscribes again, as after any stream drop: one such line is a reconnect, not a dead judge. Seen once on participant-judge-themis-1 of the v0.8.0 stage target in the v0.9.0 stage run 20261115T063127Z (Q13-log-baseline), 0.13 s after the judge filed a judgement and followed by 'subscribed' 5 s later. Held to that message and to judge participant containers, like expected-judge-subscribe-connect-retry: an HTTP refusal makes the client exit (the participants check catches the restart), every other subscription error stays unclassified and fails, and a judge that never reconnects fails the sessions check as an unjudged publish."
+  },
+  {
     "id": "expected-twin-autovacuum-cancel",
     "match": "ERROR: canceling autovacuum task$",
     "source": "^rm-restore-",
