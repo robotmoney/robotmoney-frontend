@@ -80,6 +80,20 @@ describe("prerendered routes carry their own content", () => {
     }
   });
 
+  test("no served HTML file carries an email address (owner, 2026-11-15)", () => {
+    // Cloudflare's email obfuscation rewrites any email-shaped string in an HTML answer
+    // (`__cf_email__` markup plus its decode script), so the edge serves bytes that are
+    // not the signed bundle's. Contact goes through Telegram; placeholders and examples
+    // are not email-shaped.
+    const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
+    const html = (Array.from(new Bun.Glob("**/*.html").scanSync({ cwd: dir })) as string[]);
+    expect(html.length).toBeGreaterThan(30);
+    for (const f of html) {
+      const hit = EMAIL.exec(readFileSync(join(dir, f), "utf8"));
+      expect(hit?.[0], `${f} carries an email-shaped string`).toBeUndefined();
+    }
+  });
+
   test("every route carries substantially more than nav and footer", () => {
     for (const route of ROUTES) {
       expect(readableChars(htmlFor(route)), `${route} is boilerplate only`).toBeGreaterThan(BOILERPLATE_CHARS * 1.5);
@@ -199,6 +213,10 @@ describe("_shell.html, the fallback for routes that cannot be prerendered", () =
     // a group of its own ignores `*`. A group is a run of User-agent lines and
     // the rules under it, so every group, not merely the * one, has to carry
     // the line: a named crawler in an Allow-only group may crawl the shell.
+    // Groups naming the same crawler combine (RFC 9309 section 2.2.1), and the
+    // Cloudflare-managed block the file carries (owner, 2026-11-15) names some
+    // crawlers again with `Disallow: /`, which closes every path. So each
+    // crawler's combined rules must close the shell and /admin, or close `/`.
     const robotsTxt = readFileSync(join(publicDir, "robots.txt"), "utf8");
     const lines = robotsTxt.split("\n").map((l) => l.replace(/#.*/, "").trim()).filter(Boolean);
     const groups: { agents: string[]; rules: string[] }[] = [];
@@ -214,7 +232,15 @@ describe("_shell.html, the fallback for routes that cannot be prerendered", () =
       }
     }
     expect(groups.some((g) => g.agents.includes("*"))).toBe(true);
-    for (const g of groups) expect({ agents: g.agents, rules: g.rules }).toEqual({ agents: g.agents, rules: expect.arrayContaining(["Disallow: /_shell.html", "Disallow: /admin"]) });
+    const byAgent = new Map<string, string[]>();
+    for (const g of groups) for (const a of g.agents) byAgent.set(a.toLowerCase(), [...(byAgent.get(a.toLowerCase()) ?? []), ...g.rules]);
+    for (const [agent, rules] of byAgent) {
+      const closed = rules.includes("Disallow: /") || (rules.includes("Disallow: /_shell.html") && rules.includes("Disallow: /admin"));
+      expect(closed, `${agent} may crawl the shell or /admin: ${rules.join("; ")}`).toBe(true);
+    }
+    // Our own group still names every crawler with both lines, the case the
+    // Cloudflare block does not cover.
+    expect(robotsTxt).toContain("Allow: /\nDisallow: /admin\nDisallow: /admin/\nDisallow: /_shell.html");
   });
 
   test("carries a noindex meta of its own, on top of robots.txt", () => {

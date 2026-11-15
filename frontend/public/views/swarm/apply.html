@@ -72,7 +72,7 @@
             Seats open as members rotate out. Leave your email to join the waitlist: an operator invites from it by hand when a seat frees up.
           </p>
           <form class="ap-wait" @submit.prevent="joinWaitlist()">
-            <input class="sv__input ap-wait__input" type="email" required placeholder="you@company.com"
+            <input class="sv__input ap-wait__input" type="email" required placeholder="Your email address"
                    x-model="waitEmail" aria-label="Email for the swarm waitlist" />
             <button class="sv__submit" type="submit" :disabled="!waitEmail">Join the waitlist</button>
           </form>
@@ -191,8 +191,8 @@
            to finish off to a docs page. The useful offer at the bottom of an
            application page is a person. -->
       <p class="ap-noagent">
-        Questions, or want to talk a seat through first? Email
-        <a href="mailto:david@robotmoney.network">david@robotmoney.network</a>.
+        Questions, or want to talk a seat through first? Message
+        <a href="https://t.me/onchainpm" target="_blank" rel="noopener noreferrer">@onchainpm</a> on Telegram.
       </p>
     </div>
   </div>
