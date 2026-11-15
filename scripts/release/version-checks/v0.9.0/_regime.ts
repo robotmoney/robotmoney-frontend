@@ -114,11 +114,22 @@ export async function readArtifactRows(db: ReadOnlySession, artifactId: number, 
   return out;
 }
 
-/** The newest regime artifact's id, or 0. */
+/**
+ * The newest regime artifact's id that holds rows, or 0. The producer also writes an empty `[]`
+ * regime_snapshots artifact a couple of minutes after each research tick and at a boot (2 bytes); it
+ * recomputes nothing. Q44 of stage run 20261115T082237Z took one for "the next regime run" and so saw no
+ * day rewritten. Only the scheduled regime run (:30 UTC) writes the history. `octet_length` reads the
+ * stored size without decoding the payload.
+ */
 export async function newestArtifactId(db: ReadOnlySession): Promise<number> {
-  const [r] = await db.query<{ id: string | null }>("SELECT max(id)::text AS id FROM analytics_output_snapshots WHERE artifact_kind = 'regime_snapshots'");
+  const [r] = await db.query<{ id: string | null }>(
+    `SELECT max(id)::text AS id FROM analytics_output_snapshots WHERE artifact_kind = 'regime_snapshots' AND octet_length(payload_bytes) > ${EMPTY_ARTIFACT_BYTES}`,
+  );
   return Number(r?.id ?? 0);
 }
+
+/** The byte length of an empty artifact payload, `[]`. */
+export const EMPTY_ARTIFACT_BYTES = 2;
 
 /** The longest history the endpoint serves (backend/src/api/routes/dashboards.ts caps range at 3650). */
 export const MAX_RANGE = 3650;
