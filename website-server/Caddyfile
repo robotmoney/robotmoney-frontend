@@ -11,6 +11,14 @@
 	admin off
 	auto_https off
 	persist_config off
+	# A swap retires this container with SIGTERM, which Caddy takes as a graceful
+	# stop. The default grace period is eternal: an open event stream (an
+	# external judge client's lasts about a minute) would hold the container, and
+	# so the public port, until docker's forced stop. 500 ms lets a short request
+	# finish, then Caddy closes every connection and exits inside the swap's
+	# one-second retire bound (scripts/lib/website-release.ts STOP_GRACE_SECONDS),
+	# so the gap never waits on a client. docs/technical/web-serving-architecture.md section 4.1.
+	grace_period 500ms
 	servers {
 		# WHO THE CLIENT IS: the same peers nginx.conf's geo block trusts
 		# (loopback, this host's private ranges for the cloudflared tunnel, and

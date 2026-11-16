@@ -77,17 +77,24 @@ export type WebAction = "deploy" | "rollback";
 //   2. build the site image on the host FROM the server image's id, pinned by
 //      a tag named for that id, and confirm the result's layers start with
 //      the server image's (BuildKit cannot take a bare image id as FROM);
-//   3. run a throwaway copy on an ephemeral loopback port, check it
-//      (checkServedSite), and remove it. A failure never touches the public port;
-//   4. stop the running container and start the new one, created beforehand
-//      with the old one's port, networks, aliases, labels, restart policy, log
-//      and health settings plus the overlay's isolation flags. The stop, the
-//      start and a fallback start of the old one are ONE host command
+//   3. PRE-CHECK, while the old container keeps serving: create a copy of the
+//      image the way the final container is created (precheckCreateArgs: same
+//      image, overlay flags, healthcheck, log settings and networks; a spare
+//      loopback port, no labels, aliases or restart policy), start it, time its
+//      cold start, run the live check set on it (liveProblems), and kill it. A
+//      failure, or a cold start that with the retire bound could not fit
+//      GAP_LIMIT_MS, never touches the old container or the public port. It
+//      cannot prove the public port binds; step 6 answers that;
+//   4. retire the running container (SIGTERM, forced stop after
+//      STOP_GRACE_SECONDS: retireArgs) and start the new one, created
+//      beforehand with the old one's port, networks, aliases, labels, restart
+//      policy, log and health settings plus the overlay's isolation flags. The
+//      stop, the start and a fallback start of the old one are ONE host command
 //      (handoverScript) whose body survives a dropped SSH link. The gap runs
 //      from the stop to the first answer on the public port that names the
 //      release, and must be at most GAP_LIMIT_MS;
 //   5. check that /version.json, read through the public origin, names the
-//      release;
+//      release, and repeat step 3's live check set on the host's public port;
 //   6. on any failure or throw after the stop, remove the new container,
 //      start the old one again (it was only stopped), put back the tags step 7
 //      moved, and exit non-zero, with the revert's own gap;
@@ -121,6 +128,24 @@ export type WebAction = "deploy" | "rollback";
 
 /** A swap's gap may not exceed this (§4.1). */
 export const GAP_LIMIT_MS = 3_000;
+/**
+ * How a serving container is retired (§4.1): SIGTERM, then SIGKILL after
+ * STOP_GRACE_SECONDS. nginx's own StopSignal is SIGQUIT, which closes its
+ * listeners at once and then waits for every open connection (the site is dark
+ * for the whole wait). SIGTERM is nginx's fast shutdown and Caddy's graceful
+ * one (bounded by the Caddyfile's grace_period). The forced kill after one
+ * second is the hard bound: it, the start of the new container and its first
+ * answer must fit in GAP_LIMIT_MS.
+ */
+export const STOP_SIGNAL = "SIGTERM";
+/** `docker stop --signal` exists from Docker 25. */
+export const MIN_DOCKER_MAJOR = 25;
+export const STOP_GRACE_SECONDS = 1;
+
+/** PURE. The `docker stop` argv that retires `id`: the signal, then a forced stop after `graceSeconds`. */
+export function retireArgs(id: string, graceSeconds: number = STOP_GRACE_SECONDS): string[] {
+  return ["stop", "--signal", STOP_SIGNAL, "-t", String(graceSeconds), id];
+}
 /** The repository every site image of an instance is tagged in. */
 export const SITE_IMAGE_REPO = "robotmoney-website";
 /** The repository a server image id is pinned in for a build (a tag named for the id). */
@@ -186,6 +211,15 @@ export interface SwapGap {
   readonly ms: number | null;
 }
 
+/** The pre-check container's cold start: `docker start` to the first good answer, on the spare port. */
+export interface PrecheckTiming {
+  /** Measured start time. */
+  readonly coldStartMs: number;
+  /** The retire bound: STOP_GRACE_SECONDS in ms. The worst case of the old container's stop. */
+  readonly retireBoundMs: number;
+  readonly gapLimitMs: number;
+}
+
 export type ImageOutcome = "swapped" | "unchanged" | "refused" | "reverted" | "failed";
 
 /** What one image-mode run leaves in `receipt.json` (and appends to `journal.jsonl`). */
@@ -205,6 +239,10 @@ export interface ImageReceipt {
   readonly checks: readonly ImageCheck[];
   readonly gap: SwapGap | null;
   readonly revertGap: SwapGap | null;
+  /** The pre-check container's cold start and the bound it was gated by; absent when no pre-check ran. */
+  readonly precheck?: PrecheckTiming | null;
+  /** The host's Docker server version, read before anything was created (`docker stop --signal` needs 25). */
+  readonly dockerVersion?: string | null;
   /** The images `-current` and `-previous` name after the run. */
   readonly currentImage: string | null;
   readonly previousImage: string | null;
@@ -227,7 +265,7 @@ export interface ImageReleaseDeps {
   readonly gapLimitMs?: number;
   /** How long a started container may take to answer. */
   readonly readyTimeoutMs?: number;
-  /** Seconds `docker stop` gives the old container. */
+  /** Seconds the old container gets after SIGTERM before SIGKILL (default STOP_GRACE_SECONDS). */
   readonly stopTimeoutSeconds?: number;
   /** Download a `web-vA.B.C` release's bundle, digest and signature into `dir`. */
   fetchRelease?(tag: string, dir: string): Promise<void>;
@@ -331,6 +369,43 @@ export function replacementCreateArgs(old: ContainerInspect, name: string, image
 }
 
 /**
+ * PURE. The `docker create` argv of the pre-check container (§4 step 3): what
+ * `replacementCreateArgs` gives the final container, except what would make it
+ * a second website-server or a second owner of the public port. IDENTICAL: the
+ * image (so the Caddyfile, the baked bundle and its verification), the overlay's
+ * run flags (read-only, user, dropped capabilities, tmpfs), the healthcheck, the
+ * log driver and its options, and the old container's networks. DIFFERENT: the
+ * published port (an ephemeral loopback port, never the public one), the name,
+ * no compose or instance labels (the instance's listing must still find one
+ * website-server), no network aliases (nothing resolves the copy as
+ * `website-server`) and no restart policy (it is removed after the check).
+ */
+export function precheckCreateArgs(old: ContainerInspect, name: string, image: string, overlayFlags: readonly string[]): { create: string[]; connect: string[][] } {
+  const args = ["create", "--name", name];
+  const log = old.HostConfig.LogConfig;
+  if (log?.Type) {
+    args.push("--log-driver", log.Type);
+    for (const [k, v] of Object.entries(log.Config ?? {})) args.push("--log-opt", `${k}=${v}`);
+  }
+  args.push(...healthFlags(old.Config.Healthcheck), ...overlayFlags);
+  const connect: string[][] = [];
+  Object.keys(old.NetworkSettings.Networks ?? {}).forEach((net, i) => {
+    if (i === 0) args.push("--network", net);
+    else connect.push(["network", "connect", net, name]);
+  });
+  args.push("-p", "127.0.0.1::8080", image);
+  return { create: args, connect };
+}
+
+/** PURE. The argv tail that runs a container's healthcheck once with `docker exec`, or null when it declares none. */
+export function healthExecArgs(hc: ContainerInspect["Config"]["Healthcheck"]): string[] | null {
+  if (!hc?.Test || hc.Test.length === 0) return null;
+  const [kind, ...rest] = hc.Test;
+  if (kind === "NONE") return null;
+  return kind === "CMD-SHELL" ? ["sh", "-c", rest[0] ?? "true"] : rest;
+}
+
+/**
  * The name suffix of a first rollout's rollback target (§4, the first-rollout
  * rule): the nginx container that served before a host's first image swap,
  * kept stopped under `<its name>-first-rollout` until a swap from one site
@@ -352,7 +427,8 @@ export type SwapTarget = { readonly kind: "image"; readonly image: string } | { 
  * background subshell that ignores SIGHUP and SIGPIPE, and the command waits
  * for it: a dropped SSH link ends the wait, never the body, so the host is
  * never left with the old container stopped and nothing started. It prints
- * `started`, or `failed: <docker's error>`. One docker command per line.
+ * `started`, or `failed: <docker's error>` followed by what the earlier
+ * commands (the stop) wrote to stderr. One docker command per line.
  */
 export function handoverScript(first: readonly (readonly string[])[], start: string, fallback: string | null): string {
   const docker = (args: readonly string[]) => ["docker", ...args].map(shellQuote).join(" ");
@@ -360,8 +436,10 @@ export function handoverScript(first: readonly (readonly string[])[], start: str
     "trap '' HUP PIPE",
     "(",
     "trap '' HUP PIPE",
-    ...first.map((args) => `${docker(args)} >/dev/null 2>&1`),
-    `if err=$(${docker(["start", start])} 2>&1 >/dev/null); then echo started; else ${fallback === null ? "" : `${docker(["start", fallback])} >/dev/null 2>&1; `}echo "failed: $err"; fi`,
+    // The stop's own stderr is kept (never discarded): it reaches the failure message.
+    'se=""',
+    ...first.map((args) => `se="$se$(${docker(args)} 2>&1 >/dev/null)"`),
+    `if err=$(${docker(["start", start])} 2>&1 >/dev/null); then echo started; else ${fallback === null ? "" : `${docker(["start", fallback])} >/dev/null 2>&1; `}echo "failed: $err\${se:+ (the stop said: $se)}"; fi`,
     ") </dev/null &",
     "wait $!",
   ].join("\n");
@@ -476,6 +554,8 @@ class ImageRun {
   copyPort: number | null = null;
   gap: SwapGap | null = null;
   revertGap: SwapGap | null = null;
+  precheck: PrecheckTiming | null = null;
+  dockerVersion: string | null = null;
   currentImage: string | null = null;
   previousImage: string | null = null;
 
@@ -518,6 +598,8 @@ class ImageRun {
       checks: this.checks,
       gap: this.gap,
       revertGap: this.revertGap,
+      precheck: this.precheck,
+      dockerVersion: this.dockerVersion,
       currentImage: this.currentImage,
       previousImage: this.previousImage,
       error,
@@ -540,6 +622,7 @@ class ImageRun {
     try {
       await this.lock();
       lockHeld = true;
+      await this.removeStaleChecks();
       outcome = await body();
     } catch (e) {
       error = e as Error;
@@ -550,6 +633,42 @@ class ImageRun {
     const receipt = this.writeReceipt(outcome, error?.message ?? null);
     if (error) throw error;
     return receipt;
+  }
+
+  /**
+   * A pre-check container left by a run that died (the control machine lost
+   * between its create and its kill). Under the host lock no other run of this
+   * instance is making one. The name filter is anchored and fixed to this
+   * instance's name and the 8 hex digits of checkCopy's suffix, so another
+   * instance whose name starts with this one's is never matched.
+   */
+  async removeStaleChecks(): Promise<void> {
+    const escaped = this.deps.instance.replace(/[.]/g, "\\.");
+    const r = await this.docker.try(["ps", "-aq", "--no-trunc", "--filter", `name=^robotmoney-web-check-${escaped}-[0-9a-f]{8}$`]);
+    if (r.code !== 0) return;
+    for (const id of r.stdout.split("\n").filter((l) => l !== "")) {
+      this.log(`removing the stale pre-check container ${id.slice(0, 12)} of an earlier run`);
+      await this.docker.try(["rm", "-f", id]);
+    }
+  }
+
+  /**
+   * Refuse a host whose Docker cannot do the bounded stop (`docker stop
+   * --signal`, Docker 25). Read before the pre-check copy is created and
+   * before the old container is touched. Recorded in the receipt.
+   */
+  async checkDocker(): Promise<void> {
+    const r = await this.docker.try(["version", "--format", "{{.Server.Version}}"]);
+    const version = r.stdout.trim();
+    if (r.code === 0 && version !== "") this.dockerVersion = version;
+    const major = Number(/^(\d+)\./.exec(version)?.[1]);
+    const ok = r.code === 0 && Number.isInteger(major) && major >= MIN_DOCKER_MAJOR;
+    this.check("docker-version", ok, ok ? `Docker ${version} supports stop --signal` : `Docker ${version === "" ? `version unreadable (${r.stderr || r.stdout || `exit ${r.code}`})` : version}`);
+    if (!ok) {
+      throw new WebRefusal(
+        `Refusing: docker too old for stop --signal: need ${MIN_DOCKER_MAJOR}, host has ${version === "" ? `an unreadable version (${r.stderr || r.stdout || `exit ${r.code}`})` : version}. Nothing was changed.`,
+      );
+    }
   }
 
   private async lock(): Promise<void> {
@@ -611,23 +730,89 @@ class ImageRun {
     this.check("api-range", true, `API ${api} is inside ${release.apiRange}`);
   }
 
-  /** Step 3: a throwaway copy of `image` on an ephemeral loopback port, checked and removed. */
-  async checkCopy(image: string, release: SiteRelease): Promise<void> {
-    const name = `robotmoney-web-check-${this.deps.instance}-${randomBytes(4).toString("hex")}`;
-    const flags = websiteImageRunFlags(readWebsiteImageService(this.deps.repoRoot));
-    await this.docker.ok(["run", "-d", "--rm", "--name", name, ...flags, "-p", "127.0.0.1::8080", image], "starting the throwaway copy");
+  /**
+   * The live check set of a site image, one function for both the pre-check
+   * (on the spare port) and the post-switch check (on the public port), so the
+   * second is a repeat of a check that already passed: the route and header
+   * table, /version.json naming the release, the bundle's sha256 on the
+   * container's labels (set by the image build from the verified bundle), the
+   * API reached through the server's proxy naming the running API's version,
+   * and the container's healthcheck command run once inside it. Returns every
+   * problem; empty means it passes.
+   */
+  private async liveProblems(origin: string, release: SiteRelease, containerId: string, healthcheck: ContainerInspect["Config"]["Healthcheck"]): Promise<string[]> {
+    const problems = await checkServedSite(origin, release);
     try {
-      const port = Number((await this.docker.ok(["port", name, "8080/tcp"], "reading the copy's port")).split("\n")[0]!.split(":").pop());
+      const labels = (await this.docker.inspectContainer(containerId)).Config.Labels ?? {};
+      const sha = labels[WEBSITE_IMAGE_LABELS.bundleSha256];
+      if (sha !== release.sha256) problems.push(`the container's bundle sha256 is ${String(sha)}, want ${release.sha256}`);
+    } catch (e) {
+      problems.push(`the container could not be inspected: ${(e as Error).message}`);
+    }
+    if (this.apiVersion !== null) {
+      try {
+        const res = await fetch(`${origin}/api/version`, { signal: AbortSignal.timeout(5_000) });
+        const body = (await res.json()) as { api?: unknown };
+        if (!res.ok || body.api !== this.apiVersion) problems.push(`/api/version through the server answered ${res.status} naming ${String(body.api)}, want ${this.apiVersion}`);
+      } catch (e) {
+        problems.push(`/api/version through the server failed: ${(e as Error).message}`);
+      }
+    }
+    const exec = healthExecArgs(healthcheck);
+    if (exec !== null) {
+      const r = await this.docker.try(["exec", containerId, ...exec]);
+      if (r.code !== 0) problems.push(`the healthcheck command failed inside the container: ${r.stderr || r.stdout}`);
+    }
+    return problems;
+  }
+
+  /**
+   * Step 3: the pre-check. A copy of `image` is created the way the final
+   * container will be (precheckCreateArgs), started on an ephemeral loopback
+   * port, timed from `docker start` to its first good answer (the cold start),
+   * given the whole live check set, and killed. Nothing here touches the public
+   * port or the old container. Refuses, before the old container is touched,
+   * when the cold start plus the retire bound could not fit in the gap limit.
+   *
+   * It cannot prove the public port binds (a port conflict, a dangling
+   * docker-proxy): only the swap itself finds that, and its revert answers it.
+   */
+  async checkCopy(image: string, release: SiteRelease, old: ContainerInspect): Promise<void> {
+    const name = `robotmoney-web-check-${this.deps.instance}-${randomBytes(4).toString("hex")}`;
+    const { create, connect } = precheckCreateArgs(old, name, image, websiteImageRunFlags(readWebsiteImageService(this.deps.repoRoot)));
+    await this.docker.ok(create, "creating the pre-check container");
+    try {
+      for (const c of connect) await this.docker.ok(c, "connecting the pre-check container to its networks");
+      const startedAt = Date.now();
+      await this.docker.ok(["start", name], "starting the pre-check container");
+      const port = Number((await this.docker.ok(["port", name, "8080/tcp"], "reading the pre-check container's port")).split("\n")[0]!.split(":").pop());
       this.copyPort = port;
-      if (port === this.publicPort) throw new Error(`the throwaway copy was given the public port ${port}`);
+      if (port === this.publicPort) throw new Error(`the pre-check container was given the public port ${port}`);
       const forward = await this.deps.host.openPort(port);
       try {
-        const deadline = Date.now() + (this.deps.readyTimeoutMs ?? 30_000);
-        while ((await servedIdentity(forward.origin)) === null && Date.now() < deadline) await Bun.sleep(100);
-        const problems = await checkServedSite(forward.origin, release);
+        const goodAt = await this.firstGoodAnswer(forward.origin, release);
+        if (goodAt === null) {
+          this.check("copy", false, `the pre-check container on port ${port} never named ${release.tag}`);
+          throw new WebRefusal(`Refusing: the pre-check container of ${release.tag} never answered. The public port was not touched.`);
+        }
+        const limit = this.deps.gapLimitMs ?? GAP_LIMIT_MS;
+        const timing: PrecheckTiming = { coldStartMs: goodAt - startedAt, retireBoundMs: (this.deps.stopTimeoutSeconds ?? STOP_GRACE_SECONDS) * 1000, gapLimitMs: limit };
+        this.precheck = timing;
+        const fits = timing.coldStartMs + timing.retireBoundMs <= limit;
+        this.check(
+          "cold-start",
+          fits,
+          `${timing.coldStartMs} ms from start to first good answer on the spare port, plus ${timing.retireBoundMs} ms retire bound, against the ${limit} ms gap limit`,
+        );
+        if (!fits) {
+          throw new WebRefusal(
+            `Refusing: ${release.tag} starts in ${timing.coldStartMs} ms, and with the ${timing.retireBoundMs} ms retire bound the gap could exceed ${limit} ms. The old container was not touched.`,
+          );
+        }
+        const problems = await this.liveProblems(forward.origin, release, name, old.Config.Healthcheck);
         const ok = problems.length === 0;
-        this.check("copy", ok, ok ? `the copy on port ${port} serves ${release.tag} with the server's routes and headers` : problems.join("; "));
-        if (!ok) throw new WebRefusal(`Refusing: the throwaway copy of ${release.tag} failed its check: ${problems.join("; ")}. The public port was not touched.`);
+        this.check("copy", ok, ok ? `the pre-check container on port ${port} passes the live check set for ${release.tag}` : problems.join("; "));
+        if (!ok) throw new WebRefusal(`Refusing: the pre-check container of ${release.tag} failed: ${problems.join("; ")}. The public port was not touched.`);
       } finally {
         forward.close();
       }
@@ -714,7 +899,7 @@ class ImageRun {
    * dropped link never leaves the port with nothing behind it. Every error
    * after that command goes through the revert.
    */
-  async swap(old: ContainerInspect, target: SwapTarget, want: Pick<SiteRelease, "tag" | "version" | "commit">): Promise<void> {
+  async swap(old: ContainerInspect, target: SwapTarget, want: SiteRelease): Promise<void> {
     const local = await this.deps.host.openPort(this.publicPort!);
     try {
       const publicOrigin = this.deps.publicOrigin ?? local.origin;
@@ -722,7 +907,7 @@ class ImageRun {
       const maintenance = await this.readMaintenance(old.Id);
       const oldName = old.Name.replace(/^\//, "");
       const suffix = randomBytes(3).toString("hex");
-      const stopTimeout = String(this.deps.stopTimeoutSeconds ?? 10);
+      const grace = this.deps.stopTimeoutSeconds ?? STOP_GRACE_SECONDS;
       let newId: string;
       let keptName: string | null = null;
       if (target.kind === "image") {
@@ -747,7 +932,7 @@ class ImageRun {
       let retagged = false;
       const stopAt = Date.now();
       try {
-        const started = await this.handover(handoverScript([["stop", "-t", stopTimeout, old.Id]], newId, old.Id));
+        const started = await this.handover(handoverScript([retireArgs(old.Id, grace)], newId, old.Id));
         if (started !== "started") failure = `the new website-server did not start: ${started}`;
         const goodAt = failure === null ? await this.firstGoodAnswer(local.origin, want) : null;
         this.gap = this.gapOf(stopAt, goodAt);
@@ -771,6 +956,12 @@ class ImageRun {
           const ok = sameIdentity(served, want);
           this.check("public", ok, `${publicOrigin}/version.json names ${served ? `${served.version} at ${served.commit}` : "nothing"}`);
           if (!ok) failure = `${publicOrigin}/version.json does not name ${want.tag}`;
+        }
+        if (failure === null && target.kind === "image") {
+          // The post-switch check repeats the pre-check's whole set, on the host's own public port.
+          const problems = await this.liveProblems(local.origin, want, newId, old.Config.Healthcheck);
+          this.check("live", problems.length === 0, problems.length === 0 ? `the public port passes the live check set for ${want.tag}` : problems.join("; "));
+          if (problems.length > 0) failure = `the live check set failed on the public port: ${problems.join("; ")}`;
         }
         if (failure === null) {
           // Step 7. The old container is parked under another name first, so
@@ -799,7 +990,7 @@ class ImageRun {
         const undo: string[][] =
           target.kind === "image"
             ? [["rm", "-f", newId]]
-            : [["stop", "-t", stopTimeout, newId], ["rename", newId, keptName!]];
+            : [retireArgs(newId, grace), ["rename", newId, keptName!]];
         const back = await this.handover(handoverScript([...undo, ["rename", old.Id, oldName]], old.Id, null));
         const backAt = back === "started" ? await this.firstGoodAnswer(local.origin, before) : null;
         this.revertGap = this.gapOf(revertAt, backAt);
@@ -1010,6 +1201,7 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       run.check("verify-local", true, `${basename(bundlePath)} signed by ${verified.principal}, sha256 ${verified.sha256}`);
 
       const old = await run.serving();
+      await run.checkDocker();
       await run.checkApiRange(release);
       if ((old.Config.Labels ?? {})[WEBSITE_IMAGE_LABELS.bundleSha256] === release.sha256) {
         // The same bundle on the same server image is already serving. On
@@ -1027,7 +1219,7 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       // Step 1, on the host, then step 2.
       const image = await buildOnHost(run, bundlePath, release, opts.serverImage);
       try {
-        await run.checkCopy(image, release);
+        await run.checkCopy(image, release, old);
         await run.swap(old, { kind: "image", image }, release);
       } catch (e) {
         // A candidate that never kept the port is not kept: the host holds exactly one previous image.
@@ -1117,6 +1309,7 @@ export async function rollbackImage(deps: ImageReleaseDeps): Promise<ImageReceip
     // A run that died between its stop and its start left nothing serving: start what served last.
     if (await run.restartStopped()) return "swapped";
     const old = await run.serving();
+    await run.checkDocker();
     const previous = await run.docker.imageId(siteImageTag(deps.instance, "previous"));
     if (previous === null) {
       // The first-rollout rule (§4): until a swap from one site image to another
@@ -1140,7 +1333,7 @@ export async function rollbackImage(deps: ImageReleaseDeps): Promise<ImageReceip
     const release = await run.releaseOfImage(previous);
     run.release = release;
     await run.checkApiRange(release);
-    await run.checkCopy(previous, release);
+    await run.checkCopy(previous, release, old);
     await run.swap(old, { kind: "image", image: previous }, release);
     return "swapped";
   });
