@@ -1,0 +1,425 @@
+<!-- Deposit (RM-146, under RM-205). Built to the design canvas, the source of
+     truth: https://claude.ai/artifact/JwVUy2W8WJbj8B4hxSb3MY (boards 1 to 5,
+     8, 9, 13 to 16, 19, 22 to 25). PRD: https://claude.ai/artifact/HBQ4utcPSrv5ULHDjQ7yWG
+
+     Early access first: depositGate() (lib/deposit/access.js) asks for a
+     personal code before the page loads anything. The gate is its own canvas
+     (https://claude.ai/artifact/BbcnTLm9uYxtj8PrXpfM5V): the early access
+     page's photograph, lit as that page lights it, with the form on its night
+     sky; on a phone the photograph sits above the form. The same block opens
+     Your requests (deposit-requests.html): change both together.
+
+     The vault on the left, the action on the right: the panel stays in view
+     on desktop while the vault details scroll (review finding P2). Review,
+     Signing and Requested are ONE dialog whose content changes; no dialog ever
+     opens on top of another (board 12).
+
+     Contracts 0.9.0: a request names an amount, never a price; the batch sets
+     the price, so the panel shows an estimate at today's price and the time
+     the request locks. Exit in kind shows only while the vault winds down.
+
+     The data source is the live vault on Base when lib/deposit/manifest.js has
+     Deploy 4's addresses, and the simulator otherwise; the eyebrow says
+     "Sample data" and the simulation bar shows only then.
+     Factory: depositView() (alpine/views/deposit.js). -->
+
+<section class="dp" x-data="depositGate()">
+
+  <!-- Early access gate -->
+  <template x-if="!open">
+    <div class="dpg-wrap">
+      <header class="dpg">
+        <div class="dpg__viz" x-data="litPlateHero(0.74, 0.3)" aria-hidden="true">
+          <img class="dpg__still" src="/assets/img/early-access/stairs.jpg" alt="" width="1672" height="941" fetchpriority="high" decoding="async" />
+          <canvas class="dpg__canvas"></canvas>
+        </div>
+        <div class="dpg__inner">
+          <div class="dpg__col">
+            <h1 class="dpg__title">Early access to the vault</h1>
+            <p class="dpg__lede">The Robot Money vault on Base opens to the early access list first, a few depositors at a time.</p>
+            <label class="dpg__label" for="dp-code">Have an invite code? Enter it below.</label>
+            <div class="dpg__code" :class="'is-' + state">
+              <span class="dpg__rm" aria-hidden="true">RM</span>
+              <template x-for="i in [0, 1, 2, 3, 4]" :key="i"><span class="dpg__box" :class="boxClass(i)" x-text="box(i)" aria-hidden="true"></span></template>
+              <span class="dpg__dash" aria-hidden="true"></span>
+              <template x-for="i in [5, 6, 7, 8, 9]" :key="i"><span class="dpg__box" :class="boxClass(i)" x-text="box(i)" aria-hidden="true"></span></template>
+              <input id="dp-code" class="dpg__input" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="24" x-init="focusFirst($el)" @input="onInput($event)" @focus="focused = true" @blur="focused = false" :aria-invalid="state === 'wrong' ? 'true' : 'false'" aria-describedby="dp-code-msg" />
+            </div>
+            <p class="dpg__msg" id="dp-code-msg" role="status" :class="'is-' + state" x-text="msg()"></p>
+            <p class="dpg__fine">Not on the list yet? <a href="/early-access">Request early access</a></p>
+          </div>
+        </div>
+      </header>
+      <footer class="dp__foot dpg__foot">
+        <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
+        <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
+      </footer>
+    </div>
+  </template>
+
+  <template x-if="open">
+  <div x-data="depositView()" @keydown.escape.window="menuOpen = false; closeDialog()">
+  <div class="dp__wrap">
+    <div class="dp__cols">
+
+      <!-- The vault -->
+      <div class="dp__main">
+        <header class="dp__head">
+          <p class="dp__eyebrow"><span class="dp__lbl">Vault on Base</span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
+          <h1 class="dp__title">The model portfolio,<br>in one vault</h1>
+          <p class="dp__lede">Deposit USDC for shares of the portfolio the swarm recommends. Every holder owns the same mix.</p>
+        </header>
+
+        <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
+
+        <div class="dp__facts">
+          <div class="dp__fact"><span class="dp__lbl">Share price</span><b x-text="price()">—</b></div>
+          <div class="dp__fact"><span class="dp__lbl">TVL</span><b x-text="tvl()">—</b></div>
+          <div class="dp__fact"><span class="dp__lbl">Room left</span><b x-text="roomLabel()">—</b></div>
+        </div>
+
+        <section class="dp__sec dp__sec--first" aria-labelledby="hold-h">
+          <div class="dp__sechead">
+            <h2 class="dp__h2" id="hold-h">What the vault holds</h2>
+            <a class="dp__lbl dp__lbl--link" href="/model-portfolio">Model portfolio</a>
+          </div>
+          <div class="dp__hold">
+            <span class="dp__ring" x-html="ringSvg()"></span>
+            <div class="dp__tablewrap">
+              <table class="dp__tbl">
+                <thead><tr><th scope="col">Position</th><th scope="col">Venue</th><th scope="col" class="n">Target</th><th scope="col" class="n">Actual</th><th scope="col" class="n">Value</th></tr></thead>
+                <tbody>
+                  <template x-for="h in holdings()" :key="h.key">
+                    <tr>
+                      <td><i class="dp__sw" data-mark="series" :style="`background:${h.hue}`" aria-hidden="true"></i><span x-text="h.label"></span></td>
+                      <td x-text="h.venueLabel"></td>
+                      <td class="n" x-text="h.target"></td>
+                      <td class="n" x-text="h.actual"></td>
+                      <td class="n" x-text="h.value"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="dp__sec" aria-labelledby="land-h">
+          <h2 class="dp__h2" id="land-h">How a deposit lands</h2>
+          <div class="dp__steps">
+            <div><p class="dp__lbl">Request</p><p class="dp__when">Any time</p><p class="dp__desc">Your USDC waits in the queue. You can cancel until it locks, <span x-text="lockLead()"></span> before its batch.</p></div>
+            <div><p class="dp__lbl">Batch</p><p class="dp__when">Every <span x-text="epochLabel()"></span></p><p class="dp__desc">Sets the price after requests lock. Deposits and redemptions are matched with each other; only the difference trades in the market.</p></div>
+            <div><p class="dp__lbl">Hold</p><p class="dp__when" x-text="holdLabel()"></p><p class="dp__desc">The wait that stops a pushed price from moving money.</p></div>
+            <div><p class="dp__lbl">Shares</p><p class="dp__when"><span x-text="waitLabel()"></span> after</p><p class="dp__desc">In your wallet. A large deposit can fill over several batches; anything unfilled after <span x-text="expiryLabel()"></span> is yours to take back.</p></div>
+          </div>
+        </section>
+
+        <section class="dp__sec dp__sec--last" aria-labelledby="facts-h">
+          <h2 class="dp__h2" id="facts-h">Before you deposit</h2>
+          <dl class="dp__dl">
+            <dt>Custody</dt><dd>Non-custodial. Your wallet signs every step, and Robot Money never holds your keys.</dd>
+            <dt>Price</dt><dd>Set by the batch, from the vault's holdings at market prices, after requests lock. Nobody can see it when they request.</dd>
+            <dt>Getting out</dt><dd>Redeem to USDC <span x-text="redeemWaitLabel()"></span> after you request, at the price the batch sets, less the exit fee.</dd>
+            <dt>Who sets the mix</dt><dd>The swarm recommends it, a multisig applies it through a timelock, and the vault moves toward it in small steps.</dd>
+            <dt>Limits</dt><dd class="dp__mono" x-text="limits()"></dd>
+            <dt>Fees</dt><dd class="dp__mono" x-text="fees()"></dd>
+            <dt>Contracts</dt><dd class="dp__mono" x-text="contractsLabel()"></dd>
+            <dt>Audit</dt><dd>[AUDIT STATUS]</dd>
+            <dt>Risks</dt><dd>Deposits are not insured and can lose value. <a href="/disclaimer">Read the risks</a> and how <a href="/smart-contract-risks">DeFi vaults get exploited</a>.</dd>
+          </dl>
+        </section>
+      </div>
+
+      <!-- The panel -->
+      <aside class="dp__aside" aria-label="Deposit and redeem">
+        <div class="dp__mhead" aria-hidden="true"><span class="dp__mtitle">Deposit</span><span class="dp__mono dp__muted" x-text="vault ? `${vault.priceUsdc.toFixed(4)} USDC a share` : ''"></span></div>
+        <div class="dp__panel">
+
+          <template x-if="connected()">
+            <div class="dp__walletrow" @click.outside="menuOpen = false">
+              <button type="button" class="dp__chip" :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu" @click="menuOpen = !menuOpen">
+                <i class="dp__dot" :class="onBase() ? 'is-ok' : 'is-off'" aria-hidden="true"></i><span x-text="short()"></span><span class="dp__muted" x-text="onBase() ? 'Base' : 'Wrong network'"></span>
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 3.5l3 3 3-3"></path></svg>
+              </button>
+              <div class="dp__menu" role="menu" x-show="menuOpen" x-cloak>
+                <div class="dp__menuhead">
+                  <span class="dp__lbl" x-text="`Connected with ${walletName() || 'a wallet'}`"></span>
+                  <span class="dp__addr" x-text="address()"></span>
+                  <span class="dp__menulinks"><button type="button" class="dp__txt" @click="copyAddress()" x-text="copied ? 'Copied' : 'Copy'"></button><a class="dp__txt" :href="explorerAddress()" target="_blank" rel="noopener noreferrer">Basescan</a></span>
+                </div>
+                <a role="menuitem" class="dp__menuitem" href="/deposit/requests"><span>Your requests</span><span class="dp__muted" x-show="inQueue() > 0" x-text="`${fmtShares(inQueue())} shares queued`"></span></a>
+                <button role="menuitem" type="button" class="dp__menuitem" @click="menuOpen = false; connect()">Switch wallet</button>
+                <button role="menuitem" type="button" class="dp__menuitem" @click="disconnect()">Disconnect</button>
+              </div>
+            </div>
+          </template>
+
+          <div class="dp__tabs" role="tablist" aria-label="Action">
+            <button type="button" role="tab" class="dp__tab" :class="tab === 'deposit' ? 'is-on' : ''" :aria-selected="tab === 'deposit' ? 'true' : 'false'" @click="tab = 'deposit'">Deposit</button>
+            <button type="button" role="tab" class="dp__tab" :class="tab === 'redeem' ? 'is-on' : ''" :aria-selected="tab === 'redeem' ? 'true' : 'false'" @click="tab = 'redeem'">Redeem</button>
+          </div>
+
+          <!-- What stops the vault right now: the cause, when it ends, and what still works. -->
+          <template x-if="stop()">
+            <div class="dp__note" role="status"><b x-text="stop().title"></b><p x-text="stop().body"></p></div>
+          </template>
+
+          <!-- Deposit -->
+          <div x-show="tab === 'deposit'" class="dp__pane" role="tabpanel">
+            <div class="dp__field" :class="amountError() ? 'is-err' : ''">
+              <div class="dp__fieldtop">
+                <label class="dp__lbl" for="dp-amt">You deposit</label>
+                <template x-if="!acctData"><span class="dp__lbl">Connect to see balance</span></template>
+                <template x-if="acctData"><span class="dp__lbl">Balance <span class="dp__bal" x-text="acctData.usdc.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })"></span><button type="button" class="dp__txt dp__txt--gap" @click="setMax()">Max</button></span></template>
+              </div>
+              <div class="dp__amt">
+                <input id="dp-amt" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" x-model="amount" :aria-invalid="amountError() ? 'true' : 'false'" aria-describedby="dp-amt-msg">
+                <span class="dp__tok"><i class="dp__coin" aria-hidden="true"></i>USDC</span>
+              </div>
+            </div>
+            <p class="dp__err dp__err--tight" id="dp-amt-msg" x-show="amountError() || maxWhy" :class="amountError() ? '' : 'is-hint'" x-text="amountError() || maxWhy" x-cloak></p>
+
+            <div class="dp__kvs">
+              <div class="dp__kv"><span>You receive about</span><b x-text="estShares()"></b></div>
+              <div class="dp__kv"><span>You can cancel until</span><b x-text="fmtWhen(lockAt())"></b></div>
+              <div class="dp__kv"><span>Next batch</span><b x-text="nextBatch()"></b></div>
+              <div class="dp__kv"><span>Shares arrive</span><b x-text="sharesArrive()"></b></div>
+            </div>
+            <p class="dp__hint">At today's price. The batch sets the price your deposit buys at.</p>
+
+            <template x-if="!connected()">
+              <div class="dp__stack">
+                <button type="button" class="btn-primary dp__btn" @click="connect()" :disabled="walletLoading()" x-text="walletLoading() ? 'Opening…' : 'Connect wallet'"></button>
+                <p class="dp__fine">Any wallet on Base, a Safe included. No sign-up.<template x-if="simulated()"><span> <button type="button" class="dp__txt" @click="useTestAddress()">Use a test address</button></span></template></p>
+                <p class="dp__err dp__err--tight" x-show="walletError()" x-text="walletError()" x-cloak></p>
+                <p class="dp__legal">By connecting a wallet you agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>
+              </div>
+            </template>
+            <template x-if="connected() && !onBase()">
+              <div class="dp__stack">
+                <button type="button" class="btn-primary dp__btn" @click="switchToBase()">Switch to Base</button>
+                <p class="dp__fine">The vault is on Base. Your wallet is on another network.</p>
+                <p class="dp__err dp__err--tight" x-show="walletError()" x-text="walletError()" x-cloak></p>
+              </div>
+            </template>
+            <template x-if="connected() && onBase()">
+              <button type="button" class="btn-primary dp__btn" :disabled="!canReview()" @click="openReview('deposit')">Review deposit</button>
+            </template>
+          </div>
+
+          <!-- Redeem (board 8) -->
+          <div x-show="tab === 'redeem'" class="dp__pane" role="tabpanel" x-cloak>
+            <div class="dp__field" :class="redeemError() ? 'is-err' : ''">
+              <div class="dp__fieldtop">
+                <label class="dp__lbl" for="dp-sh">You redeem</label>
+                <template x-if="!acctData"><span class="dp__lbl">Connect to see shares</span></template>
+                <template x-if="acctData"><span class="dp__lbl">You hold <span class="dp__bal" x-text="fmtShares(acctData.shares)"></span><button type="button" class="dp__txt dp__txt--gap" @click="redeemMax()">Max</button></span></template>
+              </div>
+              <div class="dp__amt">
+                <input id="dp-sh" type="text" inputmode="decimal" autocomplete="off" placeholder="0" x-model="shares" :aria-invalid="redeemError() ? 'true' : 'false'">
+                <span class="dp__tok">Shares</span>
+              </div>
+            </div>
+            <p class="dp__err dp__err--tight" x-show="redeemError()" x-text="redeemError()" x-cloak></p>
+
+            <template x-if="exitMode === 'queue'">
+              <div class="dp__stack dp__stack--tight">
+                <div class="dp__kvs">
+                  <div class="dp__kv"><span>You receive about</span><b x-text="estUsdc()"></b></div>
+                  <div class="dp__kv"><span>Exit fee</span><b x-text="fmtFee(exitFeeBps())"></b></div>
+                  <div class="dp__kv"><span>You can cancel until</span><b x-text="fmtWhen(redeemLockAt())"></b></div>
+                  <div class="dp__kv"><span>USDC ready</span><b x-text="rq ? fmtWhen(rq.readyAt) : nextBatch()"></b></div>
+                </div>
+                <p class="dp__hint">At today's price, after the exit fee. The batch sets the price your shares sell at.</p>
+              </div>
+            </template>
+            <!-- Wind-down only (D18): the one way out while no batch runs. -->
+            <template x-if="exitMode === 'inkind'">
+              <div class="dp__choice is-on">
+                <span class="dp__choicehead"><span>Exit in kind</span></span>
+                <span class="dp__choicep">At once, your slice of each holding as it is. Nothing is sold.</span>
+                <template x-for="l in inKindSummary()" :key="l.key"><span class="dp__kv"><span x-text="l.label"></span><b x-text="l.amount"></b></span></template>
+              </div>
+            </template>
+
+            <template x-if="!connected()"><button type="button" class="btn-primary dp__btn" @click="connect()">Connect wallet</button></template>
+            <template x-if="connected() && !onBase()"><button type="button" class="btn-primary dp__btn" @click="switchToBase()">Switch to Base</button></template>
+            <template x-if="connected() && onBase()">
+              <button type="button" class="btn-primary dp__btn" :disabled="!canRedeem()" @click="openReview(exitMode === 'queue' ? 'redeem' : 'inkind')" x-text="exitMode === 'queue' ? 'Review redemption' : 'Review exit in kind'"></button>
+            </template>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="dp__foot">
+      <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
+      <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
+    </footer>
+  </div>
+
+  <!-- The dialog: review, then signing, then requested -->
+  <div class="dp__scrim" x-show="dlg.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeDialog()">
+    <div class="dp__dlg" role="dialog" aria-modal="true" aria-labelledby="dp-dlg-h">
+      <div class="dp__dlghead">
+        <div class="dp__stack dp__stack--tight">
+          <template x-if="dlg.phase === 'signing' && dlg.steps.length > 1 && !dlg.batch"><span class="dp__lbl" x-text="stepOf()"></span></template>
+          <template x-if="dlg.phase === 'requested'"><svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#10b981" stroke-width="1.8" aria-hidden="true"><path d="M5 14.5l6 6L23 8"></path></svg></template>
+          <h2 class="dp__dlgtitle" id="dp-dlg-h" tabindex="-1" x-ref="dlgTitle" x-text="dlgTitle()"></h2>
+        </div>
+        <button type="button" class="dp__x" aria-label="Close" @click="closeDialog()" x-show="dlg.phase === 'review'"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"></path></svg></button>
+      </div>
+
+      <!-- Review (board 3, with the checks of board 22) -->
+      <template x-if="dlg.phase === 'review'">
+        <div class="dp__dlgbody">
+          <template x-if="dlg.kind === 'deposit'">
+            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You deposit</span><p class="dp__bignum" x-text="fmtUsdc(dlg.amount)"></p><p class="dp__soft">for about <b class="dp__mono dp__strong" x-text="estShares(dlg.amount)"></b> of the model portfolio, at the price its batch sets</p></div>
+          </template>
+          <template x-if="dlg.kind !== 'deposit'">
+            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You redeem</span><p class="dp__bignum" x-text="`${fmtShares(dlg.amount)} shares`"></p><p class="dp__soft" x-text="dlg.kind === 'redeem' ? `for about ${estUsdc(dlg.amount)} after the exit fee, at the price its batch sets` : 'and receive your slice of each holding, at once'"></p></div>
+          </template>
+
+          <div class="dp__kvs dp__kvs--rule">
+            <div class="dp__kv"><span>Share price now</span><b x-text="price()"></b></div>
+            <template x-if="dlg.kind !== 'inkind'"><div class="dp__kv"><span>Your price</span><b>Set by the batch</b></div></template>
+            <template x-if="dlg.kind === 'deposit'"><div class="dp__kv"><span>Entry fee</span><b x-text="fmtFee(vault?.entryFeeBps)"></b></div></template>
+            <template x-if="dlg.kind !== 'deposit'"><div class="dp__kv"><span>Exit fee</span><b x-text="fmtFee(dlg.quote?.feeBps ?? vault?.exitFeeBps)"></b></div></template>
+            <template x-if="dlg.kind === 'inkind'"><template x-for="l in inKindSummary()" :key="`r${l.key}`"><div class="dp__kv"><span x-text="l.label"></span><b x-text="l.amount"></b></div></template></template>
+            <div class="dp__kv"><span>From</span><b x-text="`${short()} on Base`"></b></div>
+          </div>
+
+          <template x-if="dlg.quote">
+            <div class="dp__stack">
+              <span class="dp__lbl">What happens next</span>
+              <ol class="dp__tl">
+                <li class="is-now"><span>You request</span><span class="dp__mono">Now</span></li>
+                <li><span>It locks, and cancelling closes</span><span class="dp__mono" x-text="fmtWhen(dlg.quote.lockAt)"></span></li>
+                <li><span>Next batch sets the price and fills it</span><span class="dp__mono" x-text="fmtWhen(dlg.quote.settlesAt)"></span></li>
+                <template x-if="dlg.kind === 'deposit'"><li><span>Shares held</span><span class="dp__mono" x-text="holdLabel()"></span></li></template>
+                <li><span x-text="dlg.kind === 'deposit' ? 'Shares arrive in your wallet' : 'USDC ready to claim'"></span><span class="dp__mono" x-text="fmtWhen(dlg.quote.readyAt)"></span></li>
+                <li><span x-text="dlg.kind === 'deposit' ? 'Unfilled USDC can be taken back' : 'If unfilled, you can ask for the shares back'"></span><span class="dp__mono" x-text="fmtWhen(expiresAt())"></span></li>
+              </ol>
+            </div>
+          </template>
+
+          <div class="dp__stack dp__stack--tight">
+            <span class="dp__lbl" x-text="signatureLine()"></span>
+            <template x-for="(c, i) in dlg.calls" :key="i">
+              <div class="dp__sig"><span class="dp__num" x-text="i + 1"></span><div><p x-text="c.label"></p><p class="dp__fine" x-text="callNote(c)"></p></div></div>
+            </template>
+            <template x-if="dlg.batch"><p class="dp__fine">Your wallet shows both steps together. They go through as one, or not at all.</p></template>
+          </div>
+
+          <!-- Checks before the wallet opens (board 22): only shown when one fails. -->
+          <template x-if="failedChecks().length">
+            <div class="dp__checks" role="status">
+              <span class="dp__lbl">One thing first</span>
+              <template x-for="c in dlg.checks" :key="c.key">
+                <div class="dp__check">
+                  <template x-if="c.ok"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="#10b981" stroke-width="1.8" aria-hidden="true"><path d="M4 10.5l4 4 8-9"></path></svg></template>
+                  <template x-if="!c.ok"><i class="dp__pt" aria-hidden="true"></i></template>
+                  <span x-text="c.text"></span><span class="dp__mono dp__muted dp__right" x-text="c.aside || ''"></span>
+                </div>
+              </template>
+              <template x-for="c in failedChecks()" :key="`n${c.key}`"><p class="dp__soft dp__small" x-show="c.note" x-text="c.note"></p></template>
+              <p class="dp__fine">Your wallet opens only once every check passes. This checks again on its own.</p>
+            </div>
+          </template>
+
+          <template x-if="accountSwitched()">
+            <p class="dp__err dp__err--tight">Your wallet switched to another account. Close this and review again for the new address.</p>
+          </template>
+
+          <template x-if="needsAck()">
+            <label class="dp__ack">
+              <input type="checkbox" x-model="dlg.ack">
+              <span>I have read the <a href="/terms" target="_blank" rel="noopener">Terms</a> and the <a href="/disclaimer" target="_blank" rel="noopener">risks</a>. My deposit buys the model portfolio at the price its batch sets, is not insured, can lose value, and settles in batches. [ELIGIBILITY LINE, counsel]</span>
+            </label>
+          </template>
+
+          <div class="dp__btnrow">
+            <button type="button" class="dp__btn2" @click="closeDialog()">Back</button>
+            <button type="button" class="btn-primary dp__btn dp__grow" :disabled="!canConfirm()" @click="confirm()">Confirm in wallet</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- Signing (boards 4, 15, 16) -->
+      <template x-if="dlg.phase === 'signing'">
+        <div class="dp__dlgbody">
+          <p class="dp__soft" x-show="!dlg.error" x-text="signingLede()"></p>
+          <div>
+            <template x-for="(st, i) in dlg.steps" :key="i">
+              <div class="dp__srow">
+                <span class="dp__mark" aria-hidden="true">
+                  <template x-if="st.state === 'done'"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#10b981" stroke-width="1.6"><path d="M4 10.5l4 4 8-9"></path></svg></template>
+                  <template x-if="st.state === 'wallet' || st.state === 'sent'"><svg class="dp__spin" width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#f2f4f9" stroke-width="1.6"><circle cx="10" cy="10" r="7" stroke="#2e3a4e"></circle><path d="M10 3a7 7 0 0 1 7 7"></path></svg></template>
+                  <template x-if="st.state === 'idle'"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#2e3a4e" stroke-width="1.6"><circle cx="10" cy="10" r="7"></circle></svg></template>
+                </span>
+                <div class="dp__grow"><p x-text="st.label"></p><p class="dp__fine" x-text="stepWords(st)"></p></div>
+                <template x-if="hashUrl(st.hash)"><a class="dp__txt" :href="hashUrl(st.hash)" target="_blank" rel="noopener noreferrer">Basescan</a></template>
+              </div>
+            </template>
+          </div>
+          <template x-if="dlg.error">
+            <div class="dp__stack">
+              <p class="dp__err dp__err--tight" role="alert" x-text="dlg.error"></p>
+              <div class="dp__btnrow"><button type="button" class="dp__btn2" @click="closeDialog()">Close</button><button type="button" class="btn-primary dp__btn dp__grow" @click="retry()">Try again</button></div>
+            </div>
+          </template>
+          <template x-if="!dlg.error">
+            <div class="dp__stack dp__stack--tight dp__rule">
+              <p class="dp__fine" x-text="closeNote()"></p>
+              <button type="button" class="dp__txt dp__self-start" @click="dlg.open = false">Close and keep waiting</button>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- Requested (board 5) -->
+      <template x-if="dlg.phase === 'requested'">
+        <div class="dp__dlgbody">
+          <template x-if="dlg.kind === 'inkind'"><p class="dp__soft">Your slice of each holding is in your wallet.</p></template>
+          <template x-if="dlg.kind !== 'inkind'">
+            <p class="dp__soft"><span x-text="dlg.kind === 'deposit' ? `${fmtUsdc(dlg.amount)} is in the queue. Your shares arrive` : `${fmtShares(dlg.amount)} shares are in the queue. Your USDC is ready`"></span> <b class="dp__mono dp__strong" x-text="fmtWhen(dlg.quote?.readyAt)"></b>, <span x-text="readyIn()"></span>. <span x-text="`You can cancel until ${fmtWhenShort(dlg.quote?.lockAt)} under Your requests.`"></span></p>
+          </template>
+          <template x-if="dlg.kind !== 'inkind'">
+            <div class="dp__track" aria-label="Progress" :style="`grid-template-columns: repeat(${track().length}, minmax(0, 1fr))`">
+              <template x-for="n in track()" :key="n.key"><div class="dp__node" :class="n.done ? 'is-done' : ''"><i aria-hidden="true"></i><b x-text="n.label"></b><span x-text="n.when"></span></div></template>
+            </div>
+          </template>
+          <template x-if="dlg.kind !== 'inkind'">
+            <div class="dp__linkbox">
+              <div class="dp__stack dp__stack--tight dp__minw"><span class="dp__lbl">Status link</span><a class="dp__mono dp__soft dp__ellipsis" :href="statusLink()" x-text="statusUrl().replace(/^https?:\/\//, '')"></a></div>
+              <button type="button" class="dp__txt" @click="copyStatus()" x-text="copied ? 'Copied' : 'Copy link'"></button>
+            </div>
+          </template>
+          <div class="dp__btnrow">
+            <button type="button" class="dp__btn2" @click="closeDialog()">Done</button>
+            <a class="btn-primary dp__btn dp__grow" href="/deposit/requests">View your requests</a>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Simulation only: the clock and states the simulated queue runs on. -->
+  <template x-if="simulated()">
+    <aside class="dp__sim" aria-label="Simulation controls">
+      <p><b>Simulated vault</b> Nothing is sent to any chain.</p>
+      <p>Clock <b class="dp__mono" x-text="simClock()"></b> <span x-text="simAhead()"></span></p>
+      <div class="dp__simb">
+        <button type="button" class="dp__btn2 dp__btn2--sm" @click="simNext()">Run next batch</button>
+        <button type="button" class="dp__btn2 dp__btn2--sm" @click="simAdvance(1)">+1 h</button>
+        <button type="button" class="dp__txt" @click="simToggleDeposits()" x-text="simState().deposits ? 'Resume deposits' : 'Stop deposits'"></button>
+        <button type="button" class="dp__txt" @click="simToggleBlocked()" x-text="simState().blocked ? 'Unblock batches' : 'Block batches'"></button>
+        <button type="button" class="dp__txt" @click="simToggleWindDown()" x-text="simState().windDown ? 'Restore' : 'Wind down'"></button>
+        <template x-if="!resetAsk"><button type="button" class="dp__txt" @click="resetAsk = true">Reset</button></template>
+        <template x-if="resetAsk"><span>Clear every simulated request? <button type="button" class="dp__txt" @click="simReset()">Yes</button> <button type="button" class="dp__txt" @click="resetAsk = false">No</button></span></template>
+      </div>
+    </aside>
+  </template>
+  </div>
+  </template>
+</section>
