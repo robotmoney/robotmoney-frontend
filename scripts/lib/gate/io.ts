@@ -35,6 +35,16 @@ export function describeLastStop(c: ContainerState): string {
   return `last stop ${s.finishedAt || "?"}, exit code ${s.exitCode}, oom-killed ${s.oomKilled}${s.error ? `, docker error '${s.error}'` : ""}`;
 }
 
+/**
+ * PURE. A container whose logs are read but whose running and health state is not graded: a `run`
+ * container (the typed migrate) exits by design, and so does a website-server kept stopped as
+ * `<name>-first-rollout` by a host's first swap to the site image (web-serving-architecture.md
+ * section 4, the first-rollout rule): it is the rollback target, never a running service.
+ */
+export function ungradedContainer(name: string): boolean {
+  return /-run-/.test(name) || /-first-rollout$/.test(name);
+}
+
 /** Every container of a compose project, one-shots included while Docker still has them. */
 export function projectContainers(project: string): ContainerState[] {
   const names = sh(["docker", "ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}}"])
@@ -52,7 +62,7 @@ export function projectContainers(project: string): ContainerState[] {
       health: health ?? "?",
       restarts: Number(restarts ?? 0),
       startedAt: startedAt ?? "",
-      oneShot: /-run-/.test(name),
+      oneShot: ungradedContainer(name),
       participantKind: kind ? kind : null,
       lastStop: exitCode === undefined ? undefined : { exitCode: Number(exitCode), oomKilled: oom === "true", error: error ?? "", finishedAt: finishedAt ?? "" },
     };

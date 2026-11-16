@@ -80,6 +80,20 @@ describe("prerendered routes carry their own content", () => {
     }
   });
 
+  test("no served HTML file carries an email address (owner, 2026-11-15)", () => {
+    // Cloudflare's email obfuscation rewrites any email-shaped string in an HTML answer
+    // (`__cf_email__` markup plus its decode script), so the edge serves bytes that are
+    // not the signed bundle's. Contact goes through Telegram; placeholders and examples
+    // are not email-shaped.
+    const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
+    const html = (Array.from(new Bun.Glob("**/*.html").scanSync({ cwd: dir })) as string[]);
+    expect(html.length).toBeGreaterThan(30);
+    for (const f of html) {
+      const hit = EMAIL.exec(readFileSync(join(dir, f), "utf8"));
+      expect(hit?.[0], `${f} carries an email-shaped string`).toBeUndefined();
+    }
+  });
+
   test("every route carries substantially more than nav and footer", () => {
     for (const route of ROUTES) {
       expect(readableChars(htmlFor(route)), `${route} is boilerplate only`).toBeGreaterThan(BOILERPLATE_CHARS * 1.5);

@@ -162,6 +162,20 @@ export function evaluateJudgeConfig(row: { mode: string } | undefined): { status
   return { status: "PASS", detail: ["mode=enforce"] };
 }
 
+/**
+ * PURE. Where a website-server's log window starts in a post-release grade without `--since`. The window
+ * starts at the api container's start, but the api listens about a second later; a proxy request asked
+ * in between is refused (nginx: `connect() failed (111: Connection refused) while connecting to
+ * upstream`) and answered from the maintenance fallback. That refusal is the rolling boot's own api
+ * swap (release-runbooks.md section 4.7), not the release's state, so a website-server's window starts
+ * when the api logged `api listening`. Every other source keeps the api's start (stage run
+ * 20261115T034457Z, Q28).
+ */
+export function logWindowStart(source: string, since: string, apiListeningAt: string | null): string {
+  if (apiListeningAt === null || !/-website-server-\d+(-first-rollout)?$/.test(source)) return since;
+  return Date.parse(apiListeningAt) > Date.parse(since) ? apiListeningAt : since;
+}
+
 /** Every service container of a project: running, healthy where it has a check, and (strict) never restarted. */
 export function evaluateContainers(containers: readonly ContainerState[], project: string, strictRestarts: boolean): { failures: string[]; warnings: string[]; services: ContainerState[] } {
   const services = containers.filter((c) => !c.oneShot);

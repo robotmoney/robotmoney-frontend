@@ -17,15 +17,23 @@
 // the running release's commit and /version its tag. Then only /version.json
 // must name the release commit; /api/version must still answer 200 as JSON
 // with no +dirty or +unknown, and neither its commit nor /version's tag is compared.
+//
+// A signed bundle's /version.json names the commit the bundle was BUILT at. A platform release that deploys
+// one (v0.9.0's first rollout, scripts/release/platform-bundle.ts) builds it once, at the QA commit stage
+// ran, and production deploys those same bytes (R13) at the rc's squash commit, whose tree is the same
+// (D70). So /version.json may also name a commit the release commit differs from only in check-only paths
+// (journal.ts CHECK_ONLY_PATHS; an empty diff included), which `sameSite` decides with git in the checkout.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { notCheckOnly } from "./journal.ts";
 
 /**
  * PURE. Every way the served identity is not the release's. `ref` is the go's
  * ref; a tag must be served as `tag` at /version (`versionText`). A commit ref
  * (stage) compares no tag, so /version is not read.
  */
-export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit, siteOnly = false): string[] {
+export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit, siteOnly = false, sameSite: (siteCommit: string) => boolean = () => false): string[] {
   const out: string[] = [];
   const tag = ref === commit || siteOnly ? undefined : ref;
   if (apiText === null) out.push("/api/version did not answer 200");
@@ -50,8 +58,9 @@ export function identityProblems(apiText: string | null, versionText: string | n
     let site: { commit?: unknown } | null = null;
     try { site = JSON.parse(siteText) as { commit?: unknown }; } catch { out.push("/version.json is not JSON"); }
     const siteCommit = site && typeof site.commit === "string" ? site.commit.replace(/\+.*$/, "") : "";
-    if (site && !(siteCommit.length >= 7 && /^[0-9a-f]+$/.test(siteCommit) && commit.startsWith(siteCommit))) {
-      out.push(`/version.json commit is ${String(site.commit)}, which does not name ${commit}`);
+    const hex = siteCommit.length >= 7 && /^[0-9a-f]+$/.test(siteCommit);
+    if (site && !(hex && (commit.startsWith(siteCommit) || sameSite(siteCommit)))) {
+      out.push(`/version.json commit is ${String(site.commit)}, which does not name ${commit} or a commit whose site tree equals it`);
     }
     if (/\+(dirty|unknown)/.test(siteText)) out.push("/version.json carries +dirty or +unknown");
   }
@@ -61,6 +70,12 @@ export function identityProblems(apiText: string | null, versionText: string | n
 function flag(name: string): string | undefined {
   const at = process.argv.indexOf(name);
   return at >= 0 ? process.argv[at + 1] : undefined;
+}
+
+/** Whether `siteCommit` differs from `commit` only in check-only paths, by `git diff` in this checkout; false when git cannot tell. */
+function siteTreeMatches(siteCommit: string, commit: string): boolean {
+  const r = spawnSync("git", ["diff", "--name-only", siteCommit, commit], { encoding: "utf8" });
+  return r.status === 0 && notCheckOnly(r.stdout.split("\n").map((l) => l.trim()).filter(Boolean)).length === 0;
 }
 
 async function get(url: string): Promise<string | null> {
@@ -85,7 +100,7 @@ async function main(): Promise<number> {
   const apiText = await get(`${origin}/api/version`);
   const versionText = await get(`${origin}/version`);
   const siteText = await get(`${origin}/version.json`);
-  const problems = identityProblems(apiText, versionText, siteText, commit, ref, siteOnly);
+  const problems = identityProblems(apiText, versionText, siteText, commit, ref, siteOnly, (siteCommit) => siteTreeMatches(siteCommit, commit));
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
   writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, siteOnly, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });

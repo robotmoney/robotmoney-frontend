@@ -23,6 +23,7 @@ import {
 import {
   assertImageInstance,
   deployImage,
+  fileOfTar,
   FIRST_ROLLOUT_SUFFIX,
   handoverScript,
   GAP_LIMIT_MS,
@@ -125,6 +126,21 @@ const PUBLIC_PORT = 48787;
 const COPY_PORT = 40001;
 const OLD_RELEASE = { version: "0.1.0", commit: "aaaa111" };
 const IMAGE_INSTANCE = "stage_target";
+/** A ustar entry as `docker cp <c>:<file> -` prints one: a 512-byte header, the body padded to 512. */
+function tarEntry(name: string, body: string, type = "0"): string {
+  const size = Buffer.byteLength(body);
+  const h = Buffer.alloc(512, 0);
+  h.write(name, 0);
+  h.write("0000644\0", 100);
+  h.write(`${size.toString(8).padStart(11, "0")}\0`, 124);
+  h.write(type, 156);
+  h.write("ustar\0", 257);
+  return h.toString("latin1") + body + "\0".repeat((512 - (size % 512)) % 512);
+}
+function tarOf(name: string, body: string, type = "0"): string {
+  return tarEntry(name, body, type) + "\0".repeat(1024);
+}
+
 const KEPT_ID = "c".repeat(64);
 const NGINX_IMAGE = `sha256:${"5".repeat(64)}`;
 const KEPT_RELEASE = { version: "0.0.1", commit: "nginx01" };
@@ -315,11 +331,13 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
       }
       case "run":
         if (joined.includes("rm-verify-web-bundle")) return state.hostVerifyFails ? no("web bundle refused: no key in /etc/robotmoney/allowed-signers signed it") : ok("verified");
-        if (joined.includes("--volumes-from")) return ok(JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" }));
         if (joined.includes("--entrypoint cat")) return ok(JSON.stringify({ ...state.previousRelease }));
         // The throwaway copy serves the image it was started from.
         copyRelease = a.at(-1) === PREV_IMAGE ? state.previousRelease : state.newRelease;
         return ok("copyid");
+      case "cp":
+        if (a[2] === `${KEPT_ID}:/srv/web/current/version.json`) return ok(tarOf("version.json", JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" })));
+        return no("No such container:path");
       case "build":
         built.sha256 = a.find((x) => x.startsWith("BUNDLE_SHA256="))!.slice("BUNDLE_SHA256=".length);
         return ok(NEW_IMAGE);
@@ -670,7 +688,9 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["api-range", true], ["gap", true], ["public", true]]);
     expect(host.state.serving).toBe("kept");
     const lines = host.lines();
-    expect(lines.some((l) => l.includes(`--volumes-from ${KEPT_ID}`))).toBe(true);
+    expect(lines.some((l) => l.startsWith(`docker cp -L ${KEPT_ID}:`))).toBe(true);
+    // The kept container's image is never run: a containerd image store may have dropped it.
+    expect(lines.some((l) => l.includes(NGINX_IMAGE) && l.startsWith("docker run"))).toBe(false);
     const order = [
       index(lines, new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
       index(lines, new RegExp(`^docker start ${KEPT_ID}$`)),
@@ -777,6 +797,23 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["restart", true]]);
     expect(host.state.serving).toBe("old");
     expect(host.lines().filter((l) => /^docker (stop|create|build)\b/.test(l))).toEqual([]);
+  });
+});
+
+describe("v0.9.0 review fixes: the only stopped website-server, and --bundle serving's digest", () => {
+  test("--rollback with nothing running and no -current image starts the only stopped website-server (a first swap whose revert could not restart nginx)", async () => {
+    const host = fakeHost({ allStopped: true, serving: "none", currentTag: null, oldIsNginx: true });
+    const receipt = await rollbackImage(imageDeps(host));
+    expect(receipt).toMatchObject({ action: "rollback", outcome: "swapped", newContainer: { id: OLD_ID } });
+    expect(host.state.serving).toBe("old");
+  });
+
+  test("a fetched bundle whose sha256 is not the serving label's is refused before anything reaches the host", async () => {
+    const host = fakeHost();
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    const deps = imageDeps(host, { allowedSigners: b.allowedSigners });
+    await expect(deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform", expectSha256: "0".repeat(64) }, deps)).rejects.toThrow(/serving container's robotmoney.web.bundle-sha256 label names 0{64}/);
+    expect(host.lines().filter((l) => /^docker (build|create|stop)\b/.test(l))).toEqual([]);
   });
 });
 
@@ -908,5 +945,20 @@ describe("image mode: pure parts", () => {
     const serving = entry(["--host", "local", "--instance", "rm_no_such_instance_1630", "--bundle", "serving", "--server-image", "x"]);
     expect(serving.exitCode).toBe(1);
     expect(serving.stderr.toString()).toMatch(/Refusing: (local runs 0 website-server containers for rm_no_such_instance_1630, not one|listing rm_no_such_instance_1630's website-server on local failed)/);
+  });
+});
+
+describe("fileOfTar: the kept container's version.json from docker cp (stage run 20261115T034457Z)", () => {
+  const body = JSON.stringify({ version: "0.1.0", commit: "771c9a02", apiRange: "^0.5.0" });
+  test("reads the one regular file", () => {
+    expect(fileOfTar(tarOf("version.json", body))).toBe(body);
+  });
+  test("skips a PAX header before it", () => {
+    const pax = tarEntry("PaxHeaders/version.json", "30 mtime=1763183000.123456789\n", "x");
+    expect(fileOfTar(pax + tarOf("version.json", body))).toBe(body);
+  });
+  test("an empty or file-less stream is empty", () => {
+    expect(fileOfTar("")).toBe("");
+    expect(fileOfTar("\0".repeat(1024))).toBe("");
   });
 });

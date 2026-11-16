@@ -26,9 +26,12 @@
 // checkout into the instance's `web/` directory and reloaded nginx is retired
 // (issue 1631): a run without `--host` refuses and changes nothing. A host
 // before its first swap still serves the site its last `bun smoke` placed.
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stateRoot } from "./lib/smoke-state.ts";
+import { journalRoot } from "./release/journal.ts";
 import { WEB_BUNDLE_ALLOWED_SIGNERS } from "./lib/web-bundle.ts";
 import { localHost, sshHost, type WebHost } from "./lib/website-host.ts";
 import { WEBSITE_IMAGE_LABELS } from "./lib/website-image.ts";
@@ -78,17 +81,38 @@ if (values["--host"] === undefined) {
 await imageMode(values["--host"]);
 process.exit(0);
 
-/** The web tag the instance's running website-server's labels name, or null while none does (nginx serves). */
-async function servingTag(host: WebHost, instance: string): Promise<string | null> {
+/** The web tag and bundle sha256 the instance's running website-server's labels name, or null while none does (nginx serves). */
+async function servingTag(host: WebHost, instance: string): Promise<{ tag: string; sha256: string } | null> {
   const r = await host.run([
     "docker", "ps", "--filter", `label=${INSTANCE_LABEL}=${instance}`, "--filter", `label=${SERVICE_LABEL}=${WEBSITE_SERVICE}`,
-    "--format", `{{.ID}}\t{{.Label "${WEBSITE_IMAGE_LABELS.tag}"}}`,
+    "--format", `{{.ID}}\t{{.Label "${WEBSITE_IMAGE_LABELS.tag}"}}\t{{.Label "${WEBSITE_IMAGE_LABELS.bundleSha256}"}}`,
   ]);
   if (r.code !== 0) throw new Error(`Refusing: listing ${instance}'s website-server on ${host.name} failed: ${r.stderr || r.stdout}`);
   const rows = r.stdout.split("\n").filter((l) => l.trim() !== "");
   if (rows.length !== 1) throw new Error(`Refusing: ${host.name} runs ${rows.length} website-server containers for ${instance}, not one.`);
-  const tag = rows[0]!.split("\t")[1]?.trim() ?? "";
-  return tag === "" ? null : tag;
+  const [, tag = "", sha256 = ""] = rows[0]!.split("\t").map((x) => x.trim());
+  if (tag === "") return null;
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error(`Refusing: ${instance}'s website-server on ${host.name} names ${tag} but no bundle sha256 label.`);
+  return { tag, sha256 };
+}
+
+/**
+ * The signed bundle with this sha256 in the control machine's platform-release store
+ * (<journal root>/bundles/<release>/, scripts/release/platform-bundle.ts), copied with its digest and
+ * signature into `dir`; false when none matches. A bundle a platform release deployed has no GitHub release.
+ */
+function bundleFromStore(sha256: string, dir: string): boolean {
+  const root = join(journalRoot(), "bundles");
+  if (!existsSync(root)) return false;
+  for (const release of readdirSync(root)) {
+    const d = join(root, release);
+    for (const f of readdirSync(d).filter((n) => n.endsWith(".tar.gz"))) {
+      if (createHash("sha256").update(readFileSync(join(d, f))).digest("hex") !== sha256) continue;
+      for (const suffix of ["", ".sha256", ".sha256.sig"]) copyFileSync(join(d, f + suffix), join(dir, f + suffix));
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Image mode: one signed bundle, one immutable container, swapped on the host's public port. */
@@ -101,21 +125,23 @@ async function imageMode(hostName: string): Promise<void> {
     fail(`Refusing: an ssh host needs --origin, the public origin the swap's check reads (without it the check reads the host's loopback port). ${USAGE}`);
   }
   const host = hostName === "local" ? localHost() : sshHost(hostName);
+  let expectSha256: string | undefined;
   if (values["--bundle"] === SERVING_BUNDLE) {
-    let tag: string | null;
+    let serving: { tag: string; sha256: string } | null;
     try {
-      tag = await servingTag(host, instance);
+      serving = await servingTag(host, instance);
     } catch (err) {
       host.close();
       fail(err instanceof Error ? err.message : String(err));
     }
-    if (tag === null) {
+    if (serving === null) {
       host.close();
       console.log(`${TAG} host ${host.name}, instance ${instance}: no signed bundle serves yet (a host's first rollout keeps its running website-server); nothing to deploy`);
       return;
     }
-    console.log(`${TAG} host ${host.name}, instance ${instance}: the serving bundle is ${tag}`);
-    values["--bundle"] = tag;
+    console.log(`${TAG} host ${host.name}, instance ${instance}: the serving bundle is ${serving.tag} (sha256 ${serving.sha256})`);
+    values["--bundle"] = serving.tag;
+    expectSha256 = serving.sha256;
   }
   const deps: ImageReleaseDeps = {
     host,
@@ -126,14 +152,20 @@ async function imageMode(hostName: string): Promise<void> {
     publicOrigin: values["--origin"],
     async fetchRelease(tag, dir) {
       const r = Bun.spawnSync(["gh", "release", "download", tag, "--pattern", "robotmoney-web-*", "--dir", dir], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
-      if (r.exitCode !== 0) throw new Error(`gh release download ${tag} failed: ${r.stderr.toString().trim()}`);
+      if (r.exitCode === 0) return;
+      // The serving bundle a platform release deployed has no GitHub release; the control machine that signed it keeps it.
+      if (expectSha256 !== undefined && bundleFromStore(expectSha256, dir)) {
+        console.log(`${TAG} ${tag} has no GitHub release; using the bundle with sha256 ${expectSha256} from the control machine's platform-release store`);
+        return;
+      }
+      throw new Error(`gh release download ${tag} failed: ${r.stderr.toString().trim()}`);
     },
     log: (line) => console.log(`${TAG} ${line}`),
   };
   console.log(`${TAG} host ${host.name}, instance ${instance}: ${rollback ? "rolling back to the previous image" : `deploying ${values["--bundle"]}`}`);
   let receipt: ImageReceipt;
   try {
-    receipt = rollback ? await rollbackImage(deps) : await deployImage({ bundle: values["--bundle"]!, serverImage: values["--server-image"]! }, deps);
+    receipt = rollback ? await rollbackImage(deps) : await deployImage({ bundle: values["--bundle"]!, serverImage: values["--server-image"]!, ...(expectSha256 !== undefined ? { expectSha256 } : {}) }, deps);
   } catch (err) {
     console.error(`${TAG} receipt: ${join(deps.receiptDir, "receipt.json")}`);
     fail(err instanceof Error ? err.message : String(err));
