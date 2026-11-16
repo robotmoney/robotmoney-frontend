@@ -81,12 +81,12 @@ test("deploy: the new container takes the public port and the old one's name, th
 
   expect(receipt.outcome).toBe("swapped");
   expect(receipt.checks.every((c) => c.ok)).toBe(true);
-  expect(receipt.checks.map((c) => c.name)).toEqual(["verify-local", "api-range", "verify-host", "build", "copy", "gap", "public"]);
+  expect(receipt.checks.map((c) => c.name)).toEqual(["verify-local", "docker-version", "api-range", "verify-host", "build", "cold-start", "copy", "gap", "public", "live"]);
   expect(receipt.oldContainer).toEqual({ id: before.id, image: before.image });
   expect(receipt.newContainer?.id).toBe(after.id);
   expect(after.id).not.toBe(before.id);
   expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
-  // The same host port, the same name; the throwaway copy had its own port.
+  // The same host port, the same name; the pre-check container had its own port.
   expect(after.port).toBe(before.port);
   expect(after.name).toBe(before.name);
   expect(receipt.publicPort).toBe(before.port);
@@ -107,11 +107,11 @@ test("deploy: the new container takes the public port and the old one's name, th
   expect(() => docker(["exec", after.id, "cat", `${WEBSITE_MAINTENANCE_DIR}/${MAINTENANCE_FILE}`])).toThrow();
 }, 300_000);
 
-test("a throwaway copy that fails its check never takes the public port", async () => {
+test("a pre-check container that fails its check never takes the public port", async () => {
   const before = h.serving();
   const images = h.instanceImages();
   const { receipt, error, deps } = await deploy(h.bundle({ ...V3, broken: true }));
-  expect(error?.message).toMatch(/throwaway copy of web-v1\.2\.0 failed its check/);
+  expect(error?.message).toMatch(/pre-check container of web-v1\.2\.0 failed/);
   expect(receipt).toMatchObject({ outcome: "refused", newContainer: null, gap: null });
   expect(receipt.checks.find((c) => c.name === "copy")).toMatchObject({ ok: false });
   // Nothing on the public port moved: the same container, never restarted, still serving V2.
@@ -119,7 +119,7 @@ test("a throwaway copy that fails its check never takes the public port", async 
   expect([after.id, after.startedAt]).toEqual([before.id, before.startedAt]);
   await waitServed(h, V2, 1_000);
   const sent = (deps.host.commands as string[][]).map((c) => c.join(" "));
-  expect(sent.filter((l) => /^docker (create|stop|start)\b/.test(l))).toEqual([]);
+  expect(sent.filter((l) => /^docker (create|stop|start)\b/.test(l) && !l.includes("robotmoney-web-check-"))).toEqual([]);
   // The candidate that never served is gone: the host keeps one previous image.
   expect(h.instanceImages()).toEqual(images);
 }, 300_000);
@@ -133,7 +133,7 @@ test("a bundle the server image does not trust fails verification on the host an
   await Bun.write(signers, `${await Bun.file(h.allowedSigners).text()}rogue namespaces="robotmoney-web-bundle@v1" ${pub}\n`);
   const { receipt, error, deps } = await deploy(bundle, { allowedSigners: signers });
   expect(error?.message).toMatch(/failed verification on local: web bundle refused: no key in \/etc\/robotmoney\/allowed-signers signed/);
-  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["api-range", true], ["verify-host", false]]);
+  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["docker-version", true], ["api-range", true], ["verify-host", false]]);
   const sent = (deps.host.commands as string[][]).map((c) => c.join(" "));
   expect(sent.some((l) => l.includes("rm-verify-web-bundle"))).toBe(true);
   expect(sent.filter((l) => /^docker build\b/.test(l))).toEqual([]);
@@ -176,12 +176,15 @@ test("--bundle web-v1.0.0 deploys the older signed bundle by name, fetched from 
   expect(receipt.release).toMatchObject({ tag: "web-v1.0.0", ...V1 });
   expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
     ["verify-local", true],
+    ["docker-version", true],
     ["api-range", true],
     ["verify-host", true],
     ["build", true],
+    ["cold-start", true],
     ["copy", true],
     ["gap", true],
     ["public", true],
+    ["live", true],
   ]);
   await waitServed(h, V1, 1_000);
   expect(h.imageId(siteImageTag(h.instance, "previous"))).toBe(v2Image);

@@ -40,6 +40,14 @@ const BUN_IMAGE = "oven/bun:1.4.4";
 const STAND_IN_API = `Bun.serve({ port: 8787, hostname: "0.0.0.0", fetch(req) {
   const path = new URL(req.url).pathname;
   if (path === "/api/version") return Response.json({ api: "${API_VERSION}", commit: "c0ffee0" });
+  if (path === "/api/stream") {
+    // An event stream that never ends, as an external judge client holds (smoke-web-held-stream.test.ts).
+    let timer;
+    return new Response(new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(": " + "x".repeat(16384) + "\\n\\ndata: open\\n\\n")); /* padding: nginx buffers until a buffer fills */ timer = setInterval(() => c.enqueue(new TextEncoder().encode(": ping\\n\\n")), 1000); },
+      cancel() { clearInterval(timer); },
+    }), { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+  }
   return Response.json({ path });
 } });`;
 
@@ -97,7 +105,11 @@ function keypair(work: string, name: string): string {
 }
 
 /** Build the server image and bring up the instance's api and its first website-server, serving `first`. */
-export function createImageHost(label: string, first: BundleSpec, opts: { firstServer?: "site" | "nginx" } = {}): ImageHost {
+export function createImageHost(
+  label: string,
+  first: BundleSpec,
+  opts: { firstServer?: "site" | "nginx"; /** Rewrite the server image's Caddyfile (a red control builds the one before grace_period). */ caddyfile?: (text: string) => string } = {},
+): ImageHost {
   const run = `${label}-${process.pid}-${Date.now().toString(36)}`;
   const instance = `rm_swt_${run.replace(/-/g, "_")}`;
   const project = instance;
@@ -199,6 +211,7 @@ export function createImageHost(label: string, first: BundleSpec, opts: { firstS
     const serverDir = join(work, "website-server");
     cpSync(join(repoRoot, "website-server"), serverDir, { recursive: true });
     writeFileSync(join(serverDir, "allowed-signers"), readFileSync(allowedSigners));
+    if (opts.caddyfile) writeFileSync(join(serverDir, "Caddyfile"), opts.caddyfile(readFileSync(join(serverDir, "Caddyfile"), "utf8")));
     const platformCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot }).toString().trim();
     docker(["build", "-q", "-t", serverImage, "--build-arg", `PLATFORM_COMMIT=${platformCommit}`, "-f", join(serverDir, "Dockerfile.caddy"), serverDir]);
 
