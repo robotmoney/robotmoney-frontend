@@ -287,6 +287,14 @@ const META = {
     image: "/assets/img/early-access/og.jpg",
     imageAlt: "Early access to Robot Money's vaults on Base: basalt steps rising to a lit doorway on a salt flat at night",
   },
+  // Deposit into the one vault from any wallet on Base (RM-146, under RM-205).
+  // Behind the early access gate (lib/deposit/access.js), so out of search
+  // until it opens to everyone: drop `robots` when GATE_ON goes false.
+  "/deposit": {
+    title: "Deposit into the Model Portfolio | Robot Money",
+    description: "Deposit USDC into Robot Money's model portfolio from any wallet on Base. Requests settle in hourly batches and shares arrive about two hours later. Limits, fees and how to get out.",
+    robots: "noindex, nofollow",
+  },
   // A placeholder hub nothing links to since the footer became the site index
   // (RM-124), and out of sitemap.xml: noindexed like the stubs below.
   "/visualizations": {
@@ -649,10 +657,9 @@ const LEGACY_ALIASES = [
   // rmAGENT closed with the Small Cap Tokens sleeve (RM-190) and its address
   // renders the allocation view, so it names /model-portfolio canonical too.
   ["/vault/rmagent", "/model-portfolio", "exact"],
-  // Deposits wait for the vaults to open (RM-190): the deposit page and the
-  // deposit skill's docs render early access. Exact, one entry each: a prefix
+  // The retired deposit skill's docs render early access (RM-190). Exact, one
+  // entry each: a prefix
   // entry would map /docs/skill/commands to /early-access/commands.
-  ["/deposit", "/early-access", "exact"],
   ["/docs/skill", "/early-access", "exact"],
   ["/docs/skill/installation", "/early-access", "exact"],
   ["/docs/skill/commands", "/early-access", "exact"],
@@ -786,6 +793,13 @@ export function metaFor(pathname) {
       description: d.description,
       ...(d.robots ? { robots: d.robots } : {}),
     };
+  }
+  // Your requests, and one request's status page: personal, so never indexed.
+  if (p === "/deposit/requests" || p === "/deposit/requests/") {
+    return { title: "Your requests | Robot Money", description: "Your position in Robot Money's model portfolio and every deposit and redemption request from your wallet.", robots: "noindex, nofollow" };
+  }
+  if (/^\/deposit\/requests\/[A-Za-z0-9-]+\/?$/.test(p)) {
+    return { title: "Deposit request | Robot Money", description: "Where one deposit or redemption request into Robot Money's model portfolio stands, and what happens next.", robots: "noindex, nofollow" };
   }
   for (const { prefix, suffix } of SECTIONS) {
     if (p === prefix || p.startsWith(prefix + "/")) {

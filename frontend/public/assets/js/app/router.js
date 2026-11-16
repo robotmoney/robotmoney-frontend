@@ -96,10 +96,10 @@ async function render(pathname) {
     history.replaceState(history.state, "", "/treasury" + location.search + location.hash);
     pathname = "/treasury";
   }
-  // Deposits wait for the vaults to open (RM-190): the deposit page and the
-  // deposit skill's docs move to early access, query kept (a referral rides
-  // on it). Their fragments named sections early access does not have.
-  if (pathname === "/deposit" || pathname === "/deposit/" || RETIRED_SKILL_DOCS.test(pathname)) {
+  // The retired deposit skill's docs move to early access (RM-190), query kept
+  // (a referral rides on it). Their fragments named sections early access does
+  // not have. /deposit is its own page again (RM-146, under RM-205).
+  if (RETIRED_SKILL_DOCS.test(pathname)) {
     history.replaceState(history.state, "", "/early-access" + location.search);
     pathname = "/early-access";
   }
