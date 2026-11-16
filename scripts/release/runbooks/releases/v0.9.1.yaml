@@ -128,22 +128,6 @@ recovery: |
   - The regime fix is read-path only: rolling back the code restores the old served line; the frozen
     ledger and regime_snapshots are unchanged either way.
 scope:
-  - {pr: 1620, what: "docs(web): the web serving architecture (signed bundles in one immutable container)", none: "docs only"}
-  - {pr: 1633, what: "fix(release): a breaking cutover keeps the site up (smoke:down --keep-web, probe asks /api/status/maintenance)", none: "release tooling run only on a breaking cutover; v0.9.0 declares no breaking:, so its steps are recorded skipped"}
-  - {pr: 1634, what: "fix(release): the probe grade reads the maintenance window of the run's own target", none: "release tooling (probe grade) that matters only inside a declared maintenance window; v0.9.0 declares none"}
-  - {pr: 1635, what: "feat(web): P6 the api owns the public analytics cache; nginx stores no api answer", check: "Q42-api-cache"}
-  - {pr: 1636, what: "feat(web): P1 the website-server route and header contract", check: "Q38-web-routes"}
-  - {pr: 1637, what: "feat(web): P2 Caddy server image (spike made the platform's server)", check: "Q39-server-image"}
-  - {pr: 1638, what: "feat(web): P3 signed bundle pack, sign and verify", check: "Q41-web-bundle"}
-  - {pr: 1639, what: "feat(web): P4 the read-only immutable website-server image", check: "Q40-web-image"}
-  - {pr: 1640, what: "feat(web): P5 swap, rollback and gap measurement (bun smoke:web image mode)", check: "Q40-web-image"}
-  - {pr: 1641, what: "feat(web): P7 runbook integration (site steps run the image-mode swap, probe excuses a recorded swap gap)", none: "release tooling the run itself exercises: Q24-site/C12-site and Q25/C13-probe-grade"}
-  - {pr: 1642, what: "feat(web): P9 platform boots keep the serving image; each host's first rollout", check: "Q40-web-image"}
-  - {pr: 1643, what: "feat(web): P8 smoke:web directory mode removed; nginx kept only as bootstrap and first-rollout target", check: "Q40-web-image"}
-  - {pr: 1417, what: "fix(analytics): regime frozen publications by migration 0132 (reverted by 1645)", none: "reverted by PR 1645 in the same range; nothing of it ships"}
-  - {pr: 1645, what: "revert: the regime frozen-publications fix 1417", none: "a revert of PR 1417 in the same range; together they change no file"}
-  - {pr: 1646, what: "fix(analytics): the regime history serves each day's published figure from the frozen ledger (D83, issue 1182)", check: "Q43-regime-published"}
-  - {pr: 1648, what: "fix(web): served pages carry no email address; robots.txt carries Cloudflare's managed block (owner, 2026-11-15; cherry-picked onto the QA branch)", check: "Q41a-web-bundle-edge"}
   - {pr: 1651, what: "fix(web): bounded nginx-to-Caddy swap, private-port pre-check and Caddy grace period", check: "Q45-site-swap-under-stream"}
 steps:
 # every template step stays, unchanged and in order (scripts/release/runbook.ts
