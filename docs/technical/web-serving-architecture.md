@@ -41,7 +41,7 @@ control machine (release commit)     serving host
 ┌──────────────────────┐            ┌───────────────────────────────────────┐
 │ assemble the site    │            │ verify signature + digest + apiRange  │
 │ pack the bundle      │  bundle    │ build the image (bundle baked in)     │
-│ digest + sign        │ ─────────► │ check a throwaway copy                │
+│ digest + sign        │ ─────────► │ pre-check a copy on a spare port      │
 │ send over SSH        │            │ swap the container on the public port │
 └──────────────────────┘            │ check the public site, revert if bad  │
                                     └───────────────────────────────────────┘
@@ -158,20 +158,31 @@ runs these steps in order:
 
 1. Verify the signature, the digest and `version.json`. Refuse a bundle whose `apiRange` excludes the running API.
 2. Build the image.
-3. Start a throwaway copy on a spare port. Check that `/version.json` names the release and that the route and
-   header table passes. Remove the copy.
-4. Stop the running container. Start the new one on the public port.
-5. Check that `/version.json`, read through the public origin, names the release.
-6. If step 5 fails, start the previous image on the public port and exit non-zero.
+3. Pre-check. Create a copy of the image the way the final container is created and start it on a spare loopback
+   port, while the old container keeps serving. Time its cold start, from `docker start` to the first good answer.
+   Run the full live check set against it: the route and header table, `/version.json` naming the release, the
+   bundle's sha256 on the container's labels, the API reached through the server's proxy, and the healthcheck
+   command. Kill the copy. Refuse, without touching the old container, when the cold start plus the retire bound
+   (step 4) would not fit in the gap limit (§4.1).
+4. Retire the old container: SIGTERM, then a forced stop after one second. Start the new container, created
+   beforehand, on the public port.
+5. Check that `/version.json`, read through the public origin, names the release, and repeat the full live check
+   set of step 3 against the public port.
+6. If step 4 or 5 fails, start the previous container on the public port and exit non-zero.
 7. If step 5 passes, keep the previous image as the rollback target.
 
 `bun smoke:web --rollback` refuses a previous image whose `apiRange` excludes the running API. Otherwise it
-runs steps 3 to 5 with the previous image.
+runs steps 3 to 5 with the previous image, and retires the serving container the same way as step 4.
 
 Rules:
 
-- A bundle that fails step 1 or step 3 never reaches the public port.
-- The throwaway copy is a valid check because it runs the same image that will serve.
+- A bundle that fails step 1 or step 3 never reaches the public port, and the old container is not stopped.
+- The pre-check copy is a valid check because it is the same image, with the same Caddyfile, baked bundle and
+  run flags (read-only root, user, dropped capabilities, tmpfs), healthcheck, log settings and networks as the
+  container that will serve. It differs in four things: the published port (a spare loopback port), the name, no
+  compose or instance labels and network aliases (so the host still runs one `website-server`), and no restart
+  policy. It cannot prove that the public port binds (a port conflict, a dangling docker-proxy). Step 6 answers
+  that risk: the old container is started again at once.
 - A host always holds exactly one previous image: the image that served before the last swap, whatever caused
   that swap. A release is refused when there is none.
 - The first-rollout rule. A host's first swap replaces nginx, so it has no previous image. Until one swap from a
@@ -206,8 +217,20 @@ a dropped SSH link. Every error after the stop goes through step 6. A failed run
 
 ### 4.1 The gap
 
-Docker gives a published port to one container at a time. Between step 4's stop and start nothing listens, so
-requests fail. API calls fail in that gap too, because the same container proxies them. This is accepted (R11).
+Docker gives a published port to one container at a time, and the cloudflared origin does not change (R8), so the
+new container cannot serve real traffic while the old one holds the port. Between step 4's stop and start nothing
+listens, so requests fail. API calls fail in that gap too, because the same container proxies them. This is
+accepted (R11). Step 3 moves everything else out of the gap: the new container is proven on a spare port first.
+
+- The retire is bounded. A graceful stop that waits for open connections would hold the port while nothing
+  serves: nginx's own stop signal is SIGQUIT, which closes its listeners at once and then waits for every open
+  connection, and the first production rollout waited the whole 10 s of `docker stop -t 10` for one event stream.
+  The swap sends SIGTERM (nginx's fast shutdown, Caddy's graceful one) and docker forces the stop after one
+  second. The Caddyfile sets `grace_period 500ms`, so a Caddy closes held streams and exits by itself inside that
+  second.
+- The least gap is the old container's exit (at most the one-second bound, a few hundred milliseconds when
+  nothing is held), plus the new container's start and first answer (the cold start step 3 measured).
+  Step 3 refuses a swap whose measured cold start plus the one-second bound exceeds the limit below.
 
 - The gap runs from the stop of the old container to the first good answer from the new one on the public port.
 - The gap is measured on every swap and recorded in the receipt, in milliseconds.
@@ -308,7 +331,7 @@ W06 and W11 run the same check:
 |---|---|---|
 | The bundle changed after it was signed | Signature and digest | `smoke:web` step 1 |
 | The site needs a newer API than the host runs | `apiRange` against `/api/version` | `smoke:web` step 1 |
-| The image serves wrong routes or headers | Route and header table on the throwaway copy | `smoke:web` step 3 |
+| The image serves wrong routes or headers | Full live check set on the pre-check copy | `smoke:web` step 3 |
 | A CSP change blocks a dapp page | Header table through the origin | Live check 4 |
 | The host serves bytes that differ from the release | Served bytes against the manifest | Live check 3 |
 | The running container is not the released version | Labels against the bundle digest | Live check 2 |

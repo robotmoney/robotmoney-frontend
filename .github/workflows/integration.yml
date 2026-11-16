@@ -250,6 +250,23 @@ jobs:
             grep -qE "^smoke-web-first-rollout $line" "$RUNNER_TEMP/integration-bun-test.log" \
               || { echo "::error::the first-rollout proof did not reach: $line"; exit 1; }
           done
+      # The first production rollout's gap (run 20261116T143356Z): a stream held
+      # through the old container made `docker stop -t 10` take 10 s. The held
+      # stream proofs run on real Docker: the old stop is the red control (at
+      # least 10 s, for nginx and for a Caddy with no grace_period), the
+      # bounded retire finishes inside its bound, and the whole first rollout
+      # and rollback keep the gap inside the limit with a stream open.
+      - name: Held-stream swap proofs ran
+        shell: bash
+        run: |
+          f=scripts/tests/integration/smoke-web-held-stream.test.ts
+          test -f "$f" || { echo "::error::$f is missing"; exit 1; }
+          grep -qE "^(::group::|##\[group\])?${f//./\\.}:\$" "$RUNNER_TEMP/integration-bun-test.log" \
+            || { echo "::error::$f did not run in the integration suite"; exit 1; }
+          for line in "nginx old logic: stop took 1[0-9]{4} ms" "nginx new logic: stop took [0-9]{1,4} ms" "caddy old logic: stop took 1[0-9]{4} ms" "caddy new logic: stop took [0-9]{1,4} ms" "first rollout: gap [0-9]+ ms, cold start [0-9]+ ms" "rollback: gap [0-9]+ ms"; do
+            grep -qE "^smoke-web-held-stream $line" "$RUNNER_TEMP/integration-bun-test.log" \
+              || { echo "::error::the held-stream proof did not reach: $line"; exit 1; }
+          done
       # Issue 1624 red control: one Cache-Control value, one fallback and one
       # 404 rule, each changed in a scratch copy of nginx.conf, must each turn
       # the table red on the row that guards it.

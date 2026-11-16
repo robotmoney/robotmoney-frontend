@@ -31,7 +31,11 @@ import {
   isReleaseName,
   publicPortBinding,
   readImageReceipt,
+  healthExecArgs,
+  precheckCreateArgs,
   replacementCreateArgs,
+  retireArgs,
+  STOP_GRACE_SECONDS,
   rollbackImage,
   SERVER_PIN_REPO,
   siteImageTag,
@@ -117,6 +121,7 @@ describe("wiring", () => {
 
 const OLD_ID = "a".repeat(64);
 const NEW_ID = "b".repeat(64);
+const COPY_ID = "d".repeat(64);
 const OLD_IMAGE = `sha256:${"1".repeat(64)}`;
 const NEW_IMAGE = `sha256:${"2".repeat(64)}`;
 const PREV_IMAGE = `sha256:${"3".repeat(64)}`;
@@ -145,6 +150,12 @@ interface FakeHostState {
   keptNginx: boolean;
   /** The new container fails to start. */
   newStartFails: boolean;
+  /** The pre-check container answers only this long after its `docker start` (a slow cold start). */
+  copyColdStartMs: number;
+  /** The sha256 label the pre-check and new containers carry; null means the bundle's own. */
+  containerSha: string | null;
+  /** The healthcheck command exits non-zero inside the new containers. */
+  healthFails: boolean;
   /** These docker sub-commands (by their first two words, e.g. "rename"), fail. */
   failing: string[];
   /** The serving bundle's digest (labels of the old container), when it equals the deployed one. */
@@ -229,6 +240,9 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
     oldIsNginx: false,
     keptNginx: false,
     newStartFails: false,
+    copyColdStartMs: 0,
+    containerSha: null,
+    healthFails: false,
     failing: [],
     servingSha: null,
     serverLayers: ["sha256:l1"],
@@ -247,14 +261,18 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
       if (state.serving === "none") return new Response("down", { status: 502 });
       if (path === "/api/version") return json({ api: state.api, commit: "c0ffee0" });
       if (path === "/version.json") return json(state.serving === "old" ? OLD_RELEASE : state.serving === "kept" ? KEPT_RELEASE : copyRelease, securityHeaders(false));
+      if (path.endsWith(".js")) return new Response("missing", { status: 404, headers: securityHeaders(false) });
       return new Response("<!doctype html>", { headers: securityHeaders(true) });
     },
   });
+  let copyReadyAt = 0;
   const copyServer = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     fetch(req) {
       const path = new URL(req.url).pathname;
+      if (Date.now() < copyReadyAt) return new Response("starting", { status: 503 });
+      if (path === "/api/version") return json({ api: state.api, commit: "c0ffee0" });
       if (path === "/version.json") return json(copyRelease, securityHeaders(false));
       if (path.endsWith(".js")) return new Response("missing", { status: 404, headers: securityHeaders(false) });
       if (state.copyBroken) return new Response("not found", { status: 404, headers: securityHeaders(true) });
@@ -276,6 +294,7 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
     return {};
   };
   const built = { sha256: "" };
+  let createdSha = "";
   const docker = (a: string[]): HostResult => {
     const joined = a.join(" ");
     switch (a[0]) {
@@ -288,6 +307,11 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         if (state.allStopped) return a.includes("-aq") ? ok(OLD_ID) : ok("");
         return ok(OLD_ID);
       case "inspect": {
+        if (a[1] === NEW_ID || a[1]!.startsWith("robotmoney-web-check-")) {
+          const o = oldInspect();
+          o.Config.Labels!["robotmoney.web.bundle-sha256"] = state.containerSha ?? createdSha;
+          return ok(JSON.stringify([o]));
+        }
         if (a[1] === KEPT_ID) return ok(JSON.stringify([keptInspect()]));
         const o = oldInspect();
         if (state.oldIsNginx) {
@@ -317,24 +341,34 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         if (joined.includes("rm-verify-web-bundle")) return state.hostVerifyFails ? no("web bundle refused: no key in /etc/robotmoney/allowed-signers signed it") : ok("verified");
         if (joined.includes("--volumes-from")) return ok(JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" }));
         if (joined.includes("--entrypoint cat")) return ok(JSON.stringify({ ...state.previousRelease }));
-        // The throwaway copy serves the image it was started from.
-        copyRelease = a.at(-1) === PREV_IMAGE ? state.previousRelease : state.newRelease;
-        return ok("copyid");
+        return ok("runid");
       case "build":
         built.sha256 = a.find((x) => x.startsWith("BUNDLE_SHA256="))!.slice("BUNDLE_SHA256=".length);
         return ok(NEW_IMAGE);
       case "port":
         return ok(`127.0.0.1:${COPY_PORT}`);
       case "create":
+        if (joined.includes("-p 127.0.0.1::8080")) {
+          // The pre-check container serves the image it was created from.
+          copyRelease = a.at(-1) === PREV_IMAGE ? state.previousRelease : state.newRelease;
+          createdSha = a.at(-1) === PREV_IMAGE ? "e".repeat(64) : built.sha256;
+          return ok(COPY_ID);
+        }
+        createdSha = a.at(-1) === PREV_IMAGE ? "e".repeat(64) : built.sha256;
         return ok(NEW_ID);
       case "stop":
         state.serving = "none";
         return ok();
       case "start":
+        if (a[1]!.startsWith("robotmoney-web-check-")) {
+          copyReadyAt = Date.now() + state.copyColdStartMs;
+          return ok();
+        }
         if (a[1] === NEW_ID && state.newStartFails) return no("Error response from daemon: driver failed programming external connectivity");
         state.serving = a[1] === NEW_ID ? "new" : a[1] === KEPT_ID ? "kept" : "old";
         return ok();
       case "exec":
+        if (a.includes("wget")) return state.healthFails ? no("wget: server returned error") : ok();
         return no("cat: can't open: No such file");
       case "images":
         return ok([NEW_IMAGE, OLD_IMAGE, PREV_IMAGE].join("\n"));
@@ -456,9 +490,11 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
       ["api-range", true],
       ["verify-host", true],
       ["build", true],
+      ["cold-start", true],
       ["copy", true],
       ["gap", true],
       ["public", true],
+      ["live", true],
     ]);
     expect(typeof receipt.gap?.ms).toBe("number");
     expect(receipt.gap!.ms!).toBeGreaterThanOrEqual(0);
@@ -484,11 +520,14 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
       at(new RegExp(`^docker tag ${SERVER_ID} ${SERVER_PIN_REPO}:${"4".repeat(64)}$`)),
       at(new RegExp(`^docker run --rm --network none --user 0:0 -v /host/work/bundle:/in:ro --entrypoint rm-verify-web-bundle ${SERVER_ID} /in \\S+ web-v0\\.2\\.0 bbbb222 [0-9a-f]{64}$`)),
       at(new RegExp(`^docker build .*--build-arg SERVER_IMAGE=${SERVER_PIN_REPO}:${"4".repeat(64)} `)),
-      at(/^docker run -d --rm --name robotmoney-web-check-stage_target-\S+ .*-p 127\.0\.0\.1::8080 /),
+      // The pre-check: create, start, port, kill, all before the new container is even created.
+      at(/^docker create --name robotmoney-web-check-stage_target-\S+ .*-p 127\.0\.0\.1::8080 /),
+      at(/^docker start robotmoney-web-check-stage_target-\S+$/),
+      at(/^docker rm -f robotmoney-web-check-stage_target-\S+$/),
       at(/^docker create --name rm_stage_target-website-server-1-next-/),
       // The stop and the start are one host command (handoverScript), recorded line by line.
       at(/^sh -c trap '' HUP PIPE\n/),
-      at(new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
+      at(new RegExp(`^docker stop --signal SIGTERM -t 1 ${OLD_ID}$`)),
       at(new RegExp(`^docker start ${NEW_ID}$`)),
       at(new RegExp(`^docker rename ${OLD_ID} rm_stage_target-website-server-1-old-[0-9a-f]{6}$`)),
       at(new RegExp(`^docker rename ${NEW_ID} rm_stage_target-website-server-1$`)),
@@ -503,7 +542,7 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
     expect(lines).not.toContain(`docker rmi -f ${OLD_IMAGE}`);
     expect(lines).not.toContain(`docker rmi -f ${NEW_IMAGE}`);
     // The throwaway copy never names the public port.
-    expect(lines.filter((l) => l.startsWith("docker run -d")).join("\n")).not.toContain(String(PUBLIC_PORT));
+    expect(lines.filter((l) => /^docker create --name robotmoney-web-check/.test(l)).join("\n")).not.toContain(String(PUBLIC_PORT));
     // Every command is docker, mktemp, mkdir, rm or a `sh -c cat` write: nothing else is needed on the host.
     expect(new Set(host.commands.map((c) => c[0]))).toEqual(new Set(["docker", "mktemp", "mkdir", "sh", "rm"]));
   });
@@ -550,9 +589,9 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
   test("a throwaway copy that fails its check never touches the public port", async () => {
     const host = fakeHost({ copyBroken: true });
     const { receipt, error } = await deployFake(host);
-    expect(error?.message).toMatch(/throwaway copy of web-v0\.2\.0 failed its check: \/: status 404/);
+    expect(error?.message).toMatch(/pre-check container of web-v0\.2\.0 failed: \/: status 404/);
     expect(receipt).toMatchObject({ outcome: "refused", newContainer: null, gap: null });
-    expect(host.lines().filter((l) => /^docker (create|stop|start)\b/.test(l))).toEqual([]);
+    expect(host.lines().filter((l) => /^docker (create|stop|start)\b/.test(l) && !l.includes("robotmoney-web-check-"))).toEqual([]);
     expect(host.state.serving).toBe("old");
     // The candidate image is removed: it never served, so it is not kept.
     expect(host.lines()).toContain(`docker rmi -f ${NEW_IMAGE}`);
@@ -598,7 +637,7 @@ describe("image mode: rollback (smoke:web --host --rollback)", () => {
       currentImage: PREV_IMAGE,
       previousImage: OLD_IMAGE,
     });
-    expect(receipt.checks.map((c) => c.name)).toEqual(["api-range", "copy", "gap", "public"]);
+    expect(receipt.checks.map((c) => c.name)).toEqual(["api-range", "cold-start", "copy", "gap", "public", "live"]);
     expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
     // A rollback builds nothing.
     expect(host.lines().filter((l) => /^docker build\b|rm-verify-web-bundle/.test(l))).toEqual([]);
@@ -672,7 +711,7 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     const lines = host.lines();
     expect(lines.some((l) => l.includes(`--volumes-from ${KEPT_ID}`))).toBe(true);
     const order = [
-      index(lines, new RegExp(`^docker stop -t \\d+ ${OLD_ID}$`)),
+      index(lines, new RegExp(`^docker stop --signal SIGTERM -t 1 ${OLD_ID}$`)),
       index(lines, new RegExp(`^docker start ${KEPT_ID}$`)),
       index(lines, new RegExp(`^docker rename ${KEPT_ID} rm_stage_target-website-server-1$`)),
       index(lines, new RegExp(`^docker tag ${OLD_IMAGE} robotmoney-website:stage_target-previous$`)),
@@ -705,7 +744,7 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     expect(host.state.serving).toBe("old");
     const lines = host.lines();
     const first = index(lines, /^sh -c trap /);
-    expect(lines.slice(first + 1, first + 4)).toEqual([`docker stop -t 10 ${OLD_ID}`, `docker start ${NEW_ID}`, `docker start ${OLD_ID}`]);
+    expect(lines.slice(first + 1, first + 4)).toEqual([`docker stop --signal SIGTERM -t 1 ${OLD_ID}`, `docker start ${NEW_ID}`, `docker start ${OLD_ID}`]);
   });
 
   test("a throw in step 7 reverts: the old container gets its name back and serves, and the tags are restored", async () => {
@@ -757,13 +796,13 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
   test("a failed deploy never removes an image the host keeps: a candidate equal to -previous stays", async () => {
     const host = fakeHost({ candidateImage: PREV_IMAGE });
     const { receipt, error } = await deployFake(host);
-    expect(error?.message).toMatch(/throwaway copy .* failed its check/);
+    expect(error?.message).toMatch(/pre-check container of .* (failed|never answered)/);
     expect(receipt.outcome).toBe("refused");
     expect(host.lines()).not.toContain(`docker rmi -f ${PREV_IMAGE}`);
   });
 
   test("a maintenance file that cannot be carried is recorded and never fails the swap", async () => {
-    const host = fakeHost({ failing: ["exec"] });
+    const host = fakeHost({ failing: ["exec-cat"] });
     const { receipt, error } = await deployFake(host);
     expect(error).toBeNull();
     expect(receipt.outcome).toBe("swapped");
@@ -804,9 +843,11 @@ describe("image mode: a server-image change rebuilds the serving bundle through 
       ["api-range", true],
       ["verify-host", true],
       ["build", true],
+      ["cold-start", true],
       ["copy", true],
       ["gap", true],
       ["public", true],
+      ["live", true],
     ]);
     const build = host.lines().find((l) => l.startsWith("docker build "))!;
     expect(build).toContain(`BUNDLE_SHA256=${b.sha256}`);
@@ -908,5 +949,122 @@ describe("image mode: pure parts", () => {
     const serving = entry(["--host", "local", "--instance", "rm_no_such_instance_1630", "--bundle", "serving", "--server-image", "x"]);
     expect(serving.exitCode).toBe(1);
     expect(serving.stderr.toString()).toMatch(/Refusing: (local runs 0 website-server containers for rm_no_such_instance_1630, not one|listing rm_no_such_instance_1630's website-server on local failed)/);
+  });
+});
+
+// ===========================================================================
+// THE SWAP SEQUENCE (the first production rollout, run 20261116T143356Z):
+// the new container is proven on a spare port before the old one is touched,
+// the old one is retired with SIGTERM and a forced stop after one second, and
+// a failed post-switch check puts the old one back. The real-Docker half, with
+// a stream held through the old container, is
+// scripts/tests/integration/smoke-web-held-stream.test.ts.
+// ===========================================================================
+describe("image mode: the swap sequence (pre-check, bounded retire, revert)", () => {
+  test("retireArgs: SIGTERM, then a forced stop after the bound, and the bound fits the gap limit with a cold start of 2 s", () => {
+    expect(retireArgs("abc")).toEqual(["stop", "--signal", "SIGTERM", "-t", "1", "abc"]);
+    expect(retireArgs("abc", 2)).toEqual(["stop", "--signal", "SIGTERM", "-t", "2", "abc"]);
+    expect(STOP_GRACE_SECONDS * 1000 + 2_000).toBeLessThanOrEqual(GAP_LIMIT_MS);
+  });
+
+  test("precheckCreateArgs: the final container's image, flags, health, log and networks; never its labels, aliases, restart policy or public port", () => {
+    const old = oldInspect();
+    old.NetworkSettings.Networks = { net_a: { Aliases: ["website-server"] }, net_b: { Aliases: ["x"] } };
+    const overlay = websiteImageRunFlags(readWebsiteImageService(repoRoot));
+    const copy = precheckCreateArgs(old, "check-1", NEW_IMAGE, overlay);
+    const real = replacementCreateArgs(old, "real-1", NEW_IMAGE, overlay);
+    const joined = copy.create.join(" ");
+    for (const flag of [...overlay, "--health-cmd", "--log-driver", "--log-opt"]) expect(real.create).toContain(flag);
+    for (const flag of [...overlay, "--health-cmd", "--log-driver", "--log-opt"]) expect(copy.create).toContain(flag);
+    expect(copy.create.at(-1)).toBe(NEW_IMAGE);
+    expect(copy.create.slice(-3)).toEqual(["-p", "127.0.0.1::8080", NEW_IMAGE]);
+    expect(joined).not.toContain(String(PUBLIC_PORT));
+    expect(joined).not.toContain("--label");
+    expect(joined).not.toContain("--network-alias");
+    expect(joined).not.toContain("--restart");
+    expect(copy.connect).toEqual([["network", "connect", "net_b", "check-1"]]);
+    expect(copy.create).toContain("net_a");
+  });
+
+  test("healthExecArgs: the healthcheck command as an exec argv, or null", () => {
+    expect(healthExecArgs({ Test: ["CMD", "wget", "-q", "http://127.0.0.1:8080/"] })).toEqual(["wget", "-q", "http://127.0.0.1:8080/"]);
+    expect(healthExecArgs({ Test: ["CMD-SHELL", "wget -q x"] })).toEqual(["sh", "-c", "wget -q x"]);
+    expect(healthExecArgs({ Test: ["NONE"] })).toBeNull();
+    expect(healthExecArgs(null)).toBeNull();
+  });
+
+  test("order: the pre-check container is started, checked and killed before the old container is stopped; the stop is SIGTERM with a one-second forced stop; then the start on the real port", async () => {
+    const host = fakeHost();
+    const { error, receipt } = await deployFake(host);
+    expect(error).toBeNull();
+    const lines = host.lines();
+    const order = [
+      index(lines, /^docker start robotmoney-web-check-/),
+      index(lines, /^docker exec robotmoney-web-check-\S+ wget /),
+      index(lines, /^docker rm -f robotmoney-web-check-/),
+      index(lines, new RegExp(`^docker stop --signal SIGTERM -t 1 ${OLD_ID}$`)),
+      index(lines, new RegExp(`^docker start ${NEW_ID}$`)),
+      index(lines, new RegExp(`^docker exec ${NEW_ID} wget `)),
+    ];
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(lines.filter((l) => l.startsWith("docker stop "))).toEqual([`docker stop --signal SIGTERM -t 1 ${OLD_ID}`]);
+    // The receipt prints the measured cold start and the bound it was gated by.
+    expect(receipt.precheck).toMatchObject({ retireBoundMs: 1_000, gapLimitMs: GAP_LIMIT_MS });
+    expect(receipt.precheck!.coldStartMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("the start-time gate: a slow-starting pre-check container aborts the run before the old container is stopped", async () => {
+    // 700 ms to answer plus the 1000 ms retire bound is over a 1500 ms limit.
+    const host = fakeHost({ copyColdStartMs: 700 });
+    const { receipt, error } = await deployFake(host, "^0.2.0", { gapLimitMs: 1_500 });
+    expect(error?.message).toMatch(/starts in \d+ ms, and with the 1000 ms retire bound the gap could exceed 1500 ms\. The old container was not touched\./);
+    expect(receipt.outcome).toBe("refused");
+    expect(receipt.checks.find((c) => c.name === "cold-start")).toMatchObject({ ok: false });
+    expect(receipt.precheck!.coldStartMs).toBeGreaterThanOrEqual(700);
+    expect(receipt).toMatchObject({ gap: null, newContainer: null });
+    expect(host.lines().filter((l) => /^docker (stop|rename)\b/.test(l) || l.includes("-next-"))).toEqual([]);
+    expect(host.state.serving).toBe("old");
+  });
+
+  test("a pre-check container whose bundle sha256 or healthcheck is wrong aborts before the old container is stopped", async () => {
+    for (const over of [{ containerSha: "0".repeat(64) }, { healthFails: true }]) {
+      const host = fakeHost(over);
+      const { receipt, error } = await deployFake(host);
+      expect(error?.message).toMatch(/pre-check container of web-v0\.2\.0 failed: /);
+      expect(receipt.outcome).toBe("refused");
+      expect(host.lines().filter((l) => /^docker (stop|rename)\b/.test(l) || l.includes("-next-"))).toEqual([]);
+      expect(host.state.serving).toBe("old");
+    }
+  });
+
+  test("a failed post-switch check restores the old container at once: the new one is removed, the old one started, and only the revert's own rename happens, no retag", async () => {
+    const host = fakeHost();
+    const realRun = host.run.bind(host);
+    let handovers = 0;
+    host.run = async (argv, stdin) => {
+      // The pre-check passed. Only the container on the real port fails its healthcheck.
+      if (argv[0] === "sh" && argv[2]?.includes("echo started") && ++handovers === 1) host.state.healthFails = true;
+      return realRun(argv, stdin);
+    };
+    const { receipt, error } = await deployFake(host);
+    expect(error?.message).toMatch(/The swap to web-v0\.2\.0 failed: the live check set failed on the public port: .*healthcheck.*The previous website-server was started again\./);
+    expect(receipt.outcome).toBe("reverted");
+    expect(receipt.checks.find((c) => c.name === "copy")).toMatchObject({ ok: true });
+    expect(receipt.checks.find((c) => c.name === "live")).toMatchObject({ ok: false });
+    expect(receipt.checks.find((c) => c.name === "revert")).toMatchObject({ ok: true });
+    expect(host.state.serving).toBe("old");
+    const lines = host.lines();
+    expect(index(lines, new RegExp(`^docker rm -f ${NEW_ID}$`))).toBeLessThan(index(lines, new RegExp(`^docker start ${OLD_ID}$`)));
+    expect(lines.filter((l) => /^docker rename\b/.test(l))).toEqual([`docker rename ${OLD_ID} rm_stage_target-website-server-1`]);
+  });
+
+  test("--rollback retires the serving container with the same bounded stop: to a previous image, and to the kept nginx container", async () => {
+    const toImage = fakeHost();
+    await rollbackImage(imageDeps(toImage));
+    expect(toImage.lines().filter((l) => l.startsWith("docker stop "))).toEqual([`docker stop --signal SIGTERM -t 1 ${OLD_ID}`]);
+    const toKept = fakeHost({ hasPrevious: false, keptNginx: true });
+    await rollbackImage(imageDeps(toKept));
+    expect(toKept.lines().filter((l) => l.startsWith("docker stop "))).toEqual([`docker stop --signal SIGTERM -t 1 ${OLD_ID}`]);
   });
 });
