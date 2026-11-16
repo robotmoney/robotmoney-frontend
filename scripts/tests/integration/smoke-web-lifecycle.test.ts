@@ -81,7 +81,7 @@ test("deploy: the new container takes the public port and the old one's name, th
 
   expect(receipt.outcome).toBe("swapped");
   expect(receipt.checks.every((c) => c.ok)).toBe(true);
-  expect(receipt.checks.map((c) => c.name)).toEqual(["verify-local", "api-range", "verify-host", "build", "cold-start", "copy", "gap", "public", "live"]);
+  expect(receipt.checks.map((c) => c.name)).toEqual(["verify-local", "docker-version", "api-range", "verify-host", "build", "cold-start", "copy", "gap", "public", "live"]);
   expect(receipt.oldContainer).toEqual({ id: before.id, image: before.image });
   expect(receipt.newContainer?.id).toBe(after.id);
   expect(after.id).not.toBe(before.id);
@@ -133,7 +133,7 @@ test("a bundle the server image does not trust fails verification on the host an
   await Bun.write(signers, `${await Bun.file(h.allowedSigners).text()}rogue namespaces="robotmoney-web-bundle@v1" ${pub}\n`);
   const { receipt, error, deps } = await deploy(bundle, { allowedSigners: signers });
   expect(error?.message).toMatch(/failed verification on local: web bundle refused: no key in \/etc\/robotmoney\/allowed-signers signed/);
-  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["api-range", true], ["verify-host", false]]);
+  expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["docker-version", true], ["api-range", true], ["verify-host", false]]);
   const sent = (deps.host.commands as string[][]).map((c) => c.join(" "));
   expect(sent.some((l) => l.includes("rm-verify-web-bundle"))).toBe(true);
   expect(sent.filter((l) => /^docker build\b/.test(l))).toEqual([]);
@@ -176,6 +176,7 @@ test("--bundle web-v1.0.0 deploys the older signed bundle by name, fetched from 
   expect(receipt.release).toMatchObject({ tag: "web-v1.0.0", ...V1 });
   expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
     ["verify-local", true],
+    ["docker-version", true],
     ["api-range", true],
     ["verify-host", true],
     ["build", true],

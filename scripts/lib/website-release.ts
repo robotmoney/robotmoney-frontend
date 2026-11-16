@@ -138,6 +138,8 @@ export const GAP_LIMIT_MS = 3_000;
  * answer must fit in GAP_LIMIT_MS.
  */
 export const STOP_SIGNAL = "SIGTERM";
+/** `docker stop --signal` exists from Docker 25. */
+export const MIN_DOCKER_MAJOR = 25;
 export const STOP_GRACE_SECONDS = 1;
 
 /** PURE. The `docker stop` argv that retires `id`: the signal, then a forced stop after `graceSeconds`. */
@@ -239,6 +241,8 @@ export interface ImageReceipt {
   readonly revertGap: SwapGap | null;
   /** The pre-check container's cold start and the bound it was gated by; absent when no pre-check ran. */
   readonly precheck?: PrecheckTiming | null;
+  /** The host's Docker server version, read before anything was created (`docker stop --signal` needs 25). */
+  readonly dockerVersion?: string | null;
   /** The images `-current` and `-previous` name after the run. */
   readonly currentImage: string | null;
   readonly previousImage: string | null;
@@ -423,7 +427,8 @@ export type SwapTarget = { readonly kind: "image"; readonly image: string } | { 
  * background subshell that ignores SIGHUP and SIGPIPE, and the command waits
  * for it: a dropped SSH link ends the wait, never the body, so the host is
  * never left with the old container stopped and nothing started. It prints
- * `started`, or `failed: <docker's error>`. One docker command per line.
+ * `started`, or `failed: <docker's error>` followed by what the earlier
+ * commands (the stop) wrote to stderr. One docker command per line.
  */
 export function handoverScript(first: readonly (readonly string[])[], start: string, fallback: string | null): string {
   const docker = (args: readonly string[]) => ["docker", ...args].map(shellQuote).join(" ");
@@ -431,8 +436,10 @@ export function handoverScript(first: readonly (readonly string[])[], start: str
     "trap '' HUP PIPE",
     "(",
     "trap '' HUP PIPE",
-    ...first.map((args) => `${docker(args)} >/dev/null 2>&1`),
-    `if err=$(${docker(["start", start])} 2>&1 >/dev/null); then echo started; else ${fallback === null ? "" : `${docker(["start", fallback])} >/dev/null 2>&1; `}echo "failed: $err"; fi`,
+    // The stop's own stderr is kept (never discarded): it reaches the failure message.
+    'se=""',
+    ...first.map((args) => `se="$se$(${docker(args)} 2>&1 >/dev/null)"`),
+    `if err=$(${docker(["start", start])} 2>&1 >/dev/null); then echo started; else ${fallback === null ? "" : `${docker(["start", fallback])} >/dev/null 2>&1; `}echo "failed: $err\${se:+ (the stop said: $se)}"; fi`,
     ") </dev/null &",
     "wait $!",
   ].join("\n");
@@ -548,6 +555,7 @@ class ImageRun {
   gap: SwapGap | null = null;
   revertGap: SwapGap | null = null;
   precheck: PrecheckTiming | null = null;
+  dockerVersion: string | null = null;
   currentImage: string | null = null;
   previousImage: string | null = null;
 
@@ -591,6 +599,7 @@ class ImageRun {
       gap: this.gap,
       revertGap: this.revertGap,
       precheck: this.precheck,
+      dockerVersion: this.dockerVersion,
       currentImage: this.currentImage,
       previousImage: this.previousImage,
       error,
@@ -613,6 +622,7 @@ class ImageRun {
     try {
       await this.lock();
       lockHeld = true;
+      await this.removeStaleChecks();
       outcome = await body();
     } catch (e) {
       error = e as Error;
@@ -623,6 +633,42 @@ class ImageRun {
     const receipt = this.writeReceipt(outcome, error?.message ?? null);
     if (error) throw error;
     return receipt;
+  }
+
+  /**
+   * A pre-check container left by a run that died (the control machine lost
+   * between its create and its kill). Under the host lock no other run of this
+   * instance is making one. The name filter is anchored and fixed to this
+   * instance's name and the 8 hex digits of checkCopy's suffix, so another
+   * instance whose name starts with this one's is never matched.
+   */
+  async removeStaleChecks(): Promise<void> {
+    const escaped = this.deps.instance.replace(/[.]/g, "\\.");
+    const r = await this.docker.try(["ps", "-aq", "--no-trunc", "--filter", `name=^robotmoney-web-check-${escaped}-[0-9a-f]{8}$`]);
+    if (r.code !== 0) return;
+    for (const id of r.stdout.split("\n").filter((l) => l !== "")) {
+      this.log(`removing the stale pre-check container ${id.slice(0, 12)} of an earlier run`);
+      await this.docker.try(["rm", "-f", id]);
+    }
+  }
+
+  /**
+   * Refuse a host whose Docker cannot do the bounded stop (`docker stop
+   * --signal`, Docker 25). Read before the pre-check copy is created and
+   * before the old container is touched. Recorded in the receipt.
+   */
+  async checkDocker(): Promise<void> {
+    const r = await this.docker.try(["version", "--format", "{{.Server.Version}}"]);
+    const version = r.stdout.trim();
+    if (r.code === 0 && version !== "") this.dockerVersion = version;
+    const major = Number(/^(\d+)\./.exec(version)?.[1]);
+    const ok = r.code === 0 && Number.isInteger(major) && major >= MIN_DOCKER_MAJOR;
+    this.check("docker-version", ok, ok ? `Docker ${version} supports stop --signal` : `Docker ${version === "" ? `version unreadable (${r.stderr || r.stdout || `exit ${r.code}`})` : version}`);
+    if (!ok) {
+      throw new WebRefusal(
+        `Refusing: docker too old for stop --signal: need ${MIN_DOCKER_MAJOR}, host has ${version === "" ? `an unreadable version (${r.stderr || r.stdout || `exit ${r.code}`})` : version}. Nothing was changed.`,
+      );
+    }
   }
 
   private async lock(): Promise<void> {
@@ -1155,6 +1201,7 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       run.check("verify-local", true, `${basename(bundlePath)} signed by ${verified.principal}, sha256 ${verified.sha256}`);
 
       const old = await run.serving();
+      await run.checkDocker();
       await run.checkApiRange(release);
       if ((old.Config.Labels ?? {})[WEBSITE_IMAGE_LABELS.bundleSha256] === release.sha256) {
         // The same bundle on the same server image is already serving. On
@@ -1262,6 +1309,7 @@ export async function rollbackImage(deps: ImageReleaseDeps): Promise<ImageReceip
     // A run that died between its stop and its start left nothing serving: start what served last.
     if (await run.restartStopped()) return "swapped";
     const old = await run.serving();
+    await run.checkDocker();
     const previous = await run.docker.imageId(siteImageTag(deps.instance, "previous"));
     if (previous === null) {
       // The first-rollout rule (§4): until a swap from one site image to another

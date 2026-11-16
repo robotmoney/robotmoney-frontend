@@ -215,6 +215,62 @@ a dropped SSH link. Every error after the stop goes through step 6. A failed run
 `-current` or `-previous` names. `--rollback` on a host where nothing runs starts the stopped container that
 `-current` names, or else the first-rollout container.
 
+### 4.0 Recovering by hand
+
+Use these only when `bun smoke:web` cannot finish its own revert. Run them on the serving host. `<i>` is the
+instance (for example `rm_prod`), `<name>` is the serving container's name (`<project>-website-server-1`).
+
+See the state first:
+
+```
+docker ps -a --filter label=robotmoney.instance=<i> --filter label=com.docker.compose.service=website-server \
+  --format '{{.ID}}  {{.Names}}  {{.Image}}  {{.Status}}'
+docker ps -a --filter 'name=^robotmoney-web-check-<i>-'
+docker network ls --filter name=robotmoney-web-lock-<i>
+```
+
+The names a run creates: the new container is `<name>-next-<6 hex>` until step 7 renames it to `<name>`. The old
+container is parked as `<name>-old-<6 hex>` during step 7. The nginx container a first rollout keeps is
+`<name>-first-rollout`. The pre-check container is `robotmoney-web-check-<i>-<8 hex>`. The receipt of the last
+run is `<state root>/web-image/<i>/receipt.json` on the control machine (`~/.local/state/robotmoney-smoke/` unless
+`RM_SMOKE_STATE_ROOT` is set), with `journal.jsonl` beside it. It names the old and new container ids.
+
+a. The control machine was lost after the new container started (the old one is stopped, the receipt and the
+   tags are stale). Step 7 had not run, so the old container still exists under its own name. Put it back:
+
+   ```
+   docker stop --signal SIGTERM -t 1 <next-container-id>
+   docker start <old-container-id>
+   curl -fsS http://127.0.0.1:<public-port>/version.json
+   docker rm -f <next-container-id>
+   ```
+
+   Then run `bun smoke:web ... --bundle <web-vA.B.C>` again by name. If step 7 had half run (the old container is
+   named `<name>-old-<6 hex>`), the same commands apply with that container, and `docker rename <old-container-id>
+   <name>` after the new one is gone. Do not retag images by hand: the next run sets `-current` and `-previous`.
+
+b. A failed revert, so nothing serves. Start the container that served last. `bun smoke:web --host <h> --instance
+   <i> --rollback --origin <url>` does this by itself when nothing runs: it starts the stopped container that
+   `robotmoney-website:<i>-current` names, or else the `-first-rollout` one. By hand:
+
+   ```
+   docker start <old-container-id>        # from the listing above: the stopped one that served last
+   docker rename <old-container-id> <name>   # only if it was parked as <name>-old-... or <name>-first-rollout
+   ```
+
+   Check `/version.json` on the public port. If the old container will not start, start the new one the same way,
+   or redeploy a signed bundle by name once any website-server runs.
+
+c. An orphaned pre-check container (a run died between its create and its kill). It holds no public port and
+   serves nothing. Remove it. The next run does this by itself, for its own instance only:
+
+   ```
+   docker rm -f $(docker ps -aq --filter 'name=^robotmoney-web-check-<i>-[0-9a-f]{8}$')
+   ```
+
+A stale host lock (`robotmoney-web-lock-<i>`) blocks a new run for 30 minutes. After that the next run takes it
+over. To clear it sooner, once no `smoke:web` runs: `docker network rm robotmoney-web-lock-<i>`.
+
 ### 4.1 The gap
 
 Docker gives a published port to one container at a time, and the cloudflared origin does not change (R8), so the
@@ -230,7 +286,10 @@ accepted (R11). Step 3 moves everything else out of the gap: the new container i
   second.
 - The least gap is the old container's exit (at most the one-second bound, a few hundred milliseconds when
   nothing is held), plus the new container's start and first answer (the cold start step 3 measured).
-  Step 3 refuses a swap whose measured cold start plus the one-second bound exceeds the limit below.
+  Step 3 refuses a swap whose measured cold start plus the one-second bound exceeds the limit below. The retire
+  needs `docker stop --signal` (Docker 25): a run reads the host's Docker version first, records it in the
+  receipt and refuses an older one before anything is created or stopped. The stop's own error text reaches the
+  failure message.
 
 - The gap runs from the stop of the old container to the first good answer from the new one on the public port.
 - The gap is measured on every swap and recorded in the receipt, in milliseconds.

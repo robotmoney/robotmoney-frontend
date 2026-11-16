@@ -156,6 +156,10 @@ interface FakeHostState {
   containerSha: string | null;
   /** The healthcheck command exits non-zero inside the new containers. */
   healthFails: boolean;
+  /** `docker version --format {{.Server.Version}}`; "" makes the command fail. */
+  dockerVersion: string;
+  /** Pre-check containers an earlier run left behind (full ids). */
+  staleChecks: string[];
   /** These docker sub-commands (by their first two words, e.g. "rename"), fail. */
   failing: string[];
   /** The serving bundle's digest (labels of the old container), when it equals the deployed one. */
@@ -243,6 +247,8 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
     copyColdStartMs: 0,
     containerSha: null,
     healthFails: false,
+    dockerVersion: "29.1.3",
+    staleChecks: [],
     failing: [],
     servingSha: null,
     serverLayers: ["sha256:l1"],
@@ -302,7 +308,10 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
         if (a[1] === "create") return state.lockHeld ? no("network with name robotmoney-web-lock-stage_target already exists") : ok("lockid");
         if (a[1] === "inspect") return ok(new Date().toISOString());
         return ok();
+      case "version":
+        return state.dockerVersion === "" ? no("Cannot connect to the Docker daemon") : ok(state.dockerVersion);
       case "ps":
+        if (joined.includes("name=^robotmoney-web-check-")) return ok(state.staleChecks.join("\n"));
         if (joined.includes(`name=${FIRST_ROLLOUT_SUFFIX}`)) return ok(state.keptNginx ? KEPT_ID : "");
         if (state.allStopped) return a.includes("-aq") ? ok(OLD_ID) : ok("");
         return ok(OLD_ID);
@@ -380,12 +389,14 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
   // The one-command handover (handoverScript): each docker line is recorded as if sent alone, in order.
   const words = (line: string) => line.split(" ").map((w) => w.replace(/^'|'$/g, ""));
   const handover = (script: string): string => {
+    let se = "";
     for (const line of script.split("\n")) {
-      const plain = /^docker (.*) >\/dev\/null 2>&1$/.exec(line);
+      // `se="$se$(docker <args> 2>&1 >/dev/null)"`: the stop's stderr is kept.
+      const plain = /^se="\$se\$\(docker (.*) 2>&1 >\/dev\/null\)"$/.exec(line);
       if (plain) {
         const a = words(plain[1]!);
         commands.push(["docker", ...a]);
-        dockerOrFail(a);
+        se += dockerOrFail(a).stderr;
         continue;
       }
       const branch = /^if err=\$\(docker (start \S+) 2>&1 >\/dev\/null\); then echo started; else (?:docker (start \S+) >\/dev\/null 2>&1; )?/.exec(line);
@@ -399,7 +410,7 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
           commands.push(["docker", ...f]);
           dockerOrFail(f);
         }
-        return `failed: ${r.stderr}`;
+        return `failed: ${r.stderr}${se === "" ? "" : ` (the stop said: ${se})`}`;
       }
     }
     throw new Error(`the fake host cannot read the handover script:\n${script}`);
@@ -487,6 +498,7 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
     });
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
       ["verify-local", true],
+      ["docker-version", true],
       ["api-range", true],
       ["verify-host", true],
       ["build", true],
@@ -566,7 +578,7 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
     const { receipt, error } = await deployFake(host, "^0.2.0");
     expect(error?.message).toBe("Refusing: the running API is 0.3.0, outside web-v0.2.0's range ^0.2.0. Nothing was changed.");
     expect(receipt).toMatchObject({ outcome: "refused", apiVersion: "0.3.0", newContainer: null, gap: null });
-    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["api-range", false]]);
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["verify-local", true], ["docker-version", true], ["api-range", false]]);
     expect(host.lines().filter((l) => /^(docker (build|create|stop|start|tag)|mktemp)\b/.test(l))).toEqual([]);
   });
 
@@ -583,7 +595,7 @@ describe("image mode: deploy (smoke:web --host --bundle)", () => {
     const deps = imageDeps(host, { allowedSigners: other.allowedSigners });
     await expect(deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform" }, deps)).rejects.toThrow(/failed verification: no key in .* signed this bundle/);
     expect(readImageReceipt(deps.receiptDir)?.outcome).toBe("refused");
-    expect(host.commands.map((c) => c.slice(0, 3).join(" "))).toEqual(["docker network create", "docker network rm"]);
+    expect(host.commands.map((c) => c.slice(0, 3).join(" "))).toEqual(["docker network create", "docker ps -aq", "docker network rm"]);
   });
 
   test("a throwaway copy that fails its check never touches the public port", async () => {
@@ -637,7 +649,7 @@ describe("image mode: rollback (smoke:web --host --rollback)", () => {
       currentImage: PREV_IMAGE,
       previousImage: OLD_IMAGE,
     });
-    expect(receipt.checks.map((c) => c.name)).toEqual(["api-range", "cold-start", "copy", "gap", "public", "live"]);
+    expect(receipt.checks.map((c) => c.name)).toEqual(["docker-version", "api-range", "cold-start", "copy", "gap", "public", "live"]);
     expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
     // A rollback builds nothing.
     expect(host.lines().filter((l) => /^docker build\b|rm-verify-web-bundle/.test(l))).toEqual([]);
@@ -706,7 +718,7 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
       currentImage: NGINX_IMAGE,
       previousImage: OLD_IMAGE,
     });
-    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["api-range", true], ["gap", true], ["public", true]]);
+    expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["docker-version", true], ["api-range", true], ["gap", true], ["public", true]]);
     expect(host.state.serving).toBe("kept");
     const lines = host.lines();
     expect(lines.some((l) => l.includes(`--volumes-from ${KEPT_ID}`))).toBe(true);
@@ -840,6 +852,7 @@ describe("image mode: a server-image change rebuilds the serving bundle through 
     expect(receipt.release?.sha256).toBe(b.sha256);
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([
       ["verify-local", true],
+      ["docker-version", true],
       ["api-range", true],
       ["verify-host", true],
       ["build", true],
@@ -861,7 +874,7 @@ describe("image mode: pure parts", () => {
     roots.push(bin);
     const log = join(bin, "log");
     // A stand-in docker: records its argv, and `start bad` fails.
-    writeFileSync(join(bin, "docker"), `#!/bin/sh\necho "$*" >> ${log}\n[ "$1 $2" = "start bad" ] && { echo "no such container: bad" >&2; exit 1; }\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(join(bin, "docker"), `#!/bin/sh\necho "$*" >> ${log}\n[ "$1 $2" = "start bad" ] && { echo "no such container: bad" >&2; exit 1; }\n[ "$1 $2" = "stop stopfail" ] && { echo "unknown flag: --signal" >&2; exit 125; }\nexit 0\n`, { mode: 0o755 });
     const run = (script: string) => {
       writeFileSync(log, "");
       const r = Bun.spawnSync(["sh", "-c", script], { env: { PATH: `${bin}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" });
@@ -869,6 +882,11 @@ describe("image mode: pure parts", () => {
     };
     expect(run(handoverScript([["stop", "-t", "10", "old"]], "new", "old"))).toEqual({ out: "started", calls: ["stop -t 10 old", "start new"] });
     expect(run(handoverScript([["stop", "-t", "10", "old"]], "bad", "old"))).toEqual({ out: "failed: no such container: bad", calls: ["stop -t 10 old", "start bad", "start old"] });
+    // A stop that failed keeps its stderr, and it reaches the failure line.
+    expect(run(handoverScript([["stop", "stopfail"]], "bad", "old"))).toEqual({
+      out: "failed: no such container: bad (the stop said: unknown flag: --signal)",
+      calls: ["stop stopfail", "start bad", "start old"],
+    });
     expect(run(handoverScript([], "bad", null))).toEqual({ out: "failed: no such container: bad", calls: ["start bad"] });
     // The body ignores SIGHUP and SIGPIPE, so a dropped link cannot stop it halfway.
     expect(handoverScript([], "x", null).split("\n").filter((l) => l === "trap '' HUP PIPE")).toHaveLength(2);
@@ -1066,5 +1084,46 @@ describe("image mode: the swap sequence (pre-check, bounded retire, revert)", ()
     const toKept = fakeHost({ hasPrevious: false, keptNginx: true });
     await rollbackImage(imageDeps(toKept));
     expect(toKept.lines().filter((l) => l.startsWith("docker stop "))).toEqual([`docker stop --signal SIGTERM -t 1 ${OLD_ID}`]);
+  });
+  test("an old Docker is refused before anything is created or stopped, and a current one passes with its version in the receipt", async () => {
+    for (const version of ["24.0.7", "20.10.21", ""]) {
+      const host = fakeHost({ dockerVersion: version });
+      const { receipt, error } = await deployFake(host);
+      expect(error?.message).toMatch(version === "" ? /docker too old for stop --signal: need 25, host has an unreadable version/ : new RegExp(`docker too old for stop --signal: need 25, host has ${version.replace(/\./g, "\\.")}`));
+      expect(receipt.outcome).toBe("refused");
+      expect(receipt.checks.find((c) => c.name === "docker-version")).toMatchObject({ ok: false });
+      expect(host.lines().filter((l) => /^docker (create|stop|start|run|build)\b/.test(l))).toEqual([]);
+      expect(host.state.serving).toBe("old");
+    }
+    const rb = fakeHost({ dockerVersion: "24.0.7" });
+    await expect(rollbackImage(imageDeps(rb))).rejects.toThrow(/docker too old for stop --signal: need 25, host has 24\.0\.7/);
+    expect(rb.lines().filter((l) => /^docker (create|stop|start|run)\b/.test(l))).toEqual([]);
+    const ok = fakeHost({ dockerVersion: "25.0.0" });
+    const { receipt, error } = await deployFake(ok);
+    expect(error).toBeNull();
+    expect(receipt.dockerVersion).toBe("25.0.0");
+    expect(receipt.checks.find((c) => c.name === "docker-version")).toMatchObject({ ok: true });
+  });
+
+  test("the stderr of a failed stop is not discarded: it reaches the failure message", async () => {
+    const host = fakeHost({ newStartFails: true });
+    // The fake handover goes through dockerOrFail, so make the stop fail there.
+    host.state.failing = ["stop"];
+    const { error } = await deployFake(host);
+    expect(error?.message).toMatch(/the new website-server did not start: .*\(the stop said: docker stop failed by the test\)/);
+  });
+
+  test("an orphaned pre-check container of an earlier run is removed at the start of the next run, and only this instance's", async () => {
+    const stale = "e".repeat(64);
+    const host = fakeHost({ staleChecks: [stale] });
+    const { error } = await deployFake(host);
+    expect(error).toBeNull();
+    const lines = host.lines();
+    const filter = lines.find((l) => l.startsWith("docker ps -aq --no-trunc --filter name=^robotmoney-web-check-"))!;
+    // Anchored, this instance's name, the checker's 8 hex digits: `stage_target` never matches `stage_target-2`'s checks.
+    expect(filter).toBe("docker ps -aq --no-trunc --filter name=^robotmoney-web-check-stage_target-[0-9a-f]{8}$");
+    expect(index(lines, new RegExp(`^docker rm -f ${stale}$`))).toBeGreaterThan(index(lines, /^docker network create/));
+    // Before anything is verified or built.
+    expect(index(lines, new RegExp(`^docker rm -f ${stale}$`))).toBeLessThan(index(lines, /rm-verify-web-bundle/));
   });
 });
