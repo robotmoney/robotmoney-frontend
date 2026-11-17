@@ -575,7 +575,9 @@ async function runReleaseOnce(
   }
 
   // Exit point: nothing runnable and nothing in flight, but a step waits on a future notBefore. Resume then.
-  if (waiting.length > 0) {
+  // A failed QA must stop for diagnosis, not auto-resume from its first failure.
+  // Otherwise each timed resume repeats subsequent mutations and resets READY.
+  if (waiting.length > 0 && failedSteps.length === 0) {
     journal.status = runStatus(journal, ids);
     writeJournal(runDir, journal);
     for (const w of waiting) deps.log(`\n[${NAME}] ${w.id} becomes runnable at ${w.earliest.toISOString()} (${w.afterStep} ended ${w.anchorEnded} + ${w.hours} h).`);
