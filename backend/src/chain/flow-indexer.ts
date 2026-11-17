@@ -1,6 +1,6 @@
 // Chain scan logic is independent of storage; the API-owned store must commit
 // each window and its checkpoints atomically and delete projections on rewind.
-export interface FlowHeader { number: number; hash: string; timestamp: number }
+export interface FlowHeader { number: number; hash: string; timestamp: number; parentHash?: string }
 export interface FlowLog { blockNumber: number; blockHash: string; logIndex: number; transactionHash: string; address: string; topics: string[]; data: string }
 export interface FlowIndexStore {
   checkpoints(): Promise<FlowHeader[]>;
@@ -10,6 +10,7 @@ export interface FlowIndexStore {
 export interface FlowIndexSource {
   head(): Promise<number>;
   header(block: number): Promise<FlowHeader>;
+  headers?(blocks: number[]): Promise<FlowHeader[]>;
   logs(from: number, to: number): Promise<FlowLog[]>;
 }
 
@@ -28,8 +29,16 @@ export async function scanFlowWindow(source: FlowIndexSource, store: FlowIndexSt
   const from = ancestor ? ancestor.number + 1 : deployBlock;
   const to = Math.min((await source.head()) - confirmations, from + maxBlocks - 1);
   if (to < from) return ancestor?.number ?? null;
-  const headers: FlowHeader[] = [];
-  for (let block = from; block <= to; block++) headers.push(await source.header(block));
+  const blockNumbers = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  const headers = source.headers ? await source.headers(blockNumbers) : await Promise.all(blockNumbers.map((block) => source.header(block)));
+  if (headers.length !== blockNumbers.length) throw new Error("RPC returned an incomplete block batch");
+  for (let i = 0; i < blockNumbers.length; i++) {
+    const block = blockNumbers[i]!;
+    const header = headers[i]!;
+    if (header.number !== block) throw new Error("RPC returned the wrong block number");
+    const parent = i ? headers[i - 1] : ancestor;
+    if (parent && header.parentHash && header.parentHash.toLowerCase() !== parent.hash.toLowerCase()) throw new Error("chain changed while reading headers");
+  }
   const logs = await source.logs(from, to);
   const hashes = new Map(headers.map((header) => [header.number, header.hash.toLowerCase()]));
   for (const log of logs) {
