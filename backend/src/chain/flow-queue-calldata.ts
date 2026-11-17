@@ -18,6 +18,8 @@ export const flowQueueCalldata = {
   redeem: (shares: bigint, receiver: string, owner: string) => "0xba087652" + uint(shares) + encodeAddressArg(receiver) + encodeAddressArg(owner),
   quoteDeposit: (amount: bigint) => "0xdb431f06" + uint(amount),
   quoteRedeem: (amount: bigint) => "0x2711be44" + uint(amount),
+  allowance: (owner: string, spender: string) => "0xdd62ed3e" + encodeAddressArg(owner) + encodeAddressArg(spender),
+  approve: (spender: string, amount: bigint) => "0x095ea7b3" + encodeAddressArg(spender) + uint(amount),
 };
 
 /** Decode the static Quote tuple defined in FlowTypes.sol. */

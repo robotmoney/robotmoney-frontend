@@ -24,6 +24,14 @@ const definitions: Record<string, { name: string; indexed: string[]; fields: str
   "0xe5d56550a7bce6fe2562d64317b68394c9641cd177ea535b02c6493a783cd6bb": { name: "SettlementReleased", indexed: ["settlementId"], fields: [] },
   "0x2947fcf1e6533444a8b0d024aa23d671ce26710c63e636fdba834268d08ce95c": { name: "QueuePaused", indexed: ["account:address"], fields: ["until"] },
   "0xe68bef58d69407b5152e5a066d0a8f5f89ba63f10dfa5fe672a833260bd54c91": { name: "QueueUnpaused", indexed: ["account:address"], fields: [] },
+  "0xeb225a736fbfee3f85ccb72bdf84ff0396ab358b7970e2cc351ab3e3fd92358d": { name: "DepositsPaused", indexed: ["account:address"], fields: [] },
+  "0xd92e31f504caf26579aa9a5860a669bf0ccf07c267baa65bc79bf3ee57cfa27c": { name: "DepositsUnpaused", indexed: ["account:address"], fields: [] },
+  "0x4426aa1fb73e391071491fcfe21a88b5c38a0a0333a1f6e77161470439704cf8": { name: "Shutdown", indexed: [], fields: [] },
+  "0x8844cef3a16b6ac7edabbd8f395fc713a830e9a3198c483c712e4b515439f0d3": { name: "Restored", indexed: [], fields: ["newTvlCap"] },
+  "0x14100b5173247fd85933be4f0a825a6f177df0921816a1412b949113e3c40b3a": { name: "FlowRoleBound", indexed: ["queue:address"], fields: [] },
+  "0x67f9b61bf7b39fd24dd60467083f89ea77979db358db2804069474590a36c035": { name: "Seeded", indexed: [], fields: ["usdc", "shares"] },
+  "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef": { name: "Transfer", indexed: ["from:address", "to:address"], fields: ["value"] },
+  "0x7b1aef0e0b790eaabc2bf48a69f9bdd83f9ae8c4eaca8d95b24850113af86e0e": { name: "ExitFeeCharged", indexed: ["owner:address"], fields: ["grossAssets", "fee"] },
 };
 
 export function decodeFlowEvent(log: Pick<FlowLog, "topics" | "data">): { name: string; args: Record<string, string> } | null {
