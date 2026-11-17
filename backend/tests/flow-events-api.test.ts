@@ -4,6 +4,7 @@ import { flowBindDeployment, flowRecord, flowRewind } from "../src/pipeline/stor
 import { handleFlowEvents } from "../src/api/routes/flow-events.ts";
 import { handleFlowOwner } from "../src/api/routes/flow-owner.ts";
 import { handleFlowPrices } from "../src/api/routes/flow-prices.ts";
+import { handleFlowRequestHistory } from "../src/api/routes/flow-request-history.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -34,6 +35,11 @@ test("serves only canonical events with the matching deployment and watermark", 
     const priceBody = await pricesResponse.json();
     expect(priceBody.prices).toHaveLength(1);
     expect(priceBody.prices[0]).toMatchObject({ settlementId: "2", sharePrice: "100", time: "1970-01-01T00:00:01.000Z" });
+    const historyResponse = await handleFlowRequestHistory(new Request(url), url, "1", "flow-history-1");
+    const historyBody = await historyResponse.json();
+    expect(historyBody.attribution).toBe("request-events-only");
+    expect(historyBody.events).toHaveLength(1);
+    expect(historyBody.events[0].event.name).toBe("DepositRequested");
     await sql.begin(async (tx) => { await flowRewind(tx, 8453, 0); await flowRecord(tx, 8453, [{ number: 1, hash: "b", timestamp: 2 }], []); });
     const next = await handleFlowEvents(new Request(url), url, "flow-events-2");
     expect((await next.json()).events).toHaveLength(0);

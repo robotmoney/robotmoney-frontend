@@ -6948,5 +6948,6 @@ CREATE TABLE public.flow_index_logs (
 CREATE INDEX flow_index_logs_canonical_cursor ON public.flow_index_logs (chain_id, block_number, log_index) WHERE canonical;
 CREATE INDEX flow_index_logs_owner_cursor ON public.flow_index_logs (chain_id, lower(address), lower((topics ->> 2)), block_number, log_index) WHERE canonical;
 CREATE INDEX flow_index_logs_topic_cursor ON public.flow_index_logs (chain_id, lower(address), lower((topics ->> 0)), block_number, log_index) WHERE canonical;
+CREATE INDEX flow_index_logs_request_cursor ON public.flow_index_logs (chain_id, lower(address), lower((topics ->> 1)), block_number, log_index) WHERE canonical;
 
 

@@ -37,6 +37,8 @@ CREATE INDEX IF NOT EXISTS flow_index_logs_owner_cursor
   ON flow_index_logs (chain_id, lower(address), lower(topics->>2), block_number, log_index) WHERE canonical;
 CREATE INDEX IF NOT EXISTS flow_index_logs_topic_cursor
   ON flow_index_logs (chain_id, lower(address), lower(topics->>0), block_number, log_index) WHERE canonical;
+CREATE INDEX IF NOT EXISTS flow_index_logs_request_cursor
+  ON flow_index_logs (chain_id, lower(address), lower(topics->>1), block_number, log_index) WHERE canonical;
 GRANT SELECT, INSERT, UPDATE ON flow_index_blocks TO rm_app;
 GRANT SELECT, INSERT, UPDATE ON flow_index_logs TO rm_app;
 GRANT SELECT, INSERT ON flow_index_deployment TO rm_app;
