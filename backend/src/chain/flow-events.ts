@@ -32,6 +32,16 @@ const definitions: Record<string, { name: string; indexed: string[]; fields: str
   "0x67f9b61bf7b39fd24dd60467083f89ea77979db358db2804069474590a36c035": { name: "Seeded", indexed: [], fields: ["usdc", "shares"] },
   "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef": { name: "Transfer", indexed: ["from:address", "to:address"], fields: ["value"] },
   "0x7b1aef0e0b790eaabc2bf48a69f9bdd83f9ae8c4eaca8d95b24850113af86e0e": { name: "ExitFeeCharged", indexed: ["owner:address"], fields: ["grossAssets", "fee"] },
+  "0xdcbc1c05240f31ff3ad067ef1ee35ce4997762752e3a095284754544f4c709d7": { name: "Deposit", indexed: ["caller:address", "owner:address"], fields: ["assets", "shares"] },
+  "0xfbde797d201c681b91056529119e0b02407c7bb96a4a2c75c01fc9667232c8db": { name: "Withdraw", indexed: ["caller:address", "receiver:address", "owner:address"], fields: ["assets", "shares"] },
+  "0x3461fe378a2efca85c88ef6623ffa209efcef9051431ffca026aab841a2b4f89": { name: "AgentAuthorized", indexed: ["agent:address", "owner:address"], fields: ["validUntil", "maxPerPayment", "maxPerWindow", "shareReceiver:address"] },
+  "0x3855bc4f5f7ba28049e0abd622b6ffbbf63cb46e6b09593b9213c9fd38db5cad": { name: "AgentRevoked", indexed: ["agent:address", "owner:address"], fields: [] },
+  "0xa9d4181f9a037cd8447c2d7336d15eaf9b4424df7793889e5d155ec7cdb01965": { name: "AgentDeposit", indexed: ["paymentId:bytes32", "orderId:bytes32", "agent:address"], fields: ["shareReceiver:address", "amount", "sharesMinted", "windowId"] },
+  "0x5fb42bba5add49752cfadf2acd1a6766af263661f5caca0577015c183fcce4ee": { name: "AgentWithdrawal", indexed: ["paymentId:bytes32", "orderId:bytes32", "agent:address"], fields: ["sourceVault:address", "shares", "assetsOut", "assetRecipient:address", "windowId"] },
+  "0x59f0898f2df0fec2756b6bd25584cac8bc6d5a277a1c12aadd6b5c1ad801bff0": { name: "VaultStatusChanged", indexed: ["vault:address", "status"], fields: ["timestamp"] },
+  "0x257cb22e03ab252c5a562a7b4b371f420ba141f1445d13e81e7f3ba3946f601f": { name: "Allocated", indexed: ["index", "adapter:address"], fields: ["amount"] },
+  "0xc47b274de5c3e6569385361fa3dc869c98af8023c31ec785a8da75b9c91cfb99": { name: "Pulled", indexed: ["index", "adapter:address"], fields: ["amount"] },
+  "0xc306af072396b02bf3a9782c10065cc7ff4aa842934a43f0b76f997b291237c8": { name: "Rebalanced", indexed: [], fields: ["totalMoved"] },
 };
 
 export function decodeFlowEvent(log: Pick<FlowLog, "topics" | "data">): { name: string; args: Record<string, string> } | null {
@@ -43,7 +53,7 @@ export function decodeFlowEvent(log: Pick<FlowLog, "topics" | "data">): { name: 
     if (!/^[0-9a-fA-F]{64}$/.test(word)) throw new Error(`malformed ${def.name} word`);
     const [name, kind] = field.split(":");
     if (kind === "address" && !/^0{24}/.test(word)) throw new Error(`malformed ${def.name} address`);
-    args[name!] = kind === "address" ? `0x${word.slice(24).toLowerCase()}` : BigInt(`0x${word}`).toString();
+    args[name!] = kind === "address" ? `0x${word.slice(24).toLowerCase()}` : kind === "bytes32" ? `0x${word.toLowerCase()}` : BigInt(`0x${word}`).toString();
   };
   def.indexed.forEach((field, i) => assign(field, log.topics[i + 1]!.replace(/^0x/, "")));
   def.fields.forEach((field, i) => assign(field, log.data.slice(2 + i * 64, 2 + (i + 1) * 64)));
