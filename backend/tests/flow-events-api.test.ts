@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { flowBindDeployment, flowRecord, flowRewind } from "../src/pipeline/stores/flow-index.ts";
 import { handleFlowEvents } from "../src/api/routes/flow-events.ts";
+import { handleFlowOwner } from "../src/api/routes/flow-owner.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -15,12 +16,18 @@ test("serves only canonical events with the matching deployment and watermark", 
     await sql.begin(async (tx) => {
       await flowBindDeployment(tx, 8453, queue, fund);
       await flowRecord(tx, 8453, [{ number: 1, hash: "a", timestamp: 1 }], [{ blockNumber: 1, blockHash: "a", logIndex: 0, transactionHash: "tx", address: queue, topics: ["0xunknown"], data: "0x" }]);
+      const word = (s: string) => s.padStart(64, "0");
+      await flowRecord(tx, 8453, [], [{ blockNumber: 1, blockHash: "a", logIndex: 1, transactionHash: "tx2", address: queue, topics: ["0xb8cbb91f85c0ecbb8b541805846bc3a6e090a8147b47523c51583a4815daebf9", `0x${word("1")}`, `0x${word(fund.slice(2))}`, `0x${word(fund.slice(2))}`], data: `0x${word("a")}${word("1")}` }]);
     });
     const response = await handleFlowEvents(new Request(url), url, "flow-events-1");
     const body = await response.json();
     expect(response.status).toBe(200);
     expect(body.indexedThrough.hash).toBe("a");
-    expect(body.events).toHaveLength(1);
+    expect(body.events).toHaveLength(2);
+    const ownerResponse = await handleFlowOwner(new Request(url), url, fund, "flow-owner-1");
+    const ownerBody = await ownerResponse.json();
+    expect(ownerBody.requests).toHaveLength(1);
+    expect(ownerBody.requests[0].event.args.requestId).toBe("1");
     await sql.begin(async (tx) => { await flowRewind(tx, 8453, 0); await flowRecord(tx, 8453, [{ number: 1, hash: "b", timestamp: 2 }], []); });
     const next = await handleFlowEvents(new Request(url), url, "flow-events-2");
     expect((await next.json()).events).toHaveLength(0);

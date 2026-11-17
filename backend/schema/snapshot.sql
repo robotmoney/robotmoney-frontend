@@ -6946,5 +6946,6 @@ CREATE TABLE public.flow_index_logs (
     FOREIGN KEY (chain_id, block_number, block_hash) REFERENCES public.flow_index_blocks (chain_id, block_number, block_hash)
 );
 CREATE INDEX flow_index_logs_canonical_cursor ON public.flow_index_logs (chain_id, block_number, log_index) WHERE canonical;
+CREATE INDEX flow_index_logs_owner_cursor ON public.flow_index_logs (chain_id, lower(address), lower((topics ->> 2)), block_number, log_index) WHERE canonical;
 
 

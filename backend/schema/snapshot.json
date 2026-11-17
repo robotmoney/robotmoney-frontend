@@ -146,7 +146,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "8c52cdd4f0e882337e47051eb00badae0cd89e47b1279bd14268cb997ef67497",
+  "contentHash": "18148c91246633ebafbde05ac2accd15ced24543a07b07ba6d4142d1df6ddf76",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -5423,6 +5423,9 @@
     },
     "index public.flow_index_logs_canonical_cursor": {
       "definition": "CREATE INDEX flow_index_logs_canonical_cursor ON public.flow_index_logs USING btree (chain_id, block_number, log_index) WHERE canonical"
+    },
+    "index public.flow_index_logs_owner_cursor": {
+      "definition": "CREATE INDEX flow_index_logs_owner_cursor ON public.flow_index_logs USING btree (chain_id, lower(address), lower((topics ->> 2)), block_number, log_index) WHERE canonical"
     },
     "index public.flow_index_logs_pkey": {
       "definition": "CREATE UNIQUE INDEX flow_index_logs_pkey ON public.flow_index_logs USING btree (chain_id, block_hash, log_index)"

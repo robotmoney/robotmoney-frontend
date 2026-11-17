@@ -30,5 +30,5 @@ export async function flowRewind(tx: RegistryDb, chainId: number, after: number)
 }
 export async function flowRecord(tx: RegistryDb, chainId: number, headers: FlowHeader[], logs: FlowLog[]): Promise<void> {
   for (const h of headers) await on(tx, insertBlock)`INSERT INTO flow_index_blocks (chain_id, block_number, block_hash, block_time, canonical) VALUES (${chainId}, ${h.number}, ${h.hash}, to_timestamp(${h.timestamp}), true) ON CONFLICT (chain_id, block_number, block_hash) DO UPDATE SET canonical = true`;
-  for (const l of logs) await on(tx, insertLog)`INSERT INTO flow_index_logs (chain_id, block_number, block_hash, log_index, transaction_hash, address, topics, data) VALUES (${chainId}, ${l.blockNumber}, ${l.blockHash}, ${l.logIndex}, ${l.transactionHash}, ${l.address}, ${JSON.stringify(l.topics)}::jsonb, ${l.data}) ON CONFLICT (chain_id, block_hash, log_index) DO UPDATE SET canonical = true`;
+  for (const l of logs) await on(tx, insertLog)`INSERT INTO flow_index_logs (chain_id, block_number, block_hash, log_index, transaction_hash, address, topics, data) VALUES (${chainId}, ${l.blockNumber}, ${l.blockHash}, ${l.logIndex}, ${l.transactionHash}, ${l.address}, ${tx.json(l.topics)}::jsonb, ${l.data}) ON CONFLICT (chain_id, block_hash, log_index) DO UPDATE SET canonical = true`;
 }
