@@ -172,3 +172,27 @@ describe("the whole swap, nginx to Caddy and back, with a stream held through th
     await waitServed(h, V0, 10_000);
   }, 300_000);
 });
+
+describe("a Caddy-to-Caddy swap with a held stream", () => {
+  const V1 = { version: "1.0.0", commit: "1111aaa" };
+  let h: ImageHost;
+  beforeAll(async () => {
+    h = createImageHost("held-caddy-swap", V0);
+    await waitServed(h, V0);
+  }, 600_000);
+  afterAll(() => h?.dispose(), 120_000);
+
+  test("deploying a different signed bundle keeps the gap inside the limit", async () => {
+    const stream = await holdStream(h.serving().port);
+    try {
+      const receipt = await deployImage({ bundle: h.bundle(V1), serverImage: h.serverImage }, h.deps());
+      expect(receipt.outcome).toBe("swapped");
+      expect(receipt.gap!.ms!).toBeLessThanOrEqual(GAP_LIMIT_MS);
+      expect(receipt.precheck!.coldStartMs + receipt.precheck!.retireBoundMs).toBeLessThanOrEqual(GAP_LIMIT_MS);
+      expect(receipt.checks.every((c) => c.ok)).toBe(true);
+    } finally {
+      stream.close();
+    }
+    await waitServed(h, V1, 10_000);
+  }, 300_000);
+});
