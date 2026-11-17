@@ -13,7 +13,7 @@ import { assetPriceBackfillCandidateDays, assetPriceDayCompleteness, writeAssetP
 import { lastPersistedHolding, walletHistoryRows } from "../chain/wallet-balances-store.ts";
 import { recentPersistedPrice } from "../chain/wallet-persisted-price.ts";
 import { buybackScanState, recordBuybackWindow } from "./stores/buybacks.ts";
-import { flowCheckpoints, flowRecord, flowRewind } from "./stores/flow-index.ts";
+import { flowBindDeployment, flowCheckpoints, flowRecord, flowRewind } from "./stores/flow-index.ts";
 import {
   activeCoins,
   activeDiscoveredCount,
@@ -77,6 +77,7 @@ export const PIPELINE_OPS: Readonly<Record<string, PipelineOp>> = Object.freeze(
   "buybacks.record_window": ingestOp(recordBuybackWindow, rowsAt(0)),
   "buybacks.scan_state": readOp(buybackScanState),
   "flow.checkpoints": readOp(flowCheckpoints),
+  "flow.bind_deployment": ingestOp(flowBindDeployment),
   "flow.record": ingestOp(flowRecord, (args) => rowsAt(1)(args) + rowsAt(2)(args)),
   "flow.rewind": ingestOp(flowRewind),
   "gaps.reports": readOp(gapReports),

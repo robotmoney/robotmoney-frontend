@@ -146,7 +146,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "0589e3e1f0dbe79bdcd20bb2a437cb428b04538557b1f0e05eea74ff714b9456",
+  "contentHash": "8c52cdd4f0e882337e47051eb00badae0cd89e47b1279bd14268cb997ef67497",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -1371,6 +1371,18 @@
       "type": "bigint",
       "notnull": "yes"
     },
+    "column public.flow_index_deployment.chain_id": {
+      "type": "bigint",
+      "notnull": "yes"
+    },
+    "column public.flow_index_deployment.fund_address": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.flow_index_deployment.queue_address": {
+      "type": "text",
+      "notnull": "yes"
+    },
     "column public.flow_index_logs.address": {
       "type": "text",
       "notnull": "yes"
@@ -1382,6 +1394,11 @@
     "column public.flow_index_logs.block_number": {
       "type": "bigint",
       "notnull": "yes"
+    },
+    "column public.flow_index_logs.canonical": {
+      "type": "boolean",
+      "notnull": "yes",
+      "default": "true"
     },
     "column public.flow_index_logs.chain_id": {
       "type": "bigint",
@@ -4364,6 +4381,9 @@
     "constraint public.flow_index_blocks.flow_index_blocks_pkey": {
       "definition": "PRIMARY KEY (chain_id, block_number, block_hash)"
     },
+    "constraint public.flow_index_deployment.flow_index_deployment_pkey": {
+      "definition": "PRIMARY KEY (chain_id)"
+    },
     "constraint public.flow_index_logs.flow_index_logs_chain_id_block_number_block_hash_fkey": {
       "definition": "FOREIGN KEY (chain_id, block_number, block_hash) REFERENCES public.flow_index_blocks(chain_id, block_number, block_hash)"
     },
@@ -5398,6 +5418,12 @@
     "index public.flow_index_blocks_pkey": {
       "definition": "CREATE UNIQUE INDEX flow_index_blocks_pkey ON public.flow_index_blocks USING btree (chain_id, block_number, block_hash)"
     },
+    "index public.flow_index_deployment_pkey": {
+      "definition": "CREATE UNIQUE INDEX flow_index_deployment_pkey ON public.flow_index_deployment USING btree (chain_id)"
+    },
+    "index public.flow_index_logs_canonical_cursor": {
+      "definition": "CREATE INDEX flow_index_logs_canonical_cursor ON public.flow_index_logs USING btree (chain_id, block_number, log_index) WHERE canonical"
+    },
     "index public.flow_index_logs_pkey": {
       "definition": "CREATE UNIQUE INDEX flow_index_logs_pkey ON public.flow_index_logs USING btree (chain_id, block_hash, log_index)"
     },
@@ -6388,6 +6414,9 @@
       "owner": "rm_owner"
     },
     "table public.flow_index_blocks": {
+      "owner": "rm_owner"
+    },
+    "table public.flow_index_deployment": {
       "owner": "rm_owner"
     },
     "table public.flow_index_logs": {

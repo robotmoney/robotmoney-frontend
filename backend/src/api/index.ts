@@ -26,6 +26,7 @@ import { handleAdminWebauthn } from "./routes/admin-webauthn.ts";
 import { ANALYTICS_CONCURRENCY, handleAnalytics } from "./routes/analytics.ts";
 import { handlePublicAnalytics } from "./routes/public-analytics.ts";
 import { handleFlowTransactions } from "./routes/flow-transactions.ts";
+import { handleFlowEvents } from "./routes/flow-events.ts";
 import { handlePipeline, pipelineTokenConcurrency } from "./routes/pipeline.ts";
 import { handleReferrals, REFERRALS_PREFIX } from "./routes/referrals.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
@@ -468,6 +469,7 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
     }
 
     if (pathname === "/api/public/flow/transactions") return handleFlowTransactions(req, url, clientIp);
+    if (pathname === "/api/public/flow/events") return handleFlowEvents(req, url, clientIp);
 
     // Public referral-code lookup (issue 1371, referrals-spec §6). The handler
     // owns the whole prefix and answers every request under it, rate limited
