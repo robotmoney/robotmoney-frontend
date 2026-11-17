@@ -27,12 +27,18 @@ export async function readFlowRequest(queue: string, requestId: bigint, block: n
   const ownerArg = encodeAddressArg(owner);
   const pending = kind === 0n ? "0x26c6f96c" : "0xf5a23d8d";
   const claimable = kind === 0n ? "0x995ea21a" : "0xeaed1d07";
-  const calls = [`0x1a313202${id}`, `${pending}${id}${ownerArg}`, `${claimable}${id}${ownerArg}`];
+  const epoch = BigInt(`0x${words[2]}`);
+  if (epoch >= (1n << 64n)) throw new Error("invalid request epoch");
+  const calls = [`0x1a313202${id}`, `${pending}${id}${ownerArg}`, `${claimable}${id}${ownerArg}`, `0x648c691a${encodeUint256Arg(epoch)}`, "0x71d53fe4"];
   const results = await readBatch(calls);
-  const values = results.map((result) => {
+  const values = results.slice(0, 4).map((result) => {
     if (!/^0x[0-9a-fA-F]{64}$/.test(result)) throw new Error("invalid queue request view");
     return BigInt(result);
   });
   if (values[0]! > 3n) throw new Error("invalid request status");
-  return { requestId: requestId.toString(), owner, kind: kind === 0n ? "deposit" : "redeem", amountUnit: kind === 0n ? "usdc-base-units" : "share-base-units", status: ["none", "pending", "expired", "closed"][Number(values[0])], amount: BigInt(`0x${words[3]}`).toString(), pending: values[1]!.toString(), claimable: values[2]!.toString(), epoch: BigInt(`0x${words[2]}`).toString(), exitFeeBps: BigInt(`0x${words[6]}`).toString(), minHold: BigInt(`0x${words[7]}`).toString(), createdAt: BigInt(`0x${words[9]}`).toString(), expiresAt: BigInt(`0x${words[11]}`).toString() };
+  const params = results[4];
+  if (!params || !/^0x[0-9a-fA-F]{1344}$/.test(params)) throw new Error("invalid queue parameters");
+  const settleWindow = BigInt(`0x${params.slice(66, 130)}`), cancelBuffer = BigInt(`0x${params.slice(2 + 18 * 64, 2 + 19 * 64)}`);
+  if (values[3]! < settleWindow + cancelBuffer) throw new Error("invalid request cutoff");
+  return { requestId: requestId.toString(), owner, kind: kind === 0n ? "deposit" : "redeem", amountUnit: kind === 0n ? "usdc-base-units" : "share-base-units", status: ["none", "pending", "expired", "closed"][Number(values[0])], amount: BigInt(`0x${words[3]}`).toString(), pending: values[1]!.toString(), claimable: values[2]!.toString(), epoch: epoch.toString(), cancelCutoff: (values[3]! - settleWindow - cancelBuffer).toString(), originalEpochSettleableAt: values[3]!.toString(), exitFeeBps: BigInt(`0x${words[6]}`).toString(), minHold: BigInt(`0x${words[7]}`).toString(), createdAt: BigInt(`0x${words[9]}`).toString(), expiresAt: BigInt(`0x${words[11]}`).toString() };
 }

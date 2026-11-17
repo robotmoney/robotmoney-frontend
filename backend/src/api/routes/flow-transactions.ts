@@ -50,7 +50,7 @@ export async function handleFlowTransactions(req: Request, url: URL, clientIp: s
         : action === "claim-notice" ? flowQueueCalldata.claimNoticeReturn(requestNum)
         : action === "claim-deposit" ? flowQueueCalldata.deposit(claimAmount, owner)
         : flowQueueCalldata.redeem(claimAmount, owner, owner);
-      return respond(200, { chainId: 8453, sender, transactions: [{ to: dependencies.address, data, value: "0" }], claimScope: claim ? "owner-oldest-eligible-first" : null, terms: { epoch: request.epoch, exitFeeBps: request.exitFeeBps, minHold: request.minHold, expiresAt: request.expiresAt }, asOf: { block: watermark.number, hash: watermark.hash, time: new Date(watermark.timestamp * 1000).toISOString() } });
+      return respond(200, { chainId: 8453, sender, transactions: [{ to: dependencies.address, data, value: "0" }], claimScope: claim ? "owner-oldest-eligible-first" : null, terms: { epoch: request.epoch, cancelCutoff: request.cancelCutoff, originalEpochSettleableAt: request.originalEpochSettleableAt, exitFeeBps: request.exitFeeBps, minHold: request.minHold, expiresAt: request.expiresAt }, asOf: { block: watermark.number, hash: watermark.hash, time: new Date(watermark.timestamp * 1000).toISOString() } });
     }
     const n = BigInt(amount);
     const blockTag = `0x${watermark.number.toString(16)}`;

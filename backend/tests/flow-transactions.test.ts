@@ -58,7 +58,7 @@ test("fails closed for invalid input, unavailable queue, and failed quote", asyn
 test("builds owner FIFO claim and rejects a different request owner", async () => {
   const owner = `0x${"1".repeat(40)}`, queue = `0x${"2".repeat(40)}`;
   const url = new URL(`http://localhost/api/public/flow/transactions?action=claim-deposit&owner=${owner}&requestId=7&amount=12`);
-  const request = async () => ({ requestId: "7", owner, kind: "deposit", amountUnit: "usdc-base-units", status: "closed", amount: "100", pending: "0", claimable: "20", epoch: "1", exitFeeBps: "0", minHold: "10", createdAt: "1", expiresAt: "99" });
+  const request = async () => ({ requestId: "7", owner, kind: "deposit", amountUnit: "usdc-base-units", status: "closed", amount: "100", pending: "0", claimable: "20", epoch: "1", cancelCutoff: "12", originalEpochSettleableAt: "20", exitFeeBps: "0", minHold: "10", createdAt: "1", expiresAt: "99" });
   const deps = { ...chain, address: queue, batch: async () => [], request };
   const response = await handleFlowTransactions(new Request(url), url, "flow-fifo", deps);
   const body = await response.json();

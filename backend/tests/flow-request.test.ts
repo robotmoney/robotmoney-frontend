@@ -11,12 +11,13 @@ test("reads request status and lazy claimability at the indexed block", async ()
   const result = await readFlowRequest(owner, 5n, 100, "0xhash", {
     batch: async (batch) => {
       calls.push(...batch.map((call) => String(call.params?.[call.method === "eth_call" ? 1 : 0])));
-      const values = pass++ === 0 ? [`0x${words.join("")}`] : [1n, 30n, 70n].map((n) => `0x${word(n)}`);
+      const params = Array.from({ length: 21 }, () => word(0n)); params[1] = word(10n); params[18] = word(5n);
+      const values = pass++ === 0 ? [`0x${words.join("")}`] : [...[1n, 30n, 70n, 100n].map((n) => `0x${word(n)}`), `0x${params.join("")}`];
       return [...values.map((result) => ({ ok: true as const, result })), { ok: true as const, result: { hash: "0xhash" } }];
     },
   });
-  expect(result).toMatchObject({ requestId: "5", owner, kind: "deposit", status: "pending", amount: "100", pending: "30", claimable: "70", epoch: "9" });
-  expect(calls.filter((x) => x === "0x64")).toHaveLength(6);
+  expect(result).toMatchObject({ requestId: "5", owner, kind: "deposit", status: "pending", amount: "100", pending: "30", claimable: "70", epoch: "9", cancelCutoff: "85", originalEpochSettleableAt: "100" });
+  expect(calls.filter((x) => x === "0x64")).toHaveLength(8);
 });
 
 test("refuses a request result if the indexed block was reorganized", async () => {
