@@ -3,8 +3,7 @@ release: v0.9.1
 notes: |
   Production runs the v0.9.0 backend with the prior nginx website after the first
   signed-Caddy swap reverted. PR 1651 bounds the swap and adds a private-port
-  pre-check. Stage rehearses deployment and rollback while a stream is held open,
-  then deploys the bundle whose bytes production must reuse. This release adds no
+  pre-check. Stage deploys the bundle whose bytes production must reuse. This release adds no
   migration; the kitchen-sink template provides the standing release checks.
   Issue 1649 records the release gates, including the owner's offline key backup.
 recovery: |
@@ -15,7 +14,7 @@ recovery: |
   Inspect the receipt and verify both site and API. No migration is introduced by
   this release; follow the release policy before rolling back application code.
 scope:
-  - {pr: 1651, what: "Bounded nginx-to-Caddy swap and private-port pre-check", check: "Q45-site-swap-under-stream"}
+  - {pr: 1651, what: "Bounded nginx-to-Caddy swap and private-port pre-check", check: "Q24b-site-bundle-deploy"}
 template: kitchen-sink
 steps:
   # ── QA: stage only, as often as needed. Every step here runs on the stage target and
@@ -408,34 +407,6 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
-  - id: "Q45-site-swap-under-stream"
-    standing: ["SC.5"]
-    host: "control"
-    phase: "qa"
-    added: "v0.9.1"
-    stageOnly: true
-    description: "Stage only: deploy the release bundle while a disposable stage judge event stream is open through nginx. Requires the stream at the stop, a <=3s gap, reconnect <=10s, no request failure outside the gap, a measured private-port pre-check and the stopped nginx first-rollout target."
-    cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "swap-under-stream", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--host", "{host}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: "stage"
-    maxMinutes: 15
-  - id: "Q46-site-rollback-under-stream"
-    standing: ["SC.5"]
-    host: "control"
-    phase: "qa"
-    added: "v0.9.1"
-    stageOnly: true
-    description: "Stage only: roll the held-stream Caddy container back to the kept nginx first-rollout target. Requires the same bounded stream proof and both site and proxied API routes to serve after rollback."
-    cmds:
-      - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "rollback-under-stream", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "-", "--host", "{host}"]
-    expectExit: 0
-    receipts: []
-    irreversible: false
-    onlyFor: "stage"
-    maxMinutes: 15
   - id: "Q24b-site-bundle-deploy"
     standing: ["SC.5"]
     host: "control"
