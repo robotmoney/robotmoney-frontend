@@ -283,6 +283,7 @@ services:
       # With nothing set each resolves EMPTY and backend config.ts falls through
       # to its live production default. An explicit override always wins.
       BASE_RPC_URL: ${BASE_RPC_URL:-}
+      FLOW_QUEUE_ADDRESS: ${FLOW_QUEUE_ADDRESS:-}
       BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
       ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
       ANALYTICS_FLOOR_SEED: ${ANALYTICS_FLOOR_SEED:-}
