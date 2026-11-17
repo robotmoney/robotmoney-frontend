@@ -146,7 +146,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "18148c91246633ebafbde05ac2accd15ced24543a07b07ba6d4142d1df6ddf76",
+  "contentHash": "07acf2739e84ef44a411d65b56acd82a197f8b900ed9137720e8ef46409cedd8",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -5429,6 +5429,9 @@
     },
     "index public.flow_index_logs_pkey": {
       "definition": "CREATE UNIQUE INDEX flow_index_logs_pkey ON public.flow_index_logs USING btree (chain_id, block_hash, log_index)"
+    },
+    "index public.flow_index_logs_topic_cursor": {
+      "definition": "CREATE INDEX flow_index_logs_topic_cursor ON public.flow_index_logs USING btree (chain_id, lower(address), lower((topics ->> 0)), block_number, log_index) WHERE canonical"
     },
     "index public.job_runs_job_idx": {
       "definition": "CREATE INDEX job_runs_job_idx ON public.job_runs USING btree (job_id)"
