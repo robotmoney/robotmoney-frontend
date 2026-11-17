@@ -6918,4 +6918,26 @@ ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQU
 -- PostgreSQL database dump complete
 --
 
+CREATE TABLE public.flow_index_blocks (
+    chain_id bigint NOT NULL,
+    block_number bigint NOT NULL,
+    block_hash text NOT NULL,
+    block_time timestamp with time zone NOT NULL,
+    canonical boolean DEFAULT true NOT NULL,
+    PRIMARY KEY (chain_id, block_number, block_hash)
+);
+CREATE UNIQUE INDEX flow_index_blocks_canonical ON public.flow_index_blocks (chain_id, block_number) WHERE canonical;
+CREATE TABLE public.flow_index_logs (
+    chain_id bigint NOT NULL,
+    block_number bigint NOT NULL,
+    block_hash text NOT NULL,
+    log_index integer NOT NULL,
+    transaction_hash text NOT NULL,
+    address text NOT NULL,
+    topics jsonb NOT NULL,
+    data text NOT NULL,
+    PRIMARY KEY (chain_id, block_hash, log_index),
+    FOREIGN KEY (chain_id, block_number, block_hash) REFERENCES public.flow_index_blocks (chain_id, block_number, block_hash)
+);
+
 
