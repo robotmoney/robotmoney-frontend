@@ -5,14 +5,14 @@
 // tap outside closes it. The model is read through a function, so the dial
 // follows its page:
 //
-//   <div class="rm-dial" x-data="rmRegimeDial(() => ({ percentile, riskOff, riskOn, regime }))"
+//   <div class="rm-dial" x-data="rmRegimeDial(() => ({ value, riskOff, riskOn, regime }))"
 //        @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null"
 //        @keydown.escape="point = null; pinned = null">
 //     <div class="rm-dial__arc" x-ref="arc">
 //       <div class="rm-dial__svg" x-html="svg()"></div>
 //       <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">…tip(at)…</div>
 //     </div>
-//     <p class="rm-dial__v"><b class="rm-dial__n"><span x-text="reading().n"></span><small x-text="reading().suffix"></small></b>…the regime's name…</p>
+//     <p class="rm-dial__v"><b class="rm-dial__n" x-text="reading()"></b>…the regime's name…</p>
 //     <template x-for="k in keys" :key="k">
 //       <button type="button" class="rm-dial__k" :class="{ 'is-on': lit() === k }" :style="labelAt(k)" :data-at="k"
 //               :aria-describedby="shown() === k ? tipId : null" :aria-expanded="shown() === k ? 'true' : 'false'"
@@ -25,12 +25,12 @@
 // segment while open, and closes a beat after it leaves (a move from a name
 // onto the arc does not flicker it). It keeps its last state while it fades
 // out, so it never empties mid-fade.
-import { DIAL_KEYS, DIAL_LABEL_AT, ordinalParts, regimeDialAt, regimeDialSvg, regimeDialTip, regimeDialTipAt } from "../lib/regime-dial.js";
+import { DIAL_KEYS, DIAL_LABEL_AT, levelText, regimeDialAt, regimeDialSvg, regimeDialTip, regimeDialTipAt } from "../lib/regime-dial.js";
 
 // The lib's two types, restated: the asset stamper reads a JSDoc type import
 // as a module specifier, so one here would break the static build.
 /** @typedef {"risk_off" | "neutral" | "risk_on"} DialKey */
-/** @typedef {{ percentile: number | null | undefined, riskOff: number, riskOn: number, regime?: string | null }} DialModel */
+/** @typedef {{ value: number | null | undefined, riskOff: number, riskOn: number, regime?: string | null }} DialModel */
 
 const OPEN_DELAY_MS = 70;
 const CLOSE_DELAY_MS = 120;
@@ -70,7 +70,7 @@ export function registerRegimeDial(Alpine) {
     lit() { return this.shown() || String(this.model()?.regime || "").replace(/-/g, "_"); },
     svg() { return regimeDialSvg({ ...this.model(), focus: this.shown() }); },
     tip(/** @type {DialKey} */ k) { return regimeDialTip(this.model(), k); },
-    reading() { return ordinalParts(+(this.model()?.percentile ?? 0)); },
+    reading() { return levelText(+(this.model()?.value ?? 0)); },
     labelAt(/** @type {DialKey} */ k) { const p = DIAL_LABEL_AT[k]; return `left:${p.left}%;top:${p.top}%`; },
     tipStyle() { const p = regimeDialTipAt(this.model(), this.at); return `left:${p.left.toFixed(2)}%;top:${p.top.toFixed(2)}%`; },
     tipSide() { return regimeDialTipAt(this.model(), this.at).side; },

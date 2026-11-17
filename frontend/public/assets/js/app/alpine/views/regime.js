@@ -8,6 +8,7 @@ import { fmtUsdCompact } from "../lib/dash-format.js";
 import { sessionBrief } from "../../lib/session-brief.js";
 import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
 import { regimeDialValid } from "../../lib/regime-dial.js";
+import { readOnComposite } from "../../lib/regime-scale.js";
 import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, stepAt, logTicks, dragWindow } from "../../lib/line-chart.js";
 import {
   alignToDates,
@@ -168,9 +169,14 @@ export function registerRegimeView(Alpine) {
         this.fullLoaded = true;
       }
     },
-    _apply(data) {
-      this.latest = data.latest;
-      this.setBackdrop(data.latest, { date: data.latest?.date });
+    // Every label is cut on the composite itself (lib/regime-scale.js). Market
+    // context is fed the index levels where the session page feeds it
+    // percentiles: the composite and each panel's index, on one 0 to 1 scale.
+    _apply(raw) {
+      const data = readOnComposite(raw);
+      const l = data.latest;
+      this.latest = l;
+      this.setBackdrop(l && { ...l, compositePercentile: l.composite, macroPercentile: l.macroIndex, onchainPercentile: l.onchainIndex, factorPercentile: l.factorIndex }, { date: l?.date });
       this.history = data.history || [];
       this.staleness = data.staleness || null;
     },
@@ -211,9 +217,9 @@ export function registerRegimeView(Alpine) {
     // descriptions), its count when the snapshot has no indicator rows, and
     // its part in the composite.
     regimeTip() {
-      const lo = this.ordinalPct(+this.bucketPct("risk_off") / 100);
-      const hi = this.ordinalPct(+this.bucketPct("risk_on") / 100);
-      return `Where the composite, the mean of the macro and on-chain indices, ranks in its last 3 years: risk-off below the ${lo} percentile, risk-on above the ${hi}, neutral between. The label switches after 5 consecutive trading days in a new bucket, or on a one-day move over\u00a02σ.`;
+      const lo = (+this.bucketPct("risk_off") / 100).toFixed(2);
+      const hi = (+this.bucketPct("risk_on") / 100).toFixed(2);
+      return `The composite is the mean of the macro and on-chain indices, on a scale of 0 to 1: risk-off below ${lo}, risk-on above ${hi}, neutral between. The label switches after 5 consecutive trading days in a new bucket.`;
     },
     panelTip(p) {
       const t = PANEL_TIP[p];
@@ -278,12 +284,12 @@ export function registerRegimeView(Alpine) {
     // The names the Market context markup reads.
     ordinal(p) { return this.ordinalPct(p); },
     fmtNum(v, d = 2) { return v == null || !isFinite(v) ? "—" : (+v).toFixed(d); },
-    // A row's tip: its label and value (the composite, or the panel's index),
-    // its percentile, and its reading.
+    // A row's tip: its label and value (the composite, or the panel's index)
+    // and its reading.
     signalTip(r) {
       const v = r.key === "composite" ? this.latest?.composite : this.latest?.[r.key + "Index"];
       const name = r.key === "composite" ? "Composite" : `${this.panelLabel(r.key)} index`;
-      return [v == null ? name : `${name} ${this.fmtNum(v)}`, `${this.ordinal(r.pct)} percentile`, r.kind === "context" ? "" : (r.regime ? this.regimeLabel(r.regime) : "")].filter(Boolean).join(" · ");
+      return [v == null ? name : `${name} ${this.fmtNum(v)}`, r.kind === "context" ? "" : (r.regime ? this.regimeLabel(r.regime) : "")].filter(Boolean).join(" · ");
     },
     fmtWeight(w) { return w == null ? "—" : (w * 100).toFixed(1) + "%"; },
     regimeLabel(r) { return r == null ? "—" : ({ risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[r] || String(r).replace(/_/g, "-")); },
@@ -293,9 +299,9 @@ export function registerRegimeView(Alpine) {
     // text colour beside its dot.
     regimeColor(r) { return REGIME[String(r || "").replace(/-/g, "_")] || REGIME.neutral; },
     // The top-line dial's reading (alpine/regime-dial.js); null without a
-    // percentile or cuts, and the plain readout stands in.
+    // composite or cuts, and the plain readout stands in.
     dialModel() {
-      const m = { percentile: this.latest?.compositePercentile, riskOff: +this.bucketPct("risk_off") / 100, riskOn: +this.bucketPct("risk_on") / 100, regime: this.latest?.regime };
+      const m = { value: this.latest?.composite, riskOff: +this.bucketPct("risk_off") / 100, riskOn: +this.bucketPct("risk_on") / 100, regime: this.latest?.regime };
       return regimeDialValid(m) ? m : null;
     },
     // The provenance line in words. The transform is what the percentile ranks
@@ -535,7 +541,7 @@ export function registerRegimeView(Alpine) {
     // the bands behind them stay day by day.
     bandBg(state) { return REGIME_BAND_BG[state] || "transparent"; },
     historySeries() {
-      const hasFactor = this.history.some((h) => (h.factorPercentile ?? h.factor_percentile) != null);
+      const hasFactor = this.history.some((h) => this._idx(h, "factor") != null);
       return HISTORY_SERIES.filter(([k]) => k !== "factor" || hasFactor).map(([key, label]) => ({ key, label, color: HISTORY_LINE[key] ?? STRATEGY_STYLE[key].color }));
     },
     toggleSeries(key) { this.series[key] = !this.series[key]; },
@@ -571,22 +577,16 @@ export function registerRegimeView(Alpine) {
     _hist() {
       const h = this.history;
       const [from, to] = this._win("hist");
-      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${from}|${to}|${this.historyPct()}`;
+      const key = `${h.length}|${h[0]?.date}|${h[h.length - 1]?.date}|${from}|${to}`;
       if (HIST_MEMO.key === key) return HIST_MEMO.m;
       const all = this._allDays();
       const days = all.slice(from, to + 1);
       const byDate = new Map(h.map((r) => [r.date, r]));
       const idx = sampleDays(days.length, WEEKLY_AFTER_DAYS);
-      // Each line is a percentile of its own last three years: the scale the
-      // regime is read on (the composite's cuts) and the one Market context
-      // draws. The index levels stay in the tips, for reference.
-      // A history without percentiles (an older snapshot, the eq fixture)
-      // draws the index levels instead, on their own 0 to 1 axis.
-      const usePct = this.historyPct();
-      const pct = (r, k) => r[k + "Percentile"] ?? r[k + "_percentile"];
-      const read = usePct
-        ? { composite: (r) => pct(r, "composite"), macro: (r) => pct(r, "macro"), onchain: (r) => pct(r, "onchain"), factor: (r) => pct(r, "factor") }
-        : { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
+      // Each line is its index level, 0 to 1: the composite, and each panel's
+      // weighted mean of its indicators' percentiles. The scale the regime is
+      // cut on, and the one Market context draws.
+      const read = { composite: (r) => r.composite, macro: (r) => this._idx(r, "macro"), onchain: (r) => this._idx(r, "onchain"), factor: (r) => this._idx(r, "factor") };
       const values = {};
       for (const k of Object.keys(read)) values[k] = idx.map((i) => { const r = byDate.get(days[i]); const v = r ? read[k](r) : null; return v == null ? null : +v; });
       const extras = this.latest?.extras || {};
@@ -597,13 +597,7 @@ export function registerRegimeView(Alpine) {
       return m;
     },
     historyWeekly() { return this._hist().weekly; },
-    // Percentiles when the history carries them for most days.
-    historyPct() {
-      const h = this.history;
-      if (!h.length) return false;
-      return h.filter((r) => (r.compositePercentile ?? r.composite_percentile) != null).length >= h.length / 2;
-    },
-    _histFmt(v) { return this.historyPct() ? this.ordinalPct(v) : (+v).toFixed(2); },
+    _histFmt(v) { return (+v).toFixed(2); },
     historyDays() { return this._hist().n; },
     // The lines drawn now: each index that is on, then any price overlay that
     // is on. A price overlay has its own log scale, fitted to the range.
@@ -627,25 +621,24 @@ export function registerRegimeView(Alpine) {
       // Each line is placed by its own scale and drawn on a unit one; the
       // composite reads against its median (COMPOSITE_AREA).
       return lineChartSvg({
-        n: m.n, y: (v) => v, grid: this.historyPct() ? [+this.bucketPct("risk_off") / 100, 0.5, +this.bucketPct("risk_on") / 100] : [0.25, 0.5, 0.75],
+        n: m.n, y: (v) => v, grid: [+this.bucketPct("risk_off") / 100, 0.5, +this.bucketPct("risk_on") / 100],
         series: lines.map((l) => ({ token: l.token, color: l.color, width: l.width, dash: l.dash, muted: !!this.histFocus && this.histFocus !== l.token,
           area: l.token === "composite" ? COMPOSITE_AREA : null, points: m.idx.map((i, k) => ({ i, v: l.values[k] == null ? null : l.y(l.values[k]) })) })),
       });
     },
     historyBands() { return this.visible.bands ? this._hist().runs : []; },
-    // The percentile axis, marked at the composite's cuts: below the lower one
-    // reads risk-off, above the upper one risk-on.
+    // The composite's own axis, 0 to 1, marked at its cuts: below the lower
+    // one reads risk-off, above the upper one risk-on.
     historyYTicks() {
-      if (!this.historyPct()) return [1, 0.75, 0.5, 0.25, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2), cut: false }));
       const lo = +this.bucketPct("risk_off") / 100, hi = +this.bucketPct("risk_on") / 100;
-      return [[1, "100"], [hi, this.ordinalPct(hi)], [0.5, "50th"], [lo, this.ordinalPct(lo)], [0, "0"]].map(([v, label]) => ({ key: v, top: (1 - v) * 100, label, cut: v === lo || v === hi }));
+      return [1, hi, 0.5, lo, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2), cut: v === lo || v === hi }));
     },
     historyXTicks() { return this._hist().ticks; },
     historyLabel() {
       const m = this._hist();
       if (!m.n) return "";
       const last = this.history[this.history.length - 1];
-      return `The composite and each panel as a percentile of its last three years, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}${m.weekly ? ", one reading a week" : ""}. Latest: ${this.regimeLabel(last?.regime)}, composite at the ${this.ordinalPct(last?.compositePercentile)} percentile. Use the arrow keys to step through the readings.`;
+      return `The composite and each panel's index, on a scale of 0 to 1, ${this.dateLong(m.days[0])} to ${this.dateLong(m.days[m.n - 1])}${m.weekly ? ", one reading a week" : ""}. Latest: ${this.regimeLabel(last?.regime)}, composite ${this.fmtNum(last?.composite)}. Use the arrow keys to step through the readings.`;
     },
     // The legend: each line with its latest value; hover focuses it, a click
     // switches it off and on.
@@ -670,20 +663,13 @@ export function registerRegimeView(Alpine) {
     legendToggle(row) { if (row.price) this.toggle(row.key); else this.toggleSeries(row.key); },
     historyMove(ev) { const m = this._hist(); if (m.n) this.histAt = nearestSample(m.idx, m.n, ev); },
     historyKey(ev) { this.histAt = stepAt(ev, this.histAt, this._hist().idx.length); },
-    // The level behind a percentile, for the tip: the raw composite or the
-    // panel's index. The line is the percentile; this is there for reference.
-    _histLevel(r, token) {
-      if (!r || !this.historyPct()) return null;
-      const v = token === "composite" ? r.composite : HISTORY_SERIES.some(([k]) => k === token) ? this._idx(r, token) : null;
-      return v == null ? null : (+v).toFixed(2);
-    },
     historyPoint() {
       const m = this._hist();
       const k = this.histAt;
       if (k == null || m.idx[k] == null) return null;
       const i = m.idx[k];
       const r = this.history.find((h) => h.date === m.days[i]);
-      const items = this._histLines().map((l) => ({ token: l.token, label: [this.historyLegend().find((x) => x.key === l.token)?.label || l.token, this._histLevel(r, l.token)].filter(Boolean).join(" "), color: this._sideColor(l, l.values[k]), value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
+      const items = this._histLines().map((l) => ({ token: l.token, label: this.historyLegend().find((x) => x.key === l.token)?.label || l.token, color: this._sideColor(l, l.values[k]), value: l.values[k] == null ? "—" : l.price ? fmtUsdCompact(l.values[k]) : this._histFmt(l.values[k]) }));
       return { left: (i / Math.max(1, m.n - 1)) * 100, date: this.dateLong(m.days[i]), regime: r?.regime ? this.regimeLabel(r.regime) : "", regimeColor: this.regimeColor(r?.regime), items };
     },
 
@@ -716,7 +702,7 @@ export function registerRegimeView(Alpine) {
       const idx = sampleDays(all.length, 60);
       if (which === "hist") {
         const byDate = new Map(this.history.map((r) => [r.date, r]));
-        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const r = byDate.get(all[i]); const v = this.historyPct() ? r?.compositePercentile : r?.composite; return { i, v: v == null ? null : +v }; }) }] });
+        return lineChartSvg({ n: all.length, y: (v) => v, series: [{ token: "nav", color: "rgba(242,244,249,0.45)", width: 1, points: idx.map((i) => { const r = byDate.get(all[i]); const v = r?.composite; return { i, v: v == null ? null : +v }; }) }] });
       }
       const curve = this.latest?.backtest?.[this.btMarket]?.composite?.equity_curve || [];
       const pos = new Map(all.map((d, i) => [d, i]));

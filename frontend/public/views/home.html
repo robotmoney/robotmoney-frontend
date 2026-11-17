@@ -113,7 +113,7 @@
                  @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null" @keydown.escape="point = null; pinned = null">
               <div class="rm-dial__arc" x-ref="arc">
                 <div class="rm-dial__svg" x-html="svg()"></div>
-                <p class="rm-dial__v"><b class="rm-dial__n"><span x-text="reading().n"></span><small x-text="reading().suffix"></small></b><span class="rm-dial__name">Percentile</span></p>
+                <p class="rm-dial__v"><b class="rm-dial__n" x-text="reading()"></b><span class="rm-dial__name">Composite</span></p>
                 <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">
                   <p class="rm-dial__tip-h" x-text="tip(at).title"></p>
                   <p x-text="tip(at).body"></p>
@@ -136,7 +136,7 @@
       </div>
       <figure class="rr-area rv__fig hm-reg__chart">
         <figcaption class="hm-reg__cap">
-          <span class="hm-k">Composite percentile, last 12 months</span>
+          <span class="hm-k">Composite, last 12 months</span>
           <span class="rv__lg-key hm-reg__key" x-show="yearReady()">
             <template x-for="r in bgLegend()" :key="r.label">
               <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>

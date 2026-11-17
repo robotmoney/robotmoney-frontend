@@ -1,5 +1,5 @@
-// The regime dial: where a composite percentile sits between risk-off and
-// risk-on, as a half circle. Risk-off is the left segment, neutral the top,
+// The regime dial: where the composite sits between risk-off and risk-on, on
+// its own 0 to 1 scale, as a half circle. Risk-off is the left segment, neutral the top,
 // risk-on the right, cut at the snapshot's own thresholds. One segment is lit
 // (the current regime, or the one a reader points at) and the others recede;
 // a round dot is the reading (a round mark is a reading site-wide). Styled by
@@ -8,8 +8,8 @@
 
 /** @typedef {"risk_off" | "neutral" | "risk_on"} DialKey */
 /**
- * @typedef {{ percentile: number | null | undefined, riskOff: number, riskOn: number, regime?: string | null }} DialModel
- *   percentile and the cuts are fractions (0 to 1); regime is risk_off | neutral | risk_on.
+ * @typedef {{ value: number | null | undefined, riskOff: number, riskOn: number, regime?: string | null }} DialModel
+ *   value is the composite and the cuts are levels of it (all 0 to 1); regime is risk_off | neutral | risk_on.
  */
 
 import { REGIME } from "./chart-theme.js";
@@ -26,7 +26,7 @@ export const DIAL_KEYS = ["risk_off", "neutral", "risk_on"];
 
 /** @param {DialModel | null | undefined} m */
 export function regimeDialValid(m) {
-  return !!m && m.percentile != null && Number.isFinite(+m.percentile) && m.riskOff > 0 && m.riskOn > m.riskOff && m.riskOn < 1;
+  return !!m && m.value != null && Number.isFinite(+m.value) && m.riskOff > 0 && m.riskOn > m.riskOff && m.riskOn < 1;
 }
 
 /** @param {string | null | undefined} r @returns {DialKey | null} */
@@ -46,7 +46,7 @@ export function regimeDialSvg(m) {
     return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${R} ${R} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
   };
   const lit = m.focus || keyOf(m.regime);
-  const dot = Math.max(0, Math.min(1, +(m.percentile ?? 0)));
+  const dot = Math.max(0, Math.min(1, +(m.value ?? 0)));
   const spans = /** @type {[DialKey, number, number][]} */ ([["risk_off", 0, m.riskOff - GAP], ["neutral", m.riskOff + GAP, m.riskOn - GAP], ["risk_on", m.riskOn + GAP, 1]]);
   const segs = spans.map(([key, a0, b0]) => {
     // The dot's halo cuts the arc, so a dot this near a segment's end would
@@ -113,6 +113,11 @@ export function ordinalPct(/** @type {number} */ x) {
   return n + suffix;
 }
 
+/** The composite as the dial prints it, "0.38". */
+export function levelText(/** @type {number} */ x) {
+  return (+x).toFixed(2);
+}
+
 /**
  * What a state means, for its tip: where the composite has to sit to read it,
  * and for the current one, where it sits today and how the label moves.
@@ -120,11 +125,11 @@ export function ordinalPct(/** @type {number} */ x) {
  * @returns {{ title: string, body: string, now: string | null }}
  */
 export function regimeDialTip(m, key) {
-  const lo = ordinalPct(m.riskOff), hi = ordinalPct(m.riskOn);
-  const where = { risk_off: `below the ${lo}`, neutral: `between the ${lo} and the ${hi}`, risk_on: `above the ${hi}` }[key];
+  const lo = levelText(m.riskOff), hi = levelText(m.riskOn);
+  const where = { risk_off: `below ${lo}`, neutral: `between ${lo} and ${hi}`, risk_on: `above ${hi}` }[key];
   const title = { risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[key];
-  const now = key === keyOf(m.regime) && m.percentile != null
-    ? `Today, at the ${ordinalPct(+m.percentile)}. A new label holds after five trading days, or at once on a 2σ move.`
+  const now = key === keyOf(m.regime) && m.value != null
+    ? `Today, at ${levelText(+m.value)}. A new label holds after five trading days.`
     : null;
-  return { title, body: `The composite is ${where} percentile of its last three years.`, now };
+  return { title, body: `The composite is ${where}, on its scale of 0 to 1.`, now };
 }

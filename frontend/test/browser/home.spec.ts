@@ -56,8 +56,8 @@ const CATEGORICAL_RGB = [
 
 const SESSION_ID = "8f0d6c21-4a5e-4a1c-9f2b-7c1de2a44b10";
 
-// A year and a bit of the regime, on a slow wave, ending ten days into a
-// risk-off run at the 3rd percentile.
+// A year and a bit of the regime, on a slow wave that stays between the cuts,
+// ending ten days below 0.33 with the composite at 0.31.
 function regimeSnapshots(days = 400) {
   const end = Date.parse("2026-11-09T00:00:00Z");
   const history = Array.from({ length: days }, (_, i) => {
@@ -454,7 +454,8 @@ test("the roster lists the analysts, then the judges under their own label", asy
 });
 
 // The market regime under the portfolio: the dial with the regime beside it,
-// and the last year on a chart with both axes labelled, in percentiles.
+// and the last year on a chart with both axes labelled, on the composite's own
+// 0 to 1 scale.
 test("the market regime reads under the portfolio, and is fetched only as the section nears", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubHome(page);
@@ -465,17 +466,17 @@ test("the market regime reads under the portfolio, and is fetched only as the se
 
   const block = page.locator(".hm-reg");
   await block.scrollIntoViewIfNeeded();
-  await expect(block.locator(".rm-dial__n")).toHaveText("3rd");
+  await expect(block.locator(".rm-dial__n")).toHaveText("0.31");
   expect(reads).toBe(1);
-  await expect(block.locator(".rm-dial__name")).toHaveText("Percentile");
+  await expect(block.locator(".rm-dial__name")).toHaveText("Composite");
   await expect(block.locator(".hm-reg__now")).toHaveText("Risk-off");
-  // The raw composite is the supporting number beside the percentile.
+  // The label is cut on the composite and holds after five readings below 0.33.
   await expect(block.locator(".hm-reg__since")).toHaveText(
-    "Since Oct 31, 2026. The composite of macro and on-chain conditions reads 0.31, ranked against its last three years.");
+    /^Since [A-Z][a-z]{2} \d{1,2}, 2026\. The composite averages macro and on-chain conditions, on a scale of 0 to 1\.$/);
   await expect(block.getByRole("link", { name: "See the market regime" })).toHaveAttribute("href", "/regime");
 
-  await expect(block.locator(".hm-reg__cap .hm-k")).toHaveText("Composite percentile, last 12 months");
-  await expect(block.locator(".rr-area__y span")).toHaveText(["100", "67th", "50th", "33rd", "0"]);
+  await expect(block.locator(".hm-reg__cap .hm-k")).toHaveText("Composite, last 12 months");
+  await expect(block.locator(".rr-area__y span")).toHaveText(["1.00", "0.67", "0.50", "0.33", "0.00"]);
   await expect(block.locator(".rr-area__x span").first()).toHaveText(/^[A-Z][a-z]{2}( '\d\d)?$/);
   await expect(block.locator(".rv__bands i").first()).toBeAttached();
   await expect(block.locator(".hm-reg__last")).toBeVisible();
@@ -486,16 +487,16 @@ test("the market regime reads under the portfolio, and is fetched only as the se
     await plot.scrollIntoViewIfNeeded();
     const at = (await plot.boundingBox())!;
     await page.mouse.move(at.x + at.width - 2, at.y + at.height / 2);
-    await expect(row).toContainText("Composite 0.31", { timeout: 500 });
+    await expect(row).toContainText("Composite", { timeout: 500 });
   }).toPass({ timeout: 5000 });
-  await expect(row.locator("b")).toHaveText("3rd");
+  await expect(row.locator("b")).toHaveText("0.31");
   await page.mouse.move(0, 0);
   await expect(block.locator(".rr-area__tip")).toHaveCount(0);
 
   // The chart answers the keyboard, and Escape lets go.
   await plot.focus();
   await page.keyboard.press("End");
-  await expect(row.locator("b")).toHaveText("3rd");
+  await expect(row.locator("b")).toHaveText("0.31");
   await page.keyboard.press("Escape");
   await expect(block.locator(".rr-area__tip")).toHaveCount(0);
 
@@ -519,7 +520,7 @@ test("too little regime history: the dial still reads, and the chart says why it
   await openHome(page);
   await page.locator(".hm-reg").scrollIntoViewIfNeeded();
   await expect(page.locator(".hm-reg .rm-nodata__h")).toHaveText("Not enough data yet");
-  await expect(page.locator(".hm-reg .rm-dial__n")).toHaveText("3rd");
+  await expect(page.locator(".hm-reg .rm-dial__n")).toHaveText("0.31");
 });
 
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
