@@ -1,7 +1,5 @@
 import { sql } from "../../db/client.ts";
-import { config } from "../../config.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
-import { ethGetBlockByNumber } from "../../chain/base-rpc-client.ts";
 import { readFlowRequest } from "../../chain/flow-request.ts";
 import { createRateLimiter } from "../rate-limit.ts";
 
@@ -17,10 +15,7 @@ export async function handleFlowRequest(req: Request, id: string, ip: string): P
     const [bound, checkpoints] = await Promise.all([flowDeployment(sql, 8453), flowCheckpoints(sql, 8453)]);
     if (bound?.queue_address !== queue.toLowerCase() || bound.fund_address !== fund.toLowerCase() || !checkpoints.length) return reply(503, { error: "flow index unavailable" });
     const checkpoint = checkpoints[0]!;
-    const current = await ethGetBlockByNumber(checkpoint.number, { rpcUrl: config.baseRpcUrl });
-    if (typeof current.hash !== "string" || current.hash.toLowerCase() !== checkpoint.hash.toLowerCase()) return reply(503, { error: "flow index is reorganizing" });
-    const request = await readFlowRequest(queue, BigInt(id), checkpoint.number);
-    if ((await ethGetBlockByNumber(checkpoint.number, { rpcUrl: config.baseRpcUrl })).hash !== current.hash) return reply(503, { error: "flow index is reorganizing" });
+    const request = await readFlowRequest(queue, BigInt(id), checkpoint.number, checkpoint.hash);
     if (!request) return reply(404, { error: "request not found" });
     return reply(200, { schemaVersion: 1, indexedThrough: { block: checkpoint.number, hash: checkpoint.hash, time: new Date(checkpoint.timestamp * 1000).toISOString() }, request });
   } catch { return reply(503, { error: "flow request unavailable" }); }
