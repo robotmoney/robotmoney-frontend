@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { handleFlowTransactions } from "../src/api/routes/flow-transactions.ts";
-const chain = { watermark: async () => ({ number: 8, timestamp: 1, hash: "0xabc" }) };
+import { readFlowRequest } from "../src/chain/flow-request.ts";
+const chain = { watermark: async () => ({ number: 8, timestamp: 1, hash: "0xabc" }), request: readFlowRequest };
 
 test("returns unsigned request calldata with terms read from the queue", async () => {
   const queue = `0x${"1".repeat(40)}`;
@@ -52,4 +53,18 @@ test("fails closed for invalid input, unavailable queue, and failed quote", asyn
   expect((await handleFlowTransactions(new Request(url), url, "missing-flow", deps)).status).toBe(503);
   expect((await handleFlowTransactions(new Request(url), url, "broken-flow", { ...deps, address: `0x${"1".repeat(40)}` })).status).toBe(503);
   expect((await handleFlowTransactions(new Request(url), url, "orphan-flow", { ...deps, address: `0x${"1".repeat(40)}`, batch: async () => [{ ok: true as const, result: { hash: "0xorphan" } }] })).status).toBe(503);
+});
+
+test("builds owner FIFO claim and rejects a different request owner", async () => {
+  const owner = `0x${"1".repeat(40)}`, queue = `0x${"2".repeat(40)}`;
+  const url = new URL(`http://localhost/api/public/flow/transactions?action=claim-deposit&owner=${owner}&requestId=7&amount=12`);
+  const request = async () => ({ requestId: "7", owner, kind: "deposit", amountUnit: "usdc-base-units", status: "closed", amount: "100", pending: "0", claimable: "20", epoch: "1", exitFeeBps: "0", minHold: "10", createdAt: "1", expiresAt: "99" });
+  const deps = { ...chain, address: queue, batch: async () => [], request };
+  const response = await handleFlowTransactions(new Request(url), url, "flow-fifo", deps);
+  const body = await response.json();
+  expect(response.status).toBe(200);
+  expect(body.claimScope).toBe("owner-oldest-eligible-first");
+  expect(body.transactions[0].data.startsWith("0x6e553f65")).toBe(true);
+  url.searchParams.set("owner", queue);
+  expect((await handleFlowTransactions(new Request(url), url, "flow-owner-mismatch", deps)).status).toBe(404);
 });

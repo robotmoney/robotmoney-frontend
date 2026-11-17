@@ -11,6 +11,7 @@ export const flowQueueCalldata = {
   requestDeposit: (amount: bigint, owner: string) => "0x29344f08" + uint(amount) + encodeAddressArg(owner),
   requestRedeem: (amount: bigint, owner: string) => "0x107703ab" + uint(amount) + encodeAddressArg(owner),
   cancel: (requestId: bigint) => "0x40e58ee5" + uint(requestId),
+  withdrawExpired: (requestId: bigint) => "0x0b4a1063" + uint(requestId),
   giveRedemptionNotice: (requestId: bigint) => "0x9a4c9b1a" + uint(requestId),
   claimNoticeReturn: (requestId: bigint) => "0x29e9559b" + uint(requestId),
   withdrawCredit: () => "0xc36f3874",

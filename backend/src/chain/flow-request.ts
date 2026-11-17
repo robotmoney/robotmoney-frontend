@@ -34,5 +34,5 @@ export async function readFlowRequest(queue: string, requestId: bigint, block: n
     return BigInt(result);
   });
   if (values[0]! > 3n) throw new Error("invalid request status");
-  return { requestId: requestId.toString(), owner, kind: kind === 0n ? "deposit" : "redeem", amountUnit: kind === 0n ? "usdc-base-units" : "share-base-units", status: ["none", "pending", "expired", "closed"][Number(values[0])], amount: BigInt(`0x${words[3]}`).toString(), pending: values[1]!.toString(), claimable: values[2]!.toString(), epoch: BigInt(`0x${words[2]}`).toString(), createdAt: BigInt(`0x${words[9]}`).toString(), expiresAt: BigInt(`0x${words[11]}`).toString() };
+  return { requestId: requestId.toString(), owner, kind: kind === 0n ? "deposit" : "redeem", amountUnit: kind === 0n ? "usdc-base-units" : "share-base-units", status: ["none", "pending", "expired", "closed"][Number(values[0])], amount: BigInt(`0x${words[3]}`).toString(), pending: values[1]!.toString(), claimable: values[2]!.toString(), epoch: BigInt(`0x${words[2]}`).toString(), exitFeeBps: BigInt(`0x${words[6]}`).toString(), minHold: BigInt(`0x${words[7]}`).toString(), createdAt: BigInt(`0x${words[9]}`).toString(), expiresAt: BigInt(`0x${words[11]}`).toString() };
 }
