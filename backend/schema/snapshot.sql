@@ -6921,7 +6921,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE rm_owner IN SCHEMA public GRANT SELECT ON SEQU
 CREATE TABLE public.flow_index_deployment (
     chain_id bigint PRIMARY KEY,
     queue_address text NOT NULL,
-    fund_address text NOT NULL
+    fund_address text NOT NULL,
+    explorer_addresses jsonb DEFAULT '[]'::jsonb NOT NULL
 );
 CREATE TABLE public.flow_index_blocks (
     chain_id bigint NOT NULL,

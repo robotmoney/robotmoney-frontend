@@ -4,7 +4,8 @@
 CREATE TABLE IF NOT EXISTS flow_index_deployment (
   chain_id bigint PRIMARY KEY,
   queue_address text NOT NULL,
-  fund_address text NOT NULL
+  fund_address text NOT NULL,
+  explorer_addresses jsonb NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE TABLE IF NOT EXISTS flow_index_blocks (
   chain_id bigint NOT NULL,

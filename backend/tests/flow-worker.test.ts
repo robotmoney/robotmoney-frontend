@@ -7,7 +7,7 @@ test("worker rejects absent contract configuration instead of silently skipping"
   try {
     delete process.env.FLOW_QUEUE_ADDRESS;
     delete process.env.FLOW_FUND_ADDRESS;
-    await expect(refreshFlowIndex()).rejects.toThrow("FLOW_QUEUE_ADDRESS and FLOW_FUND_ADDRESS");
+    await expect(refreshFlowIndex()).rejects.toThrow("FLOW_QUEUE_ADDRESS, FLOW_FUND_ADDRESS");
   } finally {
     if (queue === undefined) delete process.env.FLOW_QUEUE_ADDRESS; else process.env.FLOW_QUEUE_ADDRESS = queue;
     if (fund === undefined) delete process.env.FLOW_FUND_ADDRESS; else process.env.FLOW_FUND_ADDRESS = fund;

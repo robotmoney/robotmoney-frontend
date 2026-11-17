@@ -7,12 +7,14 @@ marks orphaned blocks and logs noncanonical before replay. The worker does not
 hold a database credential.
 
 Configure `FLOW_QUEUE_ADDRESS` and `FLOW_FUND_ADDRESS` for the API and worker.
-The worker discovers the first block containing code at either address and
+Optional `FLOW_EXPLORER_ADDRESSES` is a comma-separated list of additional
+legacy explorer contracts; automatic registry discovery and legacy projections
+are not yet implemented. The worker discovers the first block containing code at any configured address and
 stores those floors using the existing address-floor cache. An optional
 `FLOW_INDEX_DEPLOY_BLOCK` overrides the earliest block; an operator supplying
-it must ensure it is no later than either deployment. The `flow.index` job is
+it must ensure it is no later than any configured deployment. The `flow.index` job is
 seeded disabled and must be enabled after deployment configuration is installed.
-The index is bound to one pair of addresses; changing either requires a
+The index is bound to the complete configured set; changing it requires a
 deliberate reindex and is refused by the worker. A configured job with missing
 or invalid addresses fails rather than claiming it indexed anything.
 

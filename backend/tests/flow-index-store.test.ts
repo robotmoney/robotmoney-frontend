@@ -15,6 +15,7 @@ test("stores idempotent logs and replaces canonical history without runtime DELE
     await db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowBindDeployment(tx, 8453, "0xQUEUE", "0xFUND"); });
     await db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowBindDeployment(tx, 8453, "0xqueue", "0xfund"); });
     await expect(db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowBindDeployment(tx, 8453, "0xother", "0xfund"); })).rejects.toThrow("different deployment");
+    await expect(db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowBindDeployment(tx, 8453, "0xqueue", "0xfund", ["0xlegacy"]); })).rejects.toThrow("different deployment");
     await db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowRecord(tx, 8453, [a, b], [log]); });
     await db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowRecord(tx, 8453, [a, b], [log]); });
     await db.begin(async (tx) => { await tx`SET LOCAL ROLE rm_app`; await flowRewind(tx, 8453, 1); await flowRecord(tx, 8453, [replacement], []); });
