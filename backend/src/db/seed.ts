@@ -303,6 +303,8 @@ export const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Enable after the deployed queue address and deploy block are configured.
+  { kind: "flow.index", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: false, catchupPolicy: "latest-only" },
   // Self-healing dispatcher (issue #709). Asks the gap detector what is missing
   // and enqueues ONE wallet.backfill_window job carrying the days it picked,
   // bounded per run (#739 — the provider meters HTTP hits, so a window that

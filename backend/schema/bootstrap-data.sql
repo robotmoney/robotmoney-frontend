@@ -110,6 +110,7 @@ INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, la
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (15, 'projects.snapshot_daily', '40 0 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (16, 'projects.sync_revenue', '50 1 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (17, 'projects.recompute_coverage', '0 3 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
+INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (18, 'flow.index', '* * * * *', '{}', 'UTC', false, NULL, NULL, 'latest-only');
 
 
 --

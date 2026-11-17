@@ -188,6 +188,8 @@ x-worker-env: &worker-env
   # ANALYTICS_SOURCE / BASE_RPC_SOURCE -> live). scripts/lib/smoke-env.ts pins
   # them explicitly for `bun run smoke`; an explicit override always wins.
   BASE_RPC_URL: ${BASE_RPC_URL:-}
+  FLOW_QUEUE_ADDRESS: ${FLOW_QUEUE_ADDRESS:-}
+  FLOW_QUEUE_DEPLOY_BLOCK: ${FLOW_QUEUE_DEPLOY_BLOCK:-}
   BASE_RPC_SOURCE: ${BASE_RPC_SOURCE:-}
   ANALYTICS_SOURCE: ${ANALYTICS_SOURCE:-}
   # Cold-DB floor seed: load the vendored raw floor once so a fresh LIVE boot
