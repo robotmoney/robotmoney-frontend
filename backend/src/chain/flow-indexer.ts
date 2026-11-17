@@ -3,7 +3,7 @@
 export interface FlowHeader { number: number; hash: string; timestamp: number; parentHash?: string }
 export interface FlowLog { blockNumber: number; blockHash: string; logIndex: number; transactionHash: string; address: string; topics: string[]; data: string }
 export interface FlowIndexStore {
-  checkpoints(): Promise<FlowHeader[]>;
+  checkpoints(before?: number): Promise<FlowHeader[]>;
   rewind(afterBlock: number): Promise<void>;
   record(headers: FlowHeader[], logs: FlowLog[]): Promise<void>;
 }
@@ -19,13 +19,20 @@ export async function scanFlowWindow(source: FlowIndexSource, store: FlowIndexSt
 }): Promise<number | null> {
   const { deployBlock, confirmations, maxBlocks } = options;
   if (![deployBlock, confirmations, maxBlocks].every(Number.isSafeInteger) || deployBlock < 0 || confirmations < 0 || maxBlocks < 1) throw new Error("invalid scan configuration");
-  const checkpoints = (await store.checkpoints()).sort((a, b) => b.number - a.number);
+  let checkpoints = (await store.checkpoints()).sort((a, b) => b.number - a.number);
   let ancestor: FlowHeader | undefined;
-  for (const checkpoint of checkpoints) {
-    const canonical = await source.header(checkpoint.number);
-    if (canonical.hash.toLowerCase() === checkpoint.hash.toLowerCase()) { ancestor = checkpoint; break; }
+  const newest = checkpoints[0];
+  while (checkpoints.length) {
+    for (const checkpoint of checkpoints) {
+      const canonical = await source.header(checkpoint.number);
+      if (canonical.hash.toLowerCase() === checkpoint.hash.toLowerCase()) { ancestor = checkpoint; break; }
+    }
+    if (ancestor || checkpoints.length < 256) break;
+    const oldest = checkpoints[checkpoints.length - 1]!.number;
+    checkpoints = (await store.checkpoints(oldest)).sort((a, b) => b.number - a.number);
+    if (checkpoints.some((checkpoint) => checkpoint.number >= oldest)) throw new Error("invalid checkpoint pagination");
   }
-  if (checkpoints.length && ancestor?.number !== checkpoints[0]?.number) await store.rewind(ancestor?.number ?? deployBlock - 1);
+  if (newest && ancestor?.number !== newest.number) await store.rewind(ancestor?.number ?? deployBlock - 1);
   const from = ancestor ? ancestor.number + 1 : deployBlock;
   const to = Math.min((await source.head()) - confirmations, from + maxBlocks - 1);
   if (to < from) return ancestor?.number ?? null;

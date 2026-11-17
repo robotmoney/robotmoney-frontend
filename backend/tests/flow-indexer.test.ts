@@ -29,3 +29,20 @@ test("backfills confirmed blocks, resumes, and rewinds a reorg", async () => {
   expect(await scanFlowWindow(source, store, options)).toBe(6);
   expect(saved).toHaveLength(5);
 });
+
+test("walks bounded checkpoint pages for a deep reorg", async () => {
+  const saved = Array.from({ length: 300 }, (_, number) => ({ number, hash: `old${number}`, timestamp: number }));
+  let rewound = -2;
+  const store: FlowIndexStore = {
+    checkpoints: async (before = Infinity) => saved.filter((h) => h.number < before).slice(-256).reverse(),
+    rewind: async (n) => { rewound = n; },
+    record: async () => {},
+  };
+  const source: FlowIndexSource = {
+    head: async () => 300,
+    header: async (number) => ({ number, hash: number <= 10 ? `old${number}` : `new${number}`, timestamp: number }),
+    logs: async () => [],
+  };
+  expect(await scanFlowWindow(source, store, { deployBlock: 0, confirmations: 0, maxBlocks: 1 })).toBe(11);
+  expect(rewound).toBe(10);
+});

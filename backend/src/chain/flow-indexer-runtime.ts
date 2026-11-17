@@ -28,7 +28,7 @@ export async function indexFlowQueue(input: { address: string; fundAddress: stri
       return { blockNumber: parseInt(log.blockNumber, 16), blockHash: log.blockHash, logIndex: parseInt(log.logIndex, 16), transactionHash: log.transactionHash, address: log.address, topics: log.topics, data: log.data };
     }),
   }, {
-    checkpoints: () => pipelineRead<FlowHeader[]>("flow.checkpoints", chainId),
+    checkpoints: (before) => pipelineRead<FlowHeader[]>("flow.checkpoints", chainId, before ?? Number.MAX_SAFE_INTEGER),
     rewind: async (after) => { await pipelineIngest("flow.rewind", chainId, after); },
     record: async (headers, logs) => { await pipelineIngest("flow.record", chainId, headers, logs); },
   }, input);
