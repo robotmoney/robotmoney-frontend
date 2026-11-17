@@ -2,7 +2,7 @@ import { on, registerQuery, type RegistryDb } from "../../db/registry.ts";
 import type { FlowHeader, FlowLog } from "../../chain/flow-indexer.ts";
 
 const insertDeployment = registerQuery({ role: "rm_app", object: "flow_index_deployment", privileges: ["INSERT"], site: "src/pipeline/stores/flow-index:bindDeployment", purpose: "Bind an index to one queue and fund deployment.", callers: ["src/api/routes/pipeline"], probe: { statement: "INSERT INTO flow_index_deployment (chain_id, queue_address, fund_address) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", params: [8453, "0xqueue", "0xfund"] } });
-const readDeployment = registerQuery({ role: "rm_app", object: "flow_index_deployment", privileges: ["SELECT"], site: "src/pipeline/stores/flow-index:readDeployment", purpose: "Refuse a cursor bound to different contracts.", callers: ["src/api/routes/pipeline"], probe: { statement: "SELECT queue_address, fund_address FROM flow_index_deployment WHERE chain_id = $1", params: [8453] } });
+const readDeployment = registerQuery({ role: "rm_app", object: "flow_index_deployment", privileges: ["SELECT"], site: "src/pipeline/stores/flow-index:readDeployment", purpose: "Refuse a cursor bound to different contracts.", callers: ["src/api/routes/pipeline", "src/api/index"], probe: { statement: "SELECT queue_address, fund_address FROM flow_index_deployment WHERE chain_id = $1", params: [8453] } });
 const readBlocks = registerQuery({ role: "rm_app", object: "flow_index_blocks", privileges: ["SELECT"], site: "src/pipeline/stores/flow-index:checkpoints", purpose: "Read a bounded page of canonical scan checkpoints for reorg detection.", callers: ["src/api/routes/pipeline"], probe: { statement: "SELECT block_number, block_hash, extract(epoch from block_time) AS block_time FROM flow_index_blocks WHERE chain_id = $1 AND canonical AND block_number < $2 ORDER BY block_number DESC LIMIT 256", params: [8453, 999] } });
 const rewindBlocks = registerQuery({ role: "rm_app", object: "flow_index_blocks", privileges: ["SELECT", "UPDATE"], site: "src/pipeline/stores/flow-index:rewind", purpose: "Mark orphaned blocks noncanonical after a reorg.", callers: ["src/api/routes/pipeline"], probe: { statement: "UPDATE flow_index_blocks SET canonical = false WHERE chain_id = $1 AND block_number > $2 AND canonical", params: [8453, 0] } });
 const insertBlock = registerQuery({ role: "rm_app", object: "flow_index_blocks", privileges: ["SELECT", "INSERT", "UPDATE"], site: "src/pipeline/stores/flow-index:recordBlock", purpose: "Persist a canonical block checkpoint.", callers: ["src/api/routes/pipeline"], probe: { statement: "INSERT INTO flow_index_blocks (chain_id, block_number, block_hash, block_time, canonical) VALUES ($1, $2, $3, to_timestamp($4), true) ON CONFLICT (chain_id, block_number, block_hash) DO UPDATE SET canonical = true", params: [8453, 1, "0xprobe", 1] } });
@@ -12,8 +12,12 @@ const rewindLogs = registerQuery({ role: "rm_app", object: "flow_index_logs", pr
 export async function flowBindDeployment(tx: RegistryDb, chainId: number, queue: string, fund: string): Promise<void> {
   queue = queue.toLowerCase(); fund = fund.toLowerCase();
   await on(tx, insertDeployment)`INSERT INTO flow_index_deployment (chain_id, queue_address, fund_address) VALUES (${chainId}, ${queue}, ${fund}) ON CONFLICT DO NOTHING`;
-  const rows = await on(tx, readDeployment)<{ queue_address: string; fund_address: string }>`SELECT queue_address, fund_address FROM flow_index_deployment WHERE chain_id = ${chainId}`;
-  if (rows[0]?.queue_address !== queue || rows[0]?.fund_address !== fund) throw new Error("flow index is bound to a different deployment");
+  const bound = await flowDeployment(tx, chainId);
+  if (bound?.queue_address !== queue || bound?.fund_address !== fund) throw new Error("flow index is bound to a different deployment");
+}
+export async function flowDeployment(db: RegistryDb, chainId: number): Promise<{ queue_address: string; fund_address: string } | null> {
+  const rows = await on(db, readDeployment)<{ queue_address: string; fund_address: string }>`SELECT queue_address, fund_address FROM flow_index_deployment WHERE chain_id = ${chainId}`;
+  return rows[0] ?? null;
 }
 
 export async function flowCheckpoints(db: RegistryDb, chainId: number, before = Number.MAX_SAFE_INTEGER): Promise<FlowHeader[]> {
