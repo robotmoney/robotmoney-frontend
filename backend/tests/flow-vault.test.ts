@@ -9,7 +9,7 @@ test("reads fund, holdings and queue state at the same verified block", async ()
   const asset = [0n, 1n, 5000n, 1n, 2n, 3n, 3000n, 60n, 0n, 4n, 60n];
   const vault = await readFlowVault("0xqueue", "0xfund", 12, "0xhash", async (batch) => {
     expect(batch.every((entry) => entry.method === "eth_call" ? entry.params?.[1] === "0xc" : entry.params?.[0] === "0xc")).toBe(true);
-    const values = call++ === 0 ? [encoded(100n, 90n), encoded(80n), encoded(200n, 50n, 25n, 0n), encoded(1n, 0n, 0n, 0n, 0n, 5n, 100n), encoded(3n), encoded(...params), encoded(32n, 1n, 5000n), encoded(32n, 1n, ...asset), encoded(7n, 64n, 1n, 33n), encoded(123n)] : [encoded(100n)];
+    const values = call++ === 0 ? [encoded(100n, 90n), encoded(80n), encoded(200n, 50n, 25n, 0n), encoded(1n, 0n, 0n, 0n, 0n, 5n, 100n), encoded(3n), encoded(...params), encoded(32n, 1n, 5000n), encoded(32n, 1n, ...asset), encoded(7n, 64n, 1n, 33n)] : [encoded(100n), encoded(123n)];
     return [...values.map((result) => ({ ok: true as const, result })), { ok: true as const, result: { hash: "0xhash" } }];
   });
   expect(vault).toMatchObject({ navUsdc: "100", totalShares: "80", roomAtLastGoodNavUsdc: "100", cancelCutoff: "85", pricePerMillionSharesUsdc: "123", priceBinding: false, keeperConfigured: true, holdings: [{ held: "33", targetBps: "5000", active: true }] });

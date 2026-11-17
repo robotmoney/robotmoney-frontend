@@ -10,15 +10,13 @@ export async function readFlowVault(queue: string, fund: string, block: number, 
     if (!header?.ok || typeof header.result !== "object" || header.result === null || !("hash" in header.result) || typeof header.result.hash !== "string" || header.result.hash.toLowerCase() !== expectedHash.toLowerCase()) throw new Error("indexed block changed");
     return results.map((result, i) => { if (!result.ok || typeof result.result !== "string") { if (optional.includes(i)) return null; throw new Error("fund read failed"); } return result.result; });
   };
-  const selectors = ["0x2d39d674", "0x18160ddd", "0x79502c55", "0x6ad0690a", "0x76671808", "0x71d53fe4", "0x9f163905", "0x7d53d9c1", "0x2eee90e3", `0x07a2d13a${encodeUint256Arg(1_000_000n)}`];
-  const results = await read(selectors.map((data, i) => ({ to: [3, 4, 5].includes(i) ? queue : fund, data })), [9]);
+  const selectors = ["0x2d39d674", "0x18160ddd", "0x79502c55", "0x6ad0690a", "0x76671808", "0x71d53fe4", "0x9f163905", "0x7d53d9c1", "0x2eee90e3"];
+  const results = await read(selectors.map((data, i) => ({ to: [3, 4, 5].includes(i) ? queue : fund, data })));
   const words = (value: string | null | undefined): bigint[] => {
     if (!value || !/^0x(?:[0-9a-fA-F]{64})+$/.test(value)) throw new Error("invalid fund ABI result");
     return Array.from({ length: (value.length - 2) / 64 }, (_, i) => BigInt(`0x${value.slice(2 + 64 * i, 66 + 64 * i)}`));
   };
-  const [nav, supply, fundConfig, live, epoch, params, targetsRaw, assetsRaw, heldRaw] = results.slice(0, 9).map(words);
-  const price = results[9] === null ? null : words(results[9]);
-  if (price && price.length !== 1) throw new Error("invalid price result");
+  const [nav, supply, fundConfig, live, epoch, params, targetsRaw, assetsRaw, heldRaw] = results.map(words);
   if (nav!.length !== 2 || supply!.length !== 1 || fundConfig!.length !== 4 || live!.length !== 7 || epoch!.length !== 1 || params!.length !== 21) throw new Error("invalid fund state");
   if ([live![0], live![1], live![3], live![4]].some((v) => v !== 0n && v !== 1n)) throw new Error("invalid liveness flag");
   if (targetsRaw![0] !== 32n || assetsRaw![0] !== 32n || heldRaw![1] !== 64n) throw new Error("invalid fund array offset");
@@ -30,7 +28,9 @@ export async function readFlowVault(queue: string, fund: string, block: number, 
     if (a[1] !== 0n && a[1] !== 1n) throw new Error("invalid asset active flag");
     return { index: i, kind: a[0]!.toString(), active: a[1] === 1n, capBps: a[2]!.toString(), adapter: address(a[3]!), token: address(a[4]!), pool: address(a[5]!), held: heldRaw![3 + i]!.toString(), targetBps: targetsRaw![2 + i]!.toString() };
   });
-  const [settle] = await read([{ to: queue, data: `0x648c691a${encodeUint256Arg(epoch![0]!)}` }]);
+  const [settle, priceRaw] = await read([{ to: queue, data: `0x648c691a${encodeUint256Arg(epoch![0]!)}` }, { to: fund, data: `0x07a2d13a${encodeUint256Arg(1_000_000n)}` }], [1]);
+  const price = priceRaw === null || priceRaw === "0x" ? null : words(priceRaw);
+  if (price && price.length !== 1) throw new Error("invalid price result");
   const settleWords = words(settle);
   if (settleWords.length !== 1 || settleWords[0]! < params![1]! + params![18]!) throw new Error("invalid epoch cutoff");
   const navValue = nav![0]!, cap = fundConfig![0]!;
