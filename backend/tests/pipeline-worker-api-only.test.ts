@@ -5,7 +5,7 @@
 // the real worker entry (`bun run src/worker/index.ts`, WORKER_LANE=analytics)
 // with an environment built from nothing: no DATABASE_URL, no
 // WORKER_DATABASE_URL, no PG* key. Its only credential is the pipeline-worker
-// token file. Five jobs are queued and must reach `succeeded`, and the rows
+// token file. Six jobs are queued and must reach `succeeded`, and the rows
 // they write must exist:
 //
 //   vault.sample_share_price  → vault_share_price_history
@@ -13,6 +13,7 @@
 //   buybacks.refresh          → buyback_scan_state (the scanned window)
 //   projects.snapshot_daily   → daily_coin_snapshots
 //   ops.repair_gaps           → its job_runs output (the gap reports it read)
+//   flow.index                → canonical flow checkpoints and log scan
 //
 // THE CHAIN. The worker's chain and price reads go to providers, never to a
 // test database. A `bun --preload` module in the worker process answers them:
@@ -42,6 +43,7 @@ const KINDS = [
   "buybacks.refresh",
   "projects.snapshot_daily",
   "ops.repair_gaps",
+  "flow.index",
 ] as const;
 
 let api: ApiProcess;
@@ -56,6 +58,7 @@ function writeChainPreload(): string {
 const realFetch = globalThis.fetch;
 const word = (n: bigint) => "0x" + n.toString(16).padStart(64, "0");
 const head = "0x" + (${BUYBACK_FROM_BLOCK} + 10).toString(16);
+const hash = (n: number) => "0x" + BigInt(n).toString(16).padStart(64, "0");
 function answer(req: { id?: number; method: string; params: any[] }) {
   const id = req.id ?? 1;
   switch (req.method) {
@@ -71,7 +74,7 @@ function answer(req: { id?: number; method: string; params: any[] }) {
     case "eth_blockNumber": return { jsonrpc: "2.0", id, result: head };
     case "eth_getLogs": return { jsonrpc: "2.0", id, result: [] };
     case "eth_getBalance": return { jsonrpc: "2.0", id, result: word(10n ** 18n) };
-    case "eth_getBlockByNumber": return { jsonrpc: "2.0", id, result: { number: req.params[0], timestamp: "0x68000000", hash: "0x" + "ab".repeat(32) } };
+    case "eth_getBlockByNumber": { const n = parseInt(req.params[0], 16); return { jsonrpc: "2.0", id, result: { number: req.params[0], timestamp: "0x68000000", hash: hash(n), parentHash: hash(n - 1) } }; }
     default: return { jsonrpc: "2.0", id, error: { code: -32601, message: "fake rpc has no " + req.method } };
   }
 }
@@ -103,6 +106,9 @@ function workerEnv(extra: Record<string, string> = {}): Record<string, string> {
     BASE_RPC_SOURCE: "live",
     PRICE_SOURCE: "stub",
     BASE_RPC_MAX_CALLS_PER_SEC: "0",
+    FLOW_QUEUE_ADDRESS: "0x1111111111111111111111111111111111111111",
+    FLOW_FUND_ADDRESS: "0x2222222222222222222222222222222222222222",
+    FLOW_INDEX_DEPLOY_BLOCK: String(BUYBACK_FROM_BLOCK - 4),
     GECKO_MIN_INTERVAL_MS: "0",
     WORKER_IDLE_POLL_MS: "200",
     SCHEDULER_TICK_MS: "60000",
@@ -140,7 +146,7 @@ async function waitFor<T>(what: string, read: () => Promise<T>, done: (v: T) => 
 }
 
 test(
-  "the worker, with no database key in its environment, runs five jobs to succeeded through /api/pipeline/**, and their rows exist",
+  "the worker, with no database key in its environment, runs six jobs to succeeded through /api/pipeline/**, and their rows exist",
   async () => {
     const ids: Record<string, number> = {};
     for (const kind of KINDS) {
@@ -187,6 +193,8 @@ test(
     expect(balances!.n).toBeGreaterThan(0);
     const [scan] = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
     expect(Number(scan!.b)).toBe(BUYBACK_FROM_BLOCK + 10);
+    const [flow] = await sql<{ b: string }[]>`SELECT max(block_number)::text AS b FROM flow_index_blocks WHERE chain_id = 8453 AND canonical`;
+    expect(Number(flow!.b)).toBe(BUYBACK_FROM_BLOCK - 2);
     const [coinSnaps] = await sql<{ n: number }[]>`
       SELECT count(*)::int AS n FROM daily_coin_snapshots WHERE snapshot_date = (now() AT TIME ZONE 'UTC')::date`;
     expect(coinSnaps!.n).toBe(1);
@@ -198,7 +206,7 @@ test(
     const writes = await sql<{ operation: string }[]>`
       SELECT DISTINCT operation FROM pipeline_ingest_receipts WHERE job_id = ANY(${Object.values(ids)}) ORDER BY operation`;
     expect(writes.map((w) => w.operation)).toEqual(
-      expect.arrayContaining(["buybacks.record_window", "projects.snapshot_daily", "queue.settle", "vault.share_price", "wallet.balance_samples"]),
+      expect.arrayContaining(["buybacks.record_window", "flow.bind_deployment", "flow.record", "projects.snapshot_daily", "queue.settle", "vault.share_price", "wallet.balance_samples"]),
     );
   },
   180_000,
