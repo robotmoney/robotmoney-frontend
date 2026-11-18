@@ -37,7 +37,7 @@ import { withFetchCache } from "../analytics/extract/fetch-cache.ts";
 import { fetchYahoo } from "../analytics/extract/yahoo.ts";
 import { TtlCache } from "./ttl-cache.ts";
 import { serialized, retryAfterMs, sleep } from "./gecko-rate-limit.ts";
-import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree } from "./gecko-endpoint.ts";
+import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree, budgetedTarget, geckoErrorDetail } from "./gecko-endpoint.ts";
 
 const GECKO_TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
@@ -158,29 +158,32 @@ const STUB_PRICES: Record<string, number> = {
 async function geckoFetchJson(url: string, timeoutMs: number, label: string): Promise<unknown> {
   const deadline = Date.now() + timeoutMs;
   const retries = geckoMaxRetries();
-  // The Pro host may refuse a call the plan does not include (401/403); that one request is retried on the free host.
+  // The Pro host may refuse a call (401/403, or a quota 429); that one request is retried on the free host. A Pro
+  // call over this process's per-minute budget is sent to the free host instead (gecko-endpoint.ts budgetedTarget).
   let target = url;
   for (let attempt = 0; ; attempt++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(`geckoterminal: ${label} timeout`);
+    const send = budgetedTarget(target);
     const res = await serialized(() =>
-      fetch(target, {
+      fetch(send, {
         signal: AbortSignal.timeout(remaining),
-        headers: { "user-agent": UA, accept: "application/json", ...geckoAuthHeaders(target) },
+        headers: { "user-agent": UA, accept: "application/json", ...geckoAuthHeaders(send) },
       }),
-      tierOf(target),
+      tierOf(send),
     );
     if (res.ok) return await res.json();
-    if (proRefused(target, res.status)) {
-      target = fallBackToFree(target, res.status, label);
+    const body = await res.text().catch(() => "");
+    if (proRefused(send, res.status, body)) {
+      target = fallBackToFree(send, res.status, label, console, Date.now(), body);
       continue;
     }
     if (!GECKO_TRANSIENT_STATUSES.has(res.status) || attempt >= retries) {
-      throw new Error(`${res.status} ${res.statusText} for ${url}`);
+      throw new Error(`${res.status} ${res.statusText} for ${send}${geckoErrorDetail(body)}`);
     }
     const wait = retryAfterMs(res.headers.get("retry-after"), attempt + 1, geckoRetryBaseMs());
     if (wait >= deadline - Date.now()) {
-      throw new Error(`geckoterminal: ${label} retry budget exhausted after HTTP ${res.status}`);
+      throw new Error(`geckoterminal: ${label} retry budget exhausted after HTTP ${res.status}${geckoErrorDetail(body)}`);
     }
     await sleep(wait);
   }

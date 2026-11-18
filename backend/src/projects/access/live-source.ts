@@ -37,6 +37,7 @@ import {
   type WalletBalanceRead,
 } from "./data-source.ts";
 import { loadV0RosterWithManifest, type LoadedRosterSeed } from "../seed/roster-seed.ts";
+import { budgetedTarget, fallBackToFree, geckoErrorDetail, proAvailable, proRefused } from "../../chain/gecko-endpoint.ts";
 
 // CoinGecko has two hosts. The public host serves the keyless, rate-limited
 // tier; a paid plan's key is honoured ONLY on the Pro host, and ONLY under the
@@ -55,13 +56,21 @@ interface CoinGeckoEndpoint {
 }
 
 // Pick the host and headers from COINGECKO_API_KEY. Set → the Pro host with
-// x-cg-pro-api-key. Unset or blank → exactly today's keyless public request,
-// with no x-cg-* header at all. The key only ever lands in `headers`; the
-// tier and host are what callers may log or put in an error.
+// x-cg-pro-api-key. Unset or blank, or the Pro host inside its refusal
+// cooldown (chain/gecko-endpoint.ts, shared with every GeckoTerminal call,
+// issue 1664) → exactly today's keyless public request, with no x-cg-* header
+// at all. The key only ever lands in `headers`; the tier and host are what
+// callers may log or put in an error.
+const publicEndpoint = (): CoinGeckoEndpoint => ({
+  tier: "public",
+  base: CG_PUBLIC_BASE,
+  host: new URL(CG_PUBLIC_BASE).host,
+  headers: { accept: "application/json" },
+});
 function coinGeckoEndpoint(rawKey: string | undefined = process.env.COINGECKO_API_KEY): CoinGeckoEndpoint {
   const key = (rawKey ?? "").trim();
   const headers: Record<string, string> = { accept: "application/json" };
-  if (!key) return { tier: "public", base: CG_PUBLIC_BASE, host: new URL(CG_PUBLIC_BASE).host, headers };
+  if (!key || !proAvailable()) return publicEndpoint();
   // A key with a control character inside it (a stray CR/LF from a pasted
   // secret) makes fetch throw "Header ... has invalid value: '<key>'", which
   // the degraded run would copy into the log and job_runs. Refuse it here
@@ -155,14 +164,29 @@ export const liveProjectsDataSource: ProjectsDataSource = {
 
   async coinGeckoMarkets(ids: string[]): Promise<CoinGeckoMarketRow[]> {
     if (ids.length === 0) return [];
-    const { tier, base, host, headers } = coinGeckoEndpoint();
-    const url = `${base}/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
-    // Tier and host only — never the key. This line and the error below reach
-    // the worker log and the degraded job_runs result.
-    console.log(`[projects.coingecko] coins/markets via ${tier} tier (${host})`);
-    const r = await timedFetch(url, { headers });
-    if (!r.ok) throw new Error(`coingecko markets ${host} ${r.status}`);
-    return (await r.json()) as CoinGeckoMarketRow[];
+    const path = `/coins/markets?vs_currency=usd&ids=${ids.join(",")}&per_page=250&page=1&sparkline=false&price_change_percentage=24h`;
+    let endpoint = coinGeckoEndpoint();
+    // Over this process's per-minute Pro-call budget the call goes to the
+    // public host (chain/gecko-endpoint.ts budgetedTarget).
+    if (endpoint.tier === "pro" && budgetedTarget(`${endpoint.base}${path}`) !== `${endpoint.base}${path}`) endpoint = publicEndpoint();
+    for (;;) {
+      const { tier, base, host, headers } = endpoint;
+      const url = `${base}${path}`;
+      // Tier and host only — never the key. This line and the error below reach
+      // the worker log and the degraded job_runs result.
+      console.log(`[projects.coingecko] coins/markets via ${tier} tier (${host})`);
+      const r = await timedFetch(url, { headers });
+      if (r.ok) return (await r.json()) as CoinGeckoMarketRow[];
+      const body = await r.text().catch(() => "");
+      // A Pro refusal (401, 403, or a quota 429) is retried once on the public
+      // host without the key, and starts the shared ten-minute cooldown.
+      if (tier === "pro" && proRefused(url, r.status, body)) {
+        fallBackToFree(url, r.status, "coins/markets", console, Date.now(), body);
+        endpoint = publicEndpoint();
+        continue;
+      }
+      throw new Error(`coingecko markets ${host} ${r.status}${geckoErrorDetail(body)}`);
+    }
   },
 
   async dexScreenerToken(address: string): Promise<DexPayload> {

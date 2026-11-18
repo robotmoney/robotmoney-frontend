@@ -39,6 +39,25 @@ export function proMinIntervalMs(): number {
 
 export type GeckoTier = "free" | "pro";
 
+// Per-process Pro-call budget (issue 1664). CoinGecko counts paid credits per account, and every process that holds
+// the key spends from the same monthly pool, so no process may send more than GECKO_PRO_CALLS_PER_MIN Pro calls in
+// any sliding minute. A call over the budget goes to the free host instead (gecko-endpoint.ts budgetedTarget).
+const DEFAULT_PRO_CALLS_PER_MIN = 2;
+const PRO_BUDGET_WINDOW_MS = 60_000;
+let proCallTimes: number[] = [];
+
+export function proCallsPerMin(): number {
+  return intEnv("GECKO_PRO_CALLS_PER_MIN", DEFAULT_PRO_CALLS_PER_MIN, 0);
+}
+
+/** Claim one Pro call at `now`. False when this process already sent GECKO_PRO_CALLS_PER_MIN in the last minute. */
+export function takeProCall(now: number = Date.now()): boolean {
+  proCallTimes = proCallTimes.filter((t) => now - t < PRO_BUDGET_WINDOW_MS);
+  if (proCallTimes.length >= proCallsPerMin()) return false;
+  proCallTimes.push(now);
+  return true;
+}
+
 let chain: Promise<void> = Promise.resolve();
 // Per tier: a free request must be 6 s after the previous FREE request, however many Pro requests ran in between, or
 // interleaving the two would push the free host past its 10-a-minute quota.
@@ -85,4 +104,5 @@ export function _resetRateLimitStateForTests(): void {
   lastRequestAtMs.free = 0;
   lastRequestAtMs.pro = 0;
   chain = Promise.resolve();
+  proCallTimes = [];
 }

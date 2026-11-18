@@ -25,7 +25,7 @@ import { resolveTrackedAssets } from "../src/config.ts";
 useCleanDatabase(import.meta.file);
 
 const realFetch = globalThis.fetch;
-const ENV_KEYS = ["BASE_RPC_SOURCE", "PRICE_SOURCE", "COINGECKO_API_KEY", "GECKO_PRICE_MAX_RETRIES", "GECKO_PRICE_RETRY_BASE_MS"] as const;
+const ENV_KEYS = ["BASE_RPC_SOURCE", "PRICE_SOURCE", "COINGECKO_API_KEY", "GECKO_PRICE_MAX_RETRIES", "GECKO_PRICE_RETRY_BASE_MS", "GECKO_PRO_CALLS_PER_MIN"] as const;
 const saved: Record<string, string | undefined> = {};
 
 const RM = resolveTrackedAssets().find((a) => a.symbol === "ROBOTMONEY")!.address!.toLowerCase();
@@ -141,6 +141,9 @@ test("a reading older than its bound is not served", async () => {
 
 test("the worker sends the price read to the Pro host with the paid key, and the api serves what it persisted", async () => {
   process.env.COINGECKO_API_KEY = "test-paid-key";
+  // Three Pro calls in one tick; the per-process budget (default 2 a minute,
+  // tests/gecko-call-budget.test.ts) is raised so this test pins the host only.
+  process.env.GECKO_PRO_CALLS_PER_MIN = "10";
   const seen = mockGecko();
   expect(await sampleTokenMarket()).toEqual({ price: "ok", weth: "ok", pool: "ok" });
 

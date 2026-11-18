@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { _resetTokenPriceCacheForTests, DEFAULT_TOKEN_PRICE_CACHE_TTL_MS, fetchGeckoTokenPriceUsd, resolveTokenPriceCacheTtlMs, TOKEN_PRICE_CACHE_TTL_ENV } from "../src/chain/token-prices.ts";
 import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
+import { _resetGeckoEndpointForTests } from "../src/chain/gecko-endpoint.ts";
 
 const realFetch = globalThis.fetch;
 const ADDRESS = "0x4200000000000000000000000000000000000006"; // WETH
@@ -200,3 +201,76 @@ test("capability TTL selects one hour for normal smoke while production/smoke de
     Date.now = realNow;
   }
 });
+
+// ── Issue 1664: the paid account out of monthly credit ──────────────────────
+const PRO_PRICE = "https://pro-api.coingecko.com/api/v3/onchain/simple/networks/base/token_price/";
+const FREE_PRICE = "https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/";
+const PAID_KEY = "paid-key-resilience-never-logged";
+const QUOTA_429 = () =>
+  new Response(JSON.stringify({ status: { error_code: 10006, error_message: "You've exceeded the monthly credit limit" } }), {
+    status: 429,
+    statusText: "Too Many Requests",
+  });
+
+function withKey(fn: () => Promise<void>): () => Promise<void> {
+  return async () => {
+    const prev = process.env.COINGECKO_API_KEY;
+    process.env.COINGECKO_API_KEY = PAID_KEY;
+    process.env.GECKO_PRO_MIN_INTERVAL_MS = "0";
+    _resetGeckoEndpointForTests();
+    try {
+      await fn();
+    } finally {
+      if (prev === undefined) delete process.env.COINGECKO_API_KEY;
+      else process.env.COINGECKO_API_KEY = prev;
+      delete process.env.GECKO_PRO_MIN_INTERVAL_MS;
+      _resetGeckoEndpointForTests();
+    }
+  };
+}
+
+test("a Pro quota 429 is retried once on the free host with no key header and returns the free host's price", withKey(async () => {
+  const sent: { url: string; key: string | null }[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    sent.push({ url: u, key: new Headers(init?.headers).get("x-cg-pro-api-key") });
+    return u.startsWith(PRO_PRICE) ? QUOTA_429() : price(1850);
+  }) as unknown as typeof fetch;
+
+  expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1850);
+  expect(sent.map((s) => s.url)).toEqual([`${PRO_PRICE}${ADDRESS}`, `${FREE_PRICE}${ADDRESS}`]);
+  expect(sent[0]!.key).toBe(PAID_KEY);
+  expect(sent[1]!.key).toBeNull();
+}));
+
+test("a plain Pro 429 (no quota error_code) is retried on the Pro host with backoff", withKey(async () => {
+  const sent: string[] = [];
+  globalThis.fetch = (async (url: string) => {
+    sent.push(String(url));
+    return sent.length === 1 ? new Response("Rate limit exceeded", { status: 429, headers: { "Retry-After": "0" } }) : price(1900);
+  }) as unknown as typeof fetch;
+
+  expect(await fetchGeckoTokenPriceUsd(ADDRESS)).toBe(1900);
+  expect(sent).toEqual([`${PRO_PRICE}${ADDRESS}`, `${PRO_PRICE}${ADDRESS}`]);
+}));
+
+test("a thrown error after retries carries CoinGecko's error_code and error_message, never the key", withKey(async () => {
+  process.env.GECKO_PRICE_MAX_RETRIES = "1";
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ status: { error_code: 429, error_message: `throttled ${PAID_KEY}` } }), {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: { "Retry-After": "0" },
+    })) as unknown as typeof fetch;
+
+  let caught: unknown;
+  try {
+    await fetchGeckoTokenPriceUsd(ADDRESS);
+  } catch (err) {
+    caught = err;
+  }
+  const message = (caught as Error).message;
+  expect(message).toContain("error_code 429");
+  expect(message).toContain("throttled");
+  expect(message).not.toContain(PAID_KEY);
+}));

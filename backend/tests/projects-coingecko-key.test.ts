@@ -7,12 +7,17 @@
 //   - key unset or blank → exactly one GET to the public host, no x-cg-* header;
 //   - key set → the Pro host with x-cg-pro-api-key, and no legacy header;
 //   - a 401/429 from either host rejects with an Error naming host and status,
-//     never the key, and the tier log line never carries the key either.
+//     never the key, and the tier log line never carries the key either;
+//   - a Pro refusal (401, 403, or a 429 with quota error_code 10006) is
+//     retried on the public host with no key, and the shared ten-minute
+//     cooldown sends the next call straight there (issue 1664).
 //
 // fetch is stubbed ONLY at the process boundary (globalThis.fetch); the real
 // live source runs. Fully offline; gates every PR in the backend job.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { liveProjectsDataSource } from "../src/projects/access/live-source.ts";
+import { PRO_REJECTED_COOLDOWN_MS, _resetGeckoEndpointForTests } from "../src/chain/gecko-endpoint.ts";
+import { _resetRateLimitStateForTests } from "../src/chain/gecko-rate-limit.ts";
 
 const KEY = "cg-test-key-9f3a7e1c-never-log-me";
 const PUBLIC_MARKETS = "https://api.coingecko.com/api/v3/coins/markets";
@@ -46,6 +51,8 @@ function xcgHeaders(h: Headers): string[] {
 }
 
 beforeEach(() => {
+  _resetGeckoEndpointForTests();
+  _resetRateLimitStateForTests();
   calls = [];
   logged = [];
   const capture = (...args: unknown[]) => {
@@ -107,13 +114,15 @@ describe("coinGeckoMarkets host and header selection", () => {
 });
 
 describe("a failed CoinGecko call never carries the key", () => {
+  // A Pro 401 now falls back to the public host, so the error that surfaces is
+  // the public host's; a Pro 429 without a quota error_code stays on Pro.
   const cases = [
-    { tier: "pro", key: KEY, host: "pro-api.coingecko.com" },
-    { tier: "public", key: undefined, host: "api.coingecko.com" },
+    { tier: "pro", key: KEY, host: "pro-api.coingecko.com", statuses: [429] },
+    { tier: "public", key: undefined, host: "api.coingecko.com", statuses: [401, 429] },
   ] as const;
 
-  for (const { tier, key, host } of cases) {
-    for (const status of [401, 429]) {
+  for (const { tier, key, host, statuses } of cases) {
+    for (const status of statuses) {
       test(`${tier} host ${status} → Error names host and status, never the key`, async () => {
         if (key === undefined) delete process.env.COINGECKO_API_KEY;
         else process.env.COINGECKO_API_KEY = key;
@@ -167,4 +176,60 @@ describe("a malformed key is refused before it can reach a header error", () => 
       expect(logged.join("\n")).not.toContain(KEY);
     });
   }
+});
+
+describe("a Pro refusal falls back to the public host (issue 1664)", () => {
+  const QUOTA = { status: { error_code: 10006, error_message: "You've exceeded the monthly credit limit" } };
+
+  function stubSequence(): void {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push({ url, method: (init?.method ?? "GET").toUpperCase(), headers: new Headers(init?.headers) });
+      if (url.startsWith(PRO_MARKETS)) return new Response(JSON.stringify(QUOTA), { status: 429 });
+      return new Response(JSON.stringify([{ id: "virtual-protocol" }]), { status: 200 });
+    }) as typeof fetch;
+  }
+
+  test("a quota 429 is retried on api.coingecko.com without the key, and the next call inside ten minutes goes straight there", async () => {
+    process.env.COINGECKO_API_KEY = KEY;
+    stubSequence();
+
+    const rows = await liveProjectsDataSource.coinGeckoMarkets(["virtual-protocol"]);
+    expect(rows).toEqual([{ id: "virtual-protocol" }] as never);
+    expect(calls.map((c) => c.url.split("?")[0])).toEqual([PRO_MARKETS, PUBLIC_MARKETS]);
+    expect(calls[0]!.headers.get("x-cg-pro-api-key")).toBe(KEY);
+    expect(xcgHeaders(calls[1]!.headers)).toEqual([]);
+
+    await liveProjectsDataSource.coinGeckoMarkets(["virtual-protocol"]);
+    expect(calls.length).toBe(3);
+    expect(calls[2]!.url.startsWith(`${PUBLIC_MARKETS}?`)).toBe(true);
+    expect(xcgHeaders(calls[2]!.headers)).toEqual([]);
+
+    const out = logged.join("\n");
+    expect(out).toContain("answered HTTP 429 (error_code 10006");
+    expect(out).toContain(`using api.coingecko.com for ${PRO_REJECTED_COOLDOWN_MS / 60_000} min`);
+    expect(out).not.toContain(KEY);
+  });
+
+  test("a Pro 401 is retried on the public host and returns its rows", async () => {
+    process.env.COINGECKO_API_KEY = KEY;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: "GET", headers: new Headers(init?.headers) });
+      return url.startsWith(PRO_MARKETS)
+        ? new Response(JSON.stringify({ status: { error_code: 10002, error_message: "invalid key" } }), { status: 401 })
+        : new Response(JSON.stringify([{ id: "aixbt" }]), { status: 200 });
+    }) as typeof fetch;
+
+    expect(await liveProjectsDataSource.coinGeckoMarkets(["aixbt"])).toEqual([{ id: "aixbt" }] as never);
+    expect(calls.map((c) => c.url.split("?")[0])).toEqual([PRO_MARKETS, PUBLIC_MARKETS]);
+  });
+
+  test("the error from a failed call carries error_code and error_message, never the key", async () => {
+    delete process.env.COINGECKO_API_KEY;
+    stubFetch(429, { status: { error_code: 429, error_message: "You've exceeded the Rate Limit" } });
+    await expect(liveProjectsDataSource.coinGeckoMarkets(["aixbt"])).rejects.toThrow(
+      "coingecko markets api.coingecko.com 429 (error_code 429: You've exceeded the Rate Limit)",
+    );
+  });
 });

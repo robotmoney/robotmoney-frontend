@@ -28,7 +28,7 @@ import { isoDay } from "../transform/math.ts";
 import { UA } from "./http.ts";
 import { withFetchCache } from "./fetch-cache.ts";
 import { recordSourceFetch, type CacheStatus } from "../source-ledger.ts";
-import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree } from "../../chain/gecko-endpoint.ts";
+import { geckoUrl, geckoAuthHeaders, tierOf, proRefused, fallBackToFree, budgetedTarget, geckoErrorDetail } from "../../chain/gecko-endpoint.ts";
 import { serialized } from "../../chain/gecko-rate-limit.ts";
 
 const MAX_PAGES = 10;
@@ -99,7 +99,7 @@ async function fetchNewPoolsPage(
   sleep: Sleep,
 ): Promise<unknown> {
   const url = geckoTerminalUrl(page);
-  let target = url; // the Pro host may refuse (401/403); the same page is then retried on the free host
+  let target = url; // the Pro host may refuse (401/403, quota 429); the same page is then retried on the free host
   const headers = { "user-agent": UA, accept: "application/json" };
   let cacheStatus: CacheStatus = "disabled";
   const result = await withFetchCache<{ payloadBase64: string }>("json", url, async () => {
@@ -113,41 +113,45 @@ async function fetchNewPoolsPage(
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), Math.min(timeoutMs, remaining));
       let res: Response;
-      // Credentialed when `target` is a Pro URL. The ledger redacts the key header (source-ledger.ts).
-      const reqHeaders = { ...headers, ...geckoAuthHeaders(target) };
+      // Over this process's per-minute Pro-call budget, the page goes to the free host (gecko-endpoint.ts).
+      const sendUrl = budgetedTarget(target, Date.now(), logger);
+      // Credentialed when `sendUrl` is a Pro URL. The ledger redacts the key header (source-ledger.ts).
+      const reqHeaders = { ...headers, ...geckoAuthHeaders(sendUrl) };
       try {
-        const send = () => fetch(target, { signal: ac.signal, headers: reqHeaders });
+        const send = () => fetch(sendUrl, { signal: ac.signal, headers: reqHeaders });
         // The sweep requests up to 10 pages back to back. Free, that is unchanged (and is what throttles page 6);
         // on the Pro tier the pages are spaced (GECKO_PRO_MIN_INTERVAL_MS).
-        res = tierOf(target) === "pro" ? await serialized(send, "pro") : await send();
+        res = tierOf(sendUrl) === "pro" ? await serialized(send, "pro") : await send();
       } catch (error) {
-        recordSourceFetch({ url: target, headers: reqHeaders, cacheStatus, error });
+        recordSourceFetch({ url: sendUrl, headers: reqHeaders, cacheStatus, error });
         throw error;
       } finally {
         clearTimeout(timer);
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      recordSourceFetch({ url: target, headers: reqHeaders, cacheStatus, responseStatus: res.status, payload: bytes,
+      const errorBody = res.ok ? "" : new TextDecoder().decode(bytes);
+      const detail = geckoErrorDetail(errorBody);
+      recordSourceFetch({ url: sendUrl, headers: reqHeaders, cacheStatus, responseStatus: res.status, payload: bytes,
         providerReleaseId: res.headers.get("etag") ?? res.headers.get("last-modified"),
-        error: res.ok ? undefined : `${res.status} ${res.statusText}` });
+        error: res.ok ? undefined : `${res.status} ${res.statusText}${detail}` });
       if (res.ok) return { payloadBase64: Buffer.from(bytes).toString("base64") };
-      if (proRefused(target, res.status)) {
-        target = fallBackToFree(target, res.status, `new_pools page ${page}`, logger);
+      if (proRefused(sendUrl, res.status, errorBody)) {
+        target = fallBackToFree(sendUrl, res.status, `new_pools page ${page}`, logger, Date.now(), errorBody);
         continue;
       }
-      if (!TRANSIENT_STATUSES.has(res.status)) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+      if (!TRANSIENT_STATUSES.has(res.status)) throw new Error(`${res.status} ${res.statusText} for ${sendUrl}${detail}`);
       const wait =
         attempt < MAX_ATTEMPTS_PER_PAGE
           ? throttleWaitMs(attempt, res.headers.get("retry-after"), deadline - Date.now())
           : null;
       if (wait === null) {
         throw new Error(
-          `geckoterminal: still throttled (HTTP ${res.status}) at page ${page} after ${attempt} attempt(s) — ` +
+          `geckoterminal: still throttled (HTTP ${res.status}${detail}) at page ${page} after ${attempt} attempt(s) — ` +
             `retry budget exhausted, degrading to last-persisted NEW_TOKENS`,
         );
       }
       logger.warn?.(
-        `[geckoterminal] new_pools page ${page}: HTTP ${res.status} — retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS_PER_PAGE})`,
+        `[geckoterminal] new_pools page ${page}: HTTP ${res.status}${detail} — retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS_PER_PAGE})`,
       );
       await sleep(wait);
     }

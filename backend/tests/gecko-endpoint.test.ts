@@ -4,7 +4,8 @@
 // All HTTP is mocked at the process boundary and the waits are tens of milliseconds. No network.
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
-  PRO_CALLS, PRO_REJECTED_COOLDOWN_MS, fallBackToFree, freeUrlFor, geckoAuthHeaders, geckoUrl, isProUrl, proRefused, tierOf,
+  PRO_CALLS, PRO_REJECTED_COOLDOWN_MS, fallBackToFree, freeUrlFor, geckoAuthHeaders, geckoErrorDetail, geckoUrl, isProUrl,
+  proRefused, tierOf,
   _resetGeckoEndpointForTests,
 } from "../src/chain/gecko-endpoint.ts";
 import { _resetRateLimitStateForTests, serialized } from "../src/chain/gecko-rate-limit.ts";
@@ -85,6 +86,61 @@ test("a Pro 401 or 403 is the plan or key refusing; 429 and 5xx are not", () => 
   expect(proRefused(u, 429)).toBe(false);
   expect(proRefused(u, 503)).toBe(false);
   expect(proRefused(`${FREE}/networks/new_pools?page=1`, 403)).toBe(false); // the free host's refusals are not ours to route around
+});
+
+// Issue 1664: CoinGecko answers a spent monthly credit with HTTP 429 and error_code 10006. That is the account
+// refusing, like 401/403, not per-minute throttling, so it fails over to the free host.
+const QUOTA_BODY = JSON.stringify({ status: { error_code: 10006, error_message: "You've exceeded the monthly credit limit" } });
+
+test("a Pro 429 with a quota error_code is a refusal; a 429 with no error_code and any free-host URL are not", () => {
+  const u = `${PRO}/simple/networks/base/token_price/0xabc`;
+  expect(proRefused(u, 429, QUOTA_BODY)).toBe(true);
+  expect(proRefused(u, 401, "")).toBe(true);
+  expect(proRefused(u, 403, "not json")).toBe(true);
+  expect(proRefused(u, 429, "")).toBe(false);
+  expect(proRefused(u, 429, "Rate limit exceeded")).toBe(false);
+  expect(proRefused(u, 429, JSON.stringify({ status: { error_message: "throttled" } }))).toBe(false);
+  expect(proRefused(u, 429, JSON.stringify({ status: { error_code: 429, error_message: "rate limit" } }))).toBe(false);
+  expect(proRefused(`${FREE}/simple/networks/base/token_price/0xabc`, 429, QUOTA_BODY)).toBe(false);
+  expect(proRefused("https://api.coingecko.com/api/v3/coins/markets?ids=x", 429, QUOTA_BODY)).toBe(false);
+  // CoinGecko's own coins API shares the key, the credit pool and the cooldown.
+  expect(proRefused("https://pro-api.coingecko.com/api/v3/coins/markets?ids=x", 429, QUOTA_BODY)).toBe(true);
+  expect(freeUrlFor("https://pro-api.coingecko.com/api/v3/coins/markets?ids=x")).toBe("https://api.coingecko.com/api/v3/coins/markets?ids=x");
+});
+
+test("two quota refusals inside one cooldown log exactly one [gecko] warning, with the status and error_code and never the key", () => {
+  process.env.COINGECKO_API_KEY = KEY;
+  const lines: string[] = [];
+  const log = { warn: (m: string) => lines.push(m) };
+  const echoed = JSON.stringify({ status: { error_code: 10006, error_message: `credit spent for ${KEY}` } });
+  fallBackToFree(`${PRO}/simple/networks/base/token_price/0xabc`, 429, "price for 0xabc", log, 5_000, echoed);
+  fallBackToFree(`${PRO}/networks/base/pools/0xp/ohlcv/day`, 429, "ohlcv", log, 6_000, QUOTA_BODY);
+  const warnings = lines.filter((l) => l.startsWith("[gecko]"));
+  expect(warnings.length).toBe(1);
+  expect(warnings[0]).toContain("pro-api.coingecko.com answered HTTP 429 (error_code 10006");
+  expect(warnings[0]).not.toContain(KEY);
+  expect(geckoErrorDetail(echoed, KEY)).not.toContain(KEY);
+});
+
+test("a quota 429 on a new_pools sweep page falls back to the free host for that page", async () => {
+  process.env.COINGECKO_API_KEY = KEY;
+  process.env.GECKO_PRO_MIN_INTERVAL_MS = "0";
+  const sent: { url: string; key: string | null }[] = [];
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    const u = String(url);
+    sent.push({ url: u, key: new Headers(init.headers).get("x-cg-pro-api-key") });
+    if (u.startsWith(PRO)) return new Response(QUOTA_BODY, { status: 429, statusText: "Too Many Requests" });
+    return newPoolsResponse();
+  }) as unknown as typeof fetch;
+
+  const lines: string[] = [];
+  const points = await fetchGeckoTerminalNewPools(Date.parse("2026-07-15T12:00:00Z"), 15000, { logger: { warn: (m) => lines.push(m) }, sleep: async () => {} });
+
+  expect(points[0]!.value).toBe(1);
+  expect(sent.map((s) => s.url)).toEqual([`${PRO}/networks/new_pools?page=1`, `${FREE}/networks/new_pools?page=1`]);
+  expect(sent[1]!.key).toBeNull();
+  expect(lines.some((l) => l.includes("answered HTTP 429 (error_code 10006"))).toBe(true);
+  expect(lines.join("\n")).not.toContain(KEY);
 });
 
 test("after a refusal the call falls back to the free host, logs once, and the Pro host is tried again after ten minutes", () => {
