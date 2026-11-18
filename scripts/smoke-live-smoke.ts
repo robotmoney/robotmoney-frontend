@@ -193,9 +193,11 @@ export function evaluateResearch(
 }
 
 export const FLOW_HEALTH_PATH = "/api/public/flow/health";
-interface FlowHealthDto { status?: string; ageSeconds?: number; maxAgeSeconds?: number; indexedThrough?: { block?: number; time?: string } }
+interface FlowHealthDto { status?: string; error?: string; ageSeconds?: number; maxAgeSeconds?: number; indexedThrough?: { block?: number; time?: string } }
 export function evaluateFlow(body: FlowHealthDto | null): string[] {
-  if (!body) return [`flow: GET ${FLOW_HEALTH_PATH} failed — the deposit queue index is unconfigured, unbound or has indexed no block`];
+  if (!body || body.status === "unavailable") {
+    return [`flow: GET ${FLOW_HEALTH_PATH} failed (${body?.error ?? "no answer"}) — the deposit queue index is unconfigured, unbound or has indexed no block`];
+  }
   if (typeof body.indexedThrough?.block !== "number" || typeof body.ageSeconds !== "number") {
     return ["flow: index health carries no indexed block or age — cannot certify freshness"];
   }
@@ -232,7 +234,8 @@ export async function collectFailures(backend: string): Promise<string[]> {
     getJson(`${backend}${ROUTES.dashboards.regimeSnapshots}?range=1`),
     getJson(`${backend}${ROUTES.dashboards.walletBalances}`),
     getJson(`${backend}${ROUTES.dashboards.vaultEconomics}`),
-    getJson(`${backend}${FLOW_HEALTH_PATH}`),
+    // Read the 503 body too: its `error` names which precondition is missing.
+    fetch(`${backend}${FLOW_HEALTH_PATH}`).then((r) => r.json() as Promise<Record<string, unknown>>).catch(() => null),
     ...RESEARCH_KEYS.map((key) => getJson(`${backend}${routePath(ROUTES.dashboards.researchSignal, { key })}`)),
   ]);
   const signals = Object.fromEntries(RESEARCH_KEYS.map((key, i) => [key, research[i] as { signalKey?: string } | null]));
