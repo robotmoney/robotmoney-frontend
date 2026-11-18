@@ -68,7 +68,9 @@ describe("the regime read on the composite", () => {
   });
 
   test("a composite of 0.38 that the engine ranks 4th in three years reads neutral", () => {
-    const history = Array.from({ length: 8 }, (_, i) => ({ date: `2026-11-${10 + i}`, composite: 0.38 + i * 0.001, compositePercentile: 0.04, regime: "risk_off", macroIndex: 0.3, onchainIndex: 0.4 }));
+    // readOnComposite adds each panel's label, so the rows declare those fields.
+    type Row = { date: string; composite: number; compositePercentile: number; regime: string; macroIndex: number; onchainIndex: number; macroRegime?: string; onchainRegime?: string };
+    const history: Row[] = Array.from({ length: 8 }, (_, i) => ({ date: `2026-11-${10 + i}`, composite: 0.38 + i * 0.001, compositePercentile: 0.04, regime: "risk_off", macroIndex: 0.3, onchainIndex: 0.4 }));
     const out = readOnComposite({ latest: { ...history[7], bucketThresholds: null }, history });
     expect(out.latest.regime).toBe("neutral");
     expect(out.history.every((r: { regime: string }) => r.regime === "neutral")).toBe(true);
