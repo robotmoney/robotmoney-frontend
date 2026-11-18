@@ -1,12 +1,13 @@
 // The market regime under the home page's model portfolio (Lex: the portfolio,
 // then the regime it is read against): the dial with the regime beside it, and
-// the last year on the site's chart. The composite is plotted as a percentile
-// of its last three years, so the dial, the bands and the axis read on one
-// scale; the raw composite is the supporting number beside it. One read of the
+// the last year on the site's chart. The composite is plotted on its own 0 to
+// 1 scale, and every label is cut on it (lib/regime-scale.js), so the dial,
+// the bands and the axis read on one scale. One read of the
 // regime snapshots, made as the section nears the viewport: a visitor who never
 // scrolls this far never pays for it.
 import { api, ROUTES } from "../../lib/api.js";
-import { ordinalPct, regimeDialValid } from "../../lib/regime-dial.js";
+import { regimeDialValid } from "../../lib/regime-dial.js";
+import { readOnComposite } from "../../lib/regime-scale.js";
 import { bandRuns, dateTicks, denseDays, lineChartSvg, nearestSample, stepAt } from "../../lib/line-chart.js";
 import { REGIME } from "../../lib/chart-theme.js";
 import { COMPOSITE_AREA, REGIME_BAND_BG, REGIME_BG_LEGEND } from "./shared.js";
@@ -34,13 +35,12 @@ function yearModel(rows, riskOff, riskOn) {
   const inYear = rows.filter((r) => r.date >= first);
   const days = denseDays(inYear.map((r) => r.date));
   const byDate = new Map(inYear.map((r) => [r.date, r]));
-  const values = days.map((d) => { const v = byDate.get(d)?.compositePercentile; return v == null ? null : +v; });
-  const levels = days.map((d) => { const v = byDate.get(d)?.composite; return v == null ? null : +v; });
+  const values = days.map((d) => { const v = byDate.get(d)?.composite; return v == null ? null : +v; });
   if (values.filter((v) => v != null).length < 2) return null;
   const n = days.length;
   const regimes = days.map((d) => keyOf(byDate.get(d)?.regime) || null);
   return {
-    n, days, values, levels, regimes,
+    n, days, values, regimes,
     idx: days.map((_, i) => i),
     ticks: dateTicks(days),
     bands: bandRuns(regimes).map((b) => ({ ...b, bg: REGIME_BAND_BG[/** @type {keyof typeof REGIME_BAND_BG} */ (b.state)] || "transparent" })),
@@ -59,7 +59,7 @@ export function registerHomeRegime(Alpine) {
     /** @type {ReturnType<typeof yearModel>} */ let year = null;
     /** @type {IntersectionObserver | null} */ let near = null;
     return {
-      /** @type {{ regime: string, composite: number | null, compositePercentile: number, bucketThresholds?: Record<string, number> | null } | null} */
+      /** @type {{ regime: string, composite: number | null, bucketThresholds?: Record<string, number> | null } | null} */
       latest: null,
       regimeLoaded: false,
       regimeFailed: false,
@@ -77,9 +77,9 @@ export function registerHomeRegime(Alpine) {
       destroy() { near?.disconnect(); },
       async loadRegime() {
         try {
-          const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: FETCH_DAYS });
+          const data = readOnComposite(await api.get(ROUTES.dashboards.regimeSnapshots, { range: FETCH_DAYS }));
           const l = data.latest;
-          this.latest = l ? { regime: l.regime, composite: l.composite ?? null, compositePercentile: l.compositePercentile, bucketThresholds: l.bucketThresholds } : null;
+          this.latest = l ? { regime: l.regime, composite: l.composite ?? null, bucketThresholds: l.bucketThresholds } : null;
           rows = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
           const { riskOff, riskOn } = this.cuts();
           year = yearModel(rows, riskOff, riskOn);
@@ -94,7 +94,7 @@ export function registerHomeRegime(Alpine) {
       dialModel() {
         const l = this.latest;
         if (!l) return null;
-        const m = { percentile: l.compositePercentile, regime: l.regime, ...this.cuts() };
+        const m = { value: l.composite, regime: l.regime, ...this.cuts() };
         return regimeDialValid(m) ? m : null;
       },
       regimeReady() { return !!this.dialModel(); },
@@ -109,9 +109,8 @@ export function registerHomeRegime(Alpine) {
         return short(rows[i].date);
       },
       regimeSentence() {
-        const since = this.regimeSince(), raw = this.latest?.composite;
-        const level = raw == null ? "," : ` reads ${(+raw).toFixed(2)},`;
-        return `${since ? `Since ${since}. ` : ""}The composite of macro and on-chain conditions${level} ranked against its last three years.`;
+        const since = this.regimeSince();
+        return `${since ? `Since ${since}. ` : ""}The composite averages macro and on-chain conditions, on a scale of 0 to 1.`;
       },
 
       // ── The last year ──
@@ -119,12 +118,11 @@ export function registerHomeRegime(Alpine) {
       yearSvg() { return year?.svg || ""; },
       yearBands() { return year?.bands || []; },
       yearXTicks() { return year?.ticks || []; },
-      // The percentile axis, marked at the regime's cuts, as the regime page
-      // marks it on this scale.
+      // The composite's own axis, 0 to 1, marked at the regime's cuts, as the
+      // regime page marks it.
       yearYTicks() {
         const { riskOff: lo, riskOn: hi } = this.cuts();
-        return /** @type {[number, string][]} */ ([[1, "100"], [hi, ordinalPct(hi)], [0.5, "50th"], [lo, ordinalPct(lo)], [0, "0"]])
-          .map(([v, label]) => ({ key: v, top: (1 - v) * 100, label, cut: v === lo || v === hi }));
+        return [1, hi, 0.5, lo, 0].map((v) => ({ key: v, top: (1 - v) * 100, label: v.toFixed(2), cut: v === lo || v === hi }));
       },
       bgLegend() { return REGIME_BG_LEGEND; },
       // The latest reading, the dial's own dot on the line.
@@ -137,21 +135,22 @@ export function registerHomeRegime(Alpine) {
       },
       yearLabel() {
         if (!year) return "";
-        return `The composite as a percentile of its last three years, ${short(year.days[0])} to ${short(year.days[year.n - 1])}. Latest: ${this.regimeLabel()}, ${ordinalPct(this.latest?.compositePercentile ?? 0)} percentile. Use the arrow keys to step through the readings.`;
+        const now = this.latest?.composite;
+        return `The composite, on a scale of 0 to 1, ${short(year.days[0])} to ${short(year.days[year.n - 1])}. Latest: ${this.regimeLabel()}${now == null ? "" : `, ${(+now).toFixed(2)}`}. Use the arrow keys to step through the readings.`;
       },
       yearMove(/** @type {PointerEvent} */ ev) { if (year) this.yearAt = nearestSample(year.idx, year.n, ev); },
       yearKey(/** @type {KeyboardEvent} */ ev) { if (year) this.yearAt = stepAt(ev, this.yearAt, year.n); },
       yearPoint() {
         const k = this.yearAt;
         if (!year || k == null) return null;
-        const v = year.values[k], level = year.levels[k], regime = year.regimes[k];
+        const v = year.values[k], regime = year.regimes[k];
         return {
           left: (k / Math.max(1, year.n - 1)) * 100,
           date: short(year.days[k]),
           regime: regime ? LABEL[regime] : "",
           regimeColor: regime ? REGIME[regime] : REGIME.neutral,
-          label: level == null ? "Composite" : `Composite ${level.toFixed(2)}`,
-          value: v == null ? "—" : ordinalPct(v),
+          label: "Composite",
+          value: v == null ? "—" : v.toFixed(2),
           color: v == null ? REGIME.neutral : v >= COMPOSITE_AREA.base ? COMPOSITE_AREA.above.line : COMPOSITE_AREA.below.line,
         };
       },

@@ -93,17 +93,17 @@
                    risk-on, the regime named in its middle. Each state explains
                    itself on hover, focus or tap: where the composite has to sit
                    to read it, and for today's, how the label moves. Without a
-                   percentile or thresholds it gives way to the plain readout. -->
+                   composite or thresholds it gives way to the plain readout. -->
               <template x-if="dialModel()">
                 <div class="rm-dial" x-data="rmRegimeDial(() => dialModel())"
                      @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null"
                      @keydown.escape="point = null; pinned = null">
                   <div class="rm-dial__arc" x-ref="arc">
                     <div class="rm-dial__svg" x-html="svg()"></div>
-                    <!-- The reading in the bowl: the percentile the dot marks,
+                    <!-- The reading in the bowl: the composite the dot marks,
                          with the regime it reads as under it. -->
                     <p class="rm-dial__v">
-                      <b class="rm-dial__n"><span x-text="reading().n"></span><small x-text="reading().suffix"></small></b>
+                      <b class="rm-dial__n" x-text="reading()"></b>
                       <span class="rm-dial__name" x-text="regimeLabel(latest.regime)"></span>
                     </p>
                     <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">
@@ -122,28 +122,28 @@
               <template x-if="!dialModel()">
                 <p class="rr-stat__v rv__today-v"><i class="rv__regime-dot" :style="`background:${regimeColor(latest.regime)}`" aria-hidden="true"></i><span x-text="regimeLabel(latest.regime)"></span></p>
               </template>
-              <!-- With the dial, its bowl carries the percentile, so this line says what
-                   is ranked; without it, the line carries both. -->
-              <p class="rr-stat__sub" x-show="dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b>, ranked against its last 3 years</p>
-              <p class="rr-stat__sub" x-show="!dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b> · <span x-text="ordinalPct(latest.compositePercentile)"></span> percentile over 3 years</p>
+              <!-- With the dial, its bowl carries the composite, so this line says what
+                   the number is; without it, the line carries the number too. -->
+              <p class="rr-stat__sub" x-show="dialModel()">The composite: the mean of the macro and on-chain indices</p>
+              <p class="rr-stat__sub" x-show="!dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b></p>
             </div>
-            <!-- The session page's Market context component: each reading on
-                 its own three-year percentile track, the cuts where the reading
-                 carries them, the dot in its regime's colour, and a tip with its
-                 value. -->
+            <!-- The session page's Market context component, fed index levels
+                 here: the composite and each panel's index on one 0 to 1 track,
+                 the cuts where the reading carries them, the dot in its regime's
+                 colour, and a tip with its value. -->
             <div class="rr-context rv__context">
               <div class="rr-context__head">
                 <h3 class="rr-subhead__h">Market context</h3>
               </div>
               <div class="sig" role="group"
-                   :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
+                   :aria-label="`Index levels, on a scale of 0 to 1: ${signalRows().map((r) => `${r.label} ${fmtNum(r.pct)}`).join(', ')}.`">
                 <div class="sig__scale" aria-hidden="true">
                   <span></span>
                   <span class="sig__ticks">
                     <template x-for="z in signalZones()" :key="z.key">
                       <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
                     </template>
-                    <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
+                    <b style="left:0">0</b><b style="left:50%">0.50</b><b style="left:100%">1</b>
                   </span>
                   <span></span>
                 </div>
@@ -155,8 +155,9 @@
                       <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
                       <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
                             <!-- The reading beside its dot, so it reads without a hover; it
-                                 turns to the dot's left near the top end. -->
-                            <span class="sig__v" :class="r.pct > 0.82 ? 'is-end' : ''" :style="`left:${r.at}`" x-text="ordinal(r.pct)"></span>
+                                 turns to the dot's left near the top end, and just
+                                 under the midpoint, where it would sit on the mark. -->
+                            <span class="sig__v" :class="r.pct > 0.82 || (r.pct > 0.36 && r.pct < 0.5) ? 'is-end' : ''" :style="`left:${r.at}`" x-text="fmtNum(r.pct)"></span>
                       <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
                         <b x-text="signalTip(r)"></b>
                         <span x-text="r.about"></span>
@@ -165,7 +166,7 @@
                   </div>
                 </template>
               </div>
-              <p class="rr-note">Each reading is a percentile of its own last three years, so the 50th is its median.</p>
+              <p class="rr-note">Each index is a weighted mean of its indicators' percentiles, on a scale of 0 to 1.</p>
             </div>
           </div>
         </section>
@@ -188,9 +189,8 @@
           </template>
           <template x-if="!historyEmpty()">
             <figure class="rr-area rv__fig" :data-days="historyDays()">
-              <!-- The scale and the bands' key above the plot, the lines' legend below it. -->
+              <!-- The bands' key above the plot, the lines' legend below it. -->
               <ul class="rr-area__legend rv__legend-list rv__legend-top">
-                <li class="rv__legend-axis" x-show="historyPct()">Percentile of its last 3 years</li>
                 <li class="rv__lg-bands" :class="{ 'is-off': !visible.bands }">
                   <button type="button" class="rv__tgl" :aria-pressed="visible.bands ? 'true' : 'false'" @click="toggle('bands')"><i class="rv__tgl-box" aria-hidden="true"></i>Regime bands</button>
                   <span class="rv__lg-key">
@@ -495,7 +495,7 @@
     <section class="rr-sec" id="methodology-sec" aria-labelledby="methodology">
       <div class="rr-sec__head"><h2 class="rr-sec__h" id="methodology">Methodology</h2></div>
       <!-- The bucket thresholds come from the snapshot (bucketPct). -->
-      <p class="rv__method-lead" x-show="latest">Composite = 0.5 × macro + 0.5 × on-chain. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite percentile below <span x-text="bucketPct('risk_off')"></span> reads risk-off and above <span x-text="bucketPct('risk_on')"></span> reads risk-on.</p>
+      <p class="rv__method-lead" x-show="latest">Composite = 0.5 × macro + 0.5 × on-chain. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite below <span x-text="(+bucketPct('risk_off') / 100).toFixed(2)"></span> reads risk-off and above <span x-text="(+bucketPct('risk_on') / 100).toFixed(2)"></span> reads risk-on.</p>
 
       <h3 class="rr-subhead__h" id="panels">Panels</h3>
       <div class="rr-tablewrap">
@@ -514,8 +514,8 @@
       <dl class="rr-dl rv__mdl">
         <div><dt>Normalization</dt><dd>A rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</dd></div>
         <div><dt>Weighting</dt><dd>Point-in-time inverse correlation within each panel. Each day's weights use only the trailing 3-year window, so there is no look-ahead. Redundant inputs are discounted automatically, without manual sub-grouping. No indicator carries more than 25%.</dd></div>
-        <div><dt>Composite</dt><dd>The arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), ranked as a 3-year rolling percentile and bucketed at 0.33 / 0.67.</dd></div>
-        <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket, or on a single-day move in the composite percentile beyond <strong>2σ</strong> of its trailing 1-year daily changes, in the new bucket's direction. It filters out flips at a boundary and still follows a fast, real shift.</dd></div>
+        <div><dt>Composite</dt><dd>The arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), bucketed at 0.33 / 0.67 on its own 0 to 1 scale.</dd></div>
+        <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket. It filters out flips at a boundary.</dd></div>
         <div><dt>Storage</dt><dd>The history is kept daily in long format; the current snapshot is served from the analytics store.</dd></div>
       </dl>
 

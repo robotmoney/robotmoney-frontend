@@ -135,7 +135,7 @@ test("regime dashboard renders 3 panels, sparklines, correlations + backtests (e
   // for the eq snapshot). The regime card shows the composite level in its foot.
   // Today: the top-line regime with the composite under it, and one index row
   // per panel (3 for the eq snapshot).
-  // The top line is the dial: the composite's percentile in its bowl.
+  // The top line is the dial: the composite in its bowl.
   await expect(page.locator("#composite .rm-dial__n")).toBeVisible();
   await expect(page.locator("#composite")).toContainText(latest.composite!.toFixed(2));
   // The session page's Market context: the composite, then one row per panel.
@@ -244,7 +244,7 @@ test("regime view surfaces the Equity factor panel even when `panels` is null (d
 
   // THREE panel index summary cards (macro + on-chain + equity factor) — plus the
   // top-line regime card = 4 total, exactly the happy-path count despite null panels.
-  // The top line is the dial: the composite's percentile in its bowl.
+  // The top line is the dial: the composite in its bowl.
   await expect(page.locator("#composite .rm-dial__n")).toBeVisible();
   const indexCards = page.locator("#composite .sig__row:not(#index-composite)");
   await expect(indexCards).toHaveCount(3);
@@ -398,24 +398,24 @@ test("regime history chart: toggles redraw it, ranges set its span, weekly past 
   expect(errors).toEqual([]);
 });
 
-// The history chart reads in percentiles when the history carries them: the
-// scale the regime is cut on, so the lines, the bands and the dial agree. The
-// raw composite stays in the tip, for reference.
-test("the regime history draws percentiles, with the raw level in its tip", async ({ page }) => {
+// The history chart reads on the composite's own 0 to 1 scale, marked at the
+// cuts the label is taken at, even when the history carries percentiles: the
+// lines, the bands and the dial agree on one scale.
+test("the regime history draws the composite, 0 to 1, marked at the cuts", async ({ page }) => {
   await stubEnvironment(page);
   const dto = loadRegimeStub();
   for (const r of dto.history) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row = r as any;
-    row.compositePercentile = 0.5; row.macroPercentile = 0.5; row.onchainPercentile = 0.5; row.factorPercentile = 0.5;
+    row.compositePercentile = 0.02; row.macroPercentile = 0.02; row.onchainPercentile = 0.02; row.factorPercentile = 0.02;
   }
   await page.route("**/api/dashboards/regime-snapshots*", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(dto) }));
   await page.goto("/");
   await navigate(page, "/regime");
-  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["100", "67th", "50th", "33rd", "0"]);
-  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText("50th");
-  await expect(page.locator("#history-sec .rv__legend-axis")).toHaveText("Percentile of its last 3 years");
+  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["1.00", "0.67", "0.50", "0.33", "0.00"]);
+  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d\.\d\d$/);
+  await expect(page.locator("#history-sec .rv__legend-axis")).toHaveCount(0);
 
   const plot = page.locator("#history-sec .rr-area__plot");
   const row = page.locator("#history-sec .rr-area__tip li").first();
@@ -423,20 +423,10 @@ test("the regime history draws percentiles, with the raw level in its tip", asyn
     await plot.scrollIntoViewIfNeeded();
     const at = (await plot.boundingBox())!;
     await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
-    await expect(row).toContainText(/Composite \d\.\d\d/, { timeout: 500 });
+    await expect(row).toContainText("Composite", { timeout: 500 });
   }).toPass({ timeout: 5000 });
-  await expect(row.locator("b")).toHaveText("50th");
-});
-
-// An older snapshot carries no percentiles, so its history has no percentile to
-// draw: it falls back to the index levels on their own 0 to 1 axis, and says so.
-test("a history without percentiles draws the index levels, 0 to 1", async ({ page }) => {
-  await stubEnvironment(page);
-  await page.goto("/");
-  await navigate(page, "/regime");
-  await expect(page.locator("#history-sec .rr-area__y span")).toHaveText(["1.00", "0.75", "0.50", "0.25", "0.00"]);
-  await expect(page.locator("#history-sec .rv__lg b").first()).toHaveText(/^\d\.\d\d$/);
-  await expect(page.locator("#history-sec .rv__legend-axis")).toBeHidden();
+  // The percentile is not what is read: the tip carries the level.
+  await expect(row.locator("b")).toHaveText(/^\d\.\d\d$/);
 });
 
 // The backtest table's first figure is a multiple, not dollars.
