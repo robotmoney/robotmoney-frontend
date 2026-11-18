@@ -33,6 +33,8 @@ import { handleFlowVault } from "./routes/flow-vault.ts";
 import { handleFlowPrices } from "./routes/flow-prices.ts";
 import { handleFlowPosition } from "./routes/flow-position.ts";
 import { handleFlowRequestHistory } from "./routes/flow-request-history.ts";
+import { handleFlowHealth } from "./routes/flow-health.ts";
+import { handleFlowOwnerClaims } from "./routes/flow-owner-claims.ts";
 import { handlePipeline, pipelineTokenConcurrency } from "./routes/pipeline.ts";
 import { handleReferrals, REFERRALS_PREFIX } from "./routes/referrals.ts";
 import { closeSchedulerStreamSockets, schedulerStreamWebSocket, upgradeSchedulerStream, type SchedulerStreamSocketData } from "./routes/swarm-stream.ts";
@@ -476,10 +478,12 @@ async function route(req: Request, url: URL, pathname: string, clientIp: string)
 
     if (pathname === "/api/public/flow/transactions") return handleFlowTransactions(req, url, clientIp);
     if (pathname === "/api/public/flow/events") return handleFlowEvents(req, url, clientIp);
+    if (pathname === "/api/public/flow/health") return handleFlowHealth(req, clientIp);
     if (pathname === "/api/public/flow/vault") return handleFlowVault(req, clientIp);
     if (pathname === "/api/public/flow/prices") return handleFlowPrices(req, url, clientIp);
     if (pathname.startsWith("/api/public/flow/requests/") && pathname.endsWith("/history")) return handleFlowRequestHistory(req, url, pathname.slice("/api/public/flow/requests/".length, -"/history".length), clientIp);
     if (pathname.startsWith("/api/public/flow/requests/")) return handleFlowRequest(req, pathname.slice("/api/public/flow/requests/".length), clientIp);
+    if (pathname.startsWith("/api/public/flow/owners/") && pathname.endsWith("/claims")) return handleFlowOwnerClaims(req, url, pathname.slice("/api/public/flow/owners/".length, -"/claims".length), clientIp);
     if (pathname.startsWith("/api/public/flow/owners/") && pathname.endsWith("/position")) return handleFlowPosition(req, pathname.slice("/api/public/flow/owners/".length, -"/position".length), clientIp);
     if (pathname.startsWith("/api/public/flow/owners/")) return handleFlowOwner(req, url, pathname.slice("/api/public/flow/owners/".length), clientIp);
 

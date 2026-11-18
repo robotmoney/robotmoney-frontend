@@ -29,7 +29,7 @@ function chain(kind: "deposit" | "redeem", allowance: bigint) {
     address: QUEUE,
     watermark: async () => watermark,
     request: request(kind),
-    batch: async (calls: { method: string; params?: unknown[] }[]) => calls.map((call) => {
+    batch: async (calls: readonly { method: string; params?: readonly unknown[] }[]) => calls.map((call) => {
       if (call.method === "eth_getBlockByNumber") {
         expect(call.params?.[0]).toBe("0x8");
         return { ok: true as const, result: { hash: watermark.hash } };
