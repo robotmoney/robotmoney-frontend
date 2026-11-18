@@ -64,6 +64,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _resetGeckoEndpointForTests(); // a refusal starts a process-wide cooldown; never leak it into the next file
   globalThis.fetch = realFetch;
   console.log = realLog;
   console.warn = realWarn;

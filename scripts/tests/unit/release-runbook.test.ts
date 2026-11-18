@@ -599,3 +599,28 @@ describe("the template's database statistics and jobs-plan steps (issue 1581)", 
     expect(twinProblems(template.steps, "t")).toEqual([]);
   });
 });
+
+// Issue 1664: production alone holds the paid CoinGecko key, so its preflight reads the account's credit once, and
+// stage, which holds no key, runs nothing new.
+describe("the CoinGecko credit preflight (issue 1664)", () => {
+  test("a production-only preflight step runs coingecko-credit.ts", () => {
+    const step = template.steps.find((s) => s.id === "P09-coingecko-credit");
+    expect(step).toBeDefined();
+    expect(step!.phase).toBe("preflight");
+    expect(step!.onlyFor).toBe("prod");
+    expect(step!.host).toBe("target");
+    expect(step!.cmds).toEqual([["bun", "scripts/release/coingecko-credit.ts"]]);
+    expect(step!.expectExit).toBe(0);
+  });
+
+  test("the stage QA step list is unchanged", () => {
+    const text = readFileSync(templatePath("kitchen-sink"), "utf8");
+    const start = text.indexOf('  - id: "P09-coingecko-credit"');
+    const end = text.indexOf("  # ── Cutover: production only.");
+    expect(start).toBeGreaterThan(0);
+    const without = parseTemplate(text.slice(0, start) + text.slice(end), "kitchen-sink");
+    const qa = (steps: readonly RunbookStep[]) => steps.filter((s) => s.onlyFor === "stage").map((s) => JSON.stringify(s));
+    expect(qa(template.steps)).toEqual(qa(without.steps));
+    expect(template.steps.filter((s) => s.onlyFor === "stage").some((s) => s.cmds.flat().join(" ").includes("coingecko"))).toBe(false);
+  });
+});

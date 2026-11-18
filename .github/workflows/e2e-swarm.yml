@@ -112,35 +112,27 @@ jobs:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Starter agent (REST, with its two missing-credential guards)
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check starter-agent
         env:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
-      # The paid CoinGecko key (issue #1062). GeckoTerminal is CoinGecko's: with
-      # the key, the new_pools sweep and token-price lookups use
-      # pro-api.coingecko.com/api/v3/onchain instead of the keyless host, which
-      # allows ~10 calls a minute per IP and 429s in CI. It reaches the containers
-      # through DEMO_COMPOSE_PASSTHROUGH. On a fork PR GitHub supplies an empty
-      # secret and the smoke falls back to the keyless host. The source ledger
-      # redacts the key header, so it is not saved in the database or an artifact.
+      # No CoinGecko key (issue 1664): only production holds the paid key, whose
+      # credit is counted per account. CI reads the keyless free hosts and keeps
+      # 'live' price provenance (issue 147); a keyless 429 degrades honestly.
       - name: Live steady state (published sessions, regime, wallets, vaults, research)
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check live-smoke
         env:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Product invariants (verify-live, tier readonly)
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check verify-live
         env:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Tear down this job's smoke stack
         if: always()
         uses: ./.github/actions/e2e-teardown

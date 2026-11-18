@@ -25,6 +25,7 @@ beforeEach(() => {
   delete process.env.COINGECKO_API_KEY;
 });
 afterEach(() => {
+  _resetGeckoEndpointForTests(); // a refusal starts a process-wide cooldown; never leak it into the next file
   globalThis.fetch = realFetch;
   if (realKey === undefined) delete process.env.COINGECKO_API_KEY;
   else process.env.COINGECKO_API_KEY = realKey;

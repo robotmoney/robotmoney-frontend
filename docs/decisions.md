@@ -6500,3 +6500,24 @@ its amendments stand.
 **Rejected.** Keeping the second ranking with a shorter lookback: it still re-normalizes a normalized number. Tagging the change `v4`: that tag already names the publication model.
 
 **Left alone.** The cut-off values. The indicator ranks, weights, panel indices and composite. The vendored reference and the originals, which stay `v3` and are compared under `v3`.
+
+---
+
+<a id="d85"></a>
+## D85 — Only production holds the paid CoinGecko key; stage and CI read the free hosts, and a spent credit fails over (owner, 2026-11-18)
+
+**Status:** Accepted 2026-11-18 (owner, issue 1664 intake). Built by issue 1664: `backend/src/chain/gecko-endpoint.ts`, `backend/src/chain/gecko-rate-limit.ts`, `backend/src/projects/access/live-source.ts`, `scripts/release/stage-target.ts`, `scripts/release/coingecko-credit.ts`, the e2e workflows. Specified in `docs/technical/smoke-production-spec.md` section 3.
+
+**Decision.**
+
+1. **One holder.** `COINGECKO_API_KEY` lives only in production's `~/.env`. The stage target's `~/.env` has no such line, and `stage-target.ts up` neither requires it on the stage server nor copies it. No CI workflow references the secret.
+2. **Keyless is still live.** Stage and CI read `api.geckoterminal.com` and `api.coingecko.com` with no key. They keep `PRICE_SOURCE=live` and 'live' provenance (issue 147); a keyless 429 degrades honestly to the last persisted reading, and the release gate classifies a keyless-host 429 as external.
+3. **A spent credit fails over.** A Pro answer of 401, 403, or 429 with a quota `error_code` (10006) sends that request and every CoinGecko call for the next ten minutes to the free host, with one `[gecko]` warning per cooldown naming the status and `error_code`, never the key. A 429 with no quota `error_code` is throttling and keeps the retry with backoff on the Pro host. The gate still fails on that warning after a release: a spent credit must be seen.
+4. **A budget per process.** No process sends more than `GECKO_PRO_CALLS_PER_MIN` (default 2) Pro calls in any minute; extra calls go to the free host.
+5. **A preflight floor.** Production's preflight `P09-coingecko-credit` reads `GET /key` once and goes red when the remaining monthly credit is below `COINGECKO_CREDIT_FLOOR_PCT` (default 10) percent. Stage has no key, so the step has no QA twin.
+
+**Why.** CoinGecko counts credit per account. One key served production, stage-2 and CI, and on 2026-11-16 09:27 UTC the month's credit ran out: every paid call answered 429 error_code 10006 until 2026-12-01, the fallback ran only on 401/403, the coins API had none, and error lines dropped the body, so prices froze for two days unseen.
+
+**Rejected.** `PRICE_SOURCE=stub` in CI: the smoke must keep 'live' provenance (issue 147). A second price vendor and a higher plan: out of scope for the intake.
+
+**Left alone.** Job cadences, persisted price shapes, and the GitHub secret itself and the stage host's `/home/stage-server/.env` (owner steps).

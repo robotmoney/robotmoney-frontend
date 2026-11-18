@@ -160,12 +160,18 @@
     "reason": "The buyback eth_getLogs scan failing on a range the provider refuses (HTTP 413). v0.5.4 halves the range, so a recurrence after v0.5.4 is a regression."
   },
   {
+    "id": "external-gecko-keyless-host-429",
+    "match": "(\\b429 Too Many Requests\\b.* for https://(api\\.geckoterminal\\.com|api\\.coingecko\\.com)/|coingecko markets api\\.coingecko\\.com 429\\b)",
+    "class": "external",
+    "reason": "A keyless CoinGecko host (api.geckoterminal.com, api.coingecko.com) answering HTTP 429: its per-IP rate limit. Since issue 1664 stage and CI hold no CoinGecko key and read these hosts, and production overflows to them past its per-process Pro-call budget or during a Pro refusal cooldown. The price reads retry, then degrade to the last persisted sample or the last good reading, so no wrong price is served. Held to the keyless hosts: a 429 from pro-api.coingecko.com is not matched here, and a paid-host quota refusal stays known-gecko-paid-tier-refused."
+  },
+  {
     "id": "known-gecko-paid-tier-refused",
     "match": "(pro-api\\.coingecko\\.com|\\[gecko\\]).*(HTTP 429|HTTP 40[13])",
     "class": "known-issue",
     "issue": "1062",
     "fixedIn": "0.5.4",
-    "reason": "The paid CoinGecko tier answering 429, 401 or 403. v0.5.4 uses the Basic plan key on the paid host, so a refusal after v0.5.4 is a regression (a bad key, or a plan limit reached)."
+    "reason": "The paid CoinGecko tier answering 429, 401 or 403. v0.5.4 uses the Basic plan key on the paid host, so a refusal after v0.5.4 is a regression (a bad key, or a plan limit reached). Since issue 1664 the backend fails over to the free hosts on a 401, 403 or quota 429 (error_code 10006) and logs one '[gecko] pro-api.coingecko.com answered HTTP <status> (error_code <code>: <message>)' warning per cooldown, which this rule still fails after the release: a spent monthly credit must be seen."
   },
   {
     "id": "external-gecko-onchain-price-5xx-or-timeout",

@@ -127,21 +127,18 @@ jobs:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Core-surface checks (smoke-frontend-check)
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check frontend
         env:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Playwright specs on the live stack
         run: bun --no-env-file scripts/smoke-ci-checks.ts --check browser
         env:
           CI: "true"
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
       - name: Tear down this job's smoke stack
         if: always()
         uses: ./.github/actions/e2e-teardown

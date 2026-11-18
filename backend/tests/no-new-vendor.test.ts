@@ -50,7 +50,9 @@ test("new #84 valuation files reach no forbidden vendor host or import", () => {
 // no longer name a GeckoTerminal host themselves: they get their URLs from that module, so the host policy is one place
 // to read and one test to hold. Nothing else about the #84 boundary changes: still no Alchemy, DexScreener, Dune or
 // Supabase, and still no CoinGecko host anywhere else in these files (FORBIDDEN above checks "coingecko" in code).
-const GECKO_ENDPOINT_HOSTS = ["api.geckoterminal.com", "pro-api.coingecko.com"];
+// Issue 1664: the module also maps a refused Pro coins call to CoinGecko's public host (one key, one credit pool, one
+// shared cooldown), so it names api.coingecko.com too. Same vendor, no new one.
+const GECKO_ENDPOINT_HOSTS = ["api.coingecko.com", "api.geckoterminal.com", "pro-api.coingecko.com"];
 
 test("GeckoTerminal's hosts are named in exactly one module, and are exactly the free host and CoinGecko's paid host for it", () => {
   const src = readFileSync(join(process.cwd(), "src/chain/gecko-endpoint.ts"), "utf8");

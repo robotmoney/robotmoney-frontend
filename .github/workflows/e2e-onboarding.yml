@@ -244,9 +244,7 @@ jobs:
           ONBOARDING_REAL_EVAL: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.real_eval) || contains(github.event.pull_request.labels.*.name, 'real-eval')) && '1' || '' }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           AGENT_MODEL: ${{ vars.AGENT_MODEL || '' }}
-          # The paid CoinGecko key (issue #1062), forwarded to the containers
-          # through DEMO_COMPOSE_PASSTHROUGH; see e2e-swarm.yml.
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          # No CoinGecko key (issue 1664): CI reads the keyless free hosts.
       # ── The admission RECORD (issue #373) ─────────────────────────────────
       # Reporting on the admission that ALREADY ran: no new harness, no sampling
       # loop, no second stack. scripts/smoke-ci-checks.ts classifies the run with

@@ -15,7 +15,8 @@
 #   P  preflight, production only: read-only gates that assume the QA passed.
 #   C  cutover, production only: the release as it happens, then the soak, then the version checks.
 # Every P and C step has a Q twin of the same name and commands (runbook.ts twinProblems), so
-# production runs only what stage ran. The version tag (C06) has none: stage tags nothing.
+# production runs only what stage ran. The version tag (C06) has none: stage tags nothing. The CoinGecko
+# credit check (P09) has none either: only production holds the paid key (issue 1664).
 # `standing` names the standing runbook rows each step satisfies
 # (docs/technical/release-runbooks.md §9).
 template: kitchen-sink
@@ -721,6 +722,20 @@ steps:
     irreversible: false
     onlyFor: "prod"
     triage: true
+  # ── The paid CoinGecko account's credit (issue 1664), from release v0.9.2 (since): production
+  # alone holds the key, so this step has no QA twin (runbook.ts PROD_ONLY_NAMES).
+  - id: "P09-coingecko-credit"
+    standing: []
+    host: "target"
+    phase: "preflight"
+    since: "v0.9.2"
+    description: "CoinGecko credit: one GET /key with the production key from ~/.env; red when the remaining monthly credit is below COINGECKO_CREDIT_FLOOR_PCT (default 10) percent. Prints used, remaining and monthly credit, never the key"
+    cmds:
+      - ["bun", "scripts/release/coingecko-credit.ts"]
+    expectExit: 0
+    receipts: []
+    irreversible: false
+    onlyFor: "prod"
   # ── Cutover: production only. Backup and restore proof, then the rolling upgrade (the
   # website never goes down), then the soak and the version checks, as stage ran them.
   - id: "C01-backup"
