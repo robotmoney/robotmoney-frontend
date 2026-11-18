@@ -54,6 +54,7 @@
 // (scripts/tests/integration/smoke-live-smoke.test.ts) can prove the red paths quickly.
 import { ROUTES, path as routePath } from "@robotmoney/contract";
 import { resolveSmokeCadence } from "./lib/smoke-cadence.ts";
+import { operatorTokenFromEnv } from "./lib/operator-token.ts";
 
 const BACKEND = process.env.BACKEND_URL ?? "http://localhost:8787";
 
@@ -249,6 +250,20 @@ export async function collectFailures(backend: string): Promise<string[]> {
   ];
 }
 
+/** On a red flow leg, print what the flow.index job did (issue 1614): never ran, threw, or recorded nothing. */
+async function printFlowJobDiagnostics(backend: string): Promise<void> {
+  const token = operatorTokenFromEnv();
+  if (!token) return void console.error("  (no operator token: flow.index job diagnostics unavailable)");
+  for (const path of ["/api/admin/jobs?kind=flow.index&limit=5", "/api/admin/runs?kind=flow.index&limit=5"]) {
+    try {
+      const r = await fetch(`${backend}${path}`, { headers: { "X-Admin-Token": token } });
+      console.error(`  flow.index diagnostics ${path} → ${r.status}: ${(await r.text()).slice(0, 4000)}`);
+    } catch (e) {
+      console.error(`  flow.index diagnostics ${path} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   console.log(`\n=== LIVE-path smoke assertions (${BACKEND}) — issue #128 ===\n`);
 
@@ -264,6 +279,7 @@ async function main(): Promise<void> {
   if (failures.length > 0) {
     console.error(`\n✗ LIVE smoke FAILED after ${Math.round(deadlineMs / 1000)}s — the LIVE steady state was not reached:\n`);
     for (const f of failures) console.error(`  ✗ ${f}`);
+    if (failures.some((f) => f.startsWith("flow:"))) await printFlowJobDiagnostics(BACKEND);
     process.exit(1);
   }
   console.log(
