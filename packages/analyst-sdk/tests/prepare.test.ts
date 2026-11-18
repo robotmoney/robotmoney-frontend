@@ -1,7 +1,7 @@
 // prepareRegimeInputs unit tests with synthetic registries. The shipped registry
 // has no zero_fill indicator, so these are the only red controls for that branch,
 // for lastRaw, and for the empty-series rule (all NaN, for every transform).
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { prepareRegimeInputs } from "../src/prepare.ts";
 import type { Indicator } from "../src/analyze/indicators.ts";
 
@@ -52,66 +52,38 @@ describe("prepareRegimeInputs", () => {
 });
 
 // ── Ratios from their legs (analytics requirements 4.3, SDK-10, AN-4) ─────────
-// The committed fixture stores the eight ratios. The source-only input below
-// drops them and carries each ratio's two legs under their source ids instead.
-// Each numerator is the stored ratio times its denominator, so the legs are
-// real-shaped data; the comparison input stores mergeRatioSeries(legs), the
-// value a collector would have stored from the same legs.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// The inputs (support/ratio-legs.ts): the committed fixture's eight ratios
+// replaced by their two legs (sourceOnly), or by mergeRatioSeries(legs)
+// (stored). runRegime(stored) and runRegime(sourceOnly) each run once, in
+// beforeAll, and each one result feeds every check and report built from that
+// input (issue 1667).
 import * as grid from "../src/transform/grid.ts";
 import * as sdk from "../src/index.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { mergeRatioSeries as fetchRatio } from "../src/extract/sources.ts";
-import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { RATIO_LEG_MAPPING, resolveInputHistory } from "../src/series-ids.ts";
+import { resolveInputHistory } from "../src/series-ids.ts";
 import { ratiosFromLegs } from "../src/transform/ratios.ts";
-import { buildReport, runRegime } from "../src/run.ts";
+import { buildReport, runRegime, type RunResult } from "../src/run.ts";
 import type { Point, RawIndicatorHistory } from "../src/types.ts";
-
-const fixture: RawIndicatorHistory = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "fixtures", "raw-indicator-history.csv"), "utf8")));
-const RATIOS = [...new Set(RATIO_LEG_MAPPING.map((m) => m.consumer.slice("indicator:".length)))];
-// Each leg by its source id, except the one leg another indicator also reads.
-const ETH_LEG = "backtest:ETH-USD";
-const legsOf = (ratio: string) => RATIO_LEG_MAPPING.filter((m) => m.consumer === `indicator:${ratio}`).map((m) => (m.storageKey === ETH_LEG ? ETH_LEG : m.series)) as [string, string];
-
-// BTC_ETH's denominator leg is the fixture's ETH stream, named by its storage
-// key backtest:ETH-USD (yahoo:ETH-USD alone would also name ETH_TREND's). Every other denominator is 4 on each ratio date.
-function legInputs(): { legs: RawIndicatorHistory; sourceOnly: RawIndicatorHistory; stored: RawIndicatorHistory } {
-  const legs: RawIndicatorHistory = {};
-  const dens = new Map<string, Map<string, number>>();
-  const eth = new Map(fixture.ETH!.map((p) => [p.date, p.value]));
-  for (const ratio of RATIOS) {
-    const [, den] = legsOf(ratio);
-    const d = dens.get(den) ?? dens.set(den, new Map()).get(den)!;
-    for (const p of fixture[ratio]!) if (den !== ETH_LEG) d.set(p.date, 4);
-  }
-  dens.set(ETH_LEG, eth);
-  for (const [den, m] of dens) legs[den] = [...m].map(([date, value]) => ({ date, value })).sort((a, b) => (a.date < b.date ? -1 : 1));
-  for (const ratio of RATIOS) {
-    const [num, den] = legsOf(ratio);
-    const d = dens.get(den)!;
-    legs[num] = fixture[ratio]!.filter((p) => d.has(p.date)).map((p) => ({ date: p.date, value: p.value * d.get(p.date)! }));
-  }
-  const base: RawIndicatorHistory = {};
-  for (const [k, v] of Object.entries(fixture)) if (!RATIOS.includes(k) && k !== "ETH") base[k] = v;
-  const sourceOnly = { ...base, ...legs };
-  const stored: RawIndicatorHistory = { ...base, [ETH_LEG]: legs[ETH_LEG]! };
-  for (const ratio of RATIOS) stored[ratio] = mergeRatioSeries(legs[legsOf(ratio)[0]]!, legs[legsOf(ratio)[1]]!);
-  return { legs, sourceOnly, stored };
-}
+import { legInputs, legsOf, RATIOS } from "./support/ratio-legs.ts";
 
 describe("ratios from legs (SDK-10)", () => {
   const { legs, sourceOnly, stored } = legInputs();
+  let storedRun: RunResult;
+  let sourceOnlyRun: RunResult;
+  beforeAll(() => {
+    storedRun = runRegime(stored);
+    sourceOnlyRun = runRegime(sourceOnly);
+  }, 120_000);
 
   test("a source-only input with yahoo:HG=F and yahoo:GC=F ranks COPPER_GOLD on every date the stored ratio does", () => {
-    const fromLegs = runRegime(sourceOnly).result.ranks.COPPER_GOLD!;
-    const fromStored = runRegime(stored).result.ranks.COPPER_GOLD!;
+    const fromLegs = sourceOnlyRun.result.ranks.COPPER_GOLD!;
+    const fromStored = storedRun.result.ranks.COPPER_GOLD!;
     const finite = (xs: number[]) => xs.filter(Number.isFinite).length;
     expect(finite(fromStored)).toBeGreaterThan(0);
     expect(finite(fromLegs)).toBe(finite(fromStored));
     expect(fromLegs.map(Number.isFinite)).toEqual(fromStored.map(Number.isFinite));
-  });
+  }, 120_000);
 
   test("each of the eight ratios is mergeRatioSeries(legs) byte for byte, and the report equals the stored-ratio report", () => {
     expect(RATIOS.length).toBe(8);
@@ -121,8 +93,8 @@ describe("ratios from legs (SDK-10)", () => {
       expect(JSON.stringify(resolved[ratio]), ratio).toBe(JSON.stringify(mergeRatioSeries(legs[num]!, legs[den]!)));
       expect(resolved[ratio]!.length, ratio).toBeGreaterThan(0);
     }
-    const canon = (h: RawIndicatorHistory) => JSON.stringify(buildReport(runRegime(h), { full: true }));
-    expect(canon(sourceOnly)).toBe(canon(stored));
+    const canon = (run: RunResult) => JSON.stringify(buildReport(run, { full: true }));
+    expect(canon(sourceOnlyRun)).toBe(canon(storedRun));
   }, 120_000);
 
   test("a replay input with a stored ratio and both legs uses the stored ratio unchanged", () => {
@@ -130,8 +102,8 @@ describe("ratios from legs (SDK-10)", () => {
     const other: Point[] = legs["yahoo:GC=F"]!.map((p) => ({ date: p.date, value: p.value * 2 }));
     const replay: RawIndicatorHistory = { ...stored, "yahoo:HG=F": legs["yahoo:HG=F"]!, "yahoo:GC=F": other };
     expect(ratiosFromLegs(replay, resolveInputHistory(replay)).COPPER_GOLD).toBe(stored.COPPER_GOLD!);
-    const canon = (h: RawIndicatorHistory) => JSON.stringify(buildReport(runRegime(h)));
-    expect(canon(replay)).toBe(canon(stored));
+    const canon = (run: RunResult) => JSON.stringify(buildReport(run));
+    expect(canon(runRegime(replay))).toBe(canon(storedRun));
   }, 120_000);
 
   test("one ratio function: ratioByDate is gone, and the fetch uses the same mergeRatioSeries", () => {
