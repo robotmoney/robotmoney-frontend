@@ -48,6 +48,8 @@
 import {
   centeredCrossDD,
   correlation,
+  correlationFromMoments,
+  correlationMoments,
   ddAdd,
   ddDiv,
   ddDivD,
@@ -213,23 +215,56 @@ export function pearson(xs: number[], ys: number[]): number {
 
 // For each i, rank of xs[i] within xs[max(0,i-window+1)..i]. Value in [0,1].
 // NaN until at least 30 finite observations available. rank=(below+0.5·equal)/n.
+// O(n log n) for every window: the distinct finite values are ranked once, and
+// the window's finite values sit in a Fenwick tree of integer counts over those
+// ranks, so below, equal and n are exact and the division is the plain one.
 export function rollingPercentileRank(xs: number[], window: number): number[] {
-  const out = new Array(xs.length).fill(NaN);
-  for (let i = 0; i < xs.length; i++) {
+  const n = xs.length;
+  const out = new Array(n).fill(NaN);
+  if (!(window >= 1)) return out; // the window is empty on every day
+  // A fractional window leaves start = i - window + 1 fractional, so the window
+  // is the whole prefix while start clamps to 0 and empty after that.
+  const integral = Number.isInteger(window) || window === Infinity;
+  const last = integral ? n - 1 : Math.min(n - 1, Math.floor(window - 1));
+  const sorted: number[] = [];
+  for (let i = 0; i < n; i++) if (Number.isFinite(xs[i])) sorted.push(xs[i]);
+  sorted.sort((a, b) => a - b);
+  const vals: number[] = [];
+  for (const v of sorted) if (vals.length === 0 || vals[vals.length - 1] !== v) vals.push(v);
+  const m = vals.length;
+  const rank = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
     if (!Number.isFinite(xs[i])) continue;
-    const start = Math.max(0, i - window + 1);
-    const slice: number[] = [];
-    for (let j = start; j <= i; j++) {
-      if (Number.isFinite(xs[j])) slice.push(xs[j]);
+    let lo = 0;
+    let hi = m - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (vals[mid] < xs[i]) lo = mid + 1;
+      else hi = mid;
     }
-    if (slice.length < 30) continue;
+    rank[i] = lo + 1; // 1-based Fenwick index
+  }
+  const tree = new Int32Array(m + 1);
+  const at = new Int32Array(m + 1);
+  const bump = (r: number, d: number) => {
+    at[r] += d;
+    for (; r <= m; r += r & -r) tree[r] += d;
+  };
+  let count = 0;
+  for (let i = 0; i <= last; i++) {
+    if (Number.isFinite(xs[i])) {
+      bump(rank[i], 1);
+      count++;
+    }
+    const j = i - window;
+    if (integral && j >= 0 && Number.isFinite(xs[j])) {
+      bump(rank[j], -1);
+      count--;
+    }
+    if (!Number.isFinite(xs[i]) || count < 30) continue;
     let below = 0;
-    let equal = 0;
-    for (const v of slice) {
-      if (v < xs[i]) below++;
-      else if (v === xs[i]) equal++;
-    }
-    out[i] = (below + 0.5 * equal) / slice.length;
+    for (let r = rank[i] - 1; r > 0; r -= r & -r) below += tree[r];
+    out[i] = (below + 0.5 * at[rank[i]]) / count;
   }
   return out;
 }
@@ -258,11 +293,45 @@ export function inverseCorrelationWeights(
     return out;
   }
 
+  // Per indicator, once: its finite indices and, over them, correlation's
+  // rescaled values, mean and sxx. A pair whose finite indices coincide is
+  // exactly pearson's joint subset, so it reuses them and computes only sxy.
+  const fin: Record<string, number[]> = {};
+  const mom: Record<string, ReturnType<typeof correlationMoments>> = {};
+  for (const id of validIds) {
+    const xs = panel[id];
+    const idx: number[] = [];
+    const vs: number[] = [];
+    for (let i = 0; i < xs.length; i++) {
+      if (Number.isFinite(xs[i])) {
+        idx.push(i);
+        vs.push(xs[i]);
+      }
+    }
+    fin[id] = idx;
+    if (vs.length >= 3) mom[id] = correlationMoments(vs);
+  }
+  const sameFinite = (a: string, b: string): boolean => {
+    const x = fin[a];
+    const y = fin[b];
+    if (x.length !== y.length) return false;
+    for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return false;
+    return true;
+  };
   const corr: Record<string, Record<string, number>> = {};
   for (const a of validIds) {
     corr[a] = {};
     for (const b of validIds) {
-      corr[a][b] = a === b ? 1 : pearson(panel[a], panel[b]);
+      if (a === b) {
+        corr[a][b] = 1;
+      } else if (sameFinite(a, b)) {
+        const ma = mom[a];
+        const mb = mom[b];
+        const r = ma && mb ? correlationFromMoments(ma.a, mb.a, ma.m, mb.m, ma.sxx, mb.sxx) : NaN;
+        corr[a][b] = Number.isNaN(r) ? 0 : r;
+      } else {
+        corr[a][b] = pearson(panel[a], panel[b]);
+      }
     }
   }
   const avgAbs: Record<string, number> = {};

@@ -316,6 +316,77 @@ export function correlation(xs: readonly number[], ys: readonly number[]): numbe
 }
 
 /**
+ * One finite series' share of `correlation`: its power-of-two rescaling, the
+ * mean of the rescaled values and their centered sum of squares sxx, formed
+ * exactly as `correlation` forms them (centeredMoments' sxx accumulator reads
+ * only its own series). Built once per series, it is reused for every pair.
+ */
+export function correlationMoments(xs: readonly number[]): { a: readonly number[]; m: number; sxx: DD } {
+  const s = scaleOf(xs);
+  const a = s === 1 ? xs : rescaled(xs, s);
+  const m = mean2(a);
+  return { a, m, sxx: centeredMoments(a, a, m, m).sxx };
+}
+
+/**
+ * `correlation` from per-series moments (correlationMoments): a, b are the
+ * rescaled series, ma, mb their means and sxx, syy their centered sums of
+ * squares. Only the cross sum sxy is computed here, with the same per-element
+ * operations as centeredMoments, and the result is finished exactly as
+ * `correlation` finishes it, so the value is bit-identical.
+ */
+export function correlationFromMoments(
+  a: readonly number[],
+  b: readonly number[],
+  ma: number,
+  mb: number,
+  sxx: DD,
+  syy: DD,
+): number {
+  if (a.length !== b.length) throw new RangeError(`correlation: series of length ${a.length} and ${b.length}`);
+  const n = a.length;
+  if (n === 0) return NaN;
+  if (!(sxx[0] > 0) || !(syy[0] > 0)) return NaN;
+  let pxy = 0, cxy = 0;
+  let ds = 0, dc = 0, es = 0, ec = 0;
+  for (let t = 0; t < n; t++) {
+    const xv = a[t]!;
+    const dh = xv - ma;
+    let bb = dh - xv;
+    const dl = xv - (dh - bb) + (-ma - bb);
+    const yv = b[t]!;
+    const eh = yv - mb;
+    bb = eh - yv;
+    const el = yv - (eh - bb) + (-mb - bb);
+    let c = 134217729 * dh;
+    const dhh = c - (c - dh);
+    const dhl = dh - dhh;
+    c = 134217729 * eh;
+    const ehh = c - (c - eh);
+    const ehl = eh - ehh;
+    const p = dh * eh;
+    const pe = dhl * ehl - (p - dhh * ehh - dhl * ehh - dhh * ehl);
+    let s = pxy + p;
+    bb = s - pxy;
+    cxy += pxy - (s - bb) + (p - bb) + pe + (dh * el + dl * eh);
+    pxy = s;
+    s = ds + dh;
+    bb = s - ds;
+    dc += ds - (s - bb) + (dh - bb) + dl;
+    ds = s;
+    s = es + eh;
+    bb = s - es;
+    ec += es - (s - bb) + (eh - bb) + el;
+    es = s;
+  }
+  const sd = ds + dc;
+  const se = es + ec;
+  const sxy = twoSum(pxy, cxy - (sd * se) / n);
+  const r = ddValue(ddDiv(sxy, ddMul(ddSqrt(sxx), ddSqrt(syy))));
+  return r < -1 ? -1 : r > 1 ? 1 : r;
+}
+
+/**
  * Daily rate from an annual one, rate_daily = (1 + annual)^(1/periods) - 1,
  * evaluated as expm1(log1p(annual) / periods) so the small result keeps its
  * leading digits (the pow form loses them to the final subtraction of 1).
