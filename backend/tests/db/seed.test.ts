@@ -33,6 +33,9 @@ afterEach(async () => {
   // so later test files sharing this ephemeral Postgres see the production
   // baseline enabled.
   await fixtureDb`UPDATE job_schedules SET enabled = true WHERE kind = 'projects.recompute_coverage' AND cron = '0 3 * * *'`;
+  // Issue 1614: the smoke step enables the deposit queue indexer in place; the
+  // production baseline keeps it disabled.
+  await fixtureDb`UPDATE job_schedules SET enabled = false WHERE kind = 'flow.index'`;
 });
 
 test("cadence (#118): seed registers wallet.sample_balances at the every-minute cron '* * * * *'", async () => {
@@ -63,6 +66,14 @@ test("smoke cadence: explicit step seeds an ENABLED hourly sampler and DISABLES 
   expect(rows).toHaveLength(2);
   expect(byCron["3 * * * *"]).toBe(true);
   expect(byCron["* * * * *"]).toBe(false);
+});
+
+test("the production seed leaves flow.index disabled; the explicit smoke step enables it", async () => {
+  await seed(fixtureDb);
+  const read = () => sql<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'flow.index'`;
+  expect((await read()).map((r) => r.enabled)).toEqual([false]);
+  await seedSmokeJobSchedules(fixtureDb);
+  expect((await read()).map((r) => r.enabled)).toEqual([true]);
 });
 
 test("smoke cadence never re-enables an operator-disabled hourly row (seed stays ON CONFLICT DO NOTHING)", async () => {

@@ -37,6 +37,11 @@
 //       stale === false (the real eth_call reads succeeded).
 //   (e) research — both research-signal keys serve a landed signal (a dead
 //       research leg → null/404 → red).
+//   (f) deposit queue index — /api/public/flow/health answers 200 with
+//       status 'ok': the deployed flow.index job scanned confirmed Base blocks
+//       into the migrated database and its newest indexed block is within the
+//       freshness budget. A 503 (unconfigured, unbound or empty index) or a
+//       'stale' watermark is red (issue 1614).
 //
 // NEVER SKIPS: every failure exits non-zero and names the leg/feed that failed.
 // LIVE upstreams are eventually consistent right after boot (e.g. the seed's
@@ -187,6 +192,22 @@ export function evaluateResearch(
   return failures;
 }
 
+export const FLOW_HEALTH_PATH = "/api/public/flow/health";
+interface FlowHealthDto { status?: string; ageSeconds?: number; maxAgeSeconds?: number; indexedThrough?: { block?: number; time?: string } }
+export function evaluateFlow(body: FlowHealthDto | null): string[] {
+  if (!body) return [`flow: GET ${FLOW_HEALTH_PATH} failed — the deposit queue index is unconfigured, unbound or has indexed no block`];
+  if (typeof body.indexedThrough?.block !== "number" || typeof body.ageSeconds !== "number") {
+    return ["flow: index health carries no indexed block or age — cannot certify freshness"];
+  }
+  if (body.status !== "ok") {
+    return [
+      `flow: index is ${body.status ?? "unknown"} (block ${body.indexedThrough.block} at ${body.indexedThrough.time ?? "?"}, ` +
+        `age ${body.ageSeconds}s > ${body.maxAgeSeconds ?? "?"}s) — the flow.index job is not keeping up`,
+    ];
+  }
+  return [];
+}
+
 // ── Fetch + poll driver ─────────────────────────────────────────────────────
 async function getJson(url: string): Promise<Record<string, unknown> | null> {
   try {
@@ -199,7 +220,7 @@ async function getJson(url: string): Promise<Record<string, unknown> | null> {
 }
 
 export async function collectFailures(backend: string): Promise<string[]> {
-  const [sessions, regime, wallet, vault, ...research] = await Promise.all([
+  const [sessions, regime, wallet, vault, flow, ...research] = await Promise.all([
     // ?state=published (issue #243): the default list response is now a
     // light, paginated (20-most-recent, ANY state) projection — on a
     // long-running smoke stack the newest 20 sessions across every state could
@@ -211,6 +232,7 @@ export async function collectFailures(backend: string): Promise<string[]> {
     getJson(`${backend}${ROUTES.dashboards.regimeSnapshots}?range=1`),
     getJson(`${backend}${ROUTES.dashboards.walletBalances}`),
     getJson(`${backend}${ROUTES.dashboards.vaultEconomics}`),
+    getJson(`${backend}${FLOW_HEALTH_PATH}`),
     ...RESEARCH_KEYS.map((key) => getJson(`${backend}${routePath(ROUTES.dashboards.researchSignal, { key })}`)),
   ]);
   const signals = Object.fromEntries(RESEARCH_KEYS.map((key, i) => [key, research[i] as { signalKey?: string } | null]));
@@ -220,6 +242,7 @@ export async function collectFailures(backend: string): Promise<string[]> {
     ...evaluateWallet(wallet as Parameters<typeof evaluateWallet>[0]),
     ...evaluateVaultEconomics(vault as Parameters<typeof evaluateVaultEconomics>[0]),
     ...evaluateResearch(signals),
+    ...evaluateFlow(flow as FlowHealthDto | null),
   ];
 }
 
@@ -243,7 +266,8 @@ async function main(): Promise<void> {
   console.log(
     `\n✓ LIVE smoke passed: >=${LIVE_SMOKE_MIN_PUBLISHED_SESSIONS} swarm sessions published, ` +
       "regime snapshot fresh, wallet + vault-economics provenance live " +
-      `(allowed #120 degrades logged above), research signals ${RESEARCH_KEYS.join(" + ")} served.\n`,
+      `(allowed #120 degrades logged above), research signals ${RESEARCH_KEYS.join(" + ")} served, ` +
+      "deposit queue index fresh.\n",
   );
 }
 

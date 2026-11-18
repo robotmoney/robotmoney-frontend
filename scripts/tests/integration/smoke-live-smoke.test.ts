@@ -25,7 +25,9 @@ import { join } from "node:path";
 import { ROUTES, path as routePath } from "@robotmoney/contract";
 import {
   ALLOWED_STALE_LEGS,
+  evaluateFlow,
   evaluateRegime,
+  FLOW_HEALTH_PATH,
   evaluateSessions,
   evaluateVaultEconomics,
   evaluateWallet,
@@ -73,10 +75,11 @@ const vaultPayload = (
     provenance: adapterOverrides[name] ?? "live",
   })),
 });
+const flowPayload = (status = "ok") => ({ schemaVersion: 1, status, indexedThrough: { block: 1000, hash: "0xabc", time: "2026-07-15T00:00:00.000Z" }, ageSeconds: status === "ok" ? 40 : 900, maxAgeSeconds: 300 });
 const signalPayload = (key: string) => ({ signalKey: key, date: "2026-07-15", payload: { gauges: [] } });
 
 interface StubOverrides {
-  sessions?: unknown; regime?: unknown; wallet?: unknown; vault?: unknown;
+  sessions?: unknown; regime?: unknown; wallet?: unknown; vault?: unknown; flow?: unknown;
   signals?: Partial<Record<(typeof RESEARCH_KEYS)[number], unknown>>;
 }
 function startStubBackend(o: StubOverrides = {}) {
@@ -88,6 +91,7 @@ function startStubBackend(o: StubOverrides = {}) {
       if (p === ROUTES.dashboards.regimeSnapshots) return Response.json(o.regime ?? regimePayload());
       if (p === ROUTES.dashboards.walletBalances) return Response.json(o.wallet ?? walletPayload({ "ZYFAI-SS1": "stale", "GIZA-SS1": "seed" }));
       if (p === ROUTES.dashboards.vaultEconomics) return Response.json(o.vault ?? vaultPayload());
+      if (p === FLOW_HEALTH_PATH) return o.flow === null ? Response.json({ status: "unavailable" }, { status: 503 }) : Response.json(o.flow ?? flowPayload());
       for (const key of RESEARCH_KEYS) {
         if (p === routePath(ROUTES.dashboards.researchSignal, { key })) {
           const sig = o.signals && key in o.signals ? o.signals[key] : signalPayload(key);
@@ -203,6 +207,23 @@ describe("smoke-live-smoke (nightly LIVE gate self-test, issue #128)", () => {
       backend.stop(true);
     }
   }, 20_000);
+
+  // Issue 1614: the deployed deposit queue indexer must be healthy and fresh.
+  for (const [label, flow, expected] of [
+    ["an absent index (503)", null, "flow: GET /api/public/flow/health failed"],
+    ["a stale index watermark", flowPayload("stale"), "flow: index is stale"],
+  ] as const) {
+    test(`${label} → exit non-zero naming flow`, async () => {
+      const backend = startStubBackend({ flow });
+      try {
+        const r = await runSmoke(backend);
+        expect(r.exitCode).not.toBe(0);
+        expect(r.output).toContain(expected);
+      } finally {
+        backend.stop(true);
+      }
+    }, 20_000);
+  }
 });
 
 // Issue #371 — the single most dangerous coupling in the cadence change. This
@@ -287,5 +308,10 @@ describe("pure evaluators (edge cases)", () => {
 
   test("missing staleness object is a failure (cannot certify freshness)", () => {
     expect(evaluateRegime({ latest: {} }).some((f) => f.includes("no staleness"))).toBe(true);
+  });
+
+  test("flow health without an indexed block or age is a failure, a fresh one passes", () => {
+    expect(evaluateFlow({ status: "ok" }).some((f) => f.includes("no indexed block"))).toBe(true);
+    expect(evaluateFlow(flowPayload())).toEqual([]);
   });
 });
