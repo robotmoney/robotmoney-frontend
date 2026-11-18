@@ -250,7 +250,9 @@ describe("parity: original, shared and generalized paths", () => {
   const extras: BacktestExtras = { spx: raw.SPX!, eth: raw.ETH!, tbill3m: raw.TBILL3M! };
 
   test("fixture, two-panel result: complete payload with daily values is byte-identical on all three paths", () => {
-    const run = runRegime(raw);
+    // The pinned pre-refactor bytes were computed under methodology v3 (labels
+    // cut on the rolling percentile), so this run is v3 (issue 1652).
+    const run = runRegime(raw, { version: "v3" });
     const out = threeWay(run.dateAxis, run.result, extras);
     // Pinned bytes of the pre-refactor output, daily values included (main 408cd875, computed from the unmodified main checkout).
     // The frozen reference still produces them; the shared output matches it up to rounding (D78).
@@ -262,6 +264,23 @@ describe("parity: original, shared and generalized paths", () => {
   test("fixture, three-panel (factor) result is byte-identical on all three paths", () => {
     const run = runRegime(raw, { factor: true });
     threeWay(run.dateAxis, run.factor!, extras);
+  });
+
+  // Issue 1652: the composite strategy trades result.regime, which since v5 is
+  // the label cut on the composite itself, never on its rolling percentile.
+  test("the composite strategy reads result.regime cut on the composite (v5)", async () => {
+    const { bucketFn, smoothRegimes } = await import("../src/analyze/compute.ts");
+    const run = runRegime(raw);
+    expect(run.version).toBe("v5");
+    expect(run.result.regime).toEqual(smoothRegimes(run.result.composite, bucketFn));
+    const out = threeWay(run.dateAxis, run.result, extras);
+    // The composite line is the schedule from those labels, nothing else.
+    const cutOnComposite = { ...run.result, regime: smoothRegimes(run.result.composite, bucketFn) } as RegimeComputeResult;
+    expect(JSON.stringify(computeBacktest(run.dateAxis, cutOnComposite, extras).eth!.composite)).toBe(JSON.stringify(out.eth!.composite));
+    // Non-vacuity: labels cut on the percentile give another composite line.
+    const cutOnRank = { ...run.result, regime: smoothRegimes(run.result.compositePercentile, bucketFn) } as RegimeComputeResult;
+    expect(JSON.stringify(computeBacktest(run.dateAxis, cutOnRank, extras).eth!.composite)).not.toBe(JSON.stringify(out.eth!.composite));
+    for (const p of run.result.panels) expect(run.result.panelRegimes[p]).toEqual(smoothRegimes(run.result.panelIndices[p]!, bucketFn));
   });
 
   test("the reference report's backtest section is unchanged: golden bytes", async () => {

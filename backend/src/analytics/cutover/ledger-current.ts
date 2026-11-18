@@ -24,6 +24,10 @@
 //     row, so a day no run with that as-of day published is a gap. Days before
 //     the ledger start are served from that first artifact, as they were served
 //     when the ledger began.
+//   - Regime only, one method (issue 1652): only artifacts whose run carries
+//     the methodology version of the newest carrying artifact publish. The
+//     ledger start is the first artifact of that version, so a new version
+//     (v5) restates the served history once, from its first run.
 //
 // The compatibility tables are NOT held to this rule: their writers still
 // upsert the newest run's rows (last write wins), and the parity sweep
@@ -81,8 +85,9 @@ const READ_CALLERS = ["src/api/routes/admin", "src/api/routes/analytics", "src/a
 
 const REGIME_INDEX_PROBE = {
   statement: `SELECT aos.id::text AS id, aos.run_id::text AS run_id, aos.checksum, r.asof::text AS asof,
-           ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on
+           ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on, m.version_label AS version
       FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
+      JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
      WHERE aos.artifact_kind = 'regime_snapshots'
      ORDER BY aos.run_id, aos.id`,
 };
@@ -93,6 +98,16 @@ const regimeIndex = registerQuery({
   privileges: ["SELECT"],
   site: "src/analytics/cutover/ledger-current:regimeArtifactIndex",
   purpose: "List every regime artifact with its run, as-of day and the UTC day it was written, without reading a payload, to select each day's publication.",
+  callers: READ_CALLERS,
+  probe: REGIME_INDEX_PROBE,
+});
+
+const regimeIndexMethodology = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_methodology_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/cutover/ledger-current:regimeArtifactIndex.methodology",
+  purpose: "Read each regime artifact's methodology version, so the served history is one method end to end (issue 1652).",
   callers: READ_CALLERS,
   probe: REGIME_INDEX_PROBE,
 });
@@ -385,9 +400,10 @@ interface RegimePublications {
 
 async function regimePublications(db: DbHandle): Promise<RegimePublications | null> {
   const cache = cacheFor(db);
-  const index = await on(db, regimeIndex, regimeIndexRuns)<{ id: string; run_id: string; checksum: string; asof: string; written_on: string }>`SELECT aos.id::text AS id, aos.run_id::text AS run_id, aos.checksum, r.asof::text AS asof,
-           ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on
+  const index = await on(db, regimeIndex, regimeIndexRuns, regimeIndexMethodology)<{ id: string; run_id: string; checksum: string; asof: string; written_on: string; version: string }>`SELECT aos.id::text AS id, aos.run_id::text AS run_id, aos.checksum, r.asof::text AS asof,
+           ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on, m.version_label AS version
       FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
+      JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
      WHERE aos.artifact_kind = 'regime_snapshots'
      ORDER BY aos.run_id, aos.id`;
   const shapeKey = (r: { checksum: string; asof: string }) => `${r.checksum}|${r.asof}`;
@@ -406,8 +422,14 @@ async function regimePublications(db: DbHandle): Promise<RegimePublications | nu
       cache.regimeCarries.set(shapeKey(r), value);
     }
   }
-  const carrying: RegimeArtifact[] = index
-    .filter((r) => cache.regimeCarries.get(shapeKey(r)))
+  // One method end to end (issue 1652): only the artifacts of the newest
+  // carrying artifact's methodology version publish. The first of them is the
+  // ledger start for that version, and the days before it are served from it,
+  // so a new version restates the history once, in one method.
+  const carriesRow = index.filter((r) => cache.regimeCarries.get(shapeKey(r)));
+  const method = carriesRow.at(-1)?.version;
+  const carrying: RegimeArtifact[] = carriesRow
+    .filter((r) => r.version === method)
     .map((r) => ({ key: r.asof, date: r.asof, runId: Number(r.run_id), artifactId: Number(r.id), writtenOn: r.written_on, checksum: r.checksum }));
   const first = carrying[0];
   if (!first) return null;

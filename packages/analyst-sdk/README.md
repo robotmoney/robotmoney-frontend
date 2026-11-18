@@ -272,6 +272,7 @@ bun run regime tests/fixtures/raw-indicator-history.json --full    # adds the pe
 bun run regime my-history.csv --start 2018-01-01                   # first day of the date axis
 bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
 bun run regime my-history.csv --factor                             # also report the factor panel
+bun run regime my-history.csv --replay --methodology v3            # replay a run published under v3
 bun test                                                           # package tests, every HTTP client is a thrower
 bunx tsc --noEmit                                                  # typecheck
 ```
@@ -286,6 +287,7 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date of any series the run reads. |
 | `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
 | `--replay` | accept the historical replay contract (`parseInput(text, { replay: true })`). |
+| `--methodology V` / `version` | the regime methodology version to compute, `v3` or `v5`. Default `CURRENT_REGIME_VERSION` (`v5`). `v5` cuts the regime label on the composite and each panel label on its panel index; `v3` cut them on the 3y rolling percentile of that series. A published run replays under the version it was stamped with, e.g. `--replay --methodology v3` for a run published before v5 (issue 1652, decision D84). `compositePercentile` and the panel percentiles are the same under both and are information only. |
 | required data | at least one composite panel (macro, on-chain) needs a registry indicator with a row on or before the as-of day, or `runRegime` throws the named `CoverageError` (the CLI exits 1). It never fetches to fill the gap. Optional inputs give a missing result instead: without `SPX` and `ETH`, `correlations` and `backtest` are `null`; without `TBILL3M`, `backtest` is `null`; without factor indicators, the `factor` figures are `null`. |
 | `--provenance` | print `{pinned, manifest, report}` instead of the bare report; see the quickstart. The report inside is unchanged. |
 | validation | the CLI exits 2 on a usage error: a second input file, an option given twice, an unknown option (such as the former `--panels`), an option missing its value, an invalid `start`/`asof` (real `YYYY-MM-DD` dates, `asof` not before `start` or every input row), a `start` after every input row. It exits 1 on a runtime failure: an unreadable or malformed input, a manifest that does not match its input. `runRegime` throws a `RangeError` for the same option errors. |

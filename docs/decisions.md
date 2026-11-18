@@ -6475,3 +6475,28 @@ its amendments stand.
 **Rejected.** Showing a later run's recomputation of a day with no run (choice 4b): it is a later recomputation and breaks the rule. Making each day's first run its publication (choice 1b): it is often computed before that day's data arrived. Repairing `regime_snapshots` and guarding it with triggers in a migration (PR 1417): fixing how past runs are displayed must not need a migration, and the ledger already holds what is needed.
 
 **Left alone.** The regime methodology. The run artifacts and reports, which were already frozen (#986, #987). The compatibility tables and their writers. History readers already saw is not rewritten: the format 1 backups keep it as it was.
+
+**Amended by [D84](#d84) (issue 1652).** The served regime history is one methodology end to end: only artifacts of the newest artifact's methodology version publish, so a methodology change restates the served history once, from that version's first run.
+
+<a id="d84"></a>
+
+## D84 — Regime methodology `v5`: the label is cut on the composite, not on a second ranking of it (amends D83; issue 1652 decisions, 2026-11-17)
+
+**Status:** Accepted 2026-11-17 (the Decisions of issue 1652, from the 17 Nov sync). Built by issue 1652. `packages/analyst-sdk/src/analyze/compute.ts` (`computeRegime`, `regimeLabels`), `packages/analyst-sdk/src/analyze/regime-versions.ts`, `packages/analyst-sdk/src/run.ts` (`runRegime`'s `version`), `packages/analyst-sdk/src/allocate/signals.ts`, `backend/src/analytics/index.ts` (`runAnalytics`'s `regimeVersion`), `backend/src/analytics/cutover/ledger-current.ts` (one method served). Methodology in [`docs/technical/regime-engine.md` §5](technical/regime-engine.md#5-panel--composite--bucketing--smoothing).
+
+**Decision.**
+
+1. **The cut.** The regime label is `bucketFn` applied to the composite itself (0.33 / 0.67). Each panel label (macro, on-chain, factor) is cut on its own panel index. The composite and the panel indices are not ranked a second time before the cut.
+2. **Smoothing.** The 5-day confirmation and the 2σ fast switch of `smoothRegimes` act on the series the label is cut on: the composite for the regime label, the panel index for a panel label.
+3. **Readers of the label.** The backtest strategies read that label. The model portfolio's `composite` signal reads the composite and a panel signal its panel index. `compositePercentile` and the panel percentiles stay in the SDK output and the dashboards DTO as information only.
+4. **The version tag.** The change is methodology `v5` (`CURRENT_REGIME_VERSION`). `v4` stays reserved for the frozen, versioned publication model (`regime-engine.md` §11.8.3, PD10).
+5. **Replay.** `runRegime` (`version`) and `runAnalytics` (`regimeVersion`) compute a given version. A run stamped `v3` takes the rank-then-cut path and replays exactly as it published.
+6. **One method served.** Every row of the served regime history carries one methodology version (D83 amended above). The first `v5` run restates the history once.
+7. **Cut-offs.** 0.33 / 0.67 stay. A retune is a separate change.
+8. **The lookback (issue 1659).** It stamps the same `v5` tag, so history restates once. No release tag is cut with one of the two merged and the other not.
+
+**Why.** The composite is already a normalized number, a mean of weighted means of percentile ranks. Ranking it again against its own trailing three years stretched a mild reading into an extreme one in a flat period: on 17 Nov the composite was 0.37, its rank the 3rd percentile, and the label risk-off. On 1,624 of 3,108 served days the composite sat between the cut-offs while the label was not neutral. The second ranking was in the original engine's first commit and the vendored reference; the port was faithful, the method changes.
+
+**Rejected.** Keeping the second ranking with a shorter lookback: it still re-normalizes a normalized number. Tagging the change `v4`: that tag already names the publication model.
+
+**Left alone.** The cut-off values. The indicator ranks, weights, panel indices and composite. The vendored reference and the originals, which stay `v3` and are compared under `v3`.

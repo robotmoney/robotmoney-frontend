@@ -24,8 +24,8 @@ const sum = (h: Holdings) => Object.values(h).reduce((a, b) => a + b, 0);
 const BOOK = E1.engine.dollarBook.instruments;
 const flatYields = (y = 4): Yields => Object.fromEntries(BOOK.map((h) => [h, y]));
 const at = (composite: number | null, extra: Partial<EngineSignals> = {}): EngineSignals => ({
-  compositePercentile: composite,
-  panels: { macro: { label: null, percentile: composite }, onchain: { label: null, percentile: composite } },
+  composite,
+  panels: { macro: { label: null, index: composite, percentile: composite }, onchain: { label: null, index: composite, percentile: composite } },
   indicators: {},
   ...extra,
 });

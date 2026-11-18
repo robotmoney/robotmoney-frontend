@@ -2,7 +2,7 @@ export * from "./types.ts";
 export * from "./input/load.ts";
 export * from "./run.ts";
 export { prepareRegimeInputs, type PreparedRegimeInputs } from "./prepare.ts";
-export { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
+export { computeRegime, regimeLabels, type RegimeComputeResult } from "./analyze/compute.ts";
 export { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indicators.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {
@@ -20,7 +20,7 @@ export {
   openArchive, collectRunInputs, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
 } from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
-export { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
+export { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
 export { quantile, median } from "./transform/exact.ts";
 export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";

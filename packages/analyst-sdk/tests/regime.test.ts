@@ -269,3 +269,87 @@ describe("two stored streams for one source id stay separate", async () => {
     expect(JSON.stringify(buildReport(runRegime(inputHistoryFromStorage(original))), null, 2) + "\n").toBe(goldenText);
   });
 });
+
+// Issue 1652 (methodology v5): the regime label is cut on the composite itself
+// and each panel label on its panel index, never on a second rolling rank of
+// it. The 5-day confirmation and the 2σ fast switch act on that same series.
+// A run under v3 keeps the rank-then-cut path, so a v3 run replays exactly.
+describe("v5: labels are cut on the composite and the panel indices (issue 1652)", async () => {
+  const { bucketFn, smoothRegimes, regimeLabels } = await import("../src/analyze/compute.ts");
+  const { rollingPercentileRank } = await import("../src/transform/math.ts");
+  const { ROLLING_WINDOW_DAYS } = await import("../src/analyze/indicators.ts");
+  const { CURRENT_REGIME_VERSION } = await import("../src/analyze/regime-versions.ts");
+  const run = runRegime(toHistory(parseRawHistory(csvText)));
+  const v3 = runRegime(toHistory(parseRawHistory(csvText)), { version: "v3" });
+
+  test("the current version is v5, and the report and run carry the version they computed", () => {
+    expect(CURRENT_REGIME_VERSION).toBe("v5");
+    expect(run.version).toBe("v5");
+    expect(reportObject.version).toBe("v5");
+    expect(v3.version).toBe("v3");
+    expect(buildReport(v3).version).toBe("v3");
+  });
+
+  test("a synthetic composite inside 0.33 to 0.67 whose rolling rank falls below 0.33 is neutral every day", () => {
+    // Three years near 0.6, then a slow slide to 0.36: always inside the cut-offs,
+    // while the rolling rank of the slide sinks to the bottom of its window.
+    const n = ROLLING_WINDOW_DAYS + 400;
+    const composite = Array.from({ length: n }, (_, i) =>
+      (i < ROLLING_WINDOW_DAYS ? 0.6 : 0.6 - (0.24 * (i - ROLLING_WINDOW_DAYS)) / 400) + 0.01 * Math.sin(i / 7),
+    );
+    for (const c of composite) {
+      expect(c).toBeGreaterThanOrEqual(0.33);
+      expect(c).toBeLessThanOrEqual(0.67);
+    }
+    const rank = rollingPercentileRank(composite, ROLLING_WINDOW_DAYS);
+    expect(rank.filter((r) => Number.isFinite(r) && r < 0.33).length).toBeGreaterThan(200);
+    const labels = regimeLabels(composite, rank, CURRENT_REGIME_VERSION);
+    expect(labels.length).toBe(n);
+    for (const l of labels) expect(l).toBe("neutral");
+    // Non-vacuity: the v3 path cuts on the rank and reads risk-off.
+    expect(regimeLabels(composite, rank, "v3")).toContain("risk_off");
+  });
+
+  test("each panel label equals smoothRegimes(panel index, bucketFn) on the fixture", () => {
+    for (const p of run.result.panels) {
+      expect(run.result.panelRegimes[p]).toEqual(smoothRegimes(run.result.panelIndices[p]!, bucketFn));
+    }
+    expect(run.result.macroRegime).toEqual(smoothRegimes(run.result.macroIndex!, bucketFn));
+    // Non-vacuity: the fixture's last macro index 0.662 ranks 0.897; v3 reads risk-on, v5 neutral.
+    const last = run.dateAxis.length - 1;
+    expect(run.result.panelRegimes.macro![last]).toBe("neutral");
+    expect(v3.result.panelRegimes.macro![last]).toBe("risk_on");
+    for (const p of v3.result.panels) {
+      expect(v3.result.panelRegimes[p]).toEqual(smoothRegimes(v3.result.panelPercentiles[p]!, bucketFn));
+    }
+  });
+
+  test("the regime label equals smoothRegimes(composite, bucketFn) on the fixture; v3 keeps the rank cut", () => {
+    expect(run.result.regime).toEqual(smoothRegimes(run.result.composite, bucketFn));
+    expect(v3.result.regime).toEqual(smoothRegimes(v3.result.compositePercentile, bucketFn));
+    // The numbers themselves do not depend on the version.
+    expect(v3.result.composite).toEqual(run.result.composite);
+    expect(v3.result.compositePercentile).toEqual(run.result.compositePercentile);
+    expect(v3.result.panelIndices).toEqual(run.result.panelIndices);
+    expect(v3.result.regime).not.toEqual(run.result.regime);
+  });
+
+  test("the fast switch fires on a 2σ move of the composite, without the 5-day confirmation", () => {
+    // 60 quiet days near 0.5, then one jump to 0.2: risk-off the same day.
+    const quiet = Array.from({ length: 60 }, (_, i) => 0.5 + 0.002 * Math.sin(i));
+    const jump = [...quiet, 0.2, 0.2, 0.2];
+    const labels = regimeLabels(jump, rollingPercentileRank(jump, ROLLING_WINDOW_DAYS), CURRENT_REGIME_VERSION);
+    expect(labels.slice(0, 60).every((l) => l === "neutral")).toBe(true);
+    expect(labels[60]).toBe("risk_off");
+    // A slow drift below 0.33 is not a 2σ move: it waits for 5 days in the new bucket.
+    const drift = [...quiet, ...Array.from({ length: 40 }, (_, i) => 0.5 - 0.005 * (i + 1))];
+    const d = regimeLabels(drift, [], CURRENT_REGIME_VERSION);
+    const firstBelow = drift.findIndex((c) => c < 0.33);
+    expect(d[firstBelow]).toBe("neutral");
+    expect(d[firstBelow + 4]).toBe("risk_off");
+  });
+
+  test("an unknown version is rejected", () => {
+    expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v4" as never })).toThrow(RangeError);
+  });
+});

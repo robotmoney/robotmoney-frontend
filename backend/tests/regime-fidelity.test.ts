@@ -112,7 +112,10 @@ async function replay() {
     const aligner = (ind as any).align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
     transformed[ind.id] = applyTransform(ind.transform, aligner(series, dateAxis));
   }
-  const result = computeRegime(transformed, dateAxis);
+  // The vendored reference and the committed goldens are methodology v3
+  // (labels cut on the rolling percentile); issue 1652 keeps that path behind
+  // the version, so this replay pins v3.
+  const result = computeRegime(transformed, dateAxis, undefined, undefined, undefined, "v3");
   return { result, dateAxis, transformed, raw };
 }
 
@@ -359,7 +362,8 @@ describe("issue 1421: backend report bytes equal the original captured bytes", (
           return directAnalyticsPersistence.submitTerminalRunPackage(input);
         },
       };
-      const results = await runAnalytics(inputs.asof, "regime", variantSource(inputs), persistence, noopTelemetrySink);
+      // The originals were captured under methodology v3 (issue 1652): the run replays v3.
+      const results = await runAnalytics(inputs.asof, "regime", variantSource(inputs), persistence, noopTelemetrySink, undefined, "v3");
       const runId = (results as any).__runLedger.runId as string;
 
       const [artifact] = await sql<{ payload_bytes: Uint8Array }[]>`

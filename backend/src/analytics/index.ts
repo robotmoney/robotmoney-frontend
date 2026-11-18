@@ -40,7 +40,7 @@ import {
   stripDailyFromSnapshot,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,
@@ -164,6 +164,12 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // attached to the returned object as a non-enumerable `__telemetry` property
 // (invisible to `Object.keys`/JSON shape assertions) so callers that care —
 // the worker handlers, which fold it into job_runs.output — can still see it.
+//
+// METHODOLOGY (issue 1652): `regimeVersion` is the regime methodology the run
+// computes and stamps (methodology label, every row's `version`). Production
+// never passes it, so a run is CURRENT_REGIME_VERSION (v5). A replay of a run
+// stamped with an earlier version passes that version (v3) and computes it
+// exactly as published.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
@@ -171,6 +177,7 @@ export async function runAnalytics(
   persistence: AnalyticsPersistence = analyticsApiClient(),
   telemetry: TelemetrySink = telemetryHttpSink(),
   jobId?: number,
+  regimeVersion: RegimeVersion = CURRENT_REGIME_VERSION,
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   // `toolId` is one tool id, the RESEARCH_TOOL_GROUP alias, or omitted (whole
@@ -214,8 +221,8 @@ export async function runAnalytics(
   const buildIdentity = resolveBuildIdentity();
   const methodology: MethodologyIdentity = {
     toolId: runToolId,
-    versionLabel: CURRENT_REGIME_VERSION,
-    config: { toolId: runToolId, regimeVersion: CURRENT_REGIME_VERSION },
+    versionLabel: regimeVersion,
+    config: { toolId: runToolId, regimeVersion },
   };
   const { runId, methodologyVersionId } = await persistence.beginRun({
     runKey: randomUUID(),
@@ -431,8 +438,8 @@ export async function runAnalytics(
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
-    const r2 = computeRegime(transformed, dateAxis, PANELS, ages); // [macro, onchain]
-    const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages); // +factor
+    const r2 = computeRegime(transformed, dateAxis, PANELS, ages, undefined, regimeVersion); // [macro, onchain]
+    const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, regimeVersion); // +factor
 
     // Predictive correlations + regime backtest — computed from the SAME 2-panel
     // composite the original main snapshot uses, over the chart-overlay extras
@@ -462,7 +469,7 @@ export async function runAnalytics(
     });
 
     t0 = new Date();
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel);
+    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel, regimeVersion);
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
     // ISSUE #978 AC2: the current projection is NOT published here. The rows
@@ -805,6 +812,7 @@ function buildSnapshotRows(
   backtest: BacktestPayload | null = null,
   correlations: CorrelationsPayload | null = null,
   source: string | null = null,
+  version: RegimeVersion = CURRENT_REGIME_VERSION,
 ): RegimeSnapshotRow[] {
   const rows: RegimeSnapshotRow[] = [];
   const lastIdx = dateAxis.length - 1;
@@ -844,7 +852,7 @@ function buildSnapshotRows(
       onchainPercentile: nn(r2.onchainPercentile?.[i]),
       factorPercentile: nn(r3.factorPercentile?.[i]),
       panelWeights,
-      version: CURRENT_REGIME_VERSION,
+      version,
       source,
       percentiles,
       indicators,

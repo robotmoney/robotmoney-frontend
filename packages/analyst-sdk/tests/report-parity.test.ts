@@ -54,13 +54,13 @@ for (const v of VARIANTS) {
   const csvPath = join(tmp, `${v}.csv`);
   writeFileSync(csvPath, csv);
   const history = toHistory(parseRawHistory(csv));
-  const run = runRegime(history);
+  const run = runRegime(history, { version: "v3" });
   computed[v] = {
     csvPath,
     run,
     history,
     defaultEnvelope: JSON.stringify(buildReport(run), null, 2) + "\n",
-    fullFactorEnvelope: JSON.stringify(buildReport(runRegime(history, { factor: true }), { full: true }), null, 2) + "\n",
+    fullFactorEnvelope: JSON.stringify(buildReport(runRegime(history, { factor: true, version: "v3" }), { full: true }), null, 2) + "\n",
   };
 }
 
@@ -107,12 +107,12 @@ for (const v of VARIANTS) {
 
     test("default report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
       expectOriginal(c.defaultEnvelope, originalFile.sdkReport(v), v);
-      expectBytes(cli([c.csvPath]), c.defaultEnvelope, `${v} CLI`);
+      expectBytes(cli([c.csvPath, "--methodology", "v3"]), c.defaultEnvelope, `${v} CLI`);
     });
 
     test("--full --factor report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
       expectOriginal(c.fullFactorEnvelope, originalFile.sdkReportFull(v), v);
-      expectBytes(cli([c.csvPath, "--full", "--factor"]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
+      expectBytes(cli([c.csvPath, "--full", "--factor", "--methodology", "v3"]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
     });
   });
 }
@@ -133,7 +133,8 @@ describe("the variants exercise the edge cases they are named for", () => {
     expect(new Set(sharpes)).toEqual(new Set([0]));
   });
 
-  test("production: the default envelope is the committed CLI golden", async () => {
-    expect(computed.production.defaultEnvelope).toBe(await Bun.file(join(import.meta.dir, "golden/regime-report.json")).text());
+  test("production: under the current version, the default envelope is the committed CLI golden", async () => {
+    const current = JSON.stringify(buildReport(runRegime(computed.production.history)), null, 2) + "\n";
+    expect(current).toBe(await Bun.file(join(import.meta.dir, "golden/regime-report.json")).text());
   });
 });

@@ -10,5 +10,20 @@
 // recomputed history is kept in its frozen artifact (analytics_output_snapshots)
 // and is not what readers are served: each day shows the figure published that
 // day, frozen once the day is over (decision D83, issue 1182). See
-// docs/technical/regime-engine.md section 8.1 and decision D59.
-export const CURRENT_REGIME_VERSION = "v3";
+// docs/technical/regime-engine.md section 8.1 and decision D59. The labels are
+// cut on a second 3y rolling rank of the composite and of each panel index.
+//
+// v4: reserved for the frozen, versioned publication model
+// (docs/technical/regime-engine.md section 11.8.3, PD10). Never stamped here.
+//
+// v5 (issue 1652, decision D86): v3 with the regime label cut on the composite
+// itself and each panel label on its panel index. The rolling ranks of the
+// composite and the panel indices stay in the output as information only.
+export const REGIME_VERSIONS = ["v3", "v5"] as const;
+export type RegimeVersion = (typeof REGIME_VERSIONS)[number];
+export const CURRENT_REGIME_VERSION: RegimeVersion = "v5";
+
+/** True for a methodology version this engine can compute (and so replay). */
+export function isRegimeVersion(v: unknown): v is RegimeVersion {
+  return typeof v === "string" && (REGIME_VERSIONS as readonly string[]).includes(v);
+}

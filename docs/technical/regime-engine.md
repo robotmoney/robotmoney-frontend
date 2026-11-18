@@ -87,6 +87,10 @@ a gap.
 
 ## 4. Percentile, sign alignment, and weights
 
+The rolling percentile rank below is applied once, to each indicator. The panel
+indices and the composite built from the ranks are not ranked again before the
+labels are cut (§5, methodology `v5`).
+
 1. **Rolling percentile rank** (`rollingPercentileRank`,
    `packages/analyst-sdk/src/transform/math.ts:216`) — for each indicator, each
    day's transformed value is ranked against the trailing
@@ -126,19 +130,32 @@ a gap.
   with `["macro", "onchain", "factor"]` for the extended 3-panel view
   (`analytics/index.ts` calls `computeRegime` twice, once per panel set — see
   `r2`/`r3` in `runAnalytics`).
-- **Bucketing** — the composite is itself percentile-ranked against its own
-  trailing 1095-day window (same `rollingPercentileRank`), then bucketed by
-  `bucketFn` (`analyze/compute.ts:266`): `< 0.33 → risk_off`,
-  `> 0.67 → risk_on` (strict, exclusive upper), else `neutral`. `NaN → null`.
+- **Bucketing** — the composite itself is bucketed by `bucketFn`
+  (`analyze/compute.ts`): `< 0.33 → risk_off`, `> 0.67 → risk_on` (strict,
+  exclusive upper), else `neutral`. `NaN → null`. The composite is already a
+  normalized 0..1 number (a mean of weighted means of percentile ranks), so it
+  is not ranked a second time before the cut (methodology `v5`,
+  [D84](../decisions.md#d84), issue 1652). Each panel label (macro, on-chain,
+  factor) is cut the same way on its own panel index. The composite's trailing
+  1095-day `rollingPercentileRank` (`compositePercentile`) and each panel
+  index's (`macroPercentile`, `onchainPercentile`, `factorPercentile`) are
+  still computed and served as information only: no label, backtest strategy
+  or model-portfolio signal reads them. The `composite` signal kind reads the
+  composite and a panel signal kind its panel index
+  (`allocate/signals.ts`). Under the earlier `v3` methodology the label was cut
+  on that rolling percentile instead; `computeRegime` and `runRegime` keep that
+  path behind the version (`regimeLabels`), so a run stamped `v3` replays
+  exactly as it published (§8.1).
   **This is the production classifier function** — see §7 for why
   `contract/src/regime.js`'s `classifyRegime` is a *different, secondary*
   function that exists for other surfaces to reuse the same 0.33/0.67
   thresholds, not the thing that labels `/regime`.
-- **Smoothing** — `smoothRegimes` (`analyze/compute.ts:172`) turns the raw
+- **Smoothing** — `smoothRegimes` (`analyze/compute.ts`) turns the raw
   daily bucket into the published label via **5-day confirmation** (a new
   bucket must hold for `CONFIRMATION_DAYS = 5` consecutive days before the
   published label moves) **OR 2σ fast-track** (`FAST_TRACK_SIGMA = 2.0`): if
-  the day-over-day change in the composite's percentile exceeds 2 standard
+  the day-over-day change in the series the label is cut on (the composite,
+  or the panel index for a panel label) exceeds 2 standard
   deviations of the trailing `SIGMA_LOOKBACK_DAYS = 252` daily deltas (needs
   ≥30 deltas), and the move is *directionally consistent* with the new bucket
   (moving down into `risk_off`, up into `risk_on`, or landing on `neutral`),
@@ -292,7 +309,7 @@ flowchart TD
     K --> L["weights: inverseCorrelationWeights +\ncapWeights (0.25 cap, 21d refresh)\ntransform/math.ts"]
     L --> N["panel index: weightedMeanOnDay\nanalyze/compute.ts::weightedMeanOnDay"]
     N --> O["composite: mean of panel indices\nanalyze/compute.ts::computeRegime"]
-    O --> P["bucket: rollingPercentileRank(composite)\n-> bucketFn (0.33/0.67)\nanalyze/compute.ts::bucketFn"]
+    O --> P["bucket: bucketFn(composite) (0.33/0.67, v5)\nanalyze/compute.ts::regimeLabels"]
     P --> Q["smooth: smoothRegimes\n(5d confirm OR 2σ fast-track)\nanalyze/compute.ts::smoothRegimes"]
     Q --> R["store: saveRegimeSnapshots\nstore/regime-store.ts"]
     R --> S["report: fetchRegimeSnapshots\nreport/projections.ts"]
@@ -405,6 +422,23 @@ from that first artifact, as they were served when the ledger began; they are a
 reconstruction, not the original publications. The same rule holds for
 `research_signals`. Until issue 1182 both read paths served the newest run's
 recomputation for every day.
+
+**One method end to end ([D84](../decisions.md#d84), issue 1652).** The served regime
+history carries one methodology version. Only the artifacts whose run carries the
+methodology version of the newest regime artifact publish, so the ledger start is the
+as-of day of that version's first artifact, and the days before it are served from
+that artifact. A new version (`v5`) therefore restates the served history once, from
+its first run, and the chart has one scale. A version change is the one event that
+moves a past day's served figure.
+
+**Replay under the run's own version.** A run is stamped with its methodology version
+(the run ledger's methodology label and every row's `version`). `runRegime` takes it
+as `version` (`bun run regime --methodology v3`), and `runAnalytics` as
+`regimeVersion`; both default to `CURRENT_REGIME_VERSION`. A run stamped `v3` replays
+through the rank-then-cut path and gives the label, composite and percentiles it
+published (`backend/tests/regime-replay-published.test.ts`). The composite, the panel
+indices and every percentile do not depend on the version; only the labels and the
+backtest that trades them do.
 
 **The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
@@ -1284,6 +1318,12 @@ problem. The entry should state the model of §11.8.1, tag the methodology `v4`,
 name the `regime-versions.ts` comment it displaces — which, as with PD3, **must
 be edited in the same diff**, or the repo ships a `v4` whose own version file
 still says there is no frozen lockout.
+
+**`v4` stays reserved for this model.** The label-cut change of issue 1652 (the
+regime label cut on the composite, not on a second rolling rank of it) is a
+methodology change of its own. It is tagged **`v5`** ([D84](../decisions.md#d84)) so
+that `v4` keeps meaning the frozen, versioned publication model of this section and
+PD10.
 
 #### 11.8.4 Noop-as-audit is a first-class verification instrument
 

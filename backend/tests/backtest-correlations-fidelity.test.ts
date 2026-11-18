@@ -109,7 +109,8 @@ async function replay() {
     const aligner = (ind as any).align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
     transformed[ind.id] = applyTransform(ind.transform, aligner(series, dateAxis));
   }
-  const result = computeRegime(transformed, dateAxis);
+  // The original JS and the committed snapshot are methodology v3 (issue 1652).
+  const result = computeRegime(transformed, dateAxis, undefined, undefined, undefined, "v3");
   return { result, dateAxis };
 }
 
@@ -280,7 +281,8 @@ describe("issue 1421: backend backtest and correlations against the original byt
     test(`${v}: shared artifact and daily portfolio values equal the originals`, () => {
       const inputs = variantInputs(v);
       const { dateAxis, transformed, ages } = prepareRegimeInputs(inputs.registry, { start: BACKFILL_START, asof: inputs.asof });
-      const r2 = computeRegime(transformed, dateAxis, PANELS, ages);
+      // The originals were captured under methodology v3 (issue 1652).
+      const r2 = computeRegime(transformed, dateAxis, PANELS, ages, undefined, "v3");
       const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };
       const full = computeBacktest(dateAxis, r2, extras);
       const shared = sharedAnalysisBytes({ correlations: computeCorrelations(dateAxis, r2, extras), backtest: stripDailyFromSnapshot(full) });

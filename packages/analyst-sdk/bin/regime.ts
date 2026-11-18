@@ -1,5 +1,7 @@
-// `bun run regime <input.csv|input.json> [--full] [--start D] [--asof D] [--factor] [--replay] [--provenance]`
-// Prints the regime report as JSON on stdout. Reads one local file (and, with
+// `bun run regime <input.csv|input.json> [--full] [--start D] [--asof D] [--factor] [--replay] [--provenance] [--methodology V]`
+// Prints the regime report as JSON on stdout. --methodology picks the regime
+// methodology version (default the current one): a published run replays under
+// the version it was stamped with, e.g. --methodology v3 (issue 1652). Reads one local file (and, with
 // --provenance, its manifest sidecar); no network. A relative path resolves
 // from the folder the command was run in, also under `bun run`.
 //
@@ -11,10 +13,11 @@ import { basename } from "node:path";
 import { parseInput } from "../src/input/load.ts";
 import { manifestPathFor, provenanceEnvelope, validateManifest, type InputManifest } from "../src/input/manifest.ts";
 import { buildReport, runRegime } from "../src/run.ts";
+import type { RegimeVersion } from "../src/analyze/regime-versions.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 
 const USAGE =
-  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance]";
+  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v5]";
 
 function fail(e: unknown, code: number): never {
   console.error(`${(e as Error).name}: ${(e as Error).message}`);
@@ -26,7 +29,7 @@ let args;
 try {
   args = parseArgs(process.argv.slice(2), {
     flags: ["--full", "--factor", "--replay", "--provenance"],
-    values: ["--start", "--asof"],
+    values: ["--start", "--asof", "--methodology"],
     maxPositionals: 1,
   });
   if (args.positionals.length === 0) throw new UsageError("an input file is required");
@@ -50,7 +53,12 @@ try {
     }
   }
   const report = buildReport(
-    runRegime(input.history, { start: args.values.get("--start"), asof: args.values.get("--asof"), factor: args.flags.has("--factor") }),
+    runRegime(input.history, {
+      start: args.values.get("--start"),
+      asof: args.values.get("--asof"),
+      factor: args.flags.has("--factor"),
+      version: args.values.get("--methodology") as RegimeVersion | undefined,
+    }),
     { full: args.flags.has("--full") },
   );
   console.log(JSON.stringify(args.flags.has("--provenance") ? provenanceEnvelope(report, manifest) : report, null, 2));

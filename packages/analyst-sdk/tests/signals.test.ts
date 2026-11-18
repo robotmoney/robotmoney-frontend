@@ -45,22 +45,34 @@ describe("signalPercentile on a fixture date", () => {
     expect(signalPercentile("indicator:VIX", label)).toBe(label.indicators.VIX!);
   });
 
-  test("composite and the panels read the label's percentiles", () => {
-    expect(signalPercentile("composite", label)).toBe(label.compositePercentile!);
-    expect(signalPercentile("macro", label)).toBe(label.panels.macro!.percentile!);
-    expect(signalPercentile("onchain", label)).toBe(label.panels.onchain!.percentile!);
-    for (const v of [label.compositePercentile, label.panels.macro!.percentile, label.panels.onchain!.percentile]) {
+  // Issue 1652: the composite kind reads the composite and the panel kind the
+  // panel index, the numbers the labels are cut on, never their percentiles.
+  test("composite returns the composite and each panel returns its panel index, not their percentiles", () => {
+    const run = runRegime(raw8y, { asof: DECISION.asof });
+    const i = run.dateAxis.lastIndexOf(DECISION.asof);
+    expect(label.composite).toBe(run.result.composite[i]!);
+    expect(signalPercentile("composite", label)).toBe(label.composite!);
+    for (const p of ["macro", "onchain"]) {
+      expect(label.panels[p]!.index).toBe(run.result.panelIndices[p]![i]!);
+      expect(signalPercentile(p, label)).toBe(label.panels[p]!.index!);
+    }
+    for (const v of [label.composite, label.panels.macro!.index, label.panels.onchain!.index]) {
       expect(v).not.toBeNull();
       expect(v!).toBeGreaterThanOrEqual(0);
       expect(v!).toBeLessThanOrEqual(1);
     }
-  });
-
-  test("mean(macro,onchain) is their mean; inverse(composite) is 1 - composite", () => {
-    const m = (label.panels.macro!.percentile! + label.panels.onchain!.percentile!) / 2;
-    expect(signalPercentile("mean(macro,onchain)", label)).toBeCloseTo(m, 15);
-    expect(signalPercentile("mean( macro , onchain )", label)).toBeCloseTo(m, 15);
-    expect(signalPercentile("inverse(composite)", label)).toBeCloseTo(1 - label.compositePercentile!, 15);
+    // Non-vacuity: the percentiles differ from the numbers the signals read.
+    expect(label.compositePercentile).not.toBe(label.composite);
+    expect(label.panels.macro!.percentile).not.toBe(label.panels.macro!.index);
+    // A label with only the percentiles changed reads the same signals.
+    const moved: SignalInputs = {
+      ...label,
+      compositePercentile: 0.01,
+      panels: { macro: { ...label.panels.macro!, percentile: 0.01 }, onchain: { ...label.panels.onchain!, percentile: 0.99 } },
+    } as SignalInputs;
+    expect(signalPercentile("composite", moved)).toBe(label.composite!);
+    expect(signalPercentile("macro", moved)).toBe(label.panels.macro!.index!);
+    expect(signalPercentile("onchain", moved)).toBe(label.panels.onchain!.index!);
   });
 
   test("nested calls: the prototype's real_rates_dollar is a mean of three indicators", () => {
@@ -69,7 +81,7 @@ describe("signalPercentile on a fixture date", () => {
     expect(signalPercentile(name, label)).toBeCloseTo(xs.reduce((a, b) => a + b, 0) / 3, 15);
     expect(signalPercentile(`inverse(${name})`, label)).toBeCloseTo(1 - xs.reduce((a, b) => a + b, 0) / 3, 15);
     expect(signalPercentile("mean(inverse(macro),onchain)", label)).toBeCloseTo(
-      (1 - label.panels.macro!.percentile! + label.panels.onchain!.percentile!) / 2,
+      (1 - label.panels.macro!.index! + label.panels.onchain!.index!) / 2,
       15,
     );
   });
@@ -84,8 +96,8 @@ describe("signalPercentile on a fixture date", () => {
 
 describe("missing data", () => {
   const empty: SignalInputs = {
-    compositePercentile: null,
-    panels: { macro: { label: null, percentile: null }, onchain: { label: null, percentile: 0.8 } },
+    composite: null,
+    panels: { macro: { label: null, index: null, percentile: null }, onchain: { label: null, index: 0.8, percentile: 0.8 } },
     indicators: { ...label.indicators, VIX: null },
   };
 
@@ -208,7 +220,7 @@ describe("research signals through research-signals.ts", () => {
     expect(signalPercentile("research:late_cycle", inputs)).toBe(r.late_cycle);
     expect(signalPercentile("inverse(research:late_cycle)", inputs)).toBeCloseTo(1 - r.late_cycle!, 15);
     expect(signalPercentile("mean(composite,research:channel_divergence)", inputs)).toBeCloseTo(
-      (label.compositePercentile! + r.channel_divergence!) / 2,
+      (label.composite! + r.channel_divergence!) / 2,
       15,
     );
   });

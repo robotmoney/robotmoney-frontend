@@ -16,6 +16,7 @@ import { canonicalStringify } from "../../src/analytics/run-ledger.ts";
 import { parseInput } from "../../../packages/analyst-sdk/src/input/load.ts";
 import { runRegime } from "../../../packages/analyst-sdk/src/run.ts";
 import type { RawIndicatorHistory } from "../../src/analytics/types.ts";
+import type { RegimeVersion } from "../../src/analytics/analyze/regime-versions.ts";
 import { numericDiff } from "../../../packages/analyst-sdk/tests/support/numeric-diff.ts";
 
 // The as-of row of a published regime_snapshots artifact (backend
@@ -87,14 +88,18 @@ export function publishedAsofRow(payloadText: string, asof: string): PublishedAs
   return rows.find((r) => r.date === asof) ?? null;
 }
 
-/** Replay a run's input file (replay contract text) as of `asof` and compare with its published as-of row. */
-export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null): ReplayOutcome {
-  return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published);
+/**
+ * Replay a run's input file (replay contract text) as of `asof` and compare
+ * with its published as-of row. `version` is the methodology version the run
+ * was stamped with (issue 1652); a run replays under its own version.
+ */
+export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion): ReplayOutcome {
+  return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published, version);
 }
 
 /** The same replay from an input history already in memory (the backend's vintage read through the D74 mapping). */
-export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null): ReplayOutcome {
-  const run = runRegime(history, { asof, factor: true });
+export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion): ReplayOutcome {
+  const run = runRegime(history, { asof, factor: true, ...(version ? { version } : {}) });
   const last = run.dateAxis.length - 1;
   if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
   const r2 = run.result;

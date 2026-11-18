@@ -37,6 +37,7 @@ import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
 import { withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../src/analytics/analyze/regime-versions.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
@@ -64,6 +65,8 @@ async function publish(asof: string, obs: Observations): Promise<void> {
 interface PublishedRun {
   id: string;
   asof: string;
+  // The run's methodology version label (issue 1652): it replays under it.
+  version: RegimeVersion;
   vintage: FrozenVintage;
   rows: (PublishedAsofRow & { date: string })[];
   asofRow: PublishedAsofRow;
@@ -87,9 +90,10 @@ describe("regime replay of every published run from 2026-09-21", () => {
     await saveRawIndicatorHistory({ VIX: [{ date: MISMATCH_ASOF, value: S }] }, sql, "seed");
     await publish(MISMATCH_ASOF, { ...base, registry: { ...base.registry, VIX: [...base.registry.VIX!, { date: MISMATCH_ASOF, value: F }] } });
 
-    const found = await sql<{ id: string; asof: string; vintage_id: string; payload_bytes: Uint8Array }[]>`
-      SELECT r.id::text AS id, r.asof::text AS asof, v.id::text AS vintage_id, o.payload_bytes
+    const found = await sql<{ id: string; asof: string; vintage_id: string; payload_bytes: Uint8Array; version_label: string }[]>`
+      SELECT r.id::text AS id, r.asof::text AS asof, v.id::text AS vintage_id, o.payload_bytes, m.version_label
       FROM analytics_ledger_runs r
+      JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
       JOIN analytics_data_vintages v ON v.run_id = r.id AND v.tool_id = r.tool_id
       JOIN analytics_output_snapshots o ON o.run_id = r.id AND o.artifact_kind = 'regime_snapshots'
       WHERE r.tool_id = 'regime' AND r.asof >= ${LEDGER_START}::date
@@ -99,7 +103,8 @@ describe("regime replay of every published run from 2026-09-21", () => {
       const rows = JSON.parse(new TextDecoder().decode(r.payload_bytes)) as PublishedRun["rows"];
       const asofRow = rows.find((row) => row.date === r.asof);
       if (!asofRow) throw new Error(`run ${r.id} published no row for its as-of day ${r.asof}`);
-      runs.push({ id: r.id, asof: r.asof, vintage: (await loadFrozenVintage(r.vintage_id))!, rows, asofRow });
+      if (!isRegimeVersion(r.version_label)) throw new Error(`run ${r.id} carries methodology ${r.version_label}, which this engine cannot replay`);
+      runs.push({ id: r.id, asof: r.asof, version: r.version_label, vintage: (await loadFrozenVintage(r.vintage_id))!, rows, asofRow });
     }
   }, 600_000);
 
@@ -107,17 +112,19 @@ describe("regime replay of every published run from 2026-09-21", () => {
 
   test("every field of each run's as-of row, and the label and composite of every published row, replay exactly from its vintage", () => {
     expect(runs.map((r) => r.asof)).toEqual(["2026-09-21", "2026-09-22", "2026-09-23", MISMATCH_ASOF]);
+    // A run made now is stamped with the current version (issue 1652).
+    for (const run of runs) expect(run.version).toBe(CURRENT_REGIME_VERSION);
     const poison = poisonNetwork("during replay");
     try {
       for (const run of runs) {
         const input = inputOf(run);
         expect(Object.keys(input).length).toBe(INDICATORS.length + 3);
         expect(run.asofRow.regime).not.toBeNull();
-        const outcome = replayPublishedHistory(input, run.asof, run.asofRow);
+        const outcome = replayPublishedHistory(input, run.asof, run.asofRow, run.version);
         expect({ run: run.id, asof: run.asof, differing: outcome.differing }).toEqual({ run: run.id, asof: run.asof, differing: [] });
         expect(Object.keys(outcome.fields)).toEqual([...COMPARED_FIELDS]);
 
-        const replay = runRegime(input, { asof: run.asof });
+        const replay = runRegime(input, { asof: run.asof, version: run.version });
         const at = new Map(replay.dateAxis.map((d, i) => [d, i]));
         expect(run.rows.length).toBeGreaterThan(1000);
         for (const row of run.rows) {
@@ -148,17 +155,17 @@ describe("regime replay of every published run from 2026-09-21", () => {
     const pinned = run.vintage.members.find((m) => m.sourceKey === "raw_indicator_history:VIX" && m.marketDate === MISMATCH_ASOF)!;
     expect(pinned.value).toBe(F);
     const input = inputOf(run);
-    expect(replayPublishedHistory(input, run.asof, run.asofRow).differing).toEqual([]);
+    expect(replayPublishedHistory(input, run.asof, run.asofRow, run.version).differing).toEqual([]);
     // Non-vacuity: computed from the raw floor's S, the as-of row differs, so
     // a run that computed from raw would fail the assertion above.
     const fromRaw = { ...input, VIX: input.VIX!.map((p) => (p.date === MISMATCH_ASOF ? { date: p.date, value: S } : p)) };
-    expect(replayPublishedHistory(fromRaw, run.asof, run.asofRow).differing.length).toBeGreaterThan(0);
+    expect(replayPublishedHistory(fromRaw, run.asof, run.asofRow, run.version).differing.length).toBeGreaterThan(0);
   }, 120_000);
 
   test("negative control: a deliberately altered macroIndex in a published payload fails the comparison", () => {
     const run = runs[0]!;
     const altered = { ...run.asofRow, macroIndex: run.asofRow.macroIndex! + 0.001 };
-    const outcome = replayPublishedHistory(inputOf(run), run.asof, altered);
+    const outcome = replayPublishedHistory(inputOf(run), run.asof, altered, run.version);
     expect(outcome.differing).toEqual(["macroIndex"]);
     expect(() => expect(outcome.differing).toEqual([])).toThrow();
   }, 120_000);
@@ -180,6 +187,10 @@ describe("regime replay of every published run from 2026-09-21", () => {
 // rounding as recorded, the recorded first difference reproduces up to
 // rounding, and every other field equals the published one up to rounding.
 const SAMPLE_DIR = join(import.meta.dir, "fixtures/published-replay");
+// Every sampled run was published under methodology v3 (backup 2026-10-19,
+// before issue 1652 made v5 current), so each replays under v3: the label cut
+// on the rolling percentile, exactly as it published.
+const SAMPLE_VERSION: RegimeVersion = "v3";
 
 interface SampleRun {
   index: number;
@@ -228,7 +239,7 @@ describe("regime replay of a committed sample of published production runs (issu
       const poison = poisonNetwork("during replay");
       let outcome;
       try {
-        outcome = replayPublishedRun(text, run.asof, run.publishedAsofRow);
+        outcome = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION);
       } finally {
         poison.restore();
       }
@@ -259,6 +270,20 @@ describe("regime replay of a committed sample of published production runs (issu
         expect(firstMaterial).toBe(recorded.field);
         expect(numericDiff(recorded.replay, replayedField(outcome, recorded.field)).differences).toEqual([]);
         expect(publishedField(run.publishedAsofRow, recorded.field)).toBe(recorded.published);
+      }
+      // Issue 1652: under the current version (v5) the label is cut on the
+      // composite, so a v3 run whose composite sits inside the cut-offs while
+      // its percentile does not would replay to another label. The fields the
+      // version does not change (composite, percentiles, indices) are the same
+      // under both.
+      const current = replayPublishedRun(text, run.asof, run.publishedAsofRow);
+      for (const f of ["composite", "compositePercentile", "macroIndex", "onchainIndex", "macroPercentile", "onchainPercentile", "percentiles"]) {
+        expect({ run: run.runKey, field: f, value: current.fields[f] }).toEqual({ run: run.runKey, field: f, value: outcome.fields[f] });
+      }
+      if (run.runKey === "526a3988-0ebf-40b7-9c58-c588998303f8") {
+        // Published risk_off at composite 0.477 (percentile below 0.33): v5 reads neutral.
+        expect(outcome.replayLabel).toBe("risk_off");
+        expect(current.replayLabel).toBe("neutral");
       }
       if (run.replayDiffering.length > 0) console.log(`run ${run.runKey} as of ${run.asof}: label matches; recorded pre-1421 differences in ${run.replayDiffering.join(", ")}`);
     }, 120_000);

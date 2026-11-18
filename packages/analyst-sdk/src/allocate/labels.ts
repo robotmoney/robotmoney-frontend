@@ -26,6 +26,9 @@ export type DecisionCadence = "weekly" | "daily";
 
 export interface PanelLabel {
   label: RegimeState | null;
+  /** The panel index the label is cut on (since v5, issue 1652), 0..1 with high meaning risk-on. */
+  index: number | null;
+  /** The panel index's 3y rolling percentile. Information only: no label or signal reads it. */
   percentile: number | null;
 }
 
@@ -38,8 +41,11 @@ export interface AsofLabel {
   /** Panel labels combined: any risk_off wins (conservative), or the majority (aggressive). */
   conservative: RegimeState | null;
   aggressive: RegimeState | null;
+  /** The composite the label is cut on (since v5, issue 1652), 0..1 with high meaning risk-on. */
+  composite: number | null;
+  /** The composite's 3y rolling percentile. Information only: no label or signal reads it. */
   compositePercentile: number | null;
-  /** Per panel (macro, onchain): its label and percentile. */
+  /** Per panel (macro, onchain): its label, index and percentile. */
   panels: Record<string, PanelLabel>;
   /**
    * Per registry indicator id (every id in INDICATORS): the sign-aligned
@@ -112,7 +118,11 @@ export function labelAt(run: RunResult, date: string, asof: string): AsofLabel {
   const i = at >= 0 ? at : run.dateAxis.length - 1;
   const panels: Record<string, PanelLabel> = {};
   for (const p of r.panels) {
-    panels[p] = { label: state(r.panelRegimes[p]?.[i]), percentile: finite(r.panelPercentiles[p]?.[i]) };
+    panels[p] = {
+      label: state(r.panelRegimes[p]?.[i]),
+      index: finite(r.panelIndices[p]?.[i]),
+      percentile: finite(r.panelPercentiles[p]?.[i]),
+    };
   }
   const panelLabels = r.panels.map((p) => panels[p]!.label);
   const indicators: Record<string, number | null> = {};
@@ -123,6 +133,7 @@ export function labelAt(run: RunResult, date: string, asof: string): AsofLabel {
     label: state(r.regime[i]),
     conservative: state(combineConservativeN(panelLabels)),
     aggressive: state(combineAggressiveN(panelLabels)),
+    composite: finite(r.composite[i]),
     compositePercentile: finite(r.compositePercentile[i]),
     panels,
     indicators,
