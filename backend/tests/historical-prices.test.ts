@@ -34,6 +34,7 @@ import {
   _resetHistoricalPriceCachesForTests,
 } from "../src/chain/historical-prices.ts";
 import { resolveTrackedAssets } from "../src/config.ts";
+import { _resetGeckoEndpointForTests } from "../src/chain/gecko-endpoint.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -440,4 +441,36 @@ test("an EMPTY page IS the end of the history — the days below it are settled,
   const below = await loadHistoricalPrices(bnkr, dayAgo(150), dayAgo(150));
   expect(below.get("BNKR")!.has(dayAgo(150))).toBe(false); // the pool did not exist yet
   expect(ohlcvCalls).toBe(settled); // and that is a settled fact, not a re-ask
+});
+
+// Issue 1664: the paid account's monthly credit spent (HTTP 429, error_code 10006) is a Pro refusal, not throttling,
+// so the OHLCV read is retried on the free host with no key instead of backing off against the Pro host.
+test("a Pro quota 429 on the OHLCV path is retried on the free host without the key", async () => {
+  _resetGeckoEndpointForTests();
+  const prevKey = process.env.COINGECKO_API_KEY;
+  process.env.COINGECKO_API_KEY = "hist-test-key-never-logged";
+  const sent: { url: string; key: string | null }[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    sent.push({ url: u, key: new Headers(init?.headers).get("x-cg-pro-api-key") });
+    if (u.startsWith("https://pro-api.coingecko.com/")) {
+      return new Response(JSON.stringify({ status: { error_code: 10006, error_message: "monthly credit limit reached" } }), { status: 429 });
+    }
+    return json({
+      data: { attributes: { ohlcv_list: [[midnight("2026-07-02"), 1, 9, 0.5, 2.2, 100]] } },
+      meta: { base: { symbol: "TKN", address: "0xtoken" }, quote: { symbol: "USDC", address: "0xusdc" } },
+    });
+  }) as unknown as typeof fetch;
+  try {
+    const { closes } = await fetchDailyCloses("0xpool", "0xtoken", "2026-07-02", "2026-07-02");
+    expect(closes.get("2026-07-02")).toBe(2.2);
+    expect(sent[0]!.url.startsWith("https://pro-api.coingecko.com/api/v3/onchain/networks/base/pools/0xpool/ohlcv/day")).toBe(true);
+    expect(sent[1]!.url.startsWith("https://api.geckoterminal.com/api/v2/networks/base/pools/0xpool/ohlcv/day")).toBe(true);
+    expect(sent[1]!.key).toBeNull();
+    expect(sent.filter((s) => s.url.startsWith("https://pro-api.")).length).toBe(1);
+  } finally {
+    if (prevKey === undefined) delete process.env.COINGECKO_API_KEY;
+    else process.env.COINGECKO_API_KEY = prevKey;
+    _resetGeckoEndpointForTests();
+  }
 });

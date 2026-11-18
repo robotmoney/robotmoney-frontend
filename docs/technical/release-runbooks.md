@@ -134,8 +134,9 @@ the rehearsal of one.
 `Q18-migrate` is `C05-migrate`, `Q22-rolling-boot` is `C10-rolling-boot`, `Q32-soak-gate` is
 `C20-soak-gate`. The runner refuses a step list where a P or C step has no twin, where a twin's
 commands differ, or where the twins run in a different order (`twinProblems` in
-`scripts/release/runbook.ts`). Four steps have no twin: stage's preparation (`Q01` to `Q05`) and
-`C06-version-tag`, which stage never runs. A version check that must write is `stageOnly: true` and
+`scripts/release/runbook.ts`). These steps have no twin: stage's preparation (`Q01` to `Q05`),
+`C06-version-tag`, which stage never runs, and `P09-coingecko-credit`, because only production holds
+the paid CoinGecko key ([D85](../decisions.md#d85)). A version check that must write is `stageOnly: true` and
 has no production twin.
 
 A stage run is the QA phase end to end, so production's checks have passed on stage before
@@ -169,7 +170,10 @@ records production's state through `rm_readonly`: the ledger and its reconciliat
 `backend/migrations` ([D67](../decisions.md#d67)), identity, roles, row counts, the sessions in
 flight and the database size. It refuses any pending migration that is not `compat: additive`
 (§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
-owner (`--triage <file>`).
+owner (`--triage <file>`). P09-coingecko-credit (from v0.9.2) runs `scripts/release/coingecko-credit.ts`
+with the key from production's `~/.env`: one `GET /key`, red when the remaining monthly CoinGecko
+credit is below `COINGECKO_CREDIT_FLOOR_PCT` (default 10) percent. It prints the used, remaining and
+monthly credit and never the key (issue 1664).
 
 `P.ci` reads the rc commit's check runs first. The rc squash has the QA commit's tree, and its push
 to the release branch starts CI again. When the rc commit's CI is not green yet, `P.ci` reads the
@@ -485,6 +489,12 @@ production: a `full` leg publishes sessions and spends inference. A WARN is not 
 distinct error in every log must match a classification in
 `scripts/lib/gate/log-classifications.json` with a written reason. A session that publishes
 `no_consensus` is a warning, never a good session (owner, 2026-10-06).
+
+**CoinGecko 429s (issue 1664).** Stage and CI hold no CoinGecko key and read the keyless hosts, so a
+`429 Too Many Requests` for `api.geckoterminal.com` or `api.coingecko.com` is `external`
+(`external-gecko-keyless-host-429`). The paid host refusing, such as `[gecko] pro-api.coingecko.com
+answered HTTP 429 (error_code 10006 …)` when the month's credit is spent, stays
+`known-gecko-paid-tier-refused` and fails a post-release grade.
 
 **The window of a post-release grade.** Without `--since`, `--mode post-release` grades since the
 run's READY, and falls back to the previous release's READY when the run has none. A release with no

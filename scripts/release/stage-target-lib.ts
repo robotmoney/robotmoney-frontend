@@ -258,9 +258,13 @@ export const PROD_HOME_ENV_KEYS = [
  * The stage `~/.env` holds production's key names and nothing more: no
  * `rm_owner` line (production's pre-state: `prod-init role-passwords` writes
  * it) and never `doadmin` (D61, owner 2026-10-08: doadmin is typed each run
- * and stored in no file).
+ * and stored in no file). It also holds no COINGECKO_API_KEY: only production
+ * holds the paid CoinGecko key, and stage reads the free hosts (issue 1664).
  */
-export type StageHomeEnvKey = (typeof PROD_HOME_ENV_KEYS)[number];
+export const STAGE_HOME_ENV_KEYS = PROD_HOME_ENV_KEYS.filter(
+  (k): k is Exclude<(typeof PROD_HOME_ENV_KEYS)[number], "COINGECKO_API_KEY"> => k !== "COINGECKO_API_KEY",
+);
+export type StageHomeEnvKey = (typeof STAGE_HOME_ENV_KEYS)[number];
 export type StageHomeEnv = Record<StageHomeEnvKey, string>;
 
 /** The login roles whose passwords the builder generates. `rm_owner` gets one too, and stays NOLOGIN. */
@@ -274,7 +278,8 @@ function assertLineValue(key: string, value: string | undefined): string {
 }
 
 /**
- * The stage target's `~/.env`. Production's layout, line for line: the same
+ * The stage target's `~/.env`. Production's layout, line for line, less the
+ * paid CoinGecko key (issue 1664): the same
  * comment headers, the same `key = value` spacing on the DigitalOcean panel
  * keys, the same order. No `rm_owner` line and no `doadmin` line: role-passwords
  * adds the first, and the second is never stored.
@@ -294,9 +299,6 @@ export function composeStageHomeEnv(v: StageHomeEnv): string {
     "",
     "# inference",
     line("OPENCODE_API_KEY", "="),
-    "",
-    "# research",
-    line("COINGECKO_API_KEY", "="),
     "",
   ].join("\n");
 }

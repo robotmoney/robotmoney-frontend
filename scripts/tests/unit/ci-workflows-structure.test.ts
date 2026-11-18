@@ -437,3 +437,30 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
   });
 });
 
+
+// Issue 1664: only production holds the paid CoinGecko key. Its credit is counted per account, so CI spending it
+// froze production's prices for two weeks. CI reads the keyless free hosts instead, and keeps 'live' price
+// provenance (issue 147): no stack step swaps the price feed for fixtures.
+describe("CI holds no CoinGecko key and keeps live prices (issue 1664)", () => {
+  test("no workflow references secrets.COINGECKO_API_KEY", () => {
+    const offenders = allWorkflows().filter((name) => /secrets\.COINGECKO_API_KEY/.test(read(name)));
+    expect(offenders).toEqual([]);
+  });
+
+  test("no step in e2e-web, e2e-swarm or e2e-onboarding sets PRICE_SOURCE=stub", () => {
+    for (const name of ["e2e-web.yml", "e2e-swarm.yml", "e2e-onboarding.yml"]) {
+      const wf = parse(name) as Workflow & { env?: Record<string, unknown> };
+      expect(String(wf.env?.PRICE_SOURCE ?? ""), `${name} workflow env`).not.toBe("stub");
+      for (const [jobName, job] of Object.entries(wf.jobs ?? {})) {
+        const jobEnv = (job as WorkflowJob & { env?: Record<string, unknown> }).env ?? {};
+        expect(String(jobEnv.PRICE_SOURCE ?? ""), `${name} ${jobName} env`).not.toBe("stub");
+        for (const step of job.steps ?? []) {
+          const env = (step as WorkflowStep & { env?: Record<string, unknown> }).env ?? {};
+          expect(String(env.PRICE_SOURCE ?? ""), `${name} ${jobName} ${step.name ?? step.uses}`).not.toBe("stub");
+          expect(step.run ?? "", `${name} ${jobName} ${step.name ?? step.uses}`).not.toMatch(/PRICE_SOURCE=stub/);
+          expect(JSON.stringify((step as { with?: unknown }).with ?? {})).not.toMatch(/PRICE_SOURCE=stub/);
+        }
+      }
+    }
+  });
+});

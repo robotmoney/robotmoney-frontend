@@ -351,7 +351,9 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(stepListHash(unmarked)).not.toBe(stepListHash());
     const ids = stepIds();
     // The preflight ends where the cutover's backup starts; the probe starts once the restore is proven.
-    expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("C01-backup") - 1);
+    // P09-coingecko-credit (issue 1664) is the last preflight step.
+    expect(ids.indexOf("P09-coingecko-credit")).toBe(ids.indexOf("C01-backup") - 1);
+    expect(ids.indexOf("P08-log-baseline")).toBe(ids.indexOf("P09-coingecko-credit") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
     expect(ids.slice(-7)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats"]);
@@ -1250,7 +1252,7 @@ describe("the phases: QA on stage, production's preflight, the cutover", () => {
       // Query statistics and the jobs-table plans (issue 1581, since v0.7.4); the plans are stage only.
       "Q37a-db-stats", "Q37b-jobs-plans",
     ]);
-    expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline"]);
+    expect(RELEASE_STEPS.filter((s) => s.phase === "preflight").map((s) => s.id)).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline", "P09-coingecko-credit"]);
     expect(RELEASE_STEPS.filter((s) => s.phase === "cutover").map((s) => s.id)).toEqual([
       "C01-backup", "C02-backup-sums", "C03-restore-proof", "C04-probe-start", "C05-migrate", "C05a-maintenance-on", "C05b-smoke-down", "C05c-migrate-breaking", "C06-version-tag", "C07-env-rewrite", "C08-set-identity", "C09-tokens", "C10-rolling-boot", "C10a-full-boot", "C11-ready", "C12-site", "C12a-maintenance-off", "C13-probe-grade",
       "C14-verify-version", "C15-verify-product", "C16-log-verdict", "C17-soak-record", "C18-compare-baseline", "C19-host-guards", "C20-soak-gate", "C21-soak-checks", "C22-collect-logs",
@@ -1851,9 +1853,9 @@ describe("preflight", () => {
     JSON.parse(readFileSync(join(f.journalRoot, target, "preflight-20261008T120000Z", "preflight.json"), "utf8")) as { exit: number; checks: { id: string; status: string; detail: string }[] };
   const status = (r: ReturnType<typeof report>, id: string) => r.checks.find((c) => c.id === id)?.status;
 
-  test("the real step list: the preflight runs P01-checkout to P08-log-baseline, never the backup, the restore proof or anything after", () => {
+  test("the real step list: the preflight runs P01-checkout to P09-coingecko-credit, never the backup, the restore proof or anything after", () => {
     const ids = preflightSteps(RELEASE_STEPS).map((s) => s.id);
-    expect(ids).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline"]);
+    expect(ids).toEqual(["P01-checkout", "P02-host-identity", "P03-install", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install", "P07-state-baseline", "P08-log-baseline", "P09-coingecko-credit"]);
     expect(preflightSteps(RELEASE_STEPS).some((s) => s.irreversible || s.host === "control")).toBe(false);
     // red control: the cutover's backup is never a preflight step.
     expect(ids).not.toContain("C01-backup");
@@ -2029,7 +2031,7 @@ describe("preflight", () => {
     expect(laneOf({ host: "capture" }, stage)).toBe(laneOf({ host: "capture" }, prod));
     expect(laneOf({ host: "target" }, prod)).toBe(`${prod.host}:${prod.checkout}`);
     // The preflight order: the target lane, then the capture lane (its checkout and install only; the backup is the cutover's).
-    const order = ["P01-checkout", "P02-host-identity", "P03-install", "P07-state-baseline", "P08-log-baseline", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install"];
+    const order = ["P01-checkout", "P02-host-identity", "P03-install", "P07-state-baseline", "P08-log-baseline", "P09-coingecko-credit", "P04-capture-checkout", "P05-capture-identity", "P06-capture-install"];
     expect(preflightOrder(RELEASE_STEPS, prod).map((s) => s.id)).toEqual(order);
   });
 

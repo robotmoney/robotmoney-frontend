@@ -4,6 +4,9 @@
 // plan replays the dump's own ledger at the tag and commit production reports,
 // with no past-upgrade constant in the tool (issue 1272).
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { parseEnvFile } from "../../lib/env-role.ts";
 import {
@@ -25,6 +28,7 @@ import {
   removalRefusal,
   stageTargetDirs,
   PROD_HOME_ENV_KEYS,
+  STAGE_HOME_ENV_KEYS,
   roleShapeProblems,
   rolePasswordSql,
   STAGE_TARGET,
@@ -44,7 +48,6 @@ const VALUES: StageHomeEnv = {
   database: "defaultdb",
   sslmode: "require",
   OPENCODE_API_KEY: "zen-key",
-  COINGECKO_API_KEY: "cg-key",
 };
 
 /** Production's globals as `bun smoke:capture` wrote them on 2026-10-08 (role catalog only, no passwords). */
@@ -90,10 +93,12 @@ GRANT SET ON PARAMETER session_replication_role TO doadmin_group WITH GRANT OPTI
 `;
 
 describe("the stage target's ~/.env", () => {
-  test("its key names are exactly production's: no rm_owner line (role-passwords writes it) and never doadmin (D61)", () => {
+  test("its key names are production's less the paid CoinGecko key: no rm_owner line (role-passwords writes it) and never doadmin (D61)", () => {
     const keys = envKeyNames(composeStageHomeEnv(VALUES));
-    expect(new Set(keys)).toEqual(new Set(PROD_HOME_ENV_KEYS));
-    expect(keys.length).toBe(PROD_HOME_ENV_KEYS.length);
+    expect(new Set(keys)).toEqual(new Set(STAGE_HOME_ENV_KEYS));
+    expect(keys.length).toBe(STAGE_HOME_ENV_KEYS.length);
+    expect(new Set(keys)).toEqual(new Set(PROD_HOME_ENV_KEYS.filter((k) => k !== "COINGECKO_API_KEY")));
+    expect(keys).not.toContain("COINGECKO_API_KEY");
     expect(keys).not.toContain("rm_owner");
     expect(keys).not.toContain("doadmin");
   });
@@ -349,5 +354,43 @@ describe("Q02 always captures a fresh dump; up refuses one over 24 h (issue 1564
   test("dumpAgeRefusal refuses a manifest with no capturedAt or an unreadable one", () => {
     expect(dumpAgeRefusal({}, now)).toContain("no capturedAt");
     expect(dumpAgeRefusal({ capturedAt: "not a date" }, now)).toContain("no capturedAt");
+  });
+});
+
+// Issue 1664: only production holds the paid CoinGecko key. Stage boots keyless on the free hosts, so the stage
+// server's own .env need not carry the key and the stage ~/.env never gets one.
+describe("writeEnvFiles", () => {
+  test("succeeds when the stage server's .env has no COINGECKO_API_KEY, and writes no COINGECKO_API_KEY line", async () => {
+    const { writeEnvFiles } = await import("../../release/stage-target.ts");
+    const dir = mkdtempSync(join(tmpdir(), "rm-stage-target-env-"));
+    try {
+      const stageDefault = join(dir, "stage-server.env");
+      writeFileSync(stageDefault, "OPENCODE_API_KEY=zen-key\n");
+      const values = writeEnvFiles(
+        { doadmin: "da-pw", rm_owner: "owner-pw", rm_app: "app-pw", rm_worker: "worker-pw", rm_readonly: "ro-pw" },
+        stageDefault,
+        dir,
+      );
+      const written = readFileSync(join(dir, ".env"), "utf8");
+      expect("COINGECKO_API_KEY" in values).toBe(false);
+      expect(written).not.toMatch(/COINGECKO_API_KEY/);
+      expect(envKeyNames(written)).toEqual([...STAGE_HOME_ENV_KEYS, "rm_owner"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("still refuses a stage server .env with no OPENCODE_API_KEY", async () => {
+    const { writeEnvFiles } = await import("../../release/stage-target.ts");
+    const dir = mkdtempSync(join(tmpdir(), "rm-stage-target-env-"));
+    try {
+      const stageDefault = join(dir, "stage-server.env");
+      writeFileSync(stageDefault, "COINGECKO_API_KEY=cg-key\n");
+      expect(() =>
+        writeEnvFiles({ doadmin: "a", rm_owner: "b", rm_app: "c", rm_worker: "d", rm_readonly: "e" }, stageDefault, dir),
+      ).toThrow(/OPENCODE_API_KEY/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

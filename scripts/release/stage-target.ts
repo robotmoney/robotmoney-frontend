@@ -86,7 +86,7 @@ import {
   parseKeyValues,
   parseRunningVersion,
   pgHbaConf,
-  PROD_HOME_ENV_KEYS,
+  STAGE_HOME_ENV_KEYS,
   removalRefusal,
   replayMigrationScript,
   RESTORED_STATE_QUERY,
@@ -391,10 +391,16 @@ function readRestoredLedger(): string[] {
   return psql(`SELECT name FROM schema_migrations ORDER BY applied_at, name COLLATE "C";`, { tuples: true }).split("\n").filter(Boolean);
 }
 
-function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageHomeEnv {
-  const stageDefault = parseEnvFile(readFileSync("/home/stage-server/.env", "utf8"));
-  for (const k of ["OPENCODE_API_KEY", "COINGECKO_API_KEY"] as const) {
-    if (!stageDefault[k]) throw new Error(`/home/stage-server/.env has no ${k}`);
+/** Write the stage `~/.env`. Stage holds no COINGECKO_API_KEY: only production holds the paid key, and stage reads
+ *  the free hosts (issue 1664), so the stage server's own file need not carry one and none is copied. */
+export function writeEnvFiles(
+  passwords: Record<GeneratedPasswordRole, string>,
+  stageDefaultPath: string = "/home/stage-server/.env",
+  home: string = T.home,
+): StageHomeEnv {
+  const stageDefault = parseEnvFile(readFileSync(stageDefaultPath, "utf8"));
+  for (const k of ["OPENCODE_API_KEY"] as const) {
+    if (!stageDefault[k]) throw new Error(`${stageDefaultPath} has no ${k}`);
   }
   const values: StageHomeEnv = {
     rm_app: passwords.rm_app,
@@ -406,9 +412,8 @@ function writeEnvFiles(passwords: Record<GeneratedPasswordRole, string>): StageH
     database: T.database,
     sslmode: "require",
     OPENCODE_API_KEY: stageDefault.OPENCODE_API_KEY!,
-    COINGECKO_API_KEY: stageDefault.COINGECKO_API_KEY!,
   };
-  const homeEnv = join(T.home, ".env");
+  const homeEnv = join(home, ".env");
   writeFileSync(homeEnv, composeStageHomeEnv(values), { mode: 0o600 });
   chmodSync(homeEnv, 0o600);
   // Production's ~/.env holds rm_owner since role-passwords ran (2026-10-08).
@@ -710,7 +715,7 @@ async function remoteStatus(): Promise<number> {
   const homeEnv = join(T.home, ".env");
   if (existsSync(homeEnv)) {
     const keys = envKeyNames(readFileSync(homeEnv, "utf8"));
-    const want: readonly string[] = PROD_HOME_ENV_KEYS;
+    const want: readonly string[] = STAGE_HOME_ENV_KEYS;
     const pre = keys.length === want.length && want.every((k) => keys.includes(k));
     const after = keys.length === want.length + 1 && want.every((k) => keys.includes(k)) && keys.includes("rm_owner");
     line("~/.env", `${homeEnv} keys: ${keys.join(" ")} (${pre ? "production's key names: role-passwords not yet run" : after ? "production's key names + the rm_owner line role-passwords wrote" : "DIFFERS from production's"})`);

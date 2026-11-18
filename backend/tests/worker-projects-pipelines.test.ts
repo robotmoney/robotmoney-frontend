@@ -32,6 +32,7 @@ import {
   type Aggregate3Result,
 } from "../src/chain/base-rpc-client.ts";
 import { _resetTokenPriceCacheForTests } from "../src/chain/token-prices.ts";
+import { _resetGeckoEndpointForTests } from "../src/chain/gecko-endpoint.ts";
 
 const KINDS = [
   "projects.discover",
@@ -214,7 +215,9 @@ test("refreshCoins with the CoinGecko key set and a 401 degrades without leaking
     expect(res.ok).toBe(false);
     expect(res.status).toBe("degraded");
     expect(urls.some((u) => u.startsWith("https://pro-api.coingecko.com/api/v3/coins/markets?"))).toBe(true);
-    expect(String(res.error)).toContain("pro-api.coingecko.com");
+    // Issue 1664: the Pro 401 is retried once on the public host, whose own 401 is the error that surfaces.
+    expect(urls.some((u) => u.startsWith("https://api.coingecko.com/api/v3/coins/markets?"))).toBe(true);
+    expect(String(res.error)).toContain("api.coingecko.com");
     expect(String(res.error)).toContain("401");
     expect(JSON.stringify(res)).not.toContain(KEY);
     expect(errors.length).toBeGreaterThan(0);
@@ -229,6 +232,7 @@ test("refreshCoins with the CoinGecko key set and a 401 degrades without leaking
     console.log = realLog;
     if (prevKey === undefined) delete process.env.COINGECKO_API_KEY;
     else process.env.COINGECKO_API_KEY = prevKey;
+    _resetGeckoEndpointForTests(); // the Pro refusal started the shared cooldown
     if (projectId) {
       await fixtureDb`DELETE FROM lobster_coins WHERE project_id = ${projectId}`;
       await fixtureDb`DELETE FROM projects WHERE id = ${projectId}`;

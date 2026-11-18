@@ -119,8 +119,8 @@ export const stepNameOf = (id: string): string => id.replace(/^[A-Z]\d{2}[a-z]?-
 
 /** The QA steps with no production twin: stage's own preparation. */
 export const QA_ONLY_NAMES: readonly string[] = ["lockfile", "dump", "stage-up", "role-passwords", "scope"];
-/** The one production step with no QA twin: stage tags nothing. */
-export const PROD_ONLY_NAMES: readonly string[] = ["version-tag"];
+/** The production steps with no QA twin: stage tags nothing, and stage holds no paid CoinGecko key (issue 1664). */
+export const PROD_ONLY_NAMES: readonly string[] = ["version-tag", "coingecko-credit"];
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
