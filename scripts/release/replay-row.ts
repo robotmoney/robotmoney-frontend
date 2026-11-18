@@ -114,7 +114,7 @@ export function comparisonProblems(c: RowComparison, run: string, asof: string):
 interface Sdk {
   openBackupsDir(root: string): { table(name: string): Record<string, string | null>[]; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
   parseInput(text: string, o: { replay: boolean }): { history: unknown };
-  runRegime(history: unknown, o: { asof: string; factor: boolean }): {
+  runRegime(history: unknown, o: { asof: string; factor: boolean; version?: string }): {
     dateAxis: string[];
     result: Record<string, any>;
     factor?: Record<string, any>;
@@ -122,21 +122,29 @@ interface Sdk {
     backtest?: unknown;
   };
   INDICATORS: { id: string }[];
+  /** The methodology versions the SDK computes (issue 1652); absent on an SDK before v5. */
+  REGIME_VERSIONS?: readonly string[];
 }
 
 async function loadSdk(dir: string): Promise<Sdk> {
-  const [local, load, run, ind] = await Promise.all([
+  const [local, load, run, ind, ver] = await Promise.all([
     import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
+    import(join(dir, "src/analyze/regime-versions.ts")),
   ]);
-  return { openBackupsDir: local.openBackupsDir, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS };
+  return { openBackupsDir: local.openBackupsDir, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS, REGIME_VERSIONS: ver.REGIME_VERSIONS };
 }
 
 const nn = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-/** The SDK's as-of row for `inputText` (replay contract), the way published-replay.ts builds it. */
-export function replayRow(sdk: Sdk, inputText: string, asof: string): AsofRow {
+/**
+ * The SDK's as-of row for `inputText` (replay contract), the way published-replay.ts builds it.
+ * `methodology` is the run's methodology label: when the SDK computes that version (issue 1652),
+ * the run replays under it, so a run published under v3 replays as v3.
+ */
+export function replayRow(sdk: Sdk, inputText: string, asof: string, methodology?: string | null): AsofRow {
   const { history } = sdk.parseInput(inputText, { replay: true });
-  const run = sdk.runRegime(history, { asof, factor: true });
+  const version = methodology && sdk.REGIME_VERSIONS?.includes(methodology) ? methodology : undefined;
+  const run = sdk.runRegime(history, { asof, factor: true, ...(version ? { version } : {}) });
   const last = run.dateAxis.length - 1;
   if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
   const r2 = run.result;
@@ -185,7 +193,8 @@ async function main(): Promise<number> {
     return 1;
   }
   const asof = runRow.asof!;
-  const replay = replayRow(sdk, readFileSync(inputs, "utf8"), asof);
+  const methodology = copy.table("analytics_ledger_methodology_versions").find((m) => m.id === runRow.methodology_version_id)?.version_label ?? null;
+  const replay = replayRow(sdk, readFileSync(inputs, "utf8"), asof, methodology);
   if (process.argv.includes("--print-row")) {
     console.log(JSON.stringify(replay));
     return 0;

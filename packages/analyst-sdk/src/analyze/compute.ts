@@ -11,8 +11,15 @@
 //      ending that day; recomputed on a 21-day cadence + always the final day)
 //   4. Panel index = weighted mean of sign-aligned percentile-ranks
 //   5. Composite = arithmetic mean of all included panel indices
-//   6. Bucket composite by 3y rolling percentile → risk-off / neutral / risk-on,
-//      with 5-day confirmation OR 2σ fast-track smoothing.
+//   6. Bucket the composite → risk-off / neutral / risk-on, with 5-day
+//      confirmation OR 2σ fast-track smoothing. Each panel label is bucketed
+//      the same way from its panel index. The 3y rolling percentile of the
+//      composite and of each panel index is still computed, as information.
+//
+// Methodology version (regime-versions.ts): v5 (current, issue 1652) cuts each
+// label on the composite or panel index itself. v3 cut it on the 3y rolling
+// percentile of that series (a second ranking); it is kept so a run stamped v3
+// replays exactly.
 //
 // Accuracy (decision D78): the panel weighted mean, the composite
 // mean and the fast-track σ are compensated (transform/exact.ts).
@@ -30,6 +37,7 @@ import {
   inverseCorrelationWeights,
   MAX_FORWARD_FILL_DAYS,
 } from "../transform/math.ts";
+import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "./regime-versions.ts";
 
 export interface RegimeComputeResult {
   dateAxis: string[];
@@ -72,7 +80,11 @@ export function computeRegime(
   // that date, so the indicator re-enters normally with no special-casing.
   ages?: Record<string, number[]>,
   maxForwardFillDays: number = MAX_FORWARD_FILL_DAYS,
+  // The methodology version to compute (issue 1652). v5 cuts each label on the
+  // composite or panel index; v3 on its 3y rolling percentile.
+  version: RegimeVersion = CURRENT_REGIME_VERSION,
 ): RegimeComputeResult {
+  if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
   for (const ind of INDICATORS) {
@@ -130,7 +142,7 @@ export function computeRegime(
   const panelRegimes: Record<string, (string | null)[]> = {};
   for (const p of panels) {
     panelPercentiles[p] = rollingPercentileRank(panelIndices[p], ROLLING_WINDOW_DAYS);
-    panelRegimes[p] = smoothRegimes(panelPercentiles[p], bucketFn);
+    panelRegimes[p] = regimeLabels(panelIndices[p], panelPercentiles[p], version);
   }
 
   const out: RegimeComputeResult = {
@@ -144,7 +156,7 @@ export function computeRegime(
     panelRegimes,
     composite,
     compositePercentile: compRank,
-    regime: smoothRegimes(compRank, bucketFn),
+    regime: regimeLabels(composite, compRank, version),
   };
   if (panels.includes("macro")) {
     out.macroIndex = panelIndices.macro;
@@ -164,11 +176,23 @@ export function computeRegime(
   return out;
 }
 
+/**
+ * The smoothed labels of one series (the composite, or a panel index) under a
+ * methodology version: since v5 cut on the series itself, under v3 on `rank`,
+ * its 3y rolling percentile (issue 1652).
+ */
+export function regimeLabels(series: number[], rank: number[], version: RegimeVersion = CURRENT_REGIME_VERSION): (string | null)[] {
+  return smoothRegimes(version === "v3" ? rank : series, bucketFn);
+}
+
 // ─── Regime smoothing: 5-day confirmation OR 2σ fast-track ──────────────────
 export const CONFIRMATION_DAYS = 5;
 export const FAST_TRACK_SIGMA = 2.0;
 export const SIGMA_LOOKBACK_DAYS = 252;
 
+// `rankSeries` is the series the label is cut on: since v5 the composite or a
+// panel index, under v3 its rolling percentile. The fast track measures σ on
+// that same series.
 export function smoothRegimes(
   rankSeries: number[],
   bucketFnArg: (p: number) => string | null,

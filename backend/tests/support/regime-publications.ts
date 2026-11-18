@@ -66,6 +66,8 @@ export interface RunSpec {
   regime?: RegimeSnapshotRow[];
   research?: ResearchSignalArtifact[];
   sourceLabel?: string;
+  /** The run's methodology version label (issue 1652). Default "v-test". */
+  version?: string;
 }
 
 async function begin(spec: RunSpec): Promise<string> {
@@ -74,7 +76,7 @@ async function begin(spec: RunSpec): Promise<string> {
     asof: spec.asof,
     toolId: "regime",
     sourceLabel: spec.sourceLabel ?? "live",
-    methodology: { toolId: "regime", versionLabel: "v-test", config: { issue: 1182 } },
+    methodology: { toolId: "regime", versionLabel: spec.version ?? "v-test", config: spec.version ? { issue: 1182, version: spec.version } : { issue: 1182 } },
     buildIdentity: "issue-1182-test",
   });
   return runId;

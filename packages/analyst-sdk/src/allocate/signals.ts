@@ -1,13 +1,13 @@
 // Sleeve signals (issue 1402): the signal a sleeve moves on, named in the rule
 // file. A name is parsed once (parseSignalName, shared with the rule-file
 // validator) and read against one decision's inputs (signalPercentile), which
-// gives a percentile from 0 to 1, high meaning risk-on, or null when the data is
+// gives a value from 0 to 1, high meaning risk-on, or null when the data is
 // missing. The engine treats null as neutral: signalOrNeutral maps it to 0.5,
 // which is a tilt of zero.
 //
 // Grammar:
-//   composite                     the composite percentile
-//   macro | onchain               a panel's percentile (every id in PANELS)
+//   composite                     the composite (the number the regime label is cut on, issue 1652)
+//   macro | onchain               a panel's index (every id in PANELS)
 //   indicator:<ID>                a registry indicator (every id in INDICATORS)
 //   research:channel_divergence   the channel-divergence composite gauge
 //   research:late_cycle           1 - the mean late-cycle gauge percentile
@@ -104,7 +104,7 @@ export function parseSignalName(name: string): Signal {
 export type ResearchSignalValues = Record<ResearchSignalId, number | null>;
 
 /** What a signal reads: one as-of label, plus the research signals when the caller has them. */
-export type SignalInputs = Pick<AsofLabel, "compositePercentile" | "panels" | "indicators"> & {
+export type SignalInputs = Pick<AsofLabel, "composite" | "panels" | "indicators"> & {
   research?: Partial<ResearchSignalValues>;
 };
 
@@ -139,9 +139,9 @@ export function researchSignalValues(
 function evaluate(sig: Signal, s: SignalInputs): number | null {
   switch (sig.kind) {
     case "composite":
-      return finite(s.compositePercentile);
+      return finite(s.composite);
     case "panel":
-      return finite(s.panels[sig.panel]?.percentile);
+      return finite(s.panels[sig.panel]?.index);
     case "indicator":
       return finite(s.indicators[sig.id]);
     case "research":

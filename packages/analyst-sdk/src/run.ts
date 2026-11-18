@@ -11,7 +11,7 @@ import { INDICATORS, PANELS } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
 import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
@@ -28,6 +28,8 @@ export const EXTRA_IDS = {
 const READ_IDS: ReadonlySet<string> = new Set([...INDICATORS.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
 
 export interface RunResult {
+  // The methodology version the run computed (RunOptions.version).
+  version: RegimeVersion;
   dateAxis: string[];
   result: RegimeComputeResult;
   // Production's second computeRegime call (macro, onchain, factor), present
@@ -47,6 +49,11 @@ export interface RunOptions {
   // and return its factor_* figures. The composite and labels stay the
   // two-panel ones the published table uses.
   factor?: boolean;
+  // The methodology version to compute (issue 1652). Default
+  // CURRENT_REGIME_VERSION. A published run replays under the version it was
+  // stamped with: "v3" cuts the labels on the rolling percentile, "v5" on the
+  // composite and panel indices.
+  version?: RegimeVersion;
 }
 
 // A real calendar date in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-45, "").
@@ -55,7 +62,7 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version"];
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
   // An option this version does not know is an error, never silently ignored
@@ -63,11 +70,15 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   for (const k of Object.keys(opts)) {
     if (!KNOWN_OPTIONS.includes(k)) {
       const hint = k === "panels" ? " (use factor: true for the factor_* figures)" : "";
-      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor`);
+      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version`);
     }
   }
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
+  }
+  const version = opts.version ?? CURRENT_REGIME_VERSION;
+  if (!isRegimeVersion(version)) {
+    throw new RangeError(`version must be one of ${REGIME_VERSIONS.join(", ")}, got ${JSON.stringify(opts.version)}`);
   }
   // Input names (input id, storage key or source id, D74) -> the ids read
   // below, and each ratio the input does not store from its legs (4.3).
@@ -113,9 +124,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // downstream run never fetches (issue 1421, src/coverage.ts).
   assertRequiredCoverage(raw, asof ?? maxDate);
   const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof: asof ?? maxDate });
-  const result = computeRegime(transformed, dateAxis, PANELS, ages);
-  const out: RunResult = { dateAxis, result };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages);
+  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version);
+  const out: RunResult = { version, dateAxis, result };
+  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];
@@ -164,7 +175,7 @@ export function buildReport(run: RunResult, opts: { full?: boolean } = {}) {
     weight: result.weightsByPanel[ind.panel]?.[ind.id] ?? null,
   }));
   return {
-    version: CURRENT_REGIME_VERSION,
+    version: run.version,
     asof: dateAxis[last] ?? null,
     days: dateAxis.length,
     regime: {
