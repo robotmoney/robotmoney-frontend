@@ -20,10 +20,17 @@ or invalid addresses fails rather than claiming it indexed anything.
 
 Public GET routes under `/api/public/flow/`:
 
+- `health`: the indexed block, hash and time, `ageSeconds` since that block and
+  `status`. `status` is `ok`, or `stale` once the block is older than
+  `maxAgeSeconds` (300). It answers 503 with `status: "unavailable"` while the
+  index is unconfigured, bound to other contracts or empty.
 - `vault`: fund NAV, supply, caps, current holdings and target weights, queue
   liveness, epoch timing and a non-binding share price. NAV has its own
   `navObservedAt`; cap room is explicitly relative to that last good NAV.
 - `owners/{address}`: paginated request-creation events for an owner.
+- `owners/{address}/claims`: paginated owner-level `SharesDelivered`,
+  `RedeemClaimed`, `CreditAdded`, `CreditWithdrawn` and `WindDownReleased`
+  events in chain order. The queue emits claims per owner, not per request.
 - `owners/{address}/position`: wallet, queued and ledger shares, credits and
   currently claimable quantities.
 - `requests/{id}`: contract request status, pending and claimable quantities,
@@ -49,3 +56,16 @@ position, request and transaction terms are read at that block and checked
 against its canonical hash; they are not a guarantee about a future transaction.
 An unavailable index, changed chain or failed contract view returns 503 rather
 than invented state. List cursors use `afterBlock` and `afterLogIndex`.
+
+## Smoke and CI
+
+The v0.9 queue and fund are not on Base mainnet yet. A local `bun smoke` boot
+that is neither the standing stack nor `RM_ENV=prod` therefore indexes the
+live deploy-2 gateway and rmUSD vault as stand-ins, from 60 blocks below the
+head the boot read (`scripts/lib/smoke-env.ts`). The smoke seed enables the
+`flow.index` schedule. The live-smoke check (`bun --no-env-file
+scripts/smoke-ci-checks.ts --check live-smoke`, run by `e2e-swarm`) fails unless
+`health` answers 200 with `status: "ok"`. The stand-ins exercise the deployed
+scan, the migrated tables and the health route on the real chain, but not the
+queue views. An exported `FLOW_QUEUE_ADDRESS` replaces the stand-ins, and a
+standing or prod boot indexes only the addresses its operator exports.
