@@ -254,10 +254,10 @@ export async function collectFailures(backend: string): Promise<string[]> {
 async function printFlowJobDiagnostics(backend: string): Promise<void> {
   const token = operatorTokenFromEnv();
   if (!token) return void console.error("  (no operator token: flow.index job diagnostics unavailable)");
-  for (const path of ["/api/admin/jobs?kind=flow.index&limit=5", "/api/admin/runs?kind=flow.index&limit=5"]) {
+  for (const path of ["/api/admin/runs?kind=flow.index&limit=5", "/api/admin/jobs?status=running&limit=5", "/api/admin/runs?limit=15"]) {
     try {
       const r = await fetch(`${backend}${path}`, { headers: { "X-Admin-Token": token } });
-      console.error(`  flow.index diagnostics ${path} → ${r.status}: ${(await r.text()).slice(0, 4000)}`);
+      console.error(`  flow.index diagnostics ${path} → ${r.status}: ${(await r.text()).slice(0, 12000)}`);
     } catch (e) {
       console.error(`  flow.index diagnostics ${path} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
