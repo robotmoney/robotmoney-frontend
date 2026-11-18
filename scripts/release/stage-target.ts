@@ -395,8 +395,8 @@ function readRestoredLedger(): string[] {
  *  the free hosts (issue 1664), so the stage server's own file need not carry one and none is copied. */
 export function writeEnvFiles(
   passwords: Record<GeneratedPasswordRole, string>,
-  stageDefaultPath = "/home/stage-server/.env",
-  home = T.home,
+  stageDefaultPath: string = "/home/stage-server/.env",
+  home: string = T.home,
 ): StageHomeEnv {
   const stageDefault = parseEnvFile(readFileSync(stageDefaultPath, "utf8"));
   for (const k of ["OPENCODE_API_KEY"] as const) {
