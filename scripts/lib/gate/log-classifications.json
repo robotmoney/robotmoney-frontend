@@ -202,6 +202,29 @@
     "reason": "The headline backend/src/worker/handlers/token-market.ts readPrice logs when a price leg fails: it writes nothing for that leg, so the row keeps its last good reading with its true age, and the api stops serving it once it is older than PRICE_MAX_AGE_MS (backend/src/chain/token-metrics.ts). Seen 16x per symbol on the v0.6.3 production preflight on 2026-10-21. The cause is on its own lines, which the inventory does not join to this headline: a provider cause has its own external rule, and any other cause (an unresolved asset, a non-positive price) stays unclassified and fails."
   },
   {
+    "id": "known-gecko-paid-quota-429-onchain",
+    "match": "^\\s*error: 429 Too Many Requests for https://pro-api\\.coingecko\\.com/api/v\\d+/onchain/(simple/networks/base/token_price|networks/base/pools)/",
+    "source": "worker-analytics",
+    "class": "known-issue",
+    "issue": "1664",
+    "reason": "The cause line bun prints under a failed onchain token_price or pool read (backend/src/chain/token-prices.ts geckoFetchJson: new Error(`${status} ${statusText} for ${url}`)). The paid CoinGecko account is out of its monthly call credit with overage off: every paid-host call has answered HTTP 429 with error_code 10006 (\"You have reached your account's monthly credit limit\") since 2026-11-16 09:27 UTC on production and on stage-2, which shared the key. The release does not cause or change it; the credit resets on the 1st of the month. The worker keeps the last good reading. Issue 1664 adds free-host failover on a quota 429; it has no fixedIn yet, so the gates report these lines as a known-issue warning instead of failing, and a 429 from any other endpoint stays unclassified."
+  },
+  {
+    "id": "known-gecko-paid-quota-429-coin-markets",
+    "match": "(\\[projects\\.refresh_coins\\] extractor failed — keeping last-persisted rows \\(degraded\\)|job \\S+ \\(projects\\.refresh_coins\\) DEGRADED — kept last-persisted[^:]*): coingecko markets pro-api\\.coingecko\\.com 429$",
+    "source": "worker-analytics",
+    "class": "known-issue",
+    "issue": "1664",
+    "reason": "The hourly coin market refresh (backend/src/projects/access/live-source.ts, `coingecko markets <host> <status>`) and the worker loop's DEGRADED summary for it, when the paid host answers 429; the job keeps the last-persisted rows. The paid CoinGecko account is out of its monthly call credit with overage off: every paid-host call has answered HTTP 429 with error_code 10006 (\"You have reached your account's monthly credit limit\") since 2026-11-16 09:27 UTC on production and on stage-2, which shared the key. The release does not cause or change it; the credit resets on the 1st of the month. The worker keeps the last good reading. Issue 1664 adds free-host failover on a quota 429; it has no fixedIn yet, so the gates report these lines as a known-issue warning instead of failing, and a 429 from any other endpoint stays unclassified."
+  },
+  {
+    "id": "external-token-market-pool-read-kept-last-good",
+    "match": "^token-market: pool read failed, keeping the last good reading:",
+    "source": "worker-analytics",
+    "class": "external",
+    "reason": "The headline backend/src/worker/handlers/token-market.ts sampleTokenMarket logs when the ten-minute pool reading fails: it writes no new pool reading, so the row keeps its last good one with its true age, as the price legs do (external-token-market-price-read-kept-last-good). The cause is on its own line, which the inventory classifies separately; an unclassified cause still fails. Seen with the paid host's quota 429 on stage-2 and production, 2026-11-17."
+  },
+  {
     "id": "expected-token-market-price-holdoff",
     "match": "^\\s*error: token-market: a token_price request failed (<n>|\\d+) ms ago; not asking again this tick$",
     "source": "worker-analytics",
