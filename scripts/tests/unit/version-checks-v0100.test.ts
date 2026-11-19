@@ -7,7 +7,7 @@ import { apiContractProblems, EXPECTED_CONTRACT } from "../../release/version-ch
 import { envMap } from "../../release/version-checks/v0.10.0/_flow.ts";
 import { flowProblems, type FlowRead } from "../../release/version-checks/v0.10.0/flow-index.ts";
 import { buybacksProblems, MIGRATION as BUYBACKS_MIGRATION } from "../../release/version-checks/v0.10.0/buybacks-disabled.ts";
-import { bucketOf, cutsOf, labelProblems, ledgerProblems } from "../../release/version-checks/v0.10.0/regime-v5.ts";
+import { bucketOf, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v5.ts";
 import { FILES, pageProblems } from "../../release/version-checks/v0.10.0/regime-page.ts";
 import { baa10yProblems, compositeInputProblems, legProblems } from "../../release/version-checks/v0.10.0/source-data.ts";
 import { loadReleaseRunbook } from "../../release/runbook.ts";
@@ -133,6 +133,16 @@ describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
     expect(ledgerProblems({ newestLabel: "v5", v5Start: "2026-11-20" })).toEqual([]);
     expect(ledgerProblems({ newestLabel: "v3", v5Start: null }).join()).toContain("not v5");
     expect(ledgerProblems({ newestLabel: "v5", v5Start: null }).join()).toContain("no v5 run has succeeded");
+  });
+  test("grading starts at the first v5 regime run that published its own as-of day, never at a research run or an empty artifact", async () => {
+    const seen: string[] = [];
+    const db = { async query<T>(text: string): Promise<T[]> { seen.push(text); return [{ label: "v5", asof: "2026-11-20" }] as unknown as T[]; } };
+    expect((await readLedger(db)).v5Start).toBe("2026-11-20");
+    const start = seen.find((q) => q.includes("min(r.asof)"))!;
+    expect(start).toContain("r.tool_id = 'regime'");
+    expect(start).toContain("artifact_kind = 'regime_snapshots'");
+    expect(start).toContain("natural_keys @> ARRAY[r.asof::text]");
+    expect(start).toContain("'succeeded'");
   });
 });
 

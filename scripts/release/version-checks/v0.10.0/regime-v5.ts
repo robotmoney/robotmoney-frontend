@@ -3,7 +3,8 @@
 // public origin.
 //
 // WHAT IT REQUIRES:
-//   - the newest ledger run is stamped v5 (v3 is never stamped again), and a v5 run succeeded;
+//   - the newest ledger run is stamped v5 (v3 is never stamped again), and a v5 REGIME run succeeded and published its own as-of
+//     day (a research-tool run, or a run whose regime artifact is empty, publishes no regime row and does not start grading);
 //   - the served regime history holds, from the first v5 run's as-of day on, a label equal to the composite's bucket
 //     (risk_off below the cut, risk_on above, neutral between; the cuts are the snapshot's bucketThresholds, else 0.33 and
 //     0.67) on every day whose bucket has held CONFIRM_READINGS (5) consecutive days, the engine's own confirmation rule.
@@ -66,13 +67,13 @@ export function labelProblems(history: readonly Point[], v5Start: string, cuts: 
 export interface LedgerRead {
   /** The newest run's methodology label, or null when the ledger holds no run. */
   readonly newestLabel: string | null;
-  /** The as-of day of the first succeeded v5 run, or null when none has. */
+  /** The as-of day of the first succeeded v5 regime-tool run whose regime artifact carries that day's row, or null when none has. */
   readonly v5Start: string | null;
 }
 
 export async function readLedger(db: { query<T>(text: string): Promise<T[]> }): Promise<LedgerRead> {
   const [newest] = await db.query<{ label: string }>("SELECT m.version_label AS label FROM analytics_ledger_runs r JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id ORDER BY r.id DESC LIMIT 1");
-  const [first] = await db.query<{ asof: string | null }>("SELECT min(r.asof)::text AS asof FROM analytics_ledger_runs r JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id WHERE m.version_label = 'v5' AND EXISTS (SELECT 1 FROM analytics_ledger_run_events e WHERE e.run_id = r.id AND e.event_type = 'succeeded')");
+  const [first] = await db.query<{ asof: string | null }>("SELECT min(r.asof)::text AS asof FROM analytics_ledger_runs r JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id WHERE m.version_label = 'v5' AND r.tool_id = 'regime' AND EXISTS (SELECT 1 FROM analytics_ledger_run_events e WHERE e.run_id = r.id AND e.event_type = 'succeeded') AND EXISTS (SELECT 1 FROM analytics_output_snapshots o WHERE o.run_id = r.id AND o.artifact_kind = 'regime_snapshots' AND o.natural_keys @> ARRAY[r.asof::text])");
   return { newestLabel: newest?.label ?? null, v5Start: first?.asof ?? null };
 }
 
