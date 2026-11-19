@@ -133,7 +133,8 @@
     "0129_allocation_framework_hard_assets.sql",
     "0130_jobs_live_index_brief_allocation_stats.sql",
     "0131_swarm_briefs_allocation_backfill.sql",
-    "0132_flow_index.sql"
+    "0132_flow_index.sql",
+    "0133_buybacks_refresh_disabled.sql"
   ],
   "exclusions": {
     "roles": [
@@ -146,7 +147,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "541f592a1183b028d6336cca8a05299436baa54b5be37944ae2c46159cb46073",
+  "contentHash": "b15601ea003bfcc3428c0cf364e6fc37a81a64bb525221e9d32da2ad30e732aa",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",

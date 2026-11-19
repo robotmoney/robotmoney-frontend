@@ -1,3 +1,5 @@
+// Disabled by issue 1184: no schedule enqueues buybacks.refresh and no handler is registered. Kept for reference.
+//
 // Periodic refresh of buyback_swaps (issue: live-data contract §1). Calls the
 // chain/buyback-indexer.ts eth_getLogs indexer to discover NEW WETH -> ROBOTMONEY
 // buyback swaps into the primary prop wallet and record them (keyed on tx_hash,

@@ -192,3 +192,27 @@ test("Buyback History reflects the SERVED rows, not the goldens it usually match
   await expect(row.nth(2)).toHaveText("7.00M");
   await expect(table.locator("tfoot td").first()).toHaveText("9.500000 WETH");
 });
+
+// Issue 1184: the buyback indexer is disabled, so the live feed answers
+// `stale: true`. The section says the record is no longer updated and still
+// shows every stored row. A fresh feed (`stale: false`) shows no such line.
+const STALE_LINE = "This record is no longer updated, so recent buybacks may be missing.";
+
+for (const stale of [true, false]) {
+  test(`Buyback History ${stale ? "says the record is no longer updated" : "shows no not-updated line"} when the feed answers stale: ${stale}`, async ({ page }) => {
+    const buybacks = { ...loadBuybacksGolden(), source: "live", stale };
+    await stubEnvironment(page, loadTokenMetricsGolden());
+    await page.route("**/api/dashboards/buybacks", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(buybacks) }));
+    await page.goto("/");
+    await navigate(page, "/tokenomics");
+
+    const table = page.locator("#buybacks .rr-table");
+    const dataRows = table.locator("tbody tr").filter({ hasText: buybacks.rows[0]!.date.slice(0, 4) });
+    await expect(dataRows).toHaveCount(Math.min(buybacks.rows.length, 10));
+    await expect(table.locator("tfoot td").first()).toHaveText(fmtWethLabel(buybacks.totals.wethSpent));
+    const line = page.locator("#buybacks").getByText(STALE_LINE);
+    if (stale) await expect(line).toBeVisible();
+    else await expect(line).toBeHidden();
+  });
+}

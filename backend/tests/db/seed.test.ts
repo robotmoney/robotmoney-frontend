@@ -293,11 +293,13 @@ test("the seed and the snapshot's REAL bootstrap data write the same job_schedul
 
   // §8.1: bootstrap data carries "the pipeline worker's job_schedules rows for
   // the vault, wallet, buyback and project jobs. There are no session schedule
-  // rows." Each named family present and enabled; no swarm kind at all.
-  for (const family of ["vault.", "wallet.", "buybacks.", "projects."]) {
+  // rows." Each named family present and enabled; no swarm kind at all. The
+  // buyback row is present and disabled (issue 1184).
+  for (const family of ["vault.", "wallet.", "projects."]) {
     const present = fromBootstrap.some((r) => r.kind.startsWith(family) && r.enabled);
     expect({ family, present }).toEqual({ family, present: true });
   }
+  expect(fromBootstrap.filter((r) => r.kind === "buybacks.refresh").map((r) => r.enabled)).toEqual([false]);
   expect(fromBootstrap.filter((r) => r.kind.startsWith("swarm."))).toEqual([]);
   // No other table's rows ride along as session scheduling: the file writes no
   // swarm_sessions, swarm_subjects or swarm_recommendations row.

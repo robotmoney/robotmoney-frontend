@@ -130,7 +130,6 @@ test("overview: the AC1 sampler kinds are monitored", async () => {
     "wallet.sample_sleeves",
     "vault.sample_share_price",
     "vault.sample_adapters",
-    "buybacks.refresh",
   ]);
   for (const kind of SAMPLER_KINDS) expect(MONITORED_KINDS).toContain(kind);
 
@@ -138,6 +137,16 @@ test("overview: the AC1 sampler kinds are monitored", async () => {
   const body = res?.body as { production: Array<{ kind: string }> };
   const monitoredKinds = body.production.map((p) => p.kind);
   for (const kind of SAMPLER_KINDS) expect(monitoredKinds).toContain(kind);
+});
+
+// Issue 1184: buybacks.refresh is disabled, so nothing enqueues it. Monitoring
+// it could only raise a permanent "not run" or "stale" alert.
+test("overview: buybacks.refresh is NOT a monitored kind — the job is disabled", async () => {
+  expect(MONITORED_KINDS as readonly string[]).not.toContain("buybacks.refresh");
+
+  const res = await call(req("GET", "/api/admin/overview", OPERATOR));
+  const body = res?.body as { production: Array<{ kind: string }> };
+  expect(body.production.map((p) => p.kind)).not.toContain("buybacks.refresh");
 });
 
 // NO JUDGE LANE TO MONITOR (issue #1026). `swarm.judge` used to be a monitored

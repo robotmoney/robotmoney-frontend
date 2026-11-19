@@ -68,6 +68,15 @@ existing `callBalanceOf` / `callTotalSupply` / `callConvertToAssets`.
   persisted rows marked `stale`; the historical 10-row set (all 2026-03-23,
   total `1.149114 WETH` / `$2,504.31` / `178.82M ROBOTMONEY`, real BaseScan tx
   hashes) is the `seed` provenance backfill (replaces `allocation.html:383-403`).
+- **Indexer**: disabled (issue 1184). Its log scan held the shared analytics
+  worker past its heartbeat budget. The `buybacks.refresh` schedule row is
+  disabled, no handler is registered for the kind, and the admin overview does
+  not monitor it. `chain/buyback-indexer.ts` and `worker/handlers/buybacks.ts`
+  are kept for reference and never run. The endpoint serves the stored
+  `buyback_swaps` rows, so under a `live` source `stale` is always `true`.
+  Under a `stub` source `stale` is `false`. The tokenomics `#buybacks` section
+  and the treasury "Buybacks out" block show "This record is no longer
+  updated, so recent buybacks may be missing." when `stale` is `true`.
 
 **DTO**
 ```ts
@@ -82,7 +91,7 @@ interface BuybackRow {
 interface Buybacks {
   asOf: string;              // ISO timestamp
   source: "live" | "stub";
-  stale: boolean;            // true if ANY row degraded to persisted/seed
+  stale: boolean;            // always true under a live source: no indexer adds rows
   rows: BuybackRow[];        // newest-first
   totals: {
     wethSpent: number;       // 1.149114

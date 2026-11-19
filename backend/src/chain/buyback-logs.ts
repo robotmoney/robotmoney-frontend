@@ -5,9 +5,9 @@
 // wallet.ts::fetchBuybackTransactions).
 //
 // Read path (getBuybacks): serves the durable buyback_swaps table (migration
-// 0015) — the 10 real historical rows are the 'seed' provenance backfill, and
-// the pipeline worker's indexer (chain/buyback-indexer.ts indexBuybacks)
-// adds any NEW live swaps keyed on tx_hash. On a table/read failure it degrades
+// 0015) — the 10 real historical rows are the 'seed' provenance backfill, plus
+// any live swaps the indexer (chain/buyback-indexer.ts) recorded before issue
+// 1184 disabled it. Nothing adds rows any more. On a table/read failure it degrades
 // honestly rather than fabricating rows. Per #50: 'stub'/'stale'/'seed' are
 // never presented as live chain data.
 import { resolveBaseRpcSource, type BaseRpcSource } from "../config.ts";
@@ -29,7 +29,7 @@ export interface BuybackRow {
 export interface Buybacks {
   asOf: string;
   source: BaseRpcSource;
-  stale: boolean; // true when a live source is degraded to persisted/seed rows only
+  stale: boolean; // always true under a live source: no indexer adds rows (issue 1184)
   rows: BuybackRow[]; // newest-first
   totals: { wethSpent: number; valueUsd: number; robotmoneyReceived: number };
 }
@@ -112,12 +112,11 @@ async function computeBuybacks(): Promise<Buybacks> {
     provenance: (["live", "stub", "stale", "seed"].includes(r.provenance) ? r.provenance : "seed") as Provenance,
   }));
 
-  // Honest staleness: only meaningful for a LIVE source. If we claim 'live' but
-  // no row was actually indexed live (only seed/stale persisted rows exist), the
-  // feed is degraded. In stub mode the seeded rows ARE the intended fixture, so
-  // it is not "stale". An empty table is degraded under a live source.
-  const stale =
-    source === "live" && !rows.some((r) => r.provenance === "live");
+  // Honest staleness: only meaningful for a LIVE source. The buyback indexer is
+  // disabled (issue 1184), so a live source serves a record nothing updates:
+  // stale, whatever its rows' provenance. In stub mode the seeded rows ARE the
+  // intended fixture, so it is not "stale".
+  const stale = source === "live";
 
   const totals = rows.reduce(
     (t, r) => {

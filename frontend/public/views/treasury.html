@@ -276,6 +276,7 @@
             <div><dt>Share of the WETH earned</dt><dd x-text="buybackOfFeesLabel()">—</dd></div>
             <div><dt>$ROBOTMONEY bought, held in the primary wallet</dt><dd x-text="buybackBoughtLabel()">—</dd></div>
           </dl>
+          <p class="rr-note" x-show="buybacksStale()" x-cloak data-testid="treasury-buybacks-stale">This record is no longer updated, so recent buybacks may be missing.</p>
           <a class="rr-lnk" href="/tokenomics#buybacks">The buyback record</a>
         </div>
       </div>

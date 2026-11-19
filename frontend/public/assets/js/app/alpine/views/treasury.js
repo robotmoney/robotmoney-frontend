@@ -376,6 +376,9 @@ export function registerTreasuryView(Alpine) {
       return r ? fmtDate(`${String(r.date).slice(0, 10)}T00:00:00Z`) : "—";
     },
     buybackUsdLabel() { return fmtUsd(this.buybacks?.totals?.valueUsd); },
+    // The buyback indexer is disabled (issue 1184), so the live feed reports
+    // stale: the record stops at its last stored buyback.
+    buybacksStale() { return this.buybacks?.stale === true; },
     buybackWethLabel() {
       const w = this.buybacks?.totals?.wethSpent;
       return w == null ? "—" : `${Number(w).toFixed(4)} WETH`;

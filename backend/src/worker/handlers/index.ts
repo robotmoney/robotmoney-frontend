@@ -2,7 +2,6 @@
 // does its work (idempotently, upserting on natural keys). Returns optional JSON
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
-import { refreshBuybacks } from "./buybacks.ts";
 import { refreshFlowIndex } from "./flow-index.ts";
 import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
@@ -100,8 +99,8 @@ export const handlers: Record<string, JobHandler> = {
   // empty and ledger-mode reads can never be armed.
   //
   // ONCE A DAY, ONE REQUEST PER DOMAIN (issue 1375). The schedule row
-  // (db/seed.ts, migration 0123) fires at 04:47 UTC, when no producer run,
-  // projects job or buyback refresh is due. triggerParitySweep()
+  // (db/seed.ts, migration 0123) fires at 04:47 UTC, when no producer run
+  // or projects job is due. triggerParitySweep()
   // (analytics/api-client.ts) posts each domain in turn over the SAME
   // authenticated HTTP boundary the retained analytics handlers above use; the
   // api runs that domain's one set-based statement in Postgres. This handler
@@ -128,8 +127,10 @@ export const handlers: Record<string, JobHandler> = {
       throw err;
     }
   },
-  // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
-  "buybacks.refresh": refreshBuybacks,
+  // NO "buybacks.refresh" (issue 1184). Its log scan halved an eth_getLogs
+  // range over and over from a scan position behind the chain head and held
+  // the analytics lane past its heartbeat budget. handlers/buybacks.ts stays
+  // for reference. A stray job of that kind fails on "no handler registered".
   "flow.index": refreshFlowIndex,
   // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue
   // work any more: system-scheduler-spec.md §4 gives the lifecycle a different

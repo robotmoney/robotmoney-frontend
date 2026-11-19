@@ -37,6 +37,9 @@ export function registerBuybackSummary(Alpine) {
     older() { return (this.page + 1) * BUYBACK_PAGE < this.rows().length; },
     totals() { return this.buybacks?.totals || null; },
     nonLive() { return this.buybacks?.source === "stub"; },
+    // The buyback indexer is disabled (issue 1184), so the live feed reports
+    // stale: the record stops at its last stored buyback.
+    stale() { return this.buybacks?.stale === true; },
     fmtWeth(v) { return v == null ? "—" : Number(v).toFixed(4); },
     fmtWethLabel(v) { return v == null ? "—" : Number(v).toFixed(6) + " WETH"; },
     fmtUsd0(v) { return v == null ? "—" : "$" + Number(v).toLocaleString("en-US", { maximumFractionDigits: 0 }); },

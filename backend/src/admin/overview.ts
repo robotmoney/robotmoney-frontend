@@ -49,8 +49,9 @@ export const SAMPLER_KINDS = [
   "wallet.sample_sleeves",
   "vault.sample_share_price",
   "vault.sample_adapters",
-  "buybacks.refresh",
 ] as const;
+// NOT "buybacks.refresh" (issue 1184): no schedule enqueues it, so monitoring
+// it could only raise a permanent "not run" or "stale" alert.
 
 // NO JUDGE KIND. `swarm.judge` used to be monitored here as the judge's lane,
 // and it is deliberately gone (issue #1026): no queue job judges any more — the
@@ -85,7 +86,6 @@ const KIND_STALE_AFTER_MS: Partial<Record<MonitoredKind, number>> = {
   "wallet.sample_sleeves": 10 * 60_000, // cron: every minute
   "vault.sample_share_price": 4 * 60 * 60_000, // cron: hourly
   "vault.sample_adapters": 4 * 60 * 60_000, // cron: hourly
-  "buybacks.refresh": 24 * 60 * 60_000, // cron: every 6h
 };
 
 // The two research-signal natural keys research.refresh persists.
