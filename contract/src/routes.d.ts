@@ -128,6 +128,19 @@ export const ROUTES: {
     archiveBackups: string;
     archiveFiles: string;
   };
+  flow: {
+    prefix: string;
+    health: string;
+    vault: string;
+    prices: string;
+    events: string;
+    transactions: string;
+    request: string;
+    requestHistory: string;
+    owner: string;
+    ownerClaims: string;
+    ownerPosition: string;
+  };
   pipeline: {
     claim: string;
     renew: string;
