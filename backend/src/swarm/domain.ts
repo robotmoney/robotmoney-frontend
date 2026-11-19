@@ -4469,6 +4469,13 @@ async function recordAbsenceEvents(sessionId: string): Promise<string[]> {
 // never writes to regime_snapshots — stored labels are READ as-is (the
 // classifier owns them) and classifyRegime is only a fallback for rows whose
 // label is null. History is unpadded and emits only real points.
+//
+// THE COMPOSITE, NOT ITS PERCENTILE (issue 1660). Members and judges are served
+// this object, and the composite's rank in its trailing window is no reading
+// of the market since the label is cut on the composite itself (issue 1652).
+// So `composite_percentile` is written null, on the latest and on every
+// history point. The field stays in the shape: a summary stored before this
+// change keeps its number, and the text builders below still read it.
 const regimeSummaryRead = registerQuery({
   role: "rm_app",
   object: "regime_snapshots",
@@ -4477,7 +4484,7 @@ const regimeSummaryRead = registerQuery({
   purpose: "Read the fourteen regime snapshots up to a date for a session's summary.",
   callers: [SWARM_ROUTE, ADMIN_ROUTE],
   probe: {
-    statement: `SELECT date, composite, composite_percentile, regime,
+    statement: `SELECT date, composite, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
            macro_percentile, onchain_percentile, factor_percentile
@@ -4490,7 +4497,7 @@ const regimeSummaryRead = registerQuery({
 });
 export async function buildRegimeSummary(endDate: string, minPoints = 8): Promise<RegimeSummary> {
   const rows = await on(sql, regimeSummaryRead)<any>`
-    SELECT date, composite, composite_percentile, regime,
+    SELECT date, composite, regime,
            macro_regime, onchain_regime, factor_regime,
            macro_index, onchain_index, factor_index,
            macro_percentile, onchain_percentile, factor_percentile
@@ -4509,7 +4516,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8): Promis
     return {
       date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
       composite: c,
-      composite_percentile: num(r.composite_percentile),
+      composite_percentile: null,
       regime: (r.regime ?? (c != null ? classifyRegime(c) : "neutral")) as RegimeLabel,
       macro_percentile: num(r.macro_percentile),
       onchain_percentile: num(r.onchain_percentile),
@@ -4521,7 +4528,7 @@ export async function buildRegimeSummary(endDate: string, minPoints = 8): Promis
   const lc = latest ? num(latest.composite) ?? 0.5 : 0.5;
   return {
     composite: round(lc),
-    composite_percentile: num(latest?.composite_percentile),
+    composite_percentile: null,
     regime: (latest?.regime ?? classifyRegime(lc)) as RegimeLabel,
     macro_regime: (latest?.macro_regime ?? (num(latest?.macro_percentile ?? latest?.macro_index) != null ? classifyRegime(num(latest?.macro_percentile ?? latest?.macro_index)!) : "neutral")) as RegimeLabel,
     onchain_regime: (latest?.onchain_regime ?? (num(latest?.onchain_percentile ?? latest?.onchain_index) != null ? classifyRegime(num(latest?.onchain_percentile ?? latest?.onchain_index)!) : "neutral")) as RegimeLabel,
@@ -4655,20 +4662,36 @@ export function majorityStance(byStance: Record<string, number>): { stance: stri
 // Discrete, one-line points of agreement: quorum, stance split, mean
 // confidence, and (when available) the regime backdrop. Always true of the
 // data actually submitted; never exceeds a sentence, never a take body.
+//
+// The regime line is a function of the STORED summary (issue 1660): a summary
+// written before 1660 carries `composite_percentile` and re-derives its old
+// sentence; a newer one carries only `composite` and reads it to 2 decimals.
 export function buildConsensus(
   active: number, submitted: number, participation: number,
   byStance: Record<string, number>, meanConfidence: number | null,
-  regimeSummary: { composite_percentile?: number | null; regime?: string } | null,
+  regimeSummary: RegimeTextSummary | null,
 ): string[] {
   if (submitted === 0) return [];
   const points: string[] = [`${submitted} of ${active} members submitted (${Math.round(participation * 100)}% participation).`];
   const breakdown = stanceBreakdown(byStance);
   if (breakdown) points.push(`Stance split: ${breakdown}.`);
   if (meanConfidence != null) points.push(`Mean confidence ${meanConfidence.toFixed(2)} across submitted takes.`);
-  if (regimeSummary?.composite_percentile != null) {
-    points.push(`Regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile (${regimeSummary.regime ?? "unclassified"}).`);
-  }
+  const reading = regimeReading(regimeSummary);
+  if (reading) points.push(`Regime ${reading} (${regimeSummary?.regime ?? "unclassified"}).`);
   return points;
+}
+
+/** The part of a stored regime_summary the consensus and rationale text read. */
+export type RegimeTextSummary = { composite?: number | null; composite_percentile?: number | null; regime?: string };
+
+// "composite at the 3rd percentile" for a summary stored before issue 1660,
+// "composite 0.38" for one stored after, null when the summary has neither.
+function regimeReading(regimeSummary: RegimeTextSummary | null): string | null {
+  if (regimeSummary?.composite_percentile != null) {
+    return `composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile`;
+  }
+  if (regimeSummary?.composite != null) return `composite ${regimeSummary.composite.toFixed(2)}`;
+  return null;
 }
 
 // Recommendation-voiced "why": leads with the majority stance actually
@@ -4676,13 +4699,14 @@ export function buildConsensus(
 // the two can never collide (cheap check: rationale !== synthesis).
 export function buildRationale(
   subjectLabel: string, byStance: Record<string, number>, submitted: number,
-  meanConfidence: number | null, regimeSummary: { composite_percentile?: number | null } | null,
+  meanConfidence: number | null, regimeSummary: RegimeTextSummary | null,
 ): string {
   const majority = majorityStance(byStance);
   const parts: string[] = [];
   if (majority) parts.push(`Majority stance is ${majority.stance} (${majority.count} of ${submitted} submitted takes)`);
   if (meanConfidence != null) parts.push(`mean confidence ${meanConfidence.toFixed(2)}`);
-  if (regimeSummary?.composite_percentile != null) parts.push(`regime composite at the ${ordinal(Math.round(regimeSummary.composite_percentile * 100))} percentile`);
+  const reading = regimeReading(regimeSummary);
+  if (reading) parts.push(`regime ${reading}`);
   return `${parts.length ? parts.join(", ") : "No stance data available"} on ${subjectLabel}.`;
 }
 
@@ -4722,7 +4746,7 @@ export function buildDisagreements(subjectLabel: string, authoredTakes: any[]): 
         { member_id: high.member_id, view: high.body },
         { member_id: low.member_id, view: low.body },
       ],
-      what_settles: `Whether the next regime snapshot's composite percentile moves toward the ${high.stance} or the ${low.stance} read for ${subjectLabel}.`,
+      what_settles: `Whether the next regime snapshot's composite moves toward the ${high.stance} or the ${low.stance} read for ${subjectLabel}.`,
     });
   }
   return disagreements;
@@ -4948,7 +4972,7 @@ export async function judgeInputFromFrozen(
     minTakes,
     byStance: (rec.stances as Record<string, number>) ?? {},
     meanConfidence: typeof rec.meanConfidence === "number" ? rec.meanConfidence : null,
-    regimeSummary: (s.regime_summary as { composite_percentile?: number } | null) ?? null,
+    regimeSummary: (s.regime_summary as JudgeInput["regimeSummary"]) ?? null,
   };
 }
 
@@ -6519,7 +6543,7 @@ export async function submitJudgement(
     const judged = await judgeInputFromFrozen(frozen, Number(cfg?.min_takes ?? 3), tx);
     if (judged.takes.length === 0) return refuseSubmission(409, "nothing_to_judge:no_takes");
     if (!judged.takes.some((t) => t.body.trim() !== "")) return refuseSubmission(409, "nothing_to_judge:no_take_bodies");
-    if (inputsDigest(judged) !== claimedDigest) return refuseSubmission(409, "inputs_digest_mismatch");
+    if (inputsDigest(judged, DIGEST_SCHEME) !== claimedDigest) return refuseSubmission(409, "inputs_digest_mismatch");
 
     // ── THE ANSWER PARSES, OR THERE IS NO JUDGEMENT ─────────────────────────
     const drops = noDrops();

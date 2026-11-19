@@ -707,7 +707,7 @@ function inputsDigest(i) {
     subjectLabel: i.subjectLabel, minTakes: i.minTakes,
     byStance: Object.keys(i.byStance ?? {}).sort().map((k) =&gt; [k, i.byStance[k]]),
     meanConfidence: i.meanConfidence ?? null,
-    regimeComposite: i.regimeSummary?.composite_percentile ?? null,
+    regimeComposite: i.regimeSummary?.composite ?? null,
   }));
 }
 

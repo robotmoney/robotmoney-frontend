@@ -258,6 +258,7 @@ export interface SwarmTakeReceipt {
 export interface RegimeHistoryPoint {
   date: string;
   composite: number | null;
+  /** null on a session aggregated after issue 1660 (D86); a number only on an older stored summary. */
   composite_percentile: number | null;
   regime: RegimeLabel;
   macro_percentile: number | null;
@@ -271,6 +272,7 @@ export interface RegimeHistoryPoint {
 // verbatim (archive fixtures and live sessions share the shape).
 export interface RegimeSummary {
   composite: number;
+  /** null on a session aggregated after issue 1660 (D86): the swarm reads `composite`. A number only on an older stored summary. */
   composite_percentile: number | null;
   regime: RegimeLabel;
   macro_regime: RegimeLabel;

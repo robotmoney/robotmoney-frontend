@@ -686,7 +686,7 @@ around it is tolerated):
   in that key order, with `member_name` and `weights` `null` when absent;
   `byStance` becomes `[[stance, count], ...]` sorted by stance;
   `meanConfidence` is the value or `null`; and `regimeComposite` is
-  `input.regimeSummary.composite_percentile`, or `null`. The server recomputes
+  `input.regimeSummary.composite`, or `null`. The server recomputes
   it over the input it served and answers `409 inputs_digest_mismatch` when
   yours differs, writing nothing, so a wrong digest is safe to fix and retry.
   With the item's `input` saved to `./input.json`:
@@ -696,7 +696,7 @@ around it is tolerated):
     takes: [.takes[] | {member_id, member_name, revision, stance, confidence, body, weights}],
     subjectLabel, minTakes,
     byStance: (.byStance | to_entries | sort_by(.key) | map([.key, .value])),
-    meanConfidence, regimeComposite: .regimeSummary.composite_percentile}' ./input.json \
+    meanConfidence, regimeComposite: .regimeSummary.composite}' ./input.json \
     | shasum -a 256 | cut -c1-64
   ```
 

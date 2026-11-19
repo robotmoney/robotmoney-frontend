@@ -164,8 +164,8 @@ for (const id of sessionIds) {
       console.log(
         `           digest scheme: stored=${replay.digestScheme ?? "(none)"} current=${DIGEST_SCHEME}` +
           (replay.digestVerdict === "historical_divergence"
-            ? "  — written under an earlier canonical form; a raw comparison is expected to differ (D44)"
-            : "  — SAME scheme as this code implements now; this divergence is a real finding"),
+            ? "  — written under a canonical form this code does not implement; a raw comparison is expected to differ (D44)"
+            : "  — recomputed under the row's own scheme; this divergence is a real finding"),
       );
       console.log(`           digest stored:    ${replay.digestStored}`);
       console.log(`           digest rederived: ${replay.digestRederived}`);

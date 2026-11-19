@@ -3569,6 +3569,8 @@ consumer.
 
 ## D44 — `digest_scheme`: a recorded marker, not a cutover date, discriminates which canonical form wrote an `inputs_digest` (issue #829, third instance of the shape #766 fixed)
 
+**Followed by** [D86](#d86): `derivation-v2` digests the regime composite, and replay recomputes each row under its own stamped scheme.
+
 **Decision.** `swarm_session_judgements` gains a `digest_scheme` column
 (migration 0052), written on every insert with `judge.ts`'s new `DIGEST_SCHEME`
 constant. `swarm-judge-replay` (`judge-replay.ts`) uses it, not a hardcoded
@@ -6590,3 +6592,22 @@ This is SDK tooling, not a methodology change: with every parameter at its decla
 **Rejected.** Shipping the analyst's values with the tooling: that would change published figures in a tooling change. Supporting `drop-unclosed` for every source: GeckoTerminal stamps `NEW_TOKENS` with the poll day, so it would discard every new row.
 
 **Enforced by** `packages/analyst-sdk/tests/fill-policy.test.ts`, `packages/analyst-sdk/tests/complete-day.test.ts`, `backend/tests/analytics-incomplete-day.test.ts`, `backend/tests/forward-fill-cap.test.ts`, `packages/analyst-sdk/tests/report-parity.test.ts`, `backend/tests/regime-replay-published.test.ts` and `scripts/tests/unit/regime-indicator-glossary-links.test.ts`. Run semantics in [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+---
+
+<a id="d86"></a>
+## D86 — Digest scheme `derivation-v2`: the judge digest reads the regime composite, not its percentile (follows D44 and D84; issue 1660)
+
+**Decision.**
+
+1. **What members and judges are served.** A session aggregated from now on stores `regime_summary.composite_percentile` as `null`, on the latest reading and on every `history` point. `composite`, `regime`, the panel labels and the panel percentiles are unchanged. A session stored earlier keeps its summary byte for byte, and the contract keeps the field as `number | null`.
+2. **The text.** The consensus line, the rationale and the disagreement's `what_settles` read the composite ("Regime composite 0.38 (risk_off)."). The text is a function of the stored summary: one stored with a percentile re-derives its old sentence, so the rationale ladder check still reproduces old sessions.
+3. **The digest.** `DIGEST_SCHEME` is `derivation-v2`. Under it `regimeComposite` is `regimeSummary.composite`, or `null`. Under `derivation-v1` it stays `regimeSummary.composite_percentile`. `canonicalizeDigestInputs(input, scheme)` takes the scheme and throws on one it does not know.
+4. **Who uses which scheme.** `submitJudgement` checks a claimed digest under `derivation-v2` only and stamps it on the row; a judge still on the v1 recipe gets `409 inputs_digest_mismatch` and writes nothing. `judge-replay.ts` and the consensus receipt recompute a stored row under the scheme stamped on that row, so a `derivation-v1` row still reproduces. A row that fails under its own scheme is a `mismatch`.
+5. **The recipe.** The judge recipe in `frontend/public/skills/swarm-onboarding/SKILL.md` and `frontend/public/views/docs/investment-swarm/participation.html` digests `regimeSummary.composite`.
+
+**Why.** D84 cut the regime label on the composite and left the composite's rank in its trailing three years as information only. The swarm was still told that rank. On 16 Nov the treasury session's consensus read "Regime composite at the 3rd percentile (risk_off)." while the composite was 0.38. With the percentile null on new sessions, a v1 digest would cover a constant, so the digested field moves to the number the swarm reads. D44 already made a scheme bump a recorded marker; this is its first use.
+
+**Rejected.** Keeping `derivation-v1` and digesting a null: the digest would stop covering the regime reading the members were given. Rewriting stored sessions, judgements, receipts or disagreements: the record is append-only.
+
+**Enforced by** `backend/tests/swarm-judge.test.ts`, `backend/tests/swarm-regime-composite.test.ts`, `backend/tests/regime-summary-history.test.ts` and `scripts/tests/unit/swarm-judge-recipe.test.ts`.

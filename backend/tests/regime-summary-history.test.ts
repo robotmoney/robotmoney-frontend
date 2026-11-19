@@ -37,7 +37,8 @@ test("buildRegimeSummary(endDate) selects the snapshot row matching endDate even
 
   // Latest selected snapshot matches 2026-09-10
   expect(summary.composite).toBe(0.6045);
-  expect(summary.composite_percentile).toBe(0.62);
+  // Issue 1660: the swarm is served the composite, never its percentile.
+  expect(summary.composite_percentile).toBeNull();
   expect(summary.regime).toBe("neutral");
   expect(summary.macro_percentile).toBe(0.60);
   expect(summary.onchain_percentile).toBe(0.58);
@@ -51,8 +52,12 @@ test("buildRegimeSummary(endDate) selects the snapshot row matching endDate even
   const lastPoint = summary.history[summary.history.length - 1];
   expect(lastPoint.date).toBe("2026-09-10");
   expect(lastPoint.composite).toBe(0.6045);
-  expect(lastPoint.composite_percentile).toBe(0.62);
+  expect(lastPoint.composite_percentile).toBeNull();
   expect(lastPoint.regime).toBe("neutral");
+  // Every history point, not just the last, carries a null percentile and the snapshot's own composite and regime.
+  expect(summary.history.map((h) => h.composite_percentile)).toEqual([null, null, null]);
+  expect(summary.history.map((h) => h.composite)).toEqual([0.55, 0.58, 0.6045]);
+  expect(summary.history.map((h) => h.regime)).toEqual(["neutral", "neutral", "neutral"]);
 
   // Newer dates are excluded
   expect(dates).not.toContain("2026-09-11");
