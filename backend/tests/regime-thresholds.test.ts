@@ -127,7 +127,7 @@ test("LIVE aggregation path: buildRegimeSummary writes NO synthetic rows and emi
   }
 });
 
-test("buildRegimeSummary history rows emit percentiles when source columns exist", async () => {
+test("buildRegimeSummary history rows emit panel percentiles when source columns exist, and never the composite percentile", async () => {
   await sql`
     INSERT INTO regime_snapshots (
       date, composite, composite_percentile, regime,
@@ -141,7 +141,9 @@ test("buildRegimeSummary history rows emit percentiles when source columns exist
   const row = summary.history[0];
   expect(row.date).toBe("2026-07-09");
   expect(row.composite).toBe(0.65);
-  expect(row.composite_percentile).toBe(0.72);
+  // Issue 1660 (D86): the swarm is served the composite, so its percentile is null even when the column has one.
+  expect(row.composite_percentile).toBeNull();
+  expect(summary.composite_percentile).toBeNull();
   expect(row.regime).toBe("risk_on");
   expect(row.macro_percentile).toBe(0.81);
   expect(row.onchain_percentile).toBeNull();
