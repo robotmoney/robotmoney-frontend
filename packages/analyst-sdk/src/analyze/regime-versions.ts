@@ -19,7 +19,7 @@ import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
 // v4: reserved for the frozen, versioned publication model
 // (docs/technical/regime-engine.md section 11.8.3, PD10). Never stamped here.
 //
-// v5 (issue 1652, decision D86): v3 with the regime label cut on the composite
+// v5 (issue 1652, decision D87): v3 with the regime label cut on the composite
 // itself and each panel label on its panel index. The rolling ranks of the
 // composite and the panel indices stay in the output as information only.
 export const REGIME_VERSIONS = ["v3", "v5"] as const;

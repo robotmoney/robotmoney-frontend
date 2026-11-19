@@ -85,7 +85,7 @@ describe("C23-subject-spacing close spacing (issue 1310)", () => {
   });
 });
 
-// Issue 1684 (D86): the producer runs production's pair or the stage target's boot-anchored hourly pair; nothing else.
+// Issue 1684 (D87): the producer runs production's pair or the stage target's boot-anchored hourly pair; nothing else.
 describe("the producer's schedule pair", () => {
   test("production's pair and stage's hourly pair pass", () => {
     expect(regimeCronProblems("30 */3 * * *", "0 */3 * * *")).toEqual([]);

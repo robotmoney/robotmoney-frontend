@@ -540,14 +540,14 @@ steps:
   # production twin. It watches one scheduled analytics run on stage, which carries production's
   # dump and connection budget, and fails on any api request of 5 s or more or any db_saturated.
   # From release v0.9.2 (issue 1684) it waits only for READY, so its tick lands during the soak, and
-  # stage's producer runs hourly from a boot-anchored minute (D86): at most 190 minutes in all.
+  # stage's producer runs hourly from a boot-anchored minute (D87): at most 190 minutes in all.
   - id: "Q34a-analytics-load"
     standing: []
     host: "target"
     phase: "qa"
     since: "v0.7.1"
     stageOnly: true
-    description: "Analytics load: wait for the next scheduled research run the analytics-producer's own cron names (stage's boot-anchored hourly schedule, D86) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
+    description: "Analytics load: wait for the next scheduled research run the analytics-producer's own cron names (stage's boot-anchored hourly schedule, D87) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
     cmds:
       - ["bun", "scripts/release/analytics-load-check.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0

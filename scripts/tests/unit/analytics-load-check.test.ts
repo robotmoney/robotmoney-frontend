@@ -112,7 +112,7 @@ describe("the verdict", () => {
 });
 
 describe("the window", () => {
-  // Issue 1684: the check reads the producer's own schedule; stage's is hourly from a boot-anchored minute (D86).
+  // Issue 1684: the check reads the producer's own schedule; stage's is hourly from a boot-anchored minute (D87).
   const PROD = "0 */3 * * *";
   const at = (cron: string, iso: string) => nextScheduledRun(cron, new Date(iso))?.toISOString();
 

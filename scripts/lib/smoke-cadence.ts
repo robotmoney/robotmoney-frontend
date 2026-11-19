@@ -184,7 +184,7 @@ const REALISTIC: SmokeCadence = {
 };
 
 /**
- * THE STAGE TARGET'S ANALYTICS SCHEDULE (issue 1684, D86). A realistic boot
+ * THE STAGE TARGET'S ANALYTICS SCHEDULE (issue 1684, D87). A realistic boot
  * under RM_ENV=stage does not keep production's 3-hourly grid: the release's
  * analytics load check (Q34a-analytics-load) would idle up to 3 hours for its
  * tick. The boot instead sets an HOURLY schedule anchored to its own time:

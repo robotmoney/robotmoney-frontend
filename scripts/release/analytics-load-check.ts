@@ -18,7 +18,7 @@
 // and PRODUCER_REGIME_CRON from `docker inspect`; unreadable crons exit 2), waits
 // for the next research slot that cron names, and follows the producer's log
 // from it. On the stage target that is an hourly slot anchored to the boot,
-// about 15 minutes after it (D86, issue 1684); production's is `0 */3 * * *`.
+// about 15 minutes after it (D87, issue 1684); production's is `0 */3 * * *`.
 // The window closes 5 minutes after the tick's `[analytics] regime asof` line
 // (backend/src/analytics/index.ts), or at its cap, which fails when that line
 // never comes (issue 1567: a window is a cap, never a fixed wait). The cap is

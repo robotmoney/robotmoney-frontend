@@ -31,7 +31,7 @@
 // PRODUCER_RESEARCH_CRON (scripts/lib/smoke-cadence.ts) so research cadence and
 // swarm cadence are stated in ONE file. Under RM_ENV=stage the realistic
 // profile's crons are the stage target's boot-anchored hourly pair instead
-// (stageProducerCrons, issue 1684, D86): a schedule, never a run started by
+// (stageProducerCrons, issue 1684, D87): a schedule, never a run started by
 // hand; RM_ENV=prod keeps production's 3-hourly pair. A fast-cadence boot — CI, plain
 // `bun run smoke`, and the smoke-twin's deliberate `--static-port --cadence fast`
 // — injects neither, so compose resolves the COMMITTED production defaults
@@ -156,7 +156,7 @@ export function resolveSmokeEnv(
   const cadence = resolveSmokeCadence({ stage: opts.stage === true, cadence: opts.cadence });
   const standingStack = opts.standingStack ?? opts.stage === true;
   const rmEnv = opts.rmEnv ?? env.RM_ENV;
-  // The stage target's first tick lands just after its boot, hourly from then on (issue 1684, D86); production keeps its grid.
+  // The stage target's first tick lands just after its boot, hourly from then on (issue 1684, D87); production keeps its grid.
   const crons = cadence.profile === "realistic" && rmEnv === "stage" ? stageProducerCrons(opts.now ?? new Date()) : cadence;
   const producerCronEnv: Record<string, string> = cadence.profile === "realistic"
     ? { PRODUCER_REGIME_CRON: crons.regimeCron, PRODUCER_RESEARCH_CRON: crons.researchCron }

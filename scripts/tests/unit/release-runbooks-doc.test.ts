@@ -7,7 +7,7 @@
 //   - §4.4: the runner tears stage down after a pass, and --keep-stage keeps it;
 //   - §4.6: docs/** is check-only;
 //   - §4.7: the deferred session grade's hand command passes --release;
-//   - decisions.md: D86 records the boot-anchored hourly stage schedule.
+//   - decisions.md: D87 records the boot-anchored hourly stage schedule.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -66,8 +66,8 @@ describe("the release policy says what the runner does (issue 1684)", () => {
     for (const c of cmds) expect(c).toMatch(/--release v\S+/);
   });
 
-  test("decisions.md: D86 records the boot-anchored hourly stage schedule", () => {
-    const d86 = flat(section(decisions, /^## D86 /));
+  test("decisions.md: D87 records the boot-anchored hourly stage schedule", () => {
+    const d86 = flat(section(decisions, /^## D87 /));
     expect(d86).toMatch(/hourly/);
     expect(d86).toMatch(/boot/);
     expect(d86).toMatch(/stage/i);

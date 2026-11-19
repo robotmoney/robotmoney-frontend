@@ -96,7 +96,7 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
     expect(r.composeEnv.PRODUCER_RESEARCH_CRON).toBe("0 */3 * * *");
   });
 
-  // Issue 1684 (D86): the stage target's first analytics tick lands about 15 minutes after its boot, hourly from then
+  // Issue 1684 (D87): the stage target's first analytics tick lands about 15 minutes after its boot, hourly from then
   // on. The boot sets a schedule and starts no run; production keeps its 3-hourly grid.
   test("a realistic RM_ENV=stage boot anchors hourly producer crons to the boot's minute; prod keeps 3-hourly; fast sets neither", () => {
     const at = (iso: string, rmEnv: string) => resolveSmokeEnv({}, { stage: true, rmEnv, now: new Date(iso) }).composeEnv;

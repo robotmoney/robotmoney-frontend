@@ -21,7 +21,7 @@
 //   4. it REPORTS the last parity sweep's duration, and fails a dead one; and
 //      the sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375,
 //      migration 0123): the one schedule this upgrade intends to move.
-// The stage target's producer runs hourly from a minute its boot anchors (D86),
+// The stage target's producer runs hourly from a minute its boot anchors (D87),
 // so its first tick lands just after READY; the check itself runs unchanged.
 //
 // `--sessions` comes from the target's `watchSessions` (./target.ts). With
@@ -155,7 +155,7 @@ export function parseSessionsFlag(value: string | undefined): WatchSessions | { 
  * PURE. The producer's schedule is one of the two pairs a target runs (issue 1684):
  * production's, regime at minute 30 and research at minute 0 in the same hours
  * (every third hour), or the stage target's boot-anchored pair, both
- * hourly with regime 30 minutes after research (D86). Any other pair is a problem.
+ * hourly with regime 30 minutes after research (D87). Any other pair is a problem.
  */
 export function regimeCronProblems(regime: string, research: string): string[] {
   const [rm, rh, ...rRest] = regime.trim().split(/\s+/);

@@ -277,7 +277,7 @@ its tick lands during the soak instead of after it. It runs `scripts/release/ana
 on the stage host. The check starts no analytics run. It reads the analytics-producer container's
 own schedule (`PRODUCER_RESEARCH_CRON` and `PRODUCER_REGIME_CRON`, from `docker inspect`; crons it
 cannot read exit 2 with the reason), waits for the next research slot, and follows the producer's
-log from it. **The stage target's schedule is anchored to its boot ([D86](../decisions.md#d86)).**
+log from it. **The stage target's schedule is anchored to its boot ([D87](../decisions.md#d87)).**
 A realistic boot under `RM_ENV=stage` sets research to minute `m` of every hour, where `m` is the
 boot's minute plus 15, and regime 30 minutes after research; the first tick lands about 15 minutes
 after the boot, so after READY, and a stage resume hours later waits at most an hour. The boot sets
@@ -751,7 +751,7 @@ a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records t
 
 | Id | Invariant | Status | Note |
 |---|---|---|---|
-| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). The stage target runs hourly from a boot-anchored minute, regime 30 minutes after research ([D86](../decisions.md#d86)); the script reads whatever the container names. A cron the script cannot expand is a WARN |
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). The stage target runs hourly from a boot-anchored minute, regime 30 minutes after research ([D87](../decisions.md#d87)); the script reads whatever the container names. A cron the script cannot expand is a WARN |
 | R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
 | R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
 | R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |
