@@ -278,11 +278,14 @@ jobs:
       # Issue 1477: format 1 has one writer. csvb and the archive store write the
       # same day-cut backups byte for byte, the planted junction cases of the
       # archive routes ran, and the api-recorded fixture is reproduced unchanged.
+      # Issue 1436: csvb's API fill over HTTP matches a replica backup of the
+      # same database, and the SDK's inputs agree (csvb-api-parity).
       - name: Format 1 writer parity proofs ran (issue 1477)
         shell: bash
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/csvb-api-archive-parity.test.ts:2
+          tests/csvb-api-parity.test.ts:2
           tests/api/public-analytics-archives.test.ts:27
           tests/analyst-sdk-public-archive-recording.test.ts:2
       # Issue 1498: the vault TVL conversion keeps the raw amount as a BigInt

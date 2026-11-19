@@ -123,6 +123,47 @@ GitHub rejects files over 100 MB), `--pause-ms`, `--max-seconds`, `--statement-t
 `--only table,table`, `--env-file`. The staged files are verified before they join the repo; `csvb finish` completes
 a run interrupted after staging.
 
+### From the public archive API (`--source api`)
+
+Anyone can fill a backup repo from the public archive routes, with no credentials (issue 1436):
+
+```
+bun run csvb backup --source api --repo ~/robotmoney-archives/api-copy [--api https://robotmoney.network] [--max-requests 500]
+bun run csvb verify --repo ~/robotmoney-archives/api-copy
+```
+
+`--source` is `db` (the default, the replica backup above) or `api`. The API source reads only
+`GET /api/public/analytics/archive/backups`, paged by `nextCursor`, and `GET /api/public/analytics/archive/<path>`. It
+fetches each listed backup the repo lacks, oldest first: the record, then every file the record lists. The repo must
+hold a prefix of the served list. A backup id the list does not contain stops the run before any body is fetched.
+Like the database source, it refuses a `--repo` inside a robotmoney-frontend checkout. It writes files only and never
+runs git. The replica options (`--env-file`, `--statement-timeout-s`, `--part-mb`, `--only`, `--pause-ms`,
+`--max-seconds`, `--max-rss-mb`) are refused with `--source api`, and `--api` and `--max-requests` with `--source db`
+(exit 2).
+
+- **Verification.** Each file's gzip size must equal `bytes_gz` when the record carries it (the API's records do not:
+  gzip bytes depend on the encoder). Its inflated size must equal `bytes_raw`, its inflated SHA-256 `sha256_raw`, and
+  its row count `rows`. A file that fails is fetched again, within the retry limit.
+- **Atomic backups.** A backup is assembled in `<repo>/.api-fill` and renamed to `csv/<backup id>` only after every
+  file verifies, so no partial backup is ever under `csv/`. The record is kept byte for byte as served
+  (`source: "api"`, `consistency: "paged"`). SIGINT or SIGTERM removes the temporary directory and exits 1. A later
+  run resumes at the first missing backup.
+- **Pacing.** One request at a time, starts at least 1 second apart, and within the public budgets of
+  `@robotmoney/contract` in any minute: `PUBLIC_ANALYTICS_TOKENS_PER_MINUTE` (an archive body costs
+  `PUBLIC_ANALYTICS_HEAVY_COST`, the list and a record `PUBLIC_ANALYTICS_LIST_COST`) and
+  `PUBLIC_ANALYTICS_BYTES_PER_MINUTE`. A request that would pass a budget waits. Every request carries the User-Agent
+  `csvb/<package version>`.
+- **Retries.** A 429 or 503 waits its `Retry-After`. A network error or another 5xx waits a full-jitter backoff of 1 to
+  60 seconds. Any other 4xx fails the run at once. A request is retried at most 5 times; the sixth failure fails the run.
+- **Request cap.** `--max-requests` (default 500) counts every request, retries included. The run stops before the
+  request that would pass it, keeps every complete backup, prints how many backups remain and exits 3. Run it again
+  to continue.
+
+Exit codes: 0 the repo holds every served backup, 1 a failure (earlier complete backups stay), 2 a refused option,
+3 the request cap stopped the run. The API source needs the `contract` folder beside `packages/` (it reads the
+budgets there), so a sparse clone adds `packages/csvb contract`. The scheduled backup image holds no `contract` and runs
+only the database source.
+
 ## Scheduled backups
 
 The `csvb-backup` container (`docker-compose.yml`, `Dockerfile` here, issue 1608, D82) runs `csvb serve` so no one
@@ -171,3 +212,5 @@ container. `.github/workflows/csvb.yml` runs the suite. `tests/fixtures/legacy/`
 backups (never production data), written once by csvb before the day cut (robotmoney/csv-backups `d60f710`) from the
 rows of the SDK's synthetic `repo-plus-increment` archive fixture; `packages/analyst-sdk/tests/fixtures/archive/legacy-snapshot/`
 is a copy of it. The byte parity between csvb and the archive routes is `backend/tests/csvb-api-archive-parity.test.ts`.
+`tests/api-fill.test.ts` runs the API source against a fake archive replaying the SDK's recording of the real routes,
+and `backend/tests/csvb-api-parity.test.ts` checks an API fill over HTTP against a replica backup of one database.

@@ -20,7 +20,9 @@ import { BACKUP_ID_RE, CSV_DIR, backupDir, dataFileName, dataPath, parseDbTime, 
 import { keyOf, loadRecords, resolvePath, scanCsvGz, stateHash, type Layout, type Scanned, type State } from "./repo.ts";
 
 function compare(f: FileRecord, s: Scanned, out: string[]): void {
-  if (s.sha256_gz !== f.sha256_gz || s.bytes_gz !== f.bytes_gz) out.push(`${f.path}: compressed bytes differ from the record`);
+  // An API record (source "api") carries no compressed size or hash: the gzip bytes depend on the encoder, and the
+  // content is checked by its uncompressed bytes alone.
+  if ((f.sha256_gz !== undefined && s.sha256_gz !== f.sha256_gz) || (f.bytes_gz !== undefined && s.bytes_gz !== f.bytes_gz)) out.push(`${f.path}: compressed bytes differ from the record`);
   if (s.sha256_raw !== f.sha256_raw || s.bytes_raw !== f.bytes_raw) out.push(`${f.path}: uncompressed bytes differ from the record`);
 }
 

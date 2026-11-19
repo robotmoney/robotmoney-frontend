@@ -70,35 +70,30 @@ no HTTP request, and a missing input is an error, never a download.
 **1. Get a local copy (acquisition).** A local copy is a directory of format 1 backups
 (`csv/<backup id>/backup.json` plus the gzipped archives it lists), the layout csvb
 writes into robotmoney/csv-backups and the public archive routes serve (see "Archives
-(format 1)"). The archive tool, csvb, lives beside this package in `packages/csvb` and
-will own these fills (`csvb backup --source api`; its download client is follow-up issue
-1436). Until then the API-only fill is these shell commands
-(`curl`, `jq`, `gunzip`, `sha256sum`): list the sealed backups, and for each backup not yet in
-the copy fetch every archive its record lists, check each one's `sha256_raw` (the hash of its uncompressed bytes, so any gzip encoder's output verifies), and write
-the record last, so an interrupted backup is fetched again and never half-kept. `curl
---retry` waits out a `429` or `503` with its `Retry-After`.
+(format 1)"). The archive tool, csvb, lives beside this package in `packages/csvb`, and
+`csvb backup --source api` fills a local copy from the public archive routes, with no
+credentials. Add it to a sparse clone with `git sparse-checkout add packages/csvb contract`,
+then run `bun install` in `packages/csvb`. csvb lists the sealed backups and, for each one the
+copy lacks, fetches its record and every archive it lists. It checks each archive's size,
+`sha256_raw` (the hash of its uncompressed bytes, so any gzip encoder's output verifies) and
+row count, and moves a backup into the copy only once all of it verifies, so an interrupted
+backup is fetched again and never half-kept. It paces itself to the public rate limits,
+and it stops after `--max-requests` requests (default 500) with exit 3, so `fill` runs it
+again until it is done (`packages/csvb/README.md`, "Making a backup"). csvb never writes
+inside a robotmoney-frontend checkout, so the copies live in `$ARCHIVES`.
 
 <!-- readme-test: acquire -->
 ```sh
-API="${API:-https://robotmoney.network/api/public/analytics}"
+API="${API:-https://robotmoney.network}"
+CSVB="${CSVB:-bun run --cwd ../csvb csvb}"
+ARCHIVES="${ARCHIVES:-$HOME/robotmoney-archives}"
 fill() {
-  mkdir -p "$1/csv"
-  curl -fsS --retry 8 "$API/archive/backups?limit=1000" | jq -r '.backups[].record' | while read -r rec; do
-    case "$rec" in ''|.|*/|/*|*..*|*[!A-Za-z0-9._/-]*) echo "bad path" >&2; exit 1;; esac
-    [ -f "$1/$rec" ] && continue
-    curl -fsS --retry 8 "$API/archive/$rec" -o "$1/$rec.part" --create-dirs
-    jq -r '.append_only[].files[] | "\(.sha256_raw)  \(.bytes_raw)  \(.path)"' "$1/$rec.part" | while read -r sum raw path; do
-      case "$raw" in ''|*[!0-9]*) echo "bad bytes_raw" >&2; exit 1;; esac
-      [ "$raw" -le 67108864 ] || { echo "bytes_raw over 64 MiB" >&2; exit 1; }
-      case "$path" in ''|.|*/|/*|*..*|*[!A-Za-z0-9._/-]*) echo "bad path" >&2; exit 1;; esac
-      curl -fsS --retry 8 "$API/archive/$path" -o "$1/$path" --create-dirs
-      # Read at most bytes_raw + 1 inflated bytes, so a hostile gzip cannot fill the disk.
-      gunzip -c "$1/$path" 2>/dev/null | head -c $((raw+1)) > "$1/$path.raw" || true
-      got="$(wc -c < "$1/$path.raw")"; hash="$(sha256sum < "$1/$path.raw" | cut -d' ' -f1)"; rm -f "$1/$path.raw"
-      [ "$got" = "$raw" ] && [ "$hash" = "$sum" ] || { echo "corrupt: $path" >&2; exit 1; }
-    done || return 1
-    mv "$1/$rec.part" "$1/$rec"
+  local code=3
+  while [ "$code" = 3 ]; do
+    code=0
+    $CSVB backup --source api --api "$API" --repo "$ARCHIVES/$1" || code=$?
   done
+  return "$code"
 }
 fill api-copy
 ```
@@ -110,8 +105,8 @@ holds. Here the first recorded backup stands in for the clone:
 
 <!-- readme-test: acquire -->
 ```sh
-mkdir -p repo-copy/csv
-cp -R tests/fixtures/archive/api-recorded/csv/2001-01-02T000000Z repo-copy/csv/
+mkdir -p "$ARCHIVES/repo-copy/csv"
+cp -R tests/fixtures/archive/api-recorded/csv/2001-01-02T000000Z "$ARCHIVES/repo-copy/csv/"
 fill repo-copy
 ```
 
@@ -131,8 +126,8 @@ finds the run's frozen vintage and writes exactly those source values:
 
 <!-- readme-test: run -->
 ```sh
-bun run inputs --archive api-copy --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out api-fill
-bun run inputs --archive repo-copy --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out repo-fill
+bun run inputs --archive "$ARCHIVES/api-copy" --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out api-fill
+bun run inputs --archive "$ARCHIVES/repo-copy" --run 0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2 --out repo-fill
 cmp api-fill/inputs.csv repo-fill/inputs.csv
 cmp api-fill/inputs.manifest.json repo-fill/inputs.manifest.json
 ```
