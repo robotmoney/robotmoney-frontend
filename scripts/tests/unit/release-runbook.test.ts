@@ -524,10 +524,10 @@ describe("a step's after list", () => {
     // From v0.7.3 on, a copy without them edits the template.
     expect(checkAddOnly(template, runbook(noAfter, "v0.7.3")).join()).toContain("Q35-archive-routes differs from the template's step");
     expect(checkAddOnly(template, runbook(boundBy("v0.7.3"), "v0.7.3"))).toEqual([]);
-    // The committed runbooks of releases that ran carry no after and still load.
+    // The committed runbooks of releases before the side-by-side rules (issue 1684, v0.9.2 on) carry no after and still load.
     for (const release of releaseRunbookNames()) {
       const rb = loadReleaseRunbook(release);
-      expect(rb.steps.filter((s) => s.after !== undefined).map((s) => s.id), release).toEqual([]);
+      if (releaseBefore(release, "v0.9.2")) expect(rb.steps.filter((s) => s.after !== undefined).map((s) => s.id), release).toEqual([]);
     }
   });
 
