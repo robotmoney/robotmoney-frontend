@@ -327,6 +327,7 @@ analyst changes one.
 | ------ | ------- |
 | `{ kind: "none" }` | no fill: a day without a real observation is missing |
 | `{ kind: "forward", maxAgeDays: N }` | the last real observation is carried for at most N days; an older day is missing |
+| `{ kind: "forward", maxAgeDays: null }` | the last real observation is carried with no age limit (the backtest's price and cash-rate series, issue 1554) |
 | `{ kind: "zero" }` | a gap is a real 0 |
 
 Declared: every indicator is `{ kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }`
@@ -459,14 +460,48 @@ const year = periodStats(sim.values, "2025-01-01", "2025-12-31", { returns: sim.
 
 // The reference portfolios are data: a regime label series through a weight table.
 const ethSchedule = scheduleFromLabels(labels, PORTFOLIO_SPECS.eth.weights);
+
+// Declare how each series fills a gap (issue 1554). A series with no entry uses
+// DEFAULT_SIMULATOR_FILL: forward with no age limit, the former carry.
+const bounded = simulatePortfolio(dateAxis, schedule, { "yahoo:GLD": gld, "yahoo:SPY": spy }, tbillPercent, {
+  fill: {
+    "yahoo:GLD": { kind: "forward", maxAgeDays: 4, reason: "Exchange days; a long weekend is 4 days" },
+    "yahoo:SPY": { kind: "forward", maxAgeDays: 4, reason: "Exchange days; a long weekend is 4 days" },
+    cash: { kind: "forward", maxAgeDays: 4, reason: "FRED business-daily" },
+  },
+});
 ```
+
+**Labels.** `scheduleFromLabels(labels, table, { unknownLabel })` maps each label through
+the table; a null label is a skipped day. A label with no own row in the table (a typo
+such as `risk-on`) is refused with a `RangeError` naming the label and its index:
+`UNKNOWN_LABEL_RULE` is `"refuse"`. Pass `{ unknownLabel: "skip" }` for the former
+behaviour, a skipped day. `referenceStrategies({ regime, panelRegimes, panels? })`
+returns the reference grid's label series (composite, each panel, `macro_inverted`,
+`conservative`, `aggressive`), and `computeBacktest` takes the same shape, so published
+label series need no `RegimeComputeResult`. `parsePlainDecimal` (with `PLAIN_DECIMAL`) is
+the loader's value rule: a finite number or plain decimal string, anything else a
+`RangeError` (`1e400`, blank, hex, padded, NaN, Infinity).
+
+**Fill policies.** No series is filled without a declared policy, in the form of the
+indicator fill policies above plus a `reason`. With no observation on a day, `none`
+gives a missing value, `forward` N the latest observation from the last N days,
+`forward` with `maxAgeDays: null` the latest one with no age limit, and `zero` gives 0.
+A held day reads each asset with a nonzero weight on the previous and the current date,
+and the cash rate (when cash is held) on the previous date; a value the policy does not
+cover is a `RangeError` naming the series, the date and the policy, for example
+`price "sp500" has no value on 2026-07-04 (fill forward 4 days)`. The cash rate earns
+zero before its first observation. A `fill` key that names no series is refused. The
+reference backtest's policies are `REFERENCE_FILL_POLICIES` (`spx`, `eth`, `tbill3m`,
+each `forward` with no age limit); each reference portfolio ends on its latest complete
+day under them, which with no age limit is the last axis date.
 
 The rules are the established ones, unchanged: a date's return uses the previous target
 weights and that date's price change; a change of target weights at the close costs
 one-sided turnover (half the sum of absolute weight changes) times `costBps` (default
 10); cash earns the previous day's annual percent yield, `(1 + y / 100) ** (1 / 365) - 1`
-(evaluated as `expm1(log1p(y / 100) / 365)`), and zero before the first yield; prices are
-forward-filled; the simulation starts at the first date every supplied asset is priced,
+(evaluated as `expm1(log1p(y / 100) / 365)`), and zero before the first yield; prices and
+the cash rate fill gaps only as their declared policies allow; the simulation starts at the first date every supplied asset is priced,
 then at the first date with weights. Equity compounds unrounded (D78): each daily value
 is the exact product of the growth and cost factors so far, rounded once.
 `sim` carries the net daily values, the pre-cost daily returns, each trade's turnover
@@ -500,7 +535,8 @@ whose one-sided turnover exceeds 1e-9 costs turnover times `costBps / 10000` and
 recorded in `trades`. An unknown option key, a negative or non-finite `costBps` or `band`,
 an unknown `freq`, or a day whose portfolio factor `1 + r_p` is not positive throws a
 `RangeError` naming the field or the date. With `costBps: 0` and `freq: "daily"` the values
-and returns equal `simulatePortfolio`'s bit for bit.
+and returns equal `simulatePortfolio`'s bit for bit. `fill` declares each series' fill
+policy exactly as for `simulatePortfolio`.
 
 From the command line, one fixed-target portfolio (weights in percent of NAV, summing to
 100; `cash` earns the input's `TBILL3M`, `fred:DTB3`):
@@ -515,7 +551,9 @@ and priced from the universe asset's `series` in the input. A holding outside th
 or over a cap is refused (exit 2) unless `--allow-outside-universe` is set, in which case it
 is priced from the input series named by the holding itself (`"yahoo:WIDGET": 5`). A
 yield series (`defillama-yields:`) is not a price and is refused. Missing price coverage
-exits 1 and names the series; the command never fetches. It prints the portfolio, the
+exits 1 and names the series; the command never fetches. The command declares
+`forward` with no age limit for every holding and the cash rate (`BACKTEST_FILL` in
+`bin/backtest.ts`), the former carry, so its output is unchanged. It prints the portfolio, the
 universe check and the statistics; `--full` adds the daily values, returns and trades.
 
 ## Size and optimise a portfolio
@@ -600,7 +638,9 @@ Every step can be tuned. Options are one object; an unknown key throws `RangeErr
 | `lookback` | expanding window | a rolling window of the last `lookback` rows |
 | `reoptimise` | `"monthly"` | `"weekly"` (a new Monday-to-Sunday week), `"monthly"`, `"quarterly"` (a new calendar quarter), or `(date, prevDate) => boolean` (`prevDate` is null on the first axis date) |
 | `expand(weights, date, rebalance)` | identity | maps optimizer weights (`cash` plus one key per asset) onto the day's priced holdings; null leaves the day unset. Called once per axis date in ascending order, so it may keep state. `rebalance` is a copy of the re-optimisation in force (`vol`, `rf`, `mu`, `nObs`, `weights`) |
-| `simulate` | `simulatePortfolio` | `{ drift: { freq, band, costBps } }` for `simulateDrift`, or any `(dateAxis, schedule, prices, cashRate) => SimulationResult` |
+| `expands` | none | `markowitzSchedule` only: a record of named `expand` rules. One solve per re-optimisation; the result adds `schedules[name]` per rule, and `schedule` holds the optimizer weights. Not with `expand`; `markowitzBacktest` refuses it |
+| `simulate` | `simulatePortfolio` | `{ drift: { freq, band, costBps, fill } }` for `simulateDrift`, or any `(dateAxis, schedule, prices, cashRate) => SimulationResult` |
+| `fill` | `DEFAULT_SIMULATOR_FILL` | `markowitzBacktest` only: the fill policy per holding and `cash`, passed to the built-in simulator; refused with a `simulate` function |
 | `minObs`, `from`, `shrink`, `periodsPerYear`, `costBps`, `lambda`, `zeroTol`, `splitDate` | 252, every return, 0.2, 252, 10, 4, 1e-12, `BACKTEST_IN_SAMPLE_END` | |
 
 Each `rebalances` entry records `date`, `rf`, `mu`, `nObs`, `vol` (sqrt(w' S w) of the optimizer weights on the covariance the solver saw, in the units of that covariance) and `weights`. `expand` output must pass the simulator's weight checks (nonnegative, summing to 1). A
