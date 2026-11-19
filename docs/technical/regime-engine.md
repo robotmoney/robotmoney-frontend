@@ -65,6 +65,62 @@ read the entry itself (`indicators.ts`) for what a specific indicator means and
 why its sign is what it is; that prose is intentionally the primary source and
 is not duplicated here.
 
+### 2.1 Value source and scored versions (issue 1654)
+
+Two optional registry fields decide where an indicator's values come from and
+which methodology versions score it. Both are declared on the entry in
+`indicators.ts`; the analyst changes either in a reviewed diff.
+
+- **`valueSource`** — `"stored"` (absent: the indicator's
+  `raw_indicator_history` rows, as every indicator reads), `"new_pool_records"`
+  or `"legacy_count"`. The last two are allowed only on an indicator whose
+  `source` is `geckoterminal_newpools`; any other use throws when the registry
+  loads. **Declared: `NEW_TOKENS` is `"new_pool_records"`.** Its value is the
+  SDK's `newPoolDailyCounts` over the stored pool records and polls known at
+  the run's knowledge-time cutoff. `"legacy_count"` reads the legacy
+  `raw_indicator_history:NEW_TOKENS` rows, kept selectable only for
+  comparison (pass a registry copy to `runRegime`).
+- **`scoredIn`** — the versions that score the indicator. Absent means every
+  version in `REGIME_VERSIONS`. `scoredIndicators(version, indicators)` is the
+  list `computeRegime` builds ranks, weights and panel membership from; an
+  unscored indicator gets none of them and no figure depends on its rows.
+  `scoredIn` does not change what is fetched or shown. **Declared: no entry
+  sets it**, so every indicator, `NEW_TOKENS` included, is scored under `v3`
+  and `v5`. Narrowing a published version's set changes its replays, so it
+  goes with a new entry in `REGIME_VERSIONS`.
+
+**Why NEW_TOKENS changed source.** The legacy sweep read at most 10 pages of
+20 pools from GeckoTerminal's new-pools feed and stored how many fell in the
+trailing 24 hours. The feed shows about 48 new pools a minute, so the stored
+value was the fetch cap: 100 from 6 Aug to 30 Sep 2026, then 200. Those rows
+are a known defect. They stay stored (`UNRECOVERABLE_PRESERVE_IDS`), the
+sweep keeps writing them, published-run replays from frozen vintages use them
+unchanged, and no new run reads them (D86).
+
+**The collector and its coverage rule.** The analytics producer polls
+`/networks/new_pools` every 60 s on its own timer (live source only), from page
+1 down to the first page that reaches the previous poll's newest pool, page 10
+or an empty page. Requests go to the keyless host, at least 6 s apart, within a
+55 s poll budget. Each pool is stored once in `new_pool_records`; each poll
+stores its oldest and newest `pool_created_at` in `new_pool_polls`. A poll
+whose oldest pool is after the previous poll's newest records a coverage gap
+and logs `[new-pools] coverage gap <from> to <to>`. A UTC day has a reading
+only when one continuous covered span contains both its 00:00 and the next
+day's 00:00; its value is the number of unique pools created that day. Any
+other day has no row, never 0. See
+[analytics requirements §4.10](analytics-requirements.md#410-new-pool-records-issue-1654).
+
+**What the corrected input does to the score.** Before the first gap-free day
+`NEW_TOKENS` has no reading (NaN). After a reading the declared fill policy
+carries it forward, as for every indicator. A rank needs 30 finite values in
+the window, and a weight needs 60 finite signed ranks in the weight window
+(`minValidObs`), so `NEW_TOKENS` carries weight 0 until a refresh at which it
+has about 89 days of values; until then the on-chain panel is the weighted
+mean of its other inputs. A run freezes the resolved daily series in its
+vintage under `new_pool_records:NEW_TOKENS`, which `REGIME_STORAGE_KEYS` reads
+in place of `raw_indicator_history:NEW_TOKENS`; `inputHistoryFromStorage`
+maps either key to the `NEW_TOKENS` input, and a vintage holds one of them.
+
 ## 3. Transforms
 
 Every indicator declares a `transform` field, applied to its aligned daily

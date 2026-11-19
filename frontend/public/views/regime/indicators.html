@@ -533,11 +533,11 @@
           </div>
           <div class="ri__block">
             <span class="ri__block-label">How it&rsquo;s derived</span>
-            <p class="ri__block-p">GeckoTerminal&rsquo;s new-pools feed, polled once a day. Each day&rsquo;s count is added to a stored history, and the percentile rank reads from that history.</p>
+            <p class="ri__block-p">The count of unique pools created in a gap-free UTC day, from pool records collected every 60 s from GeckoTerminal's /networks/new_pools feed. A day has a reading only when the collected polls cover it end to end with no coverage gap. The legacy daily value read at most 10 pages of 20 pools, so it was capped at 200 by the 10-page feed limit; it is no longer scored.</p>
           </div>
           <div class="ri__block">
             <span class="ri__block-label">How to read it</span>
-            <p class="ri__block-p">High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign &minus;1: rising count counts as risk-off. Note: this indicator is &ldquo;accumulate-forward&rdquo;. It only became reliable once we had ~60 days of daily samples, and the upstream API caps make it under-count on the busiest days.</p>
+            <p class="ri__block-p">High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign &minus;1: rising count counts as risk-off. The pool-record count starts with the collector, so the indicator has no rank until 30 days of readings and no weight until it has 60 ranked days; the capped legacy value (200 from October 2026) is kept stored but never scored.</p>
           </div>
         </section>
 

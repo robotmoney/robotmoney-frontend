@@ -159,6 +159,45 @@ Public traffic must never starve the site. These limits apply to every public an
 
 Yahoo-sourced rows are served like every other row (D58). Check each provider's terms before you republish what you download.
 
+### 4.10 New pool records (issue 1654)
+
+`NEW_TOKENS` is counted from source data, not stored as a count. The legacy
+sweep stored a computed 24-hour count that was the new-pools feed's 10-page
+fetch cap; its rows stay stored and are never read by a new run.
+
+- **Collector.** The analytics producer polls GeckoTerminal's
+  `/networks/new_pools` every 60 s on its own fixed timer, measured from the
+  start of the previous poll; a tick during a running poll is skipped. It is a
+  collection job, not an analytics run, and runs only when the analytics source
+  is live. A poll reads from page 1 and stops at the first page whose oldest
+  pool was created at or before the previous poll's newest, page 10, or an
+  empty page. Every request goes to the keyless host with no key header,
+  paced at least 6 s apart; a 429 or 5xx is retried (Retry-After first, then
+  backoff) inside a 55 s poll budget. A record without a parseable
+  `pool_created_at` is refused and counted.
+- **Tables** (migration 0132, append-only like the source ledger). The store
+  writes one transaction per poll through `POST /api/analytics/new-pools/polls`:
+  the acquisition (`source_acquisitions`, `source_fetches`; provider
+  `geckoterminal_newpools`, parser `new-pools:1`), each pool once into
+  `new_pool_records` (pool id key; a pool keeps the `knowledge_time` of the
+  first poll that saw it), and one `new_pool_polls` row (oldest and newest
+  `pool_created_at`, pages read, pools seen and new, `gap_from`, `gap_to`).
+  `knowledge_time` is the database clock at insert. A failed poll records its
+  acquisition and no poll row.
+- **Overlap rule.** A poll must overlap the previous stored poll: its oldest
+  pool at or before that poll's newest. When it does not, the store records
+  the gap from the previous newest to this poll's oldest, and the producer
+  logs `[new-pools] coverage gap <from> to <to>`. The first poll has no gap; a
+  producer restart is a normal poll.
+- **Daily count.** `newPoolDailyCounts` (analyst SDK) joins overlapping polls
+  into covered spans. A UTC day has a reading only when one span contains both
+  its 00:00 and the next day's 00:00; the reading is the number of unique pool
+  ids created that day. A day before coverage, touched by a gap, or not yet
+  closed has no row. The regime run reads the per-day unique counts and every
+  poll's span at the database clock (`GET /api/analytics/new-pools/inputs`),
+  records the daily series under `new_pool_records:NEW_TOKENS`, and freezes it
+  in its vintage, so a replay needs no pool records.
+
 ## 5. Backtest
 
 ### 5.1 Purpose

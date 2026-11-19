@@ -4798,6 +4798,7 @@ exact command that finishes it by hand, and the boot's seed step still runs
 | `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
+| `new_pool_records:NEW_TOKENS` | the daily count of stored new-pool records (issue 1654, D86) | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
 | `research:QQQ` | yahoo | relative 1e-6 |
@@ -6590,3 +6591,18 @@ This is SDK tooling, not a methodology change: with every parameter at its decla
 **Rejected.** Shipping the analyst's values with the tooling: that would change published figures in a tooling change. Supporting `drop-unclosed` for every source: GeckoTerminal stamps `NEW_TOKENS` with the poll day, so it would discard every new row.
 
 **Enforced by** `packages/analyst-sdk/tests/fill-policy.test.ts`, `packages/analyst-sdk/tests/complete-day.test.ts`, `backend/tests/analytics-incomplete-day.test.ts`, `backend/tests/forward-fill-cap.test.ts`, `packages/analyst-sdk/tests/report-parity.test.ts`, `backend/tests/regime-replay-published.test.ts` and `scripts/tests/unit/regime-indicator-glossary-links.test.ts`. Run semantics in [`docs/technical/regime-engine.md` §8.1](technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay).
+
+## D86 — NEW_TOKENS is corrected as a data correction: the capped rows are fabricated, kept stored, never read by a new run, and replayed unchanged from frozen vintages (issue 1654)
+
+**Decision.**
+
+1. **The capped rows are a known defect, not a reading.** The legacy sweep read at most 10 pages of 20 pools from GeckoTerminal's new-pools feed and stored how many fell in the trailing 24 hours. The feed shows about 48 new pools a minute, so every stored value was the fetch cap: 100 from 6 Aug to 30 Sep 2026, 200 from 1 Oct. The rows and their ledger versions stay stored and are never deleted or rewritten; `NEW_TOKENS` stays in `UNRECOVERABLE_PRESERVE_IDS`; the sweep keeps running so the legacy value stays comparable.
+2. **A new run reads the pool-record count.** The producer's new-pools collector stores every pool it sees every 60 s (`new_pool_records`, `new_pool_polls`, migration 0132), with each coverage gap. The registry declares `NEW_TOKENS` `valueSource: "new_pool_records"`: its value is the SDK's count of unique pools per gap-free UTC day, read at the run's knowledge-time cutoff. `REGIME_STORAGE_KEYS` reads `new_pool_records:NEW_TOKENS` in place of `raw_indicator_history:NEW_TOKENS`, and the run freezes the resolved series in its vintage under that key.
+3. **Replays are unchanged.** A vintage frozen before this change holds the capped rows it published with, and replays from them. `inputHistoryFromStorage` maps either key to the `NEW_TOKENS` input; a vintage holds one of them.
+4. **Not a methodology change.** Replacing a fabricated value with a real count corrects the data; the corrected source is the declared value, with no version bump and no golden change. A new run's `NEW_TOKENS` reading, its rank and weight, and every figure downstream of them change; every other artifact is byte-identical. The registry gains `scoredIn` (declared: unset, so `NEW_TOKENS` stays scored under `v3` and `v5`) and `"legacy_count"` for comparison. Whether `NEW_TOKENS` stays in the composite, and how it is scored, is the quant analyst's choice (research issue 1673).
+
+**Why.** Ingestion stores source data and the SDK calculates (analytics requirements §2 and §4.3). A stored computed count could not be checked or recomputed, and nothing recorded whether the feed was read completely.
+
+**Rejected.** Deleting or backfilling the capped rows: the ledger is append-only and published replays depend on them. Raising the page limit: the feed's hard limit is 10 pages. Counting a partial day, or a day a gap touches: it would publish an under-count; such a day has no reading.
+
+**Enforced by** `packages/analyst-sdk/tests/new-pools.test.ts`, `packages/analyst-sdk/tests/regime.test.ts`, `backend/tests/new-pools-collector.test.ts`, `backend/tests/new-pools-store.test.ts`, `backend/tests/producer-new-pools-schedule.test.ts`, `backend/tests/regime-sdk-equivalence.test.ts`, `backend/tests/regime-replay-published.test.ts` and `scripts/tests/unit/regime-indicator-glossary-links.test.ts`. Semantics in [`docs/technical/regime-engine.md` §2.1](technical/regime-engine.md#21-value-source-and-scored-versions-issue-1654) and [analytics requirements §4.10](technical/analytics-requirements.md#410-new-pool-records-issue-1654).

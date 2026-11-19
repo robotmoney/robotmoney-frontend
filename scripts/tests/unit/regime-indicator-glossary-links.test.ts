@@ -78,4 +78,17 @@ describe("regime indicator glossary links", () => {
       expect(card.indexOf("<dt>Transform</dt>") > card.indexOf("<dt>Fill</dt>"), ind.id).toBe(true);
     }
   });
+  // Issue 1654: NEW_TOKENS is the pool-record count, and its card says so in
+  // the registry's own words, naming the former 200 cap.
+  test("the NEW_TOKENS card shows the registry derivation text, naming the pool-record count and the former 200 cap", () => {
+    const unescape = (t: string) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    const ind = INDICATORS.find((i) => i.id === "NEW_TOKENS")!;
+    const start = glossary.indexOf('<section class="ri__ind" id="NEW_TOKENS">');
+    const card = glossary.slice(start, glossary.indexOf("</section>", start));
+    const derived = /<span class="ri__block-label">How it&rsquo;s derived<\/span>\s*<p class="ri__block-p">([^<]*)<\/p>/.exec(card);
+    expect(derived).not.toBeNull();
+    expect(unescape(derived![1]!)).toBe(ind.derivation!);
+    expect(ind.derivation).toContain("pool records collected every 60 s");
+    expect(ind.derivation).toContain("capped at 200");
+  });
 });
