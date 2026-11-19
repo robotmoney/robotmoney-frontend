@@ -14,12 +14,16 @@
 // dump and connection budget, and fails the way production did.
 //
 // WHAT IT READS. It starts no analytics run (no unscheduled run anywhere). It
-// waits for the next scheduled run, the next 3-hour boundary in UTC (research
-// `0 */3 * * *`, regime `30 */3 * * *`), and follows the analytics-producer's
-// log from it. The window closes 5 minutes after the tick's `[analytics] regime
-// asof` line (backend/src/analytics/index.ts), or at the 120-minute cap when
-// that line never comes, which fails (issue 1567: a window is a cap, never a
-// fixed wait). Then it reads the api container's log for the window and the
+// reads the analytics-producer container's own schedule (PRODUCER_RESEARCH_CRON
+// and PRODUCER_REGIME_CRON from `docker inspect`; unreadable crons exit 2), waits
+// for the next research slot that cron names, and follows the producer's log
+// from it. On the stage target that is an hourly slot anchored to the boot,
+// about 15 minutes after it (D86, issue 1684); production's is `0 */3 * * *`.
+// The window closes 5 minutes after the tick's `[analytics] regime asof` line
+// (backend/src/analytics/index.ts), or at its cap, which fails when that line
+// never comes (issue 1567: a window is a cap, never a fixed wait). The cap is
+// the earlier of 120 minutes and the next research slot after the opening, so a
+// window never spans two ticks. Then it reads the api container's log for the window and the
 // api's /health `db_pool` telemetry at the window's start and end.
 // `--since/--until` grades a window that has passed; `--log` grades a saved api
 // log.
@@ -41,12 +45,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { instancePaths, readStackState, stateRoot } from "../lib/smoke-state.ts";
+import { expandCronSlots } from "../lib/gate/standing.ts";
 
 /** The owner's rule: no api request takes 5 s or more (the request deadline stays 10 s). */
 export const SLOW_MS = 5_000;
-/** The analytics producer's schedules repeat every 3 hours, on the hour in UTC (research at :00, regime at :30). */
-export const SCHEDULE_PERIOD_HOURS = 3;
-/** The cap on the window after the boundary: both runs of the tick, well before the next one. */
+/** The longest the window stays open after its research slot: both runs of the tick. The next research slot caps it sooner. */
 export const DEFAULT_WINDOW_MINUTES = 120;
 /** How long the window stays open after the tick's `regime asof` line (issue 1567). */
 export const REGIME_MARGIN_MINUTES = 5;
@@ -246,12 +249,36 @@ export function renderReport(report: LoadReport, window: { since: string; until:
   return `${out.join("\n")}\n`;
 }
 
-/** PURE. The start of the next scheduled run at or after `now`: the next 3-hour boundary in UTC. */
-export function nextScheduledRun(now: Date): Date {
-  const t = new Date(now);
-  t.setUTCMinutes(0, 0, 0);
-  while (t.getTime() < now.getTime() || t.getUTCHours() % SCHEDULE_PERIOD_HOURS !== 0) t.setUTCHours(t.getUTCHours() + 1);
-  return t;
+/** The producer's two schedules, as its container's environment names them. */
+export interface ProducerCrons {
+  readonly research: string;
+  readonly regime: string;
+}
+
+/** PURE. The producer's crons from `docker inspect --format '{{json .Config.Env}}'`, or why they cannot be read. */
+export function producerCrons(envJson: string): ProducerCrons | { error: string } {
+  let env: unknown;
+  try { env = JSON.parse(envJson); } catch { return { error: "the analytics-producer's environment is not a JSON list" }; }
+  if (!Array.isArray(env) || !env.every((e) => typeof e === "string")) return { error: "the analytics-producer's environment is not a JSON list of strings" };
+  const read = (name: string) => (env as string[]).find((e) => e.startsWith(`${name}=`))?.slice(name.length + 1).trim();
+  const research = read("PRODUCER_RESEARCH_CRON");
+  const regime = read("PRODUCER_REGIME_CRON");
+  const missing = [...(research ? [] : ["PRODUCER_RESEARCH_CRON"]), ...(regime ? [] : ["PRODUCER_REGIME_CRON"])];
+  if (missing.length > 0) return { error: `the analytics-producer's environment names no ${missing.join(" or ")}` };
+  return { research: research!, regime: regime! };
+}
+
+/** PURE. The next slot of `cron` at or after `now` (UTC), or null when the cron cannot be expanded (only minute and hour fields). */
+export function nextScheduledRun(cron: string, now: Date): Date | null {
+  const slots = expandCronSlots(cron, now.getTime(), now.getTime() + 2 * 86_400_000, 2);
+  return slots === null || slots.length === 0 ? null : new Date(slots[0]! * 1000);
+}
+
+/** PURE. The window's cap: the earlier of `capMinutes` after the opening and the research cron's next slot after it, so a window never spans two ticks. */
+export function windowCap(researchCron: string, opening: Date, capMinutes: number = DEFAULT_WINDOW_MINUTES): Date {
+  const cap = opening.getTime() + capMinutes * 60_000;
+  const next = nextScheduledRun(researchCron, new Date(opening.getTime() + 1000));
+  return new Date(next === null ? cap : Math.min(cap, next.getTime()));
 }
 
 const REGIME_ASOF = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s.*\[analytics\] regime asof /;
@@ -259,12 +286,13 @@ const REGIME_ASOF = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s.*\[anal
 /**
  * PURE. When the default window closes: `REGIME_MARGIN_MINUTES` after the earliest
  * `[analytics] regime asof` line at or after `boundary` in the producer's log
- * (`docker logs --timestamps`), or at `boundary + capMinutes` when there is none
- * (or it comes so late the margin passes the cap). `regimeAt` is that line's
- * timestamp, null when the log has none.
+ * (`docker logs --timestamps`), or at the cap when there is none (or it comes so
+ * late the margin passes the cap). The cap is `boundary + capMinutes`, or the
+ * instant `capAt` names (windowCap). `regimeAt` is that line's timestamp, null
+ * when the log has none.
  */
-export function windowEnd(boundary: Date, producerLog: string, capMinutes: number = DEFAULT_WINDOW_MINUTES): { end: Date; regimeAt: string | null } {
-  const cap = boundary.getTime() + capMinutes * 60_000;
+export function windowEnd(boundary: Date, producerLog: string, capMinutes: number = DEFAULT_WINDOW_MINUTES, capAt?: Date): { end: Date; regimeAt: string | null } {
+  const cap = capAt?.getTime() ?? boundary.getTime() + capMinutes * 60_000;
   let regimeAt: string | null = null;
   for (const line of producerLog.split("\n")) {
     const at = REGIME_ASOF.exec(line)?.[1];
@@ -277,7 +305,8 @@ export function windowEnd(boundary: Date, producerLog: string, capMinutes: numbe
 }
 
 /** Follows the producer's log from `boundary` until the window closes (its regime line plus the margin, or the cap). */
-async function followTick(container: string, boundary: Date, capMinutes: number): Promise<{ end: Date; regimeAt: string | null }> {
+async function followTick(container: string, boundary: Date, cap: Date): Promise<{ end: Date; regimeAt: string | null }> {
+  const capMinutes = (cap.getTime() - boundary.getTime()) / 60_000;
   const proc = Bun.spawn(["docker", "logs", "--follow", "--timestamps", "--since", boundary.toISOString(), container], { stdout: "pipe", stderr: "pipe" });
   // stdout and stderr each in its own buffer, so their lines never interleave mid-line.
   const texts = ["", ""];
@@ -286,13 +315,12 @@ async function followTick(container: string, boundary: Date, capMinutes: number)
     const decoder = new TextDecoder();
     for await (const chunk of stream) {
       texts[i] += decoder.decode(chunk, { stream: true });
-      if (windowEnd(boundary, texts[i]!, capMinutes).regimeAt !== null) {
+      if (windowEnd(boundary, texts[i]!, capMinutes, cap).regimeAt !== null) {
         found = true;
         return;
       }
     }
   };
-  const cap = new Date(boundary.getTime() + capMinutes * 60_000);
   // The cap timer must be cleared when a stream wins the race: a `Bun.sleep(cap)`
   // left pending keeps the event loop alive to the cap (up to 120 minutes), so the
   // process never exited after its PASS (issue 1597).
@@ -306,7 +334,7 @@ async function followTick(container: string, boundary: Date, capMinutes: number)
     clearTimeout(capTimer);
     proc.kill();
   }
-  const result = windowEnd(boundary, texts.join("\n"), capMinutes);
+  const result = windowEnd(boundary, texts.join("\n"), capMinutes, cap);
   if (found) console.log(`[analytics-load-check] the tick logged regime asof at ${result.regimeAt}; the window closes at ${result.end.toISOString()}`);
   await Bun.sleep(Math.max(0, result.end.getTime() - Date.now()));
   return result;
@@ -383,12 +411,25 @@ async function main(): Promise<number> {
         console.error("[analytics-load-check] --boundary is an ISO instant");
         return 2;
       }
-      const start = boundary !== undefined ? new Date(boundary) : nextScheduledRun(new Date());
-      const cap = new Date(start.getTime() + minutes * 60_000);
+      // The producer's own schedule (issue 1684): stage's is hourly from a boot-anchored minute, production's 3-hourly.
+      const insp = spawnSync("docker", ["inspect", "--format", "{{json .Config.Env}}", producer], { encoding: "utf8" });
+      const crons = insp.status === 0 ? producerCrons(insp.stdout) : { error: `docker inspect ${producer} failed: ${insp.stderr.trim()}` };
+      if ("error" in crons) {
+        console.error(`[analytics-load-check] cannot read the analytics-producer's schedule: ${crons.error}`);
+        return 2;
+      }
+      const next = boundary !== undefined ? new Date(boundary) : nextScheduledRun(crons.research, new Date());
+      if (next === null) {
+        console.error(`[analytics-load-check] cannot read the analytics-producer's schedule: research cron "${crons.research}" names no slot this check can expand`);
+        return 2;
+      }
+      const start = next;
+      const cap = windowCap(crons.research, start, minutes);
+      console.log(`[analytics-load-check] the producer runs research "${crons.research}" and regime "${crons.regime}"`);
       console.log(`[analytics-load-check] waiting for the scheduled run at ${start.toISOString()}; the window closes ${REGIME_MARGIN_MINUTES} minutes after its regime asof line, at ${cap.toISOString()} at the latest`);
       await Bun.sleep(Math.max(0, start.getTime() - Date.now()));
       const startPools = await dbPool(record.apiPort);
-      const { end, regimeAt } = await followTick(producer, start, minutes);
+      const { end, regimeAt } = await followTick(producer, start, cap);
       tick = { regimeAt };
       pools = { start: startPools, end: await dbPool(record.apiPort) };
       window = { since: start.toISOString(), until: end.toISOString() };

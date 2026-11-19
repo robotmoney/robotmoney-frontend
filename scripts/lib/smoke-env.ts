@@ -29,7 +29,10 @@
 // ONLY a RESOLVED realistic cadence (`--stage`, or an explicit `--cadence
 // realistic` override) injects the realistic profile's PRODUCER_REGIME_CRON /
 // PRODUCER_RESEARCH_CRON (scripts/lib/smoke-cadence.ts) so research cadence and
-// swarm cadence are stated in ONE file. A fast-cadence boot — CI, plain
+// swarm cadence are stated in ONE file. Under RM_ENV=stage the realistic
+// profile's crons are the stage target's boot-anchored hourly pair instead
+// (stageProducerCrons, issue 1684, D86): a schedule, never a run started by
+// hand; RM_ENV=prod keeps production's 3-hourly pair. A fast-cadence boot — CI, plain
 // `bun run smoke`, and the smoke-twin's deliberate `--static-port --cadence fast`
 // — injects neither, so compose resolves the COMMITTED production defaults
 // untouched and the CI smoke path is byte-for-byte unaffected.
@@ -41,7 +44,7 @@
 // production defaults apply: the on-disk HTTP fetch cache OFF, the token-price
 // cache 30 s. Forcing one hour onto the standing boot is how prod's fetch
 // cache filled the host disk.
-import { resolveSmokeCadence, type SmokeCadenceProfile } from "./smoke-cadence.ts";
+import { resolveSmokeCadence, stageProducerCrons, type SmokeCadenceProfile } from "./smoke-cadence.ts";
 
 export const NORMAL_DEMO_CACHE_TTL_MS = 3_600_000;
 
@@ -134,6 +137,8 @@ export function resolveSmokeEnv(
     rmEnv?: string;
     /** The Base head the boot read, when wantsFlowStandIn(). */
     flowHeadBlock?: number;
+    /** The boot's time: a stage boot anchors its analytics schedule to it (issue 1684). */
+    now?: Date;
   } = {},
 ): SmokeEnvResolution {
   const baseRpcUrl = env.BASE_RPC_URL || undefined;
@@ -149,11 +154,13 @@ export function resolveSmokeEnv(
   // `cadence` override is how the fast-cadence smoke-twin lands here even
   // though it pins the port.
   const cadence = resolveSmokeCadence({ stage: opts.stage === true, cadence: opts.cadence });
-  const producerCronEnv: Record<string, string> = cadence.profile === "realistic"
-    ? { PRODUCER_REGIME_CRON: cadence.regimeCron, PRODUCER_RESEARCH_CRON: cadence.researchCron }
-    : {};
   const standingStack = opts.standingStack ?? opts.stage === true;
   const rmEnv = opts.rmEnv ?? env.RM_ENV;
+  // The stage target's first tick lands just after its boot, hourly from then on (issue 1684, D86); production keeps its grid.
+  const crons = cadence.profile === "realistic" && rmEnv === "stage" ? stageProducerCrons(opts.now ?? new Date()) : cadence;
+  const producerCronEnv: Record<string, string> = cadence.profile === "realistic"
+    ? { PRODUCER_REGIME_CRON: crons.regimeCron, PRODUCER_RESEARCH_CRON: crons.researchCron }
+    : {};
   const cacheEnv: Record<string, string> = standingStack || rmEnv === "prod"
     ? {}
     : {

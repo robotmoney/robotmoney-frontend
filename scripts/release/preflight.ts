@@ -19,7 +19,10 @@
 //                  is the commit's tree (issue 1568): the rc squash reruns CI it
 //                  already passed. The detail names the commit whose CI was used
 //     P.stage      a passed stage journal of this step list on this commit's tree
-//                  exists (SP.8, D70). Its path is what --stage-journal takes
+//                  exists (SP.8, D70). Its path is what --stage-journal takes. A stage
+//                  step the owner accepted carries to production and is reported
+//                  here, `; accepted: <step> (issue <n>: <reason>)` each, and in
+//                  preflight.json (issue 1684)
 //     P.live       the release checkout on each host is not the one a running
 //                  compose project was started from
 //     P.busy       no run of this target is in flight in the journal root
@@ -43,7 +46,7 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { originProblems, type ResolvedGo } from "./go.ts";
-import { checkStageJournal, earlierCommitPaths, readJournal, RUN_TS_RE, type ChangedPaths, type StepRecord } from "./journal.ts";
+import { acceptancesDetail, checkStageJournal, earlierCommitPaths, readJournal, RUN_TS_RE, stageAcceptances, type ChangedPaths, type StageAcceptance, type StepRecord } from "./journal.ts";
 import { executeStep, readRecovery, type RunnerDeps } from "./step-exec.ts";
 import { skipReason } from "./run.ts";
 import { CONTROL_HOST, CONTROL_REPO, READY_PENDING, renderStep, shellQuote, templateValues, type RenderedStep, type StepTemplate } from "./steps.ts";
@@ -123,6 +126,8 @@ export interface PreflightReport {
   readonly exit: number;
   readonly checks: readonly PreflightCheck[];
   readonly steps: Readonly<Record<string, StepRecord>>;
+  /** The stage steps the owner accepted, from the stage journal P.stage found (issue 1684); production runs their twins on their own. */
+  readonly stageAccepted?: readonly StageAcceptance[];
 }
 
 /** How long a green preflight stays usable by `--after-preflight`. */
@@ -253,12 +258,13 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
     add("P.commit", "red", `the control checkout has ${dirty.length} uncommitted change(s): the step list printed here is not the commit's`);
   } else add("P.commit", "green", `${commit}${go ? "" : " (the control checkout's HEAD; the go must name it)"}`);
 
+  let stageAccepted: StageAcceptance[] = [];
   if (/^[0-9a-f]{40}$/.test(commit)) {
     const branches = await deps.collect(CONTROL_HOST, inRepo(`git fetch -q origin && git branch -r --contains ${commit}`));
     const origin = branches.code === 0 ? originProblems(target.release, commit, branches.stdout, target.rmEnv) : [`git could not list the origin branches containing ${commit}`];
     add("P.origin", origin.length === 0 ? "green" : "red", origin.length === 0 ? `on ${lines(branches.stdout).join(", ")}` : origin.join("; "));
     // P.stage's lookup runs before P.ci: production's P.ci falls back to the stage journal's commit (issue 1568).
-    let stage: { journal: string | undefined; status: CheckStatus; detail: string } | undefined;
+    let stage: { journal: string | undefined; status: CheckStatus; detail: string; accepted: StageAcceptance[] } | undefined;
     let tree: string | undefined;
     if (target.rmEnv === "prod") {
       tree = await treeOf(deps, commit);
@@ -266,14 +272,17 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
       if (input.stageJournal) {
         const sj = readJournal(input.stageJournal);
         const refusals = checkStageJournal(sj, { stepListHash: hash, tree: t, stepIds: ids, earlierPaths: await earlierCommitPaths(sj, commit, controlChangedPaths(deps)) });
-        stage = { journal: input.stageJournal, status: refusals.length === 0 ? "green" : "red", detail: refusals.length === 0
-          ? `${input.stageJournal} passed on this tree and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}`
+        const accepted = refusals.length === 0 ? stageAcceptances(sj, ids) : [];
+        stage = { journal: input.stageJournal, accepted, status: refusals.length === 0 ? "green" : "red", detail: refusals.length === 0
+          ? `${input.stageJournal} passed on this tree and step list${sj?.cutoverSeconds !== undefined ? `; its cutover window was ${sj.cutoverSeconds} s` : ""}${acceptancesDetail(accepted)}`
           : refusals.join("; ") };
       } else {
         const passed = await passedStageJournals(input.root, hash, t, ids, commit, controlChangedPaths(deps));
-        const dt = passed.length > 0 ? readJournal(passed[0]!)?.cutoverSeconds : undefined;
-        stage = { journal: passed[0], status: passed.length > 0 ? "green" : "red", detail: passed.length > 0
-          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}`
+        const found = passed.length > 0 ? readJournal(passed[0]!) : undefined;
+        const dt = found?.cutoverSeconds;
+        const accepted = stageAcceptances(found, ids);
+        stage = { journal: passed[0], accepted, status: passed.length > 0 ? "green" : "red", detail: passed.length > 0
+          ? `passed stage run ${passed[0]} (pass it as --stage-journal)${dt !== undefined ? `; its cutover window was ${dt} s` : ""}${acceptancesDetail(accepted)}`
           : `no passed stage run of step list ${hash.slice(0, 12)} on tree ${t.slice(0, 8)} under ${join(input.root, "stage")} (SP.8)` };
       }
     }
@@ -297,7 +306,10 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
         }
       }
     }
-    if (stage) add("P.stage", stage.status, stage.detail);
+    if (stage) {
+      add("P.stage", stage.status, stage.detail);
+      stageAccepted = stage.accepted;
+    }
   }
 
   // No run of this target may be in flight: its steps use the same checkouts and containers.
@@ -366,6 +378,7 @@ export async function runPreflight(input: PreflightInput, deps: RunnerDeps): Pro
   const report: PreflightReport = {
     kind: "preflight", target: target.name, rmEnv: target.rmEnv, release: target.release, commit, stepListHash: hash,
     goSha256: go?.sha256 ?? null, runTs: input.runTs, at: deps.now().toISOString(), exit, checks, steps: stepRecords,
+    stageAccepted,
   };
   writeFileSync(join(dir, "preflight.json"), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   deps.log(`\n[${NAME}] preflight ${exit === 0 ? "GREEN" : "RED"}: ${counts("green")} green, ${counts("red")} red, ${counts("blocked")} blocked, ${counts("pending")} pending. Step list ${hash}. Journal ${dir}`);

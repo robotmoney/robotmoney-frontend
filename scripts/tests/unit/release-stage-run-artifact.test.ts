@@ -17,6 +17,14 @@ import { stepIds, stepListHash } from "../../release/steps.ts";
 
 const dir = join(import.meta.dir, "..", "fixtures", "release");
 
+/**
+ * The hash a committed journal recorded before issue 1684, and the same list's hash after it (descriptions left the
+ * hash). Both are pinned elsewhere too: release-breaking-cutover.test.ts pins v0.6.2's list at the new value.
+ */
+const HASH_BEFORE_1684: Readonly<Record<string, { recorded: string; now: string }>> = {
+  "v0.6.2": { recorded: "063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925", now: "f08607af8baef900f0a0ff610c6bfb5d747d24b9f72a0d61f0a0a9a5c55e2277" },
+};
+
 describe("the committed stage QA run journal (issue 1272)", () => {
   const files = existsSync(dir) ? readdirSync(dir).filter((n) => /^stage-run-\d{8}T\d{6}Z\.json$/.test(n)).sort() : [];
 
@@ -30,7 +38,11 @@ describe("the committed stage QA run journal (issue 1272)", () => {
     expect(run.rmEnv).toBe("stage");
     // A stage run runs its release's own runbook: the template plus that release's version checks.
     const steps = loadReleaseRunbook(run.release).steps;
-    expect(run.stepListHash).toBe(stepListHash(steps));
+    // Issue 1684 changed the hash's inputs once: it no longer sees a step's description. A journal recorded before then
+    // carries its list's hash as it was; the pin ties that recorded hash to the list's hash now, so the proof still holds.
+    const migrated = HASH_BEFORE_1684[run.release];
+    if (migrated !== undefined && run.stepListHash === migrated.recorded) expect(stepListHash(steps)).toBe(migrated.now);
+    else expect(run.stepListHash).toBe(stepListHash(steps));
     expect(run.commit).toMatch(/^[0-9a-f]{40}$/);
     const ids = stepIds(steps);
     for (const id of ids) expect(["ok", "skipped", "accepted"], id).toContain(run.steps[id]?.status ?? "missing");

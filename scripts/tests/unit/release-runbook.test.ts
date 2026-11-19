@@ -101,8 +101,8 @@ describe("a release runbook only adds", () => {
     expect(checkAddOnly(template, runbook(template.steps))).toEqual([]);
   });
 
-  test("an added step may sit anywhere: first, between two steps, last", () => {
-    const steps = [added("X0"), ...template.steps.slice(0, 12), added("X1"), added("X2"), ...template.steps.slice(12), added("X3")];
+  test("an added step may sit anywhere: first, between two steps, last (after READY it names what it waits for, issue 1684)", () => {
+    const steps = [added("X0"), ...template.steps.slice(0, 12), added("X1"), added("X2"), ...template.steps.slice(12), { ...added("X3"), after: ["C11-ready"] }];
     expect(checkAddOnly(template, runbook(steps))).toEqual([]);
     expect(stepListHash(steps)).not.toBe(stepListHash(template.steps));
   });
@@ -233,20 +233,24 @@ describe("the web template", () => {
         expect(s).toEqual(k);
         continue;
       }
-      const { cmds, description, ...rest } = s;
-      const { cmds: kCmds, description: _kDescription, ...kRest } = k;
+      const { cmds, description, before, ...rest } = s;
+      const { cmds: kCmds, description: _kDescription, before: kBefore, ...kRest } = k;
       expect(rest).toEqual(kRest);
-      if (SITE_ONLY.includes(s.id)) {
-        // the same step but for --site-only before --receipt-dir, and a description that says so.
-        const flag = kCmds[0]!.indexOf("--receipt-dir");
-        expect(cmds).toEqual([[...kCmds[0]!.slice(0, flag), "--site-only", ...kCmds[0]!.slice(flag)]]);
-        expect(description).toContain("site only");
-      } else {
-        // the same step but for --since {windowStartIso} before --report (issue 1613).
-        const flag = kCmds[0]!.indexOf("--report");
-        expect(cmds).toEqual([[...kCmds[0]!.slice(0, flag), "--since", "{windowStartIso}", ...kCmds[0]!.slice(flag)]]);
-        expect(description).toContain("window start");
+      // The step as earlier releases ran it (changedSince, issue 1684) carries the same adjustment.
+      expect(before === undefined).toBe(kBefore === undefined);
+      const pairs: [readonly (readonly string[])[], readonly (readonly string[])[]][] = [[cmds, kCmds], ...(before && kBefore ? [[before.cmds, kBefore.cmds] as [readonly (readonly string[])[], readonly (readonly string[])[]]] : [])];
+      for (const [c, kc] of pairs) {
+        if (SITE_ONLY.includes(s.id)) {
+          // the same step but for --site-only before --receipt-dir.
+          const flag = kc[0]!.indexOf("--receipt-dir");
+          expect(c).toEqual([[...kc[0]!.slice(0, flag), "--site-only", ...kc[0]!.slice(flag)]]);
+        } else {
+          // the same step but for --since {windowStartIso} before --report (issue 1613).
+          const flag = kc[0]!.indexOf("--report");
+          expect(c).toEqual([[...kc[0]!.slice(0, flag), "--since", "{windowStartIso}", ...kc[0]!.slice(flag)]]);
+        }
       }
+      expect(description).toContain(SITE_ONLY.includes(s.id) ? "site only" : "window start");
     }
   });
 
@@ -471,8 +475,13 @@ describe("a step's after list", () => {
       expect(s.afterSince, id).toBe("v0.7.3");
       expect(s.irreversible, id).toBe(false);
     }
-    // Every other template step waits for every earlier one, as before.
-    expect(template.steps.filter((s) => s.after !== undefined).map((s) => s.id)).toEqual(SDK);
+    // From v0.9.2 (issue 1684) the analytics load watch and the database checks wait only for READY too; every other
+    // template step waits for every earlier one, as before.
+    expect(template.steps.filter((s) => s.after !== undefined).map((s) => s.id)).toEqual([
+      "Q34a-analytics-load", "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "Q37a-db-stats", "Q37b-jobs-plans",
+      "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats",
+    ]);
+    for (const id of ["Q34a-analytics-load", "Q37a-db-stats", "Q37b-jobs-plans", "C25a-db-stats"]) expect(template.steps.find((s) => s.id === id)!.afterSince, id).toBe("v0.9.2");
   });
 
   test("red: an after naming an unknown id, a later id, the step itself, or another phase's step refuses, naming the step", () => {
@@ -491,7 +500,7 @@ describe("a step's after list", () => {
     // Naming a step past the irreversible ones is safe: that step waited for them.
     expect(() => parseTemplate(setAfter(setAfter(text, "Q36-sdk-quickstart", '["Q35-archive-routes"]'), "C24-sdk-quickstart", '["C23-archive-routes"]'), "kitchen-sink")).not.toThrow();
     // A notBefore anchor the after list does not wait for refuses too.
-    expect(() => parseTemplate(setAfter(text, "Q36-sdk-quickstart", '["Q22-rolling-boot"]'), "kitchen-sink")).toThrow("Q36-sdk-quickstart: its notBefore counts from Q23-ready, which its after list does not wait for");
+    expect(() => parseTemplate(withLine(text, "Q33-soak-checks", '    after: ["Q22-rolling-boot"]'), "kitchen-sink")).toThrow("Q33-soak-checks: its notBefore counts from Q23-ready, which its after list does not wait for");
   });
 
   test("twinProblems passes twins whose after lists match once the phase prefixes are stripped, and refuses when they differ", () => {
@@ -523,7 +532,7 @@ describe("a step's after list", () => {
   });
 
   test("add-only under changedSince (issues 1501, 1630): a release before v0.7.5 keeps the smoke-down and site steps as it ran, a later one carries the change", () => {
-    const changed = template.steps.filter((s) => s.changedSince !== undefined).map((s) => s.id);
+    const changed = template.steps.filter((s) => s.changedSince === "v0.7.5").map((s) => s.id);
     expect(changed).toEqual(["Q18b-smoke-down", "Q24-site", "C05b-smoke-down", "C12-site"]);
     const asRan = (steps: readonly RunbookStep[]) => steps.map((s) => (s.before === undefined ? s : ({ ...s, ...s.before } as RunbookStep)));
     // v0.7.0 ran the plain smoke:down and still only adds; so may any release before v0.7.5.
@@ -551,19 +560,25 @@ describe("a step's after list", () => {
     expect(errs({ changedSince: "next" })).toContain("changedSince is a release name");
     expect(errs({ before: { description: "d", cmds: [["x"]], host: "moon" } })).toContain("before is {description, cmds}");
     expect(errs({ before: { description: "d", cmds: [["x"]], host: "target" } })).toBe("");
+    // Issue 1684: before may also hold the notBefore a change dropped and the maxMinutes it moved, nothing else.
+    expect(errs({ before: { description: "d", cmds: [["x"]], notBefore: { afterStep: "Q23-ready", hours: "watchHours" }, maxMinutes: 320 } })).toBe("");
+    expect(errs({ before: { description: "d", cmds: [["x"]], notBefore: { afterStep: "Q23-ready" } } })).toContain("before is {description, cmds}");
+    expect(errs({ before: { description: "d", cmds: [["x"]], maxMinutes: 0 } })).toContain("before is {description, cmds}");
+    expect(errs({ before: { description: "d", cmds: [["x"]], after: ["Q23-ready"] } })).toContain("before is {description, cmds}");
     expect(errs({})).toBe("");
   });
 
   test("stepListHash: a list with no after hashes as before the key existed (pinned); adding after changes it", () => {
-    // Pinned before issue 1557: the v0.6.2 and v0.7.0 runbooks, which declare no after.
-    expect(stepListHash(loadReleaseRunbook("v0.6.2").steps)).toBe("063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925");
-    expect(stepListHash(loadReleaseRunbook("v0.7.0").steps)).toBe("1728492c5abbb19728e64bddbb22e7cd791ac99888f4c9f1454a0f2d1807234f");
+    // Pinned before issue 1557: the v0.6.2 and v0.7.0 runbooks, which declare no after. Re-pinned once by issue 1684,
+    // whose hash no longer sees a step's description; nothing else in those lists changed.
+    expect(stepListHash(loadReleaseRunbook("v0.6.2").steps)).toBe("f08607af8baef900f0a0ff610c6bfb5d747d24b9f72a0d61f0a0a9a5c55e2277");
+    expect(stepListHash(loadReleaseRunbook("v0.7.0").steps)).toBe("51df66c60a62389fc2ae5769877a7679ed000801b04a8115c49554c240384c72");
     // The template without its after lists hashes as the template did before
     // them (and before the v0.7.4 steps of issue 1581, which bind later releases only,
     // and with the smoke-down steps issue 1501 changed as they read before it).
     const asRan = (s: RunbookStep): RunbookStep => (s.before === undefined ? s : (({ changedSince: _c, before: _b, ...rest }) => ({ ...rest, ...s.before }))(s) as RunbookStep);
     const noAfter = boundBy("v0.7.3").map(asRan).map((s) => (s.after === undefined ? s : (({ after: _a, afterSince: _s, ...rest }) => rest)(s) as RunbookStep));
-    expect(stepListHash(noAfter)).toBe("d57de38d4dd3b30c97b76870fb60e05d4eb30a27d30bdda9a1f19d2703e079c3");
+    expect(stepListHash(noAfter)).toBe("4ba483d42665772252e7ae2d028ba731f4fa668c4efdd398e6832c33a92069a1");
     // red: one after changes it, and afterSince alone never does.
     const v070 = loadReleaseRunbook("v0.7.0").steps;
     const one = v070.map((s) => (s.id === "Q37-sdk-tests" ? { ...s, after: ["Q23-ready"] } : s));
@@ -622,5 +637,103 @@ describe("the CoinGecko credit preflight (issue 1664)", () => {
     const qa = (steps: readonly RunbookStep[]) => steps.filter((s) => s.onlyFor === "stage").map((s) => JSON.stringify(s));
     expect(qa(template.steps)).toEqual(qa(without.steps));
     expect(template.steps.filter((s) => s.onlyFor === "stage").some((s) => s.cmds.flat().join(" ").includes("coingecko"))).toBe(false);
+  });
+});
+
+// Issue 1684: the runner and its templates follow the owner's stage rules. Each changed step binds v0.9.2 on
+// (changedSince, afterSince); an earlier release's runbook keeps the step as it ran.
+describe("the templates follow the owner's stage rules (issue 1684)", () => {
+  const web = loadTemplate("web");
+  const VF = "v0.9.2";
+  const step = (t: { steps: readonly RunbookStep[] }, id: string) => t.steps.find((s) => s.id === id)!;
+  /** The template's steps as a release before VF ran them: each VF change undone. */
+  const asRanBeforeVF = (release: string): RunbookStep[] => boundBy(release).map((s) => {
+    let out: RunbookStep = s;
+    if (s.changedSince === VF && s.before !== undefined) out = { ...out, ...s.before } as RunbookStep;
+    if (s.afterSince === VF) out = (({ after: _a, ...rest }) => rest)(out) as RunbookStep;
+    return out;
+  });
+
+  test("Q02-dump says it captures a fresh dump, in both templates and in stage-target.ts; the old text stays for earlier releases", () => {
+    for (const t of [template, web]) {
+      const q02 = step(t, "Q02-dump");
+      expect(q02.description).toContain("fresh");
+      expect(q02.description).not.toContain("24 hours old");
+      expect(q02.changedSince).toBe(VF);
+      expect(q02.before?.description).toContain("24 hours old");
+      // No command, host or flag of Q02-dump changes.
+      expect(q02.before?.cmds).toEqual(q02.cmds);
+      expect(q02.cmds).toEqual([["bun", "scripts/release/stage-target.ts", "dump"]]);
+    }
+    const line5 = readFileSync(join(repoRoot, "scripts", "release", "stage-target.ts"), "utf8").split("\n")[4]!;
+    expect(line5).toContain("fresh dump");
+    expect(line5).not.toContain("24 h");
+    for (const release of ["v0.6.2", "v0.7.0"]) expect(() => loadReleaseRunbook(release), release).not.toThrow();
+  });
+
+  test("every post-release prod:gate command grades the release it runs for: --release {release}", () => {
+    let seen = 0;
+    for (const t of [template, web]) for (const s of t.steps) for (const cmd of s.cmds) {
+      if (!cmd.includes("prod:gate") || !cmd.includes("post-release")) continue;
+      seen++;
+      expect(cmd[cmd.indexOf("--release") + 1], s.id).toBe("{release}");
+      expect(s.changedSince, s.id).toBe(VF);
+      expect(s.before!.cmds.flat(), s.id).not.toContain("--release");
+    }
+    // Q28, Q32, C16 and C20 in kitchen-sink; Q28 and C16 in web.
+    expect(seen).toBe(6);
+    for (const release of ["v0.6.2", "v0.7.0"]) expect(() => loadReleaseRunbook(release), release).not.toThrow();
+  });
+
+  test("Q34a-analytics-load allows 190 minutes: an hour to its tick, the 120-minute window and a margin", () => {
+    const q34a = step(template, "Q34a-analytics-load");
+    expect(q34a.maxMinutes).toBe(190);
+    expect(q34a.before?.maxMinutes).toBe(320);
+    expect(q34a.description).not.toContain("3-hour");
+  });
+
+  test("the checks that need only READY run beside the soak: after lists and no soak notBefore", () => {
+    for (const id of ["Q34a-analytics-load", "Q37a-db-stats", "Q37b-jobs-plans"]) expect(step(template, id).after, id).toEqual(["Q23-ready"]);
+    expect(step(template, "C25a-db-stats").after).toEqual(["C11-ready"]);
+    for (const id of ["Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests"]) {
+      expect(step(template, id).notBefore, id).toBeUndefined();
+      expect(step(template, id).before?.notBefore, id).toEqual({ afterStep: id.startsWith("Q") ? "Q23-ready" : "C11-ready", hours: "watchHours" });
+    }
+  });
+
+  test("a release before v0.9.2 keeps every changed step as it ran; from v0.9.2 on the old form is an edit", () => {
+    expect(checkAddOnly(template, runbook(asRanBeforeVF("v0.9.1"), "v0.9.1"))).toEqual([]);
+    expect(checkAddOnly(template, runbook(boundBy("v0.9.1"), "v0.9.1"))).toEqual([]);
+    const old = checkAddOnly(template, runbook(asRanBeforeVF(VF), VF)).join("\n");
+    for (const id of ["Q02-dump", "Q28-log-verdict", "Q34a-analytics-load", "Q35-archive-routes", "Q37a-db-stats", "C16-log-verdict", "C25a-db-stats"]) expect(old).toContain(`${id} differs from the template's step`);
+    expect(checkAddOnly(template, runbook(boundBy(VF), VF))).toEqual([]);
+    for (const release of ["v0.6.2", "v0.7.0"]) expect(checkAddOnly(template, loadReleaseRunbook(release)), release).toEqual([]);
+  });
+
+  test("from v0.9.2 the loader refuses an added step after READY that declares no after; earlier releases and steps before READY are unaffected", () => {
+    const check = (id: string, extra: Partial<RunbookStep> = {}, release = VF): RunbookStep => ({
+      id, added: release, standing: [], description: `check ${id}`, host: "target", phase: "qa", onlyFor: "stage", irreversible: false, expectExit: 0, receipts: [],
+      cmds: [["bun", "scripts/release/version-check.ts", "--check", id]], ...extra,
+    });
+    const withCheck = (c: RunbookStep, release = VF, afterId = "Q37b-jobs-plans") => {
+      const steps = release === VF ? boundBy(VF) : asRanBeforeVF(release);
+      const at = steps.findIndex((s) => s.id === afterId) + 1;
+      return runbook([...steps.slice(0, at), c, ...steps.slice(at)], release);
+    };
+    expect(checkAddOnly(template, withCheck(check("Q38-new"))).join()).toContain("Q38-new is added after Q23-ready and declares no after");
+    expect(checkAddOnly(template, withCheck(check("Q38-new", { after: ["Q23-ready"] })))).toEqual([]);
+    // A version check that reads what another builds names that step too.
+    expect(checkAddOnly(template, withCheck(check("Q38-new", { after: ["Q23-ready", "Q36-sdk-quickstart"] })))).toEqual([]);
+    // A cutover check after C11-ready is held to the same rule.
+    const cut = check("C30-new", { phase: "cutover", onlyFor: "prod" });
+    expect(checkAddOnly(template, withCheck(cut, VF, "C25a-db-stats")).join()).toContain("C30-new is added after C11-ready and declares no after");
+    // Before READY, or in an earlier release, nothing changes.
+    expect(checkAddOnly(template, withCheck(check("Q06a-new"), VF, "Q06-checkout"))).toEqual([]);
+    expect(checkAddOnly(template, withCheck(check("Q38-new", {}, "v0.9.1"), "v0.9.1"))).toEqual([]);
+  });
+
+  test("the step-list hash never sees a description, nor changedSince or before", () => {
+    const reworded = template.steps.map((s) => ({ ...s, description: `${s.description} (reworded)` }));
+    expect(stepListHash(reworded)).toBe(stepListHash(template.steps));
   });
 });

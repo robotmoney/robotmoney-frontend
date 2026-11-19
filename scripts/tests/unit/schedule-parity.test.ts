@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { loadReleaseRunbook } from "../../release/runbook.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SUBJECT_CLOSE_ORDER, SUBJECT_CLOSE_SPACING_SECONDS, closeSpacingProblems } from "../../release/schedule-parity.ts";
+import { SUBJECT_CLOSE_ORDER, SUBJECT_CLOSE_SPACING_SECONDS, closeSpacingProblems, regimeCronProblems } from "../../release/schedule-parity.ts";
 import { RELEASE_STEPS, renderStep, templateValues } from "../../release/steps.ts";
 import { loadTarget } from "../../release/target.ts";
 import { PRODUCTION_EPOCH_SECONDS } from "../../release/watch.ts";
@@ -82,5 +82,21 @@ describe("C23-subject-spacing close spacing (issue 1310)", () => {
     expect(cmd("prod")).toBe(cmd("stage"));
     // The spacing check takes the subjects only: no sessions mode can gate it.
     expect(closeSpacingProblems.length).toBe(1);
+  });
+});
+
+// Issue 1684 (D86): the producer runs production's pair or the stage target's boot-anchored hourly pair; nothing else.
+describe("the producer's schedule pair", () => {
+  test("production's pair and stage's hourly pair pass", () => {
+    expect(regimeCronProblems("30 */3 * * *", "0 */3 * * *")).toEqual([]);
+    expect(regimeCronProblems("52 * * * *", "22 * * * *")).toEqual([]);
+    expect(regimeCronProblems("35 * * * *", "5 * * * *")).toEqual([]);
+  });
+
+  test("red: regime not 30 minutes after research, or the two on different hours, is a problem", () => {
+    expect(regimeCronProblems("40 * * * *", "22 * * * *").length).toBe(1);
+    expect(regimeCronProblems("30 */3 * * *", "0 * * * *").length).toBe(1);
+    expect(regimeCronProblems("0 */3 * * *", "0 */3 * * *").length).toBe(1);
+    expect(regimeCronProblems("30 22 * * *", "0 23 * * *").length).toBe(1);
   });
 });

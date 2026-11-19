@@ -16,6 +16,7 @@
 //   bun run release:run --target prod --go <go file> --stage-journal <stage run dir> --after-preflight <preflight dir>   (the production cutover: SP.8)
 //   bun run release:run --target <t> --abandon <run-ts>                                  (mark a dead run failed so P.busy clears)
 //   bun run release:run --target <t> --run <run-ts> --accept <step> --reason "<why>" --issue <n>   (record the owner's acceptance of one failed step)
+//   … --keep-stage   (a stage run that passes leaves the stage target up; by default the runner tears it down, issue 1684)
 //
 // What it does, in order: load and validate the target; read the go file, which
 // names this release and target and is the one source of the release ref (a
@@ -34,7 +35,9 @@
 // resume command. A stage run resumes in place at a new QA commit whose diff
 // touches only check code (journal.ts CHECK_ONLY_PATHS, issue 1565). A step that declares `after` (issue 1557) starts as soon as
 // the steps it names are done, alongside a long waiter; one that declares none
-// waits for every earlier step, as before.
+// waits for every earlier step, as before. A stage run that ends passed (every
+// step ok, skipped or accepted) tears the stage target down once
+// (`stage-target.ts down`, run.json `stageDown`) unless --keep-stage (issue 1684).
 //
 // It never prints a secret value. Output and receipts pass through
 // ./scrub.ts before they reach the console or the journal.
@@ -46,8 +49,9 @@ import { fileURLToPath } from "node:url";
 import { goRef, originProblems, validateGo, type GoRecord, type ResolvedGo } from "./go.ts";
 import {
   acceptCommand, acceptStep, checkResume, checkStageJournal, earlierCommitPaths, firstNotOk, journalRoot, readJournal, resumeCommand, runStamp, runStatus, RUN_TS_RE,
-  selectSteps, stepDone, writeJournal, type RunJournal, type StepRecord,
+  selectSteps, stageAcceptances, stepDone, writeJournal, type RunJournal, type StepRecord,
 } from "./journal.ts";
+import { scrubSecrets } from "./scrub.ts";
 import { checkAfterPreflight, controlChangedPaths, PREFLIGHT_MAX_AGE_MS, preflightSteps, runPreflight, type PreflightReport } from "./preflight.ts";
 import { executeStep, prefixedDeps, readRecovery, TIMED_OUT, type RunnerDeps } from "./step-exec.ts";
 import { endNote, labelRefusal, stopRecorder } from "./liveness.ts";
@@ -82,6 +86,8 @@ export interface RunArgs {
   accept?: string;
   reason?: string;
   issue?: string;
+  /** A stage run that passes leaves the stage target up (issue 1684). */
+  keepStage?: boolean;
 }
 
 export function parseArgs(argv: readonly string[]): RunArgs | { error: string } {
@@ -94,6 +100,7 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "--preflight" || a === "--dry-run") { out.preflight = true; continue; }
+    if (a === "--keep-stage") { out.keepStage = true; continue; }
     const key = valued[a];
     if (!key) return { error: `unknown argument "${a}"` };
     const v = argv[i + 1];
@@ -114,7 +121,7 @@ export function parseArgs(argv: readonly string[]): RunArgs | { error: string } 
     if (!out.reason?.trim()) return { error: "--accept needs --reason \"<why the owner accepts this failure>\"" };
     if (out.issue === undefined || !/^[1-9]\d*$/.test(out.issue)) return { error: `--accept needs --issue <n>, the issue that records the failure; got "${out.issue ?? ""}"` };
     if (out.go !== undefined || out.from !== undefined || out.only !== undefined || out.preflight || out.afterPreflight !== undefined || out.abandon !== undefined) {
-      return { error: "--accept takes only --target, --run, the step, --reason and --issue" };
+      return { error: "--accept takes only --target, --run, the step, --reason, --issue and --keep-stage" };
     }
   } else if (out.reason !== undefined || out.issue !== undefined) return { error: "--reason and --issue go with --accept <step>" };
   return out;
@@ -219,6 +226,8 @@ async function runReleaseOnce(
     writeFileSync(join(dir, args.accept, "result.json"), `${JSON.stringify(j.steps[args.accept], null, 2)}\n`, { mode: 0o600 });
     writeJournal(dir, j);
     deps.log(`[${NAME}] ${args.accept} of run ${args.run} accepted by the owner at ${at} (issue ${args.issue}): ${args.reason!.trim()}. The run is ${j.status}; continue it with --run ${args.run} [--from <step>].`);
+    // The acceptance that makes a stage run passed makes its pass final: stage comes down (issue 1684).
+    if (await tearStageDown(j, args.keepStage === true, deps) !== null) writeJournal(dir, j);
     return 0;
   }
 
@@ -333,7 +342,10 @@ async function runReleaseOnce(
       deps.error(`[${NAME}] refusing:\n  - ${refusals.join("\n  - ")}`);
       return 2;
     }
-    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit, tree: stage!.tree };
+    // Issue 1684: a stage step the owner accepted carries here, reported; its production twin still runs and must pass on its own.
+    const accepted = stageAcceptances(stage, ids);
+    stageRecord = { path: resolve(args.stageJournal!), runTs: stage!.runTs, stepListHash: stage!.stepListHash, commit: stage!.commit, tree: stage!.tree, accepted };
+    for (const a of accepted) deps.log(`[${NAME}] the stage run ${stage!.runTs} accepted ${a.step} (issue ${a.issue}: ${a.reason}, at ${a.at}); its production twin, if any, runs and must pass on its own`);
   }
 
   const runDir = join(root, target.name, runTs);
@@ -581,7 +593,7 @@ async function runReleaseOnce(
     deps.error(`\n[${NAME}] ${failed.length} step(s) failed in this run, all of them listed here:`);
     for (const id of failed) {
       deps.error(`  - ${id}: ${journal.steps[id]?.error ?? "failed"}`);
-      if (!steps[ids.indexOf(id)]!.irreversible) deps.error(`    or record the owner's acceptance of it:\n      ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
+      if (!steps[ids.indexOf(id)]!.irreversible) deps.error(`    or record the owner's acceptance of it (an acceptance carries to production, where preflight and SP.8 report it; the production twin still runs and must pass):\n      ${acceptCommand({ target: args.target!, runTs, stepId: id })}`);
     }
     deps.error(`[${NAME}] after the fixes, rerun the whole QA at the new QA tip. To retry only these: resume with\n  ${resumeCommand({ target: args.target!, go: args.go!, runTs, stepId: failed[0]!, stageJournal: args.stageJournal })}`);
   }
@@ -590,8 +602,42 @@ async function runReleaseOnce(
   const side: Side = target.rmEnv;
   if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s; the website stayed up (${PROBE_GRADE_STEP[side]})`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
-  stop.note(endNote(journal, ids, inOrder(failedSteps), selected.at(-1), (stepId) => resumeCommand({ target: args.target!, go: args.go!, runTs, stepId, stageJournal: args.stageJournal })));
+  const note = endNote(journal, ids, inOrder(failedSteps), selected.at(-1), (stepId) => resumeCommand({ target: args.target!, go: args.go!, runTs, stepId, stageJournal: args.stageJournal }));
+  // A final stage pass tears stage down once (issue 1684); a failed teardown leaves the run passed and says so.
+  const down = await tearStageDown(journal, args.keepStage === true, deps);
+  if (down !== null) writeJournal(runDir, journal);
+  stop.note(down?.failed === undefined ? note : { ...note, detail: `${note.detail ?? ""}; ${down.failed}` });
   return journal.status === "passed" || args.only !== undefined ? 0 : 1;
+}
+
+/** The command that tears the stage target down, run on the control machine after a final stage pass (issue 1684). */
+export const STAGE_DOWN_COMMAND = "bun scripts/release/stage-target.ts down";
+
+/**
+ * Tear the stage target down after a stage run that passed (issue 1684): at most
+ * once per run (`stageDown` in run.json), never for production, never under
+ * --keep-stage (recorded `{kept: true}`). It sets the journal's `stageDown`
+ * and returns null when it did nothing; the caller writes the journal. `failed`
+ * is the stop note's addition when the teardown failed; the run stays passed.
+ */
+export async function tearStageDown(journal: RunJournal, keep: boolean, deps: RunnerDeps): Promise<{ failed?: string } | null> {
+  if (journal.rmEnv !== "stage" || journal.status !== "passed" || journal.stageDown !== undefined) return null;
+  if (keep) {
+    journal.stageDown = { kept: true };
+    deps.log(`[${NAME}] --keep-stage: the stage target stays up; tear it down by hand with: ${STAGE_DOWN_COMMAND}`);
+    return {};
+  }
+  deps.log(`\n[${NAME}] the stage run passed: tearing the stage target down (${STAGE_DOWN_COMMAND}); --keep-stage keeps it`);
+  const r = await deps.collect(CONTROL_HOST, `cd ${shellQuote(CONTROL_REPO)} && ${STAGE_DOWN_COMMAND}`);
+  journal.stageDown = { at: deps.now().toISOString(), exit: r.code };
+  if (r.stdout.trim() !== "") deps.log(scrubSecrets(r.stdout.trimEnd()));
+  if (r.code === 0) {
+    deps.log(`[${NAME}] the stage target is down`);
+    return {};
+  }
+  const hand = `cd ${shellQuote(CONTROL_REPO)} && ${STAGE_DOWN_COMMAND}`;
+  deps.error(`[${NAME}] the stage teardown exited ${r.code}; the run stays passed. Tear stage down by hand:\n  ${hand}`);
+  return { failed: `the stage teardown exited ${r.code}: tear stage down by hand with ${hand}` };
 }
 
 /**

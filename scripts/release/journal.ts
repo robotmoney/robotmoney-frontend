@@ -12,10 +12,16 @@
 // SP.8. Production refuses to start unless a stage run journal exists that ran
 // the SAME step list (same hash) at the SAME commit, and passed every step.
 // That is D61 rule 2 as a check: the production run is the run stage rehearsed.
+// A stage step the owner accepted (`--accept`, with a reason and an issue)
+// counts as done: the acceptance carries to production, where preflight's
+// P.stage and the production journal report it (issue 1684). It never accepts
+// the step's production twin, which runs and must pass on its own.
 //
 // Resume in place (issue 1565). A stage run may resume at a new QA commit whose
-// diff from the journal's commit touches only CHECK_ONLY_PATHS: the check code,
-// not the product it checks. The journal lists every commit it ran at
+// diff from the journal's commit touches only CHECK_ONLY_PATHS: the check code
+// and prose (docs, markdown, the log classification rules), not the product it
+// checks. A run that already passed resumes so too, running no step (a doc fix
+// after the pass, issue 1684). The journal lists every commit it ran at
 // (`commits`), and each step records its own. SP.8 then requires every earlier
 // commit to differ from the production commit only in those paths.
 //
@@ -88,8 +94,11 @@ export interface CommitRecord {
 }
 
 /**
- * The paths a stage resume in place may change (issue 1565): check code, not
- * product. `dir/**` matches every file under dir; any other entry is one file.
+ * The paths a stage resume in place may change (issue 1565): check code and
+ * prose, not product. `dir/**` matches every file under dir; `*.md` matches any
+ * path ending in .md, save CHECK_ONLY_EXCLUDED; any other entry is one file.
+ * Docs and the log classification rules are check-only too (owner, 2026-11-18:
+ * a doc or non-source change never forces a new runbook run, issue 1684).
  * Nothing else is check-only: not the runner (run.ts, journal.ts, steps.ts,
  * step-exec.ts), not any product path.
  */
@@ -103,11 +112,28 @@ export const CHECK_ONLY_PATHS: readonly string[] = Object.freeze([
   "scripts/release/public-analytics-read.ts",
   "scripts/release/replay-row.ts",
   "scripts/tests/**",
+  "docs/**",
+  "*.md",
+  "scripts/lib/gate/log-classifications.json",
 ]);
+
+/**
+ * Markdown that is product or executable input, never prose: the site serves
+ * frontend/public (the backend reads its member voice and skill files), and
+ * sdk-lib.ts fillInto runs the analyst SDK README's `fill` block as a bash script.
+ */
+export const CHECK_ONLY_EXCLUDED: readonly string[] = Object.freeze([
+  "frontend/public/**",
+  "packages/analyst-sdk/README.md",
+]);
+
+const matchesPath = (p: string, path: string): boolean =>
+  p.endsWith("/**") ? path.startsWith(p.slice(0, -2)) : p.startsWith("*.") ? path.endsWith(p.slice(1)) : path === p;
 
 /** PURE. Is this repo path check-only? */
 export function isCheckOnlyPath(path: string): boolean {
-  return CHECK_ONLY_PATHS.some((p) => (p.endsWith("/**") ? path.startsWith(p.slice(0, -2)) : path === p));
+  if (CHECK_ONLY_EXCLUDED.some((p) => matchesPath(p, path))) return false;
+  return CHECK_ONLY_PATHS.some((p) => matchesPath(p, path));
 }
 
 /** PURE. The changed paths that are not check-only. */
@@ -152,8 +178,10 @@ export interface RunJournal {
   updatedAt: string;
   status: "running" | "failed" | "passed" | "incomplete";
   steps: Record<string, StepRecord>;
-  /** The stage journal production checked (SP.8), for the record. */
-  stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string; tree?: string };
+  /** The stage journal production checked (SP.8), for the record, with the stage steps the owner accepted (issue 1684). */
+  stageJournal?: { path: string; runTs: string; stepListHash: string; commit: string; tree?: string; accepted?: StageAcceptance[] };
+  /** Stage only (issue 1684): the teardown after a final pass, run at most once per run; `kept` under --keep-stage. */
+  stageDown?: { at: string; exit: number } | { kept: true };
   /** The signed recovery matrix the go names (SC.1): its reference and, for a file, its sha256. */
   recovery?: { ref: string; sha256: string | null };
   /** The migrate's start to READY's end, once both passed: the cutover window (Q18-migrate to Q23-ready on stage, C05-migrate to C11-ready on production). The website stays up through it (the probe's grade). */
@@ -221,10 +249,42 @@ export function checkStageJournal(
     const notOk = expected.stepIds.filter((id) => !stepDone(journal.steps[id]?.status));
     out.push(`SP.8: the stage run did not pass (${status}; not ok: ${notOk.join(", ")})`);
   }
-  // An owner's acceptance lets a run continue; it is not a pass. Production runs only what stage passed.
-  const accepted = expected.stepIds.filter((id) => journal.steps[id]?.status === "accepted");
-  if (accepted.length > 0) out.push(`SP.8: the stage run accepted a failure rather than passing: ${accepted.join(", ")}`);
+  // An owner's acceptance carries to production (owner, 2026-11-19, issue 1684): preflight and the production journal
+  // report it. Only an acceptance that records why and the issue counts; the production twin still runs on its own.
+  for (const id of expected.stepIds) {
+    const rec = journal.steps[id];
+    if (rec?.status !== "accepted") continue;
+    const a = rec.accepted;
+    if (typeof a?.reason !== "string" || a.reason.trim() === "" || !Number.isInteger(a.issue) || a.issue <= 0) {
+      out.push(`SP.8: the stage run accepted ${id} without a recorded reason and issue; record the owner's acceptance with --accept ${id} --reason "<why>" --issue <n>`);
+    }
+  }
   return out;
+}
+
+/** One stage step the owner accepted, as preflight and the production journal report it. */
+export interface StageAcceptance {
+  readonly step: string;
+  readonly reason: string;
+  readonly issue: number;
+  readonly at: string;
+}
+
+/** PURE. The stage journal's accepted steps, in runbook order (issue 1684). */
+export function stageAcceptances(journal: Pick<RunJournal, "steps"> | undefined, stepIds: readonly string[]): StageAcceptance[] {
+  if (journal === undefined) return [];
+  const out: StageAcceptance[] = [];
+  for (const id of stepIds) {
+    const rec = journal.steps[id];
+    if (rec?.status !== "accepted" || rec.accepted === undefined) continue;
+    out.push({ step: id, reason: rec.accepted.reason, issue: rec.accepted.issue, at: rec.accepted.at });
+  }
+  return out;
+}
+
+/** PURE. How preflight's P.stage detail reports the acceptances: `; accepted: <step> (issue <n>: <reason>)` each. */
+export function acceptancesDetail(accepted: readonly StageAcceptance[]): string {
+  return accepted.map((a) => `; accepted: ${a.step} (issue ${a.issue}: ${a.reason})`).join("");
 }
 
 /** Which steps to run, in order. */

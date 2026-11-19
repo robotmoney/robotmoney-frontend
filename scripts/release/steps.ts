@@ -177,11 +177,15 @@ export interface StepTemplate {
    * reads (`vA.B.C`, issue 1501). An earlier release's runbook keeps the step
    * as it ran: `before` holds the description and commands it ran with, and
    * its host when the step moved (issue 1630: the site step moved to the
-   * control machine) (./runbook.ts checkAddOnly). Like `since`, the hash never
-   * sees either.
+   * control machine) (./runbook.ts checkAddOnly), its notBefore when the
+   * change dropped it, and its maxMinutes when the change moved it (issue
+   * 1684). Like `since`, the hash never sees either.
    */
   readonly changedSince?: string;
-  readonly before?: { readonly description: string; readonly cmds: readonly (readonly string[])[]; readonly host?: StepHost };
+  readonly before?: {
+    readonly description: string; readonly cmds: readonly (readonly string[])[]; readonly host?: StepHost;
+    readonly notBefore?: NotBeforeTemplate; readonly maxMinutes?: number;
+  };
 }
 
 /** The repository every checkout fetches from; P01-checkout and P04-capture-checkout clone a missing checkout from it. */
@@ -363,11 +367,13 @@ export function renderStep(step: StepTemplate, target: ReleaseTarget, values: Te
 /**
  * sha256 over the templates, in order. It never sees a target value, so it is
  * the same for every target by construction; it changes whenever a step, a
- * command, an order or a flag changes.
+ * command, an order or a flag changes. It never sees a step's description
+ * (issue 1684): a wording fix is no new step list, so it never forces a new
+ * stage run (owner, 2026-11-18).
  */
 export function stepListHash(steps: readonly StepTemplate[] = RELEASE_STEPS): string {
   const canonical = steps.map((s) => ({
-    id: s.id, standing: s.standing, description: s.description, host: s.host, phase: s.phase, cmds: s.cmds,
+    id: s.id, standing: s.standing, host: s.host, phase: s.phase, cmds: s.cmds,
     env: s.env ?? {}, bootEnv: s.bootEnv ?? false, expectExit: s.expectExit, receipts: s.receipts, irreversible: s.irreversible,
     onlyFor: s.onlyFor ?? null, notBefore: s.notBefore ?? null, triage: s.triage ?? false, cloneFrom: s.cloneFrom ?? null, gateAbsent: s.gateAbsent ?? null,
     // Only a step that carries it: every earlier release's list hashes as it did.

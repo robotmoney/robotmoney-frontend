@@ -57,6 +57,40 @@ describe("analytics-load-check exits by itself (issue 1597)", () => {
   // The real hang: the default mode follows the producer's log with a cap timer
   // set at boundary + window. A stream finishing the race left that timer
   // pending. A fake `docker` on PATH stands in for the host's.
+  /** A fake docker whose `inspect` prints `envJson` as the analytics-producer's Env (issue 1684: the check reads its crons). */
+  function fakeDocker(name: string, envJson: string, regime: string) {
+    const bin = join(dir, name, "bin");
+    const state = join(dir, name, "state");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(state, "stage"), { recursive: true });
+    writeFileSync(join(state, "stage", "stack-state.json"), JSON.stringify({ project: "fakeproj", composeFiles: "x", apiPort: 1 }));
+    writeFileSync(
+      join(bin, "docker"),
+      `#!/bin/sh
+case "$1" in
+  ps) echo fakectr ;;
+  inspect) echo '${envJson}' ;;
+  logs)
+    case "$*" in
+      *--follow*) echo "${regime} [analytics] regime asof 2026-10-28"; exec sleep 60 ;;
+      *) echo "${PASS_LOG.trim()}" ;;
+    esac ;;
+esac
+`,
+    );
+    chmodSync(join(bin, "docker"), 0o755);
+    return { PATH: `${bin}:${process.env.PATH}`, RM_SMOKE_STATE_ROOT: state };
+  }
+
+  test("default mode with a producer whose Env names no crons: exit 2 with the reason, no wait", async () => {
+    const env = fakeDocker("no-crons", JSON.stringify(["PATH=/usr/bin"]), new Date().toISOString());
+    const proc = Bun.spawn(["bun", SCRIPT, "--instance", "stage", "--receipt-dir", receipt("r-no-crons")], { stdout: "pipe", stderr: "pipe", env: { ...process.env, ...env } });
+    const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    expect(code).toBe(2);
+    expect(err).toContain("cannot read the analytics-producer's schedule");
+    expect(err).toContain("PRODUCER_RESEARCH_CRON");
+  }, 30_000);
+
   test("default mode, tick followed to its regime line: exit 0 within seconds, receipt written", async () => {
     const bin = join(dir, "bin");
     const state = join(dir, "state");
@@ -70,6 +104,7 @@ describe("analytics-load-check exits by itself (issue 1597)", () => {
       `#!/bin/sh
 case "$1" in
   ps) echo fakectr ;;
+  inspect) echo '["PRODUCER_RESEARCH_CRON=22 * * * *","PRODUCER_REGIME_CRON=52 * * * *"]' ;;
   logs)
     case "$*" in
       *--follow*) echo "${regime} [analytics] regime asof 2026-10-28"; exec sleep 60 ;;

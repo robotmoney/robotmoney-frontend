@@ -170,9 +170,14 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
   if (raw.afterSince !== undefined && raw.after === undefined) errors.push(`${at}: afterSince goes with after`);
   if (raw.changedSince !== undefined && !(typeof raw.changedSince === "string" && /^v\d+\.\d+\.\d+$/.test(raw.changedSince))) errors.push(`${at}: changedSince is a release name (vA.B.C)`);
   if ((raw.changedSince === undefined) !== (raw.before === undefined)) errors.push(`${at}: changedSince and before go together`);
-  const beforeKeys = isObject(raw.before) ? Object.keys(raw.before).sort().join() : "";
-  if (raw.before !== undefined && !(isObject(raw.before) && (beforeKeys === "cmds,description" || beforeKeys === "cmds,description,host") && typeof raw.before.description === "string" && raw.before.description !== "" && Array.isArray(raw.before.cmds) && raw.before.cmds.length > 0 && raw.before.cmds.every((c) => isStringArray(c) && c.length > 0) && (raw.before.host === undefined || HOSTS.includes(raw.before.host as StepHost)))) {
-    errors.push(`${at}: before is {description, cmds} (and host when it moved), the step as an earlier release ran it`);
+  const b = raw.before;
+  const beforeOk = isObject(b) && Object.keys(b).every((k) => ["description", "cmds", "host", "notBefore", "maxMinutes"].includes(k))
+    && typeof b.description === "string" && b.description !== "" && Array.isArray(b.cmds) && b.cmds.length > 0 && b.cmds.every((c) => isStringArray(c) && c.length > 0)
+    && (b.host === undefined || HOSTS.includes(b.host as StepHost))
+    && (b.notBefore === undefined || (isObject(b.notBefore) && typeof b.notBefore.afterStep === "string" && (b.notBefore.hours === "watchHours" || (typeof b.notBefore.hours === "number" && b.notBefore.hours > 0)) && Object.keys(b.notBefore).length === 2))
+    && (b.maxMinutes === undefined || (Number.isInteger(b.maxMinutes) && (b.maxMinutes as number) > 0));
+  if (b !== undefined && !beforeOk) {
+    errors.push(`${at}: before is {description, cmds} (and host when it moved, notBefore when the change dropped it, maxMinutes when it moved), the step as an earlier release ran it`);
   }
   if (errors.length > 0) return { errors };
 
@@ -400,6 +405,31 @@ export function checkAddOnly(fullTemplate: Template, runbook: ReleaseRunbook): s
     }
   }
   for (const missed of template.steps.slice(next)) out.push(`${where}: template step ${missed.id} is missing (a release never deletes a step)`);
+  out.push(...sideBySideProblems(runbook));
+  return out;
+}
+
+/** The READY step of each phase that has one: the checks after it run side by side (issue 1684). */
+export const READY_STEPS: Readonly<Partial<Record<StepPhase, string>>> = Object.freeze({ qa: "Q23-ready", cutover: "C11-ready" });
+
+/** The first release whose added steps after READY must declare `after` (issue 1684). */
+export const SIDE_BY_SIDE_SINCE = "v0.9.2";
+
+/**
+ * PURE. From SIDE_BY_SIDE_SINCE on, a step a release adds after its phase's
+ * READY step declares `after`: it names READY, and any step whose output it
+ * reads, so it never queues behind the soak (issue 1684). An earlier
+ * release's runbook stays as it ran.
+ */
+export function sideBySideProblems(runbook: Pick<ReleaseRunbook, "release" | "steps">): string[] {
+  if (releaseBefore(runbook.release, SIDE_BY_SIDE_SINCE)) return [];
+  const out: string[] = [];
+  runbook.steps.forEach((s, i) => {
+    const ready = READY_STEPS[s.phase];
+    if (s.added === undefined || s.after !== undefined || ready === undefined) return;
+    const at = runbook.steps.findIndex((x) => x.id === ready);
+    if (at >= 0 && i > at) out.push(`runbook ${runbook.release}: ${s.id} is added after ${ready} and declares no after; from ${SIDE_BY_SIDE_SINCE} on it names what it waits for (after: ["${ready}"], plus any step whose output it reads), so it never queues behind the soak`);
+  });
   return out;
 }
 
