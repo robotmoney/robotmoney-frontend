@@ -152,6 +152,28 @@ export const SITE_IMAGE_REPO = "robotmoney-website";
 export const SERVER_PIN_REPO = "robotmoney-website-server-pin";
 /** Every site image `smoke:web` builds carries this label with the instance's name. */
 export const SITE_IMAGE_INSTANCE_LABEL = "robotmoney.web.instance";
+/**
+ * PURE. The content of the one regular file in a tar stream as text (what `docker cp <c>:<file> -`
+ * prints), or "" when it holds none. PAX and GNU long-name headers before it are skipped. The text is
+ * cut at its first NUL, the tar padding, so a header size counted in bytes never splits a character.
+ */
+export function fileOfTar(tar: string): string {
+  let at = 0;
+  while (at + 512 <= tar.length) {
+    const header = tar.slice(at, at + 512);
+    if (/^\0*$/.test(header)) return "";
+    const size = Number.parseInt(header.slice(124, 136).replace(/[\0 ]/g, ""), 8) || 0;
+    const type = header[156];
+    if (type === "0" || type === "\0") {
+      const body = tar.slice(at + 512);
+      const end = body.indexOf("\0");
+      return end === -1 ? body : body.slice(0, end);
+    }
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return "";
+}
+
 /** docker-compose.yml labels website-server with its instance and its service. */
 export const INSTANCE_LABEL = "robotmoney.instance";
 export const SERVICE_LABEL = "com.docker.compose.service";
@@ -1069,12 +1091,16 @@ class ImageRun {
     return r.code === 0 ? r.stdout.split("\n").filter((l) => l !== "") : [];
   }
 
-  /** What a kept first-rollout container serves: its web/ mount's version.json, read without starting it. */
+  /**
+   * What a kept first-rollout container serves: its web/ mount's version.json, read without starting it.
+   * `docker cp` reads it from the stopped container itself. Its image may be gone: on Docker's containerd
+   * image store a rebuild that moves the compose tag (the rolling boot rebuilds website-server's nginx
+   * image and keeps the container) drops the old image although a container still uses it, so a
+   * `docker run` of `kept.Image` fails "No such image" (stage run 20261115T034457Z, Q24c).
+   */
   async releaseOfKept(kept: ContainerInspect): Promise<SiteRelease> {
-    const text = await this.docker.ok(
-      ["run", "--rm", "--network", "none", "--volumes-from", kept.Id, "--entrypoint", "cat", kept.Image, IMAGE_VERSION_JSON],
-      `reading the first-rollout container's version.json`,
-    );
+    const tar = await this.docker.ok(["cp", "-L", `${kept.Id}:${IMAGE_VERSION_JSON}`, "-"], `reading the first-rollout container's version.json`);
+    const text = fileOfTar(tar);
     let v: { version?: unknown; commit?: unknown } = {};
     try {
       v = JSON.parse(text) as typeof v;

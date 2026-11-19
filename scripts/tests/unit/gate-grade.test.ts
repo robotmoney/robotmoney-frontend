@@ -2,8 +2,8 @@
 // model-outcome rule: a model timeout or rejected take is reported, a dead judge
 // or an unjudged publish fails; a no_consensus publish is a warning (owner, 2026-10-06).
 import { describe, expect, test } from "bun:test";
-import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type SessionRow } from "../../lib/gate/grade.ts";
-import type { ContainerState } from "../../lib/gate/io.ts";
+import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, type SessionRow } from "../../lib/gate/grade.ts";
+import { ungradedContainer, type ContainerState } from "../../lib/gate/io.ts";
 
 const H = 3_600_000;
 const NOW = Date.parse("2026-10-03T12:00:00Z");
@@ -138,5 +138,34 @@ describe("evaluateJudgeConfig and evaluateContainers", () => {
     expect(evaluateContainers([{ ...base, running: false }], "p", true).failures).toEqual(["s: not running"]);
     expect(evaluateContainers([{ ...base, health: "unhealthy" }], "p", true).failures).toEqual(["s: health 'unhealthy'"]);
     expect(evaluateContainers([{ ...base, health: "none" }], "p", true).failures).toEqual([]);
+  });
+});
+
+describe("the first rollout and the api swap (stage run 20261115T034457Z, Q28)", () => {
+  test("a kept first-rollout website-server and a run container are not graded as services; a website-server is", () => {
+    expect(ungradedContainer("rm_smoke_stack_x-website-server-1-first-rollout")).toBe(true);
+    expect(ungradedContainer("rm_smoke_stack_x-migrate-run-abc")).toBe(true);
+    expect(ungradedContainer("rm_smoke_stack_x-website-server-1")).toBe(false);
+    expect(ungradedContainer("rm_smoke_stack_x-api-1")).toBe(false);
+  });
+  test("a stopped, unhealthy first-rollout container fails nothing when marked one-shot", () => {
+    const base = { restarts: 0, startedAt: "", participantKind: null };
+    const v = evaluateContainers([
+      { ...base, name: "p-api-1", running: true, health: "healthy", oneShot: false },
+      { ...base, name: "p-website-server-1-first-rollout", running: false, health: "unhealthy", oneShot: ungradedContainer("p-website-server-1-first-rollout") },
+    ] as ContainerState[], "p", true);
+    expect(v.failures).toEqual([]);
+  });
+  const since = "2026-11-15T04:58:23.009Z";
+  const listening = "2026-11-15T04:58:24.228768078Z";
+  test("a website-server's window starts when the api listens", () => {
+    expect(logWindowStart("p-website-server-1", since, listening)).toBe(listening);
+    expect(logWindowStart("p-website-server-1-first-rollout", since, listening)).toBe(listening);
+  });
+  test("every other source, and a grade with no listening line, keep the api's start", () => {
+    expect(logWindowStart("p-api-1", since, listening)).toBe(since);
+    expect(logWindowStart("p-worker-analytics-1", since, listening)).toBe(since);
+    expect(logWindowStart("p-website-server-1", since, null)).toBe(since);
+    expect(logWindowStart("p-website-server-1", since, "2026-11-15T04:58:22.000Z")).toBe(since);
   });
 });
