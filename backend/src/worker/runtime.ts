@@ -12,7 +12,7 @@ import { processOneJob, releaseOwnedJobs } from "./loop.ts";
 import { tickScheduler } from "./scheduler.ts";
 import { reapStuckJobs } from "./reaper.ts";
 import { sweepStaleBacklog, waitForApiReady } from "./boot.ts";
-import { describeLane, type Lane } from "./lanes.ts";
+import { describeLane, LANES, type Lane } from "./lanes.ts";
 import { heartbeatPath, schedulerHeartbeatPath, writeHeartbeat } from "../ops/heartbeat.ts";
 
 export interface WorkerOptions {
@@ -313,10 +313,29 @@ export function startWorker(opts: WorkerOptions): WorkerHandle {
   // Every lane runs the scheduler + reaper too — both are concurrency-safe
   // (SKIP LOCKED / idempotent UPDATE), so N workers ticking them is harmless
   // and no lane depends on another lane's process being alive.
+  // THE FLOW LOOP (issue 1614). The analytics drain loop runs one job at a
+  // time, and a cold database's wallet.backfill_window jobs hold it for
+  // minutes each against the metered RPC budget. The per-minute deposit queue
+  // indexer gets its own loop in the same process, so it keeps indexing
+  // through a backfill. It shares the process's RPC budget and heartbeat.
+  async function flowLoop(): Promise<void> {
+    await bootSettled;
+    const flowWorkerId = `${workerId}-flow`;
+    while (running) {
+      try {
+        if (!(await processOneJob({ lane: LANES.flow, workerId: flowWorkerId }))) await sleep(idlePollMs);
+      } catch (err) {
+        console.error(`[${flowWorkerId}] loop error:`, err);
+        await sleep(idlePollMs);
+      }
+    }
+  }
+
   const loops = [
     drainLoop(),
     schedulerLoop(),
     periodic("reaper", reapStuckJobs, reaperTickMs),
+    ...(lane.name === "analytics" ? [flowLoop()] : []),
   ];
 
   async function doStop(): Promise<void> {

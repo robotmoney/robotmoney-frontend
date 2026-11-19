@@ -24,7 +24,11 @@
 // WORKER_LANE is REQUIRED for a worker process: empty or unknown lane names fail
 // loudly at startup (resolveLane) rather than silently claiming everything.
 
-export type LaneName = "analytics" | "generic";
+//   - `flow` — the per-minute deposit queue indexer (`flow.%`, issue 1614). It
+//     runs as a second drain loop inside the `analytics` worker
+//     (runtime.ts), so a long metered backfill on the main loop can never
+//     starve the index. The `analytics` loop never claims it.
+export type LaneName = "analytics" | "generic" | "flow";
 
 export interface Lane {
   readonly name: LaneName;
@@ -36,10 +40,13 @@ export interface Lane {
 
 // Queue kinds the producer replaced (D25). No lane claims them but `generic`.
 const PRODUCER_OWNED_KINDS = "research.%";
+// The deposit queue indexer's kinds, claimed only by the `flow` loop.
+const FLOW_KINDS = "flow.%";
 
 export const LANES: Record<LaneName, Lane> = {
-  analytics: { name: "analytics", include: ["%"], exclude: [PRODUCER_OWNED_KINDS] },
+  analytics: { name: "analytics", include: ["%"], exclude: [PRODUCER_OWNED_KINDS, FLOW_KINDS] },
   generic: { name: "generic", include: ["%"], exclude: [] },
+  flow: { name: "flow", include: [FLOW_KINDS], exclude: [] },
 };
 
 // Human-readable claim summary for startup/health logging ("lane-aware status").

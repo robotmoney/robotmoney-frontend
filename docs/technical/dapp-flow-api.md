@@ -14,6 +14,9 @@ stores those floors using the existing address-floor cache. An optional
 `FLOW_INDEX_DEPLOY_BLOCK` overrides the earliest block; an operator supplying
 it must ensure it is no later than any configured deployment. The `flow.index` job is
 seeded disabled and must be enabled after deployment configuration is installed.
+The analytics worker claims `flow.%` jobs in a second drain loop of its own
+(lane `flow`), so a long wallet backfill on its main loop never starves the
+per-minute index.
 The index is bound to the complete configured set; changing it requires a
 deliberate reindex and is refused by the worker. A configured job with missing
 or invalid addresses fails rather than claiming it indexed anything.
