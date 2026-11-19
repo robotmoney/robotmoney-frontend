@@ -263,7 +263,8 @@ function countingProviders(counts: Map<string, number>, failing?: string): typeo
       const p1 = Number(url.match(/period1=(\d+)/)![1]);
       const ts = FAKE_DAYS.filter((t) => t >= p1);
       const base = [...sym].reduce((a, c) => a + c.charCodeAt(0), 0);
-      return Promise.resolve(Response.json({ chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: ts.map((t, i) => base + i + n / 1000) }] } }] } }));
+      // The raw close is the adjusted close + 1000, so a test can tell which one a key holds (issue 1644).
+      return Promise.resolve(Response.json({ chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: ts.map((t, i) => base + i + n / 1000) }], quote: [{ close: ts.map((t, i) => base + i + n / 1000 + 1000) }] } }] } }));
     }
     if (url.includes("historicalChainTvl")) { bump("defillama:tvl"); return Promise.resolve(Response.json([{ date: unixOf("2024-01-02"), tvl: 3 }])); }
     if (url.includes("stablecoincharts")) { bump("defillama:stables"); return Promise.resolve(Response.json([{ date: unixOf("2024-01-02"), totalCirculatingUSD: { peggedUSD: 4 } }])); }
@@ -322,12 +323,14 @@ test("issue 1514: one live run requests each Yahoo symbol and each DefiLlama end
   for (const sym of ["SPY", "ETH-USD", "BTC-USD", "^GSPC", ...TOP7]) expect(counts.get(`yahoo:${sym}`)).toBe(1);
   expect(counts.get("defillama:tvl")).toBe(1);
   expect(counts.get("defillama:stables")).toBe(1);
-  // Without the run's memo the same collectors request ETH-USD three times and SPY four (the defect).
+  // Without the run's memo the same collectors request ETH-USD five times
+  // (ETH_TREND, BTC_ETH, its two closes as legs since issue 1644, the backtest)
+  // and SPY six (three ratios, two legs, research:SPY): the defect.
   const before = new Map<string, number>();
   globalThis.fetch = countingProviders(before);
   await liveRun(liveDataSource, memorySink([]));
-  expect(before.get("yahoo:ETH-USD")).toBe(3);
-  expect(before.get("yahoo:SPY")).toBe(4);
+  expect(before.get("yahoo:ETH-USD")).toBe(5);
+  expect(before.get("yahoo:SPY")).toBe(6);
 });
 
 test("issue 1514: SPX_TREND and backtest:^GSPC, and ETH_TREND, backtest:ETH-USD and BTC_ETH's ETH leg, hold the same values on every shared date", async () => {
@@ -388,23 +391,26 @@ test("issue 1514: a failing symbol leaves every key it feeds empty and fills the
   expect(research.btc.length).toBeGreaterThan(0);
 });
 
-test("issue 1514: one live run records a version for each leg of the eight Yahoo ratios under its mapped key", async () => {
+test("issue 1644: one live run records both closes of each ratio symbol under its own key, and each stored ratio from the adjusted legs", async () => {
   const { RATIO_LEG_MAPPING } = await import("../../packages/analyst-sdk/src/series-ids.ts");
   process.env.HTTP_FETCH_CACHE_TTL_MS = "0";
   globalThis.fetch = countingProviders(new Map());
   const saved: SourceAcquisitionEvidence[] = [];
   const { registry } = await liveRun(liveDataSource.forRun!({ regime: true, research: true }), memorySink(saved));
   const keys = byKey(saved);
-  const ratios = [...new Set(RATIO_LEG_MAPPING.map((m) => m.consumer))];
-  expect(ratios).toHaveLength(8);
+  expect([...new Set(RATIO_LEG_MAPPING.map((m) => m.consumer))]).toHaveLength(8);
   for (const m of RATIO_LEG_MAPPING) {
-    expect({ ratio: m.consumer, leg: m.series, key: m.storageKey, recorded: (keys.get(m.storageKey)?.values.size ?? 0) > 0 })
-      .toEqual({ ratio: m.consumer, leg: m.series, key: m.storageKey, recorded: true });
+    expect({ ratio: m.consumer, key: m.storageKey, recorded: (keys.get(m.storageKey)?.values.size ?? 0) > 0 })
+      .toEqual({ ratio: m.consumer, key: m.storageKey, recorded: true });
   }
-  // The stored ratio is the legs' ratio on every shared date.
-  const leg = (id: string) => keys.get(RATIO_LEG_MAPPING.find((m) => m.series === id)!.storageKey)!.values;
-  const iwm = leg("yahoo:IWM"), spy = leg("yahoo:SPY");
+  for (const sym of ["IWM", "SPHB", "SPLV", "MTUM", "IWF", "IWD", "XLU", "XLP", "XLY"]) expect(keys.has(`yahoo:${sym}`)).toBe(false);
+  // The raw close is the adjusted close + 1000 in this fake, from one request.
+  const adj = keys.get("yahoo:IWM.adjclose")!.values, raw = keys.get("yahoo:IWM.close")!.values;
+  for (const [date, v] of adj) expect(raw.get(date)).toBe(v + 1000);
+  // The stored ratio is the adjusted legs' ratio on every shared date, as before.
+  const spy = keys.get("yahoo:SPY.adjclose")!.values;
   const shared = registry.IWM_SPY!.filter((p) => spy.has(p.date));
   expect(shared.length).toBeGreaterThan(0);
-  for (const p of shared) expect(p.value).toBe(iwm.get(p.date)! / spy.get(p.date)!);
+  for (const p of shared) expect(p.value).toBe(adj.get(p.date)! / spy.get(p.date)!);
+  expect(keys.get("raw_indicator_history:IWM_SPY")!.values.size).toBe(registry.IWM_SPY!.length);
 });

@@ -14,7 +14,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
-import { SOURCE_TOLERANCES, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
+import { SOURCE_TOLERANCES, STORED_ONLY_KEYS, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { EXTRA_WRITE_KEYS, STORED_UNDER } from "../src/analytics/extras.ts";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
@@ -28,7 +28,7 @@ import { mergeSeries } from "../src/analytics/transform/math.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
 import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
-import { registryRecordedLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
+import { registryRatioLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
 import { RATIO_LEG_MAPPING } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
 import {
@@ -65,8 +65,8 @@ function resolve(expression: string, file: string): string[] {
   if (write) return [EXTRA_WRITE_KEYS[write[1] as keyof typeof EXTRA_WRITE_KEYS]];
   // access/data-source.ts collectModelPortfolioInputs (issue 1398): both shipped inventories (issue 1514).
   if (e === "entry.storageKey") return inventoryCollection().map((s) => s.storageKey);
-  // packages/analyst-sdk/src/extract/sources.ts fetchAll records the ratio legs (issue 1514).
-  if (e === "legKey") return [...registryRecordedLegs()];
+  // packages/analyst-sdk/src/extract/sources.ts fetchAll records both closes of each ratio symbol (issue 1644).
+  if (e === "legKey") return registryRatioLegs().map((l) => l.id);
   throw new Error(
     `${file}: a capture call site names its source_key as \`${e}\`, which this test cannot resolve. ` +
       "Teach resolve() what it expands to, and give every resulting key an entry in SOURCE_TOLERANCES and D56.",
@@ -104,7 +104,10 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
 
   test("the table lists no key an extractor no longer writes", () => {
     const keys = extractorSourceKeys();
-    expect(Object.keys(SOURCE_TOLERANCES).filter((k) => !keys.has(k)).sort()).toEqual([]);
+    // Issue 1644: the nine issue 1514 leg keys keep their entry for their stored rows.
+    expect(Object.keys(SOURCE_TOLERANCES).filter((k) => !keys.has(k) && !STORED_ONLY_KEYS.has(k)).sort()).toEqual([]);
+    expect([...STORED_ONLY_KEYS].sort()).toEqual(["IWD", "IWF", "IWM", "MTUM", "SPHB", "SPLV", "XLP", "XLU", "XLY"].map((sym) => `yahoo:${sym}`));
+    for (const k of STORED_ONLY_KEYS) expect({ k, written: keys.has(k), listed: k in SOURCE_TOLERANCES }).toEqual({ k, written: false, listed: true });
   });
 
   test("decision D56 in docs/decisions.md names every key with its tolerance", () => {
@@ -134,16 +137,18 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
     }
   });
 
-  test("issue 1514: every ratio leg's storage key has a SOURCE_TOLERANCES entry and a D56 row", () => {
+  test("issue 1644: each of the 28 ratio leg keys has a yahoo-float32 SOURCE_TOLERANCES entry and a D56 row; the ratio keys keep theirs", () => {
     const decisions = readFileSync(join(repoRoot, "docs", "decisions.md"), "utf8");
     const d56 = decisions.slice(decisions.indexOf("## D56 "), decisions.indexOf("\n## D", decisions.indexOf("## D56 ") + 1));
     const keys = [...new Set(RATIO_LEG_MAPPING.map((m) => m.storageKey))];
-    expect(keys.length).toBe(14);
+    expect(keys.length).toBe(28);
     for (const key of keys) {
-      expect({ key, listed: key in SOURCE_TOLERANCES }).toEqual({ key, listed: true });
+      expect({ key, tolerance: SOURCE_TOLERANCES[key] }).toEqual({ key, tolerance: { relative: 1e-6, basis: "yahoo-float32" } });
       expect({ key, row: d56.split("\n").some((l) => l.includes(`\`${key}\``)) }).toEqual({ key, row: true });
     }
-    expect([...registryRecordedLegs()].sort()).toEqual(["yahoo:IWD", "yahoo:IWF", "yahoo:IWM", "yahoo:MTUM", "yahoo:SPHB", "yahoo:SPLV", "yahoo:XLP", "yahoo:XLU", "yahoo:XLY"]);
+    for (const id of ["COPPER_GOLD", "IWM_SPY", "BTC_ETH", "SPHB_SPLV", "MTUM_SPY", "IWF_IWD", "XLU_SPY", "XLP_XLY"]) {
+      expect(SOURCE_TOLERANCES[`raw_indicator_history:${id}`]).toEqual({ relative: 5e-6, basis: "yahoo-ratio" });
+    }
   });
 
   // The v0.5.2 ledger repair (scripts/upgrades/0.5.1-to-0.5.2/ledger-repair.ts)
@@ -383,7 +388,9 @@ describe("issue 1421: downstream consumes the committed value and version, never
 
   test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
     const base = await baseObservations();
-    const composite = new Set(INDICATORS.filter((i) => i.panel === "macro" || i.panel === "onchain").map((i) => i.id));
+    // A composite panel's inputs: its indicators and each ratio's legs (issue 1644).
+    const composite = new Set(INDICATORS.filter((i) => i.panel === "macro" || i.panel === "onchain")
+      .flatMap((i) => [i.id, ...RATIO_LEG_MAPPING.filter((m) => m.consumer === `indicator:${i.id}`).map((m) => m.storageKey)]));
     // No extras either: the regime computes from the ledger heads (AN-16), so
     // extras this run recorded would be read by the missing-extras run below.
     const noMacro: typeof base = { ...base, registry: Object.fromEntries(Object.entries(base.registry).filter(([id]) => !composite.has(id))), extras: { spx: [], eth: [], tbill3m: [] } };

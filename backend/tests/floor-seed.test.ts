@@ -7,8 +7,8 @@
 // using a tiny in-test CSV.gz so the assertions are exact (not the ~530 KB vendored
 // fixture). A missing seed file must FAIL LOUDLY, never silent-skip.
 import { test, expect, beforeEach } from "bun:test";
-import { gzipSync } from "node:zlib";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { gzipSync, gunzipSync } from "node:zlib";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyRawFloorSeed } from "../src/analytics/store/floor-seed.ts";
@@ -16,6 +16,17 @@ import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "../src/analytics/extr
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { createHash } from "node:crypto";
+import { useCleanDatabasePerTest } from "./support/clean-db.ts";
+import { RATIO_IDS, RATIO_LEG_KEYS, RATIO_LEG_MAPPING } from "../src/analytics/extras.ts";
+import { runAnalytics } from "../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
+import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
+import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
+
+// Issue 1644: the last tests below need a clean database each (the seed's
+// leg rows land in the source ledger, which no test may delete from).
+useCleanDatabasePerTest(import.meta.file);
 
 // A tiny two-indicator seed CSV → gz file on disk.
 function writeSeed(): string {
@@ -194,3 +205,54 @@ test("append-only floor: an existing real BTC_MVRV DB value is never overwritten
   // (119k+ row, 26-indicator) seed — give it the same CI-load headroom as the
   // idempotency test above rather than relying on the 5000ms default.
 }, 15000);
+
+// ── Issue 1644: the committed floor carries both closes of every ratio symbol ─
+// Every other row is the seed on origin/main byte for byte: the sha256 of the
+// decompressed seed without its leg lines, in file order, is main's.
+const MAIN_SEED_SHA256 = "c9c0b12fa3c3bcc8f016292de362ed186f72608f414cffb1c957b15fa4c21fd6";
+
+test("issue 1644: every stored ratio date of the committed floor has all four legs, and every non-leg row is main's byte for byte", async () => {
+  const text = gunzipSync(readFileSync(DEFAULT_FLOOR_SEED_PATH)).toString("utf8");
+  const withoutLegs = text.split("\n").filter((l) => !RATIO_LEG_KEYS.has(l.split(",")[1] ?? "")).join("\n");
+  expect(createHash("sha256").update(withoutLegs).digest("hex")).toBe(MAIN_SEED_SHA256);
+  const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  expect(RATIO_LEG_KEYS.size).toBe(28);
+  for (const key of RATIO_LEG_KEYS) expect(seed[key]?.length ?? 0, key).toBeGreaterThan(1000);
+  expect(RATIO_IDS.size).toBe(8);
+  for (const ratio of RATIO_IDS) {
+    const legs = RATIO_LEG_MAPPING.filter((m) => m.consumer === `indicator:${ratio}`);
+    expect(legs).toHaveLength(4);
+    const stored = seed[ratio]!;
+    expect(stored.length, ratio).toBeGreaterThan(1000);
+    for (const leg of legs) {
+      const dates = new Set(seed[leg.storageKey]!.map((p) => p.date));
+      expect({ ratio, leg: leg.storageKey, missing: stored.filter((p) => !dates.has(p.date)).map((p) => p.date) }).toEqual({ ratio, leg: leg.storageKey, missing: [] });
+    }
+  }
+});
+
+test("issue 1644: ANALYTICS_FLOOR_SEED=1 writes the ratio rows as on main, no leg row to raw_indicator_history, and each leg's seed rows to the ledger under its key", async () => {
+  // The run stops at the registry fetch; the seed is written before it.
+  const stop: AnalyticsDataSource = {
+    async fetchIndicators() { throw new Error("stop after the floor seed"); },
+    async fetchBacktestExtras() { throw new Error("unused"); },
+    async fetchResearchInputs() { throw new Error("unused"); },
+  };
+  const prior = process.env.ANALYTICS_FLOOR_SEED;
+  process.env.ANALYTICS_FLOOR_SEED = "1";
+  try {
+    await runAnalytics("2026-08-15", "regime", stop, directAnalyticsPersistence, noopTelemetrySink).catch(() => {});
+  } finally {
+    if (prior === undefined) delete process.env.ANALYTICS_FLOOR_SEED;
+    else process.env.ANALYTICS_FLOOR_SEED = prior;
+  }
+  const raw = await loadRawIndicatorHistory();
+  const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  for (const id of RATIO_IDS) expect({ id, rows: raw[id]?.length ?? 0 }).toEqual({ id, rows: seed[id]!.length });
+  for (const key of RATIO_LEG_KEYS) expect(raw[key], key).toBeUndefined();
+  const rows = await sql<{ source_key: string; n: number; provenances: string[] }[]>`
+    SELECT source_key, COUNT(*)::int AS n, array_agg(DISTINCT provenance) AS provenances FROM source_value_versions
+    WHERE source_key = ANY(${[...RATIO_LEG_KEYS]}::text[]) GROUP BY source_key ORDER BY source_key`;
+  expect(rows.map((r) => r.source_key)).toEqual([...RATIO_LEG_KEYS].sort());
+  for (const r of rows) expect({ key: r.source_key, n: r.n, provenances: r.provenances }).toEqual({ key: r.source_key, n: seed[r.source_key]!.length, provenances: ["seed"] });
+}, 180_000);

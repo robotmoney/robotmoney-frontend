@@ -11,7 +11,7 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
-import { SERIES_MAPPING } from "../extras.ts";
+import { STORED_RATIO_IDS, SERIES_MAPPING } from "../extras.ts";
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
 const ANALYTICS_ROUTE = "src/api/routes/analytics";
@@ -484,8 +484,21 @@ export async function loadHistoricalSourceValues(
 // members (issue 1534). It never re-selects them by the cutoff:
 // knowledge_time is the INSERT clock, so a row inserted before the cutoff and
 // committed after this read is invisible here but would match the cutoff.
-/** Every storage key the regime run reads: the registry indicators, the correlations and the backtest (D74 mapping). */
-export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING.map((m) => m.storageKey))].sort());
+/**
+ * Every storage key the regime run reads: the registry indicators, the ratio
+ * legs (both closes, issue 1644), the correlations and the backtest (D74
+ * mapping). A ratio's stored key is read while the ratio is declared
+ * ratioInput "stored".
+ */
+export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING
+  .filter((m) => m.kind === "source" || STORED_RATIO_IDS.has(m.inputId))
+  .map((m) => m.storageKey))].sort());
+
+// Every key a regime consumer maps, a ratio's calculated key included. A
+// vintage with regime members selects none of these by cutoff: its regime keys
+// are the exact versions read, so a stored ratio the run did not read (one
+// declared "legs") is never a member its replay would read.
+const REGIME_MAPPED_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING.map((m) => m.storageKey))].sort());
 
 export interface CommittedInputs {
   /** The database clock the heads were read at, ISO 8601 with microseconds. */
@@ -625,7 +638,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     input.knowledgeTimeCutoff,
     input.marketTimeCutoff,
     sql,
-    input.regimeVersionIds ? REGIME_STORAGE_KEYS : [],
+    input.regimeVersionIds ? REGIME_MAPPED_KEYS : [],
   );
   try {
     return await sql.begin(async (tx) => {

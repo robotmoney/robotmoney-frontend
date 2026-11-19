@@ -16,12 +16,15 @@ import type { AnalyticsDataSource, ResearchInputs } from "../../src/analytics/ac
 import { hermeticDataSource } from "../../src/analytics/access/hermetic-source.ts";
 import { captureSourceAcquisition, type AcquisitionSink, type CommittedSourceValue, type SourceAcquisitionEvidence } from "../../src/analytics/source-ledger.ts";
 import { TOP7 } from "../../src/analytics/analyze/research-signals.ts";
-import { STORED_UNDER } from "../../src/analytics/extras.ts";
+import { RATIO_LEG_KEYS, STORED_UNDER } from "../../src/analytics/extras.ts";
 import { INDICATORS } from "../../src/analytics/analyze/indicators.ts";
 import { toleranceFor } from "../../src/analytics/source-tolerance.ts";
 import type { Point, RawIndicatorHistory } from "../../src/analytics/types.ts";
 import type { TelemetryRunSubmission, TelemetrySink } from "../../src/analytics/telemetry.ts";
 import { variantInputs } from "./originals-source.ts";
+import { readFileSync } from "node:fs";
+import { parseRawHistory, toHistory } from "../../../packages/analyst-sdk/src/input/load.ts";
+import { PRODUCTION_CSV } from "../../../packages/analyst-sdk/tests/support/originals.ts";
 import { poisonNetwork, type NetworkPoison } from "./network-poison.ts";
 
 export const ASOF = "2026-08-15";
@@ -49,6 +52,10 @@ export async function baseObservations(): Promise<Observations> {
   // STABLES_GROWTH are read from DEFI_TVL and STABLES, and nothing is acquired
   // under their own keys (TEST-4).
   const registry = Object.fromEntries(Object.entries(v.registry).filter(([id]) => !Object.hasOwn(STORED_UNDER, id)));
+  // Issue 1644: the registry fetch also acquires both closes of every ratio
+  // symbol (the committed fixture's legs), under their own keys.
+  const all = toHistory(parseRawHistory(readFileSync(PRODUCTION_CSV, "utf8")));
+  for (const key of RATIO_LEG_KEYS) registry[key] = all[key]!;
   return {
     registry,
     mna: r.mna,
@@ -134,7 +141,7 @@ export function poisonedSource(obs: Observations, extractCalls: number): Poisone
     },
     fetchIndicators: (_inds, _logger, sink) => step("fetchIndicators", async () => {
       const out: Record<string, Point[]> = {};
-      for (const [id, pts] of Object.entries(obs.registry)) out[id] = await acquire(sink, `raw_indicator_history:${id}`, pts);
+      for (const [id, pts] of Object.entries(obs.registry)) out[id] = await acquire(sink, RATIO_LEG_KEYS.has(id) ? id : `raw_indicator_history:${id}`, pts);
       return out;
     }),
     fetchBacktestExtras: (_logger, sink) => step("fetchBacktestExtras", async () => ({

@@ -24,6 +24,7 @@ import { seriesForStorageKey } from "../../packages/analyst-sdk/src/archive/form
 import { buildReport, requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import type { RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
+import { RATIO_LEG_KEYS } from "../src/analytics/extras.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -74,7 +75,8 @@ test(
     const history = toHistory(parseRawHistory(text).filter((r) => r.date >= FROM && r.date <= ASOF));
     const acquire = (sourceKey: string, points: { date: string; value: number }[]) =>
       captureSourceAcquisition({ provider: "fixture", sourceKey, parserVersion: "sdk-roundtrip:1", cacheIdentity: sourceKey }, { saveSourceAcquisition }, async () => points);
-    for (const [id, points] of Object.entries(history)) await acquire(EXTRA[id] ?? `raw_indicator_history:${id}`, points);
+    // A ratio leg is stored under its own source id (issue 1644).
+    for (const [id, points] of Object.entries(history)) await acquire(EXTRA[id] ?? (RATIO_LEG_KEYS.has(id) ? id : `raw_indicator_history:${id}`), points);
 
     // (2) Begin a regime run and freeze its vintage.
     const buildIdentity = "4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f";

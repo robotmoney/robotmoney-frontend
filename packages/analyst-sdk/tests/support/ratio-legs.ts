@@ -9,14 +9,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mergeRatioSeries } from "../../src/transform/grid.ts";
 import { parseRawHistory, toHistory } from "../../src/input/load.ts";
-import { RATIO_LEG_MAPPING } from "../../src/series-ids.ts";
+import { RATIO_IDS, RATIO_LEG_KEYS, olderAdjustedLegNames } from "../../src/series-ids.ts";
+import { INDICATORS } from "../../src/analyze/indicators.ts";
 import type { RawIndicatorHistory } from "../../src/types.ts";
 
 export const fixture: RawIndicatorHistory = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "..", "fixtures", "raw-indicator-history.csv"), "utf8")));
-export const RATIOS = [...new Set(RATIO_LEG_MAPPING.map((m) => m.consumer.slice("indicator:".length)))];
+export const RATIOS = [...RATIO_IDS];
 // Each leg by its source id, except the one leg another indicator also reads.
 const ETH_LEG = "backtest:ETH-USD";
-export const legsOf = (ratio: string) => RATIO_LEG_MAPPING.filter((m) => m.consumer === `indicator:${ratio}`).map((m) => (m.storageKey === ETH_LEG ? ETH_LEG : m.series)) as [string, string];
+// Issue 1644: the older names of the adjusted legs (yahoo:<SYMBOL>), still accepted.
+export const legsOf = (ratio: string) =>
+  (INDICATORS.find((i) => i.id === ratio)!.series as string[]).map((sym) => olderAdjustedLegNames("yahoo", sym).find((n) => n === ETH_LEG) ?? `yahoo:${sym}`) as [string, string];
 
 // BTC_ETH's denominator leg is the fixture's ETH stream, named by its storage
 // key backtest:ETH-USD (yahoo:ETH-USD alone would also name ETH_TREND's). Every other denominator is 4 on each ratio date.
@@ -37,7 +40,8 @@ export function legInputs(): { legs: RawIndicatorHistory; sourceOnly: RawIndicat
     legs[num] = fixture[ratio]!.filter((p) => d.has(p.date)).map((p) => ({ date: p.date, value: p.value * d.get(p.date)! }));
   }
   const base: RawIndicatorHistory = {};
-  for (const [k, v] of Object.entries(fixture)) if (!RATIOS.includes(k) && k !== "ETH") base[k] = v;
+  // The fixture's own legs (issue 1644) are left out: these inputs carry the synthetic legs only.
+  for (const [k, v] of Object.entries(fixture)) if (!RATIOS.includes(k) && k !== "ETH" && !RATIO_LEG_KEYS.has(k)) base[k] = v;
   const sourceOnly = { ...base, ...legs };
   const stored: RawIndicatorHistory = { ...base, [ETH_LEG]: legs[ETH_LEG]! };
   for (const ratio of RATIOS) stored[ratio] = mergeRatioSeries(legs[legsOf(ratio)[0]]!, legs[legsOf(ratio)[1]]!);

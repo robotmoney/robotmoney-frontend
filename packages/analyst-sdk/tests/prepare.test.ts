@@ -70,7 +70,8 @@ import { buildReport, runRegime as runRegimeOutcome, requireComplete, type RunRe
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point, RawIndicatorHistory } from "../src/types.ts";
-import { legInputs, legsOf, RATIOS } from "./support/ratio-legs.ts";
+import { fixture, legInputs, legsOf, RATIOS } from "./support/ratio-legs.ts";
+import { INDICATORS } from "../src/analyze/indicators.ts";
 
 describe("ratios from legs (SDK-10)", () => {
   const { legs, sourceOnly, stored } = legInputs();
@@ -81,14 +82,38 @@ describe("ratios from legs (SDK-10)", () => {
     sourceOnlyRun = runRegime(sourceOnly);
   }, 120_000);
 
-  test("a source-only input with yahoo:HG=F and yahoo:GC=F ranks COPPER_GOLD on every date the stored ratio does", () => {
-    const fromLegs = sourceOnlyRun.result.ranks.COPPER_GOLD!;
-    const fromStored = storedRun.result.ranks.COPPER_GOLD!;
-    const finite = (xs: number[]) => xs.filter(Number.isFinite).length;
-    expect(finite(fromStored)).toBeGreaterThan(0);
-    expect(finite(fromLegs)).toBe(finite(fromStored));
-    expect(fromLegs.map(Number.isFinite)).toEqual(fromStored.map(Number.isFinite));
-  }, 120_000);
+  // Issue 1644: the committed fixture carries the stored ratios and both
+  // closes of every leg. The ratio from the adjusted legs covers every date
+  // the stored ratio has. No regime runs.
+  test("the ratio from the committed adjusted legs has every date of the fixture's stored ratio", () => {
+    expect(RATIOS.length).toBe(8);
+    for (const ratio of RATIOS) {
+      const [num, den] = (INDICATORS.find((i) => i.id === ratio)!.series as string[]).map((sym) => fixture[`yahoo:${sym}.adjclose`]!);
+      expect(num?.length ?? 0, ratio).toBeGreaterThan(0);
+      const computed = new Set(mergeRatioSeries(num!, den!).map((p) => p.date));
+      const stored = fixture[ratio]!;
+      expect(stored.length, ratio).toBeGreaterThan(0);
+      expect(stored.filter((p) => !computed.has(p.date)).map((p) => p.date), ratio).toEqual([]);
+    }
+  });
+
+  test("under ratioInput stored, ratiosFromLegs keeps a stored IWM_SPY (same array) over legs that differ, and computes it from the adjusted legs alone", () => {
+    const dates = ["2024-01-02", "2024-01-03", "2024-01-04"];
+    const iwm = dates.map((date, i) => ({ date, value: 200 + i }));
+    const spy = dates.map((date, i) => ({ date, value: 470 + i }));
+    const storedIwmSpy = dates.map((date) => ({ date, value: 0.1 }));
+    const run = (h: RawIndicatorHistory) => ratiosFromLegs(h, resolveInputHistory(h));
+    // SPY is also MTUM_SPY's and XLU_SPY's denominator, so their numerators come along.
+    const adjusted: RawIndicatorHistory = { "yahoo:IWM.adjclose": iwm, "yahoo:SPY.adjclose": spy, "yahoo:MTUM.adjclose": iwm, "yahoo:XLU.adjclose": iwm };
+    const older: RawIndicatorHistory = { "yahoo:IWM": iwm, "research:SPY": spy, "yahoo:MTUM": iwm, "yahoo:XLU": iwm };
+    const withStored: RawIndicatorHistory = { IWM_SPY: storedIwmSpy, ...adjusted };
+    expect(run(withStored).IWM_SPY).toBe(storedIwmSpy);
+    expect(run(adjusted).IWM_SPY).toEqual(mergeRatioSeries(iwm, spy));
+    expect(run(older).IWM_SPY).toEqual(mergeRatioSeries(iwm, spy));
+    // The .adjclose key wins over an older name; the raw .close legs are not read.
+    const raw = iwm.map((p) => ({ date: p.date, value: p.value * 3 }));
+    expect(run({ ...older, ...adjusted, "yahoo:IWM.close": raw, "yahoo:SPY.close": raw, "yahoo:IWM": raw }).IWM_SPY).toEqual(mergeRatioSeries(iwm, spy));
+  });
 
   test("each of the eight ratios is mergeRatioSeries(legs) byte for byte, and the report equals the stored-ratio report", () => {
     expect(RATIOS.length).toBe(8);

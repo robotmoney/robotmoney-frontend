@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { mergeSeries } from "../transform/math.ts";
 import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "./floor-seed.ts";
 import { INDICATORS } from "../analyze/indicators.ts";
+import { RATIO_IDS, RATIO_LEG_KEYS } from "../extras.ts";
 import { filterCalendarValid, validateFloorCalendar } from "./floor-seed-calendar.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";
 
@@ -142,7 +143,13 @@ export function replaceFloorSeedAtomically(seedPath: string, generated: { gz: Bu
 //     does not reliably extend as far back as the accumulated floor.
 //   - SHILLER_CAPE: the primary (multpl) and fallback (datahub) live sources
 //     are not guaranteed to reproduce the floor's full monthly history.
-export const UNRECOVERABLE_PRESERVE_IDS: readonly string[] = ["HY_OAS", "NEW_TOKENS", "BTC_ACTIVE", "SHILLER_CAPE"];
+//   - The eight Yahoo ratios (issue 1644): the stored ratio rows are the
+//     frozen historical record the fixtures, goldens and originals comparisons
+//     read, so they are kept exactly and never refetched (a fresh download
+//     cannot reproduce them: an adjusted close moves on every later
+//     dividend). Their 28 legs (`yahoo:<SYMBOL>.close`, `.adjclose`) are
+//     recoverable and refetched like any series.
+export const UNRECOVERABLE_PRESERVE_IDS: readonly string[] = ["HY_OAS", "NEW_TOKENS", "BTC_ACTIVE", "SHILLER_CAPE", ...RATIO_IDS];
 
 export interface PurgeOptions {
   // Injectable — tests supply deterministic mocked responses instead of a
@@ -169,7 +176,7 @@ export async function generateFullUniversePurge(opts: PurgeOptions): Promise<Pur
   const seedPath = opts.seedPath ?? DEFAULT_FLOOR_SEED_PATH;
   const existing = await loadRawFloorSeed(seedPath);
   const fetched = await opts.fetchAll();
-  const ids = opts.indicatorIds ?? INDICATORS.map((i) => i.id);
+  const ids = opts.indicatorIds ?? [...INDICATORS.map((i) => i.id), ...RATIO_LEG_KEYS];
   const preserveIds = new Set(opts.preserveIds ?? UNRECOVERABLE_PRESERVE_IDS);
 
   const merged: RawIndicatorHistory = {};

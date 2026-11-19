@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
 import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
-import { registryRecordedLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
+import { registryRatioLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
 import { STORED_UNDER } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { fetchFred } from "../src/analytics/extract/fred.ts";
 import { fetchJson } from "../src/analytics/extract/http.ts";
@@ -44,7 +44,7 @@ async function enumeratedSourceVariants(): Promise<string[]> {
 
 function providerResponse(url: string): Response {
   if (url.includes("fredgraph.csv")) return new Response("DATE,VALUE\n2024-01-01,1.25\n", { headers: { etag: "fred-release-1" } });
-  if (url.includes("query2.finance.yahoo.com")) return Response.json({ chart: { result: [{ timestamp: [1704067200], indicators: { adjclose: [{ adjclose: [2] }] } }] } });
+  if (url.includes("query2.finance.yahoo.com")) return Response.json({ chart: { result: [{ timestamp: [1704067200], indicators: { adjclose: [{ adjclose: [2] }], quote: [{ close: [2.5] }] } }] } });
   if (url.includes("historicalChainTvl")) return Response.json([{ date: 1704067200, tvl: 3 }]);
   if (url.includes("stablecoincharts")) return Response.json([{ date: 1704067200, totalCirculatingUSD: { peggedUSD: 4 } }]);
   if (url.includes("api.blockchain.info")) return Response.json({ values: [{ x: 1704067200, y: 5 }] });
@@ -76,13 +76,14 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series and are not fetched (D74 amendment, issue 1514).
   const fetchedIndicators = indicators.filter((i) => !(i.id in STORED_UNDER));
   expect(fetchedIndicators.length).toBe(indicators.length - 2);
-  expect(Object.keys(output)).toHaveLength(fetchedIndicators.length);
+  // Issue 1644: both closes of every ratio symbol are acquisitions of their own (28 keys).
+  const legCount = registryRatioLegs(indicators).length;
+  expect(legCount).toBe(28);
+  expect(Object.keys(output)).toHaveLength(fetchedIndicators.length + legCount);
 
   const all = await sql`SELECT id, provider, requested_by_run_id, cache_identity FROM source_acquisitions`;
-  // Issue 1514: the ratio legs the registry records are acquisitions of their
-  // own, served from the ratio's fetch, so they carry no fetch evidence.
-  const legs = all.filter((r) => String(r.cache_identity).includes(":ratio-leg:"));
-  expect(legs).toHaveLength(registryRecordedLegs(indicators).size);
+  const legs = all.filter((r) => /:(close|adjclose)$/.test(String(r.cache_identity)));
+  expect(legs).toHaveLength(legCount);
   const acquisitions = all.filter((r) => !legs.includes(r));
   expect(acquisitions).toHaveLength(fetchedIndicators.length);
   // ENUMERATED, not listed by hand. AC1 is "every source variant enumerated by
@@ -95,7 +96,7 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   const [{ ratioFetches }] = await sql`
     SELECT count(*)::int AS "ratioFetches" FROM source_fetches f
     JOIN source_acquisitions a ON a.id = f.acquisition_id
-    WHERE a.provider = 'yahoo' AND a.cache_identity NOT LIKE '%:ratio-leg:%'`;
+    WHERE a.provider = 'yahoo' AND a.cache_identity NOT LIKE '%:close' AND a.cache_identity NOT LIKE '%:adjclose'`;
   expect(ratioFetches).toBeGreaterThan(acquisitions.filter((r) => r.provider === "yahoo").length);
   const [{ coinmetricsFetches }] = await sql`
     SELECT count(*)::int AS "coinmetricsFetches" FROM source_fetches f
@@ -114,6 +115,10 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
   expect(fred.provider_release_id).toBe("fred-release-1");
   // The body's fingerprint, not the body (issue #1035, decision D56).
   expect(fred.response_checksum).toBe(payloadChecksum(exact));
+  // A .close leg holds the raw close, a .adjclose leg the adjusted close.
+  const legValues = await sql`SELECT source_key, value FROM source_value_versions WHERE source_key LIKE 'yahoo:%.close' OR source_key LIKE 'yahoo:%.adjclose'`;
+  expect(legValues).toHaveLength(28);
+  for (const r of legValues) expect(Number(r.value)).toBe(String(r.source_key).endsWith(".close") ? 2.5 : 2);
   const [{ values }] = await sql`SELECT count(*)::int AS values FROM source_value_versions WHERE acquisition_id IS NOT NULL`;
   expect(values).toBeGreaterThan(INDICATORS.length);
 });

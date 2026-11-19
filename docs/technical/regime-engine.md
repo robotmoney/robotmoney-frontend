@@ -582,7 +582,14 @@ between the two lives in `packages/analyst-sdk/src/series-ids.ts`
   two storage keys for one source id. The error names both keys. One source id
   read by two consumers through two keys is allowed.
 - **Ratios.** A ratio indicator stores a calculated value, so its key maps to the
-  indicator id with kind `calculated`, and its two legs are listed.
+  indicator id with kind `calculated`. Its four legs, both Yahoo closes of both
+  symbols (`yahoo:<SYMBOL>.close` and `yahoo:<SYMBOL>.adjclose`, issue 1644),
+  are source entries of the same consumer, each with storage key, source id
+  and input id equal. Each ratio's `ratioInput` and `ratioClose`, declared on
+  its registry entry in `analyze/indicators.ts`, select whether the run reads
+  the stored ratio and which close the legs carry (`transform/ratios.ts`). The
+  regime storage keys hold the 28 leg keys and the stored ratio of every ratio
+  declared `"stored"` (all eight).
 - **Source ids without a provider symbol.** The provider is the registry's
   `source`, the name the ledger already records. Providers with no series use a
   fixed symbol: `defillama_tvl:total`, `defillama_stables:total`,

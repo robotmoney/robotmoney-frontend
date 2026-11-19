@@ -6,7 +6,9 @@
 // that 401s for unauthenticated callers):
 //   https://query2.finance.yahoo.com/v8/finance/chart/<SYMBOL>?period1=..&period2=..&interval=1d
 //
-// Value is adjclose when finite, else the raw close; NaN rows are dropped.
+// parseYahoo's value is adjclose when finite, else the raw close; NaN rows are
+// dropped. parseYahooClose's value is the raw close only (issue 1644: a ratio
+// leg is source data, so never the dividend-adjusted close).
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { fetchJson } from "./http.ts";
@@ -30,6 +32,21 @@ export function parseYahoo(j: unknown): Point[] {
   return out;
 }
 
+// The raw close, `indicators.quote[0].close`, never adjclose. A row whose close
+// is null or not finite is dropped.
+export function parseYahooClose(j: unknown): Point[] {
+  const res = (j as any)?.chart?.result?.[0];
+  const ts: number[] = res?.timestamp;
+  const close: number[] = res?.indicators?.quote?.[0]?.close;
+  if (!Array.isArray(ts) || !Array.isArray(close) || close.length === 0) throw new Error("yahoo: missing timestamp/close");
+  const out: Point[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (!Number.isFinite(close[i])) continue;
+    out.push({ date: isoDay(ts[i] * 1000), value: Number(close[i]) });
+  }
+  return out;
+}
+
 // Full-history v8 chart URL. period1=0 → earliest available; events=history for
 // dividend/split-adjusted closes.
 export const yfUrl = (
@@ -41,14 +58,34 @@ export const yfUrl = (
     symbol,
   )}?period1=${startUnix}&period2=${endUnix}&interval=1d&events=history`;
 
+/** The chart JSON for one symbol: both parsers read the one response. */
+export function fetchYahooChart(
+  symbol: string,
+  startUnix = 0,
+  endUnix = Math.floor(Date.now() / 1000),
+  timeoutMs = 15000,
+): Promise<unknown> {
+  return fetchJson(yfUrl(symbol, startUnix, endUnix), timeoutMs, {
+    "user-agent": "Mozilla/5.0 (compatible; robotmoney-regime/1.0)",
+  });
+}
+
+/** The adjusted close (parseYahoo). */
 export async function fetchYahoo(
   symbol: string,
   startUnix = 0,
   endUnix = Math.floor(Date.now() / 1000),
   timeoutMs = 15000,
 ): Promise<Point[]> {
-  const j = await fetchJson(yfUrl(symbol, startUnix, endUnix), timeoutMs, {
-    "user-agent": "Mozilla/5.0 (compatible; robotmoney-regime/1.0)",
-  });
-  return parseYahoo(j);
+  return parseYahoo(await fetchYahooChart(symbol, startUnix, endUnix, timeoutMs));
+}
+
+/** The raw close (parseYahooClose): a ratio leg (issue 1644). */
+export async function fetchYahooClose(
+  symbol: string,
+  startUnix = 0,
+  endUnix = Math.floor(Date.now() / 1000),
+  timeoutMs = 15000,
+): Promise<Point[]> {
+  return parseYahooClose(await fetchYahooChart(symbol, startUnix, endUnix, timeoutMs));
 }

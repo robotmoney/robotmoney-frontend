@@ -38,6 +38,8 @@ import type { RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.t
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 
+import { RATIO_LEG_KEYS } from "../src/analytics/extras.ts";
+
 useCleanDatabase(import.meta.file);
 
 const P = ROUTES.publicAnalytics;
@@ -62,7 +64,8 @@ beforeAll(async () => {
   _setArchiveClockForTests(() => NOW);
 
   const text = readFileSync(join(SDK, "tests/fixtures/raw-indicator-history.csv"), "utf8");
-  const rows = parseRawHistory(text).filter((r) => r.date >= FROM);
+  // The recorded runs predate the fixture's ratio legs (issue 1644): they hold the stored ratios only.
+  const rows = parseRawHistory(text).filter((r) => r.date >= FROM && !RATIO_LEG_KEYS.has(r.indicator));
   const obs = rows
     .map((r) => ({ key: EXTRA[r.indicator] ?? `raw_indicator_history:${r.indicator}`, date: r.date, value: r.value }))
     .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));

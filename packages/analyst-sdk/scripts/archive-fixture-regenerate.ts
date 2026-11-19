@@ -27,6 +27,7 @@
 // `--check` rebuilds in memory and exits 1 if any committed file would change.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { RATIO_LEG_KEYS } from "../src/series-ids.ts";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -58,7 +59,8 @@ type Svv = { id: number; key: string; date: string; value: string; kt: string; p
 const lines = readFileSync(join(SDK, "tests/fixtures/raw-indicator-history.csv"), "utf8").split("\n").slice(1).filter(Boolean);
 const obs = lines
   .map((l) => l.split(","))
-  .filter(([date]) => date! >= FROM)
+  // The archived runs predate the fixture's ratio legs (issue 1644): they hold the stored ratios only.
+  .filter(([date, id]) => date! >= FROM && !RATIO_LEG_KEYS.has(id!))
   .map(([date, id, value]) => ({ date: date!, key: EXTRA_KEYS[id!] ?? `raw_indicator_history:${id}`, value: value! }));
 obs.sort((a, b) => cmp(a.key, b.key) || cmp(a.date, b.date));
 

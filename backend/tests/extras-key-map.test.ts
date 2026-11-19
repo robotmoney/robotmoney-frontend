@@ -92,8 +92,14 @@ describe("the D74 storage mapping", () => {
   // The D74 amendment of 2026-10-28 (issue 1514) moves exactly two consumers:
   // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES keys.
   const AMENDED: Record<string, string> = { DEFI_GROWTH: "DEFI_TVL", STABLES_GROWTH: "STABLES" };
+  // Issue 1644: a ratio consumer also reads both closes of both its symbols.
+  const RATIO_SYMBOLS: Record<string, [string, string]> = {
+    COPPER_GOLD: ["HG=F", "GC=F"], IWM_SPY: ["IWM", "SPY"], BTC_ETH: ["BTC-USD", "ETH-USD"], SPHB_SPLV: ["SPHB", "SPLV"],
+    MTUM_SPY: ["MTUM", "SPY"], IWF_IWD: ["IWF", "IWD"], XLU_SPY: ["XLU", "SPY"], XLP_XLY: ["XLP", "XLY"],
+  };
+  const legKeys = (id: string) => (RATIO_SYMBOLS[id] ?? []).flatMap((sym) => [`yahoo:${sym}.close`, `yahoo:${sym}.adjclose`]);
   const PINNED: Record<string, string[]> = {
-    ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`]])),
+    ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`, ...legKeys(id)].sort()])),
     correlations: ["backtest:ETH-USD", "backtest:^GSPC"],
     backtest: ["backtest:DTB3", "backtest:ETH-USD", "backtest:^GSPC"],
   };
@@ -145,26 +151,26 @@ describe("the D74 storage mapping", () => {
   });
 });
 
-// Issue 1514: the Yahoo ratio legs are stored as source series (analytics requirements 4.3).
+// Issue 1644: both closes of each ratio symbol are source entries of SERIES_MAPPING (analytics requirements 4.3).
 describe("the ratio leg mapping", () => {
-  test("validateSeriesMapping accepts it, alone and with the consumer mapping, and no consumer reads one leg from two keys", async () => {
-    const { RATIO_LEG_MAPPING, validateSeriesMapping, ratioLegStorageKey } = await import("../../packages/analyst-sdk/src/series-ids.ts");
-    expect(validateSeriesMapping(RATIO_LEG_MAPPING)).toBe(RATIO_LEG_MAPPING);
-    expect(() => validateSeriesMapping([...SERIES_MAPPING, ...RATIO_LEG_MAPPING])).not.toThrow();
-    expect(RATIO_LEG_MAPPING).toHaveLength(16);
-    const keyOf = new Map<string, string>();
+  test("SERIES_MAPPING validates; RATIO_LEG_MAPPING is its 32 leg entries over 28 keys; REGIME_STORAGE_KEYS reads the legs and the stored ratios", async () => {
+    const { RATIO_LEG_MAPPING, RATIO_IDS, validateSeriesMapping } = await import("../../packages/analyst-sdk/src/series-ids.ts");
+    const { REGIME_STORAGE_KEYS } = await import("../src/analytics/store/run-ledger-store.ts");
+    expect(validateSeriesMapping(SERIES_MAPPING)).toBe(SERIES_MAPPING);
+    expect(RATIO_LEG_MAPPING).toHaveLength(32);
+    const keys = [...new Set(RATIO_LEG_MAPPING.map((m) => m.storageKey))].sort();
+    expect(keys).toEqual(["BTC-USD", "ETH-USD", "GC=F", "HG=F", "IWD", "IWF", "IWM", "MTUM", "SPHB", "SPLV", "SPY", "XLP", "XLU", "XLY"].flatMap((sym) => [`yahoo:${sym}.adjclose`, `yahoo:${sym}.close`]).sort());
     for (const m of RATIO_LEG_MAPPING) {
-      const prior = keyOf.get(m.series);
-      if (prior !== undefined) expect({ leg: m.series, key: m.storageKey }).toEqual({ leg: m.series, key: prior });
-      keyOf.set(m.series, m.storageKey);
-      expect(m.storageKey).toBe(ratioLegStorageKey(m.series));
+      expect(m.kind).toBe("source");
+      expect({ key: m.storageKey, series: m.series, input: m.inputId }).toEqual({ key: m.storageKey, series: m.storageKey, input: m.storageKey });
     }
-    expect(keyOf.get("yahoo:SPY")).toBe("research:SPY");
-    expect(keyOf.get("yahoo:ETH-USD")).toBe(LEDGER_EXTRA_KEYS.eth.ledgerKey);
-    expect(keyOf.get("yahoo:IWM")).toBe("yahoo:IWM");
+    for (const key of keys) expect(REGIME_STORAGE_KEYS).toContain(key);
+    expect(RATIO_IDS.size).toBe(8);
+    // Every ratio is declared ratioInput "stored", so the run reads its stored key.
+    for (const id of RATIO_IDS) expect(REGIME_STORAGE_KEYS).toContain(`raw_indicator_history:${id}`);
     // A consumer reading one leg from two keys is refused.
-    const bad = [...RATIO_LEG_MAPPING, { ...RATIO_LEG_MAPPING.find((m) => m.series === "yahoo:SPY")!, storageKey: "yahoo:SPY" }];
-    expect(() => validateSeriesMapping(bad)).toThrow(/would read yahoo:SPY from two storage keys/);
+    const bad = [...SERIES_MAPPING, { ...RATIO_LEG_MAPPING.find((m) => m.series === "yahoo:SPY.adjclose")!, storageKey: "research:SPY" }];
+    expect(() => validateSeriesMapping(bad)).toThrow(/would read yahoo:SPY\.adjclose from two storage keys/);
   });
 });
 

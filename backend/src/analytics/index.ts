@@ -22,7 +22,8 @@
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule } from "./analyze/indicators.ts";
-import { LEDGER_EXTRA_KEYS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
+import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
+import { ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
 import { IncompleteDayError } from "../../../packages/analyst-sdk/src/run.ts";
@@ -284,7 +285,9 @@ export async function runAnalytics(
     // default → CI/hermetic runs never touch it.
     if (process.env.ANALYTICS_FLOOR_SEED === "1") {
       // The vendored floor still carries the *_GROWTH ids; they are no longer written (D74 amendment).
-      const seed = Object.fromEntries(Object.entries(await loadRawFloorSeed()).filter(([id]) => !Object.hasOwn(STORED_UNDER, id)));
+      // Issue 1644: a ratio declared ratioInput "legs" is not written; the ratio
+      // legs go to the source ledger only (store/floor-seed.ts).
+      const seed = Object.fromEntries(Object.entries(await loadRawFloorSeed()).filter(([id]) => !Object.hasOwn(STORED_UNDER, id) && !(RATIO_IDS.has(id) && !STORED_RATIO_IDS.has(id))));
       const res = await persistence.seedRawHistory(seed);
       if (res.seededPoints > 0) {
         logger.log?.(`[analytics] floor seed: wrote ${res.seededPoints} real rows across ${res.indicators} indicator(s) (cold-DB gap fill); ${res.existingPoints} already present`);
@@ -307,6 +310,8 @@ export async function runAnalytics(
       // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH are read
       // from the DEFI_TVL and STABLES series below; nothing is written for them.
       if (Object.hasOwn(STORED_UNDER, ind.id)) continue;
+      // Issue 1644: a ratio declared ratioInput "legs" is never stored.
+      if (RATIO_IDS.has(ind.id) && !STORED_RATIO_IDS.has(ind.id)) continue;
       const prior = floor[ind.id] ?? [];
       const f = fetched[ind.id] ?? [];
       const m = mergeSeries(prior, f);
@@ -370,6 +375,9 @@ export async function runAnalytics(
     const committedFloor = await persistence.loadRawHistory();
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
+    // Issue 1644: each ratio under its declared parameters, from the legs this
+    // source served when the ratio is not read as stored.
+    registry = withRatios(fetched, registry);
     inputEvidence.registry = registryEvidence(merged, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
@@ -443,7 +451,9 @@ export async function runAnalytics(
     const committed = await persistence.loadCommittedInputs(asof);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
     regimeVersionIds = committed.values.map((v) => v.versionId);
-    const fromLedger = inputHistoryFromStorage(committed.values);
+    // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
+    const ledgerInput = inputHistoryFromStorage(committed.values);
+    const fromLedger = withRatios(ledgerInput, ledgerInput);
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
     const X = LEDGER_EXTRA_KEYS;
@@ -800,6 +810,20 @@ function recordAcquisitionEvidence(
     const m = (out.acquisitions[key] ??= { mismatched: 0, first: { date: v.marketDate ?? v.marketInstant, collected: v.value, committed: c.value } });
     m.mismatched++;
   });
+}
+
+// `resolved` with each ratio set by its declared ratioInput and ratioClose from
+// the legs `input` carries (analytics requirements 4.3, issue 1644). A ratio
+// with nothing to read is [] (missing, no weight).
+function withRatios(
+  input: Record<string, { date: string; value: number }[]>,
+  resolved: Record<string, { date: string; value: number }[]>,
+): Record<string, { date: string; value: number }[]> {
+  // A stored ratio the fetch left empty is no stored ratio.
+  const present = Object.fromEntries(Object.entries(resolved).filter(([id, pts]) => !RATIO_IDS.has(id) || pts.length > 0));
+  const out = { ...ratiosFromLegs(input, present) };
+  for (const id of RATIO_IDS) out[id] ??= [];
+  return out;
 }
 
 function registryEvidence(
