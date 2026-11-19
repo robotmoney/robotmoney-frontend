@@ -7,8 +7,9 @@
 // over a 3y rolling window, sign-aligned so +1 = risk-on, and inverse-correlation
 // weighted within its panel.
 //
-// Type-only: regime-versions.ts imports this module at runtime.
-import type { RegimeVersion } from "./regime-versions.ts";
+// Type-only, and inline: regime-versions.ts imports this module at runtime, and
+// the registry stays a leaf a public handler may read (no import statement).
+type RegimeVersion = import("./regime-versions.ts").RegimeVersion;
 
 // Sign convention: +1 means "rising raw value = risk-on", -1 means flip.
 // Transform: applied to the raw history before percentile ranking.
