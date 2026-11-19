@@ -24,6 +24,23 @@ function reasonError(reason) {
   return null;
 }
 
+// Stored as a list of notes, or (older manifests) one paragraph. Same
+// tolerance as static-views.js structuralNotesOf, kept local so this factory
+// does not pull in the public views bundle.
+function notesOf(topic) {
+  const raw = topic?.structuralNotes;
+  if (Array.isArray(raw)) return raw.filter((n) => typeof n === "string" && n.trim());
+  return typeof raw === "string" && raw.trim() ? [raw] : [];
+}
+
+// The form edits notes as one textarea with a blank line between notes: a
+// note is a sentence or two, and once it wraps, "one per line" can't be seen.
+// A line break inside a note is folded to a space.
+function notesFromText(text) {
+  return String(text || "").split(/\n\s*\n/)
+    .map((n) => n.replace(/\s*\n\s*/g, " ").trim()).filter(Boolean);
+}
+
 export function registerAdminSwarmSubject(Alpine) {
   Alpine.data("adminSwarmSubject", () => ({
     ...adminAuthState(),
@@ -47,6 +64,7 @@ export function registerAdminSwarmSubject(Alpine) {
     activateError: null,
 
     fmtUtc,
+    notesOf,
 
     async init() {
       this.subjectId = location.pathname.split("/").filter(Boolean).pop();
@@ -85,7 +103,9 @@ export function registerAdminSwarmSubject(Alpine) {
         expectedVersion: this.topic.version,
         name: this.topic.name || "",
         operator: this.topic.operator || "",
+        homepage: this.topic.homepage || "",
         thesisBlurb: this.topic.thesisBlurb || "",
+        structuralNotes: notesOf(this.topic).join("\n\n"),
         sourceType: this.topic.source?.type || "manual",
         recommendationType: this.topic.recommendationType || "position_actions",
         wallets: Array.isArray(this.topic.wallets) ? [...this.topic.wallets] : [],
@@ -113,6 +133,12 @@ export function registerAdminSwarmSubject(Alpine) {
       if (!this.editForm.name?.trim()) errors.name = "Name is required.";
       if (!this.editForm.operator?.trim()) errors.operator = "Operator is required.";
       if (!this.editForm.thesisBlurb?.trim()) errors.thesisBlurb = "Thesis is required.";
+      const homepage = this.editForm.homepage?.trim() || "";
+      if (homepage && !/^https:\/\/[^\s/]+\.[^\s]+$/.test(homepage)) {
+        errors.homepage = "Homepage must be an https:// URL.";
+      } else if (homepage.length > 500) {
+        errors.homepage = "Homepage must be at most 500 characters.";
+      }
       if (this.editForm.sourceType === "framework" && this.editForm.wallets.length > 0) {
         errors.wallets = "framework topics must not have wallets.";
       }
@@ -138,17 +164,23 @@ export function registerAdminSwarmSubject(Alpine) {
       if (Object.keys(this.editErrors).length > 0) return;
       this.submitting = true;
       try {
+        // A blank homepage is left out when there was none, and sent as ""
+        // when there was one: updateSubjectAdmin merges with `patch.homepage
+        // ?? row.homepage`, so a null would read as "absent" and keep the old
+        // URL, while "" is stored and every reader treats it as no homepage.
+        const homepage = this.editForm.homepage.trim();
         const body = {
           expectedVersion: this.editForm.expectedVersion,
           name: this.editForm.name,
           operator: this.editForm.operator,
+          ...(homepage || this.topic.homepage ? { homepage } : {}),
           thesisBlurb: this.editForm.thesisBlurb,
           wallets: this.editForm.wallets,
           nftContracts: this.topic.nftContracts || [],
           source: { type: this.editForm.sourceType },
           recommendationType: this.editForm.recommendationType,
           linkedMemberId: this.editForm.linkedMemberId || null,
-          structuralNotes: this.topic.structuralNotes || [],
+          structuralNotes: notesFromText(this.editForm.structuralNotes),
           reason: this.editForm.reason,
         };
         await api.adminPost(
