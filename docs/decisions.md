@@ -6634,3 +6634,18 @@ This is SDK tooling, not a methodology change: with every parameter at its decla
 **Rejected.** Keeping `derivation-v1` and digesting a null: the digest would stop covering the regime reading the members were given. Rewriting stored sessions, judgements, receipts or disagreements: the record is append-only.
 
 **Enforced by** `backend/tests/swarm-judge.test.ts`, `backend/tests/swarm-regime-composite.test.ts`, `backend/tests/regime-summary-history.test.ts` and `scripts/tests/unit/swarm-judge-recipe.test.ts`.
+
+---
+
+<a id="d87"></a>
+## D87 — The stage target's analytics producer runs hourly from a boot-anchored minute; production is unchanged (issue 1684; owner, 2026-11-18 and 2026-11-19)
+
+**Decision.** A realistic `bun smoke` boot under `RM_ENV=stage` sets the analytics producer's schedule from the boot's own time: research at minute `m` of every hour, `m` being the boot's minute plus `STAGE_FIRST_TICK_MINUTES` (15) mod 60, and regime 30 minutes after research (`stageProducerCrons` in `scripts/lib/smoke-cadence.ts`, applied by `resolveSmokeEnv`). The first research tick lands about 15 minutes after the boot, so after READY, and a stage resume hours later waits at most an hour. The boot sets a schedule and starts no run: nothing triggers an analytics run by hand, stage included. Production (`RM_ENV=prod`) keeps `0 */3 * * *` and `30 */3 * * *`, and the committed `docker-compose.yml` defaults and the fast smoke cadence are unchanged.
+
+The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-check.ts`) reads both crons from the analytics-producer container and waits for the next research slot they name. Its window caps at the earlier of 120 minutes and the next research slot, and the step allows 190 minutes. `regimeCronProblems` in `scripts/release/schedule-parity.ts` accepts production's pair and the stage pair, and nothing else.
+
+**Why.** The owner rule (2026-10-01) is that analytics runs only on its schedule. On production's 3-hourly grid the v0.9.1 stage run sat idle for hours waiting for a tick, and the step allowed 320 minutes. The owner's direction (2026-11-19) is that idle time of that size is unacceptable for a stage check. A schedule anchored to the boot keeps the rule (a scheduled run, never a manual one) and removes the wait.
+
+**Rejected.** A plain hourly cron (`0 * * * *`): the first tick could still land up to an hour after READY. Triggering a run after READY: it breaks the owner rule. Changing production's cadence: out of scope, and production's load is what the check models.
+
+**Enforced by** `scripts/tests/unit/smoke-env.test.ts`, `scripts/tests/unit/analytics-load-check.test.ts`, `scripts/tests/unit/schedule-parity.test.ts` and `scripts/tests/unit/release-runbook.test.ts`. Policy in [`docs/technical/release-runbooks.md` §4.4](technical/release-runbooks.md#44-stage-qa).
