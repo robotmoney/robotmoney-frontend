@@ -65,6 +65,28 @@ read the entry itself (`indicators.ts`) for what a specific indicator means and
 why its sign is what it is; that prose is intentionally the primary source and
 is not duplicated here.
 
+### 2.1 Collected series, not scored
+
+`COLLECTED_SERIES` in `packages/analyst-sdk/src/extract/collected-series.ts`
+declares series that are fetched, stored and served on the public raw-history
+route, but never scored. It holds one entry, `BAA10Y` (FRED `BAA10Y`, Moody's
+seasoned Baa corporate yield minus the 10-year Treasury yield, history from
+1986-01-02). An entry has `id`, `name`, `source`, `series`, `unit`,
+`source_url` and `description`, and no scoring field. `collectionRegistry()`
+returns `INDICATORS` then `COLLECTED_SERIES`, and an id in both throws at
+module load. The fetch, merge and store of a run, the producer's gap catch-up,
+`fetchAll`'s default list, the floor-seed generator, `sourceCalendar` and the
+admin raw-series allowlist read that combined list. Every scoring reader reads
+`INDICATORS` only, so a collected series changes no figure. It is no
+`REGIME_STORAGE_KEYS` member and no run.ts `READ_IDS` member.
+
+To score a collected series, an analyst moves its entry from
+`COLLECTED_SERIES` into `INDICATORS` and adds `panel`, `sign`, `transform`,
+its fill policy and any weight rule, under a methodology version. It needs no
+further collection work. Before that move, `computeRegime`, `runRegime` and
+`prepareRegimeInputs` take an `indicators` list (default `INDICATORS`), so a
+trial list holding the entry can be scored without editing the registry.
+
 ## 3. Transforms
 
 Every indicator declares a `transform` field, applied to its aligned daily

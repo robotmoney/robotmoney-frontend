@@ -83,6 +83,7 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "raw_indicator_history:XLU_SPY": YAHOO_RATIO, // yahoo XLU / SPY
   "raw_indicator_history:XLP_XLY": YAHOO_RATIO, // yahoo XLP / XLY
   "raw_indicator_history:SHILLER_CAPE": EXACT, // shiller_cape / multpl
+  "raw_indicator_history:BAA10Y": EXACT, // fred, a collected series (issue 1653)
 
   // access/data-source.ts — research inputs.
   "raw_indicator_history:MNA": EXACT, // edgar filing counts

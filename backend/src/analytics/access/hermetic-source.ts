@@ -12,7 +12,7 @@
 // `base` only anchors a level and `vol` supplies the variation the ranks need.
 import type { AnalyticsDataSource, ResearchInputs, BacktestExtras, Logger } from "./data-source.ts";
 import type { Point } from "../types.ts";
-import type { Indicator } from "../analyze/indicators.ts";
+import type { SourceSeries } from "../extract/collected-series.ts";
 import { seededProvider } from "./provider.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 
@@ -37,7 +37,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export const hermeticDataSource: AnalyticsDataSource = {
   // Registry indicators: one deterministic seeded series per id. fetchIndicators
   // carries no `asof`, so we anchor at today (the smoke always runs for today).
-  async fetchIndicators(indicators: Indicator[], logger: Logger = console) {
+  async fetchIndicators(indicators: readonly SourceSeries[], logger: Logger = console) {
     logger.warn?.(
       "[analytics] HERMETIC data source — deterministic seeded series, NO network " +
         "(smoke/e2e path; prod uses liveDataSource)",

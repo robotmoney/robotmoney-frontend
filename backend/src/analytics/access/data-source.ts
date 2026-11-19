@@ -7,7 +7,7 @@
 // Tests inject a fixture-backed source implementing the same interface for a
 // deterministic, network-free round-trip (see tests/analytics-suite.test.ts).
 import type { Point } from "../types.ts";
-import type { Indicator } from "../analyze/indicators.ts";
+import type { SourceSeries } from "../extract/collected-series.ts";
 import { fetchAll, createFetchMemo, mergeYahooPlans, registryYahooPlan, type FetchMemo } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
@@ -103,9 +103,9 @@ export interface ModelPortfolioCollection {
 }
 
 export interface AnalyticsDataSource {
-  // Registry indicator raw series (id → pre-transform {date,value}[]).
+  // Registry indicator and collected series raw series (id → pre-transform {date,value}[]).
   fetchIndicators(
-    indicators: Indicator[],
+    indicators: readonly SourceSeries[],
     logger?: Logger,
     acquisitionSink?: AcquisitionSink,
     requestedByRunId?: number | null,

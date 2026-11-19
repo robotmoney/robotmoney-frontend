@@ -7,7 +7,7 @@
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule } from "./analyze/indicators.ts";
+import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
@@ -25,7 +25,9 @@ export const EXTRA_IDS = {
   eth: LEDGER_EXTRA_KEYS.eth.inputId,
   tbill3m: LEDGER_EXTRA_KEYS.tbill3m.inputId,
 } as const;
-const READ_IDS: ReadonlySet<string> = new Set([...INDICATORS.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
+// The ids a run reads: its scoring registry and the price extras.
+const readIds = (indicators: readonly Indicator[]): ReadonlySet<string> => new Set([...indicators.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
+const READ_IDS = readIds(INDICATORS);
 
 export interface RunResult {
   kind: "complete";
@@ -88,6 +90,10 @@ export interface RunOptions {
   // stamped with: "v3" cuts the labels on the rolling percentile, "v5" on the
   // composite and panel indices.
   version?: RegimeVersion;
+  // The scoring registry (issue 1653). Default INDICATORS. A list holding a
+  // collected series (extract/collected-series.ts) with its scoring fields
+  // scores it, with no edit to the registry.
+  indicators?: readonly Indicator[];
 }
 
 // A real calendar date in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-45, "").
@@ -96,7 +102,7 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators"];
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
@@ -104,7 +110,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   for (const k of Object.keys(opts)) {
     if (!KNOWN_OPTIONS.includes(k)) {
       const hint = k === "panels" ? " (use factor: true for the factor_* figures)" : "";
-      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version, dayRule`);
+      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version, dayRule, indicators`);
     }
   }
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
@@ -112,6 +118,11 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   const dayRule = opts.dayRule ?? DAY_RULE;
   if (!DAY_RULES.includes(dayRule)) throw new RangeError(`dayRule must be one of ${DAY_RULES.join(", ")}, got ${JSON.stringify(opts.dayRule)}`);
+  if (opts.indicators !== undefined && !Array.isArray(opts.indicators)) {
+    throw new RangeError(`indicators must be an array of registry entries, got ${JSON.stringify(opts.indicators)}`);
+  }
+  const indicators = opts.indicators ?? INDICATORS;
+  const read = opts.indicators === undefined ? READ_IDS : readIds(indicators);
   const version = opts.version ?? CURRENT_REGIME_VERSION;
   if (!isRegimeVersion(version)) {
     throw new RangeError(`version must be one of ${REGIME_VERSIONS.join(", ")}, got ${JSON.stringify(opts.version)}`);
@@ -127,7 +138,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     if (asof < start) throw new RangeError(`asof ${asof} is before start ${start}`);
     let anyOnOrBefore = false;
     for (const id in rawIn) {
-      if (!READ_IDS.has(id)) continue;
+      if (!read.has(id)) continue;
       for (const r of rawIn[id]!) {
         if (r.date <= asof) anyOnOrBefore = true;
       }
@@ -142,7 +153,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // inputs, issue 1398) gives the same regime numbers.
   let maxDate = start;
   for (const id in raw) {
-    if (!READ_IDS.has(id)) continue;
+    if (!read.has(id)) continue;
     const rows = raw[id]!;
     if (rows.length && rows[rows.length - 1]!.date > maxDate) maxDate = rows[rows.length - 1]!.date;
   }
@@ -150,7 +161,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // is an error rather than an all-null report (issue 1404, SDK-8).
   let newestRead: string | null = null;
   for (const id in raw) {
-    if (!READ_IDS.has(id)) continue;
+    if (!read.has(id)) continue;
     const rows = raw[id]!;
     if (rows.length && (newestRead === null || rows[rows.length - 1]!.date > newestRead)) newestRead = rows[rows.length - 1]!.date;
   }
@@ -166,8 +177,8 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (dayRule === "score-newest") {
     asof ??= maxDate;
   } else if (asof === undefined) {
-    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start });
-    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate) };
+    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start, indicators });
+    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate, indicators) };
     asof = day;
     if (asof < maxDate) {
       const cut: RawIndicatorHistory = {};
@@ -175,15 +186,15 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
       raw = cut;
     }
   } else {
-    const missing = missingOnDay(raw, asof);
+    const missing = missingOnDay(raw, asof, indicators);
     if (missing.length > 0) return { kind: "incomplete", asof, missing };
   }
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof });
-  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version);
+  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators });
+  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version, undefined, indicators);
   const out: RunResult = { kind: "complete", version, dateAxis, result };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version);
+  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version, undefined, indicators);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];

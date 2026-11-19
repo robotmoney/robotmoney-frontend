@@ -30,6 +30,7 @@ import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObser
 import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 import { registryRatioLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
 import { RATIO_LEG_MAPPING } from "../../packages/analyst-sdk/src/series-ids.ts";
+import { collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
 import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
 import {
   BIN_COUNT,
@@ -58,7 +59,8 @@ function resolve(expression: string, file: string): string[] {
   const literal = /^"([^"]+)"$/.exec(e);
   if (literal) return [literal[1]!];
   // fetchAll skips the indicators stored under another's key (D74 amendment, issue 1514).
-  if (e === "`raw_indicator_history:${ind.id}`") return INDICATORS.filter((i) => !(i.id in STORED_UNDER)).map((i) => `raw_indicator_history:${i.id}`);
+  // Its default list is collectionRegistry(): the registry and the collected series (issue 1653).
+  if (e === "`raw_indicator_history:${ind.id}`") return collectionRegistry().filter((i) => !(i.id in STORED_UNDER)).map((i) => `raw_indicator_history:${i.id}`);
   if (e === "`research:${sym}`") return TOP7.map((sym) => `research:${sym}`);
   // data-source.ts writes the backtest extras through the D74 reverse mapping (issue 1423).
   const write = /^W\.(spx|eth|tbill3m)$/.exec(e);
@@ -100,6 +102,16 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
     expect(keys.size).toBeGreaterThanOrEqual(INDICATORS.length + 17);
     const missing = [...keys].filter((k) => !(k in SOURCE_TOLERANCES)).sort();
     expect(missing, "add these keys to SOURCE_TOLERANCES and to decision D56").toEqual([]);
+  });
+
+  test("issue 1653: raw_indicator_history:BAA10Y is exact (fred), and D56 names it exact", () => {
+    expect(extractorSourceKeys().has("raw_indicator_history:BAA10Y")).toBe(true);
+    expect(SOURCE_TOLERANCES["raw_indicator_history:BAA10Y"]).toEqual({ relative: 0, basis: "exact" });
+    const decisions = readFileSync(join(repoRoot, "docs", "decisions.md"), "utf8");
+    const start = decisions.indexOf("## D56 ");
+    const d56 = decisions.slice(start, decisions.indexOf("\n## D", start + 1));
+    const row = d56.split("\n").find((l) => l.includes("`raw_indicator_history:BAA10Y`"));
+    expect(row).toMatch(/\| fred[^|]*\| exact \|$/);
   });
 
   test("the table lists no key an extractor no longer writes", () => {

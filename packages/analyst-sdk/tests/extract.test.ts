@@ -11,6 +11,7 @@ import { createFetchMemo, fetchAll, fetchOne, mergeRatioSeries, mergeYahooPlans,
 import { RATIO_IDS } from "../src/series-ids.ts";
 import { CalculatedRowError, parseInput } from "../src/input/load.ts";
 import { INDICATORS } from "../src/analyze/indicators.ts";
+import { COLLECTED_SERIES } from "../src/extract/collected-series.ts";
 
 afterEach(() => { configureHttp({}); });
 
@@ -120,6 +121,45 @@ test("fetchAll calls the acquire hook once per indicator with the ledger metadat
   });
   expect(seen).toEqual([`fred|raw_indicator_history:${ind.id}|9`]);
   expect(out[ind.id]!.length).toBe(2);
+});
+
+// Issue 1653: fetchAll's default list is collectionRegistry(), so BAA10Y is
+// fetched with the registry. fixtures/extract/fred-BAA10Y.csv is a real
+// fredgraph.csv body (2026-10-20..2026-11-17; 2026-11-11 is empty, a holiday).
+const baa10yBody = await Bun.file(join(FIX, "fred-BAA10Y.csv")).text();
+
+test("issue 1653: fetchAll with its default list requests fredgraph.csv?id=BAA10Y and returns its points under BAA10Y", async () => {
+  const urls: string[] = [];
+  configureHttp({
+    fetch: (async (input: string) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("fredgraph.csv?id=BAA10Y&")) return new Response(baa10yBody, { headers: { "content-type": "text/csv" } });
+      throw new Error("offline");
+    }) as unknown as typeof fetch,
+  });
+  const logs = { error: [] as string[], warn: [] as string[] };
+  const out = await fetchAll({ logger: { log() {}, error: (m) => logs.error.push(m), warn: (m) => logs.warn.push(m) } });
+  expect(urls.filter((u) => u.includes("id=BAA10Y"))).toEqual(["https://fred.stlouisfed.org/graph/fredgraph.csv?id=BAA10Y&cosd=2010-01-01"]);
+  const points = out.BAA10Y!;
+  expect(points).toHaveLength(20);
+  expect(points[0]).toEqual({ date: "2026-10-20", value: 1.44 });
+  expect(points.find((p) => p.date === "2026-11-11")).toBeUndefined();
+  expect(points.at(-1)).toEqual({ date: "2026-11-17", value: 1.53 });
+  // Every registry indicator is still fetched, and keyed as before.
+  for (const ind of INDICATORS) expect(ind.id in out || ind.id === "DEFI_GROWTH" || ind.id === "STABLES_GROWTH").toBe(true);
+});
+
+test("issue 1653: a failed BAA10Y fetch is a warning on its own key; a failed registry fetch stays an error", async () => {
+  configureHttp({ fetch: (async () => { throw new Error("offline"); }) as unknown as typeof fetch });
+  const logs = { error: [] as string[], warn: [] as string[] };
+  const baa = COLLECTED_SERIES.find((s) => s.id === "BAA10Y")!;
+  const t10 = INDICATORS.find((i) => i.id === "T10Y2Y")!;
+  const out = await fetchAll({ indicators: [t10, baa], logger: { log() {}, error: (m) => logs.error.push(m), warn: (m) => logs.warn.push(m) } });
+  expect(out).toEqual({ T10Y2Y: [], BAA10Y: [] });
+  expect(logs.warn.filter((m) => m.includes("BAA10Y"))).toHaveLength(1);
+  expect(logs.error.filter((m) => m.includes("BAA10Y"))).toEqual([]);
+  expect(logs.error.filter((m) => m.includes("T10Y2Y"))).toHaveLength(1);
 });
 
 // ── Issue 1514: one request per (provider, symbol) per run ──────────────────

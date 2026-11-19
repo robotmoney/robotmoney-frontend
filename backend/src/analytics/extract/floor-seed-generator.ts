@@ -11,7 +11,7 @@ import { writeFileSync, readFileSync, renameSync, unlinkSync, mkdirSync } from "
 import { dirname } from "node:path";
 import { mergeSeries } from "../transform/math.ts";
 import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "./floor-seed.ts";
-import { INDICATORS } from "../analyze/indicators.ts";
+import { collectionRegistry } from "./collected-series.ts";
 import { RATIO_IDS, RATIO_LEG_KEYS } from "../extras.ts";
 import { filterCalendarValid, validateFloorCalendar } from "./floor-seed-calendar.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";
@@ -69,6 +69,25 @@ function toCsv(floor: RawIndicatorHistory): string {
   return lines.join("\n") + "\n";
 }
 
+// The committed CSV with one indicator's rows replaced by `series` (issue
+// 1653). Every other line is kept byte for byte, in its order: the new rows
+// are merged in date-major, after the lines already on their date. So a
+// one-indicator regeneration never rewrites another series' values.
+function spliceCsv(text: string, indicatorId: string, series: Point[]): string {
+  const lines = text.replace(/\n$/, "").split("\n");
+  const kept = lines.slice(1).filter((l) => l.split(",")[1] !== indicatorId);
+  const added = [...series].sort((a, b) => a.date.localeCompare(b.date)).map((p) => `${p.date},${indicatorId},${p.value}`);
+  const out = [lines[0]!];
+  let k = 0;
+  for (const line of added) {
+    const date = line.slice(0, 10);
+    while (k < kept.length && kept[k]!.slice(0, 10) <= date) out.push(kept[k++]!);
+    out.push(line);
+  }
+  while (k < kept.length) out.push(kept[k++]!);
+  return out.join("\n") + "\n";
+}
+
 // Fetch → cap → additive merge → gzip. Throws loudly if the fetch yields
 // nothing usable — a regeneration that silently no-ops would be a
 // silent-skip.
@@ -86,7 +105,8 @@ export async function generateFloorSeedArtifact(opts: RegenerateFloorSeedOptions
   }
   const mergedSeries = mergeSeries(prior, fetched);
   const merged: RawIndicatorHistory = { ...floor, [opts.indicatorId]: mergedSeries };
-  const gz = gzipSync(Buffer.from(toCsv(merged), "utf8"));
+  const text = gunzipSync(readFileSync(seedPath)).toString("utf8");
+  const gz = gzipSync(Buffer.from(spliceCsv(text, opts.indicatorId, mergedSeries), "utf8"));
   return { merged, gz, addedPoints: mergedSeries.length - prior.length, indicatorId: opts.indicatorId, cappedAt: cap };
 }
 
@@ -149,14 +169,17 @@ export function replaceFloorSeedAtomically(seedPath: string, generated: { gz: Bu
 //     cannot reproduce them: an adjusted close moves on every later
 //     dividend). Their 28 legs (`yahoo:<SYMBOL>.close`, `.adjclose`) are
 //     recoverable and refetched like any series.
-export const UNRECOVERABLE_PRESERVE_IDS: readonly string[] = ["HY_OAS", "NEW_TOKENS", "BTC_ACTIVE", "SHILLER_CAPE", ...RATIO_IDS];
+//   - BAA10Y (issue 1653): the daily fetch requests FRED's default cosd of
+//     2010-01-01, so a live fetch never returns the 1986-2009 rows the
+//     committed floor holds. They came from the one-off FRED backfill below.
+export const UNRECOVERABLE_PRESERVE_IDS: readonly string[] = ["HY_OAS", "NEW_TOKENS", "BTC_ACTIVE", "SHILLER_CAPE", ...RATIO_IDS, "BAA10Y"];
 
 export interface PurgeOptions {
   // Injectable — tests supply deterministic mocked responses instead of a
   // real network fetch. Production passes extract/sources.ts's fetchAll.
   fetchAll: () => Promise<Record<string, Point[]>>;
   seedPath?: string;
-  indicatorIds?: string[]; // defaults to the full registry (analyze/indicators.ts)
+  indicatorIds?: string[]; // defaults to every collected id (collectionRegistry(), issue 1653)
   preserveIds?: readonly string[]; // defaults to UNRECOVERABLE_PRESERVE_IDS
 }
 
@@ -176,7 +199,7 @@ export async function generateFullUniversePurge(opts: PurgeOptions): Promise<Pur
   const seedPath = opts.seedPath ?? DEFAULT_FLOOR_SEED_PATH;
   const existing = await loadRawFloorSeed(seedPath);
   const fetched = await opts.fetchAll();
-  const ids = opts.indicatorIds ?? [...INDICATORS.map((i) => i.id), ...RATIO_LEG_KEYS];
+  const ids = opts.indicatorIds ?? [...collectionRegistry().map((i) => i.id), ...RATIO_LEG_KEYS];
   const preserveIds = new Set(opts.preserveIds ?? UNRECOVERABLE_PRESERVE_IDS);
 
   const merged: RawIndicatorHistory = {};
@@ -205,4 +228,38 @@ export async function generateFullUniversePurge(opts: PurgeOptions): Promise<Pur
 
   const gz = gzipSync(Buffer.from(toCsv(merged), "utf8"));
   return { merged, gz, perIndicator };
+}
+
+// ── FRED backfill (issue 1653, D74 amendment) ───────────────────────────────
+//
+// Adds one FRED series' full history to the committed floor. Each date takes
+// its ALFRED first-release value where ALFRED holds a vintage of it, and
+// FRED's current value elsewhere. Only that series' rows change; every other
+// row of the floor stays byte-identical (spliceCsv). The rows reach a store
+// through the gap-filling seed ingestion, as 'seed' versions stamped with the
+// ingestion's own knowledge_time: a backfill is learned now, never in the past.
+
+/** FRED's current values, each replaced by its first-release value where one exists; dates of both. Sorted. */
+export function resolveFirstRelease(current: readonly Point[], firstRelease: readonly Point[]): Point[] {
+  const byDate = new Map<string, number>();
+  for (const p of current) byDate.set(p.date, p.value);
+  for (const p of firstRelease) byDate.set(p.date, p.value);
+  return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
+}
+
+export interface FredBackfillOptions {
+  indicatorId: string;
+  // FRED's current values, from the series' first observation.
+  fetchCurrent: () => Promise<Point[]>;
+  // ALFRED first-release values (extract/fred.ts fetchAlfredFirstRelease).
+  fetchFirstRelease: () => Promise<Point[]>;
+  maxDate?: string;
+  seedPath?: string;
+}
+
+export async function generateFredBackfill(opts: FredBackfillOptions): Promise<GeneratedFloorSeed & { firstRelease: number }> {
+  const [current, firstRelease] = await Promise.all([opts.fetchCurrent(), opts.fetchFirstRelease()]);
+  const resolved = filterCalendarValid(opts.indicatorId, resolveFirstRelease(current, firstRelease));
+  const generated = await generateFloorSeedArtifact({ indicatorId: opts.indicatorId, fetch: async () => resolved, maxDate: opts.maxDate, seedPath: opts.seedPath });
+  return { ...generated, firstRelease: firstRelease.length };
 }

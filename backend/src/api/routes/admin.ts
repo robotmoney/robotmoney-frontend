@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { sql, jsonValue } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { jobCountsByKind, jobCountsByStatus } from "../../admin/job-counts.ts";
-import { INDICATORS } from "../../analytics/analyze/indicators.ts";
+import { collectionRegistry } from "../../analytics/extract/collected-series.ts";
 import { computeRegimeStaleness } from "../../analytics/report/regime-projection.ts";
 import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";
@@ -413,12 +413,13 @@ function rejectUnknownFields(body: unknown, allowed: string[]): Record<string, u
 // ── Research pipeline telemetry admin surface (issue #151) ──────────────────
 const RERUN_RESEARCH_TOOLS = ["channel-divergence", "late-cycle-signals"] as const;
 
-// Allowlisted raw_indicator_history indicators: the regime registry plus MNA
+// Allowlisted raw_indicator_history indicators: the regime registry and the
+// collected series (collectionRegistry(), issue 1653), plus MNA
 // (persisted by the late-cycle-signals research tool, not itself a registry
 // indicator — analytics/index.ts). No other table/indicator name is readable
 // through this endpoint (issue #151 explicit out-of-scope guard: no arbitrary
 // SQL / unallowlisted table access).
-const RAW_SERIES_ALLOWLIST = new Set<string>([...INDICATORS.map((i) => i.id), "MNA"]);
+const RAW_SERIES_ALLOWLIST = new Set<string>([...collectionRegistry().map((i) => i.id), "MNA"]);
 const SIGNAL_ALLOWLIST = new Set<string>(RERUN_RESEARCH_TOOLS);
 
 function isIsoDate(v: string | null): v is string {

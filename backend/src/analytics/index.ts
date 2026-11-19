@@ -31,6 +31,7 @@ import {
   mergeSeries,
 } from "./transform/math.ts";
 import { loadRawFloorSeed } from "./extract/floor-seed.ts";
+import { COLLECTED_SERIES, collectionRegistry } from "./extract/collected-series.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { AnalyticsPersistence } from "./persistence.ts";
 import { analyticsApiClient } from "./api-client.ts";
@@ -298,7 +299,8 @@ export async function runAnalytics(
     let t0 = new Date();
     const floor = await getPersisted();
     const acquiredBefore = inputEvidence.acquiredKeys;
-    const fetched = await runSource.fetchIndicators(INDICATORS, logger, acquisitionSink, jobId ?? null);
+    // Issue 1653: the registry and the collected series (BAA10Y) are fetched alike.
+    const fetched = await runSource.fetchIndicators(collectionRegistry(), logger, acquisitionSink, jobId ?? null);
     registryInLedger = inputEvidence.acquiredKeys > acquiredBefore;
     collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
 
@@ -326,6 +328,17 @@ export async function runAnalytics(
         logger.warn?.(`[analytics] ${ind.id}: NO history at all — excluded from composite (all-NaN → weight 0)`);
         collector.warn("extract", `${ind.id}: no history at all — excluded from composite`);
       }
+    }
+    // Issue 1653: a collected series is merged and stored like a registry
+    // indicator, through the same D56 tolerance writer, but nothing scores it.
+    // A failed or empty fetch is a warning on its own key only: it counts in no
+    // fallback or exclusion, and changes no outcome, report or figure.
+    const collectedOnly: Record<string, { date: string; value: number }[]> = {};
+    for (const s of COLLECTED_SERIES) {
+      const prior = floor[s.id] ?? [];
+      const f = fetched[s.id] ?? [];
+      collectedOnly[s.id] = mergeSeries(prior, f);
+      if (f.length === 0) logger.warn?.(`[analytics] ${s.id}: collected series fetch returned 0 rows — keeping persisted ${prior.length} rows (not scored)`);
     }
     if (emptyFetches > 0) logger.warn?.(`[analytics] ${emptyFetches} indicator(s) fell back to the persisted real floor`);
     if (excluded > 0) logger.warn?.(`[analytics] ${excluded} indicator(s) excluded entirely (no data)`);
@@ -370,7 +383,7 @@ export async function runAnalytics(
     // reach downstream; the collected-versus-committed difference is
     // reported in the input evidence below.
     t0 = new Date();
-    await persistence.saveRawHistory(merged, sourceLabel);
+    await persistence.saveRawHistory({ ...merged, ...collectedOnly }, sourceLabel);
     collectedRegistry = merged;
     const committedFloor = await persistence.loadRawHistory();
     registry = {};

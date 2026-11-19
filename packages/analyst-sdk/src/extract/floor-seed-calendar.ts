@@ -14,7 +14,7 @@
 //     makes the defect class unrepresentable going forward
 //
 // Pure — no network, no SQL.
-import { INDICATORS } from "../analyze/indicators.ts";
+import { collectionRegistry } from "./collected-series.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";
 
 export type SourceCalendar = "any" | "business_day" | "weekly_saturday";
@@ -31,10 +31,11 @@ function symbolsOf(series: string | string[] | { asset: string; metric: string }
   return [];
 }
 
-// One registry indicator id → its source's publication calendar.
+// One collected id (a registry indicator or a collected series, issue 1653) →
+// its source's publication calendar.
 //   - ICSA: FRED weekly series, week-ending Saturday — the D6 finding: 867/867
 //     observations since 2010 land on a Saturday.
-//   - Every other FRED series, and every yahoo symbol EXCEPT the two crypto
+//   - Every other FRED series (BAA10Y included), and every yahoo symbol EXCEPT the two crypto
 //     tickers, publish business days only (D6: DTWEXBGS/DXY is business-daily;
 //     its floor should never carry weekend rows).
 //   - Every 24/7 on-chain/crypto/DeFi source (coinmetrics, blockchain_com,
@@ -42,8 +43,8 @@ function symbolsOf(series: string | string[] | { asset: string; metric: string }
 //     NEW_TOKENS accumulator, and the monthly SHILLER_CAPE valuation series
 //     carry no weekday/weekend constraint.
 export function sourceCalendar(indicatorId: string): SourceCalendar {
-  const ind = INDICATORS.find((i) => i.id === indicatorId);
-  if (!ind) return "any"; // unknown id: never flag rows for a series outside the registry
+  const ind = collectionRegistry().find((i) => i.id === indicatorId);
+  if (!ind) return "any"; // unknown id: never flag rows for a series nothing collects
   if (indicatorId === "ICSA") return "weekly_saturday";
   if (ind.source === "fred") return "business_day";
   if (ind.source === "yahoo") {

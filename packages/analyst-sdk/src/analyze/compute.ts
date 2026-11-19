@@ -97,6 +97,10 @@ export function computeRegime(
   // The rank, weight and percentile windows (issue 1659). Defaults to the
   // declaration of `version`; a caller passes its own to try another value.
   lookback: RegimeLookback = REGIME_LOOKBACK[version],
+  // The scoring registry (issue 1653), as prepareRegimeInputs takes it. Default
+  // INDICATORS; a caller passes its own list to try scoring another series. Any
+  // key of panelData outside the list is ignored.
+  indicators: readonly Indicator[] = INDICATORS,
 ): RegimeComputeResult {
   if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
   const rankWindow = lookbackDays(lookback, "rank");
@@ -104,7 +108,7 @@ export function computeRegime(
   const percentileWindow = lookbackDays(lookback, "percentile");
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
-  for (const ind of INDICATORS) {
+  for (const ind of indicators) {
     const raw = panelData[ind.id];
     if (!raw) throw new Error(`Missing series for ${ind.id}`);
     const age = ages?.[ind.id];
@@ -118,7 +122,7 @@ export function computeRegime(
 
   const WEIGHT_REFRESH_DAYS = 21;
   const indsByPanel: Record<string, Indicator[]> = {};
-  for (const p of panels) indsByPanel[p] = INDICATORS.filter((x) => x.panel === p);
+  for (const p of panels) indsByPanel[p] = indicators.filter((x) => x.panel === p);
 
   const panelIndices: Record<string, number[]> = {};
   for (const p of panels) panelIndices[p] = new Array(dateAxis.length).fill(NaN);

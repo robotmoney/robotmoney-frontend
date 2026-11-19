@@ -4798,6 +4798,7 @@ exact command that finishes it by hand, and the boot's seed step still runs
 | `raw_indicator_history:XLU_SPY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
+| `raw_indicator_history:BAA10Y` | fred (collected series, issue 1653) | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
 | `research:QQQ` | yahoo | relative 1e-6 |
@@ -6208,6 +6209,26 @@ consumer keeps the key it reads.
   `yahoo:<SYMBOL>`, or the held-elsewhere keys `research:SPY`,
   `research:BTC-USD` and `backtest:ETH-USD`. An input that carries the
   `.adjclose` key reads that instead.
+
+### Amendment (issue 1653) — a backfill is new versions, learned now
+
+A backfill adds history a store never held. It is allowed only as new
+versions stamped with the backfill's own `knowledge_time`, never a past time.
+So no earlier run or vintage can appear to have used a backfilled value, and
+no stored row changes.
+
+- **How it enters.** Through the floor-seed ingestion, which only fills gaps.
+  Its acquisition is a `seed` acquisition (provider `seed`, parser
+  `floor-seed:1`) and each version's provenance is `seed`: the backfill mark.
+  The `knowledge_time` is the ingestion's insert time.
+- **FRED values.** A FRED backfill stores the ALFRED first-release value for
+  each date where ALFRED holds a vintage of the series. A date ALFRED does not
+  cover stores FRED's current value, under the same backfill stamp.
+- **Yahoo values.** A Yahoo backfill stores each close under its own leg key
+  (amendment of issue 1644).
+- **First use.** BAA10Y from 1986-01-02 (issue 1653), a collected series that
+  nothing scores. `backend/scripts/floor-seed-regenerate.ts --fred-backfill`
+  adds it to the committed floor seed with every other row byte-identical.
 
 ---
 
