@@ -2,7 +2,7 @@
 // issue 1514 (scripts/release/analytics-load-check.ts): its log parser, its
 // per-route table and its verdict, on fixture api logs.
 import { describe, expect, test } from "bun:test";
-import { NO_REGIME_ASOF, nextScheduledRun, parseApiLog, percentile, renderReport, summarize, windowEnd, type DbPoolSnapshot } from "../../release/analytics-load-check.ts";
+import { NO_REGIME_ASOF, nextScheduledRun, parseApiLog, percentile, producerCrons, renderReport, summarize, windowCap, windowEnd, type DbPoolSnapshot } from "../../release/analytics-load-check.ts";
 
 const T = (s: string) => `2026-10-28T06:${s}.000000000Z`;
 const ua = "ua=Bun/1.3.14";
@@ -112,11 +112,42 @@ describe("the verdict", () => {
 });
 
 describe("the window", () => {
-  test("the next scheduled run is the next 3-hour boundary in UTC, or now when now is one", () => {
-    expect(nextScheduledRun(new Date("2026-10-28T02:59:59Z")).toISOString()).toBe("2026-10-28T03:00:00.000Z");
-    expect(nextScheduledRun(new Date("2026-10-28T03:00:00Z")).toISOString()).toBe("2026-10-28T03:00:00.000Z");
-    expect(nextScheduledRun(new Date("2026-10-28T03:00:01Z")).toISOString()).toBe("2026-10-28T06:00:00.000Z");
-    expect(nextScheduledRun(new Date("2026-10-28T22:10:00Z")).toISOString()).toBe("2026-10-29T00:00:00.000Z");
+  // Issue 1684: the check reads the producer's own schedule; stage's is hourly from a boot-anchored minute (D87).
+  const PROD = "0 */3 * * *";
+  const at = (cron: string, iso: string) => nextScheduledRun(cron, new Date(iso))?.toISOString();
+
+  test("production's next scheduled run is the next 3-hour boundary in UTC, or now when now is one", () => {
+    expect(at(PROD, "2026-10-28T02:59:59Z")).toBe("2026-10-28T03:00:00.000Z");
+    expect(at(PROD, "2026-10-28T03:00:00Z")).toBe("2026-10-28T03:00:00.000Z");
+    expect(at(PROD, "2026-10-28T03:00:01Z")).toBe("2026-10-28T06:00:00.000Z");
+    expect(at(PROD, "2026-10-28T22:10:00Z")).toBe("2026-10-29T00:00:00.000Z");
+    expect(at(PROD, "2026-11-19T12:10:00Z")).toBe("2026-11-19T15:00:00.000Z");
+  });
+
+  test("stage's hourly research slot: 22 * * * * at 12:10Z is 12:22Z, and at 12:30Z the next hour's", () => {
+    expect(at("22 * * * *", "2026-11-19T12:10:00Z")).toBe("2026-11-19T12:22:00.000Z");
+    expect(at("22 * * * *", "2026-11-19T12:30:00Z")).toBe("2026-11-19T13:22:00.000Z");
+    expect(at("22 * * * *", "2026-11-19T23:40:00Z")).toBe("2026-11-20T00:22:00.000Z");
+    // A cron this check cannot expand (a weekday field) names no slot: the caller exits 2.
+    expect(nextScheduledRun("0 1 * * 1", new Date("2026-11-19T12:10:00Z"))).toBeNull();
+  });
+
+  test("the window's cap is the earlier of 120 minutes and the next research slot, so a window never spans two ticks", () => {
+    expect(windowCap("22 * * * *", new Date("2026-11-19T12:22:00Z")).toISOString()).toBe("2026-11-19T13:22:00.000Z");
+    expect(windowCap(PROD, new Date("2026-11-19T15:00:00Z")).toISOString()).toBe("2026-11-19T17:00:00.000Z");
+    // windowEnd honours that cap when the tick logs no regime line.
+    expect(windowEnd(new Date("2026-11-19T12:22:00Z"), "", 120, windowCap("22 * * * *", new Date("2026-11-19T12:22:00Z"))).end.toISOString()).toBe("2026-11-19T13:22:00.000Z");
+  });
+
+  test("producerCrons reads both crons from the analytics-producer's docker inspect Env, and refuses an Env without them", () => {
+    const env = JSON.stringify(["PATH=/usr/bin", "PRODUCER_RESEARCH_CRON=22 * * * *", "PRODUCER_REGIME_CRON=52 * * * *", "TZ=UTC"]);
+    expect(producerCrons(env)).toEqual({ research: "22 * * * *", regime: "52 * * * *" });
+    const none = producerCrons(JSON.stringify(["PATH=/usr/bin"]));
+    expect(none).toHaveProperty("error");
+    expect((none as { error: string }).error).toContain("PRODUCER_RESEARCH_CRON");
+    expect(producerCrons(JSON.stringify(["PRODUCER_RESEARCH_CRON=22 * * * *"]))).toHaveProperty("error");
+    expect(producerCrons("not json")).toHaveProperty("error");
+    expect(producerCrons("{}")).toHaveProperty("error");
   });
 
   test("percentiles are nearest-rank", () => {

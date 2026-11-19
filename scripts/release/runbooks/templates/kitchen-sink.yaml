@@ -40,7 +40,7 @@ steps:
     standing: ["SR.0"]
     host: "control"
     phase: "qa"
-    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+    description: "Stage's starting dump: a fresh capture from production's read replica for this run (never a reused dump, never the production database)"
     cmds:
       - ["bun", "scripts/release/stage-target.ts", "dump"]
     expectExit: 0
@@ -48,6 +48,11 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 30
+    changedSince: "v0.9.2"
+    before:
+      description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+      cmds:
+        - ["bun", "scripts/release/stage-target.ts", "dump"]
   - id: "Q03-stage-up"
     standing: ["SR.0"]
     host: "control"
@@ -438,12 +443,17 @@ steps:
     phase: "qa"
     description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
     onlyFor: "stage"
+    changedSince: "v0.9.2"
+    before:
+      description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
   - id: "Q29-soak-record"
     standing: ["SW.2"]
     host: "target"
@@ -487,13 +497,18 @@ steps:
     phase: "qa"
     description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
     irreversible: false
     onlyFor: "stage"
     notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
+    changedSince: "v0.9.2"
+    before:
+      description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
   - id: "Q33-soak-checks"
     standing: ["SW.2"]
     host: "target"
@@ -524,13 +539,15 @@ steps:
   # ── The analytics load check (issue 1514), from release v0.7.1 (since): stage only, with no
   # production twin. It watches one scheduled analytics run on stage, which carries production's
   # dump and connection budget, and fails on any api request of 5 s or more or any db_saturated.
+  # From release v0.9.2 (issue 1684) it waits only for READY, so its tick lands during the soak, and
+  # stage's producer runs hourly from a boot-anchored minute (D87): at most 190 minutes in all.
   - id: "Q34a-analytics-load"
     standing: []
     host: "target"
     phase: "qa"
     since: "v0.7.1"
     stageOnly: true
-    description: "Analytics load: wait for the next scheduled analytics run (the next 3-hour boundary, UTC) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
+    description: "Analytics load: wait for the next scheduled research run the analytics-producer's own cron names (stage's boot-anchored hourly schedule, D87) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
     cmds:
       - ["bun", "scripts/release/analytics-load-check.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -538,11 +555,20 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "analytics-load-check.*", "required": true}
     irreversible: false
     onlyFor: "stage"
-    maxMinutes: 320
+    maxMinutes: 190
+    after: ["Q23-ready"]
+    afterSince: "v0.9.2"
+    changedSince: "v0.9.2"
+    before:
+      description: "Analytics load: wait for the next scheduled analytics run (the next 3-hour boundary, UTC) and read the api log and /health db_pool for its window; one row per route (count, p50/p95/max, limiter, pool and handler time, db_saturated); fails on any request of 5 s or more or any db_saturated answer. Starts no run"
+      cmds:
+        - ["bun", "scripts/release/analytics-load-check.ts", "--instance", "{instance}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+      maxMinutes: 320
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
   # control machine, read-only against the target, after the soak like the rest of the checks.
   # From release v0.7.3 (afterSince) they wait only for READY (after, issue 1557), so they run
   # alongside the soak checks and the analytics load watch instead of queueing behind them.
+  # From release v0.9.2 (changedSince, issue 1684) they no longer wait for the soak's length either.
   - id: "Q35-archive-routes"
     standing: ["SV.8"]
     host: "control"
@@ -555,9 +581,14 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
-    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
     after: ["Q23-ready"]
     afterSince: "v0.7.3"
+    changedSince: "v0.9.2"
+    before:
+      description: "The public archive routes answer 200 with format 1 (the backups listing and the first backup's record), not 404"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "archive-routes", "--origin", "{publicOrigin}"]
+      notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   - id: "Q36-sdk-quickstart"
     standing: ["SV.8"]
     host: "control"
@@ -570,10 +601,15 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
-    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
     after: ["Q23-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 90
+    changedSince: "v0.9.2"
+    before:
+      description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+      notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   - id: "Q37-sdk-tests"
     standing: ["SV.8"]
     host: "control"
@@ -586,12 +622,18 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "stage"
-    notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
     after: ["Q23-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
+    changedSince: "v0.9.2"
+    before:
+      description: "The SDK package's tests pass at the release commit, run from a sparse clone of it"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "package-tests", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+      notBefore: {"afterStep": "Q23-ready", "hours": "watchHours"}
   # ── Query statistics and the jobs-table plans (issue 1581), from release v0.7.4 (since): on the
-  # target host, read-only as rm_readonly, after the soak. db-stats needs what role-passwords set up as
+  # target host, read-only as rm_readonly; from release v0.9.2 (afterSince, issue 1684) right after READY,
+  # beside the soak. db-stats needs what role-passwords set up as
   # doadmin (pg_stat_statements, rm_readonly in pg_read_all_stats); jobs-plans reads production's dump
   # on stage only, so it has no production twin.
   - id: "Q37a-db-stats"
@@ -607,6 +649,8 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
     irreversible: false
     onlyFor: "stage"
+    after: ["Q23-ready"]
+    afterSince: "v0.9.2"
   - id: "Q37b-jobs-plans"
     standing: []
     host: "target"
@@ -621,6 +665,8 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "jobs-query-plans.json", "required": true}
     irreversible: false
     onlyFor: "stage"
+    after: ["Q23-ready"]
+    afterSince: "v0.9.2"
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
@@ -1005,12 +1051,17 @@ steps:
     phase: "cutover"
     description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
     onlyFor: "prod"
+    changedSince: "v0.9.2"
+    before:
+      description: "Log verdict after the release (sessions graded later: the first one publishes hours after the cutover)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
   - id: "C17-soak-record"
     standing: ["SW.2"]
     host: "target"
@@ -1054,13 +1105,18 @@ steps:
     phase: "cutover"
     description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-watch.*", "required": true}
     irreversible: false
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+    changedSince: "v0.9.2"
+    before:
+      description: "The soak since READY: prod:gate post-release, sessions as the target's watchSessions says (deferred by default: they are graded afterwards as a report)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--instance", "{instance}", "--since", "{readyIso}", "--min-attendance", "{watchMinAttendance}", "--sessions", "{watchSessions}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-watch.md"]
   - id: "C21-soak-checks"
     standing: ["SW.2"]
     host: "target"
@@ -1089,7 +1145,7 @@ steps:
     onlyFor: "prod"
     notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
   # ── The analyst SDK against the release (issue 1476, SV.8), from release v0.7.0 (since): on the
-  # control machine, read-only against the target, after the soak like the rest of the checks.
+  # control machine, read-only against the target. From release v0.9.2 (issue 1684) right after READY.
   - id: "C23-archive-routes"
     standing: ["SV.8"]
     host: "control"
@@ -1102,9 +1158,14 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
-    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
     after: ["C11-ready"]
     afterSince: "v0.7.3"
+    changedSince: "v0.9.2"
+    before:
+      description: "The public archive routes answer 200 with format 1 (the backups listing and the first backup's record), not 404"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "archive-routes", "--origin", "{publicOrigin}"]
+      notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
   - id: "C24-sdk-quickstart"
     standing: ["SV.8"]
     host: "control"
@@ -1117,10 +1178,15 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
-    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
     after: ["C11-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 90
+    changedSince: "v0.9.2"
+    before:
+      description: "The SDK quickstart from a sparse clone of the release commit against the target: fill, bun run inputs --run <latest published run>, bun run regime --replay; the SDK's as-of row for the run equals the as-of row of the run's published regime_snapshots artifact, field by field and by sha256 of the canonical JSON (the PR 1448 comparison). A target with no published run fails"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "quickstart", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+      notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
   - id: "C25-sdk-tests"
     standing: ["SV.8"]
     host: "control"
@@ -1133,11 +1199,17 @@ steps:
     receipts: []
     irreversible: false
     onlyFor: "prod"
-    notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
     after: ["C11-ready"]
     afterSince: "v0.7.3"
     maxMinutes: 30
-  # ── Query statistics (issue 1581), from release v0.7.4 (since): Q37a-db-stats's production twin.
+    changedSince: "v0.9.2"
+    before:
+      description: "The SDK package's tests pass at the release commit, run from a sparse clone of it"
+      cmds:
+        - ["bun", "scripts/release/sdk-check.ts", "--check", "package-tests", "--origin", "{publicOrigin}", "--commit", "{commit}"]
+      notBefore: {"afterStep": "C11-ready", "hours": "watchHours"}
+  # ── Query statistics (issue 1581), from release v0.7.4 (since): Q37a-db-stats's production twin,
+  # after READY only from release v0.9.2 (afterSince, issue 1684).
   - id: "C25a-db-stats"
     standing: []
     host: "target"
@@ -1151,3 +1223,5 @@ steps:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "db-stats-check.json", "required": true}
     irreversible: false
     onlyFor: "prod"
+    after: ["C11-ready"]
+    afterSince: "v0.9.2"

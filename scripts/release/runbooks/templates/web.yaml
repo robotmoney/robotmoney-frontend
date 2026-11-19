@@ -47,7 +47,7 @@ steps:
     standing: ["SR.0"]
     host: "control"
     phase: "qa"
-    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+    description: "Stage's starting dump: a fresh capture from production's read replica for this run (never a reused dump, never the production database)"
     cmds:
       - ["bun", "scripts/release/stage-target.ts", "dump"]
     expectExit: 0
@@ -55,6 +55,11 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 30
+    changedSince: "v0.9.2"
+    before:
+      description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
+      cmds:
+        - ["bun", "scripts/release/stage-target.ts", "dump"]
   - id: "Q03-stage-up"
     standing: ["SR.0"]
     host: "control"
@@ -208,12 +213,17 @@ steps:
     phase: "qa"
     description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
     onlyFor: "stage"
+    changedSince: "v0.9.2"
+    before:
+      description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
   # ── Preflight: production only, once per rc, at most 60 minutes before the cutover. It
   # assumes every QA step above passed on stage. Read-only: nothing a running service uses changes.
   - id: "P01-checkout"
@@ -347,9 +357,14 @@ steps:
     phase: "cutover"
     description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
     cmds:
-      - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
+      - ["bun", "run", "prod:gate", "--mode", "post-release", "--release", "{release}", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "prod-gate-post-release.*", "required": true}
     irreversible: false
     onlyFor: "prod"
+    changedSince: "v0.9.2"
+    before:
+      description: "Log verdict after the release, graded since the run's window start (the probe-start step), because a web-only release has no READY and would otherwise grade the previous release's whole runtime (issue 1613; sessions graded later: the first one publishes hours after the cutover)"
+      cmds:
+        - ["bun", "run", "prod:gate", "--mode", "post-release", "--defer-sessions", "--instance", "{instance}", "--since", "{windowStartIso}", "--report", "{home}/.local/state/robotmoney-release/{target}/{runTs}/prod-gate-post-release.md"]

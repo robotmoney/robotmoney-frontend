@@ -42,13 +42,11 @@ describe("watchHoursFor: the slowest subject's first publish after READY", () =>
 });
 
 describe("the soak length is target data; the step list stays one list (owner, 2026-10-14)", () => {
-  test("the soak gate, the soak checks and the log collection wait READY + watchHours: Q32 to Q37 after Q23-ready on stage, C20 to C25 after C11-ready on production (the SDK checks included); a release's version checks wait too", () => {
+  test("the soak gate, the soak checks and the log collection wait READY + watchHours: Q32 to Q34 after Q23-ready on stage, C20 to C22 after C11-ready on production (the read-only SDK checks no longer wait, issue 1684); a release's version checks wait too", () => {
     expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours]))
       .toEqual([
         ["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"],
-        ["Q35-archive-routes", "Q23-ready", "watchHours"], ["Q36-sdk-quickstart", "Q23-ready", "watchHours"], ["Q37-sdk-tests", "Q23-ready", "watchHours"],
         ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"],
-        ["C23-archive-routes", "C11-ready", "watchHours"], ["C24-sdk-quickstart", "C11-ready", "watchHours"], ["C25-sdk-tests", "C11-ready", "watchHours"],
       ]);
     const versionChecks = V062.filter((s) => s.added === "v0.6.2");
     expect(versionChecks.length).toBeGreaterThan(0);

@@ -96,6 +96,19 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
     expect(r.composeEnv.PRODUCER_RESEARCH_CRON).toBe("0 */3 * * *");
   });
 
+  // Issue 1684 (D87): the stage target's first analytics tick lands about 15 minutes after its boot, hourly from then
+  // on. The boot sets a schedule and starts no run; production keeps its 3-hourly grid.
+  test("a realistic RM_ENV=stage boot anchors hourly producer crons to the boot's minute; prod keeps 3-hourly; fast sets neither", () => {
+    const at = (iso: string, rmEnv: string) => resolveSmokeEnv({}, { stage: true, rmEnv, now: new Date(iso) }).composeEnv;
+    expect(at("2026-11-19T12:07:00Z", "stage")).toMatchObject({ PRODUCER_RESEARCH_CRON: "22 * * * *", PRODUCER_REGIME_CRON: "52 * * * *" });
+    expect(at("2026-11-19T12:50:00Z", "stage")).toMatchObject({ PRODUCER_RESEARCH_CRON: "5 * * * *", PRODUCER_REGIME_CRON: "35 * * * *" });
+    expect(at("2026-11-19T12:07:00Z", "prod")).toMatchObject({ PRODUCER_RESEARCH_CRON: "0 */3 * * *", PRODUCER_REGIME_CRON: "30 */3 * * *" });
+    const fast = resolveSmokeEnv({}, { stage: true, cadence: "fast", rmEnv: "stage", now: new Date("2026-11-19T12:07:00Z") }).composeEnv;
+    expect("PRODUCER_RESEARCH_CRON" in fast || "PRODUCER_REGIME_CRON" in fast).toBe(false);
+    // RM_ENV read from the environment when the option is absent.
+    expect(resolveSmokeEnv({ RM_ENV: "stage" }, { stage: true, now: new Date("2026-11-19T12:07:00Z") }).composeEnv.PRODUCER_RESEARCH_CRON).toBe("22 * * * *");
+  });
+
   test("empty-string knobs behave as unset (compose interpolation yields empty strings)", () => {
     const r = resolveSmokeEnv({ BASE_RPC_URL: "", ANALYTICS_SOURCE: "", ANALYTICS_FLOOR_SEED: "" });
     expect(r.baseRpcUrl).toBeUndefined();

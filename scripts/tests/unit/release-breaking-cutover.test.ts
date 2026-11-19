@@ -171,7 +171,8 @@ describe("a release that does not declare breaking is unchanged", () => {
     expect(v062.breaking).toBeUndefined();
     expect(v062.steps.some((s) => [...QA_BREAKING, ...C_BREAKING].includes(s.id))).toBe(false);
     expect(v062.steps.some((s) => (s as RunbookStep & { breakingOnly?: boolean }).breakingOnly === true)).toBe(false);
-    expect(stepListHash(v062.steps)).toBe("063950472adc89cbd00b2a359a419baecc8f9eaad54496e312c2fd5f81b11925");
+    // Re-pinned once by issue 1684: the hash no longer sees a step's description (it was 063950472adc89cb… with them).
+    expect(stepListHash(v062.steps)).toBe("f08607af8baef900f0a0ff610c6bfb5d747d24b9f72a0d61f0a0a9a5c55e2277");
   });
 
   test("red control: adding a breaking step to the list changes the hash", () => {

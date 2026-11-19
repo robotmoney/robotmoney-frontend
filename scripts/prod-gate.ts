@@ -68,14 +68,14 @@ export interface ProdGateArgs {
   minSessions: number;
   minAttendance: number;
   stuckAfterMin: number;
-  /** The release being graded; a known issue fixed by no release up to it is a warning, not a failure (default v0.6.0). */
-  release: string;
+  /** The release being graded; a known issue fixed by no release up to it is a warning, not a failure. post-release requires it (issue 1684). */
+  release?: string;
   /** post-release: FAIL when no session has published for this many hours (sessions stopped). */
   livenessHours: number;
 }
 
 export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { error: string } {
-  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: DEFAULT_STUCK_AFTER_MIN, release: "v0.6.0", livenessHours: 12 };
+  const out: ProdGateArgs = { mode: "baseline", windowHours: 24, deferSessions: false, minSessions: 1, minAttendance: 0.5, stuckAfterMin: DEFAULT_STUCK_AFTER_MIN, livenessHours: 12 };
   // `--sessions graded|deferred` is the value form of `--defer-sessions`: the
   // release run renders it from target data (`watchSessions`), so one step
   // template grades on production and defers on stage (D61 rule 2).
@@ -133,6 +133,8 @@ export function parseProdGateArgs(argv: readonly string[]): ProdGateArgs | { err
     }
     i++;
   }
+  // A post-release verdict grades the release it runs for (issue 1684): never a default the gate would grade against instead.
+  if (out.mode === "post-release" && out.release === undefined) return { error: "--mode post-release needs --release vA.B.C, the release it grades (the runbook passes {release})." };
   return out;
 }
 

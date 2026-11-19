@@ -31,7 +31,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { originProblems, qaBranchPrefix, releaseBranch, validateGo } from "../../release/go.ts";
-import { CHECK_ONLY_PATHS, checkResume, checkStageJournal, runStamp, runStatus, selectSteps, type RunJournal } from "../../release/journal.ts";
+import { CHECK_ONLY_PATHS, checkResume, checkStageJournal, isCheckOnlyPath, runStamp, runStatus, selectSteps, stageAcceptances, type RunJournal } from "../../release/journal.ts";
 import { lineScrubber, scrubSecrets, forbiddenReceiptPath } from "../../release/scrub.ts";
 import { CONTROL_REPO, READY_PENDING, REMOTE_PATH, RELEASE_REPO_URL, RELEASE_STEPS, WINDOW_START_PENDING, fill, renderStep, stepIds, stepListHash, templateValues, windowStartIsoOf, type StepTemplate } from "../../release/steps.ts";
 import { CAPTURE_CHECKOUT, CONFIRM_TARGET_PLACEHOLDER, PAST_FACT_KEYS, loadTarget, validateTarget } from "../../release/target.ts";
@@ -357,7 +357,7 @@ describe("one step list for every target (D61 rule 2)", () => {
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C04-probe-start") - 1);
     expect(ids.indexOf("C03-restore-proof")).toBe(ids.indexOf("C02-backup-sums") + 1);
     expect(ids.slice(-7)).toEqual(["C20-soak-gate", "C21-soak-checks", "C22-collect-logs", "C23-archive-routes", "C24-sdk-quickstart", "C25-sdk-tests", "C25a-db-stats"]);
-    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"], ["Q35-archive-routes", "Q23-ready", "watchHours"], ["Q36-sdk-quickstart", "Q23-ready", "watchHours"], ["Q37-sdk-tests", "Q23-ready", "watchHours"], ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"], ["C23-archive-routes", "C11-ready", "watchHours"], ["C24-sdk-quickstart", "C11-ready", "watchHours"], ["C25-sdk-tests", "C11-ready", "watchHours"]]);
+    expect(RELEASE_STEPS.filter((s) => s.notBefore).map((s) => [s.id, s.notBefore!.afterStep, s.notBefore!.hours])).toEqual([["Q32-soak-gate", "Q23-ready", "watchHours"], ["Q33-soak-checks", "Q23-ready", "watchHours"], ["Q34-collect-logs", "Q23-ready", "watchHours"], ["C20-soak-gate", "C11-ready", "watchHours"], ["C21-soak-checks", "C11-ready", "watchHours"], ["C22-collect-logs", "C11-ready", "watchHours"]]);
     // red control: C20-soak-gate never hard-codes deferral; the target's watchSessions decides, since READY.
     const w1 = RELEASE_STEPS.find((s) => s.id === "C20-soak-gate")!.cmds[0]!;
     expect(w1).not.toContain("--defer-sessions");
@@ -657,6 +657,8 @@ const PREFLIGHT_ANSWERS: Record<string, { code: number; stdout: string }> = {
   "lockfile.ts check": { code: 0, stdout: "fresh\n" },
   // A new stage run's tracking issue (issue 1555): exactly one open issue carries release:<release>.
   "gh issue list --label": { code: 0, stdout: '[{"number":4242}]\n' },
+  // A stage run that passes tears stage down on the control machine (issue 1684).
+  "stage-target.ts down": { code: 0, stdout: "" },
 };
 
 function fakeDeps(opts: { fail?: Set<string>; out?: string; receipt?: string; answers?: Record<string, { code: number; stdout: string }>; recovery?: string | null } = {}) {
@@ -1601,7 +1603,7 @@ describe("schedule parity (C23-subject-spacing)", () => {
     expect(epochProblems([{ id: "eth", epoch_duration_seconds: 86400 }])).toEqual([]);
     expect(epochProblems([{ id: "eth", epoch_duration_seconds: 21600 }]).length).toBe(1);
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T12:10:00.000Z", judging_duration_seconds: 900 }])).toEqual([]);
-    expect(regimeCronProblems("30 */3 * * *")).toEqual([]);
+    expect(regimeCronProblems("30 */3 * * *", "0 */3 * * *")).toEqual([]);
     expect(paritySweep({ status: "succeeded", secs: 21.5 })).toEqual({ problems: [], detail: "last parity sweep succeeded in 21.5 s" });
   });
   test("red: a short epoch, a moved close, a late or missing publish, a :00 cron, a dead sweep", () => {
@@ -1610,7 +1612,7 @@ describe("schedule parity (C23-subject-spacing)", () => {
     expect(inFlightProblems(base, [{ id: "s1", state: "collecting", window_closes_at: close, published_at: null, judging_duration_seconds: 900 }]).join()).toContain("not published");
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: "2026-10-08T11:00:00.000Z", published_at: "2026-10-08T11:05:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("close moved");
     expect(inFlightProblems(base, [{ id: "s1", state: "published", window_closes_at: close, published_at: "2026-10-08T14:00:00.000Z", judging_duration_seconds: 900 }]).join()).toContain("120 min after");
-    expect(regimeCronProblems("0 */3 * * *").length).toBe(1);
+    expect(regimeCronProblems("0 */3 * * *", "0 */3 * * *").length).toBe(1);
     expect(paritySweep({ status: "dead", secs: 240 }).problems.length).toBe(1);
   });
   test("the parity sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375)", () => {
@@ -2162,12 +2164,11 @@ describe("preflight", () => {
     expect(parseArgs(["--target", "stage", "--run", "20261008T120000Z", "--accept", "T1", "--reason", "x", "--issue", "1"])).not.toHaveProperty("error");
   });
 
-  test("SP.8: a stage run with an accepted step does not authorize production", () => {
+  test("SP.8: a stage step accepted without a recorded reason and issue does not authorize production", () => {
     const j = journal();
-    j.steps["C16-log-verdict"]!.status = "accepted";
+    j.steps["Q28-log-verdict"]!.status = "accepted";
     const refusals = checkStageJournal(j, { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() });
-    expect(refusals.join("\n")).toContain("accepted a failure");
-    expect(refusals.join("\n")).toContain("C16-log-verdict");
+    expect(refusals.join("\n")).toContain("accepted Q28-log-verdict without a recorded reason and issue");
     expect(runStatus(j, stepIds())).toBe("passed");
   });
 
@@ -2470,6 +2471,8 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     expect([...CHECK_ONLY_PATHS]).toEqual([
       "scripts/release/version-checks/**", "scripts/release/runbooks/**", "scripts/release/version-check.ts", "scripts/release/analytics-load-check.ts",
       "scripts/release/sdk-check.ts", "scripts/release/sdk-lib.ts", "scripts/release/public-analytics-read.ts", "scripts/release/replay-row.ts", "scripts/tests/**",
+      // Issue 1684: docs, prose and the log classification rules never force a new stage run.
+      "docs/**", "*.md", "scripts/lib/gate/log-classifications.json",
     ]);
   });
 
@@ -2675,5 +2678,154 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     expect(stepListHash(r2.steps)).toBe(stepListHash(r1.steps));
     const j = journal({ stepListHash: stepListHash(r1.steps), stepIds: stepIds(r1.steps) });
     expect(checkResume(j, exp({ stepListHash: stepListHash(r2.steps), stepIds: stepIds(r2.steps), changedPaths: ["scripts/release/runbooks/releases/v0.0.1.yaml"] }), {})).toEqual([]);
+  });
+});
+
+// ── issue 1684: the runner follows the owner's stage rules ─────────────────────
+describe("an accepted stage step reaches production, reported (issue 1684)", () => {
+  const REASON = "stage's analytics load tick ran on a cold cache; the owner accepts it";
+  const AT = "2026-11-18T20:00:00.000Z";
+  const accept = (j: RunJournal, id: string, a: Partial<{ reason: string; issue: number; at: string }> = {}) => {
+    j.steps[id]!.status = "accepted";
+    j.steps[id]!.exit = 1;
+    j.steps[id]!.accepted = { reason: REASON, issue: 1555, at: AT, ...a } as { reason: string; issue: number; at: string };
+    return j;
+  };
+  const expected = { stepListHash: stepListHash(), tree: TREE, stepIds: stepIds() };
+
+  test("SP.8 passes a stage journal with Q28-log-verdict accepted, and refuses one whose acceptance lacks a reason or an issue, naming the step", () => {
+    expect(checkStageJournal(accept(journal(), "Q28-log-verdict"), expected)).toEqual([]);
+    for (const bad of [{ reason: "" }, { reason: "   " }, { issue: undefined }, { issue: 0 }, { issue: 1.5 }]) {
+      const out = checkStageJournal(accept(journal(), "Q28-log-verdict", bad as Partial<{ reason: string; issue: number }>), expected).join();
+      expect(out, JSON.stringify(bad)).toContain("accepted Q28-log-verdict without a recorded reason and issue");
+    }
+    // A failed step is still a refusal: an acceptance is the owner's record, never implied.
+    const failed = journal();
+    failed.steps["Q28-log-verdict"]!.status = "failed";
+    expect(checkStageJournal(failed, expected).join()).toContain("did not pass");
+  });
+
+  test("stageAcceptances lists {step, reason, issue, at} in runbook order, whatever order they were accepted in", () => {
+    const j = accept(accept(journal(), "Q28-log-verdict"), "Q02-dump", { issue: 1600, reason: "the dump host was slow", at: "2026-11-18T21:00:00.000Z" });
+    expect(stageAcceptances(j, stepIds())).toEqual([
+      { step: "Q02-dump", reason: "the dump host was slow", issue: 1600, at: "2026-11-18T21:00:00.000Z" },
+      { step: "Q28-log-verdict", reason: REASON, issue: 1555, at: AT },
+    ]);
+    expect(stageAcceptances(journal(), stepIds())).toEqual([]);
+    expect(stageAcceptances(undefined, stepIds())).toEqual([]);
+  });
+
+  /** Q28-log-verdict and its production twin C16-log-verdict, with one preflight step between. */
+  const TWINS: StepTemplate[] = [
+    { id: "Q28-log-verdict", standing: [], description: "stage verdict", host: "target", phase: "qa", onlyFor: "stage", cmds: [["echo", "Q28-log-verdict"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "P01-checkout", standing: [], description: "preflight", host: "target", phase: "preflight", onlyFor: "prod", cmds: [["echo", "P01-checkout"]], expectExit: 0, receipts: [], irreversible: false },
+    { id: "C16-log-verdict", standing: [], description: "production verdict", host: "target", phase: "cutover", onlyFor: "prod", cmds: [["echo", "C16-log-verdict"]], expectExit: 0, receipts: [], irreversible: false },
+  ];
+
+  test("the stage failure output names the accept command and says an acceptance carries to production", async () => {
+    const s = fixture();
+    const d = fakeDeps({ fail: new Set(["Q28-log-verdict"]) });
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], d.deps, TWINS)).toBe(1);
+    const out = d.logs.join("\n");
+    expect(out).toContain(acceptCommandFor(s, "Q28-log-verdict"));
+    expect(out).toContain("carries to production");
+  });
+
+  const acceptCommandFor = (s: ReturnType<typeof fixture>, id: string) => `bun run release:run --target ${s.targetFile} --run 20261008T120000Z --accept ${id} --reason "<why>" --issue <n>`;
+
+  test("preflight's P.stage reports the acceptance, preflight.json records it, and the production run journals it and still runs C16-log-verdict on its own", async () => {
+    const s = fixture();
+    expect(await runRelease(["--target", s.targetFile, "--go", s.goFile, "--journal-root", s.journalRoot], fakeDeps({ fail: new Set(["Q28-log-verdict"]) }).deps, TWINS)).toBe(1);
+    const acc = fakeDeps();
+    expect(await runRelease(["--target", s.targetFile, "--journal-root", s.journalRoot, "--run", "20261008T120000Z", "--accept", "Q28-log-verdict", "--reason", REASON, "--issue", "1555"], acc.deps, TWINS)).toBe(0);
+    const stageDir = join(s.journalRoot, "stage", "20261008T120000Z");
+
+    const p = fixture("prod");
+    const preDir = await greenPreflight(p, TWINS, stageDir);
+    const pre = JSON.parse(readFileSync(join(preDir, "preflight.json"), "utf8")) as PreflightReport;
+    const stage = pre.checks.find((c) => c.id === "P.stage")!;
+    expect(stage.status).toBe("green");
+    expect(stage.detail).toContain(`; accepted: Q28-log-verdict (issue 1555: ${REASON})`);
+    expect(pre.stageAccepted).toEqual([{ step: "Q28-log-verdict", reason: REASON, issue: 1555, at: "2026-10-08T12:00:00.000Z" }]);
+
+    // The production twin runs, and an acceptance on stage never passes it: it fails on its own.
+    const cut = fakeDeps({ fail: new Set(["C16-log-verdict"]) });
+    expect(await runRelease(["--target", p.targetFile, "--go", p.goFile, "--journal-root", p.journalRoot, "--stage-journal", stageDir, "--after-preflight", preDir], cut.deps, TWINS)).toBe(1);
+    expect(cut.ran).toEqual(["C16-log-verdict"]);
+    expect(cut.logs.join("\n")).toContain("the stage run 20261008T120000Z accepted Q28-log-verdict (issue 1555");
+    const j = JSON.parse(readFileSync(join(p.journalRoot, "prod", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.stageJournal?.accepted).toEqual([{ step: "Q28-log-verdict", reason: REASON, issue: 1555, at: "2026-10-08T12:00:00.000Z" }]);
+    expect(j.steps["C16-log-verdict"]!.status).toBe("failed");
+    expect(j.status).toBe("failed");
+  });
+});
+
+describe("a doc or description fix keeps a stage run (issue 1684)", () => {
+  const C2 = "c".repeat(40);
+  const C2_TREE = "9".repeat(40);
+  const DOCS = ["docs/technical/release-runbooks.md", "README.md", "packages/csvb/README.md", "scripts/lib/gate/log-classifications.json"];
+
+  test("docs, any .md and the log classification rules are check-only; the site's markdown, the SDK README's fill block and gate code are not", () => {
+    for (const p of DOCS) expect(isCheckOnlyPath(p), p).toBe(true);
+    for (const p of ["frontend/public/skill.md", "frontend/public/data/swarm/manifests/members/athena.voice.md", "packages/analyst-sdk/README.md", "scripts/lib/gate/log-inventory.ts"]) {
+      expect(isCheckOnlyPath(p), p).toBe(false);
+    }
+    // A name that only contains .md, or ends in it without the dot, is not markdown.
+    expect(isCheckOnlyPath("scripts/release/md-check.ts")).toBe(false);
+    expect(isCheckOnlyPath("backend/src/readmd")).toBe(false);
+  });
+
+  test("checkResume in place with only those paths changed returns []", () => {
+    const exp = { target: "stage", commit: C2, stepListHash: stepListHash(), goSha256: "g2", stepIds: stepIds(), changedPaths: DOCS };
+    expect(checkResume(journal(), exp, {})).toEqual([]);
+    expect(checkResume(journal(), { ...exp, changedPaths: [...DOCS, "packages/analyst-sdk/README.md"] }, {}).join()).toContain("not check-only: packages/analyst-sdk/README.md");
+  });
+
+  test("a passed stage run resumed in place at a check-only commit runs no step, records the new commit and tree, and passes SP.8 against that tree", async () => {
+    const f = fixture();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ receipt: "{}" }).deps, TINY)).toBe(0);
+    const runDir = join(f.journalRoot, "stage", "20261008T120000Z");
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    const answers = { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `${DOCS.join("\n")}\n` }, [`${C2}^{tree}`]: { code: 0, stdout: `${C2_TREE}\n` } };
+    const later = fakeDeps({ receipt: "{}", answers });
+    later.deps.now = () => new Date("2026-10-08T15:00:00Z");
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z"], later.deps, TINY)).toBe(0);
+    expect(later.ran).toEqual([]);
+    const j = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")) as RunJournal;
+    expect(j).toMatchObject({ status: "passed", commit: C2, tree: C2_TREE });
+    expect(j.commits!.map((c) => c.commit)).toEqual([SHA, C2]);
+    const expected = { stepListHash: stepListHash(TINY), tree: C2_TREE, stepIds: stepIds(TINY) };
+    expect(checkStageJournal(j, { ...expected, earlierPaths: { [SHA]: DOCS } })).toEqual([]);
+    // red: production's tree is not the new commit's, or the earlier commit's diff is product code.
+    expect(checkStageJournal(j, { ...expected, tree: TREE, earlierPaths: { [SHA]: DOCS } }).join()).toContain("tree");
+    expect(checkStageJournal(j, { ...expected, earlierPaths: { [SHA]: ["frontend/public/skill.md"] } }).join()).toContain("outside the check-only paths: frontend/public/skill.md");
+  });
+
+  test("stepListHash ignores every description, and still changes with cmds, host, phase, env or expectExit", () => {
+    const base = stepListHash(RELEASE_STEPS);
+    expect(stepListHash(RELEASE_STEPS.map((s) => ({ ...s, description: `${s.description}, reworded` })))).toBe(base);
+    const edit = (patch: (s: StepTemplate) => Partial<StepTemplate>) => stepListHash(RELEASE_STEPS.map((s) => (s.id === "Q28-log-verdict" ? { ...s, ...patch(s) } : s)));
+    expect(edit((s) => ({ cmds: [[...s.cmds[0]!, "--x"]] }))).not.toBe(base);
+    expect(edit(() => ({ host: "capture" }))).not.toBe(base);
+    expect(edit(() => ({ phase: "cutover" }))).not.toBe(base);
+    expect(edit(() => ({ env: { X: "1" } }))).not.toBe(base);
+    expect(edit(() => ({ expectExit: 1 }))).not.toBe(base);
+  });
+});
+
+describe("independent checks run side by side (issue 1684)", () => {
+  test("a stage run starts Q34a-analytics-load and Q37a-db-stats while Q32-soak-gate still waits on its notBefore", async () => {
+    // The template's QA steps, each on the target host so the injected exec sees its marker.
+    const qa = RELEASE_STEPS.filter((s) => s.phase === "qa").map((s) => ({ ...s, host: "target" as const }));
+    const f = fixture();
+    const d = fakeDeps({ receipt: "{}" });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], d.deps, qa)).toBe(3);
+    for (const id of ["Q34a-analytics-load", "Q37a-db-stats", "Q37b-jobs-plans", "Q35-archive-routes", "Q36-sdk-quickstart", "Q37-sdk-tests"]) expect(d.ran, id).toContain(id);
+    for (const id of ["Q32-soak-gate", "Q33-soak-checks", "Q34-collect-logs"]) expect(d.ran, id).not.toContain(id);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.steps["Q34a-analytics-load"]!.status).toBe("ok");
+    expect(j.steps["Q32-soak-gate"]).toBeUndefined();
+    expect(j.stopReason).toMatchObject({ kind: "paused", step: "Q32-soak-gate" });
   });
 });

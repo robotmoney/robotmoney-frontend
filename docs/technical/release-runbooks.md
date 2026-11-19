@@ -62,8 +62,8 @@ A new release line's branch `releases-A.B.x` is created from `main`, at the comm
 scope is chosen at, never from the previous release line (owner, 2026-10-26). Its scope then reaches
 it from `main` by route (a). Nothing on `releases-A.B.x` descends from the previous line's branch.
 
-No commit lands on the release branch during a QA session. Session fixes reach `main` afterwards by
-a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
+No commit lands on the release branch during a QA session. Session fixes reach `main` after the
+production cutover by a separate PR from the QA branch (§7). A release branch is force-pushed only on an explicit owner
 instruction, after `archive/releases-A.B.x-<YYYY-MM-DD>` is pushed. Tags land on the release
 branch, never on `main` or a QA branch.
 
@@ -103,6 +103,9 @@ The cycle (D70):
 8. **The cutover starts (C05-migrate)** → step C06-version-tag tags `vA.B.C` at the rc's commit at once. A later failed
    check, a known defect or a rollback never withholds or moves it. Every defect found after the
    cutover is an issue against `vA.B.(C+1)`, whose first rc is `vA.B.(C+1)-rc.0`.
+9. **The QA branch's fixes reach `main`** by a separate PR from the QA branch, opened once the
+   production cutover and its soak are complete, and evaluated against `main` as it is then (§7).
+   Precedent: the v0.6.x QA-session merge (1260) landed after the v0.6.0 cutover.
 
 Consequences, stated because each looks like a mistake and none is:
 
@@ -114,8 +117,9 @@ Consequences, stated because each looks like a mistake and none is:
 
 ## 4. The release workflow
 
-Each gate blocks. A failed gate stops the release until it passes or the owner records an
-exception in the release's YAML.
+Each gate blocks. A failed gate stops the release until it passes, the owner records an exception
+in the release's YAML, or the owner accepts a failed reversible stage step (`--accept`, with a
+reason and an issue). An acceptance carries to production, where preflight reports it (§4.2).
 
 **Three phases (owner, 2026-10-16).** Every step of a runbook belongs to one phase and runs on one
 target. Its id names its phase: `Q` for stage, `P` and `C` for production. The phases run in this
@@ -174,6 +178,17 @@ owner (`--triage <file>`). P09-coingecko-credit (from v0.9.2) runs `scripts/rele
 with the key from production's `~/.env`: one `GET /key`, red when the remaining monthly CoinGecko
 credit is below `COINGECKO_CREDIT_FLOOR_PCT` (default 10) percent. It prints the used, remaining and
 monthly credit and never the key (issue 1664).
+
+**An accepted stage step carries to production, reported (owner, 2026-11-19; issue 1684).** A
+stage step the owner accepted counts as done for SP.8. The v0.9.1 stage run's acceptance, as the
+runner records it:
+`bun run release:run --target stage --run 20261118T195749Z --accept Q34a-analytics-load --reason "<why>" --issue 1555`. `P.stage` stays green and appends
+`; accepted: <step> (issue <n>: <reason>)` for each acceptance, `preflight.json` records the list
+(`stageAccepted`), and the production run copies it into `run.json` `stageJournal.accepted` and logs
+it at its start. SP.8 refuses an accepted step only when its record lacks a reason or an issue. An
+acceptance never accepts the step's production twin: `C16-log-verdict` runs and must pass on its own
+whatever happened to `Q28-log-verdict`. A stage-only step (such as `Q34a-analytics-load`) has no
+twin, so its acceptance only appears in the report. Irreversible steps are never accepted.
 
 `P.ci` reads the rc commit's check runs first. The rc squash has the QA commit's tree, and its push
 to the release branch starts CI again. When the rc commit's CI is not green yet, `P.ci` reads the
@@ -255,24 +270,33 @@ final tip. `--run <ts> --from <step>` retries from one failed step while a fix i
 log-baseline finding that is the old release's own defect, fixed by this release, is triaged in a
 file passed with `--triage <file>` (`scripts/release/triage.ts`).
 
-**The analytics load check (issue 1514).** From release v0.7.1, `Q34a-analytics-load` runs after
-`Q34-collect-logs`. It is a stage-only step (`stageOnly: true`): it has no production twin, and the
-runner accepts it without one. It runs `scripts/release/analytics-load-check.ts` on the stage host.
-The check starts no analytics run. It waits for the next scheduled run, the next 3-hour boundary
-in UTC (research `0 */3 * * *`, regime `30 */3 * * *`), and follows the analytics-producer's log
-from it. The window closes 5 minutes after the tick's `[analytics] regime asof` line, or at the
-120-minute cap when that line never comes; a window closed at the cap with no such line fails
-("the tick logged no regime asof line", issue 1567). Then it reads the api container's log and
+**The analytics load check (issue 1514).** From release v0.7.1, `Q34a-analytics-load` runs on
+stage. It is a stage-only step (`stageOnly: true`): it has no production twin, and the runner
+accepts it without one. From release v0.9.2 it waits only for READY (`after: ["Q23-ready"]`), so
+its tick lands during the soak instead of after it. It runs `scripts/release/analytics-load-check.ts`
+on the stage host. The check starts no analytics run. It reads the analytics-producer container's
+own schedule (`PRODUCER_RESEARCH_CRON` and `PRODUCER_REGIME_CRON`, from `docker inspect`; crons it
+cannot read exit 2 with the reason), waits for the next research slot, and follows the producer's
+log from it. **The stage target's schedule is anchored to its boot ([D87](../decisions.md#d87)).**
+A realistic boot under `RM_ENV=stage` sets research to minute `m` of every hour, where `m` is the
+boot's minute plus 15, and regime 30 minutes after research; the first tick lands about 15 minutes
+after the boot, so after READY, and a stage resume hours later waits at most an hour. The boot sets
+a schedule and starts no run. Production keeps `0 */3 * * *` and `30 */3 * * *`. The window opens
+at that research slot and closes 5 minutes after the tick's `[analytics] regime asof` line. Its cap
+is the earlier of 120 minutes and the next research slot, so a window never spans two ticks; a
+window closed at the cap with no such line fails ("the tick logged no regime asof line", issue
+1567). Then it reads the api container's log and
 `/health` `db_pool` for that window. It prints one row per route:
 the request count, p50, p95 and max duration, the limiter wait, the pool wait, the handler time,
 and the 503 `db_saturated` count with the gate that refused. It exits 1 on any request of 5 s or
 more, or any `db_saturated` answer. The api logs only slow requests and refusals, so the rows
 count those. An api built before issue 1514 logs no wait split: the check shows it as unknown and
-still fails. The step can wait up to 3 hours for the run, so it allows 320 minutes.
+still fails. The step waits at most an hour for its tick, then at most the 120-minute window, so it
+allows 190 minutes.
 
 To grade a window by hand, run it on the stage host:
 `bun scripts/release/analytics-load-check.ts --instance stage_target --receipt-dir <dir>` waits for
-the next run. `--since <iso> --until <iso>` grades a window that has passed, and `--log <file>`
+the next research slot the producer's cron names. `--since <iso> --until <iso>` grades a window that has passed, and `--log <file>`
 grades a saved api log.
 
 **Production's connection budget on stage (issue 1514).** The api derives its request and batch
@@ -292,9 +316,24 @@ its window at the tick's `regime asof` line plus 5 minutes, with its 120-minute 
 **Bounded runs.** The runner has no stop-after option. To run part of the QA, run the steps one at a
 time with `--only <step> --run <ts>`. A bounded run is never a pass.
 
+**Checks that run beside the soak (issue 1684).** A check that needs only READY says so with
+`after`, so it never queues behind the soak's 30 minutes. From release v0.9.2, `Q34a-analytics-load`,
+`Q37a-db-stats` and `Q37b-jobs-plans` wait only for `Q23-ready`, and `C25a-db-stats` for
+`C11-ready`. The read-only SDK checks (Q35 to Q37, C23 to C25) already waited only for READY; they
+no longer wait for the soak's length either (no `notBefore`). The soak steps (Q32 to Q34, C20 to
+C22) still wait READY plus the watch. From v0.9.2 the loader refuses a release version check added
+after READY that declares no `after`; a check that reads what another step builds names that step
+too. Accepted risk: the checks that overlap Q34a's window add their own api requests to the load it
+grades. They are light reads, and Q34a's report lists every route, so their requests are visible.
+
 Checks that need a seated roster and short epochs run on a twin (`--local dump`, spoofed keys,
-`bun run twin:accelerate`, `bun run twin:gate`). Tear the stage stack down once the run passes: it
-spends inference credits.
+`bun run twin:accelerate`, `bun run twin:gate`). **The runner tears stage down after a pass (issue
+1684).** A stage run that ends passed (every step ok, skipped or accepted, including through
+`--accept`) runs `bun scripts/release/stage-target.ts down` on the control machine once, because a
+stage stack spends inference credits, and records `stageDown: {at, exit}` in `run.json`. A failed
+teardown leaves the run passed, prints the command to run by hand and notes it in the stop reason.
+`--keep-stage` keeps the stack up and records `stageDown: {kept: true}`. A later resume of a passed
+run never runs the teardown again, and a production run never runs it.
 
 ### 4.4.1. Stage run liveness and notification
 
@@ -350,17 +389,29 @@ pushed commit (`git status --porcelain` empty). Fix on the QA branch (§2), rede
 stage, and rerun. The same loop applies when an rc fails in production before the cutover (§3
 step 7).
 
-**Resume in place (stage only).** A fix that changes only check code need not restart the stage
-run from Q01. `release:run --target stage --go <new go> --run <run-ts> [--from <step>]` with a go
+**Resume in place (stage only).** A fix that changes only check code or prose need not restart the
+stage run from Q01. `release:run --target stage --go <new go> --run <run-ts> [--from <step>]` with a go
 naming the new QA commit is admitted when, on the control machine, `git diff --name-only` from the
 journal's last commit to the new one lists only `CHECK_ONLY_PATHS` (`scripts/release/journal.ts`):
 `scripts/release/version-checks/**`, `scripts/release/runbooks/**`,
 `scripts/release/version-check.ts`, `scripts/release/analytics-load-check.ts`,
 `scripts/release/sdk-check.ts`, `scripts/release/sdk-lib.ts`,
-`scripts/release/public-analytics-read.ts`, `scripts/release/replay-row.ts` and
-`scripts/tests/**`. The step-list hash must be unchanged and the new commit must pass the origin
-check. A step's `maxMinutes` is not in the hash, so changing it is check-only; a `cmds` or
-`description` edit still starts a new run. Any other path, the runner itself included, is refused.
+`scripts/release/public-analytics-read.ts`, `scripts/release/replay-row.ts`,
+`scripts/tests/**`, and, from issue 1684 (owner, 2026-11-18: a doc or non-source change never forces
+a new runbook run), `docs/**`, any `*.md` and `scripts/lib/gate/log-classifications.json`. Two
+markdown paths are not prose and stay excluded: `frontend/public/**` (the site serves it, and the
+backend reads its member voice and skill files) and `packages/analyst-sdk/README.md` (`sdk-lib.ts`
+runs its `fill` block as a bash script). The step-list hash must be unchanged and the new commit
+must pass the origin check. The hash never sees a step's `description` or `maxMinutes`, so a
+`description` edit keeps the run; a `cmds` edit still starts a new one. Any other path, the runner
+itself included, is refused. Changing the hash's inputs moved every list's hash once: a stage
+journal recorded before issue 1684 carries the old hash, so a release that straddles it reruns stage
+once.
+
+**A doc fix after a pass.** A stage run that already passed resumes in place at a new QA commit whose
+diff is check-only (`--go <new go> --run <run-ts>`, no `--from`). No step runs. The journal records
+the new commit and its tree in `commits`, so SP.8 matches the tree production's rc carries. It works
+with the stage target already torn down, because no step touches it.
 `run.json` lists every commit the run ran at in `commits` (`{commit, tree, goSha256, fromStep,
 at}`), and each step record names the `commit` it ran at; steps already ok keep their records.
 SP.8 then also requires every earlier commit in `commits` to differ from the production commit only
@@ -444,7 +495,9 @@ with no query text hidden. Q37b-jobs-plans (`scripts/release/jobs-query-plans.ts
 the enqueue live guard, livePayloadField and the backlog sweep use `jobs_live_kind_locked_idx` with no Seq Scan on
 `jobs` and run under 10 ms, and the admin job counts run under 50 ms with no heap scan of `jobs` executed. Sessions are deferred in the
 soak. They are graded afterwards as a report, once 37 h have passed:
-`bun run prod:gate --mode post-release --instance rm_prod --since <READY> --sessions graded`. The
+`bun run prod:gate --mode post-release --release vA.B.C --instance rm_prod --since <READY> --sessions graded`.
+A post-release gate always names the release it grades: `prod:gate` refuses `--mode post-release`
+without `--release`, and every template step passes `--release {release}` (issue 1684). The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
 UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
 step) fills the whole archive, replays the newest archived run, and fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label). Q36 and C24 replay nothing: they are a contract smoke that fetches one backup (issue 1566).
@@ -588,7 +641,10 @@ A template step that carries `since: vA.B.C` binds the releases from that one on
 keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is
 unchanged). A template step whose commands change carries `changedSince: vA.B.C` and `before: {description, cmds}`,
 the step as earlier releases ran it. A release before `changedSince` may keep `before`, and a later one carries the
-step as it now reads (Q18b and C05b, `changedSince: v0.7.5`, issue 1501). The hash sees neither key. `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
+step as it now reads (Q18b and C05b, `changedSince: v0.7.5`, issue 1501). `before` also holds the
+`notBefore` a change dropped and the `maxMinutes` it moved (issue 1684: the SDK checks and
+`Q34a-analytics-load`, `changedSince: v0.9.2`). The hash sees neither key, nor any step's
+`description`. `scripts/release/runbook.ts` refuses a release runbook that drops, edits or reorders a template
 step, and a unit test holds every in-flight release runbook to the current template, so a step
 added to a template reaches them in the same pull request. The step-list hash SP.8 compares is
 taken over the release runbook's steps. Every step names its standing check IDs (§9) and whether it
@@ -628,8 +684,8 @@ claims the gate ran and passed.
 ## 7. Backporting
 
 Not a gate. Every fix made on a QA branch reaches the release branch in the stage-passed squash
-(§2 route (b)), and reaches `main` afterwards by a separate PR from the QA branch, evaluated against
-`main` as it is then.
+(§2 route (b)), and reaches `main` after the production cutover (and its soak) is complete, by a
+separate PR from the QA branch, evaluated against `main` as it is then (§3 step 9).
 
 A change made on a previous release line reaches a later release only through `main`, so it is
 backported to `main` by pull request first (§2).
@@ -657,7 +713,7 @@ recorded owner decision.
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
 | SP.6 | Product baseline: row counts and database size | Q12-state-baseline, P07-state-baseline |
 | SP.7 | CI green on the commit, or on the stage commit with the same tree (§4.2) | preflight `P.ci` |
-| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, every earlier stage commit check-only apart (§4.6) | preflight `P.stage` |
+| SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, skipped or accepted, every earlier stage commit check-only apart (§4.6). An accepted stage step carries to production with its reason and issue, and is reported (§4.2); its production twin still runs on its own | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
 | SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
@@ -695,7 +751,7 @@ a red control (`scripts/tests/unit/standing-soak.test.ts`). The runner records t
 
 | Id | Invariant | Status | Note |
 |---|---|---|---|
-| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). A cron the script cannot expand is a WARN |
+| R8.a, R8.b | Scheduled regime and research runs each produced their output artifact | script | The cron is read from the `analytics-producer` container's `PRODUCER_REGIME_CRON` and `PRODUCER_RESEARCH_CRON`. Compose defaults to daily (22:30, 23:00). Production runs every 3 h (:30, :00), so the 3 h cadence holds only if the boot sets those variables (the `--static-port` boot does). The stage target runs hourly from a boot-anchored minute, regime 30 minutes after research ([D87](../decisions.md#d87)); the script reads whatever the container names. A cron the script cannot expand is a WARN |
 | R8.c | No producer failure line since T0 | script | Also matches the day-roll regime failure line (1108) |
 | R8.d | Ledger growth stays inside the recorded baseline | script | Baseline from `--record`, in the instance state directory (`soak-baseline.json`) |
 | R8.e | Writers record only real changes: no noise-only revisions, no `unchanged` rows | script | |

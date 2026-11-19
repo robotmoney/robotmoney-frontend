@@ -30,8 +30,18 @@ describe("evaluateCapacity (report-only)", () => {
 });
 
 describe("parseProdGateArgs", () => {
-  test("defaults to a 24 h baseline graded as v0.6.0", () => {
-    expect(parseProdGateArgs([])).toMatchObject({ mode: "baseline", windowHours: 24, stuckAfterMin: 120, release: "v0.6.0" });
+  test("defaults to a 24 h baseline, which grades no release", () => {
+    expect(parseProdGateArgs([])).toMatchObject({ mode: "baseline", windowHours: 24, stuckAfterMin: 120 });
+    expect((parseProdGateArgs([]) as { release?: string }).release).toBeUndefined();
+  });
+
+  // Issue 1684: the post-release verdict grades the release it runs for; the "v0.6.0" default is gone.
+  test("post-release needs --release, and grades the release it names", () => {
+    const missing = parseProdGateArgs(["--mode", "post-release"]);
+    expect(missing).toHaveProperty("error");
+    expect((missing as { error: string }).error).toContain("--release");
+    expect(parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1"])).toMatchObject({ mode: "post-release", release: "v0.9.1" });
+    expect(parseProdGateArgs(["--release", "v0.9.1", "--mode", "post-release"])).toMatchObject({ release: "v0.9.1" });
   });
 
   test("rejects an unknown mode, a bad capacity and a non-markdown report", () => {
@@ -41,13 +51,13 @@ describe("parseProdGateArgs", () => {
   });
 
   test("--defer-sessions is a flag", () => {
-    expect(parseProdGateArgs(["--mode", "post-release", "--defer-sessions", "--db-capacity-gb", "25"])).toMatchObject({ mode: "post-release", deferSessions: true, capacityGb: 25 });
+    expect(parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1", "--defer-sessions", "--db-capacity-gb", "25"])).toMatchObject({ mode: "post-release", deferSessions: true, capacityGb: 25 });
   });
 
   test("--sessions graded|deferred is the value form the release run renders from target data", () => {
-    expect(parseProdGateArgs(["--mode", "post-release", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
-    expect(parseProdGateArgs(["--mode", "post-release", "--sessions", "graded"])).toMatchObject({ deferSessions: false });
-    expect(parseProdGateArgs(["--mode", "post-release", "--defer-sessions", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
+    expect(parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
+    expect(parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1", "--sessions", "graded"])).toMatchObject({ deferSessions: false });
+    expect(parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1", "--defer-sessions", "--sessions", "deferred"])).toMatchObject({ deferSessions: true });
     // red: an unknown value, or a contradiction, refuses.
     expect(parseProdGateArgs(["--sessions", "later"])).toHaveProperty("error");
     expect(parseProdGateArgs(["--sessions", "graded", "--defer-sessions"])).toHaveProperty("error");
@@ -55,7 +65,7 @@ describe("parseProdGateArgs", () => {
   });
 
   test("selects the stack by --instance; the old state-file, driver-log and SMOKE_PROJECT routes are gone", () => {
-    expect(parseProdGateArgs(["--instance", "rm_prod", "--mode", "post-release"])).toMatchObject({ mode: "post-release" });
+    expect(parseProdGateArgs(["--instance", "rm_prod", "--mode", "post-release", "--release", "v0.9.1"])).toMatchObject({ mode: "post-release" });
     expect(parseProdGateArgs(["--state-file", "/x/smoke-state.json"])).toEqual({ error: 'unknown argument "--state-file".' });
     expect(parseProdGateArgs(["--driver-log", "/x.log"])).toEqual({ error: 'unknown argument "--driver-log".' });
   });
@@ -72,6 +82,16 @@ describe("known issues after the release", () => {
     const v = inventoryVerdict(g, "post-release", "v0.5.1");
     expect(v.failures.join("\n")).toContain("known issue wallet (D2, fixed in 0.5.1) still present after the release that fixes it");
     expect(v.warnings.join("\n")).toContain("known issue ledger (1035), not fixed by v0.5.1 or earlier");
+  });
+
+  test("the release the gate is given is the one the warning names (issue 1684: never v0.6.0 by default)", async () => {
+    const { classify, inventory, inventoryVerdict } = await import("../../lib/gate/log-inventory.ts");
+    const rules = [{ id: "ledger", match: "upstream prematurely closed", class: "known-issue" as const, issue: "1035", reason: "ledger load, not this release" }];
+    const g = classify(inventory("x", [{ ts: null, text: "[error] upstream prematurely closed connection" }]), rules);
+    const args = parseProdGateArgs(["--mode", "post-release", "--release", "v0.9.1"]) as { release: string };
+    const v = inventoryVerdict(g, "post-release", args.release);
+    expect(v.warnings.join("\n")).toContain("not fixed by v0.9.1 or earlier");
+    expect(v.warnings.join("\n")).not.toContain("v0.6.0");
   });
 });
 

@@ -13,12 +13,16 @@
 //   2. every session in flight at Q12-state-baseline/P07-state-baseline (baseline.json `inFlight`) published,
 //      its window close unmoved, within its judging duration plus a grace
 //      after that close;
-//   3. the regime run lands at :30 (the analytics-producer container's
-//      PRODUCER_REGIME_CRON, or the compose default, has minute 30);
+//   3. the producer's schedule is one of the two pairs a target runs (issue
+//      1684): production's (regime at minute 30, research at minute 0, the same
+//      hours) or the stage target's (both hourly, regime 30 minutes after
+//      research). It reads the analytics-producer container's
+//      PRODUCER_REGIME_CRON and PRODUCER_RESEARCH_CRON, or the compose defaults;
 //   4. it REPORTS the last parity sweep's duration, and fails a dead one; and
 //      the sweep is scheduled exactly once, daily at 04:47 UTC (issue 1375,
 //      migration 0123): the one schedule this upgrade intends to move.
-// The stage target runs it unchanged: it is not accelerated.
+// The stage target's producer runs hourly from a minute its boot anchors (D87),
+// so its first tick lands just after READY; the check itself runs unchanged.
 //
 // `--sessions` comes from the target's `watchSessions` (./target.ts). With
 // `graded` (the default, and always production) check 2 runs in full. With
@@ -41,6 +45,8 @@ export { PRODUCTION_EPOCH_SECONDS, PUBLISH_GRACE_SECONDS, SUBJECT_CLOSE_SPACING_
 export const SUBJECT_CLOSE_ORDER = ["robotmoney-vault", "woon", "robotmoney-allocation", "robotmoney-treasury"] as const;
 /** docker-compose.yml's default when PRODUCER_REGIME_CRON is unset (scripts/standing-soak.ts DEFAULT_REGIME_CRON). */
 export const DEFAULT_REGIME_CRON = "30 22 * * *";
+/** docker-compose.yml's default when PRODUCER_RESEARCH_CRON is unset. */
+export const DEFAULT_RESEARCH_CRON = "0 23 * * *";
 
 export interface BaselineSession { readonly id: string; readonly subject: string; readonly state: string; readonly window_closes_at: string | null }
 export interface CurrentSession {
@@ -145,10 +151,22 @@ export function parseSessionsFlag(value: string | undefined): WatchSessions | { 
   return (WATCH_SESSIONS as readonly string[]).includes(value) ? (value as WatchSessions) : { error: `--sessions is ${WATCH_SESSIONS.join(" or ")}, got "${value}"` };
 }
 
-/** PURE. The regime cron's minute must be 30. */
-export function regimeCronProblems(cron: string): string[] {
-  const minute = cron.trim().split(/\s+/)[0];
-  return minute === "30" ? [] : [`the regime cron "${cron}" runs at minute ${minute ?? "?"}, not :30`];
+/**
+ * PURE. The producer's schedule is one of the two pairs a target runs (issue 1684):
+ * production's, regime at minute 30 and research at minute 0 in the same hours
+ * (every third hour), or the stage target's boot-anchored pair, both
+ * hourly with regime 30 minutes after research (D87). Any other pair is a problem.
+ */
+export function regimeCronProblems(regime: string, research: string): string[] {
+  const [rm, rh, ...rRest] = regime.trim().split(/\s+/);
+  const [sm, sh, ...sRest] = research.trim().split(/\s+/);
+  const daily = (rest: string[]) => rest.length === 3 && rest.every((f) => f === "*");
+  const minute = (m: string | undefined) => (m !== undefined && /^\d+$/.test(m) && Number(m) < 60 ? Number(m) : undefined);
+  const ok = daily(rRest) && daily(sRest) && rh === sh && (
+    (rm === "30" && sm === "0")
+    || (rh === "*" && minute(rm) !== undefined && minute(sm) !== undefined && minute(rm) === (minute(sm)! + 30) % 60)
+  );
+  return ok ? [] : [`the producer runs regime "${regime}" and research "${research}": neither production's pair (regime at :30, research at :00, the same hours) nor the stage target's (both hourly, regime 30 minutes after research)`];
 }
 
 /** The parity sweep's one schedule (db/seed.ts, migration 0123), clear of every data-acquisition job. */
@@ -173,7 +191,7 @@ function flag(name: string): string | undefined {
   return at >= 0 ? process.argv[at + 1] : undefined;
 }
 
-function producerCron(instance: string): { cron: string; source: string } | { error: string } {
+function producerCron(instance: string): { cron: string; research: string; source: string } | { error: string } {
   const record = readStackState(instancePaths(stateRoot(process.env), instance));
   if (!record) return { error: `instance ${instance} has no stack record` };
   const ps = spawnSync("docker", ["ps", "-q", "--filter", `label=com.docker.compose.project=${record.project}`,
@@ -182,9 +200,14 @@ function producerCron(instance: string): { cron: string; source: string } | { er
   if (ps.status !== 0 || !id) return { error: `no running analytics-producer in ${record.project}` };
   const insp = spawnSync("docker", ["inspect", "--format", "{{json .Config.Env}}", id], { encoding: "utf8" });
   if (insp.status !== 0) return { error: "docker inspect failed" };
-  const env = (JSON.parse(insp.stdout) as string[]).find((e) => e.startsWith("PRODUCER_REGIME_CRON="));
-  const value = env?.slice("PRODUCER_REGIME_CRON=".length);
-  return value ? { cron: value, source: "container" } : { cron: DEFAULT_REGIME_CRON, source: "compose default" };
+  const env = JSON.parse(insp.stdout) as string[];
+  const read = (name: string) => env.find((e) => e.startsWith(`${name}=`))?.slice(name.length + 1);
+  const value = read("PRODUCER_REGIME_CRON");
+  const research = read("PRODUCER_RESEARCH_CRON");
+  return {
+    cron: value || DEFAULT_REGIME_CRON, research: research || DEFAULT_RESEARCH_CRON,
+    source: value && research ? "container" : value || research ? "container and compose default" : "compose default",
+  };
 }
 
 async function main(): Promise<number> {
@@ -241,7 +264,7 @@ async function main(): Promise<number> {
     ...epochProblems(subjects),
     ...closeSpacingProblems(subjects),
     ...inFlightProblemsFor(sessions, baseline, current),
-    ...("error" in cron ? [cron.error] : regimeCronProblems(cron.cron)),
+    ...("error" in cron ? [cron.error] : regimeCronProblems(cron.cron, cron.research)),
     ...sweep.problems,
     ...paritySweepScheduleProblems(sweepCrons),
   ];
@@ -250,7 +273,7 @@ async function main(): Promise<number> {
   writeFileSync(file, `${JSON.stringify({
     step: "subject-spacing", instance, run, sessions, subjects, inFlightAtBaseline: baseline, inFlightNow: current, regimeCron: cron, paritySweep: sweep.detail, problems, at: new Date().toISOString(),
   }, null, 2)}\n`, { mode: 0o600 });
-  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at Q12-state-baseline/P07-state-baseline (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron} (${cron.source})`}; ${sweep.detail}`);
+  console.log(`[schedule-parity] ${subjects.length} active subject(s); ${baseline.length} session(s) in flight at Q12-state-baseline/P07-state-baseline (sessions ${sessions}${sessions === "deferred" ? ": publish not checked, close unmoved checked" : ""}); regime cron ${"error" in cron ? "unread" : `${cron.cron}, research cron ${cron.research} (${cron.source})`}; ${sweep.detail}`);
   console.log(`[schedule-parity] receipt: ${file}`);
   for (const p of problems) console.error(`[schedule-parity] FAIL: ${p}`);
   return problems.length === 0 ? 0 : 1;

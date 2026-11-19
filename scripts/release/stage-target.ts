@@ -2,7 +2,7 @@
 // The stage target: a production-shaped target on stage-2 for unmodified
 // rehearsals (D61 rule 2, docs/runbooks/stage-target.md).
 //
-//   bun scripts/release/stage-target.ts dump      (Q02-dump: reuse the newest dump at most 24 h old, else capture one)
+//   bun scripts/release/stage-target.ts dump      (Q02-dump: capture a fresh dump from production's read replica)
 //   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace] [--connection-limits <max>/<su>/<reserved>]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down

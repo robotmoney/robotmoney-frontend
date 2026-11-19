@@ -184,6 +184,25 @@ const REALISTIC: SmokeCadence = {
 };
 
 /**
+ * THE STAGE TARGET'S ANALYTICS SCHEDULE (issue 1684, D87). A realistic boot
+ * under RM_ENV=stage does not keep production's 3-hourly grid: the release's
+ * analytics load check (Q34a-analytics-load) would idle up to 3 hours for its
+ * tick. The boot instead sets an HOURLY schedule anchored to its own time:
+ * research at minute m, m = the boot's minute plus STAGE_FIRST_TICK_MINUTES
+ * (mod 60), and regime 30 minutes after research. The boot sets a schedule and
+ * starts no run (owner, 2026-10-01: analytics runs only on its schedule).
+ * Production (RM_ENV=prod) keeps REALISTIC's crons, and the committed
+ * docker-compose.yml defaults are untouched.
+ */
+export const STAGE_FIRST_TICK_MINUTES = 15;
+
+/** PURE. The stage target's boot-anchored producer crons for a boot at `now` (UTC). */
+export function stageProducerCrons(now: Date): { researchCron: string; regimeCron: string } {
+  const m = (now.getUTCMinutes() + STAGE_FIRST_TICK_MINUTES) % 60;
+  return { researchCron: `${m} * * * *`, regimeCron: `${(m + 30) % 60} * * * *` };
+}
+
+/**
  * Resolve the cadence profile for one smoke invocation. `stage` is the `--stage`
  * ARGUMENT, never an env var. An explicit `cadence` override wins when present —
  * that is the argument the fast smoke-twin passes (see the module header).
