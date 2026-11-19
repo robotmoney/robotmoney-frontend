@@ -15,7 +15,7 @@
 //     always win.
 import { describe, expect, test } from "bun:test";
 import { resolveSmokeEnv } from "../../smoke.ts";
-import { NORMAL_DEMO_CACHE_TTL_MS } from "../../lib/smoke-env.ts";
+import { FLOW_SMOKE_STANDINS, NORMAL_DEMO_CACHE_TTL_MS, readBaseHead, smokeFlowHead, wantsFlowStandIn } from "../../lib/smoke-env.ts";
 
 describe("resolveSmokeEnv — always the live path (production parity)", () => {
   test("with no env set, resolves the live data path", () => {
@@ -127,5 +127,46 @@ describe("resolveSmokeEnv — always the live path (production parity)", () => {
     const r = resolveSmokeEnv({ CI: "true" });
     expect(r.composeEnv.BASE_RPC_SOURCE).not.toBe("stub");
     for (const v of Object.values(r.composeEnv)) expect(v).not.toContain("base-rpc-stub");
+  });
+});
+
+// Issue 1614: a local boot indexes stand-in contracts from just below the head;
+// a standing or prod boot, or an operator-exported queue, gets no stand-in.
+describe("the deposit queue stand-in", () => {
+  test("a local boot configures the stand-in contracts from 60 blocks below the head", () => {
+    const r = resolveSmokeEnv({}, { flowHeadBlock: 1000 });
+    expect(r.composeEnv.FLOW_QUEUE_ADDRESS).toBe(FLOW_SMOKE_STANDINS.queue);
+    expect(r.composeEnv.FLOW_FUND_ADDRESS).toBe(FLOW_SMOKE_STANDINS.fund);
+    expect(r.composeEnv.FLOW_INDEX_DEPLOY_BLOCK).toBe("940");
+    expect(r.composeEnv.FLOW_RPC_URL).toBe("https://base-rpc.publicnode.com");
+    expect("FLOW_RPC_URL" in resolveSmokeEnv({ BASE_RPC_URL: "http://private" }, { flowHeadBlock: 1000 }).composeEnv).toBe(false);
+  });
+
+  test("a standing, prod or operator-configured boot gets no stand-in", () => {
+    expect(wantsFlowStandIn({}, { standingStack: true })).toBe(false);
+    expect(wantsFlowStandIn({ RM_ENV: "prod" }, { standingStack: false })).toBe(false);
+    expect(wantsFlowStandIn({ FLOW_QUEUE_ADDRESS: "0x1" }, { standingStack: false })).toBe(false);
+    for (const r of [
+      resolveSmokeEnv({}, { standingStack: true, flowHeadBlock: 1000 }),
+      resolveSmokeEnv({}, { rmEnv: "prod", flowHeadBlock: 1000 }),
+      resolveSmokeEnv({ FLOW_QUEUE_ADDRESS: "0x1" }, { flowHeadBlock: 1000 }),
+      resolveSmokeEnv({}),
+    ]) expect("FLOW_QUEUE_ADDRESS" in r.composeEnv).toBe(false);
+  });
+
+  test("only a stand-in boot reads the head, from BASE_RPC_URL when exported", async () => {
+    const urls: string[] = [];
+    const read = async (url: string) => { urls.push(url); return 1000; };
+    expect(await smokeFlowHead({ BASE_RPC_URL: "http://private" }, { standingStack: false }, read)).toBe(1000);
+    expect(await smokeFlowHead({}, { standingStack: true }, read)).toBeUndefined();
+    expect(urls).toEqual(["http://private"]);
+  });
+
+  test("the head read retries and then fails loudly", async () => {
+    let calls = 0;
+    const ok = (async () => { calls++; return Response.json(calls < 2 ? { error: "busy" } : { result: "0x3e8" }); }) as unknown as typeof fetch;
+    expect(await readBaseHead("http://rpc", ok)).toBe(1000);
+    const down = (async () => { throw new Error("refused"); }) as unknown as typeof fetch;
+    await expect(readBaseHead("http://rpc", down)).rejects.toThrow("refused");
   });
 });

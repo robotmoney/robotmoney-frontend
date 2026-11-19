@@ -119,7 +119,7 @@ async function liveSmoke(): Promise<void> {
   // LIVE steady-state smoke (issue #128): published swarm sessions, a fresh
   // regime snapshot, wallet/vault provenance live, both research signals.
   console.log("[ci-checks] asserting LIVE steady state (smoke-live-smoke)…");
-  await run(["bun", "run", "scripts/smoke-live-smoke.ts"], childEnv({ BACKEND_URL: backendUrl }), "live smoke assertions");
+  await run(["bun", "run", "scripts/smoke-live-smoke.ts"], childEnv({ BACKEND_URL: backendUrl, ...operatorTokenEnv }), "live smoke assertions");
 }
 
 async function verifyLive(): Promise<void> {

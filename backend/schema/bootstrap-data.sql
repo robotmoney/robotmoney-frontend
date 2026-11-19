@@ -110,6 +110,7 @@ INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, la
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (15, 'projects.snapshot_daily', '40 0 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (16, 'projects.sync_revenue', '50 1 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
 INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (17, 'projects.recompute_coverage', '0 3 * * *', '{}', 'UTC', true, NULL, NULL, 'all');
+INSERT INTO public.job_schedules (id, kind, cron, payload, timezone, enabled, last_enqueued_at, next_run_at, catchup_policy) VALUES (18, 'flow.index', '* * * * *', '{}', 'UTC', false, NULL, NULL, 'latest-only');
 
 
 --
@@ -140,7 +141,7 @@ INSERT INTO public.swarm_stream_head (id, seq) VALUES (true, 0);
 -- Name: job_schedules_id_seq; Type: SEQUENCE SET; Schema: public; Owner: rm_owner
 --
 
-SELECT pg_catalog.setval('public.job_schedules_id_seq', 17, true);
+SELECT pg_catalog.setval('public.job_schedules_id_seq', 18, true);
 
 
 --

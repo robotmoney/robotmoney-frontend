@@ -753,6 +753,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
 // Routes deliberately absent from the public catalogue, each with the reason.
 // assertCatalogCoversRoutes() consults this, so removing an entry here without
 // cataloguing the route is a build failure rather than a silent omission.
+const FLOW_NOT_LIVE = "the deposit queue index (issue 1614) answers 503 until the v0.9 queue is deployed on Base mainnet and configured; catalogue it then. Contract: docs/technical/dapp-flow-api.md";
 export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.comments.create]: "write; anonymous POST, rate limited, no reason to advertise to crawlers",
   [ROUTES.dashboards.submissions]: "write; anonymous intake moderated from /admin",
@@ -775,6 +776,17 @@ export const EXCLUDED_ROUTES: Record<string, string> = {
   [ROUTES.swarm.memberAvatar]: "image bytes; linked from the member payload, not independently useful",
   [ROUTES.swarm.takePermalink]: "an HTML page, not an API resource; it is in sitemap.xml",
   [ROUTES.publicAnalytics.archiveFiles]: "a prefix, not a route: a backup's record and archives, each linked from getPublicArchiveBackups and its record",
+  [ROUTES.flow.prefix]: FLOW_NOT_LIVE,
+  [ROUTES.flow.health]: FLOW_NOT_LIVE,
+  [ROUTES.flow.vault]: FLOW_NOT_LIVE,
+  [ROUTES.flow.prices]: FLOW_NOT_LIVE,
+  [ROUTES.flow.events]: FLOW_NOT_LIVE,
+  [ROUTES.flow.transactions]: FLOW_NOT_LIVE,
+  [ROUTES.flow.request]: FLOW_NOT_LIVE,
+  [ROUTES.flow.requestHistory]: FLOW_NOT_LIVE,
+  [ROUTES.flow.owner]: FLOW_NOT_LIVE,
+  [ROUTES.flow.ownerClaims]: FLOW_NOT_LIVE,
+  [ROUTES.flow.ownerPosition]: FLOW_NOT_LIVE,
   // Issue #1026 W4. Two credentialed machine surfaces that do not live under
   // /api/swarm/admin/ and so are not skipped wholesale by the namespace rule.
   // Neither is a browsable resource and neither answers an anonymous caller:

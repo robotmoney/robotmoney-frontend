@@ -228,6 +228,25 @@ test("per-entry -32016 retries ONLY the throttled entries — not the whole chun
   expect(out[3]!.ok && out[3]!.result).toBe("hit1");
 });
 
+test("per-entry -32007 (Base's 25/second limit) is throttling too: only that entry is retried", async () => {
+  // Issue 1614: a 40-header batch trips the public RPC's per-second limit on
+  // a few entries. Failing them outright failed every deposit queue scan.
+  let round = 0;
+  serve((e) => (round === 0 && e.id === 2 ? { jsonrpc: "2.0", id: e.id, error: { code: -32007, message: "25/second request limit reached" } } : { jsonrpc: "2.0", id: e.id, result: `hit${e.id}` }));
+  const inner = globalThis.fetch;
+  globalThis.fetch = (async (u: string, i: RequestInit) => {
+    const res = await (inner as typeof fetch)(u as never, i as never);
+    round++;
+    return res;
+  }) as unknown as typeof fetch;
+
+  const out = await rpcBatchRequest<string>(calls(4), OK);
+
+  expect(posts.length).toBe(2);
+  expect(posts[1]!.length).toBe(1);
+  expect(out.every((r) => r.ok)).toBe(true);
+});
+
 test("retries EXHAUSTED with entries still throttled: those report FAILED, the rest still succeed", async () => {
   // Honest degrade. The alternative — throwing away the whole batch, or
   // returning the throttled entries as anything other than failed — would make

@@ -66,6 +66,63 @@ export interface SmokeEnvResolution {
   composeEnv: Record<string, string>;
 }
 
+/**
+ * THE DEPOSIT QUEUE INDEXER (issue 1614). The v0.9 FlowQueue and fund are not
+ * deployed on Base mainnet yet, so a local, non-standing, non-prod boot points
+ * the indexer at the live deploy-2 gateway and rmUSD vault as stand-ins. That
+ * exercises the deployed scan, the migrated tables and the health route on the
+ * real chain; it does not exercise the queue views, which those contracts lack.
+ * The scan starts FLOW_SMOKE_START_LAG blocks below the head the boot read, so
+ * the per-minute job reaches the confirmed head within minutes. An exported
+ * FLOW_QUEUE_ADDRESS (DEMO_COMPOSE_PASSTHROUGH) always wins, and a standing or
+ * prod boot gets no stand-in: it indexes only what its operator configured.
+ */
+export const FLOW_SMOKE_STANDINS = Object.freeze({
+  queue: "0x8E866418Ba2c9120753b8f9B2C5F7c33246575BE",
+  fund: "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
+});
+export const FLOW_SMOKE_START_LAG = 60;
+/**
+ * The public mainnet.base.org answers every eth_getLogs with 429 "request
+ * limit reached" (seen from CI and locally, issue 1614), so the stand-in scans
+ * through a public RPC that serves logs. Only the flow indexer uses it; an
+ * exported BASE_RPC_URL or FLOW_RPC_URL wins.
+ */
+export const FLOW_SMOKE_RPC_URL = "https://base-rpc.publicnode.com";
+
+/** Whether this boot configures the stand-in deposit queue index (and so must read the chain head first). */
+export function wantsFlowStandIn(
+  env: Record<string, string | undefined>,
+  opts: { standingStack: boolean; rmEnv?: string },
+): boolean {
+  return !opts.standingStack && (opts.rmEnv ?? env.RM_ENV) !== "prod" && !env.FLOW_QUEUE_ADDRESS;
+}
+
+/** Read the Base head for the stand-in's start block; three attempts, then a loud failure. */
+export async function readBaseHead(rpcUrl: string, fetchImpl: typeof fetch = fetch): Promise<number> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await fetchImpl(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }), signal: AbortSignal.timeout(10_000) });
+      const body = (await response.json()) as { result?: unknown };
+      if (typeof body.result === "string" && /^0x[0-9a-f]+$/i.test(body.result)) return parseInt(body.result, 16);
+      last = new Error(`no block number in ${JSON.stringify(body).slice(0, 200)}`);
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw new Error(`could not read the Base head from ${rpcUrl} for the deposit queue stand-in: ${last instanceof Error ? last.message : String(last)}`);
+}
+
+/** The head a local boot starts its stand-in scan below (issue 1614); undefined when it configures none. */
+export async function smokeFlowHead(
+  env: Record<string, string | undefined>,
+  opts: { standingStack: boolean; rmEnv?: string },
+  readHead: (rpcUrl: string) => Promise<number> = readBaseHead,
+): Promise<number | undefined> {
+  return wantsFlowStandIn(env, opts) ? readHead(env.BASE_RPC_URL || "https://mainnet.base.org") : undefined;
+}
+
 export function resolveSmokeEnv(
   env: Record<string, string | undefined> = process.env,
   opts: {
@@ -75,6 +132,8 @@ export function resolveSmokeEnv(
     standingStack?: boolean;
     /** The resolved RM_ENV policy. Defaults to env.RM_ENV. */
     rmEnv?: string;
+    /** The Base head the boot read, when wantsFlowStandIn(). */
+    flowHeadBlock?: number;
   } = {},
 ): SmokeEnvResolution {
   const baseRpcUrl = env.BASE_RPC_URL || undefined;
@@ -102,6 +161,19 @@ export function resolveSmokeEnv(
         TOKEN_PRICE_CACHE_TTL_MS: String(NORMAL_DEMO_CACHE_TTL_MS),
       };
 
+  let flowEnv: Record<string, string> = {};
+  // Without a head the stand-in is left out; the live-smoke flow leg then fails loudly.
+  const head = opts.flowHeadBlock;
+  if (head !== undefined && wantsFlowStandIn(env, { standingStack, rmEnv })) {
+    if (!Number.isSafeInteger(head) || head <= FLOW_SMOKE_START_LAG) throw new Error(`resolveSmokeEnv: invalid Base head block ${head}`);
+    flowEnv = {
+      FLOW_QUEUE_ADDRESS: FLOW_SMOKE_STANDINS.queue,
+      FLOW_FUND_ADDRESS: FLOW_SMOKE_STANDINS.fund,
+      FLOW_INDEX_DEPLOY_BLOCK: String(head - FLOW_SMOKE_START_LAG),
+      ...(env.BASE_RPC_URL || env.FLOW_RPC_URL ? {} : { FLOW_RPC_URL: FLOW_SMOKE_RPC_URL }),
+    };
+  }
+
   const composeEnv: Record<string, string> = {
     ...(baseRpcUrl !== undefined ? { BASE_RPC_URL: baseRpcUrl } : {}),
     BASE_RPC_SOURCE: baseRpcSource,
@@ -109,6 +181,7 @@ export function resolveSmokeEnv(
     ANALYTICS_FLOOR_SEED: analyticsFloorSeed,
     ...cacheEnv,
     ...producerCronEnv,
+    ...flowEnv,
   };
 
   return { baseRpcUrl, baseRpcSource, analyticsSource, analyticsFloorSeed, composeEnv };

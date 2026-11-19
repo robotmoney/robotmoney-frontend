@@ -66,6 +66,15 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "WALLET_BACKFILL_MAX_ATTEMPTS_PER_DAY",
   "GECKO_OHLCV_MIN_INTERVAL_MS",
   "PG_NAMESPACE_GUARD_TIMEOUT_MS",
+  // THE DEPOSIT QUEUE DEPLOYMENT (issue 1614). An operator exports the real
+  // queue and fund (and optionally legacy explorer contracts and the deploy
+  // block) before the boot; on a local boot an exported queue replaces the
+  // stand-in scripts/lib/smoke-env.ts configures.
+  "FLOW_QUEUE_ADDRESS",
+  "FLOW_FUND_ADDRESS",
+  "FLOW_EXPLORER_ADDRESSES",
+  "FLOW_INDEX_DEPLOY_BLOCK",
+  "FLOW_RPC_URL",
   // NO "RM_ENV". No container reads it (issue 1326, D69), and
   // buildComposeEnv() refuses to see it in the extras map.
   // NO "WORKER_DATABASE_URL" either. The pipeline worker holds no database

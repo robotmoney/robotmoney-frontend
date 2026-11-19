@@ -63,6 +63,8 @@ beforeAll(() => {
   realRegime = savedRegime();
   handlers["ops.test_fast"] = async (p) => { executed.push(`ops.test_fast:${p.jobId ?? ""}`); return { ok: true }; };
   handlers["research.test_block"] = async (p) => { executed.push(`research.test_block:${p.jobId ?? ""}`); await researchGate.opened; return { ok: true }; };
+  handlers["ops.test_block"] = async (p) => { executed.push(`ops.test_block:${p.jobId ?? ""}`); await researchGate.opened; return { ok: true }; };
+  handlers["flow.test_probe"] = async (p) => { executed.push(`flow.test_probe:${p.jobId ?? ""}`); return { ok: true }; };
   handlers["test.lane_probe"] = async (p) => { executed.push(`test.lane_probe:${p.jobId ?? ""}`); return { ok: true }; };
   // Stub the REAL regime kind so the starvation test never touches live fetchers.
   handlers["regime.classify"] = async (p) => { executed.push(`regime.classify:${p.jobId ?? ""}`); return { ok: true }; };
@@ -101,7 +103,7 @@ test("resolveLane: empty or unknown lane configuration fails loudly", () => {
   expect(() => resolveLane("bogus")).toThrow(/invalid WORKER_LANE "bogus"/);
   expect(resolveLane("analytics").name).toBe("analytics");
   expect(() => resolveLane("research")).toThrow(/invalid WORKER_LANE "research"/);
-  expect(Object.keys(LANES).sort()).toEqual(["analytics", "generic"]);
+  expect(Object.keys(LANES).sort()).toEqual(["analytics", "flow", "generic"]);
   expect(resolveLane("generic").name).toBe("generic");
   expect(describeLane(LANES.analytics)).toContain("except");
 });
@@ -125,6 +127,14 @@ test("lane filter: analytics lane claims regime/pipeline kinds but not research"
   expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false); // research is not claimable here
   expect(await jobStatus(regime)).toBe("succeeded");
   expect(await jobStatus(probe)).toBe("succeeded");
+});
+
+test("lane filter: deposit queue index kinds belong to the flow loop, never the analytics loop (issue 1614)", async () => {
+  const id = await enqueue("flow.test_probe");
+  expect(await processOneJob({ lane: LANES.analytics, workerId: "a1" })).toBe(false);
+  expect(await jobStatus(id)).toBe("pending");
+  expect(await processOneJob({ lane: LANES.flow, workerId: "a1-flow" })).toBe(true);
+  expect(await jobStatus(id)).toBe("succeeded");
 });
 
 test("priority is preserved within a lane", async () => {
@@ -156,6 +166,22 @@ test("starvation: a blocked job on one worker cannot prevent another analytics w
   } finally {
     researchGate.open();
     await Promise.all(workers.map((w) => w.stop()));
+  }
+});
+
+test("starvation: an analytics worker stuck in a long job still runs the deposit queue index (issue 1614)", async () => {
+  const opts = { idlePollMs: 25, schedulerTickMs: 60_000, reaperTickMs: 60_000, shutdownTimeoutMs: 4000 };
+  const worker = launch({ lane: LANES.analytics, workerId: "busy-analytics", ...opts });
+  try {
+    const blocked = await enqueue("ops.test_block");
+    await waitFor(async () => (await jobStatus(blocked)) === "running", 3000, "the long job to hold the analytics loop");
+    const flow = await enqueue("flow.test_probe");
+    await waitFor(async () => (await jobStatus(flow)) === "succeeded", 5000, "the flow job to run beside it");
+    const [r] = await sql`SELECT locked_by FROM jobs WHERE id = ${blocked}`;
+    expect(r.locked_by).toBe("busy-analytics");
+  } finally {
+    researchGate.open();
+    await worker.stop();
   }
 });
 

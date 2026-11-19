@@ -1,7 +1,7 @@
 import { existsSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveSmokeEnv } from "./smoke-env.ts";
+import { resolveSmokeEnv, smokeFlowHead } from "./smoke-env.ts";
 import { hostname } from "node:os";
 import { loadEnvFile, postgresPhaseNarration } from "./smoke-external-pg.ts";
 import { databaseName, homeEnvFilePath, urlForRole } from "./env-role.ts";
@@ -567,7 +567,7 @@ const operatorTokenEnv = (): Record<string, string> => ({ [OPERATOR_TOKEN_FILE_E
 
 // Model + credential before anything is provisioned (AC-MODEL-01) — what the
 // standing stack refuses, and why: scripts/lib/smoke-inference-preflight.ts.
-const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile, standingStack: staticPortMode, rmEnv: policy });
+const smokeEnv = resolveSmokeEnv(process.env, { stage: staticPortMode, cadence: cadence.profile, standingStack: staticPortMode, rmEnv: policy, flowHeadBlock: await smokeFlowHead(process.env, { standingStack: staticPortMode, rmEnv: policy }) });
 const inferenceComposeEnv: Record<string, string> = {}; // filled by the preflight; buildSpawnEnv() drops process.env
 Object.assign(inferenceComposeEnv, preflightInferenceOrExit({ standingStack: acceptanceBoot, repoRoot, env: process.env, credentialModelKey: () => credentialFileModelKey(flagValue("--credentials")) }));
 

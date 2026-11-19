@@ -258,10 +258,11 @@ export function isEmptyReturnData(returnData: string): boolean {
 // gateway/overload family. A 500/400/401/etc. is a hard error — no retry.
 const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 // Base's public RPC also reports throttling as HTTP 200 with JSON-RPC code
-// -32016 (`over rate limit`). Treat that exact provider-declared condition like
-// HTTP 429. Do not message-match generic errors: execution reverts and other
+// -32016 (`over rate limit`), or per batch entry with -32007 (`25/second
+// request limit reached`, issue 1614: a 40-header batch trips it). Treat those
+// exact provider-declared conditions like HTTP 429. Do not message-match generic errors: execution reverts and other
 // hard JSON-RPC failures must remain immediate so retry cannot hide bad calls.
-const TRANSIENT_RPC_ERROR_CODES = new Set([-32016]);
+const TRANSIENT_RPC_ERROR_CODES = new Set([-32016, -32007]);
 // Hard ceiling on any single backoff wait so a hostile/huge Retry-After can't
 // stall a request longer than the AbortController timeout would anyway.
 const MAX_BACKOFF_MS = 30_000;

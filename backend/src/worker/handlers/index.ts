@@ -3,6 +3,7 @@
 // recorded in job_runs.
 import { makeAnalyticsHandlers } from "./analytics.ts";
 import { refreshBuybacks } from "./buybacks.ts";
+import { refreshFlowIndex } from "./flow-index.ts";
 import * as projects from "./projects.ts";
 import { backfillWalletDay, backfillWalletWindow, repairGaps } from "./repair.ts";
 import { sampleSharePrice, sampleVaultAdapters } from "./vault.ts";
@@ -129,6 +130,7 @@ export const handlers: Record<string, JobHandler> = {
   },
   // periodic buyback refresh — eth_getLogs indexer upserting buyback_swaps (no-op under a non-live source)
   "buybacks.refresh": refreshBuybacks,
+  "flow.index": refreshFlowIndex,
   // NO SESSION-LIFECYCLE KINDS ARE REGISTERED HERE. Session work is not queue
   // work any more: system-scheduler-spec.md §4 gives the lifecycle a different
   // shape — the `system-scheduler` container drives a subject's epoch through

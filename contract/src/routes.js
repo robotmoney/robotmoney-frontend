@@ -398,6 +398,24 @@ export const ROUTES = {
     archiveFiles: "/api/public/analytics/archive/", // GET <prefix>csv/<backup id>/backup.json | <prefix>csv/<backup id>/data/<file>.csv.gz
   },
 
+  // Issue 1614 (docs/technical/dapp-flow-api.md): the deposit queue index.
+  // Public, unauthenticated GETs. Every body carries `schemaVersion` and
+  // `indexedThrough` {block, hash, time}; an unconfigured, unbound or empty
+  // index answers 503. Lists take ?afterBlock=&afterLogIndex=.
+  flow: {
+    prefix: "/api/public/flow/", // dispatch prefix for the routes below
+    health: "/api/public/flow/health", // GET → status ok|stale, indexedThrough, ageSeconds
+    vault: "/api/public/flow/vault", // GET → fund, holdings and queue state at the indexed block
+    prices: "/api/public/flow/prices", // GET → settlement prices in chain order
+    events: "/api/public/flow/events", // GET → canonical queue and fund logs
+    transactions: "/api/public/flow/transactions", // GET ?action=&owner=&amount=&requestId= → unsigned calldata and terms
+    request: "/api/public/flow/requests/:id", // GET → request status, pending and claimable
+    requestHistory: "/api/public/flow/requests/:id/history", // GET → the request's own events
+    owner: "/api/public/flow/owners/:address", // GET → the owner's request-creation events
+    ownerClaims: "/api/public/flow/owners/:address/claims", // GET → owner-level claim, credit and wind-down events
+    ownerPosition: "/api/public/flow/owners/:address/position", // GET → claimable, credit and held shares
+  },
+
   // The pipeline worker's only way to the database (issue 1034, decision D75).
   // Every route requires the pipeline-worker store token: `pipeline_queue` for
   // the queue routes and `whoami`, `pipeline_ingest` for `read` and `ingest`.

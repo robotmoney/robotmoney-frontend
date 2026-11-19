@@ -1,0 +1,44 @@
+import { config } from "../config.ts";
+import { encodeAddressArg, encodeUint256Arg, rpcBatchRequest } from "./base-rpc-client.ts";
+
+/** Read the queue's own request and claimability views at one indexed block. */
+export async function readFlowRequest(queue: string, requestId: bigint, block: number, expectedHash: string, dependencies = { batch: rpcBatchRequest<unknown> }) {
+  if (requestId <= 0n || requestId >= (1n << 256n)) throw new Error("invalid request id");
+  const opts = { rpcUrl: config.baseRpcUrl, blockTag: `0x${block.toString(16)}` };
+  const id = encodeUint256Arg(requestId);
+  const readBatch = async (calls: string[]) => {
+    const results = await dependencies.batch([...calls.map((data) => ({ method: "eth_call", params: [{ to: queue, data }, opts.blockTag] })), { method: "eth_getBlockByNumber", params: [opts.blockTag, false] }], opts);
+    const header = results.pop();
+    if (!header?.ok || typeof header.result !== "object" || header.result === null || !("hash" in header.result) || typeof header.result.hash !== "string" || header.result.hash.toLowerCase() !== expectedHash.toLowerCase()) throw new Error("indexed block changed");
+    return results.map((result) => {
+      if (!result.ok || typeof result.result !== "string") throw new Error("invalid queue response");
+      return result.result;
+    });
+  };
+  const [raw] = await readBatch([`0xc58343ef${id}`]);
+  if (raw === undefined) throw new Error("missing queue request result");
+  if (!/^0x[0-9a-fA-F]{1280}$/.test(raw)) throw new Error("invalid queue request result");
+  const words = Array.from({ length: 20 }, (_, i) => raw.slice(2 + i * 64, 66 + i * 64));
+  if (!/^0{24}/.test(words[0]!)) throw new Error("invalid request owner");
+  const owner = `0x${words[0]!.slice(24).toLowerCase()}`;
+  const kind = BigInt(`0x${words[1]}`);
+  if (/^0x0{40}$/.test(owner)) return null;
+  if (kind !== 0n && kind !== 1n) throw new Error("invalid request kind");
+  const ownerArg = encodeAddressArg(owner);
+  const pending = kind === 0n ? "0x26c6f96c" : "0xf5a23d8d";
+  const claimable = kind === 0n ? "0x995ea21a" : "0xeaed1d07";
+  const epoch = BigInt(`0x${words[2]}`);
+  if (epoch >= (1n << 64n)) throw new Error("invalid request epoch");
+  const calls = [`0x1a313202${id}`, `${pending}${id}${ownerArg}`, `${claimable}${id}${ownerArg}`, `0x648c691a${encodeUint256Arg(epoch)}`, "0x71d53fe4"];
+  const results = await readBatch(calls);
+  const values = results.slice(0, 4).map((result) => {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(result)) throw new Error("invalid queue request view");
+    return BigInt(result);
+  });
+  if (values[0]! > 3n) throw new Error("invalid request status");
+  const params = results[4];
+  if (!params || !/^0x[0-9a-fA-F]{1344}$/.test(params)) throw new Error("invalid queue parameters");
+  const settleWindow = BigInt(`0x${params.slice(66, 130)}`), cancelBuffer = BigInt(`0x${params.slice(2 + 18 * 64, 2 + 19 * 64)}`);
+  if (values[3]! < settleWindow + cancelBuffer) throw new Error("invalid request cutoff");
+  return { requestId: requestId.toString(), owner, kind: kind === 0n ? "deposit" : "redeem", amountUnit: kind === 0n ? "usdc-base-units" : "share-base-units", status: ["none", "pending", "expired", "closed"][Number(values[0])], amount: BigInt(`0x${words[3]}`).toString(), pending: values[1]!.toString(), claimable: values[2]!.toString(), epoch: epoch.toString(), cancelCutoff: (values[3]! - settleWindow - cancelBuffer).toString(), originalEpochSettleableAt: values[3]!.toString(), exitFeeBps: BigInt(`0x${words[6]}`).toString(), minHold: BigInt(`0x${words[7]}`).toString(), createdAt: BigInt(`0x${words[9]}`).toString(), expiresAt: BigInt(`0x${words[11]}`).toString() };
+}

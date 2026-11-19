@@ -163,6 +163,20 @@ const disableSmokeSchedule = registerQuery({
   },
 });
 
+const enableSmokeSchedule = registerQuery({
+  role: "rm_owner",
+  object: "job_schedules",
+  privileges: ["UPDATE", "SELECT"],
+  site: "src/db/seed:seedSmokeJobSchedules.enable",
+  purpose: "Enable the deposit queue indexer on a smoke database, whose boot configures stand-in contracts.",
+  callers: SMOKE_CALLERS,
+  probe: {
+    statement: `UPDATE job_schedules SET enabled = true
+       WHERE kind = $1 AND cron = $2 AND NOT enabled`,
+    params: ["probe.kind", "0 0 1 1 *"],
+  },
+});
+
 const enqueueColdStart = registerQuery({
   role: "rm_owner",
   object: "jobs",
@@ -303,6 +317,8 @@ export const SCHEDULES: SeedSchedule[] = [
   // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
   // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
   { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Enable after the deployed queue address and deploy block are configured.
+  { kind: "flow.index", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: false, catchupPolicy: "latest-only" },
   // Self-healing dispatcher (issue #709). Asks the gap detector what is missing
   // and enqueues ONE wallet.backfill_window job carrying the days it picked,
   // bounded per run (#739 — the provider meters HTTP hits, so a window that
@@ -497,6 +513,15 @@ export async function seedSmokeJobSchedules(db: RegistryDb = sql): Promise<void>
 
   await disable([{ kind: "projects.recompute_coverage", cron: "0 3 * * *" }]);
   console.log("smoke schedules: disabled projects.recompute_coverage (curated scores are preserved)");
+
+  // The smoke boot configures the deposit queue indexer (scripts/lib/smoke-env.ts),
+  // and its live-smoke gate requires a fresh index (issue 1614). Production
+  // keeps the seeded row disabled until its real deployment is configured.
+  await on(db, enableSmokeSchedule)`
+    UPDATE job_schedules SET enabled = true
+     WHERE kind = ${"flow.index"} AND cron = ${"* * * * *"} AND NOT enabled
+  `;
+  console.log("smoke schedules: enabled flow.index (the boot configures its contracts)");
 }
 
 /**
