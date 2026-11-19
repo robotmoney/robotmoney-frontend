@@ -4,18 +4,23 @@
 // WHAT IT REQUIRES:
 //   - every ratio leg the SDK registry names (yahoo:<SYMBOL>.close and .adjclose for the fourteen ratio symbols, 28 keys,
 //     registryRatioLegs) has at least one version in source_value_versions, and its newest market day is within 10 days;
-//   - BAA10Y has full history in raw_indicator_history (its first day is 1990-12-31 or earlier; FRED's series starts in 1986), at
-//     least 5000 rows, and its newest day is within 10 days;
+//   - BAA10Y has the history the ordinary FRED fetch gives a live upgrade in raw_indicator_history: its first day is 2010-01-15 or
+//     earlier (the daily fetch asks FRED for cosd 2010-01-01), at least 4000 rows, and its newest day is within 10 days. The
+//     1986 to 2009 rows are delivered only by the committed seed, never by ordinary ingestion: an owner-accepted deviation from
+//     issue 1653's full-history aim (owner, 2026-11-19);
 //   - BAA10Y is no input of the regime composite: the SDK registry (INDICATORS) holds no BAA10Y indicator.
 // Ingestion writes the legs and BAA10Y at each analytics run, so the check polls for them (stage hourly, production 3-hourly,
-// D87) until --wait-minutes passes.
+// D87) until --wait-minutes passes. The cap is not a wait: the check returns the moment its assertions hold. Default cap: 90
+// minutes on the stage target (one hourly tick plus margin), 200 elsewhere (production's 3-hourly tick).
 import { INDICATORS } from "../../../../packages/analyst-sdk/src/analyze/indicators.ts";
 import { registryRatioLegs } from "../../../../packages/analyst-sdk/src/extract/sources.ts";
 import type { VersionCheck } from "../../version-check.ts";
 
 export const MAX_STALE_DAYS = 10;
-export const BAA10Y_FIRST_BY = "1990-12-31";
-export const BAA10Y_MIN_ROWS = 5000;
+export const BAA10Y_FIRST_BY = "2010-01-15";
+export const BAA10Y_MIN_ROWS = 4000;
+export const STAGE_WAIT_MINUTES = 90;
+export const DEFAULT_WAIT_MINUTES = 200;
 
 export interface LegRow {
   readonly key: string;
@@ -44,7 +49,7 @@ export function legProblems(want: readonly string[], rows: readonly LegRow[], to
 export function baa10yProblems(r: Baa10yRead, today: string): string[] {
   const out: string[] = [];
   if (r.rows === 0 || r.first === null || r.newest === null) return ["raw_indicator_history holds no BAA10Y row"];
-  if (r.first > BAA10Y_FIRST_BY) out.push(`BAA10Y starts ${r.first}, after ${BAA10Y_FIRST_BY}: its history is not full`);
+  if (r.first > BAA10Y_FIRST_BY) out.push(`BAA10Y starts ${r.first}, after ${BAA10Y_FIRST_BY}: its history is shorter than the ordinary fetch gives`);
   if (r.rows < BAA10Y_MIN_ROWS) out.push(`BAA10Y holds ${r.rows} rows, fewer than ${BAA10Y_MIN_ROWS}`);
   if (days(r.newest, today) > MAX_STALE_DAYS) out.push(`BAA10Y's newest day ${r.newest} is older than ${MAX_STALE_DAYS} days`);
   return out;
@@ -73,7 +78,7 @@ export default (async (ctx) => {
     const baa: Baa10yRead = { first: b?.first ?? null, newest: b?.newest ?? null, rows: Number(b?.rows ?? 0) };
     return { legs, baa, problems: [...legProblems(want, legs, today), ...baa10yProblems(baa, today)] };
   };
-  const deadline = Date.now() + flag("--wait-minutes", 200) * 60_000;
+  const deadline = Date.now() + flag("--wait-minutes", ctx.instance === "stage_target" ? STAGE_WAIT_MINUTES : DEFAULT_WAIT_MINUTES) * 60_000;
   let r = await read();
   while (r.problems.length > 0 && Date.now() < deadline) {
     await Bun.sleep(5 * 60_000);

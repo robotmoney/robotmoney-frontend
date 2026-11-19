@@ -69,7 +69,7 @@ scope:
   - {pr: 1670, what: "Rank and weight kernels stay fast with an all-history window", check: "Q37-sdk-tests"}
   - {pr: 1671, what: "Ingestion stores the ratio legs as source data and the SDK computes every ratio", check: "Q43-source-data"}
   - {pr: 1672, what: "The rank, weight and percentile lookback windows are methodology parameters declared per version", check: "Q36-sdk-quickstart"}
-  - {pr: 1674, what: "BAA10Y is collected as source data with full history, outside the regime composite", check: "Q43-source-data"}
+  - {pr: 1674, what: "BAA10Y is collected as source data, outside the regime composite; its history before 2010 is delivered only by the committed seed, not by ordinary ingestion (owner-accepted deviation from issue 1653's full-history aim, 2026-11-19)", check: "Q43-source-data"}
   - {pr: 1675, what: "The backtest client surface fails closed: declared fill policies, refused unknown labels, copyable helpers", check: "Q37-sdk-tests"}
   - {pr: 1685, what: "Swarm members and the judge are served the composite, not its 3-year percentile", none: "swarm session inputs: the soak defers sessions on stage, and no read-only check can observe a session without starting one; the PR carries its own unit tests"}
   - {pr: 1686, what: "The buyback refresh job is disabled, its code kept: migration 0133_buybacks_refresh_disabled", check: "Q40-buybacks-disabled"}
@@ -821,7 +821,7 @@ steps:
     host: "target"
     phase: "qa"
     added: "v0.10.0"
-    description: "Ratio legs and BAA10Y are source data (PR 1671, PR 1674, issues 1644, 1653): all 28 ratio legs the SDK registry names have a stored version with a newest day within 10 days, BAA10Y has full history (from 1990-12-31 or earlier, 5000 rows or more, newest within 10 days) and is no indicator of the composite. The check polls for the first ingestion, up to 200 minutes. Reads only"
+    description: "Ratio legs and BAA10Y are source data (PR 1671, PR 1674, issues 1644, 1653): all 28 ratio legs the SDK registry names have a stored version with a newest day within 10 days, BAA10Y has the history the ordinary FRED fetch gives a live upgrade (from 2010-01-15 or earlier, 4000 rows or more, newest within 10 days) and is no indicator of the composite. BAA10Y history before 2010 comes only from the committed seed, never from ordinary ingestion (owner-accepted deviation from issue 1653, 2026-11-19). The check polls for the first ingestion and returns as soon as its assertions hold, capped at 90 minutes on stage and 200 on production. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "source-data", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -1483,7 +1483,7 @@ steps:
     host: "target"
     phase: "cutover"
     added: "v0.10.0"
-    description: "Ratio legs and BAA10Y are source data (PR 1671, PR 1674, issues 1644, 1653): all 28 ratio legs the SDK registry names have a stored version with a newest day within 10 days, BAA10Y has full history (from 1990-12-31 or earlier, 5000 rows or more, newest within 10 days) and is no indicator of the composite. The check polls for the first ingestion, up to 200 minutes. Reads only"
+    description: "Ratio legs and BAA10Y are source data (PR 1671, PR 1674, issues 1644, 1653): all 28 ratio legs the SDK registry names have a stored version with a newest day within 10 days, BAA10Y has the history the ordinary FRED fetch gives a live upgrade (from 2010-01-15 or earlier, 4000 rows or more, newest within 10 days) and is no indicator of the composite. BAA10Y history before 2010 comes only from the committed seed, never from ordinary ingestion (owner-accepted deviation from issue 1653, 2026-11-19). The check polls for the first ingestion and returns as soon as its assertions hold, capped at 90 minutes on stage and 200 on production. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "source-data", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0

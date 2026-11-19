@@ -9,7 +9,7 @@ import { flowProblems, type FlowRead } from "../../release/version-checks/v0.10.
 import { buybacksProblems, MIGRATION as BUYBACKS_MIGRATION } from "../../release/version-checks/v0.10.0/buybacks-disabled.ts";
 import { bucketOf, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v5.ts";
 import { FILES, pageProblems } from "../../release/version-checks/v0.10.0/regime-page.ts";
-import { baa10yProblems, compositeInputProblems, legProblems } from "../../release/version-checks/v0.10.0/source-data.ts";
+import { BAA10Y_FIRST_BY, BAA10Y_MIN_ROWS, DEFAULT_WAIT_MINUTES, STAGE_WAIT_MINUTES, baa10yProblems, compositeInputProblems, legProblems } from "../../release/version-checks/v0.10.0/source-data.ts";
 import { loadReleaseRunbook } from "../../release/runbook.ts";
 import { registryRatioLegs } from "../../../packages/analyst-sdk/src/extract/sources.ts";
 
@@ -171,15 +171,23 @@ describe("Q43-source-data/C31-source-data (PR 1671, PR 1674)", () => {
     expect(want).toContain("yahoo:HG=F.close");
     expect(want).toContain("yahoo:XLY.adjclose");
   });
-  test("passes: every leg stored and fresh, BAA10Y full and fresh", () => {
+  test("passes: every leg stored and fresh, BAA10Y as the ordinary fetch gives it, fresh", () => {
     expect(legProblems(want, want.map((key) => ({ key, newest: "2026-11-19" })), today)).toEqual([]);
     expect(baa10yProblems({ first: "1986-01-02", newest: "2026-11-18", rows: 10_000 }, today)).toEqual([]);
+    // A live upgrade: FRED's default window from 2010-01-04, 4216 rows (stage run 20261119T152050Z).
+    expect(baa10yProblems({ first: "2010-01-04", newest: "2026-11-17", rows: 4216 }, today)).toEqual([]);
+  });
+  test("the BAA10Y bounds and the poll caps are the owner's (2026-11-19)", () => {
+    expect(BAA10Y_FIRST_BY).toBe("2010-01-15");
+    expect(BAA10Y_MIN_ROWS).toBe(4000);
+    expect(STAGE_WAIT_MINUTES).toBe(90);
+    expect(DEFAULT_WAIT_MINUTES).toBe(200);
   });
   test("red: a missing leg, a stale leg, a short BAA10Y history and a stale one", () => {
     expect(legProblems(want, want.slice(1).map((key) => ({ key, newest: "2026-11-19" })), today).join()).toContain("1 of 28");
     expect(legProblems(want, want.map((key, i) => ({ key, newest: i === 0 ? "2026-10-01" : "2026-11-19" })), today).join()).toContain("older than 10 days");
-    expect(baa10yProblems({ first: "2020-01-01", newest: "2026-11-18", rows: 10_000 }, today).join()).toContain("not full");
-    expect(baa10yProblems({ first: "1986-01-02", newest: "2026-11-18", rows: 100 }, today).join()).toContain("fewer than");
+    expect(baa10yProblems({ first: "2020-01-01", newest: "2026-11-18", rows: 10_000 }, today).join()).toContain("shorter than");
+    expect(baa10yProblems({ first: "1986-01-02", newest: "2026-11-18", rows: 3999 }, today).join()).toContain("fewer than");
     expect(baa10yProblems({ first: "1986-01-02", newest: "2026-10-01", rows: 10_000 }, today).join()).toContain("older than");
     expect(baa10yProblems({ first: null, newest: null, rows: 0 }, today).join()).toContain("no BAA10Y row");
   });
