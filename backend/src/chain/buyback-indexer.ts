@@ -1,3 +1,5 @@
+// Disabled by issue 1184: no schedule enqueues buybacks.refresh and no handler is registered. Kept for reference.
+//
 // The buyback indexer (live-data contract §1), run by the pipeline worker as the
 // `buybacks.refresh` job. Refreshes buyback_swaps from Base via eth_getLogs
 // (see the section header below). The read path is the api's

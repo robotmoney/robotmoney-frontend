@@ -40,7 +40,9 @@ const HEAVY = [
   "ops.backfill_asset_prices",
 ] as const;
 const SAMPLER = "wallet.sample_balances";
-const ALL_KIND = "buybacks.refresh";
+// An enabled 'all' policy kind. Not buybacks.refresh: it is disabled and has no
+// handler (issue 1184).
+const ALL_KIND = "projects.snapshot_daily";
 const STUBBED = [...HEAVY, SAMPLER, ALL_KIND];
 
 const claims: { kind: string; slotAt: string | undefined; at: number }[] = [];

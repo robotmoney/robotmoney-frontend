@@ -281,8 +281,9 @@ interface SeedSchedule {
   catchupPolicy?: CatchupPolicy;
 }
 
-// Keep this list small and harmless. Each kind MUST have a handler registered in
-// backend/src/worker/handlers/index.ts and be idempotent on natural keys.
+// Keep this list small and harmless. Each enabled kind MUST have a handler
+// registered in backend/src/worker/handlers/index.ts and be idempotent on
+// natural keys.
 //
 // Session scheduling is NOT in this list and has no row here at all. Per
 // docs/technical/system-scheduler-spec.md §2.2 a subject's epoch duration is
@@ -313,10 +314,12 @@ export const SCHEDULES: SeedSchedule[] = [
   // upsert) at a fraction of the chain reads.
   { kind: "wallet.sample_balances", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "collapse-per-bucket" },
   { kind: "wallet.sample_sleeves", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: true, catchupPolicy: "collapse-per-bucket" },
-  // Buyback refresh (live-data contract §1) — eth_getLogs indexer that upserts
-  // NEW WETH->ROBOTMONEY buyback swaps into buyback_swaps (keyed on tx_hash). No-op
-  // under a non-live source; degrade-safe on RPC failure. Handler: handlers/buybacks.ts.
-  { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: true },
+  // Buyback refresh (live-data contract §1) — DISABLED by issue 1184. Its
+  // eth_getLogs scan held the analytics lane past its heartbeat budget. No
+  // handler is registered (handlers/buybacks.ts is kept for reference) and
+  // migration 0133 disables the row on a deployed database. The row stays so a
+  // blank database bootstraps it disabled, as a deployed one holds it.
+  { kind: "buybacks.refresh", cron: "15 */6 * * *", payload: {}, timezone: "UTC", enabled: false },
   // Enable after the deployed queue address and deploy block are configured.
   { kind: "flow.index", cron: "* * * * *", payload: {}, timezone: "UTC", enabled: false, catchupPolicy: "latest-only" },
   // Self-healing dispatcher (issue #709). Asks the gap detector what is missing
@@ -355,7 +358,7 @@ export const SCHEDULES: SeedSchedule[] = [
   // The minute keeps it at least 15 minutes from every data-acquisition job:
   // a producer run (compose 22:30/23:00, production every 3 h at :00 and :30),
   // projects.refresh_coins (:10), projects.refresh_wallets (04:20),
-  // projects.fetch_vaults (04:30) and buybacks.refresh (06:15)
+  // projects.fetch_vaults (04:30) and the disabled buybacks.refresh (06:15)
   // (scripts/tests/unit/parity-sweep-schedule.test.ts). The gate's staleness
   // budget is 26 h so a daily sweep keeps it fresh (cutover/gate.ts).
   // Handler: worker/handlers/index.ts → analytics/api-client.ts::triggerParitySweep.

@@ -419,7 +419,7 @@ describe("the general job queue and every non-swarm kind are untouched", () => {
     "vault.sample_adapters",
     "wallet.sample_balances",
     "wallet.sample_sleeves",
-    "buybacks.refresh",
+    "buybacks.refresh", // seeded disabled (issue 1184): the row stays
     "ops.repair_gaps",
     "ops.backfill_asset_prices",
     "analytics.parity_sweep",

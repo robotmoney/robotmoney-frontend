@@ -66,7 +66,6 @@ describe("the pipeline worker holds no database module (D75)", () => {
       "src/worker/handlers/projects.ts",
       "src/worker/handlers/repair.ts",
       "src/ops/wallet-backfill.ts",
-      "src/chain/buyback-indexer.ts",
     ]) {
       expect({ reached, present: graph.modules.has(reached) }).toEqual({ reached, present: true });
     }

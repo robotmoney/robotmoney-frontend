@@ -218,6 +218,27 @@ test("buybacks: a LIVE source with only seed rows is reported stale (no row was 
   expect(r.stale).toBe(true); // honest degrade: claims live but nothing is live
 });
 
+// Issue 1184: the buyback indexer is disabled, so nothing adds rows. A live
+// source serves the stored record, live rows included, and always reports it
+// stale. Before the change a stored live row read as not stale.
+test("buybacks: a LIVE source with a stored live row serves it and is still reported stale (the indexer is disabled)", async () => {
+  const tx = `0x${"1184".padStart(64, "0")}`;
+  await fixtureDb`
+    INSERT INTO buyback_swaps (block_number, tx_hash, log_index, occurred_on, weth_spent, value_usd, robotmoney_received, provenance)
+    VALUES (43800000, ${tx}, 0, '2026-04-01', 0.5, 1000, 1000000, 'live')`;
+  try {
+    process.env.BASE_RPC_SOURCE = "live";
+    const r = await getBuybacks();
+    expect(r.source).toBe("live");
+    const stored = r.rows.find((x) => x.txHash === tx);
+    expect(stored).toEqual({ date: "2026-04-01", txHash: tx, wethSpent: 0.5, valueUsd: 1000, robotmoneyReceived: 1_000_000, provenance: "live" });
+    expect(r.rows).toHaveLength(11);
+    expect(r.stale).toBe(true);
+  } finally {
+    await fixtureDb`DELETE FROM buyback_swaps WHERE tx_hash = ${tx}`;
+  }
+});
+
 // ── token-metrics ───────────────────────────────────────────────────────────
 test("token-metrics: stub source → fixture supply + stub price + computed marketCap + fixed fee split; not stale", async () => {
   process.env.BASE_RPC_SOURCE = "stub";

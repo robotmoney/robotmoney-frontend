@@ -1167,11 +1167,13 @@ describe("the real snapshot (backend/schema/) — fingerprint, preflight, bootst
       // nothing else pins one to the other.
       expect(actual).toEqual(expected);
 
-      // §8.1's named families, each present and enabled.
+      // §8.1's named families, each present and enabled. The buyback row is
+      // present and disabled (issue 1184).
       const kinds = new Set(rows.filter((r) => r.enabled).map((r) => r.kind));
-      for (const family of ["vault.", "wallet.", "buybacks.", "projects."]) {
+      for (const family of ["vault.", "wallet.", "projects."]) {
         expect({ family, present: [...kinds].some((k) => k.startsWith(family)) }).toEqual({ family, present: true });
       }
+      expect(rows.filter((r) => r.kind === "buybacks.refresh").map((r) => r.enabled)).toEqual([false]);
 
       // "There are no session schedule rows" (§8.1), and no session at all.
       expect(rows.filter((r) => r.kind.startsWith("swarm."))).toEqual([]);

@@ -2,8 +2,8 @@
 // never overlaps data acquisition (issue 1375, owner requirement).
 //
 // The sweep (analytics.parity_sweep) runs once a day. Over seven days, no
-// analytics-producer run, no projects job and no buybacks.refresh may fire
-// within 15 minutes of it, under both producer cadences in use: the
+// analytics-producer run and no projects job may fire within 15 minutes of
+// it (buybacks.refresh is disabled by issue 1184, so it fires nowhere), under both producer cadences in use: the
 // docker-compose default (regime 22:30, research 23:00) and production's
 // 3-hourly cadence (regime :30, research :00 of every third hour).
 //
@@ -50,12 +50,14 @@ function firings(cron: string, start: Date, days: number): number[] {
 }
 
 /** db/seed.ts SCHEDULES, read as text (importing seed.ts opens the database). */
-function seedSchedules(): { kind: string; cron: string }[] {
+function seedSchedules(): { kind: string; cron: string; enabled: boolean }[] {
   const src = read("backend/src/db/seed.ts");
   const block = src.slice(src.indexOf("export const SCHEDULES"), src.indexOf("];", src.indexOf("export const SCHEDULES")));
-  return [...block.matchAll(/\{\s*kind:\s*"([^"]+)",\s*cron:\s*"([^"]+)"[^\n]*?enabled:\s*(true|false)/g)]
-    .filter((m) => m[3] === "true")
-    .map((m) => ({ kind: m[1]!, cron: m[2]! }));
+  return [...block.matchAll(/\{\s*kind:\s*"([^"]+)",\s*cron:\s*"([^"]+)"[^\n]*?enabled:\s*(true|false)/g)].map((m) => ({
+    kind: m[1]!,
+    cron: m[2]!,
+    enabled: m[3] === "true",
+  }));
 }
 
 function composeProducerCrons(): string[] {
@@ -69,9 +71,10 @@ function composeProducerCrons(): string[] {
 
 const START = new Date("2026-10-19T00:00:00Z");
 
-const schedules = seedSchedules();
+const allSchedules = seedSchedules();
+const schedules = allSchedules.filter((s) => s.enabled).map(({ kind, cron }) => ({ kind, cron }));
 const sweep = schedules.filter((s) => s.kind === "analytics.parity_sweep");
-const acquisition = schedules.filter((s) => s.kind.startsWith("projects.") || s.kind === "buybacks.refresh");
+const acquisition = schedules.filter((s) => s.kind.startsWith("projects."));
 
 describe("the parity sweep's schedule (issue 1375)", () => {
   test("one seeded sweep, once a day at 04:47 UTC, and migration 0123 moves an existing row to the same cron", () => {
@@ -81,9 +84,13 @@ describe("the parity sweep's schedule (issue 1375)", () => {
     expect(migration).toContain("SET cron = '47 4 * * *'");
   });
 
+  test("buybacks.refresh is seeded disabled (issue 1184), so it is no acquisition job", () => {
+    expect(allSchedules.filter((s) => s.kind === "buybacks.refresh").map((s) => s.enabled)).toEqual([false]);
+    expect(acquisition.map((s) => s.kind)).not.toContain("buybacks.refresh");
+  });
+
   test("the acquisition jobs the rule names are all present, so the check is not vacuous", () => {
     const kinds = acquisition.map((s) => s.kind).sort();
-    expect(kinds).toContain("buybacks.refresh");
     for (const k of ["projects.discover", "projects.refresh_coins", "projects.refresh_wallets", "projects.fetch_vaults", "projects.snapshot_daily", "projects.sync_revenue", "projects.recompute_coverage"]) {
       expect(kinds).toContain(k);
     }
@@ -99,7 +106,7 @@ describe("the parity sweep's schedule (issue 1375)", () => {
   });
 
   for (const [label, producerCrons] of cadences) {
-    test(`no producer run, projects job or buybacks.refresh fires within 15 minutes of a sweep over ${DAYS} days, with ${label}`, () => {
+    test(`no producer run or projects job fires within 15 minutes of a sweep over ${DAYS} days, with ${label}`, () => {
       // One day before and after, so a firing just across the window edge counts.
       const from = new Date(START.getTime() - 86_400_000);
       const sweeps = firings(sweep[0]!.cron, START, DAYS);

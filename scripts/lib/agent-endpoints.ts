@@ -185,7 +185,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.buybacks,
     summary: "$ROBOTMONEY buyback history",
     description:
-      "Each recorded buyback: date, transaction hash on Base, amount spent and tokens acquired. `stale` reports whether the indexer has caught up, so an empty tail is distinguishable from a quiet period.",
+      "Each recorded buyback: date, transaction hash on Base, amount spent and tokens acquired. The buyback indexer is disabled, so nothing adds rows: `stale` is `true` on the live site, and buybacks after the last row may be missing.",
     backs: ["/tokenomics", "/model-portfolio"],
     contractType: "{ asOf, source, stale, rows }",
     sizeHint: "about 2 KB",

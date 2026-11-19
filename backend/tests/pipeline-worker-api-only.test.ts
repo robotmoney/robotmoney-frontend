@@ -5,20 +5,22 @@
 // the real worker entry (`bun run src/worker/index.ts`, WORKER_LANE=analytics)
 // with an environment built from nothing: no DATABASE_URL, no
 // WORKER_DATABASE_URL, no PG* key. Its only credential is the pipeline-worker
-// token file. Six jobs are queued and must reach `succeeded`, and the rows
+// token file. Five jobs are queued and must reach `succeeded`, and the rows
 // they write must exist:
 //
 //   vault.sample_share_price  → vault_share_price_history
 //   wallet.sample_balances    → wallet_balance_samples
-//   buybacks.refresh          → buyback_scan_state (the scanned window)
 //   projects.snapshot_daily   → daily_coin_snapshots
 //   ops.repair_gaps           → its job_runs output (the gap reports it read)
 //   flow.index                → canonical flow checkpoints and log scan
 //
+// No buybacks.refresh job runs: the kind is disabled (issue 1184), so no
+// schedule enqueues it and the worker registers no handler for it.
+//
 // THE CHAIN. The worker's chain and price reads go to providers, never to a
 // test database. A `bun --preload` module in the worker process answers them:
 // a JSON-RPC fake for BASE_RPC_URL (every Multicall3 sub-call reads 1e18, the
-// head is just past the buyback floor, no logs) and an empty answer for the
+// head is just past the flow deploy block, no logs) and an empty answer for the
 // price hosts. PRICE_SOURCE=stub keeps the prices fixtures. Nothing in it
 // touches the database or the api.
 //
@@ -40,7 +42,6 @@ const BACKEND = join(import.meta.dir, "..");
 const KINDS = [
   "vault.sample_share_price",
   "wallet.sample_balances",
-  "buybacks.refresh",
   "projects.snapshot_daily",
   "ops.repair_gaps",
   "flow.index",
@@ -146,8 +147,9 @@ async function waitFor<T>(what: string, read: () => Promise<T>, done: (v: T) => 
 }
 
 test(
-  "the worker, with no database key in its environment, runs six jobs to succeeded through /api/pipeline/**, and their rows exist",
+  "the worker, with no database key in its environment, runs five jobs to succeeded through /api/pipeline/**, their rows exist, and no buybacks.refresh job runs",
   async () => {
+    const [{ started }] = await sql<{ started: Date }[]>`SELECT now() AS started`;
     const ids: Record<string, number> = {};
     for (const kind of KINDS) {
       const [row] = await fixtureDb<{ id: number }[]>`INSERT INTO jobs (kind, payload) VALUES (${kind}, '{}'::jsonb) RETURNING id`;
@@ -191,8 +193,14 @@ test(
       SELECT count(*)::int AS n FROM wallet_balance_samples
        WHERE sample_date = (now() AT TIME ZONE 'UTC')::date AND superseded_at IS NULL`;
     expect(balances!.n).toBeGreaterThan(0);
-    const [scan] = await sql<{ b: string }[]>`SELECT last_scanned_block::text AS b FROM buyback_scan_state WHERE id = 1`;
-    expect(Number(scan!.b)).toBe(BUYBACK_FROM_BLOCK + 10);
+    // Issue 1184: the worker's scheduler enqueued no buybacks.refresh job and
+    // nothing ran one.
+    const [buybackJobs] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM jobs WHERE kind = 'buybacks.refresh' AND created_at >= ${started}`;
+    expect(buybackJobs!.n).toBe(0);
+    const [buybackRuns] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM job_runs WHERE kind = 'buybacks.refresh' AND started_at >= ${started}`;
+    expect(buybackRuns!.n).toBe(0);
     const [flow] = await sql<{ b: string }[]>`SELECT max(block_number)::text AS b FROM flow_index_blocks WHERE chain_id = 8453 AND canonical`;
     expect(Number(flow!.b)).toBe(BUYBACK_FROM_BLOCK - 2);
     const [coinSnaps] = await sql<{ n: number }[]>`
@@ -206,7 +214,7 @@ test(
     const writes = await sql<{ operation: string }[]>`
       SELECT DISTINCT operation FROM pipeline_ingest_receipts WHERE job_id = ANY(${Object.values(ids)}) ORDER BY operation`;
     expect(writes.map((w) => w.operation)).toEqual(
-      expect.arrayContaining(["buybacks.record_window", "flow.bind_deployment", "flow.record", "projects.snapshot_daily", "queue.settle", "vault.share_price", "wallet.balance_samples"]),
+      expect.arrayContaining(["flow.bind_deployment", "flow.record", "projects.snapshot_daily", "queue.settle", "vault.share_price", "wallet.balance_samples"]),
     );
   },
   180_000,

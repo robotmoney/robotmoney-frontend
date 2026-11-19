@@ -145,6 +145,25 @@ test("in and out: fees earned against buybacks spent, the WETH share in WETH on 
   await expect(out.locator("dd")).toHaveText(["1", "Mar 23, 2026", "0.1000 WETH", "0.3%", "18.00M"]);
 });
 
+// Issue 1184: the buyback indexer is disabled, so the live feed answers
+// `stale: true`. "Buybacks out" says the record is no longer updated and keeps
+// its figures. A fresh feed (`stale: false`) shows no such line.
+for (const stale of [true, false]) {
+  test(`buybacks out ${stale ? "says the record is no longer updated" : "shows no not-updated line"} when the feed answers stale: ${stale}`, async ({ page }) => {
+    await stub(page);
+    await page.route("**/api/dashboards/buybacks", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...BUYBACKS, stale }) }));
+    await page.goto("/");
+    await navigate(page, "/treasury");
+    const out = page.locator(".trs__flow").nth(1);
+    await expect(out.locator(".rr-stat__v")).toHaveText("$250");
+    await expect(out.locator("dd")).toHaveText(["1", "Mar 23, 2026", "0.1000 WETH", "0.3%", "18.00M"]);
+    const line = out.getByText("This record is no longer updated, so recent buybacks may be missing.");
+    if (stale) await expect(line).toBeVisible();
+    else await expect(line).toBeHidden();
+  });
+}
+
 test("a failed wallet read says no data is available where each figure would be; the fee and buyback figures stand", async ({ page }) => {
   await stub(page, { balances: 503 });
   await page.goto("/");

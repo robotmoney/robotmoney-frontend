@@ -21,6 +21,14 @@ rows are deleted by migration 0089, and nothing enqueues those kinds. What
 this section describes below is the queue that remains, which the vault,
 wallet, buyback and project pipelines depend on.
 
+The buyback pipeline's one job, `buybacks.refresh`, is disabled (issue 1184).
+Its `eth_getLogs` scan halved its block range over and over from a scan
+position behind the chain head and held the analytics lane past the worker's
+900 s heartbeat budget. Migration 0133 disables its `job_schedules` row and
+dead-letters any pending or running job of the kind. The seed keeps the row
+disabled, no handler is registered, and the admin overview does not monitor
+it. The indexer code stays in the repo for reference.
+
 Each worker process (`backend/src/worker/`, entry `index.ts` → `runtime.ts`)
 runs three loops:
 
@@ -53,7 +61,7 @@ startup). Lanes are deterministic kind allowlists applied inside the claim:
 
 | Lane | Claims | Purpose |
 |------|--------|---------|
-| `analytics` | everything except `research.%` | Internal scheduled pipelines (vault/wallet/buybacks/projects); legacy `regime.classify` rows are disabled/dead-lettered. |
+| `analytics` | everything except `research.%` | Internal scheduled pipelines (vault/wallet/projects); legacy `regime.classify` rows are disabled/dead-lettered, and `buybacks.refresh` is disabled with no handler (issue 1184). |
 | `generic` | everything | Single-process dev convenience; never part of the compose topology. |
 
 There is no `research` lane. It served only retired rows, and it was removed
@@ -540,7 +548,7 @@ flowchart TB
 
     subgraph Handlers["Registered Handlers"]
         H1["legacy regime.classify / research.refresh<br/>unreachable compatibility handlers<br/>(cleanup debt)"]
-        H2["vault.* / wallet.* / buybacks.* / projects.*<br/>scheduled product pipelines"]
+        H2["vault.* / wallet.* / projects.*<br/>scheduled product pipelines"]
         H3["legacy swarm.* (2026-09-23)<br/>replaced by system-scheduler<br/>in the target; not a schedule row"]
     end
 

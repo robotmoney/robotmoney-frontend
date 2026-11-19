@@ -168,6 +168,7 @@ const NOT_IN_PRODUCTION = [
   "0130_jobs_live_index_brief_allocation_stats.sql",
   "0131_swarm_briefs_allocation_backfill.sql",
   "0132_flow_index.sql",
+  "0133_buybacks_refresh_disabled.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);
@@ -353,6 +354,18 @@ describe("the parity sweep's schedule and indexes after every migration", () => 
   });
 });
 
+// Issue 1184: buybacks.refresh is disabled, whichever path the database took.
+// The upgraded database held it enabled; 0133 disables it.
+describe("the buyback refresh schedule after every migration", () => {
+  test("the buybacks.refresh row is disabled on the upgraded and on the blank database, and the seed keeps it disabled", async () => {
+    for (const db of [upgraded, fresh]) {
+      await seedJobSchedules(db as never);
+      const rows = await db<{ enabled: boolean }[]>`SELECT enabled FROM job_schedules WHERE kind = 'buybacks.refresh'`;
+      expect(rows.map((r) => r.enabled)).toEqual([false]);
+    }
+  });
+});
+
 // Issue 1378: the six heavy kinds catch up 'latest-only', whichever path the
 // database took, and the CHECK accepts exactly the three policies.
 describe("the heavy kinds' catch-up policy after every migration", () => {
@@ -380,7 +393,7 @@ describe("the heavy kinds' catch-up policy after every migration", () => {
       expect([...new Set(heavy.map((r) => r.kind))].sort()).toEqual(HEAVY);
       for (const r of heavy) expect(r).toEqual({ kind: r.kind, catchup_policy: "latest-only" });
       // Untouched: an 'all' kind stays 'all', the samplers stay collapse-per-bucket.
-      expect(rows.find((r) => r.kind === "buybacks.refresh")!.catchup_policy).toBe("all");
+      expect(rows.find((r) => r.kind === "projects.snapshot_daily")!.catchup_policy).toBe("all");
       expect(rows.find((r) => r.kind === "wallet.sample_balances")!.catchup_policy).toBe("collapse-per-bucket");
     }
   });
