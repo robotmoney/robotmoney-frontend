@@ -6,8 +6,9 @@
 //   deploy-block discovery  no FLOW_INDEX_DEPLOY_BLOCK: the scan starts at the
 //                           first block with code at any configured address,
 //                           and the floor is cached (no second probe)
-//   bounded backfill        each run scans at most 40 blocks and never past
-//                           head - 12 confirmations
+//   bounded backfill        each run scans at most FLOW_MAX_BLOCKS_PER_RUN (300)
+//                           blocks and never past head - 12 confirmations, so a
+//                           lag of several hundred blocks clears in a few runs
 //   idempotent replay       a rewound window rescanned on the same chain
 //                           restores the same rows and adds none
 //   reorg rollback/replay   a changed hash below the watermark rewinds the
@@ -16,7 +17,7 @@ import { expect, test } from "bun:test";
 import { config } from "../src/config.ts";
 import { sql } from "../src/db/client.ts";
 import { flowCheckpoints, flowRewind } from "../src/pipeline/stores/flow-index.ts";
-import { refreshFlowIndex } from "../src/worker/handlers/flow-index.ts";
+import { FLOW_MAX_BLOCKS_PER_RUN, refreshFlowIndex } from "../src/worker/handlers/flow-index.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
 useCleanDatabase(import.meta.file);
@@ -24,7 +25,7 @@ useCleanDatabase(import.meta.file);
 const QUEUE = `0x${"1".repeat(40)}`;
 const FUND = `0x${"2".repeat(40)}`;
 const LEGACY = `0x${"4".repeat(40)}`;
-const HEAD = 100;
+const HEAD = 700;
 const DEPLOYED: Record<string, number> = { [QUEUE]: 30, [FUND]: 35, [LEGACY]: 32 };
 
 test("discovers the deploy block, backfills bounded confirmed windows, replays idempotently and recovers a reorg", async () => {
@@ -50,7 +51,7 @@ test("discovers the deploy block, backfills bounded confirmed windows, replays i
         const from = parseInt(filter.fromBlock, 16), to = parseInt(filter.toBlock, 16);
         expect(filter.address.sort()).toEqual([QUEUE, FUND, LEGACY].sort());
         windows.push([from, to]);
-        result = [40, 82].filter((n) => n >= from && n <= to).map((n) => logAt(n, 0));
+        result = [40, 682].filter((n) => n >= from && n <= to).map((n) => logAt(n, 0));
       } else throw new Error(`unexpected RPC ${call.method}`);
       return { jsonrpc: "2.0", id: call.id, result };
     };
@@ -65,45 +66,46 @@ test("discovers the deploy block, backfills bounded confirmed windows, replays i
   delete process.env.FLOW_INDEX_DEPLOY_BLOCK;
   const logs = () => sql<{ block_number: string; block_hash: string; canonical: boolean }[]>`SELECT block_number, block_hash, canonical FROM flow_index_logs ORDER BY block_number, block_hash`;
   try {
-    // Deploy-block discovery and the first bounded window: blocks 30..69.
-    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 69 });
-    expect(windows).toEqual([[30, 69]]);
+    // Deploy-block discovery, then a lag of 658 confirmed blocks cleared in
+    // three bounded runs: 30..329, 330..629, then up to the confirmed head 688.
+    expect(FLOW_MAX_BLOCKS_PER_RUN).toBe(300);
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 329 });
+    expect(windows).toEqual([[30, 329]]);
     const probes = calls.eth_getCode!;
     expect(probes).toBeGreaterThan(0);
-    // The next window stops at the confirmed head, 100 - 12.
-    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 88 });
-    expect(windows.at(-1)).toEqual([70, 88]);
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 629 });
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 688 });
+    expect(windows.slice(1)).toEqual([[330, 629], [630, 688]]);
     expect(calls.eth_getCode).toBe(probes); // the discovered floors are cached
     // Nothing new is confirmed: no scan, the watermark holds.
-    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 88 });
-    expect(windows).toHaveLength(2);
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 688 });
+    expect(windows).toHaveLength(3);
+    const blockCount = async (canonical: boolean) => (await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM flow_index_blocks WHERE canonical = ${canonical}`)[0]!.n;
+    expect(await blockCount(true)).toBe(659);
     const checkpoints = await flowCheckpoints(sql, 8453);
-    expect(checkpoints).toHaveLength(59);
-    expect(checkpoints[0]).toMatchObject({ number: 88, hash: hash(88) });
-    expect(checkpoints.at(-1)).toMatchObject({ number: 30, hash: hash(30) });
-    expect((await logs()).map((row) => [Number(row.block_number), row.canonical])).toEqual([[40, true], [82, true]]);
+    expect(checkpoints[0]).toMatchObject({ number: 688, hash: hash(688) });
+    expect((await logs()).map((row) => [Number(row.block_number), row.canonical])).toEqual([[40, true], [682, true]]);
 
     // Idempotent replay: rewind the persisted index and rescan the same chain.
-    await sql.begin(async (tx) => { await flowRewind(tx, 8453, 50); });
-    expect((await flowCheckpoints(sql, 8453))[0]!.number).toBe(50);
-    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 88 });
-    expect(windows.at(-1)).toEqual([51, 88]);
-    expect((await logs()).map((row) => [Number(row.block_number), row.block_hash, row.canonical])).toEqual([[40, hash(40), true], [82, hash(82), true]]);
+    await sql.begin(async (tx) => { await flowRewind(tx, 8453, 650); });
+    expect((await flowCheckpoints(sql, 8453))[0]!.number).toBe(650);
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 688 });
+    expect(windows.at(-1)).toEqual([651, 688]);
+    expect((await logs()).map((row) => [Number(row.block_number), row.block_hash, row.canonical])).toEqual([[40, hash(40), true], [682, hash(682), true]]);
     const [blockRows] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM flow_index_blocks`;
-    expect(blockRows!.n).toBe(59);
+    expect(blockRows!.n).toBe(659);
 
-    // Reorg from block 80: the persisted branch is rolled back and replayed.
-    const orphan = hash(82);
-    forkFrom = 80;
-    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 88 });
-    expect(windows.at(-1)).toEqual([80, 88]);
+    // Reorg from block 680: the persisted branch is rolled back and replayed.
+    const orphan = hash(682);
+    forkFrom = 680;
+    expect(await refreshFlowIndex()).toEqual({ indexedThrough: 688 });
+    expect(windows.at(-1)).toEqual([680, 688]);
     const after = await flowCheckpoints(sql, 8453);
-    expect(after).toHaveLength(59);
-    expect(after[0]).toMatchObject({ number: 88, hash: hash(88) });
-    expect(after.find((h) => h.number === 79)!.hash).toBe(`0x${(79).toString(16).padStart(64, "0")}`);
-    expect((await logs()).map((row) => [Number(row.block_number), row.block_hash, row.canonical])).toEqual([[40, hash(40), true], [82, orphan, false], [82, hash(82), true]]);
-    const [orphanBlocks] = await sql<{ n: number }[]>`SELECT count(*)::int AS n FROM flow_index_blocks WHERE NOT canonical`;
-    expect(orphanBlocks!.n).toBe(9);
+    expect(await blockCount(true)).toBe(659);
+    expect(after[0]).toMatchObject({ number: 688, hash: hash(688) });
+    expect(after.find((h) => h.number === 679)!.hash).toBe(`0x${(679).toString(16).padStart(64, "0")}`);
+    expect((await logs()).map((row) => [Number(row.block_number), row.block_hash, row.canonical])).toEqual([[40, hash(40), true], [682, orphan, false], [682, hash(682), true]]);
+    expect(await blockCount(false)).toBe(9);
   } finally {
     config.baseRpcUrl = saved.url;
     for (const [key, value] of [["BASE_RPC_MAX_CALLS_PER_SEC", saved.rate], ["FLOW_QUEUE_ADDRESS", saved.queue], ["FLOW_FUND_ADDRESS", saved.fund], ["FLOW_EXPLORER_ADDRESSES", saved.explorer], ["FLOW_INDEX_DEPLOY_BLOCK", saved.block]] as const) {

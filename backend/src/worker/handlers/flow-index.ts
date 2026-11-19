@@ -3,6 +3,15 @@ import { resolveAddressFloors } from "../../chain/address-floor-resolver.ts";
 import { config } from "../../config.ts";
 import { pipelineIngest, pipelineRead } from "../pipeline-client.ts";
 
+/**
+ * Blocks one run may scan. A caught-up index scans only the ~30 blocks Base
+ * adds a minute; a lagging one (a cold boot, a stalled worker) clears up to
+ * this many per run, so it catches up in a few runs instead of gaining 10
+ * blocks a minute (issue 1614). 300 headers plus their logs stay within the
+ * pipeline's 1,000-row write.
+ */
+export const FLOW_MAX_BLOCKS_PER_RUN = 300;
+
 export async function refreshFlowIndex(): Promise<unknown> {
   const address = process.env.FLOW_QUEUE_ADDRESS ?? "";
   const fundAddress = process.env.FLOW_FUND_ADDRESS ?? "";
@@ -20,5 +29,5 @@ export async function refreshFlowIndex(): Promise<unknown> {
     });
     deployBlock = Math.min(...Array.from(floors.values(), (floor) => floor.floorBlock));
   }
-  return { indexedThrough: await indexFlowQueue({ address, fundAddress, explorerAddresses, deployBlock, confirmations: 12, maxBlocks: 40 }) };
+  return { indexedThrough: await indexFlowQueue({ address, fundAddress, explorerAddresses, deployBlock, confirmations: 12, maxBlocks: FLOW_MAX_BLOCKS_PER_RUN }) };
 }
