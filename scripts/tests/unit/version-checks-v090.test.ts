@@ -363,3 +363,15 @@ describe("W01 refuses a web version that would reuse the tag name of a platform-
     expect(servingVersionProblem({}, "0.1.0", new Map())).toBeUndefined();
   });
 });
+
+describe("Q44's next regime run is one that holds rows (stage run 20261115T082237Z)", () => {
+  test("newestArtifactId skips the empty [] regime artifacts the producer writes after a research tick", async () => {
+    const { newestArtifactId, EMPTY_ARTIFACT_BYTES } = await import("../../release/version-checks/v0.9.0/_regime.ts");
+    expect(EMPTY_ARTIFACT_BYTES).toBe(Buffer.byteLength("[]"));
+    const sql: string[] = [];
+    const db = { query: async (q: string) => { sql.push(q); return [{ id: "2329" }]; } };
+    expect(await newestArtifactId(db as never)).toBe(2329);
+    expect(sql[0]).toContain("artifact_kind = 'regime_snapshots'");
+    expect(sql[0]).toContain(`octet_length(payload_bytes) > ${EMPTY_ARTIFACT_BYTES}`);
+  });
+});
