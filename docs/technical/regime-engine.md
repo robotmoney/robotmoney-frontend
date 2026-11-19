@@ -91,11 +91,34 @@ The rolling percentile rank below is applied once, to each indicator. The panel
 indices and the composite built from the ranks are not ranked again before the
 labels are cut (§5, methodology `v5`).
 
+**Lookback windows are methodology parameters (issue 1659).** The engine has
+three lookback windows: the indicator **rank** window (step 1), the panel
+**weight** window (step 3) and the **percentile** window of the informational
+composite and panel percentiles (§5). Each methodology version declares all
+three in `REGIME_LOOKBACK` (`packages/analyst-sdk/src/analyze/regime-versions.ts`),
+which `computeRegime` reads unless a caller passes its own `lookback`. A window
+takes one of two value forms:
+
+- `{ kind: "trailing", days: N }`: the trailing `N` days ending on day *i*, the
+  rule the original engine uses. `N` is a positive integer.
+- `{ kind: "inception" }`: all history from day 0 of the date axis to day *i*,
+  with no cap. A rank counts only finite values, so an indicator ranks against
+  its own observations only.
+
+`v3` and `v5` both declare the trailing 1095 days (`ROLLING_WINDOW_DAYS`) for
+all three windows, so the figures below read "1095-day" for both. Either value
+form is point in time: every figure for day *i* reads only data dated on or
+before day *i*. `computeRegime` throws `RangeError` naming the window for a
+missing window, an unknown `kind`, or a `days` that is not a positive integer.
+`runRegime`, the CLI and the backend have no lookback option: a published run
+always uses its version's declaration, and a changed declared value that moves
+a published number ships with a new methodology version.
+
 1. **Rolling percentile rank** (`rollingPercentileRank`,
    `packages/analyst-sdk/src/transform/math.ts:216`) — for each indicator, each
-   day's transformed value is ranked against the trailing
-   **1095-day (365×3, `ROLLING_WINDOW_DAYS`, `indicators.ts:466`) window of
-   itself**: `(below + 0.5·equal) / n`, mid-rank tie handling, `NaN` until at
+   day's transformed value is ranked against **its own rank lookback
+   window** (declared: the trailing 1095 days, 365×3, `ROLLING_WINDOW_DAYS`,
+   `indicators.ts:466`): `(below + 0.5·equal) / n`, mid-rank tie handling, `NaN` until at
    least 30 finite observations exist in the window. Every indicator is
    compared only to its own history — a macro spread in percentage points and
    a DeFi TVL figure in tens of billions of dollars become directly
@@ -103,12 +126,13 @@ labels are cut (§5, methodology `v5`).
 2. **Sign alignment** — `sign >= 0 ? rank : 1 - rank` (inline in
    `computeRegime`, `analyze/compute.ts:87`), driven by the indicator's `sign`
    field. After this step, `1.0` always means "most risk-on this indicator has
-   been in three years," regardless of whether the raw series moves with or
+   been within its rank window," regardless of whether the raw series moves with or
    against risk appetite.
 3. **Point-in-time inverse-correlation weights**
    (`inverseCorrelationWeights`, `transform/math.ts:241`, plus `capWeights`,
-   `transform/math.ts:287`) — computed **per panel, per day**, over the same
-   trailing 1095-day window of *sign-aligned* percentiles, but only recomputed
+   `transform/math.ts:287`) — computed **per panel, per day**, over the
+   weight lookback window (declared: the trailing 1095 days; an inception
+   window starts at day 0) of *sign-aligned* percentiles, but only recomputed
    every **21 days** (`WEIGHT_REFRESH_DAYS`, `analyze/compute.ts:90`) plus
    always on the final day. An indicator's weight is inversely proportional to
    its average absolute correlation with the rest of its panel (a lower
@@ -136,14 +160,15 @@ labels are cut (§5, methodology `v5`).
   normalized 0..1 number (a mean of weighted means of percentile ranks), so it
   is not ranked a second time before the cut (methodology `v5`,
   [D84](../decisions.md#d84), issue 1652). Each panel label (macro, on-chain,
-  factor) is cut the same way on its own panel index. The composite's trailing
-  1095-day `rollingPercentileRank` (`compositePercentile`) and each panel
-  index's (`macroPercentile`, `onchainPercentile`, `factorPercentile`) are
+  factor) is cut the same way on its own panel index. The composite's
+  `rollingPercentileRank` over the percentile lookback window (§4; declared:
+  the trailing 1095 days) (`compositePercentile`) and each panel index's (`macroPercentile`, `onchainPercentile`, `factorPercentile`) are
   still computed and served as information only: no label, backtest strategy
   or model-portfolio signal reads them. The `composite` signal kind reads the
   composite and a panel signal kind its panel index
   (`allocate/signals.ts`). Under the earlier `v3` methodology the label was cut
-  on that rolling percentile instead; `computeRegime` and `runRegime` keep that
+  on that rolling percentile instead, so under `v3` the percentile window
+  also sets the label; `computeRegime` and `runRegime` keep that
   path behind the version (`regimeLabels`), so a run stamped `v3` replays
   exactly as it published (§8.1).
   **This is the production classifier function** — see §7 for why

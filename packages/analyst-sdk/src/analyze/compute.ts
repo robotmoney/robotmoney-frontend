@@ -5,21 +5,26 @@
 // date axis.
 //
 // Pipeline:
-//   1. Rolling 3y percentile rank per indicator
+//   1. Rolling percentile rank per indicator over the rank lookback
 //   2. Sign-align so +1 = risk-on (sign>=0 ? v : 1-v)
-//   3. Point-in-time inverse-correlation weights per panel (trailing 3y window
+//   3. Point-in-time inverse-correlation weights per panel (weight lookback
 //      ending that day; recomputed on a 21-day cadence + always the final day)
 //   4. Panel index = weighted mean of sign-aligned percentile-ranks
 //   5. Composite = arithmetic mean of all included panel indices
 //   6. Bucket the composite → risk-off / neutral / risk-on, with 5-day
 //      confirmation OR 2σ fast-track smoothing. Each panel label is bucketed
-//      the same way from its panel index. The 3y rolling percentile of the
-//      composite and of each panel index is still computed, as information.
+//      the same way from its panel index. The rolling percentile of the
+//      composite and of each panel index, over the percentile lookback, is
+//      still computed, as information.
 //
 // Methodology version (regime-versions.ts): v5 (current, issue 1652) cuts each
-// label on the composite or panel index itself. v3 cut it on the 3y rolling
+// label on the composite or panel index itself. v3 cut it on the rolling
 // percentile of that series (a second ranking); it is kept so a run stamped v3
 // replays exactly.
+//
+// Lookback (issue 1659): the rank, weight and percentile windows are the
+// methodology parameters REGIME_LOOKBACK[version] declares (regime-versions.ts),
+// unless a caller passes its own `lookback`.
 //
 // Accuracy (decision D78): the panel weighted mean, the composite
 // mean and the fast-track σ are compensated (transform/exact.ts).
@@ -27,7 +32,6 @@ import { ddDiv, ddDivD, ddValue, dotDD, meanAndSampleSd, sumDD } from "../transf
 import {
   INDICATORS,
   PANELS,
-  ROLLING_WINDOW_DAYS,
   COMPOSITE_BUCKETS,
   type Indicator,
   type Panel,
@@ -37,7 +41,14 @@ import {
   inverseCorrelationWeights,
   MAX_FORWARD_FILL_DAYS,
 } from "../transform/math.ts";
-import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "./regime-versions.ts";
+import {
+  CURRENT_REGIME_VERSION,
+  REGIME_LOOKBACK,
+  isRegimeVersion,
+  type LookbackWindow,
+  type RegimeLookback,
+  type RegimeVersion,
+} from "./regime-versions.ts";
 
 export interface RegimeComputeResult {
   dateAxis: string[];
@@ -81,10 +92,16 @@ export function computeRegime(
   ages?: Record<string, number[]>,
   maxForwardFillDays: number = MAX_FORWARD_FILL_DAYS,
   // The methodology version to compute (issue 1652). v5 cuts each label on the
-  // composite or panel index; v3 on its 3y rolling percentile.
+  // composite or panel index; v3 on its rolling percentile.
   version: RegimeVersion = CURRENT_REGIME_VERSION,
+  // The rank, weight and percentile windows (issue 1659). Defaults to the
+  // declaration of `version`; a caller passes its own to try another value.
+  lookback: RegimeLookback = REGIME_LOOKBACK[version],
 ): RegimeComputeResult {
   if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
+  const rankWindow = lookbackDays(lookback, "rank");
+  const weightWindow = lookbackDays(lookback, "weight");
+  const percentileWindow = lookbackDays(lookback, "percentile");
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
   for (const ind of INDICATORS) {
@@ -94,7 +111,7 @@ export function computeRegime(
     const xs = age
       ? raw.map((v, i) => (Number.isFinite(age[i]) && age[i] > maxForwardFillDays ? NaN : v))
       : raw;
-    const r = rollingPercentileRank(xs, ROLLING_WINDOW_DAYS);
+    const r = rollingPercentileRank(xs, rankWindow);
     ranks[ind.id] = r;
     signed[ind.id] = r.map((v) => (Number.isFinite(v) ? (ind.sign >= 0 ? v : 1 - v) : NaN));
   }
@@ -112,7 +129,7 @@ export function computeRegime(
   for (let i = 0; i < dateAxis.length; i++) {
     if (i % WEIGHT_REFRESH_DAYS === 0 || i === dateAxis.length - 1) {
       for (const p of panels) {
-        const start = Math.max(0, i - ROLLING_WINDOW_DAYS + 1);
+        const start = weightWindow === Infinity ? 0 : Math.max(0, i - weightWindow + 1);
         const window: Record<string, number[]> = {};
         for (const ind of indsByPanel[p]) {
           window[ind.id] = signed[ind.id].slice(start, i + 1);
@@ -136,12 +153,12 @@ export function computeRegime(
     composite[i] = vs.length > 0 ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
   }
 
-  const compRank = rollingPercentileRank(composite, ROLLING_WINDOW_DAYS);
+  const compRank = rollingPercentileRank(composite, percentileWindow);
 
   const panelPercentiles: Record<string, number[]> = {};
   const panelRegimes: Record<string, (string | null)[]> = {};
   for (const p of panels) {
-    panelPercentiles[p] = rollingPercentileRank(panelIndices[p], ROLLING_WINDOW_DAYS);
+    panelPercentiles[p] = rollingPercentileRank(panelIndices[p], percentileWindow);
     panelRegimes[p] = regimeLabels(panelIndices[p], panelPercentiles[p], version);
   }
 
@@ -177,9 +194,28 @@ export function computeRegime(
 }
 
 /**
+ * The window length of one lookback window: `days` for a trailing window,
+ * Infinity (the whole prefix) for an inception window. Throws RangeError naming
+ * the window when it is missing, of an unknown kind, or has a `days` that is
+ * not a positive integer.
+ */
+function lookbackDays(lookback: RegimeLookback, name: keyof RegimeLookback): number {
+  const w = (lookback as unknown as Record<string, LookbackWindow | undefined> | null | undefined)?.[name];
+  if (w == null || typeof w !== "object") throw new RangeError(`lookback.${name} is missing`);
+  if (w.kind === "inception") return Infinity;
+  if (w.kind === "trailing") {
+    if (!Number.isInteger(w.days) || w.days <= 0) {
+      throw new RangeError(`lookback.${name}.days must be a positive integer, got ${String(w.days)}`);
+    }
+    return w.days;
+  }
+  throw new RangeError(`lookback.${name} has unknown kind ${JSON.stringify((w as { kind: unknown }).kind)}`);
+}
+
+/**
  * The smoothed labels of one series (the composite, or a panel index) under a
  * methodology version: since v5 cut on the series itself, under v3 on `rank`,
- * its 3y rolling percentile (issue 1652).
+ * its rolling percentile over the percentile lookback (issue 1652).
  */
 export function regimeLabels(series: number[], rank: number[], version: RegimeVersion = CURRENT_REGIME_VERSION): (string | null)[] {
   return smoothRegimes(version === "v3" ? rank : series, bucketFn);

@@ -353,3 +353,187 @@ describe("v5: labels are cut on the composite and the panel indices (issue 1652)
     expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v4" as never })).toThrow(RangeError);
   });
 });
+
+// Issue 1659: the rank, weight and percentile windows are methodology
+// parameters declared per version in REGIME_LOOKBACK, and computeRegime takes
+// an optional `lookback` that defaults to the declaration of its version.
+describe("lookback windows are methodology parameters (issue 1659)", async () => {
+  const { computeRegime } = await import("../src/analyze/compute.ts");
+  const { rollingPercentileRank, inverseCorrelationWeights } = await import("../src/transform/math.ts");
+  const { PANELS } = await import("../src/analyze/indicators.ts");
+  const { CURRENT_REGIME_VERSION, REGIME_LOOKBACK, REGIME_VERSIONS } = await import("../src/index.ts");
+  const { BACKFILL_START } = await import("../src/run.ts");
+  const { resolveInputHistory } = await import("../src/series-ids.ts");
+  const { ratiosFromLegs } = await import("../src/transform/ratios.ts");
+  type Lookback = (typeof REGIME_LOOKBACK)["v5"];
+  type Window = Lookback["rank"];
+
+  // The fixture's regime inputs, built the way runRegime builds them.
+  const raw = toHistory(parseRawHistory(csvText));
+  const rawIn = ratiosFromLegs(raw, resolveInputHistory(raw));
+  let newest = BACKFILL_START;
+  for (const id in rawIn) for (const r of rawIn[id]!) if (r.date > newest) newest = r.date;
+  const { dateAxis, transformed } = prepareRegimeInputs(rawIn, { start: BACKFILL_START, asof: newest });
+  const n = dateAxis.length;
+  const T1095: Window = { kind: "trailing", days: 1095 };
+  const INCEPTION: Window = { kind: "inception" };
+  const lb = (rank: Window, weight: Window, percentile: Window): Lookback => ({ rank, weight, percentile });
+  const run = (lookback?: Lookback, version: "v3" | "v5" = "v5") =>
+    computeRegime(transformed, dateAxis, PANELS, undefined, undefined, version, lookback);
+
+  const base = run();
+  const rankInc = run(lb(INCEPTION, T1095, T1095));
+  const weightInc = run(lb(T1095, INCEPTION, T1095));
+  const pctInc = run(lb(T1095, T1095, INCEPTION));
+  const T500: Window = { kind: "trailing", days: 500 };
+  const t500 = run(lb(T500, T500, T500));
+  const allInc = run(lb(INCEPTION, INCEPTION, INCEPTION));
+
+  const sameEach = (a: readonly unknown[], b: readonly unknown[]) => {
+    expect(a.length).toBe(b.length);
+    for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) expect([i, a[i]]).toEqual([i, b[i]]);
+  };
+  const sameRecord = (a: Record<string, readonly unknown[]>, b: Record<string, readonly unknown[]>) => {
+    expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort());
+    for (const k of Object.keys(a)) sameEach(a[k]!, b[k]!);
+  };
+  const finalWeights = (signed: Record<string, number[]>, start: number) => {
+    const out: Record<string, Record<string, number>> = {};
+    for (const p of PANELS) {
+      const w: Record<string, number[]> = {};
+      for (const ind of INDICATORS.filter((i) => i.panel === p)) w[ind.id] = signed[ind.id]!.slice(start, n);
+      out[p] = inverseCorrelationWeights(w);
+    }
+    return out;
+  };
+
+  test("REGIME_LOOKBACK declares every version; v3 and v5 are the trailing 1095 days for every window", () => {
+    expect(Object.keys(REGIME_LOOKBACK).sort()).toEqual([...REGIME_VERSIONS].sort());
+    for (const v of ["v3", "v5"] as const) {
+      expect(REGIME_LOOKBACK[v]).toEqual({ rank: T1095, weight: T1095, percentile: T1095 });
+    }
+  });
+
+  test("the version stays v5 and the versions stay [v3, v5]", () => {
+    expect(CURRENT_REGIME_VERSION).toBe("v5");
+    expect([...REGIME_VERSIONS]).toEqual(["v3", "v5"]);
+  });
+
+  test("no lookback argument equals the version's declared lookback, field by field", () => {
+    for (const v of ["v3", "v5"] as const) {
+      const a = v === "v5" ? base : run(undefined, "v3");
+      const b = run(REGIME_LOOKBACK[v], v);
+      sameRecord(a.ranks, b.ranks);
+      sameRecord(a.signed, b.signed);
+      expect(a.weightsByPanel).toEqual(b.weightsByPanel);
+      sameRecord(a.panelIndices, b.panelIndices);
+      sameRecord(a.panelPercentiles, b.panelPercentiles);
+      sameRecord(a.panelRegimes, b.panelRegimes);
+      sameEach(a.composite, b.composite);
+      sameEach(a.compositePercentile, b.compositePercentile);
+      sameEach(a.regime, b.regime);
+    }
+  });
+
+  test("rank at inception: each rank is its all-history rank; weights read the last 1095 days", () => {
+    expect(n).toBeGreaterThan(1095);
+    for (const ind of INDICATORS) {
+      const xs = transformed[ind.id]!;
+      sameEach(rankInc.ranks[ind.id]!, rollingPercentileRank(xs, xs.length));
+    }
+    expect(rankInc.weightsByPanel).toEqual(finalWeights(rankInc.signed, n - 1095));
+    // Non-vacuity: the inception ranks differ from the 1095-day ranks.
+    expect(rankInc.ranks).not.toEqual(base.ranks);
+  });
+
+  test("weight at inception: ranks equal the default run; weights read day 0 to the last day", () => {
+    sameRecord(weightInc.ranks, base.ranks);
+    expect(weightInc.weightsByPanel).toEqual(finalWeights(weightInc.signed, 0));
+    expect(weightInc.weightsByPanel).not.toEqual(base.weightsByPanel);
+  });
+
+  test("percentile at inception: ranks, indices and composite equal the default run; percentiles rank all history", () => {
+    sameRecord(pctInc.ranks, base.ranks);
+    sameRecord(pctInc.panelIndices, base.panelIndices);
+    sameEach(pctInc.composite, base.composite);
+    sameEach(pctInc.compositePercentile, rollingPercentileRank(pctInc.composite, pctInc.composite.length));
+    for (const p of PANELS) {
+      sameEach(pctInc.panelPercentiles[p]!, rollingPercentileRank(pctInc.panelIndices[p]!, n));
+    }
+    sameEach(pctInc.macroPercentile!, pctInc.panelPercentiles.macro!);
+    sameEach(pctInc.onchainPercentile!, pctInc.panelPercentiles.onchain!);
+    expect(pctInc.compositePercentile).not.toEqual(base.compositePercentile);
+  });
+
+  test("a trailing value other than 1095 takes effect: 500 days", () => {
+    for (const ind of INDICATORS) sameEach(t500.ranks[ind.id]!, rollingPercentileRank(transformed[ind.id]!, 500));
+    sameEach(t500.compositePercentile, rollingPercentileRank(t500.composite, 500));
+  });
+
+  test("non-vacuity: the all-inception composite differs from the default composite", () => {
+    expect(allInc.composite.some((c, i) => Number.isFinite(c) && !Object.is(c, base.composite[i]))).toBe(true);
+  });
+
+  test("point in time: an all-inception run cut at a refresh day d gives the full run's ranks, panel indices and composite at d", () => {
+    let checked = 0;
+    for (let d = 1095 + ((21 - (1095 % 21)) % 21); d < n; d += 21) {
+      const cut: Record<string, number[]> = {};
+      for (const id in transformed) cut[id] = transformed[id]!.slice(0, d + 1);
+      const r = computeRegime(cut, dateAxis.slice(0, d + 1), PANELS, undefined, undefined, "v5", lb(INCEPTION, INCEPTION, INCEPTION));
+      for (const ind of INDICATORS) expect(Object.is(r.ranks[ind.id]![d], allInc.ranks[ind.id]![d])).toBe(true);
+      for (const p of PANELS) expect(Object.is(r.panelIndices[p]![d], allInc.panelIndices[p]![d])).toBe(true);
+      expect(Object.is(r.composite[d], allInc.composite[d])).toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(10);
+  });
+
+  test("short history: a late indicator ranks only among its own values and earns weight from its 60th signed value", () => {
+    // Deterministic noise for every registry series; one macro indicator starts at day k.
+    let seed = 1659;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const N = 420;
+    const k = 150;
+    const axis = Array.from({ length: N }, (_, i) => new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10));
+    const data: Record<string, number[]> = {};
+    for (const ind of INDICATORS) data[ind.id] = Array.from({ length: N }, () => rnd());
+    const late = INDICATORS.find((i) => i.panel === "macro")!;
+    data[late.id] = data[late.id]!.map((v, i) => (i < k ? NaN : v));
+    const inc = lb(INCEPTION, INCEPTION, INCEPTION);
+    const full = computeRegime(data, axis, PANELS, undefined, undefined, "v5", inc);
+    const own = rollingPercentileRank(data[late.id]!.slice(k), Infinity);
+    for (let i = 0; i < N; i++) {
+      const r = full.ranks[late.id]![i]!;
+      if (i < k + 29) expect(Number.isNaN(r)).toBe(true);
+      else expect(Object.is(r, own[i - k])).toBe(true);
+    }
+    // The weights on refresh day r are the final weights of the run cut at r.
+    let firstFull = -1;
+    for (let r = 0; r < N; r += 21) {
+      const cut: Record<string, number[]> = {};
+      for (const id in data) cut[id] = data[id]!.slice(0, r + 1);
+      const w = computeRegime(cut, axis.slice(0, r + 1), PANELS, undefined, undefined, "v5", inc).weightsByPanel.macro![late.id]!;
+      const finite = full.signed[late.id]!.slice(0, r + 1).filter(Number.isFinite).length;
+      if (finite < 60) expect(w).toBe(0);
+      else if (firstFull < 0) {
+        firstFull = r;
+        expect(w).toBeGreaterThan(0);
+      }
+    }
+    expect(firstFull).toBeGreaterThan(k);
+  });
+
+  test("an invalid lookback throws RangeError naming the window", () => {
+    const tiny = { dateAxis: dateAxis.slice(0, 40), data: {} as Record<string, number[]> };
+    for (const id in transformed) tiny.data[id] = transformed[id]!.slice(0, 40);
+    const call = (l: unknown) => () =>
+      computeRegime(tiny.data, tiny.dateAxis, PANELS, undefined, undefined, "v5", l as Lookback);
+    expect(call({ rank: T1095, weight: T1095 })).toThrow(/percentile/);
+    expect(call({ rank: T1095, weight: T1095 })).toThrow(RangeError);
+    expect(call({ rank: { kind: "rolling", days: 10 }, weight: T1095, percentile: T1095 })).toThrow(/rank/);
+    for (const days of [0, -1, 1.5, NaN]) {
+      expect(call({ rank: T1095, weight: { kind: "trailing", days }, percentile: T1095 })).toThrow(RangeError);
+      expect(call({ rank: T1095, weight: { kind: "trailing", days }, percentile: T1095 })).toThrow(/weight/);
+    }
+  });
+});

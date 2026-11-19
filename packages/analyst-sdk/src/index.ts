@@ -20,7 +20,15 @@ export {
   openArchive, collectRunInputs, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
 } from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
-export { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
+export {
+  CURRENT_REGIME_VERSION,
+  REGIME_LOOKBACK,
+  REGIME_VERSIONS,
+  isRegimeVersion,
+  type LookbackWindow,
+  type RegimeLookback,
+  type RegimeVersion,
+} from "./analyze/regime-versions.ts";
 export { forwardFillAge, MAX_FORWARD_FILL_DAYS } from "./transform/math.ts";
 export { quantile, median } from "./transform/exact.ts";
 export { LEDGER_EXTRA_KEYS, type LedgerExtra } from "./extras.ts";
