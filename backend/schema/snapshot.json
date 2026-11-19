@@ -147,7 +147,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "541f592a1183b028d6336cca8a05299436baa54b5be37944ae2c46159cb46073",
+  "contentHash": "3583f57ab7bf81ac00180fbbf30a667a0485d181e043cfa2af0304d039eee97a",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -1683,6 +1683,69 @@
     },
     "column public.maintenance_windows.window_id": {
       "type": "uuid",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.acquisition_id": {
+      "type": "uuid",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.gap_from": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.new_pool_polls.gap_to": {
+      "type": "timestamp with time zone",
+      "notnull": "no"
+    },
+    "column public.new_pool_polls.id": {
+      "type": "bigint",
+      "notnull": "yes",
+      "identity": "always"
+    },
+    "column public.new_pool_polls.knowledge_time": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "clock_timestamp()"
+    },
+    "column public.new_pool_polls.newest_created_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.oldest_created_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.pages_read": {
+      "type": "integer",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.pools_new": {
+      "type": "integer",
+      "notnull": "yes"
+    },
+    "column public.new_pool_polls.pools_seen": {
+      "type": "integer",
+      "notnull": "yes"
+    },
+    "column public.new_pool_records.acquisition_id": {
+      "type": "uuid",
+      "notnull": "yes"
+    },
+    "column public.new_pool_records.knowledge_time": {
+      "type": "timestamp with time zone",
+      "notnull": "yes",
+      "default": "clock_timestamp()"
+    },
+    "column public.new_pool_records.network": {
+      "type": "text",
+      "notnull": "yes"
+    },
+    "column public.new_pool_records.pool_created_at": {
+      "type": "timestamp with time zone",
+      "notnull": "yes"
+    },
+    "column public.new_pool_records.pool_id": {
+      "type": "text",
       "notnull": "yes"
     },
     "column public.openclaw_agents.created_at": {
@@ -4429,6 +4492,45 @@
     "constraint public.maintenance_windows.maintenance_windows_times_check": {
       "definition": "CHECK ((expected_end > starts_at))"
     },
+    "constraint public.new_pool_polls.new_pool_polls_acquisition_id_fkey": {
+      "definition": "FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id)"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_acquisition_id_key": {
+      "definition": "UNIQUE (acquisition_id)"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_check": {
+      "definition": "CHECK (((pools_new >= 0) AND (pools_new <= pools_seen)))"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_check1": {
+      "definition": "CHECK ((oldest_created_at <= newest_created_at))"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_check2": {
+      "definition": "CHECK (((gap_from IS NULL) = (gap_to IS NULL)))"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_check3": {
+      "definition": "CHECK (((gap_from IS NULL) OR (gap_from < gap_to)))"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_pages_read_check": {
+      "definition": "CHECK (((pages_read >= 1) AND (pages_read <= 10)))"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_pkey": {
+      "definition": "PRIMARY KEY (id)"
+    },
+    "constraint public.new_pool_polls.new_pool_polls_pools_seen_check": {
+      "definition": "CHECK ((pools_seen > 0))"
+    },
+    "constraint public.new_pool_records.new_pool_records_acquisition_id_fkey": {
+      "definition": "FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id)"
+    },
+    "constraint public.new_pool_records.new_pool_records_network_check": {
+      "definition": "CHECK (((network <> ''::text) AND (length(network) <= 64)))"
+    },
+    "constraint public.new_pool_records.new_pool_records_pkey": {
+      "definition": "PRIMARY KEY (pool_id)"
+    },
+    "constraint public.new_pool_records.new_pool_records_pool_id_check": {
+      "definition": "CHECK (((pool_id <> ''::text) AND (length(pool_id) <= 160)))"
+    },
     "constraint public.openclaw_agents.openclaw_agents_pkey": {
       "definition": "PRIMARY KEY (id)"
     },
@@ -5487,6 +5589,18 @@
     "index public.maintenance_windows_window_idx": {
       "definition": "CREATE INDEX maintenance_windows_window_idx ON public.maintenance_windows USING btree (window_id, id DESC)"
     },
+    "index public.new_pool_polls_acquisition_id_key": {
+      "definition": "CREATE UNIQUE INDEX new_pool_polls_acquisition_id_key ON public.new_pool_polls USING btree (acquisition_id)"
+    },
+    "index public.new_pool_polls_pkey": {
+      "definition": "CREATE UNIQUE INDEX new_pool_polls_pkey ON public.new_pool_polls USING btree (id)"
+    },
+    "index public.new_pool_records_created_idx": {
+      "definition": "CREATE INDEX new_pool_records_created_idx ON public.new_pool_records USING btree (pool_created_at)"
+    },
+    "index public.new_pool_records_pkey": {
+      "definition": "CREATE UNIQUE INDEX new_pool_records_pkey ON public.new_pool_records USING btree (pool_id)"
+    },
     "index public.openclaw_agents_pkey": {
       "definition": "CREATE UNIQUE INDEX openclaw_agents_pkey ON public.openclaw_agents USING btree (id)"
     },
@@ -6120,6 +6234,16 @@
       "cache": "1",
       "cycle": "no"
     },
+    "sequence public.new_pool_polls_id_seq": {
+      "owner": "rm_owner",
+      "type": "bigint",
+      "start": "1",
+      "increment": "1",
+      "min": "1",
+      "max": "9223372036854775807",
+      "cache": "1",
+      "cycle": "no"
+    },
     "sequence public.prices_id_seq": {
       "owner": "rm_owner",
       "type": "bigint",
@@ -6452,6 +6576,12 @@
     "table public.maintenance_windows": {
       "owner": "rm_owner"
     },
+    "table public.new_pool_polls": {
+      "owner": "rm_owner"
+    },
+    "table public.new_pool_records": {
+      "owner": "rm_owner"
+    },
     "table public.openclaw_agents": {
       "owner": "rm_owner"
     },
@@ -6713,6 +6843,22 @@
     },
     "trigger public.audit_log.audit_log_append_only_row": {
       "definition": "CREATE TRIGGER audit_log_append_only_row BEFORE DELETE ON public.audit_log FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard()",
+      "fires": "always"
+    },
+    "trigger public.new_pool_polls.new_pool_polls_immutable": {
+      "definition": "CREATE TRIGGER new_pool_polls_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.new_pool_polls FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable()",
+      "fires": "always"
+    },
+    "trigger public.new_pool_polls.new_pool_polls_immutable_row": {
+      "definition": "CREATE TRIGGER new_pool_polls_immutable_row BEFORE DELETE OR UPDATE ON public.new_pool_polls FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable()",
+      "fires": "always"
+    },
+    "trigger public.new_pool_records.new_pool_records_immutable": {
+      "definition": "CREATE TRIGGER new_pool_records_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.new_pool_records FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable()",
+      "fires": "always"
+    },
+    "trigger public.new_pool_records.new_pool_records_immutable_row": {
+      "definition": "CREATE TRIGGER new_pool_records_immutable_row BEFORE DELETE OR UPDATE ON public.new_pool_records FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable()",
       "fires": "always"
     },
     "trigger public.raw_indicator_history.raw_indicator_history_capture_delete": {

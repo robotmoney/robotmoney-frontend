@@ -175,7 +175,7 @@ fetch cap; its rows stay stored and are never read by a new run.
   paced at least 6 s apart; a 429 or 5xx is retried (Retry-After first, then
   backoff) inside a 55 s poll budget. A record without a parseable
   `pool_created_at` is refused and counted.
-- **Tables** (migration 0132, append-only like the source ledger). The store
+- **Tables** (migration 0133, append-only like the source ledger). The store
   writes one transaction per poll through `POST /api/analytics/new-pools/polls`:
   the acquisition (`source_acquisitions`, `source_fetches`; provider
   `geckoterminal_newpools`, parser `new-pools:1`), each pool once into

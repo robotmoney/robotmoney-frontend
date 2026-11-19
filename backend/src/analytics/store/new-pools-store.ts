@@ -1,5 +1,5 @@
 // Issue 1654 SQL store: the new-pools collector's pool records and polls
-// (migration 0132). Only the API process imports this (same rule as
+// (migration 0133). Only the API process imports this (same rule as
 // source-ledger-store.ts); the producer reaches it through
 // analytics/api-client.ts and the analytics REST boundary.
 //

@@ -1,4 +1,4 @@
-// Issue 1654: the new-pools store against the test database (migration 0132).
+// Issue 1654: the new-pools store against the test database (migration 0133).
 // A pool is stored once, with the knowledge time of the first poll that saw
 // it; knowledge_time is the database clock; both tables are append-only; and
 // the gaps the store records are the gaps the SDK's coverage derives.
