@@ -627,6 +627,8 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   if ("error" in web) return { errors: [web.error] };
   const noTarget = rollbackTargetProblem(t, web.web);
   if (noTarget !== undefined) return { errors: [noTarget] };
+  const taken = servingVersionProblem(web.web, version, tags);
+  if (taken !== undefined) return { errors: [taken] };
   if (tags.get(tag) === commit) {
     const rolled = rolledBack(inputs, tag, deps);
     if (rolled !== undefined) return { errors: [rolled] };
@@ -745,6 +747,21 @@ function buildCandidate(
   cleanup();
   if (head.status !== 0) return { error: `git rev-parse in ${wt} failed: ${errText(head)}` };
   return { commit: head.stdout.trim() };
+}
+
+/**
+ * PURE. Why the version would collide with the bundle the target serves when that bundle has no git tag: a
+ * platform release that deployed its own signed bundle (v0.9.0's first rollout, scripts/release/platform-bundle.ts)
+ * labels it `web-v<frontend version>` and publishes no web tag. A web release at or below that version would
+ * cut the same tag name at another commit, and a later `bun smoke:web --bundle serving` would fetch bytes no
+ * stage run passed. Undefined when the version is above it, or the serving tag is a real git tag
+ * (versionProblems then holds the rule).
+ */
+export function servingVersionProblem(serving: Pick<HostWeb, "tag" | "digest">, version: string, tags: ReadonlyMap<string, string>): string | undefined {
+  if (serving.tag === undefined || tags.has(serving.tag)) return undefined;
+  const v = serving.tag.slice(WEB_TAG_PREFIX.length);
+  if (!SEMVER.test(v) || compareSemver(version, v) > 0) return undefined;
+  return `the target serves ${serving.tag} (sha256 ${serving.digest ?? "?"}), a bundle a platform release deployed with no git tag; version ${version} is not above it, so its tag would name other bytes. Ship above ${v}`;
 }
 
 /** PURE. Why the version cannot be tagged: not above every web-v* tag, or its tag exists at another commit. */
