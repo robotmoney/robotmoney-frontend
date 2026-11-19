@@ -123,3 +123,18 @@ describe("RED CONTROLS: the judge rule stays narrow", () => {
     expect(groupsOf([JUDGE_RETRY], "rm_prod_stack_20261010-api-1")[0]!.rule).toBeNull();
   });
 });
+
+// v0.9.0 stage run 20261115T063127Z, Q13-log-baseline: the judge's open stream reset by the peer, then
+// "subscribed" 5 s later. The same reconnect as the connect retry; the rule stays as narrow.
+const JUDGE_RESET = "[judge:themis] subscription error: ECONNRESET: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+describe("the judge's subscribe stream reset is expected", () => {
+  test("the stage line is classified expected and passes both modes", () => {
+    expect(groupsOf([JUDGE_RESET], JUDGE)[0]!.rule?.id).toBe("expected-judge-subscribe-stream-reset");
+    for (const mode of ["baseline", "post-release"] as const) expect(verdictOf([JUDGE_RESET], JUDGE, mode).failures).toEqual([]);
+  });
+  test("RED CONTROL: the same reset from an agent participant or the api is unclassified, and another reset stays unclassified", () => {
+    expect(groupsOf([JUDGE_RESET], "rm_prod_stack_20261010-participant-agent-hermes-1")[0]!.rule).toBeNull();
+    expect(groupsOf([JUDGE_RESET], "rm_prod_stack_20261010-api-1")[0]!.rule).toBeNull();
+    expect(groupsOf(["[judge:themis] subscription error: ECONNRESET: Connection reset by peer"], JUDGE)[0]!.rule).toBeNull();
+  });
+});
