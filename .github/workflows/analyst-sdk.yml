@@ -166,6 +166,17 @@ jobs:
           tests/optimizers.test.ts:21
           tests/markowitz.test.ts:31
           tests/exports.test.ts:3
+      # Issue 1554: the backtest client surface suites ran (label refusal, the
+      # declared fill policies of both simulators, the reference fill policies
+      # and grid, Markowitz expands and fill, the exported helpers).
+      - name: Backtest client surface suites ran (issue 1554)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/backtest.test.ts:35
+          tests/backtest-drift.test.ts:28
+          tests/markowitz.test.ts:34
+          tests/exports.test.ts:5
+          tests/exported-helpers.test.ts:21
       # Issue 1404: the backtest, CLI and producer-to-SDK suites ran with at
       # least their number of cases and none skipped (JUnit, not console text).
       - name: Backtest, CLI and input suites ran (issue 1404)

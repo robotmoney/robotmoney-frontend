@@ -36,3 +36,17 @@ describe("package entry exports the fill-policy and complete-day API", () => {
     expect(sdk.MAX_FORWARD_FILL_DAYS).toBe(120);
   });
 });
+
+// Issue 1554: the backtest client surface a client copies is on the package
+// entry; forwardFillDaily and computeBacktestWithFill stay off it.
+describe("package entry exports the backtest client helpers", () => {
+  test("parsePlainDecimal, PLAIN_DECIMAL, referenceStrategies and REFERENCE_FILL_POLICIES are exported", () => {
+    for (const name of ["parsePlainDecimal", "referenceStrategies"] as const) expect(typeof sdk[name]).toBe("function");
+    expect(sdk.PLAIN_DECIMAL).toBeInstanceOf(RegExp);
+    expect(Object.keys(sdk.REFERENCE_FILL_POLICIES)).toEqual(["spx", "eth", "tbill3m"]);
+    expect(sdk.UNKNOWN_LABEL_RULE).toBe("refuse");
+    expect(sdk.DEFAULT_SIMULATOR_FILL).toEqual({ kind: "forward", maxAgeDays: null, reason: "Reproduces the undeclared carry" });
+    expect("forwardFillDaily" in sdk).toBe(false);
+    expect("computeBacktestWithFill" in sdk).toBe(false);
+  });
+});

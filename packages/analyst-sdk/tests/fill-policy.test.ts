@@ -83,6 +83,29 @@ describe("a missing or malformed policy is a definition error naming the indicat
   });
 });
 
+// Issue 1554: the forward form with no age limit, maxAgeDays null, which the
+// backtest's price and cash-rate series declare. Any other maxAgeDays is refused
+// with the same FillPolicyError.
+describe("forward with no age limit (maxAgeDays null)", () => {
+  test("the validator accepts { kind: 'forward', maxAgeDays: null, reason }", () => {
+    const fill = { kind: "forward", maxAgeDays: null, reason: "Reproduces the undeclared carry" };
+    expect(fillPolicyOf(mk("NOLIMIT", fill, fill.reason))).toEqual({ kind: "forward", maxAgeDays: null });
+    expect(fillMaxAgeDays({ kind: "forward", maxAgeDays: null })).toBe(Infinity);
+  });
+
+  test("the validator refuses maxAgeDays 0, -1, 1.5 and '4'", () => {
+    for (const n of [0, -1, 1.5, "4"]) {
+      expect(() => fillPolicyOf(mk("BAD_AGE", { kind: "forward", maxAgeDays: n, reason: "r" }, "r")), String(n)).toThrow(FillPolicyError);
+      expect(() => fillPolicyOf(mk("BAD_AGE", { kind: "forward", maxAgeDays: n, reason: "r" }, "r")), String(n)).toThrow(/BAD_AGE/);
+    }
+  });
+
+  test("an indicator declared forward with no age limit carries its last observation on every later day", () => {
+    const p = prepareRegimeInputs({ X: SERIES }, { start: START, asof: ASOF, indicators: [mk("X", { kind: "forward", maxAgeDays: null }, "test")] });
+    expect(p.transformed.X).toEqual([NaN, 5, 7, 7, 7, 7, 7, 7, 7, 7]);
+  });
+});
+
 describe("each fill policy form", () => {
   const run = (fill: FillPolicy) => prepareRegimeInputs({ X: SERIES }, { start: START, asof: ASOF, indicators: [mk("X", fill, "test")] });
 
@@ -128,7 +151,7 @@ describe("a changed policy takes effect exactly as it says, on the fixture", () 
       if (!seen) return NaN;
       if (fill.kind === "zero") return 0;
       if (fill.kind === "none") return NaN;
-      return age[i]! <= fill.maxAgeDays ? last : NaN;
+      return age[i]! <= (fill.maxAgeDays ?? Infinity) ? last : NaN;
     });
   };
   const policies: Array<[string, FillPolicy]> = [

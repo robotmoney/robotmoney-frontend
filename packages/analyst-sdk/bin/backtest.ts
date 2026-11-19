@@ -16,7 +16,7 @@
 // Exit status: 0 on success; 2 for a usage error or a refused holding; 1 for a
 // runtime failure (unreadable or malformed file, missing price coverage).
 import { parseInput } from "../src/input/load.ts";
-import { periodStats, simulatePortfolio, type Weights } from "../src/analyze/backtest.ts";
+import { periodStats, simulatePortfolio, type DeclaredFill, type SimulatorFill, type Weights } from "../src/analyze/backtest.ts";
 import type { Point } from "../src/types.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 import { ALLOW_OUTSIDE_FLAG, UNIVERSE_FLAG, universeFromArgs, universeGate } from "./universe-option.ts";
@@ -44,6 +44,12 @@ try {
 }
 
 const CASH_RATE_NAMES = ["TBILL3M", "fred:DTB3", "backtest:DTB3"];
+
+// Issue 1554: the fill policy this command declares for every priced holding
+// and for the cash rate. Forward with no age limit reproduces the former
+// undeclared carry, so the output is unchanged. Research issue 1673 records
+// any other choice.
+const BACKTEST_FILL: DeclaredFill = { kind: "forward", maxAgeDays: null, reason: "Reproduces the former command-line carry" };
 const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
 
 function dateAxis(from: string, to: string): string[] {
@@ -107,7 +113,9 @@ try {
   const to = args.values.get("--to") ?? dates[dates.length - 1]!;
   if (from > to) throw new UsageError(`--from ${from} is after --to ${to}`);
   const axis = dateAxis(from, to);
-  const sim = simulatePortfolio(axis, axis.map(() => weights), prices, cashRate, costBps === undefined ? {} : { costBps });
+  const fill: SimulatorFill = { cash: BACKTEST_FILL };
+  for (const holding of Object.keys(prices)) fill[holding] = BACKTEST_FILL;
+  const sim = simulatePortfolio(axis, axis.map(() => weights), prices, cashRate, { ...(costBps === undefined ? {} : { costBps }), fill });
   const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
   const out = {
     portfolio,

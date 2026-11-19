@@ -22,7 +22,12 @@ import {
   combineAggressiveN,
   combineConservativeN,
   PORTFOLIO_SPECS,
+  REFERENCE_FILL_POLICIES,
+  UNKNOWN_LABEL_RULE,
+  DEFAULT_SIMULATOR_FILL,
   computeBacktest,
+  computeBacktestWithFill,
+  referenceStrategies,
   periodStats,
   scheduleFromLabels,
   simulatePortfolio,
@@ -39,6 +44,7 @@ import type { Point } from "../src/types.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
 import { apply1559 } from "./support/issue-1559.ts";
 import { exactCompound, exactDot, exactProduct, exactSharpe, onePlus, Q } from "./support/exact-reference.ts";
+import { NONE, forward, simulatorFillCases } from "./support/simulator-fill-cases.ts";
 
 setDefaultTimeout(120_000);
 const DIR = import.meta.dir;
@@ -351,8 +357,108 @@ describe("parity: original, shared and generalized paths", () => {
 });
 
 describe("scheduleFromLabels", () => {
-  test("maps labels through the table; a missing or unknown label has no weights", () => {
-    const t = PORTFOLIO_SPECS.eth!.weights;
-    expect(scheduleFromLabels(["risk_on", null, "neutral", "bogus", "toString"], t)).toEqual([t.risk_on!, null, t.neutral!, null, null]);
+  const t = PORTFOLIO_SPECS.eth!.weights;
+
+  test("UNKNOWN_LABEL_RULE is refuse: a label with no own row throws a RangeError naming the label and its index", () => {
+    expect(UNKNOWN_LABEL_RULE).toBe("refuse");
+    expect(() => scheduleFromLabels(["risk_on", "risk-on", null], t)).toThrow(RangeError);
+    expect(() => scheduleFromLabels(["risk_on", "risk-on", null], t)).toThrow('scheduleFromLabels: label "risk-on" at index 1 has no weight row');
+    // An own-row check: an inherited name has no row.
+    expect(() => scheduleFromLabels(["toString"], t)).toThrow('label "toString" at index 0');
+    expect(() => scheduleFromLabels(["risk_on", null, "neutral", "bogus"], t, { unknownLabel: "refuse" })).toThrow('label "bogus" at index 3');
+  });
+
+  test("unknownLabel skip: a label with no row is a skipped day, as on main", () => {
+    expect(scheduleFromLabels(["risk_on", "risk-on", null], t, { unknownLabel: "skip" })).toEqual([t.risk_on!, null, null]);
+    expect(scheduleFromLabels(["risk_on", null, "neutral", "bogus", "toString"], t, { unknownLabel: "skip" })).toEqual([t.risk_on!, null, t.neutral!, null, null]);
+  });
+
+  test("a null label is a skipped day under either rule", () => {
+    expect(scheduleFromLabels(["risk_on", null], t)).toEqual([t.risk_on!, null]);
+    expect(scheduleFromLabels(["risk_on", null], t, { unknownLabel: "skip" })).toEqual([t.risk_on!, null]);
+  });
+
+  test("an unknown option or rule is a RangeError", () => {
+    expect(() => scheduleFromLabels(["risk_on"], t, { unknownLabel: "ignore" as never })).toThrow(RangeError);
+    expect(() => scheduleFromLabels(["risk_on"], t, { onUnknown: "skip" } as never)).toThrow(RangeError);
+  });
+});
+
+simulatorFillCases("simulatePortfolio", simulatePortfolio);
+
+describe("simulatePortfolio: the shipped default fill reproduces the undeclared carry", () => {
+  test("DEFAULT_SIMULATOR_FILL is forward with no age limit", () => {
+    expect(DEFAULT_SIMULATOR_FILL).toEqual({ kind: "forward", maxAgeDays: null, reason: "Reproduces the undeclared carry" });
+  });
+});
+
+// Issue 1554: the reference backtest's label shape, its strategy grid and its
+// declared fill policies, on the committed fixture.
+describe("reference backtest: label shape, referenceStrategies and fill policies (issue 1554)", () => {
+  const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
+  const extras: BacktestExtras = { spx: raw.SPX!, eth: raw.ETH!, tbill3m: raw.TBILL3M! };
+  const run = runRegime(raw);
+  const shipped = computeBacktest(run.dateAxis, run.result, extras);
+  const changedFill = {
+    spx: forward(4),
+    eth: NONE,
+    tbill3m: forward(4),
+  };
+
+  test("computeBacktest over { regime, panelRegimes, panels } deep-equals it over the full result; referenceStrategies keys", () => {
+    const { regime, panelRegimes, panels } = run.result;
+    expect(computeBacktest(run.dateAxis, { regime, panelRegimes, panels }, extras)).toEqual(shipped);
+    expect(computeBacktest(run.dateAxis, { regime, panelRegimes }, extras)).toEqual(shipped);
+    expect(Object.keys(referenceStrategies(run.result))).toEqual(["composite", "macro", "onchain", "macro_inverted", "conservative", "aggressive"]);
+    expect(referenceStrategies(run.result).composite).toEqual(run.result.regime);
+  });
+
+  test("REFERENCE_FILL_POLICIES are forward with no age limit; computeBacktest equals the golden backtest section", async () => {
+    for (const k of ["spx", "eth", "tbill3m"] as const) {
+      expect(REFERENCE_FILL_POLICIES[k]).toEqual({ kind: "forward", maxAgeDays: null, reason: "Reproduces the published backtest" });
+    }
+    expect(Object.keys(REFERENCE_FILL_POLICIES)).toEqual(["spx", "eth", "tbill3m"]);
+    const golden = JSON.parse(await Bun.file(join(DIR, "golden/regime-report.json")).text());
+    expect(JSON.stringify(stripDailyFromSnapshot(shipped), null, 2)).toBe(JSON.stringify(golden.backtest, null, 2));
+    expect(computeBacktestWithFill(run.dateAxis, run.result, extras, REFERENCE_FILL_POLICIES)).toEqual(shipped);
+  });
+
+  test("a changed reference policy takes effect: each market ends on its latest complete day and equals the original cut there", () => {
+    const changed = computeBacktestWithFill(run.dateAxis, run.result, extras, changedFill);
+    const ends: Record<string, string> = { eth: "2026-06-29", mixed: "2026-06-29", sp500: "2026-07-03" };
+    for (const [market, end] of Object.entries(ends)) {
+      for (const m of Object.values(changed[market]!)) expect(m.end_date).toBe(end);
+      const cut = run.dateAxis.findIndex((d) => d === end) + 1;
+      const axis = run.dateAxis.slice(0, cut);
+      const panelRegimes = Object.fromEntries(Object.entries(run.result.panelRegimes).map(([p, l]) => [p, l.slice(0, cut)]));
+      const labels = { ...run.result, regime: run.result.regime.slice(0, cut), panelRegimes } as RegimeComputeResult;
+      const original = apply1559(originalBacktest(axis, labels, extras))[market];
+      expectSameUpToRounding(JSON.stringify(changed[market]), JSON.stringify(original), `${market} cut at ${end}`);
+      // Non-vacuity: the changed policies change the market's lines.
+      expect(JSON.stringify(changed[market])).not.toBe(JSON.stringify(shipped[market]));
+    }
+    expect(Object.keys(changed)).toEqual(Object.keys(shipped));
+  });
+
+  test("a missing, unknown or invalid reference policy is a RangeError", () => {
+    expect(() => computeBacktestWithFill(run.dateAxis, run.result, extras, { spx: forward(null), eth: forward(null) } as never)).toThrow(/tbill3m/);
+    expect(() => computeBacktestWithFill(run.dateAxis, run.result, extras, { ...REFERENCE_FILL_POLICIES, btc: forward(null) } as never)).toThrow(/btc/);
+    expect(() => computeBacktestWithFill(run.dateAxis, run.result, extras, { ...REFERENCE_FILL_POLICIES, eth: { kind: "forward", maxAgeDays: 0, reason: "r" } })).toThrow(RangeError);
+  });
+
+  test("a market with no complete day at or after its first priced date is left out", () => {
+    // ETH (none) is priced on day 2 only; the cash rate (none) has a value on day 0 only.
+    // No day has both, so eth and mixed are left out; sp500 (priced every day) ends on day 0.
+    const axis = axisOf(5);
+    const res = fakeResult(axis, axis.map(() => "risk_on"));
+    const ext: BacktestExtras = { spx: pts(axis, [1, 2, 3, 4, 5]), eth: pts(axis, [undefined, undefined, 7]), tbill3m: pts(axis, [4]) };
+    const fill = { spx: NONE, eth: NONE, tbill3m: NONE };
+    const out = computeBacktestWithFill(axis, res, ext, fill);
+    expect(Object.keys(out)).toEqual(["sp500"]);
+    expect(out.sp500!.composite!.end_date).toBe(axis[0]);
+    // Under the reference policies every market runs to the last axis date.
+    const ref = computeBacktestWithFill(axis, res, ext, REFERENCE_FILL_POLICIES);
+    expect(Object.keys(ref)).toEqual(["eth", "sp500", "mixed"]);
+    for (const m of Object.values(ref)) expect(m.composite!.end_date).toBe(axis[4]);
   });
 });

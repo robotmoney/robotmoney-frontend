@@ -186,7 +186,9 @@ import {
   CALCULATED_SERIES,
   CalculatedRowError,
   CsvHeaderError,
+  PLAIN_DECIMAL,
   ReplayContractError,
+  parsePlainDecimal,
   parseInput,
   parseReplayCsv,
   parseReplayJson,
@@ -217,6 +219,22 @@ describe("strict rows, every contract", () => {
     }
     const ok = ["1", "-1", "+1", "1.", ".5", "1.5e-3", "-2E+4", "0", "13.2"];
     expect(parseSourceCsv(SRC + ok.map((v, i) => `2024-01-0${i + 1},yahoo:^VIX,${v}`).join("\n")).map((r) => r.value)).toEqual(ok.map(Number));
+  });
+
+  // Issue 1554: the loader's value rule is exported as parsePlainDecimal.
+  test("parsePlainDecimal is the loader's value rule: finite plain decimals pass, the rest throw RangeError", () => {
+    expect(parsePlainDecimal("1.5")).toBe(1.5);
+    expect(parsePlainDecimal(2)).toBe(2);
+    for (const v of ["1e400", "", "abc", "0x10", " 1", NaN, Infinity]) expect(() => parsePlainDecimal(v), String(v)).toThrow(RangeError);
+    expect(() => parsePlainDecimal("1e400")).toThrow(/"1e400"/);
+    for (const v of ["0x10", " 1e1 ", " 1", "1 ", "abc", "", "NaN", "Infinity", "-Infinity", "1e", "1.2.3", "+", "1_000", "0b1", "1e400"]) {
+      expect(PLAIN_DECIMAL.test(v) && Number.isFinite(Number(v)), v).toBe(false);
+      expect(() => parsePlainDecimal(v), v).toThrow(RangeError);
+    }
+    for (const v of ["1", "-1", "+1", "1.", ".5", "1.5e-3", "-2E+4", "0", "13.2"]) expect(parsePlainDecimal(v)).toBe(Number(v));
+    // A loader row with value 1e400 still throws InputRowError with the unchanged message.
+    expect(() => parseSourceCsv(`${SRC}2024-01-01,yahoo:^VIX,1e400`)).toThrow(InputRowError);
+    expect(() => parseSourceCsv(`${SRC}2024-01-01,yahoo:^VIX,1e400`)).toThrow('input row 2: value must be a plain decimal number (finite), got "1e400"');
   });
 
   test("CSV and JSON of the same rows load the same observations", () => {

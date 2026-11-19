@@ -26,6 +26,7 @@ import { parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHist
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point } from "../src/types.ts";
 import { exactDot, onePlus, Q } from "./support/exact-reference.ts";
+import { simulatorFillCases } from "./support/simulator-fill-cases.ts";
 
 setDefaultTimeout(120_000);
 const DIR = import.meta.dir;
@@ -290,3 +291,7 @@ describe("options and inputs", () => {
     expect(entry.simulateDrift(AX, sched, DOUBLES, [], opts).values.length).toBe(5);
   });
 });
+
+// Issue 1554: simulateDrift reads its series under the same declared fill
+// policies as simulatePortfolio.
+simulatorFillCases("simulateDrift", simulateDrift);
