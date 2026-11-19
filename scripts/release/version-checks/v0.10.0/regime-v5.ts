@@ -52,9 +52,7 @@ export function labelProblems(history: readonly Point[], v5Start: string, cuts: 
     }
     if (p.composite < 0 || p.composite > 1) out.push(`${p.date}: composite ${p.composite} is outside 0 to 1`);
     const b = bucketOf(p.composite, cuts);
-    // The engine confirms a bucket on the v5 composite series. Days before the first v5 run carry the frozen v3 composite (D83),
-    // which is not that series, so a streak never counts them (stage run 20261119T152050Z: 51 frozen neutral days, first v5 day risk_off).
-    run = p.date >= v5Start && prev === b && prevDate !== null && prevDate >= v5Start && nextDay(prevDate) === p.date ? run + 1 : 1;
+    run = prev === b && prevDate !== null && nextDay(prevDate) === p.date ? run + 1 : 1;
     prev = b;
     prevDate = p.date;
     if (p.date >= v5Start && run >= CONFIRM_READINGS) {
