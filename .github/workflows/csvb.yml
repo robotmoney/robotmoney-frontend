@@ -46,6 +46,9 @@ jobs:
             csvb:
               - 'packages/csvb/**'
               - 'packages/analyst-sdk/src/archive/**'
+              # The API source paces to the contract's public budgets and replays the SDK's recording (issue 1436).
+              - 'contract/src/public-analytics.*'
+              - 'packages/analyst-sdk/tests/fixtures/archive/api-recorded/**'
               - '.github/workflows/csvb.yml'
               # The suite guard the job runs (issue 1421).
               - 'scripts/checks/assert-junit-suites.ts'
@@ -77,6 +80,8 @@ jobs:
       # verify and the import boundary ran, and none was skipped. Issue 1608:
       # the scheduled backup's suite (serve against Docker Postgres and a bare
       # git remote, the stale alarm, the credential refusals) ran its cases.
+      # Issue 1436: the API source's suite (`csvb backup --source api` against
+      # the recorded archive) ran its cases.
       - name: csvb suites ran (issues 1477, 1608)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/csvb.junit.xml"
@@ -85,3 +90,4 @@ jobs:
           tests/verify-legacy.test.ts:3
           tests/boundary.test.ts:2
           tests/serve.test.ts:25
+          tests/api-fill.test.ts:22
