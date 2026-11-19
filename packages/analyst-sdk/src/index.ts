@@ -2,12 +2,17 @@ export * from "./types.ts";
 export * from "./input/load.ts";
 export * from "./run.ts";
 export {
-  prepareRegimeInputs, latestCompleteDay, missingOnDay, type PreparedRegimeInputs, type MissingIndicator,
+  prepareRegimeInputs, latestCompleteDay, missingOnDay, resolveIndicatorSources, type PreparedRegimeInputs, type MissingIndicator,
 } from "./prepare.ts";
+export {
+  newPoolDailyCounts, newPoolCoverage, newPoolInputsAt,
+  type NewPoolRecord, type NewPoolPoll, type NewPoolDayTally, type NewPoolInputs, type NewPoolSpan,
+} from "./transform/new-pools.ts";
 export { computeRegime, regimeLabels, type RegimeComputeResult } from "./analyze/compute.ts";
 export {
   INDICATORS, PANELS, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
-  type Indicator, type Panel, type FillPolicy, type DayRule,
+  scoredIndicators, valueSourceOf, assertValueSources, VALUE_SOURCES,
+  type Indicator, type Panel, type FillPolicy, type DayRule, type ValueSource,
 } from "./analyze/indicators.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {

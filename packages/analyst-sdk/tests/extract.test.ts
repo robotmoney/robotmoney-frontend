@@ -110,6 +110,18 @@ test("fetchOne needs a host adapter for geckoterminal_newpools; fetchAll degrade
   expect(await fetchOne(ind, console, { geckoterminal_newpools: async () => [{ date: "2024-01-01", value: 3 }] })).toEqual([{ date: "2024-01-01", value: 3 }]);
 });
 
+// Issue 1654: NEW_TOKENS reads the pool-record count, but valueSource does not
+// change what is fetched. The legacy sweep keeps running, so "legacy_count"
+// stays comparable.
+test("fetchAll with a mocked network and the real registry still returns a NEW_TOKENS key from the legacy sweep", async () => {
+  configureHttp({ fetch: (async () => new Response("unavailable", { status: 503 })) as unknown as typeof fetch });
+  const legacy = [{ date: "2026-11-16", value: 200 }];
+  const out = await fetchAll({ logger: { log() {}, error() {}, warn() {} }, extensions: { geckoterminal_newpools: async () => legacy } });
+  expect(INDICATORS.find((i) => i.id === "NEW_TOKENS")!.valueSource).toBe("new_pool_records");
+  expect(Object.hasOwn(out, "NEW_TOKENS")).toBe(true);
+  expect(out.NEW_TOKENS).toEqual(legacy);
+});
+
 test("fetchAll calls the acquire hook once per indicator with the ledger metadata", async () => {
   configureHttp({ fetch: (async () => fred()) as unknown as typeof fetch });
   const ind = INDICATORS.find((i) => i.source === "fred")!;

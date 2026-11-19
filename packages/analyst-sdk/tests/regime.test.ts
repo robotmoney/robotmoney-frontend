@@ -12,6 +12,7 @@ import {
   parseRawHistory,
   runRegime as runRegimeOutcome, requireComplete,
   prepareRegimeInputs,
+  scoredIndicators,
   toHistory,
 } from "../src/index.ts";
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
@@ -537,5 +538,46 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
       expect(call({ rank: T1095, weight: { kind: "trailing", days }, percentile: T1095 })).toThrow(RangeError);
       expect(call({ rank: T1095, weight: { kind: "trailing", days }, percentile: T1095 })).toThrow(/weight/);
     }
+  });
+});
+
+// ── Issue 1654: whether an indicator is scored, per methodology version ──────
+describe("scoredIn and scoredIndicators", () => {
+  const raw = toHistory(parseRawHistory(csvText));
+  const withNewTokensIn = (versions: readonly ("v3" | "v5")[]) => INDICATORS.map((i) => (i.id === "NEW_TOKENS" ? { ...i, scoredIn: versions } : i));
+  const onchainInputs = (r: ReturnType<typeof runRegime>) => Object.keys(r.result.weightsByPanel.onchain!).length;
+
+  test("the real registry declares no scoredIn, and scoredIndicators returns every registry entry for v3 and for v5", () => {
+    expect(INDICATORS.filter((i) => i.scoredIn !== undefined)).toEqual([]);
+    expect(scoredIndicators("v3")).toEqual(INDICATORS);
+    expect(scoredIndicators("v5")).toEqual(INDICATORS);
+  });
+
+  test("with NEW_TOKENS scoredIn [v3]: under v5 it gets no rank and no weight, the on-chain panel has 9 inputs, and no figure depends on its rows; under v3 the panel has 10", () => {
+    const registry = withNewTokensIn(["v3"]);
+    expect(scoredIndicators("v5", registry).map((i) => i.id)).not.toContain("NEW_TOKENS");
+    const v5 = runRegime(raw, { version: "v5", indicators: registry });
+    expect(v5.result.ranks.NEW_TOKENS).toBeUndefined();
+    expect(v5.result.weightsByPanel.onchain!.NEW_TOKENS).toBeUndefined();
+    expect(onchainInputs(v5)).toBe(9);
+    // Byte-identical when every NEW_TOKENS value changes.
+    const changed = { ...raw, NEW_TOKENS: raw.NEW_TOKENS!.map((p, i) => ({ date: p.date, value: p.value * 3 + i })) };
+    const v5Changed = runRegime(changed, { version: "v5", indicators: registry });
+    expect(JSON.stringify(buildReport(v5Changed, { full: true }))).toBe(JSON.stringify(buildReport(v5, { full: true })));
+    const v3 = runRegime(raw, { version: "v3", indicators: registry });
+    expect(onchainInputs(v3)).toBe(10);
+    expect(v3.result.ranks.NEW_TOKENS).toBeDefined();
+  });
+
+  test("non-vacuity: scoredIn [v3] gives a v5 composite that differs from the shipped registry's", () => {
+    // A NEW_TOKENS series long enough to carry weight (the fixture's 31 capped rows never do).
+    const daily: { date: string; value: number }[] = [];
+    for (let i = 400; i >= 1; i--) daily.push({ date: new Date(Date.parse("2026-08-15T00:00:00Z") - i * 86_400_000).toISOString().slice(0, 10), value: 60_000 + ((i * 7919) % 13_000) });
+    const input = { ...raw, NEW_TOKENS: daily };
+    const shipped = runRegime(input, { version: "v5" });
+    const unscored = runRegime(input, { version: "v5", indicators: withNewTokensIn(["v3"]) });
+    expect(shipped.result.weightsByPanel.onchain!.NEW_TOKENS).toBeGreaterThan(0);
+    expect(onchainInputs(shipped)).toBe(10);
+    expect(unscored.result.composite).not.toEqual(shipped.result.composite);
   });
 });

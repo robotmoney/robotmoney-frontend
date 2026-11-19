@@ -33,6 +33,7 @@ import {
   INDICATORS,
   PANELS,
   COMPOSITE_BUCKETS,
+  scoredIndicators,
   type Indicator,
   type Panel,
 } from "./indicators.ts";
@@ -97,14 +98,19 @@ export function computeRegime(
   // The rank, weight and percentile windows (issue 1659). Defaults to the
   // declaration of `version`; a caller passes its own to try another value.
   lookback: RegimeLookback = REGIME_LOOKBACK[version],
+  // The registry (issue 1654). Ranks, weights and panel membership come from
+  // the indicators it scores under `version` (scoredIndicators) only: an
+  // unscored indicator gets no rank and no weight, and needs no series.
+  indicators: readonly Indicator[] = INDICATORS,
 ): RegimeComputeResult {
   if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
   const rankWindow = lookbackDays(lookback, "rank");
   const weightWindow = lookbackDays(lookback, "weight");
   const percentileWindow = lookbackDays(lookback, "percentile");
+  const scored = scoredIndicators(version, indicators);
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
-  for (const ind of INDICATORS) {
+  for (const ind of scored) {
     const raw = panelData[ind.id];
     if (!raw) throw new Error(`Missing series for ${ind.id}`);
     const age = ages?.[ind.id];
@@ -118,7 +124,7 @@ export function computeRegime(
 
   const WEIGHT_REFRESH_DAYS = 21;
   const indsByPanel: Record<string, Indicator[]> = {};
-  for (const p of panels) indsByPanel[p] = INDICATORS.filter((x) => x.panel === p);
+  for (const p of panels) indsByPanel[p] = scored.filter((x) => x.panel === p);
 
   const panelIndices: Record<string, number[]> = {};
   for (const p of panels) panelIndices[p] = new Array(dateAxis.length).fill(NaN);

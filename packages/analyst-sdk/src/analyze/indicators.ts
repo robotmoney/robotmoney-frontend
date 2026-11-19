@@ -7,6 +7,9 @@
 // over a 3y rolling window, sign-aligned so +1 = risk-on, and inverse-correlation
 // weighted within its panel.
 //
+// Type-only: regime-versions.ts imports this module at runtime.
+import type { RegimeVersion } from "./regime-versions.ts";
+
 // Sign convention: +1 means "rising raw value = risk-on", -1 means flip.
 // Transform: applied to the raw history before percentile ranking.
 
@@ -52,6 +55,46 @@ export interface Indicator {
   description?: string;
   derivation?: string;
   interpretation?: string;
+  // Where the indicator's daily values come from (issue 1654). Absent means
+  // "stored": its raw_indicator_history rows, as every indicator does. Only an
+  // indicator whose source is geckoterminal_newpools may declare
+  // "new_pool_records" (the SDK's count of stored pool records,
+  // transform/new-pools.ts) or "legacy_count" (the legacy capped sweep rows,
+  // kept selectable for comparison). Checked when this module loads.
+  valueSource?: ValueSource;
+  // The methodology versions that score the indicator (issue 1654). Absent
+  // means every version in REGIME_VERSIONS. An unscored indicator gets no rank,
+  // no weight and no panel membership; it is still fetched and shown.
+  scoredIn?: readonly RegimeVersion[];
+}
+
+export type ValueSource = "stored" | "new_pool_records" | "legacy_count";
+export const VALUE_SOURCES: readonly ValueSource[] = ["stored", "new_pool_records", "legacy_count"];
+/** The one source whose pool records can stand in for stored rows. */
+export const NEW_POOLS_SOURCE = "geckoterminal_newpools";
+
+/** The indicator's declared value source ("stored" when it declares none). */
+export function valueSourceOf(ind: Pick<Indicator, "valueSource">): ValueSource {
+  return ind.valueSource ?? "stored";
+}
+
+/**
+ * Throws naming the indicator when a value source is unknown, or is not
+ * "stored" on an indicator whose source is not geckoterminal_newpools.
+ */
+export function assertValueSources(indicators: readonly Pick<Indicator, "id" | "source" | "valueSource">[]): void {
+  for (const ind of indicators) {
+    const vs = valueSourceOf(ind);
+    if (!VALUE_SOURCES.includes(vs)) throw new Error(`indicator ${ind.id}: unknown valueSource ${JSON.stringify(vs)} (expected ${VALUE_SOURCES.join(", ")})`);
+    if (vs !== "stored" && ind.source !== NEW_POOLS_SOURCE) {
+      throw new Error(`indicator ${ind.id}: valueSource ${vs} is allowed only on an indicator whose source is ${NEW_POOLS_SOURCE}, not ${ind.source}`);
+    }
+  }
+}
+
+/** The indicators scored under `version`: every one with no scoredIn, and each whose scoredIn names it. Registry order. */
+export function scoredIndicators<T extends Pick<Indicator, "scoredIn">>(version: RegimeVersion, indicators: readonly T[] = INDICATORS as unknown as T[]): T[] {
+  return indicators.filter((ind) => ind.scoredIn === undefined || ind.scoredIn.includes(version));
 }
 
 // Fill policy (issue 1655, docs/technical/regime-engine.md section 8.1). The
@@ -441,13 +484,15 @@ export const INDICATORS: Indicator[] = [
     unit: "count",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    // Issue 1654: the count of stored pool records, not the legacy capped sweep.
+    valueSource: "new_pool_records",
     source_url: "https://www.geckoterminal.com/new-pools",
     description:
       "Count of new DEX liquidity pools (≈ new token launches) observed across all networks in the trailing 24 hours. A real-time measure of crypto speculation intensity.",
     derivation:
-      "GeckoTerminal's /networks/new_pools endpoint, polled daily. The cron appends each day's count to data/regime/token-launches.csv; the percentile rank reads from that accumulated history.",
+      "The count of unique pools created in a gap-free UTC day, from pool records collected every 60 s from GeckoTerminal's /networks/new_pools feed. A day has a reading only when the collected polls cover it end to end with no coverage gap. The legacy daily value read at most 10 pages of 20 pools, so it was capped at 200 by the 10-page feed limit; it is no longer scored.",
     interpretation:
-      "High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign −1: rising count counts as risk-off. Note: this indicator is \"accumulate-forward\" — it only became reliable once we had ~60 days of daily samples, and the upstream API caps make it under-count on the busiest days.",
+      "High count = speculative froth (think 2021 NFT/meme manias, 2024 memecoin frenzy) = late-cycle behavior = contrarian risk-off signal. Low count = calm market = risk-on. Sign −1: rising count counts as risk-off. The pool-record count starts with the collector, so the indicator has no rank until 30 days of readings and no weight until it has 60 ranked days; the capped legacy value (200 from October 2026) is kept stored but never scored.",
   },
   {
     id: "DEFI_GROWTH",
@@ -642,6 +687,9 @@ export function validateRatioDeclarations<T extends readonly Indicator[]>(indica
 }
 
 validateRatioDeclarations(INDICATORS);
+
+// Issue 1654: a misdeclared value source fails at load, never mid-run.
+assertValueSources(INDICATORS);
 
 export const PANELS: Panel[] = ["macro", "onchain"];
 

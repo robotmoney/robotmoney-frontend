@@ -37,7 +37,7 @@
 //
 // Writes use the reverse mapping: storageKeyForSourceId(consumer, sourceId).
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, type Indicator } from "./analyze/indicators.ts";
+import { INDICATORS, valueSourceOf, type Indicator } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 
 export type SeriesKind = "source" | "calculated";
@@ -120,6 +120,32 @@ export const STORED_UNDER: Readonly<Record<string, string>> = Object.freeze({ DE
 
 /** The registry id whose raw_indicator_history series an indicator reads. */
 export const storedIndicatorId = (id: string): string => STORED_UNDER[id] ?? id;
+
+// POOL-RECORD COUNTS (issue 1654). An indicator that declares valueSource
+// "new_pool_records" (NEW_TOKENS) is read from the SDK's daily count of the
+// stored pool records, not from its raw_indicator_history rows. A run freezes
+// that resolved series in its vintage under its own storage key, so a replay
+// needs no pool records. A vintage holds one of the two keys: one frozen
+// before issue 1654 holds the capped raw_indicator_history rows it published
+// with, one after it the count. inputHistoryFromStorage maps either to the
+// NEW_TOKENS input; when an input somehow holds both, the count wins.
+export const NEW_POOL_RECORDS_INDICATOR = "NEW_TOKENS";
+export const NEW_POOL_RECORDS_STORAGE_KEY = `new_pool_records:${NEW_POOL_RECORDS_INDICATOR}`;
+
+/**
+ * The storage keys a regime run reads, given the registry's declared value
+ * sources: every key of the mapping, except that an indicator declaring
+ * "new_pool_records" reads NEW_POOL_RECORDS_STORAGE_KEY in place of its
+ * raw_indicator_history key. `replaced` names the keys left out, so a vintage
+ * freezes one NEW_TOKENS series, never both.
+ */
+export function regimeStorageKeys(indicators: readonly Indicator[] = INDICATORS, mapping: readonly SeriesMapping[] = SERIES_MAPPING): { keys: string[]; replaced: string[] } {
+  const replaced = indicators.filter((ind) => valueSourceOf(ind) === "new_pool_records").map((ind) => `raw_indicator_history:${storedIndicatorId(ind.id)}`);
+  const keys = new Set(mapping.map((m) => m.storageKey));
+  for (const k of replaced) keys.delete(k);
+  if (replaced.length > 0) keys.add(NEW_POOL_RECORDS_STORAGE_KEY);
+  return { keys: [...keys].sort(), replaced: [...new Set(replaced)].sort() };
+}
 
 /** `<provider>:<symbol>` for one backtest extra. */
 export const extraSourceId = (x: { provider: string; symbol: string }): string => `${x.provider}:${x.symbol}`;
@@ -277,10 +303,17 @@ export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapp
     if (!ids.includes(m.inputId)) ids.push(m.inputId);
     inputsOf.set(m.storageKey, ids);
   }
+  // Issue 1654: the frozen pool-record count feeds NEW_TOKENS, and replaces
+  // any raw_indicator_history row for it in the same input.
+  const counted = rows.some((r) => r.sourceKey === NEW_POOL_RECORDS_STORAGE_KEY && r.marketDate !== null);
+  if (counted) {
+    for (const [key, ids] of inputsOf) inputsOf.set(key, ids.filter((id) => id !== NEW_POOL_RECORDS_INDICATOR));
+    inputsOf.set(NEW_POOL_RECORDS_STORAGE_KEY, [NEW_POOL_RECORDS_INDICATOR]);
+  }
   const byId = new Map<string, Map<string, number>>();
   for (const r of rows) {
     const ids = inputsOf.get(r.sourceKey);
-    if (ids === undefined || r.marketDate === null) continue;
+    if (ids === undefined || ids.length === 0 || r.marketDate === null) continue;
     for (const id of ids) {
       let m = byId.get(id);
       if (!m) byId.set(id, (m = new Map()));

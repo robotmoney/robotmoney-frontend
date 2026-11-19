@@ -5,9 +5,37 @@
 // Semantics: docs/technical/regime-engine.md section 8.1; decision D59 in docs/decisions.md.
 // Guarded by backend/tests/regime-sdk-equivalence.test.ts.
 import type { RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, fillMaxAgeDays, fillPolicyOf, type Indicator } from "./analyze/indicators.ts";
+import { INDICATORS, assertValueSources, fillMaxAgeDays, fillPolicyOf, valueSourceOf, type Indicator } from "./analyze/indicators.ts";
 import { alignDailyForwardFill, alignDailyZeroFill, buildDateAxis, forwardFillAge } from "./transform/math.ts";
 import { applyTransform } from "./transform/transforms.ts";
+import { newPoolDailyCounts, newPoolInputsAt, type NewPoolInputs } from "./transform/new-pools.ts";
+
+// ── Declared value sources (issue 1654) ──────────────────────────────────────
+
+/**
+ * A run's inputs with each indicator read from its declared value source,
+ * before prepareRegimeInputs. Given `newPools`, a "new_pool_records" indicator's
+ * rows are replaced by newPoolDailyCounts of the records and polls known at
+ * newPools.knowledgeTimeCutoff. Without `newPools` the input is used as given:
+ * its rows are the frozen input of the run it came from (the replay contract,
+ * the same rule a stored ratio follows). "stored" and "legacy_count" keep the
+ * indicator's rows as given. Never mutates `raw`. Throws when a declared value
+ * source is not allowed on its indicator.
+ */
+export function resolveIndicatorSources(
+  raw: RawIndicatorHistory,
+  opts: { indicators?: readonly Indicator[]; newPools?: NewPoolInputs } = {},
+): RawIndicatorHistory {
+  const indicators = opts.indicators ?? INDICATORS;
+  assertValueSources(indicators);
+  if (!opts.newPools) return raw;
+  const replaced = indicators.filter((ind) => valueSourceOf(ind) === "new_pool_records");
+  if (replaced.length === 0) return raw;
+  const counts = newPoolDailyCounts(newPoolInputsAt(opts.newPools));
+  const out: RawIndicatorHistory = { ...raw };
+  for (const ind of replaced) out[ind.id] = counts.map((p) => ({ ...p }));
+  return out;
+}
 
 export interface PreparedRegimeInputs {
   dateAxis: string[];

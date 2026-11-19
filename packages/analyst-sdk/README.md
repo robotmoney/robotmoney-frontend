@@ -370,6 +370,47 @@ const strict = runRegime(raw, { dayRule: "require-complete" }); // the latest co
 `tests/fill-policy.test.ts` and `tests/complete-day.test.ts` show each change taking
 effect against the declared values.
 
+### NEW_TOKENS from pool records, and scored versions
+
+Issue 1654. `NEW_TOKENS` is the count of unique DEX pools created in a gap-free UTC
+day, from pool records the platform's collector stores every 60 s. The legacy daily
+value was capped at 200 by the feed's 10-page limit; it is still stored and still
+selectable, and no new run scores it.
+
+- **`newPoolDailyCounts({ pools, polls })`** (or `{ dayTallies, polls }`) is pure: no
+  HTTP, no database. `pools` are `{ id, network, createdAt }`; `polls` are
+  `{ oldestCreatedAt, newestCreatedAt }` in poll order. A poll overlaps when its
+  oldest pool is at or before the previous poll's newest; overlapping polls join into
+  one covered span (`newPoolCoverage(polls)` returns the spans and the gaps). A day
+  has a reading only when one span contains its 00:00 and the next day's 00:00. Any
+  other day has no row, never 0.
+- **`valueSource`** on a registry entry: absent (`"stored"`), `"new_pool_records"` or
+  `"legacy_count"`, the last two only on a `geckoterminal_newpools` indicator.
+  Declared: `NEW_TOKENS` is `"new_pool_records"`.
+- **`resolveIndicatorSources(raw, { indicators, newPools })`** builds the input each
+  indicator declares: given `newPools`, a `"new_pool_records"` indicator's rows are
+  replaced by the daily counts of the records known at `newPools.knowledgeTimeCutoff`.
+  Without `newPools` the input is used as given, which is how a published run
+  replays: its vintage froze the count under `new_pool_records:NEW_TOKENS`, which
+  `inputHistoryFromStorage` maps to `NEW_TOKENS`.
+- **`scoredIn`** on a registry entry: the versions that score it (absent: every
+  version). **`scoredIndicators(version, indicators)`** is the list ranks, weights and
+  panel membership are built from. Declared: no entry sets it.
+- **`runRegime(raw, { indicators, newPools })`** takes both: the registry (default
+  `INDICATORS`) and the pool records. `computeRegime` takes the registry as its last
+  argument.
+
+```ts
+import { INDICATORS, runRegime } from "./src/index.ts";
+
+const declared = runRegime(raw, { newPools: { pools, polls } });
+// Compare with the legacy count, or stop scoring NEW_TOKENS under v5:
+const legacy = runRegime(raw, { newPools: { pools, polls }, indicators: INDICATORS.map((i) => (i.id === "NEW_TOKENS" ? { ...i, valueSource: "legacy_count" as const } : i)) });
+const v3Only = runRegime(raw, { indicators: INDICATORS.map((i) => (i.id === "NEW_TOKENS" ? { ...i, scoredIn: ["v3"] as const } : i)) });
+```
+
+`tests/new-pools.test.ts` and `tests/regime.test.ts` show each change taking effect.
+
 ### Current-month values (MNA)
 
 The current month's value of a monthly series such as `MNA` (EDGAR filing counts) is

@@ -7,12 +7,13 @@
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule } from "./analyze/indicators.ts";
+import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
-import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
+import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, resolveIndicatorSources, type MissingIndicator } from "./prepare.ts";
+import type { NewPoolInputs } from "./transform/new-pools.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
 import { ratiosFromLegs } from "./transform/ratios.ts";
@@ -88,6 +89,14 @@ export interface RunOptions {
   // stamped with: "v3" cuts the labels on the rolling percentile, "v5" on the
   // composite and panel indices.
   version?: RegimeVersion;
+  // The registry (issue 1654). Default INDICATORS. A test or an analyst passes
+  // a copy to try another declaration (scoredIn, valueSource) without editing
+  // the real one.
+  indicators?: readonly Indicator[];
+  // Stored pool records and polls (issue 1654). Given, each indicator that
+  // declares valueSource "new_pool_records" reads newPoolDailyCounts of them
+  // instead of its input rows. Absent, the input is used as given (a replay).
+  newPools?: NewPoolInputs;
 }
 
 // A real calendar date in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-45, "").
@@ -96,7 +105,7 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators", "newPools"];
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
@@ -104,7 +113,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   for (const k of Object.keys(opts)) {
     if (!KNOWN_OPTIONS.includes(k)) {
       const hint = k === "panels" ? " (use factor: true for the factor_* figures)" : "";
-      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version, dayRule`);
+      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected ${KNOWN_OPTIONS.join(", ")}`);
     }
   }
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
@@ -118,7 +127,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   // Input names (input id, storage key or source id, D74) -> the ids read
   // below, and each ratio the input does not store from its legs (4.3).
-  const rawIn = ratiosFromLegs(input, resolveInputHistory(input));
+  const indicators = opts.indicators ?? INDICATORS;
+  // Each indicator from its declared value source (issue 1654).
+  const rawIn = resolveIndicatorSources(ratiosFromLegs(input, resolveInputHistory(input)), { indicators, newPools: opts.newPools });
   const start = opts.start ?? BACKFILL_START;
   let asof = opts.asof;
   assertIsoDate("start", start);
@@ -166,8 +177,8 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (dayRule === "score-newest") {
     asof ??= maxDate;
   } else if (asof === undefined) {
-    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start });
-    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate) };
+    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start, indicators });
+    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate, indicators) };
     asof = day;
     if (asof < maxDate) {
       const cut: RawIndicatorHistory = {};
@@ -175,15 +186,15 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
       raw = cut;
     }
   } else {
-    const missing = missingOnDay(raw, asof);
+    const missing = missingOnDay(raw, asof, indicators);
     if (missing.length > 0) return { kind: "incomplete", asof, missing };
   }
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof });
-  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version);
+  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators });
+  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version, undefined, indicators);
   const out: RunResult = { kind: "complete", version, dateAxis, result };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version);
+  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version, undefined, indicators);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];

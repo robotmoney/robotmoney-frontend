@@ -21,7 +21,12 @@
 //   - coinmetrics                 → ETH_ACTIVE (eth / AdrActCnt),
 //                                    BTC_MVRV (btc / CapMVRVCur — repointed off the
 //                                    dead blockchain.com mvrv chart, #127)
-//   - geckoterminal_newpools      → NEW_TOKENS (today's 24h count; merged forward)
+//   - geckoterminal_newpools      → NEW_TOKENS (today's 24h count; merged forward).
+//                                    The legacy sweep, capped at 200 by the feed's
+//                                    10-page limit. Still fetched and stored so
+//                                    valueSource "legacy_count" stays comparable;
+//                                    a regime run reads the pool-record count
+//                                    instead (issue 1654, transform/new-pools.ts).
 //   - shiller_cape / multpl       → SHILLER_CAPE
 //
 // Note the derivation semantics: `*_TREND` ids store the RAW price (the 50/200

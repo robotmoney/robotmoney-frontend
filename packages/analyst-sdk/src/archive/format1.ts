@@ -25,7 +25,7 @@
 // is finished before it runs, and the SDK has no download client (analyst SDK
 // requirements section 2).
 import { gunzipSync } from "node:zlib";
-import { SERIES_MAPPING, STORED_UNDER } from "../series-ids.ts";
+import { NEW_POOL_RECORDS_INDICATOR, NEW_POOL_RECORDS_STORAGE_KEY, SERIES_MAPPING, STORED_UNDER } from "../series-ids.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
@@ -639,6 +639,8 @@ export function verifyFile(f: FileRecord, got: { sha256_raw: string | null; rows
 const INPUT_ID_OF_KEY = new Map<string, string>();
 for (const m of SERIES_MAPPING) if (!INPUT_ID_OF_KEY.has(m.storageKey)) INPUT_ID_OF_KEY.set(m.storageKey, m.inputId);
 for (const id of Object.keys(STORED_UNDER)) INPUT_ID_OF_KEY.set(`raw_indicator_history:${id}`, `raw_indicator_history:${id}`);
+// Issue 1654: a vintage frozen after the pool-record count holds it under its own key.
+INPUT_ID_OF_KEY.set(NEW_POOL_RECORDS_STORAGE_KEY, NEW_POOL_RECORDS_INDICATOR);
 export function seriesForStorageKey(key: string): string | null {
   return INPUT_ID_OF_KEY.get(key) ?? null;
 }
