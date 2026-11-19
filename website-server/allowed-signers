@@ -9,12 +9,14 @@
 # release never sends or changes it. Adding, replacing or removing a key is a
 # platform release (docs/technical/web-serving-architecture.md §3.1).
 #
-# BOOTSTRAP ENTRY. The key below was generated when this file was created and
-# its private half was discarded, so nothing can sign a bundle yet. Registering
-# the control machine's real key means replacing this line with its `.pub`
-# contents in a reviewed platform-release commit.
+# THE CONTROL MACHINE'S KEY (release v0.9.0, owner decision 2026-11-15). The
+# one line below is the public half of the control machine's bundle key
+# (~/.ssh/robotmoney-web-bundle there, the path scripts/release/web-release.ts
+# signs with). It replaced the bootstrap entry, whose private half was
+# discarded when this file was created, so no bundle could ever verify against
+# it; keeping it would only widen the trust root by a key nobody holds.
 #
 # NEVER a private key. scripts/tests/unit/web-bundle.test.ts reads this file on
 # every PR to say so.
 
-web-bundle@robotmoney namespaces="robotmoney-web-bundle@v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPNcM9dzbTx++mry/yCw93vNhBGDTZuA/xldBqBt/t1V
+web-bundle@robotmoney namespaces="robotmoney-web-bundle@v1" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBAd48xt0TqAqH1UNYZLLgxqTrlfFadmu+phiOjhav46

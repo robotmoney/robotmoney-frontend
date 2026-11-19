@@ -174,7 +174,7 @@ describe("verify", () => {
     expect(expectRefusedAndNothingWritten(dir, bundle)).toContain("no key");
   });
 
-  test("a valid bundle checked against the committed allowed-signers (bootstrap key only) is refused", () => {
+  test("a valid bundle signed by a key the committed allowed-signers does not list is refused", () => {
     const { dir, bundle } = signedCopy();
     expect(expectRefusedAndNothingWritten(dir, bundle, WEB_BUNDLE_ALLOWED_SIGNERS)).toContain("no key");
   });

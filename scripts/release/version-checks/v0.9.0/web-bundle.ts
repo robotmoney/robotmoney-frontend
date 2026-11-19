@@ -4,9 +4,10 @@
 // `git show` of the release commit's allowed-signers file.
 //
 // WHAT IT REQUIRES:
-//   - `/version.json` names a version and commit; the bundle of that version is the GitHub release asset
-//     `robotmoney-web-<version>-<commit>.tar.gz` of the tag `web-v<version>` (W12 publishes it, and
-//     `bun smoke:web --bundle web-vA.B.C` deploys from it);
+//   - `/version.json` names a version and commit, and a signed bundle of exactly that name exists:
+//     `robotmoney-web-<version>-<commit>.tar.gz` in this release's control-machine store (the bundle the
+//     release itself deployed, scripts/release/platform-bundle.ts, v0.9.0's first rollout), else the
+//     GitHub release asset of the tag `web-v<version>` (W12 publishes it for a web content release);
 //   - the bundle VERIFIES against the release commit's website-server/allowed-signers in the namespace
 //     robotmoney-web-bundle@v1: its digest file names its sha256, the signature is good, and its manifest
 //     and version.json check out (scripts/lib/web-bundle.ts verifyBundle, the host's own rule);
@@ -16,13 +17,15 @@
 // A platform release keeps the bundle the host serves (§5.3), so the bundle's commit is the web release's,
 // not this platform release's: `found.bundleCommit` records it. Stage and production serve the same bundle
 // bytes when they serve the same web tag (R13): compare `found.sha256` across the two receipts.
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { verifyBundle } from "../../../lib/web-bundle.ts";
 import { BUNDLE_MANIFEST_FILENAME, identityFromVersionJson, parseBundleManifest, type BundleManifest } from "../../../lib/web-bundle-manifest.ts";
 import { manifestUrlPath } from "../../web-release-lib.ts";
+import { storeDir } from "../../platform-bundle.ts";
+import { bundleFileName } from "../../../lib/web-bundle-manifest.ts";
 import type { VersionCheck } from "../../version-check.ts";
 
 export interface Served {
@@ -63,17 +66,25 @@ export default (async (ctx) => {
   if ("error" in web) return { found: {}, problems: [web.error] };
   const work = mkdtempSync(join(tmpdir(), "rm-v090-web-bundle-"));
   try {
-    const dl = Bun.spawnSync(["gh", "release", "download", web.tag, "--pattern", "robotmoney-web-*", "--dir", join(work, "in")], { stdout: "pipe", stderr: "pipe" });
-    if (dl.exitCode !== 0) {
-      return { found: { tag: web.tag, servedVersion: web.version, servedCommit: web.commit }, problems: [`no signed bundle is published for the served site: gh release download ${web.tag} failed (${dl.stderr.toString().trim().slice(0, 200)})`] };
+    const name = bundleFileName({ version: web.version, commit: web.commit });
+    const stored = join(storeDir(ctx.release), name);
+    let inDir = storeDir(ctx.release);
+    let source = "the release's control-machine store";
+    if (!existsSync(stored)) {
+      inDir = join(work, "in");
+      source = `the GitHub release ${web.tag}`;
+      const dl = Bun.spawnSync(["gh", "release", "download", web.tag, "--pattern", "robotmoney-web-*", "--dir", inDir], { stdout: "pipe", stderr: "pipe" });
+      if (dl.exitCode !== 0) {
+        return { found: { tag: web.tag, servedVersion: web.version, servedCommit: web.commit }, problems: [`no signed bundle ${name} is in ${storeDir(ctx.release)} or published for the served site: gh release download ${web.tag} failed (${dl.stderr.toString().trim().slice(0, 200)})`] };
+      }
     }
-    const tarball = readdirSync(join(work, "in")).find((f) => f.endsWith(".tar.gz"));
-    if (tarball === undefined) return { found: { tag: web.tag }, problems: [`the release ${web.tag} carries no robotmoney-web-*.tar.gz`] };
+    const tarball = readdirSync(inDir).find((f) => f === name);
+    if (tarball === undefined) return { found: { tag: web.tag, source }, problems: [`${source} carries no ${name}, the bundle the served /version.json names`] };
     const signers = Bun.spawnSync(["git", "show", `${ctx.commit}:website-server/allowed-signers`], { stdout: "pipe", stderr: "pipe" });
     if (signers.exitCode !== 0) return { found: { tag: web.tag }, problems: [`git show ${ctx.commit}:website-server/allowed-signers failed: ${signers.stderr.toString().trim()}`] };
     const signersPath = join(work, "allowed-signers");
     writeFileSync(signersPath, signers.stdout);
-    const verified = verifyBundle(join(work, "in", tarball), join(work, "out"), { allowedSigners: signersPath });
+    const verified = verifyBundle(join(inDir, tarball), join(work, "out"), { allowedSigners: signersPath });
     if (!verified.ok) return { found: { tag: web.tag, bundle: tarball }, problems: [`${tarball} fails verification against the release's allowed-signers: ${verified.reason}`] };
     const problems: string[] = [];
     if (verified.version !== web.version || verified.commit !== web.commit) problems.push(`the bundle names ${verified.version} at ${verified.commit}, the origin's /version.json ${web.version} at ${web.commit}`);
@@ -89,7 +100,7 @@ export default (async (ctx) => {
     }
     problems.push(...servedBundleProblems(manifest, served));
     return {
-      found: { tag: web.tag, bundle: tarball, sha256: verified.sha256, signer: verified.principal, bundleCommit: verified.commit, releaseCommit: ctx.commit, files: manifest.files.length, matched: served.filter((s, i) => s.status === 200 && s.sha256 === manifest.files[i]!.sha256).length },
+      found: { tag: web.tag, source, bundle: tarball, sha256: verified.sha256, signer: verified.principal, bundleCommit: verified.commit, releaseCommit: ctx.commit, files: manifest.files.length, matched: served.filter((s, i) => s.status === 200 && s.sha256 === manifest.files[i]!.sha256).length },
       problems,
     };
   } finally {
