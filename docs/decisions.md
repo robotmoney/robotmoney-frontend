@@ -6640,6 +6640,8 @@ This is SDK tooling, not a methodology change: with every parameter at its decla
 <a id="d87"></a>
 ## D87 — The stage target's analytics producer runs hourly from a boot-anchored minute; production is unchanged (issue 1684; owner, 2026-11-18 and 2026-11-19)
 
+**Status:** proposed. Drafted by the agent with issue 1684 (pr 1688); the owner accepts it.
+
 **Decision.** A realistic `bun smoke` boot under `RM_ENV=stage` sets the analytics producer's schedule from the boot's own time: research at minute `m` of every hour, `m` being the boot's minute plus `STAGE_FIRST_TICK_MINUTES` (15) mod 60, and regime 30 minutes after research (`stageProducerCrons` in `scripts/lib/smoke-cadence.ts`, applied by `resolveSmokeEnv`). The first research tick lands about 15 minutes after the boot, so after READY, and a stage resume hours later waits at most an hour. The boot sets a schedule and starts no run: nothing triggers an analytics run by hand, stage included. Production (`RM_ENV=prod`) keeps `0 */3 * * *` and `30 */3 * * *`, and the committed `docker-compose.yml` defaults and the fast smoke cadence are unchanged.
 
 The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-check.ts`) reads both crons from the analytics-producer container and waits for the next research slot they name. Its window caps at the earlier of 120 minutes and the next research slot, and the step allows 190 minutes. `regimeCronProblems` in `scripts/release/schedule-parity.ts` accepts production's pair and the stage pair, and nothing else.
