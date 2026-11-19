@@ -51,6 +51,14 @@ export interface SessionGradeOptions {
   /** FAIL when nothing has published for this many hours. Omit to skip. */
   livenessHours?: number;
   nowMs: number;
+  /** Baseline: the stack's earliest container start; idle time runs from the later of this and the last publish. */
+  livenessSinceMs?: number;
+}
+
+/** PURE. The earliest container start of the stack under grade, in ms; undefined when none is readable. */
+export function stackStartMs(containers: readonly { startedAt: string }[]): number | undefined {
+  const t = containers.map((c) => Date.parse(c.startedAt)).filter((n) => Number.isFinite(n) && n > 0);
+  return t.length ? Math.min(...t) : undefined;
 }
 
 export interface SessionVerdict {
@@ -79,7 +87,8 @@ export interface SessionVerdict {
  *    timed out or was rejected is a model outcome;
  *  - a subject needs `minSessions` good (judged, receipted, attended) sessions,
  *    or `totalSessions` good sessions across all subjects;
- *  - with `livenessHours`, nothing published for that long FAILS.
+ *  - with `livenessHours`, nothing published for that long FAILS, measured from the later of the
+ *    last publish and `livenessSinceMs` (a restored dump's last session ages with the dump).
  */
 export function evaluateSessions(
   rows: readonly SessionRow[],
@@ -122,7 +131,8 @@ export function evaluateSessions(
   }
   if (opts.livenessHours !== undefined) {
     const last = rows.reduce((m, r) => Math.max(m, r.state === "published" ? (r.publishedAtMs ?? 0) : 0), 0);
-    const idleH = last ? (opts.nowMs - last) / 3_600_000 : Infinity;
+    const from = Math.max(last, opts.livenessSinceMs ?? 0);
+    const idleH = from ? (opts.nowMs - from) / 3_600_000 : Infinity;
     if (idleH > opts.livenessHours) {
       failures.push(`no session has published for ${Number.isFinite(idleH) ? `${idleH.toFixed(1)} h` : "the whole window"} (limit ${opts.livenessHours} h): sessions have stopped`);
     }

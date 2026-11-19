@@ -47,7 +47,7 @@ steps:
     standing: ["SR.0"]
     host: "control"
     phase: "qa"
-    description: "Stage's starting dump: a fresh capture from production's read replica for this run (never a reused dump, never the production database)"
+    description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
     cmds:
       - ["bun", "scripts/release/stage-target.ts", "dump"]
     expectExit: 0
@@ -55,11 +55,6 @@ steps:
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 30
-    changedSince: "v0.9.2"
-    before:
-      description: "Stage's starting dump: the newest production dump on the capture host that is at most 24 hours old, else a new capture from production's read replica (never a stale dump, never the production database)"
-      cmds:
-        - ["bun", "scripts/release/stage-target.ts", "dump"]
   - id: "Q03-stage-up"
     standing: ["SR.0"]
     host: "control"
