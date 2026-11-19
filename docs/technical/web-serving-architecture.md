@@ -364,7 +364,16 @@ W06 and W11 run the same check:
 1. `/version.json` names the release's version and commit.
 2. The running container's labels equal the bundle's tag, commit and digest. Its healthcheck, which the swap
    carries over from the container compose started, reports healthy.
-3. Every served file equals its entry in the bundle's manifest, by sha256.
+3. Every served file equals its entry in the bundle's manifest, by sha256, read upstream of Cloudflare: on the
+   `website-server` container's own loopback port on the host, reached over ssh, not through the public
+   address (owner, 2026-11-15). Cloudflare's edge rewrites some answers: its Managed robots.txt prepends a
+   block to `/robots.txt`, and its email obfuscation rewrites any email address in an HTML page. So the site
+   carries no email address in its pages, and its `robots.txt` carries Cloudflare's block itself. A release's
+   stage run also compares every file through the public address, with an explicit exception for
+   `/robots.txt` only (v0.9.0 Q41a-web-bundle-edge); any other difference there fails it. The platform
+   release's version check does the upstream read (v0.9.0 Q41/C29-web-bundle). The web content runner's
+   W06 and W11 (`servedProblems` in `scripts/release/web-release-lib.ts`) still read the public origin until
+   they are changed to match.
 4. The route and header table passes through the origin, including each dapp page's CSP. A web release leaves
    every header unchanged.
 5. Every sitemap route answers 200.

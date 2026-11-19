@@ -48,7 +48,7 @@
           <div class="ea__field">
             <label class="ea__label" for="ea-email">Email <span class="ea__opt-tag">Optional</span></label>
             <input class="ea__input" id="ea-email" name="email" type="email" autocomplete="email" spellcheck="false"
-                   placeholder="you@company.com"
+                   placeholder="Your email address"
                    x-model="draft.email" @input="revalidate()"
                    :aria-invalid="errors.email ? 'true' : 'false'" aria-describedby="ea-email-err" />
             <p class="ea__err" id="ea-email-err" x-show="errors.email" x-text="errors.email" x-cloak></p>

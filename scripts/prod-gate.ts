@@ -49,7 +49,7 @@ import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type InventoryMode } from "./lib/gate/log-inventory.ts";
 import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
-import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
+import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 import { CLASSIFICATIONS_PATH, JUDGED_COLUMN_SQL, toSessionRow } from "./twin-gate.ts";
 
@@ -281,7 +281,11 @@ async function main(): Promise<number> {
   }
 
   // inventory: every container's log (participants included), default deny
-  const sources = containers.map((c) => ({ source: c.name, lines: containerLogs(c.name, since) }));
+  // A post-release grade on its default window reads a website-server's log from the api's listening line.
+  const apiListeningAt = args.mode === "post-release" && args.since === undefined
+    ? containerLogs(api, since).find((l) => /^api listening on /.test(l.text))?.ts ?? null
+    : null;
+  const sources = containers.map((c) => ({ source: c.name, lines: containerLogs(c.name, logWindowStart(c.name, since, apiListeningAt)) }));
   const classified: ClassifiedGroup[] = classify(sources.flatMap(({ source, lines }) => inventory(source, lines)), rules);
   const inv = inventoryVerdict(classified, args.mode, args.mode === "post-release" ? args.release : undefined);
   add("inventory", "Every distinct error in every log is classified (default deny)" + (args.mode === "post-release" ? ", and no known issue this release fixes is still present" : ""),

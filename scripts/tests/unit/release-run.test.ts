@@ -1317,6 +1317,20 @@ const WATCHED: StepTemplate[] = [
 ];
 
 describe("watch steps, prod-only steps and the recovery decision", () => {
+  test("a failed stage check stops instead of auto-resuming a pending watch", async () => {
+    const f = fixture("stage");
+    const steps: StepTemplate[] = [
+      { id: "Q13-check", standing: [], description: "check", host: "target", phase: "qa", cmds: [["echo", "Q13-check"]], expectExit: 0, receipts: [], irreversible: false, onlyFor: "stage" },
+      ...WATCHED,
+    ];
+    const d = fakeDeps({ fail: new Set(["Q13-check"]) });
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], d.deps, steps)).toBe(1);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.status).toBe("failed");
+    expect(j.stopReason?.kind).toBe("failed");
+    expect(j.pausedUntil).toBeUndefined();
+    expect(j.steps["Q32-soak-gate"]).toBeUndefined();
+  });
   test("a watch step waits for READY + 6 h, prints when it becomes runnable, and --run resumes it then", async () => {
     const f = fixture("stage");
     const early = fakeDeps();

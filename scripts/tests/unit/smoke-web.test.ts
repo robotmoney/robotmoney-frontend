@@ -23,6 +23,7 @@ import {
 import {
   assertImageInstance,
   deployImage,
+  fileOfTar,
   FIRST_ROLLOUT_SUFFIX,
   handoverScript,
   GAP_LIMIT_MS,
@@ -130,6 +131,20 @@ const PUBLIC_PORT = 48787;
 const COPY_PORT = 40001;
 const OLD_RELEASE = { version: "0.1.0", commit: "aaaa111" };
 const IMAGE_INSTANCE = "stage_target";
+/** A ustar entry as `docker cp <c>:<file> -` prints one. */
+function tarEntry(name: string, body: string, type = "0"): string {
+  const size = Buffer.byteLength(body);
+  const h = Buffer.alloc(512, 0);
+  h.write(name, 0);
+  h.write("0000644\0", 100);
+  h.write(`${size.toString(8).padStart(11, "0")}\0`, 124);
+  h.write(type, 156);
+  h.write("ustar\0", 257);
+  return h.toString("latin1") + body + "\0".repeat((512 - (size % 512)) % 512);
+}
+function tarOf(name: string, body: string): string {
+  return tarEntry(name, body) + "\0".repeat(1024);
+}
 const KEPT_ID = "c".repeat(64);
 const NGINX_IMAGE = `sha256:${"5".repeat(64)}`;
 const KEPT_RELEASE = { version: "0.0.1", commit: "nginx01" };
@@ -348,9 +363,11 @@ function fakeHost(over: Partial<FakeHostState> = {}): FakeHost {
       }
       case "run":
         if (joined.includes("rm-verify-web-bundle")) return state.hostVerifyFails ? no("web bundle refused: no key in /etc/robotmoney/allowed-signers signed it") : ok("verified");
-        if (joined.includes("--volumes-from")) return ok(JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" }));
         if (joined.includes("--entrypoint cat")) return ok(JSON.stringify({ ...state.previousRelease }));
         return ok("runid");
+      case "cp":
+        if (a[2] === `${KEPT_ID}:/srv/web/current/version.json`) return ok(tarOf("version.json", JSON.stringify({ ...KEPT_RELEASE, apiRange: "^0.2.0" })));
+        return no("No such container:path");
       case "build":
         built.sha256 = a.find((x) => x.startsWith("BUNDLE_SHA256="))!.slice("BUNDLE_SHA256=".length);
         return ok(NEW_IMAGE);
@@ -721,7 +738,8 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["docker-version", true], ["api-range", true], ["gap", true], ["public", true]]);
     expect(host.state.serving).toBe("kept");
     const lines = host.lines();
-    expect(lines.some((l) => l.includes(`--volumes-from ${KEPT_ID}`))).toBe(true);
+    expect(lines.some((l) => l.startsWith(`docker cp -L ${KEPT_ID}:`))).toBe(true);
+    expect(lines.some((l) => l.includes(NGINX_IMAGE) && l.startsWith("docker run"))).toBe(false);
     const order = [
       index(lines, new RegExp(`^docker stop --signal SIGTERM -t 1 ${OLD_ID}$`)),
       index(lines, new RegExp(`^docker start ${KEPT_ID}$`)),
@@ -828,6 +846,23 @@ describe("image mode: the first-rollout rule (§4) and swap safety (issue 1632)"
     expect(receipt.checks.map((c) => [c.name, c.ok])).toEqual([["restart", true]]);
     expect(host.state.serving).toBe("old");
     expect(host.lines().filter((l) => /^docker (stop|create|build)\b/.test(l))).toEqual([]);
+  });
+});
+
+describe("v0.9.0 review fixes: the only stopped website-server, and --bundle serving's digest", () => {
+  test("--rollback with nothing running and no -current image starts the only stopped website-server (a first swap whose revert could not restart nginx)", async () => {
+    const host = fakeHost({ allStopped: true, serving: "none", currentTag: null, oldIsNginx: true });
+    const receipt = await rollbackImage(imageDeps(host));
+    expect(receipt).toMatchObject({ action: "rollback", outcome: "swapped", newContainer: { id: OLD_ID } });
+    expect(host.state.serving).toBe("old");
+  });
+
+  test("a fetched bundle whose sha256 is not the serving label's is refused before anything reaches the host", async () => {
+    const host = fakeHost();
+    const b = signedTestBundle(host.state.newRelease, "^0.2.0");
+    const deps = imageDeps(host, { allowedSigners: b.allowedSigners });
+    await expect(deployImage({ bundle: b.bundle, serverImage: "robotmoney-website-server:platform", expectSha256: "0".repeat(64) }, deps)).rejects.toThrow(/serving container's robotmoney.web.bundle-sha256 label names 0{64}/);
+    expect(host.lines().filter((l) => /^docker (build|create|stop)\b/.test(l))).toEqual([]);
   });
 });
 

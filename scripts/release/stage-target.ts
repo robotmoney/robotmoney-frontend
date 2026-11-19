@@ -664,6 +664,17 @@ async function remoteDown(): Promise<number> {
     const images = run(["docker", "images", "-q", "--filter", `reference=${p}-*`]).stdout.split("\n").filter(Boolean);
     if (images.length) run(["docker", "image", "rm", "-f", ...new Set(images)]);
   }
+  // The instance's site images (bun smoke:web, web-serving-architecture.md §4): the -current and -previous
+  // tags and every image labelled for the instance. Left behind, the next stage stack's boot would find a
+  // -current image and refuse to keep the fresh nginx website-server ("a swap did not finish").
+  const siteImages = [
+    ...run(["docker", "images", "-q", "--filter", `reference=robotmoney-website:${T.instance}-*`]).stdout.split("\n"),
+    ...run(["docker", "images", "-q", "--filter", `label=robotmoney.web.instance=${T.instance}`]).stdout.split("\n"),
+  ].filter(Boolean);
+  if (siteImages.length) {
+    log(`removing ${new Set(siteImages).size} site image(s) of ${T.instance}`);
+    run(["docker", "image", "rm", "-f", ...new Set(siteImages)]);
+  }
   if (dockerNames("container", `name=^${T.pgContainer}$`).length) {
     log(`removing ${T.pgContainer}`);
     run(["docker", "rm", "-f", "-v", T.pgContainer]);

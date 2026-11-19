@@ -152,6 +152,28 @@ export const SITE_IMAGE_REPO = "robotmoney-website";
 export const SERVER_PIN_REPO = "robotmoney-website-server-pin";
 /** Every site image `smoke:web` builds carries this label with the instance's name. */
 export const SITE_IMAGE_INSTANCE_LABEL = "robotmoney.web.instance";
+/**
+ * PURE. The content of the one regular file in a tar stream as text (what `docker cp <c>:<file> -`
+ * prints), or "" when it holds none. PAX and GNU long-name headers before it are skipped. The text is
+ * cut at its first NUL, the tar padding, so a header size counted in bytes never splits a character.
+ */
+export function fileOfTar(tar: string): string {
+  let at = 0;
+  while (at + 512 <= tar.length) {
+    const header = tar.slice(at, at + 512);
+    if (/^\0*$/.test(header)) return "";
+    const size = Number.parseInt(header.slice(124, 136).replace(/[\0 ]/g, ""), 8) || 0;
+    const type = header[156];
+    if (type === "0" || type === "\0") {
+      const body = tar.slice(at + 512);
+      const end = body.indexOf("\0");
+      return end === -1 ? body : body.slice(0, end);
+    }
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return "";
+}
+
 /** docker-compose.yml labels website-server with its instance and its service. */
 export const INSTANCE_LABEL = "robotmoney.instance";
 export const SERVICE_LABEL = "com.docker.compose.service";
@@ -278,6 +300,11 @@ export interface DeployImageOptions {
   readonly bundle: string;
   /** The host's server image (a tag or an id), which the site image is built FROM. */
   readonly serverImage: string;
+  /**
+   * `--bundle serving`: the sha256 the serving container's label names. A fetched bundle with any other
+   * digest is refused before anything reaches the host, so a tag name reused for other bytes never deploys.
+   */
+  readonly expectSha256?: string;
 }
 
 /** The parts of `docker inspect <container>` a swap reads. */
@@ -1064,12 +1091,16 @@ class ImageRun {
     return r.code === 0 ? r.stdout.split("\n").filter((l) => l !== "") : [];
   }
 
-  /** What a kept first-rollout container serves: its web/ mount's version.json, read without starting it. */
+  /**
+   * What a kept first-rollout container serves: its web/ mount's version.json, read without starting it.
+   * `docker cp` reads it from the stopped container itself. Its image may be gone: on Docker's containerd
+   * image store a rebuild that moves the compose tag (the rolling boot rebuilds website-server's nginx
+   * image and keeps the container) drops the old image although a container still uses it, so a
+   * `docker run` of `kept.Image` fails "No such image" (stage run 20261115T034457Z, Q24c).
+   */
   async releaseOfKept(kept: ContainerInspect): Promise<SiteRelease> {
-    const text = await this.docker.ok(
-      ["run", "--rm", "--network", "none", "--volumes-from", kept.Id, "--entrypoint", "cat", kept.Image, IMAGE_VERSION_JSON],
-      `reading the first-rollout container's version.json`,
-    );
+    const tar = await this.docker.ok(["cp", "-L", `${kept.Id}:${IMAGE_VERSION_JSON}`, "-"], `reading the first-rollout container's version.json`);
+    const text = fileOfTar(tar);
     let v: { version?: unknown; commit?: unknown } = {};
     try {
       v = JSON.parse(text) as typeof v;
@@ -1094,8 +1125,12 @@ class ImageRun {
     if (all.length === 0) return false;
     const current = await this.docker.imageId(siteImageTag(this.deps.instance, "current"));
     const stopped = await Promise.all(all.map((id) => this.docker.inspectContainer(id)));
-    const pick = stopped.find((c) => current !== null && c.Image === current && !c.Name.endsWith(FIRST_ROLLOUT_SUFFIX)) ?? stopped.find((c) => c.Name.endsWith(FIRST_ROLLOUT_SUFFIX));
-    if (!pick) throw new WebRefusal(`Refusing: no website-server runs for ${this.deps.instance}, and no stopped one is the current image or the first-rollout container.`);
+    // With no -current image (a first swap whose revert could not restart nginx, which then stays stopped
+    // under its own name), the instance's only stopped website-server is what served last.
+    const pick = stopped.find((c) => current !== null && c.Image === current && !c.Name.endsWith(FIRST_ROLLOUT_SUFFIX))
+      ?? stopped.find((c) => c.Name.endsWith(FIRST_ROLLOUT_SUFFIX))
+      ?? (current === null && stopped.length === 1 ? stopped[0] : undefined);
+    if (!pick) throw new WebRefusal(`Refusing: no website-server runs for ${this.deps.instance}, and no stopped one is the current image, the first-rollout container, or (with no -current image) the only stopped website-server.`);
     this.oldContainer = { id: pick.Id, image: pick.Image };
     const started = await this.handover(handoverScript([], pick.Id, null));
     if (started !== "started") {
@@ -1197,6 +1232,10 @@ export async function deployImage(opts: DeployImageOptions, deps: ImageReleaseDe
       run.release = release;
       if (isReleaseName(opts.bundle) && opts.bundle !== release.tag) {
         throw new WebRefusal(`Refusing: release ${opts.bundle} carries a bundle for ${release.tag}.`);
+      }
+      if (opts.expectSha256 !== undefined && verified.sha256 !== opts.expectSha256) {
+        run.check("verify-local", false, `sha256 ${verified.sha256}, the serving label names ${opts.expectSha256}`);
+        throw new WebRefusal(`Refusing: ${basename(bundlePath)} hashes to ${verified.sha256}, but the serving container's ${WEBSITE_IMAGE_LABELS.bundleSha256} label names ${opts.expectSha256}: ${release.tag} names other bytes than those serving. Nothing was sent to the host.`);
       }
       run.check("verify-local", true, `${basename(bundlePath)} signed by ${verified.principal}, sha256 ${verified.sha256}`);
 
