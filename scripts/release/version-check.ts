@@ -2,7 +2,11 @@
 // scripts/release/version-check.ts — a release's version checks (the steps it
 // adds after the soak: Q for stage, C for production, one pair per check), run ON THE TARGET HOST.
 //
-//   bun scripts/release/version-check.ts --release vA.B.C --check <name> --instance <name> --origin <url> --run <run-ts> --receipt-dir <dir> [--commit <sha>]
+//   bun scripts/release/version-check.ts --release vA.B.C --check <name> --instance <name> --origin <url> --run <run-ts> --receipt-dir <dir> [--commit <sha>] [--host <ssh-dest>]
+//
+// `--host` makes a control-machine step read the target host: `docker` runs there over ssh, and
+// `hostOrigin(port)` forwards one of its loopback ports (scripts/lib/website-host.ts), so a check
+// reads what the host serves upstream of Cloudflare (owner, 2026-11-15, v0.9.0 Q41-web-bundle).
 //
 // A version check proves one change a release ships: a feature landed, a bug is
 // fixed, a feature retired (owner, 2026-10-15). The general checks every
@@ -18,8 +22,10 @@
 // It writes `version-check-<name>.json` into --receipt-dir (`-`: a control-machine step, which prints it instead) and exits 0 only when
 // the check found no problem.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sshArgv, sshHost, type WebHost } from "../lib/website-host.ts";
 import { openReadOnly, type ReadOnlySession } from "./db-read.ts";
 
 export interface VersionCheckContext {
@@ -30,12 +36,16 @@ export interface VersionCheckContext {
   readonly runTs: string;
   /** The release commit (`--commit`), for a check that runs the SDK or reads the checkout at it; absent when the step passes none. */
   readonly commit?: string;
+  /** The target host's ssh destination (`--host`), for a control-machine step that reads the host; absent on a target step. */
+  readonly host?: string;
   /** Opens the proven read-only session once, on first use. */
   db(): Promise<ReadOnlySession>;
   /** `GET <origin><path>`: the status and body, never a throw for a non-2xx. */
   http(path: string, init?: RequestInit): Promise<{ status: number; text: string }>;
-  /** Run `docker <args>` on this host. */
+  /** Run `docker <args>` on the target host: here, or over ssh to `host` when the step passes one. */
   docker(args: readonly string[]): { code: number; stdout: string; stderr: string };
+  /** An origin on this machine that reaches the target host's 127.0.0.1:`port` (an ssh forward when `host` is set). */
+  hostOrigin(port: number): Promise<string>;
   /** The instance's compose project, from the running containers' labels. */
   project(): string;
 }
@@ -59,11 +69,15 @@ export function validCheckName(name: string): boolean {
   return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(name);
 }
 
-export function makeContext(opts: { release: string; instance: string; origin: string; runTs: string; commit?: string }): VersionCheckContext & { close(): Promise<void> } {
+export function makeContext(opts: { release: string; instance: string; origin: string; runTs: string; commit?: string; host?: string }): VersionCheckContext & { close(): Promise<void> } {
   let session: Promise<ReadOnlySession> | undefined;
   let project: string | undefined;
+  let remote: WebHost | undefined;
+  const sshDir = opts.host ? mkdtempSync(join(tmpdir(), "rm-version-check-ssh-")) : undefined;
+  if (opts.host !== undefined && (opts.host === "" || opts.host.startsWith("-"))) throw new Error(`Refusing: ${JSON.stringify(opts.host)} is not an ssh destination.`);
   const docker = (args: readonly string[]) => {
-    const r = spawnSync("docker", [...args], { encoding: "utf8" });
+    const argv = opts.host && sshDir ? sshArgv(opts.host, join(sshDir, "control"), ["docker", ...args]) : ["docker", ...args];
+    const r = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8" });
     return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   };
   const origin = opts.origin.replace(/\/+$/, "");
@@ -76,6 +90,11 @@ export function makeContext(opts: { release: string; instance: string; origin: s
       return { status: res.status, text: await res.text() };
     },
     docker,
+    async hostOrigin(port) {
+      if (!opts.host) return `http://127.0.0.1:${port}`;
+      remote ??= sshHost(opts.host);
+      return (await remote.openPort(port)).origin;
+    },
     project() {
       if (project !== undefined) return project;
       const r = docker(["ps", "--filter", `label=com.docker.compose.project`, "--format", "{{.Label \"com.docker.compose.project\"}}"]);
@@ -86,6 +105,11 @@ export function makeContext(opts: { release: string; instance: string; origin: s
       return project;
     },
     async close() {
+      remote?.close();
+      if (opts.host && sshDir) {
+        spawnSync("ssh", ["-o", `ControlPath=${join(sshDir, "control")}`, "-O", "exit", opts.host], { stdio: "ignore" });
+        rmSync(sshDir, { recursive: true, force: true });
+      }
       if (session) await (await session).close();
     },
   };
@@ -104,7 +128,8 @@ async function main(): Promise<number> {
   }
   const mod = (await import(`./version-checks/${release}/${name}.ts`)) as { default: VersionCheck };
   const commit = flag("--commit");
-  const ctx = makeContext({ release, instance, origin, runTs, ...(commit ? { commit } : {}) });
+  const host = flag("--host");
+  const ctx = makeContext({ release, instance, origin, runTs, ...(commit ? { commit } : {}), ...(host ? { host } : {}) });
   let result: VersionCheckResult;
   try {
     result = await mod.default(ctx);
