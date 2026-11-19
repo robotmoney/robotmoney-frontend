@@ -21,7 +21,7 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule } from "./analyze/indicators.ts";
+import { DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, valueSourceOf, type DayRule } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
 import { ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
@@ -53,6 +53,7 @@ import type { AcquisitionSink, SaveSourceAcquisitionResult, SourceAcquisitionEvi
 import { assertRequiredCoverage } from "./coverage.ts";
 import { sha256Hex } from "./run-ledger.ts";
 import { hermeticDataSource } from "./access/hermetic-source.ts";
+import { recordNewPoolDailyCounts } from "./new-pools-collector.ts";
 import { selectEdgarRefreshTier, defaultEdgarRefreshDeadlineMs } from "./edgar-incremental-refresh.ts";
 import {
   TelemetryCollector,
@@ -448,6 +449,15 @@ export async function runAnalytics(
   let regimeVersionIds: string[] | undefined;
   if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && registryInLedger) {
     const t0 = new Date();
+    // Issue 1654: NEW_TOKENS declares valueSource "new_pool_records". Its daily
+    // count of the stored pool records is recorded under
+    // new_pool_records:NEW_TOKENS before the committed read below, which then
+    // returns it in place of the capped raw_indicator_history rows, and the
+    // vintage freezes it.
+    if (acquisitionSink && INDICATORS.some((ind) => valueSourceOf(ind) === "new_pool_records")) {
+      const counted = await recordNewPoolDailyCounts(persistence, acquisitionSink, Number(runId));
+      if (counted) logger.log?.(`[analytics] NEW_TOKENS: ${counted.points.length} gap-free day(s) counted from pool records at ${counted.knowledgeTimeCutoff}`);
+    }
     const committed = await persistence.loadCommittedInputs(asof);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
     regimeVersionIds = committed.values.map((v) => v.versionId);
@@ -458,7 +468,9 @@ export async function runAnalytics(
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
     const X = LEDGER_EXTRA_KEYS;
     extras = { spx: fromLedger[X.spx.inputId] ?? [], eth: fromLedger[X.eth.inputId] ?? [], tbill3m: fromLedger[X.tbill3m.inputId] ?? [] };
-    inputEvidence.registry = registryEvidence(collectedRegistry, registry);
+    // A pool-record indicator (issue 1654) computes from its count, not from what the sweep collected.
+    const collectedRead = Object.fromEntries(Object.entries(collectedRegistry).filter(([id]) => valueSourceOf(INDICATORS.find((i) => i.id === id) ?? {}) !== "new_pool_records"));
+    inputEvidence.registry = registryEvidence(collectedRead, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", `read ${committed.values.length} ledger head(s) at ${knowledgeTimeCutoff}, the cutoff the vintage freezes`, t0);
   }

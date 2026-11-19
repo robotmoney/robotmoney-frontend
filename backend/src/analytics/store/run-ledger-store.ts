@@ -11,7 +11,7 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
-import { STORED_RATIO_IDS, SERIES_MAPPING } from "../extras.ts";
+import { SERIES_MAPPING, regimeStorageKeys } from "../extras.ts";
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
 const ANALYTICS_ROUTE = "src/api/routes/analytics";
@@ -488,17 +488,21 @@ export async function loadHistoricalSourceValues(
  * Every storage key the regime run reads: the registry indicators, the ratio
  * legs (both closes, issue 1644), the correlations and the backtest (D74
  * mapping). A ratio's stored key is read while the ratio is declared
- * ratioInput "stored".
+ * ratioInput "stored". Issue 1654: NEW_TOKENS, which declares valueSource
+ * "new_pool_records", is read from new_pool_records:NEW_TOKENS, never from
+ * raw_indicator_history:NEW_TOKENS.
  */
-export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING
-  .filter((m) => m.kind === "source" || STORED_RATIO_IDS.has(m.inputId))
-  .map((m) => m.storageKey))].sort());
+export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze(regimeStorageKeys().keys);
+/** The keys REGIME_STORAGE_KEYS leaves out because a pool-record count replaces them (issue 1654). A vintage frozen
+ *  from a regime run's read holds neither them nor their ledger heads, so it freezes one NEW_TOKENS series. */
+export const REGIME_REPLACED_STORAGE_KEYS: readonly string[] = Object.freeze(regimeStorageKeys().replaced);
 
-// Every key a regime consumer maps, a ratio's calculated key included. A
-// vintage with regime members selects none of these by cutoff: its regime keys
-// are the exact versions read, so a stored ratio the run did not read (one
-// declared "legs") is never a member its replay would read.
-const REGIME_MAPPED_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING.map((m) => m.storageKey))].sort());
+// Every key a regime consumer maps, a ratio's calculated key, the replaced
+// NEW_TOKENS key and the pool-record count key included. A vintage with regime
+// members selects none of these by cutoff: its regime keys are the exact
+// versions read, so a stored ratio the run did not read (one declared "legs")
+// is never a member its replay would read.
+const REGIME_MAPPED_KEYS: readonly string[] = Object.freeze([...new Set([...SERIES_MAPPING.map((m) => m.storageKey), ...REGIME_STORAGE_KEYS])].sort());
 
 export interface CommittedInputs {
   /** The database clock the heads were read at, ISO 8601 with microseconds. */

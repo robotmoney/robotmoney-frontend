@@ -34,7 +34,8 @@ import { loadFrozenVintage, type FrozenVintage } from "../src/analytics/store/ru
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
-import { RATIO_IDS, RATIO_LEG_KEYS, STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
+import { NEW_POOL_RECORDS_STORAGE_KEY, RATIO_IDS, RATIO_LEG_KEYS, STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
+import { storeGapFreePolls } from "./support/new-pools.ts";
 import { withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../src/analytics/analyze/regime-versions.ts";
@@ -74,11 +75,15 @@ interface PublishedRun {
 
 describe("regime replay of every published run from 2026-09-21", () => {
   let runs: PublishedRun[] = [];
+  let poolCounts: { date: string; value: number }[] = [];
   let S = 0;
   let F = 0;
 
   beforeAll(async () => {
     const base = await baseObservations();
+    // Issue 1654: the collector's pool records, so each run reads NEW_TOKENS
+    // from their count and freezes it under new_pool_records:NEW_TOKENS.
+    poolCounts = await storeGapFreePolls("2026-03-01", "2026-09-20");
     await publish("2026-09-21", base);
     await publish("2026-09-22", secondObservations(base));
     await publish("2026-09-23", base);
@@ -159,6 +164,16 @@ describe("regime replay of every published run from 2026-09-21", () => {
       for (const key of [...RATIO_LEG_KEYS, ...ratioKeys]) expect({ run: run.id, key, member: keys.has(key) }).toEqual({ run: run.id, key, member: true });
       // The vintage carries the stored ratios, so the replay reads them (ratioInput "stored").
       for (const id of RATIO_IDS) expect(Object.hasOwn(inputOf(run), id)).toBe(true);
+    }
+  });
+
+  test("issue 1654: every run's vintage freezes the pool-record count under new_pool_records:NEW_TOKENS and holds no raw_indicator_history:NEW_TOKENS row", () => {
+    expect(runs.length).toBe(4);
+    for (const run of runs) {
+      expect(run.vintage.members.filter((m) => m.sourceKey === "raw_indicator_history:NEW_TOKENS")).toEqual([]);
+      const counted = run.vintage.members.filter((m) => m.sourceKey === NEW_POOL_RECORDS_STORAGE_KEY).map((m) => ({ date: m.marketDate, value: m.value }));
+      expect(counted.sort((a, b) => (a.date! < b.date! ? -1 : 1))).toEqual(poolCounts);
+      expect(inputOf(run).NEW_TOKENS).toEqual(poolCounts);
     }
   });
 

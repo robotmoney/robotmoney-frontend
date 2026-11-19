@@ -1871,6 +1871,73 @@ ALTER SEQUENCE public.maintenance_windows_id_seq OWNED BY public.maintenance_win
 
 
 --
+-- Name: new_pool_polls; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.new_pool_polls (
+    id bigint NOT NULL,
+    acquisition_id uuid NOT NULL,
+    oldest_created_at timestamp with time zone NOT NULL,
+    newest_created_at timestamp with time zone NOT NULL,
+    pages_read integer NOT NULL,
+    pools_seen integer NOT NULL,
+    pools_new integer NOT NULL,
+    gap_from timestamp with time zone,
+    gap_to timestamp with time zone,
+    knowledge_time timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT new_pool_polls_check CHECK (((pools_new >= 0) AND (pools_new <= pools_seen))),
+    CONSTRAINT new_pool_polls_check1 CHECK ((oldest_created_at <= newest_created_at)),
+    CONSTRAINT new_pool_polls_check2 CHECK (((gap_from IS NULL) = (gap_to IS NULL))),
+    CONSTRAINT new_pool_polls_check3 CHECK (((gap_from IS NULL) OR (gap_from < gap_to))),
+    CONSTRAINT new_pool_polls_pages_read_check CHECK (((pages_read >= 1) AND (pages_read <= 10))),
+    CONSTRAINT new_pool_polls_pools_seen_check CHECK ((pools_seen > 0))
+);
+
+
+--
+-- Name: TABLE new_pool_polls; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.new_pool_polls IS 'One row per stored new-pools poll: the pool_created_at span it read and the coverage gap before it; append-only (issue 1654).';
+
+
+--
+-- Name: new_pool_polls_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.new_pool_polls ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.new_pool_polls_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: new_pool_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.new_pool_records (
+    pool_id text NOT NULL,
+    network text NOT NULL,
+    pool_created_at timestamp with time zone NOT NULL,
+    acquisition_id uuid NOT NULL,
+    knowledge_time timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT new_pool_records_network_check CHECK (((network <> ''::text) AND (length(network) <= 64))),
+    CONSTRAINT new_pool_records_pool_id_check CHECK (((pool_id <> ''::text) AND (length(pool_id) <= 160)))
+);
+
+
+--
+-- Name: TABLE new_pool_records; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.new_pool_records IS 'Every pool the new-pools collector saw, stored once with the knowledge time of the first poll that saw it; append-only (issue 1654).';
+
+
+--
 -- Name: openclaw_agents; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4230,6 +4297,30 @@ ALTER TABLE ONLY public.maintenance_windows
 
 
 --
+-- Name: new_pool_polls new_pool_polls_acquisition_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.new_pool_polls
+    ADD CONSTRAINT new_pool_polls_acquisition_id_key UNIQUE (acquisition_id);
+
+
+--
+-- Name: new_pool_polls new_pool_polls_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.new_pool_polls
+    ADD CONSTRAINT new_pool_polls_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: new_pool_records new_pool_records_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.new_pool_records
+    ADD CONSTRAINT new_pool_records_pkey PRIMARY KEY (pool_id);
+
+
+--
 -- Name: openclaw_agents openclaw_agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5101,6 +5192,13 @@ CREATE INDEX maintenance_windows_window_idx ON public.maintenance_windows USING 
 
 
 --
+-- Name: new_pool_records_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX new_pool_records_created_idx ON public.new_pool_records USING btree (pool_created_at);
+
+
+--
 -- Name: openclaw_agents_project_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5800,6 +5898,42 @@ ALTER TABLE public.audit_log ENABLE ALWAYS TRIGGER audit_log_append_only;
 CREATE TRIGGER audit_log_append_only_row BEFORE DELETE ON public.audit_log FOR EACH ROW EXECUTE FUNCTION public.rm_append_only_guard();
 
 ALTER TABLE public.audit_log ENABLE ALWAYS TRIGGER audit_log_append_only_row;
+
+
+--
+-- Name: new_pool_polls new_pool_polls_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER new_pool_polls_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.new_pool_polls FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable();
+
+ALTER TABLE public.new_pool_polls ENABLE ALWAYS TRIGGER new_pool_polls_immutable;
+
+
+--
+-- Name: new_pool_polls new_pool_polls_immutable_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER new_pool_polls_immutable_row BEFORE DELETE OR UPDATE ON public.new_pool_polls FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable();
+
+ALTER TABLE public.new_pool_polls ENABLE ALWAYS TRIGGER new_pool_polls_immutable_row;
+
+
+--
+-- Name: new_pool_records new_pool_records_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER new_pool_records_immutable BEFORE DELETE OR UPDATE OR TRUNCATE ON public.new_pool_records FOR EACH STATEMENT EXECUTE FUNCTION public.rm_source_ledger_immutable();
+
+ALTER TABLE public.new_pool_records ENABLE ALWAYS TRIGGER new_pool_records_immutable;
+
+
+--
+-- Name: new_pool_records new_pool_records_immutable_row; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER new_pool_records_immutable_row BEFORE DELETE OR UPDATE ON public.new_pool_records FOR EACH ROW EXECUTE FUNCTION public.rm_source_ledger_immutable();
+
+ALTER TABLE public.new_pool_records ENABLE ALWAYS TRIGGER new_pool_records_immutable_row;
 
 
 --
@@ -6658,6 +6792,22 @@ ALTER TABLE ONLY public.daily_wallet_snapshots
 
 ALTER TABLE ONLY public.lobster_coins
     ADD CONSTRAINT lobster_coins_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE SET NULL;
+
+
+--
+-- Name: new_pool_polls new_pool_polls_acquisition_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.new_pool_polls
+    ADD CONSTRAINT new_pool_polls_acquisition_id_fkey FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id);
+
+
+--
+-- Name: new_pool_records new_pool_records_acquisition_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.new_pool_records
+    ADD CONSTRAINT new_pool_records_acquisition_id_fkey FOREIGN KEY (acquisition_id) REFERENCES public.source_acquisitions(id);
 
 
 --

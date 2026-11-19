@@ -183,6 +183,7 @@ test("startProducerSchedules: runs catch-up before arming the daily crons", asyn
     catchUp: async () => { order.push("catchup"); },
     catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleNewPools: () => {},
   });
   expect(order).toEqual(["ready", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);
 });
@@ -205,6 +206,7 @@ test("startProducerSchedules: the boot catch-up waits its delay after readiness,
     catchUp: async () => { catchUpAt = clock; order.push("catchup"); },
     catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleNewPools: () => {},
     scheduleDayRoll: () => {},
   });
   expect(order).toEqual(["ready", "sleep:75000", "catchup", "catchupIndicators", "armed:regime", "armed:research"]);

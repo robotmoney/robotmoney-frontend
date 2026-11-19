@@ -175,3 +175,30 @@ test("non-transient status: throws immediately with no retries (no backoff time 
     globalThis.fetch = orig;
   }
 }, 10_000);
+
+// Issue 1654: the legacy sweep reads the keyless host (new_pools left PRO_CALLS)
+// and its stored value is unchanged: MAX_PAGES (10) of 20 pools, all inside the
+// trailing 24 hours, is the 200 it has stored since 1 October.
+test("the legacy sweep still stores 200 when every page is full, from the keyless host with a key set", async () => {
+  const orig = globalThis.fetch;
+  const origKey = process.env.COINGECKO_API_KEY;
+  process.env.COINGECKO_API_KEY = "sentinel-paid-key-1654";
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: string, init: RequestInit) => {
+    urls.push(String(url));
+    expect(new Headers(init.headers).get("x-cg-pro-api-key")).toBeNull();
+    const page = Number(new URL(String(url)).searchParams.get("page"));
+    const data = Array.from({ length: 20 }, (_, i) => ({ attributes: { pool_created_at: new Date(NOW - ((page - 1) * 20 + i + 1) * 1000).toISOString() } }));
+    return Response.json({ data });
+  }) as any;
+  try {
+    const points = await fetchGeckoTerminalNewPools(NOW, 1000, { logger: silent, sleep: async () => {} });
+    expect(points).toEqual([{ date: "2026-07-15", value: 200 }]);
+    expect(urls.length).toBe(10);
+    for (const u of urls) expect(u.startsWith("https://api.geckoterminal.com/api/v2/networks/new_pools?page=")).toBe(true);
+  } finally {
+    globalThis.fetch = orig;
+    if (origKey === undefined) delete process.env.COINGECKO_API_KEY;
+    else process.env.COINGECKO_API_KEY = origKey;
+  }
+});

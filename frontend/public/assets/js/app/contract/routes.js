@@ -504,6 +504,15 @@ export const ROUTES = {
     // The run computes from these, records the same cutoff on its vintage and
     // sends their versionIds as POST vintages' regimeVersionIds.
     committedInputs: "/api/analytics/committed-inputs",
+    // Issue 1654: the new-pools collector's poll store. POST stores one poll
+    // (its acquisition evidence with no values, its pool records, its oldest
+    // and newest pool_created_at); GET head is the newest pool_created_at of
+    // the last stored poll, or null; GET inputs is the database clock and, at
+    // it, every poll's span and the unique pools per UTC day a regime run
+    // counts NEW_TOKENS from.
+    newPoolPolls: "/api/analytics/new-pools/polls",
+    newPoolHead: "/api/analytics/new-pools/head",
+    newPoolInputs: "/api/analytics/new-pools/inputs",
     // Issue #978: freeze analytics outputs and report snapshots — the next
     // layer above the run header. One terminal package per runId (idempotent,
     // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot

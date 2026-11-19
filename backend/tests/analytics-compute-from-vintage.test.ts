@@ -127,6 +127,12 @@ describe("AN-16: the regime computes from the ledger heads its vintage pins", ()
     let compared = 0;
     for (const ind of INDICATORS) {
       if (Object.hasOwn(STORED_UNDER, ind.id)) continue;
+      // Issue 1654: NEW_TOKENS reads the pool-record count, never its raw floor rows;
+      // with no pool records stored it has no reading at all.
+      if (ind.valueSource === "new_pool_records") {
+        expect(fromLedger[ind.id], ind.id).toBeUndefined();
+        continue;
+      }
       const raw = (floor[storedIndicatorId(ind.id)] ?? []).filter((p) => p.date <= ASOF);
       expect(fromLedger[ind.id] ?? [], ind.id).toEqual(raw);
       compared += raw.length;

@@ -107,7 +107,9 @@ DECLARE
     'pipeline_ingest_receipts',
     -- 0109's evidence copies, which rm_app writes since 0126 (issue 1034, D75):
     -- a replaced sample's evidence row is written once and never changed.
-    'wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence'
+    'wallet_balance_sample_evidence', 'wallet_sleeve_sample_evidence',
+    -- 0133 (issue 1654): the new-pools collector's pool records and polls are append-only.
+    'new_pool_records', 'new_pool_polls'
   ];
   rel record;
   usurped text;

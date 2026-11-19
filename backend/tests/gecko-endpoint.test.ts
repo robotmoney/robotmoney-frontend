@@ -47,13 +47,20 @@ test("a blank or whitespace key is no key", () => {
   }
 });
 
-test("with a key, every call goes to the Pro host (the plan covers the pool reading and OHLCV, verified 2026-10-08)", () => {
-  expect([...PRO_CALLS].map(String).sort()).toEqual(["new_pools", "ohlcv", "pool", "token_pools", "token_price"]);
-  expect(geckoUrl("new_pools", "/networks/new_pools?page=2", { key: KEY, log: quiet })).toBe(`${PRO}/networks/new_pools?page=2`);
+test("with a key, every call but new_pools goes to the Pro host (the plan covers the pool reading and OHLCV, verified 2026-10-08)", () => {
+  expect([...PRO_CALLS].map(String).sort()).toEqual(["ohlcv", "pool", "token_pools", "token_price"]);
   expect(geckoUrl("token_pools", "/networks/base/tokens/0xabc/pools", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/tokens/0xabc/pools`);
   expect(geckoUrl("token_price", "/simple/networks/base/token_price/0xabc", { key: KEY, log: quiet })).toBe(`${PRO}/simple/networks/base/token_price/0xabc`);
   expect(geckoUrl("ohlcv", "/networks/base/pools/0xp/ohlcv/day?limit=1", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/pools/0xp/ohlcv/day?limit=1`);
   expect(geckoUrl("pool", "/networks/base/pools/0xp", { key: KEY, log: quiet })).toBe(`${PRO}/networks/base/pools/0xp`);
+});
+
+// Issue 1654: the new-pools collector reads new_pools every 60 s, about 5,000 requests a day, which must never spend
+// paid credits. new_pools is keyless whatever the key.
+test("geckoUrl(new_pools) is the keyless host with COINGECKO_API_KEY set", () => {
+  process.env.COINGECKO_API_KEY = KEY;
+  expect(geckoUrl("new_pools", "/networks/new_pools?page=2", { log: quiet })).toBe(`${FREE}/networks/new_pools?page=2`);
+  expect(geckoUrl("new_pools", "/networks/new_pools?page=2", { key: KEY, log: quiet })).toBe(`${FREE}/networks/new_pools?page=2`);
 });
 
 test("the key header is sent to a Pro URL and to no other URL", () => {
@@ -123,27 +130,6 @@ test("two quota refusals inside one cooldown log exactly one [gecko] warning, wi
   expect(geckoErrorDetail(echoed, KEY)).not.toContain(KEY);
 });
 
-test("a quota 429 on a new_pools sweep page falls back to the free host for that page", async () => {
-  process.env.COINGECKO_API_KEY = KEY;
-  process.env.GECKO_PRO_MIN_INTERVAL_MS = "0";
-  const sent: { url: string; key: string | null }[] = [];
-  globalThis.fetch = (async (url: string, init: RequestInit) => {
-    const u = String(url);
-    sent.push({ url: u, key: new Headers(init.headers).get("x-cg-pro-api-key") });
-    if (u.startsWith(PRO)) return new Response(QUOTA_BODY, { status: 429, statusText: "Too Many Requests" });
-    return newPoolsResponse();
-  }) as unknown as typeof fetch;
-
-  const lines: string[] = [];
-  const points = await fetchGeckoTerminalNewPools(Date.parse("2026-07-15T12:00:00Z"), 15000, { logger: { warn: (m) => lines.push(m) }, sleep: async () => {} });
-
-  expect(points[0]!.value).toBe(1);
-  expect(sent.map((s) => s.url)).toEqual([`${PRO}/networks/new_pools?page=1`, `${FREE}/networks/new_pools?page=1`]);
-  expect(sent[1]!.key).toBeNull();
-  expect(lines.some((l) => l.includes("answered HTTP 429 (error_code 10006"))).toBe(true);
-  expect(lines.join("\n")).not.toContain(KEY);
-});
-
 test("after a refusal the call falls back to the free host, logs once, and the Pro host is tried again after ten minutes", () => {
   const lines: string[] = [];
   const log = { warn: (m: string) => lines.push(m) };
@@ -159,8 +145,8 @@ test("after a refusal the call falls back to the free host, logs once, and the P
   expect(geckoUrl("new_pools", "/networks/new_pools?page=5", { key: KEY, now: t0 + 60_000, log: quiet }).startsWith(FREE)).toBe(true);
   expect(geckoUrl("token_price", "/simple/networks/base/token_price/0xabc", { key: KEY, now: t0 + 60_000, log: quiet }).startsWith(FREE)).toBe(true);
   // the latch ran from the second refusal, so it holds just under ten minutes after it
-  expect(geckoUrl("new_pools", "/networks/new_pools?page=5", { key: KEY, now: t0 + 1_000 + PRO_REJECTED_COOLDOWN_MS - 1, log: quiet }).startsWith(FREE)).toBe(true);
-  expect(geckoUrl("new_pools", "/networks/new_pools?page=5", { key: KEY, now: t0 + 1_000 + PRO_REJECTED_COOLDOWN_MS, log: quiet }).startsWith(PRO)).toBe(true);
+  expect(geckoUrl("token_pools", "/networks/base/tokens/0xabc/pools", { key: KEY, now: t0 + 1_000 + PRO_REJECTED_COOLDOWN_MS - 1, log: quiet }).startsWith(FREE)).toBe(true);
+  expect(geckoUrl("token_pools", "/networks/base/tokens/0xabc/pools", { key: KEY, now: t0 + 1_000 + PRO_REJECTED_COOLDOWN_MS, log: quiet }).startsWith(PRO)).toBe(true);
 });
 
 // ── pacing, per tier ─────────────────────────────────────────────────────────
@@ -207,9 +193,8 @@ function newPoolsResponse() {
   ] });
 }
 
-test("an authenticated new_pools sweep goes to the Pro host with the key, and the saved evidence holds no key", async () => {
+test("with a key set, the new_pools sweep reads the keyless host with no key header (issue 1654)", async () => {
   process.env.COINGECKO_API_KEY = KEY;
-  process.env.GECKO_PRO_MIN_INTERVAL_MS = "0";
   const sent: { url: string; key: string | null }[] = [];
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     sent.push({ url: String(url), key: new Headers(init.headers).get("x-cg-pro-api-key") });
@@ -222,31 +207,7 @@ test("an authenticated new_pools sweep goes to the Pro host with the key, and th
     () => fetchGeckoTerminalNewPools(Date.parse("2026-07-15T12:00:00Z"), 15000, { logger: quiet, sleep: async () => {} }));
 
   expect(points[0]!.value).toBe(1);
-  expect(sent.length).toBe(1);
-  expect(sent[0]!.url).toBe(`${PRO}/networks/new_pools?page=1`);
-  expect(sent[0]!.key).toBe(KEY);
-  expect(collected.length).toBe(1);
+  expect(sent).toEqual([{ url: `${FREE}/networks/new_pools?page=1`, key: null }]);
   expect(JSON.stringify(collected)).not.toContain(KEY);
-  expect(collected[0].fetches[0].requestIdentity.headers["x-cg-pro-api-key"]).toBe("[REDACTED]");
 });
 
-test("the Pro host refusing a sweep falls back to the free host for that page and the next, with no key sent there", async () => {
-  process.env.COINGECKO_API_KEY = KEY;
-  process.env.GECKO_PRO_MIN_INTERVAL_MS = "0";
-  const sent: { url: string; key: string | null }[] = [];
-  globalThis.fetch = (async (url: string, init: RequestInit) => {
-    const u = String(url);
-    sent.push({ url: u, key: new Headers(init.headers).get("x-cg-pro-api-key") });
-    if (u.startsWith(PRO)) return new Response(JSON.stringify({ status: { error_code: 10005 } }), { status: 403, statusText: "Forbidden" });
-    return newPoolsResponse();
-  }) as unknown as typeof fetch;
-
-  const lines: string[] = [];
-  const points = await fetchGeckoTerminalNewPools(Date.parse("2026-07-15T12:00:00Z"), 15000, { logger: { warn: (m) => lines.push(m) }, sleep: async () => {} });
-
-  expect(points[0]!.value).toBe(1); // the count came from the free host, not a fabricated zero
-  expect(sent.map((s) => s.url)).toEqual([`${PRO}/networks/new_pools?page=1`, `${FREE}/networks/new_pools?page=1`]);
-  expect(sent[1]!.key).toBeNull();
-  expect(lines.some((l) => l.includes("answered HTTP 403"))).toBe(true);
-  expect(lines.join("\n")).not.toContain(KEY);
-});

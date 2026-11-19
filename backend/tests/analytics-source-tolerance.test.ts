@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { SOURCE_TOLERANCES, STORED_ONLY_KEYS, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
-import { EXTRA_WRITE_KEYS, STORED_UNDER } from "../src/analytics/extras.ts";
+import { EXTRA_WRITE_KEYS, NEW_POOL_RECORDS_STORAGE_KEY, STORED_UNDER } from "../src/analytics/extras.ts";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { CoverageError } from "../src/analytics/coverage.ts";
@@ -48,6 +48,8 @@ function extractorFiles(): string[] {
   for (const dir of dirs) {
     for (const f of readdirSync(dir)) if (f.endsWith(".ts")) out.push(join(dir, f));
   }
+  // Issue 1654: the regime run records the pool-record count of NEW_TOKENS.
+  out.push(join(srcDir, "new-pools-collector.ts"));
   return out;
 }
 
@@ -67,6 +69,8 @@ function resolve(expression: string, file: string): string[] {
   if (e === "entry.storageKey") return inventoryCollection().map((s) => s.storageKey);
   // packages/analyst-sdk/src/extract/sources.ts fetchAll records both closes of each ratio symbol (issue 1644).
   if (e === "legKey") return registryRatioLegs().map((l) => l.id);
+  // new-pools-collector.ts recordNewPoolDailyCounts (issue 1654).
+  if (e === "NEW_POOL_RECORDS_STORAGE_KEY") return [NEW_POOL_RECORDS_STORAGE_KEY];
   throw new Error(
     `${file}: a capture call site names its source_key as \`${e}\`, which this test cannot resolve. ` +
       "Teach resolve() what it expands to, and give every resulting key an entry in SOURCE_TOLERANCES and D56.",

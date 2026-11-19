@@ -134,14 +134,17 @@ export const NEW_POOL_RECORDS_STORAGE_KEY = `new_pool_records:${NEW_POOL_RECORDS
 
 /**
  * The storage keys a regime run reads, given the registry's declared value
- * sources: every key of the mapping, except that an indicator declaring
+ * sources: every source key of the mapping and each ratio declared ratioInput
+ * "stored", except that an indicator declaring
  * "new_pool_records" reads NEW_POOL_RECORDS_STORAGE_KEY in place of its
  * raw_indicator_history key. `replaced` names the keys left out, so a vintage
  * freezes one NEW_TOKENS series, never both.
  */
 export function regimeStorageKeys(indicators: readonly Indicator[] = INDICATORS, mapping: readonly SeriesMapping[] = SERIES_MAPPING): { keys: string[]; replaced: string[] } {
   const replaced = indicators.filter((ind) => valueSourceOf(ind) === "new_pool_records").map((ind) => `raw_indicator_history:${storedIndicatorId(ind.id)}`);
-  const keys = new Set(mapping.map((m) => m.storageKey));
+  // Issue 1644: a ratio's calculated key is read only while it is declared ratioInput "stored".
+  const stored = new Set(indicators.filter((ind) => ind.ratioInput === "stored").map((ind) => ind.id));
+  const keys = new Set(mapping.filter((m) => m.kind === "source" || stored.has(m.inputId)).map((m) => m.storageKey));
   for (const k of replaced) keys.delete(k);
   if (replaced.length > 0) keys.add(NEW_POOL_RECORDS_STORAGE_KEY);
   return { keys: [...keys].sort(), replaced: [...new Set(replaced)].sort() };

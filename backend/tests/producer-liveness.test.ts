@@ -44,6 +44,7 @@ test("the first record lands BEFORE the API wait, so a slow API cannot age the c
     catchUp: async () => { order.push("catchup"); },
     catchUpIndicators: async () => { order.push("catchupIndicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleNewPools: () => {},
   });
   // The beat is first. If it came after waitForApi it would cover nothing —
   // waitForApi is itself the 120s that was ageing the container out.

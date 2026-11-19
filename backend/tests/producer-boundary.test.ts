@@ -116,6 +116,7 @@ test("serve validates the credential with the API before arming either schedule"
     await expect(startProducerSchedules({
       env: { ...baseEnv, ANALYTICS_TOKEN_FILE: writeTokenFile("wrong-non-empty-secret") },
       scheduleKind: (kind) => { rejectedSchedules.push(kind); },
+      scheduleNewPools: () => {},
     })).rejects.toThrow("credential was rejected");
     expect(rejectedSchedules).toEqual([]);
 
@@ -123,6 +124,7 @@ test("serve validates the credential with the API before arming either schedule"
     await startProducerSchedules({
       env: { ...baseEnv, ANALYTICS_TOKEN_FILE: writeTokenFile(expectedToken) },
       scheduleKind: (kind, cron) => { acceptedSchedules.push(`${kind}:${cron}`); },
+      scheduleNewPools: () => {},
     });
     expect(acceptedSchedules).toEqual([
       "regime:30 22 * * *",

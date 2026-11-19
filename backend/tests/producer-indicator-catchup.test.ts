@@ -214,6 +214,7 @@ test("startProducerSchedules: runs the indicator catch-up before arming the dail
     catchUp: async () => { order.push("catchup:research"); },
     catchUpIndicators: async () => { order.push("catchup:indicators"); },
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleNewPools: () => {},
   });
   expect(order).toEqual(["ready", "catchup:research", "catchup:indicators", "armed:regime", "armed:research"]);
 });

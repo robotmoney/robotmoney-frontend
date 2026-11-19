@@ -324,7 +324,8 @@ test(
     // calculation over what was collected.
     // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series (D74 amendment).
     const growth = Object.fromEntries(Object.entries(STORED_UNDER).map(([id, stored]) => [id, committed.registry[stored]!]));
-    const prepared = prepareRegimeInputs({ ...committed.registry, ...growth }, { start: "2018-01-01", asof: COMMITTED_ASOF });
+    // Issue 1654: NEW_TOKENS reads the pool-record count; this run stored no pool records.
+    const prepared = prepareRegimeInputs({ ...committed.registry, ...growth, NEW_TOKENS: [] }, { start: "2018-01-01", asof: COMMITTED_ASOF });
     const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     const analysis = (extras: typeof committed.extras) =>
@@ -358,6 +359,12 @@ test(
       expect(heads.length).toBe(evidence.values.length);
       evidence.values.forEach((v, i) => {
         const member = members.get(`${v.sourceKey}|${v.marketDate}`);
+        // Issue 1654: the legacy NEW_TOKENS rows are acquired and stored, and a
+        // regime vintage never holds them (it freezes the pool-record count).
+        if (v.sourceKey === "raw_indicator_history:NEW_TOKENS") {
+          expect(member, `${v.sourceKey} ${v.marketDate}`).toBeUndefined();
+          return;
+        }
         expect(member, `${v.sourceKey} ${v.marketDate}`).toBeDefined();
         expect(member!.versionId).toBe(heads[i]!.versionId);
         expect(member!.value).toBe(heads[i]!.value);

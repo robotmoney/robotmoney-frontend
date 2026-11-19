@@ -56,6 +56,11 @@ import { requireComplete, runRegime as runRegimeOutcome } from "../../packages/a
 // Every run here scores a complete day under the shipped day rule (issue 1655).
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { loadRawIndicatorHistory, loadJsonGz } from "./fixtures/regime/load.ts";
+import { ASOF, baseObservations, poisonedSource } from "./support/committed-inputs.ts";
+import { storeGapFreePolls } from "./support/new-pools.ts";
+import { loadFrozenVintage } from "../src/analytics/store/run-ledger-store.ts";
+import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import { NEW_POOL_RECORDS_STORAGE_KEY, inputHistoryFromStorage } from "../src/analytics/extras.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
 useCleanDatabasePerTest(import.meta.file);
@@ -263,4 +268,70 @@ test("FUTURE_EXTRAS: extras rows after asof reach neither backend nor SDK correl
   // what the backend computed before the cut (uncut extras over the same axis).
   const uncut = computeCorrelations(sdk.dateAxis, sdk.result, { spx: extras.spx, eth: extras.eth });
   expect(JSON.stringify(uncut)).not.toBe(JSON.stringify(sdk.correlations));
+}, TIMEOUT);
+
+// ── Issue 1654: NEW_TOKENS from stored pool records ──────────────────────────
+// Through the ledger path (every input acquired into the source ledger, as
+// production runs), the backend job reads the pool records at its cutoff,
+// never reads raw_indicator_history:NEW_TOKENS into the regime input, freezes
+// the resolved series under new_pool_records:NEW_TOKENS, and computes what
+// runRegime computes with the same newPools.
+test("NEW_POOL_RECORDS: the backend job reads the pool-record count at its cutoff, freezes it, and matches runRegime with the same newPools", async () => {
+  const obs = await baseObservations();
+  expect(obs.registry.NEW_TOKENS!.length).toBeGreaterThan(0); // the legacy rows are acquired, and must not be read
+  const expected = await storeGapFreePolls("2026-02-01", "2026-08-14");
+  // A pool recorded AFTER the run's cutoff must not count: proven by the replay below.
+  let captured: any[] | null = null;
+  const persistence: AnalyticsPersistence = {
+    ...directAnalyticsPersistence,
+    async submitTerminalRunPackage(input) {
+      captured = [...(input.regimeSnapshots ?? [])];
+      return directAnalyticsPersistence.submitTerminalRunPackage(input);
+    },
+  };
+  const source = poisonedSource(obs, 2);
+  let results: any;
+  try {
+    results = await runAnalytics(ASOF, "regime", source, persistence);
+  } finally {
+    source.restore();
+  }
+  const rows = captured! as any[];
+  expect(rows.length).toBeGreaterThan(100);
+
+  // The vintage holds the count under its own key and no legacy NEW_TOKENS row.
+  const [v] = await sql<{ id: string }[]>`SELECT v.id::text AS id FROM analytics_data_vintages v JOIN analytics_ledger_runs r ON r.id = v.run_id WHERE r.tool_id = 'regime'`;
+  const vintage = (await loadFrozenVintage(v!.id))!;
+  const counted = vintage.members.filter((m) => m.sourceKey === NEW_POOL_RECORDS_STORAGE_KEY);
+  expect(counted.map((m) => ({ date: m.marketDate, value: m.value })).sort((a, b) => (a.date! < b.date! ? -1 : 1))).toEqual(expected);
+  expect(vintage.members.filter((m) => m.sourceKey === "raw_indicator_history:NEW_TOKENS")).toEqual([]);
+
+  // The SDK, given the same records: the stored observations plus newPools.
+  const inputs = await directAnalyticsPersistence.loadNewPoolInputs!();
+  const sdkInput: Rows = { ...clone(obs.registry), SPX: obs.extras.spx, ETH: obs.extras.eth, TBILL3M: obs.extras.tbill3m };
+  const sdk = runRegime(sdkInput, { asof: ASOF, factor: true, newPools: inputs });
+  const r = sdk.result;
+  const at = new Map(sdk.dateAxis.map((d, i) => [d, i]));
+  for (const row of rows) {
+    const i = at.get(row.date)!;
+    expect({ date: row.date, composite: row.composite, regime: row.regime, onchain: row.onchainIndex, factor: row.factorIndex })
+      .toEqual({ date: row.date, composite: nn(r.composite[i]), regime: r.regime[i] ?? null, onchain: nn(r.panelIndices.onchain?.[i]), factor: nn(sdk.factor!.panelIndices.factor?.[i]) });
+  }
+  const latest = rows[rows.length - 1];
+  expect(results.regime.composite).toBe(nn(r.composite[sdk.dateAxis.length - 1]));
+  expect(JSON.parse(JSON.stringify(latest.panelWeights.onchain))).toEqual(JSON.parse(JSON.stringify(r.weightsByPanel.onchain)));
+  expect(r.weightsByPanel.onchain!.NEW_TOKENS).toBeGreaterThan(0);
+  // The input the job scored for NEW_TOKENS is the count, not the capped legacy value.
+  const nt = (latest.indicators as any[]).find((x) => x.id === "NEW_TOKENS");
+  expect({ raw_value: nt.raw_value, raw_date: nt.raw_date }).toEqual({ raw_value: expected.at(-1)!.value, raw_date: expected.at(-1)!.date });
+
+  // Replaying the vintage alone (no pool records) reproduces the published as-of row.
+  const replay = runRegime(inputHistoryFromStorage(vintage.members), { asof: ASOF });
+  const last = replay.dateAxis.length - 1;
+  expect(replay.result.composite[last]).toBe(r.composite[sdk.dateAxis.length - 1]);
+  expect(replay.result.regime[last]).toBe(latest.regime);
+
+  // Non-vacuity: the legacy count gives other figures.
+  const legacy = runRegime(sdkInput, { asof: ASOF, newPools: inputs, indicators: INDICATORS.map((i) => (i.id === "NEW_TOKENS" ? { ...i, valueSource: "legacy_count" as const } : i)) });
+  expect(legacy.result.composite[legacy.dateAxis.length - 1]).not.toBe(r.composite[sdk.dateAxis.length - 1]);
 }, TIMEOUT);

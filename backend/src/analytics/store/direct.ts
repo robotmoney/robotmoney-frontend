@@ -14,6 +14,7 @@ import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
 import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, REGIME_STORAGE_KEYS } from "./run-ledger-store.ts";
 import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
+import { loadNewPoolHead, loadNewPoolRunInputs, saveNewPoolPoll } from "./new-pools-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
   beginRun,
@@ -22,6 +23,9 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   submitTerminalRunPackage,
   saveSourceAcquisition,
   loadCommittedInputs: (marketTimeCutoff) => loadCommittedInputs(REGIME_STORAGE_KEYS, marketTimeCutoff),
+  saveNewPoolPoll: (poll) => saveNewPoolPoll(poll),
+  loadNewPoolHead: () => loadNewPoolHead(),
+  loadNewPoolInputs: () => loadNewPoolRunInputs(),
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a

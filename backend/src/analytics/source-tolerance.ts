@@ -83,6 +83,9 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "raw_indicator_history:XLU_SPY": YAHOO_RATIO, // yahoo XLU / SPY
   "raw_indicator_history:XLP_XLY": YAHOO_RATIO, // yahoo XLP / XLY
   "raw_indicator_history:SHILLER_CAPE": EXACT, // shiller_cape / multpl
+  // new-pools-collector.ts recordNewPoolDailyCounts (issue 1654): the daily
+  // count of stored pool records NEW_TOKENS reads. Integers, compared exactly.
+  "new_pool_records:NEW_TOKENS": EXACT,
 
   // access/data-source.ts — research inputs.
   "raw_indicator_history:MNA": EXACT, // edgar filing counts

@@ -171,6 +171,9 @@ export const ROUTES: {
     vintages: string;
     vintage: string;
     committedInputs: string;
+    newPoolPolls: string;
+    newPoolHead: string;
+    newPoolInputs: string;
     runPackage: string;
     reportSnapshot: string;
     paritySweep: string;

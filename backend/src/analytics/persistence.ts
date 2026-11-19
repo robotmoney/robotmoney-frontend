@@ -32,6 +32,46 @@ export interface CommittedInputs {
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
+// Issue 1654: the new-pools collector's polls (store/new-pools-store.ts).
+/** The provider and parser version every collector acquisition is recorded under. */
+export const NEW_POOLS_PROVIDER = "geckoterminal_newpools";
+export const NEW_POOLS_PARSER_VERSION = "new-pools:1";
+
+/** One poll as the producer submits it (POST /api/analytics/new-pools/polls). */
+export interface NewPoolPollSubmission {
+  /** The poll's acquisition evidence: the same shape as a source acquisition, with no values. */
+  acquisition: SourceAcquisitionEvidence;
+  /** Each pool the poll parsed, once: id (`<network>_<address>`), network, pool_created_at. */
+  pools: { id: string; network: string; createdAt: string }[];
+  /** Oldest and newest pool_created_at the poll read; null when it read no pool. */
+  oldestCreatedAt: string | null;
+  newestCreatedAt: string | null;
+  pagesRead: number;
+}
+
+export interface NewPoolGap {
+  from: string;
+  to: string;
+}
+
+export interface NewPoolPollResult {
+  acquisitionId: string;
+  replayed: boolean;
+  /** False when no poll row was written: a failed poll, or one that read no pool. */
+  stored: boolean;
+  poolsSeen: number;
+  poolsNew: number;
+  /** The coverage gap before this poll: the previous stored poll's newest pool_created_at to this poll's oldest. */
+  gap: NewPoolGap | null;
+}
+
+/** What a regime run reads: the database clock and, at it, every poll's span and the unique pools per UTC day. */
+export interface NewPoolRunInputs {
+  knowledgeTimeCutoff: string;
+  dayTallies: { date: string; pools: number }[];
+  polls: { oldestCreatedAt: string; newestCreatedAt: string }[];
+}
+
 export interface BeginRunResult {
   runId: string;
   methodologyVersionId: string;
@@ -109,6 +149,14 @@ export interface AnalyticsPersistence {
   // cutoff to freezeVintage. Optional like saveSourceAcquisition: a
   // persistence without a source ledger has nothing to read.
   loadCommittedInputs?(marketTimeCutoff: string): Promise<CommittedInputs>;
+  // Issue 1654: the new-pools collector's poll store. Optional like
+  // saveSourceAcquisition: a persistence without the store has no pool records,
+  // and a run then reads NEW_TOKENS as given.
+  saveNewPoolPoll?(poll: NewPoolPollSubmission): Promise<NewPoolPollResult>;
+  loadNewPoolHead?(): Promise<string | null>;
+  // The database clock and, at it, every stored poll's span and the unique
+  // pools per UTC day: what a regime run counts NEW_TOKENS from.
+  loadNewPoolInputs?(): Promise<NewPoolRunInputs>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap

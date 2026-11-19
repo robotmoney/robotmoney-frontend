@@ -12,6 +12,7 @@ import { INDICATORS } from "../analytics/analyze/indicators.ts";
 import { RATIO_IDS, STORED_RATIO_IDS } from "../analytics/extras.ts";
 import type { RawIndicatorHistory } from "../analytics/types.ts";
 import { writeHeartbeat } from "../ops/heartbeat.ts";
+import { NEW_POOLS_INTERVAL_MS, newPoolsTicker, pollNewPools, type NewPoolsTicker } from "../analytics/new-pools-collector.ts";
 
 export type ProducerKind = "regime" | "research";
 
@@ -339,6 +340,8 @@ export function armedScheduleSnapshot(): ReadonlyMap<ProducerKind, ScheduleState
 export function resetProducerSchedules(): void {
   if (dayRollTimer) clearTimeout(dayRollTimer);
   dayRollTimer = undefined;
+  newPoolsCollector?.stop();
+  newPoolsCollector = undefined;
   for (const state of armedSchedules.values()) if (state.timer) clearTimeout(state.timer);
   armedSchedules.clear();
 }
@@ -422,6 +425,25 @@ export function armDayRollRegime(): void {
   arm();
 }
 
+// ── the new-pools collector (issue 1654) ─────────────────────────────────────
+// A separate collection job on its own fixed timer, one poll every 60 s; not
+// an analytics run. The regime and research crons, the 3-hourly cadence and
+// the day-roll fire are unchanged. Armed only when the analytics source is
+// live (ANALYTICS_SOURCE unset or "live"), never under "hermetic".
+let newPoolsCollector: NewPoolsTicker | undefined;
+
+export function armNewPoolsCollector(cfg: AnalyticsApiConfig, intervalMs: number = NEW_POOLS_INTERVAL_MS): void {
+  newPoolsCollector?.stop();
+  const persistence = analyticsApiClient(cfg);
+  newPoolsCollector = newPoolsTicker(() => pollNewPools({ persistence }), { intervalMs });
+}
+
+/** True when the producer's analytics source is live: ANALYTICS_SOURCE unset, empty or "live". */
+export function analyticsSourceIsLive(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = env.ANALYTICS_SOURCE;
+  return raw === undefined || raw === "" || raw === "live";
+}
+
 export interface ProducerServeDeps {
   env?: Record<string, string | undefined>;
   waitUntilReady?: (cfg: AnalyticsApiConfig) => Promise<void>;
@@ -442,6 +464,8 @@ export interface ProducerServeDeps {
   bootCatchUpDelayMs?: number;
   /** Test seam: the wait itself. */
   sleep?: (ms: number) => Promise<void>;
+  /** Test seam: replaces arming the new-pools collector (issue 1654); receives its interval. */
+  scheduleNewPools?: (intervalMs: number) => void;
 }
 
 // BOOT CATCH-UP DELAY (issue 1378). On the v0.6.2 stage QA run of 2026-10-15
@@ -509,6 +533,11 @@ export async function startProducerSchedules(deps: ProducerServeDeps = {}): Prom
   scheduleKind("regime", deps.env?.PRODUCER_REGIME_CRON || process.env.PRODUCER_REGIME_CRON || "30 22 * * *");
   scheduleKind("research", deps.env?.PRODUCER_RESEARCH_CRON || process.env.PRODUCER_RESEARCH_CRON || "0 23 * * *");
   (deps.scheduleDayRoll ?? armDayRollRegime)();
+  // Issue 1654: the new-pools collector, live source only.
+  const sourceEnv = deps.env && Object.hasOwn(deps.env, "ANALYTICS_SOURCE") ? deps.env : process.env;
+  if (analyticsSourceIsLive(sourceEnv)) {
+    (deps.scheduleNewPools ?? ((ms: number) => armNewPoolsCollector(cfg, ms)))(NEW_POOLS_INTERVAL_MS);
+  }
   return cfg;
 }
 

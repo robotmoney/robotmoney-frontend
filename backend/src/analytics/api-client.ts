@@ -18,6 +18,8 @@ import type {
   FloorSeedResult,
   BeginRunResult,
   FreezeVintageResult,
+  NewPoolPollResult,
+  NewPoolRunInputs,
   TerminalRunPackageResult,
 } from "./persistence.ts";
 import type { RunLifecycleEvent } from "./run-ledger.ts";
@@ -168,6 +170,16 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     },
     async loadCommittedInputs(marketTimeCutoff: string) {
       return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}`);
+    },
+    async saveNewPoolPoll(poll) {
+      return await call<NewPoolPollResult>("POST", ROUTES.analytics.newPoolPolls, { poll });
+    },
+    async loadNewPoolHead() {
+      const { newestCreatedAt } = await call<{ newestCreatedAt: string | null }>("GET", ROUTES.analytics.newPoolHead);
+      return newestCreatedAt;
+    },
+    async loadNewPoolInputs() {
+      return await call<NewPoolRunInputs>("GET", ROUTES.analytics.newPoolInputs);
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);

@@ -34,6 +34,7 @@ test("boot arms the day-roll and runs no regime write", async () => {
     catchUp: async () => {},
     catchUpIndicators: async () => {},
     scheduleKind: (kind) => { order.push(`armed:${kind}`); },
+    scheduleNewPools: () => {},
     scheduleDayRoll: () => { order.push("armed:day-roll"); },
   });
   expect(order).toEqual(["armed:regime", "armed:research", "armed:day-roll"]);

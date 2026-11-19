@@ -34,6 +34,8 @@ import { loadRecentResearchSignalDates } from "../../analytics/store/research-st
 import { saveTelemetryRun } from "../../analytics/store/telemetry-store.ts";
 import { saveSourceAcquisition } from "../../analytics/store/source-ledger-store.ts";
 import type { SourceAcquisitionEvidence } from "../../analytics/source-ledger.ts";
+import { loadNewPoolHead, loadNewPoolRunInputs, saveNewPoolPoll } from "../../analytics/store/new-pools-store.ts";
+import { NEW_POOLS_PROVIDER, type NewPoolPollSubmission } from "../../analytics/persistence.ts";
 import {
   beginRun,
   appendRunEvent,
@@ -336,6 +338,40 @@ function parseSourceAcquisition(body: unknown): SourceAcquisitionEvidence | Inva
     requestedByRunId: a.requestedByRunId as number | null, events, fetches, values };
 }
 
+// Issue 1654: one new-pools poll. The acquisition is a source acquisition with
+// no values (the pool records are its data); every pool is validated before
+// the transaction opens.
+const MAX_NEW_POOLS = 1_000; // 10 pages of 20 is 200; generous headroom
+function parseNewPoolPoll(body: unknown): NewPoolPollSubmission | Invalid {
+  const p = isPlainObject(body) ? body.poll : null;
+  if (!isPlainObject(p)) return invalid("body must be { poll: { acquisition, pools, oldestCreatedAt, newestCreatedAt, pagesRead } }");
+  const acquisition = parseSourceAcquisition({ acquisition: p.acquisition });
+  if (isInvalid(acquisition)) return acquisition;
+  if (acquisition.provider !== NEW_POOLS_PROVIDER) return invalid(`poll.acquisition.provider must be ${NEW_POOLS_PROVIDER}`);
+  if (acquisition.values.length > 0) return invalid("poll.acquisition.values must be empty: the pool records are the poll's data");
+  if (!Array.isArray(p.pools) || p.pools.length > MAX_NEW_POOLS) return invalid(`poll.pools must be an array (≤${MAX_NEW_POOLS})`);
+  const isInstant = (v: unknown): v is string => typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v));
+  const pools: NewPoolPollSubmission["pools"] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < p.pools.length; i++) {
+    const x = p.pools[i];
+    if (!isPlainObject(x) || typeof x.id !== "string" || !x.id || x.id.length > 160) return invalid(`poll.pools[${i}].id is invalid`);
+    if (typeof x.network !== "string" || !x.network || x.network.length > 64) return invalid(`poll.pools[${i}].network is invalid`);
+    if (!isInstant(x.createdAt)) return invalid(`poll.pools[${i}].createdAt must be a timestamp`);
+    if (seen.has(x.id)) return invalid(`poll.pools[${i}].id ${x.id} is repeated`);
+    seen.add(x.id);
+    pools.push({ id: x.id, network: x.network, createdAt: x.createdAt });
+  }
+  const oldest = p.oldestCreatedAt ?? null;
+  const newest = p.newestCreatedAt ?? null;
+  if ((oldest === null) !== (newest === null) || (oldest !== null && (!isInstant(oldest) || !isInstant(newest)))) return invalid("poll.oldestCreatedAt and poll.newestCreatedAt must both be timestamps, or both null");
+  if (oldest !== null && Date.parse(oldest) > Date.parse(newest as string)) return invalid("poll.oldestCreatedAt is after poll.newestCreatedAt");
+  if ((pools.length === 0) !== (oldest === null)) return invalid("poll.oldestCreatedAt and poll.newestCreatedAt are null exactly when poll.pools is empty");
+  if (!Number.isInteger(p.pagesRead) || (p.pagesRead as number) < 0 || (p.pagesRead as number) > 10) return invalid("poll.pagesRead must be an integer from 0 to 10");
+  if (pools.length > 0 && (p.pagesRead as number) < 1) return invalid("poll.pagesRead must be at least 1 when the poll read a pool");
+  return { acquisition, pools, oldestCreatedAt: oldest, newestCreatedAt: newest as string | null, pagesRead: p.pagesRead as number };
+}
+
 function isIsoDateTime(v: unknown): v is string {
   return typeof v === "string" && !Number.isNaN(Date.parse(v));
 }
@@ -625,6 +661,7 @@ export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
   A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
   A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
   A.vintages, A.vintage, A.committedInputs, A.runPackage, A.reportSnapshot, A.paritySweep,
+  A.newPoolPolls, A.newPoolHead, A.newPoolInputs,
 ]);
 
 // ANALYTICS_CONCURRENCY and createLimiter live in a leaf module since issue
@@ -821,6 +858,19 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
     const asof = url.searchParams.get("asof");
     if (!asof || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };
     return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof) };
+  }
+
+  // Issue 1654: the new-pools collector's polls, and what a regime run counts NEW_TOKENS from.
+  if (m === "POST" && p === A.newPoolPolls) {
+    const parsed = parseNewPoolPoll(await req.json().catch(() => null));
+    if (isInvalid(parsed)) return { status: 400, body: parsed };
+    return { status: 200, body: await saveNewPoolPoll(parsed) };
+  }
+  if (m === "GET" && p === A.newPoolHead) {
+    return { status: 200, body: { newestCreatedAt: await loadNewPoolHead() } };
+  }
+  if (m === "GET" && p === A.newPoolInputs) {
+    return { status: 200, body: await loadNewPoolRunInputs() };
   }
 
 // ── issue #978: the immutable analytics output/report snapshot layer ─────

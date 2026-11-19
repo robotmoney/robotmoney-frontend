@@ -5,7 +5,10 @@
 // `x-cg-pro-api-key` header, and the paths after the base are the same. Which calls a plan includes depends on the plan.
 // Our key answers every call here on the Pro host, the pool reading and pool OHLCV included (verified 2026-10-08:
 // HTTP 200 with data for tokens/{address}/pools, pools/{address} and pools/{address}/ohlcv/day with the production key),
-// so every call is in PRO_CALLS. A call the plan stops covering gets 401/403 and falls back to the free host (below).
+// so every call but new_pools is in PRO_CALLS. A call the plan stops covering gets 401/403 and falls back to the free
+// host (below). new_pools is keyless only (issue 1654): the new-pools collector reads it every 60 s, about 5,000
+// requests a day, which must never spend paid credits; the legacy NEW_TOKENS sweep reads the same keyless feed, whose
+// 10-page limit is the Pro host's too.
 //
 // COINGECKO_API_KEY unset or blank → every URL and header is exactly what it was before this module.
 //
@@ -32,8 +35,9 @@ const FREE_HOST = new URL(FREE_BASE).host;
 /** CoinGecko error_codes that mean the paid account itself is out of credit, not per-minute throttling. */
 const QUOTA_ERROR_CODES: ReadonlySet<number> = new Set([10006]);
 
-/** The calls our CoinGecko plan includes on the Pro host: all of them (verified with the production key, 2026-10-08). */
-export const PRO_CALLS: ReadonlySet<GeckoCall> = new Set<GeckoCall>(["new_pools", "token_pools", "token_price", "ohlcv", "pool"]);
+/** The calls sent to the Pro host when a key is set: every call our plan includes (verified with the production key,
+ *  2026-10-08) except new_pools, which always goes to the keyless host (issue 1654). */
+export const PRO_CALLS: ReadonlySet<GeckoCall> = new Set<GeckoCall>(["token_pools", "token_price", "ohlcv", "pool"]);
 
 export const PRO_REJECTED_COOLDOWN_MS = 10 * 60_000;
 
