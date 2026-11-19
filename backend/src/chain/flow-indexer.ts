@@ -14,6 +14,9 @@ export interface FlowIndexSource {
   logs(from: number, to: number): Promise<FlowLog[]>;
 }
 
+/** Logs one window may record: each needs a header row too, within the pipeline's 1,000-row write. */
+export const MAX_LOGS_PER_WINDOW = 400;
+
 export async function scanFlowWindow(source: FlowIndexSource, store: FlowIndexStore, options: {
   deployBlock: number; confirmations: number; maxBlocks: number;
 }): Promise<number | null> {
@@ -34,25 +37,38 @@ export async function scanFlowWindow(source: FlowIndexSource, store: FlowIndexSt
   }
   if (newest && ancestor?.number !== newest.number) await store.rewind(ancestor?.number ?? deployBlock - 1);
   const from = ancestor ? ancestor.number + 1 : deployBlock;
-  const to = Math.min((await source.head()) - confirmations, from + maxBlocks - 1);
+  let to = Math.min((await source.head()) - confirmations, from + maxBlocks - 1);
   if (to < from) return ancestor?.number ?? null;
-  const blockNumbers = Array.from({ length: to - from + 1 }, (_, i) => from + i);
-  const headers = source.headers ? await source.headers(blockNumbers) : await Promise.all(blockNumbers.map((block) => source.header(block)));
-  if (headers.length !== blockNumbers.length) throw new Error("RPC returned an incomplete block batch");
-  for (let i = 0; i < blockNumbers.length; i++) {
-    const block = blockNumbers[i]!;
-    const header = headers[i]!;
-    if (header.number !== block) throw new Error("RPC returned the wrong block number");
-    const parent = i ? headers[i - 1] : ancestor;
-    if (parent && header.parentHash && header.parentHash.toLowerCase() !== parent.hash.toLowerCase()) throw new Error("chain changed while reading headers");
+  // FEW READS PER WINDOW (issue 1614). The RPC budget is shared and metered,
+  // so a window costs a constant number of calls, not one per block: the tip's
+  // hash before the log read, the logs, then one header batch for the blocks
+  // that carry logs plus the tip. A tip hash unchanged across the log read
+  // commits to every block beneath it, so no block between changed; each log's
+  // block hash must match its header. Only those headers are checkpoints.
+  const tip = to;
+  const before = await source.header(tip);
+  if (before.number !== tip) throw new Error("RPC returned the wrong block number");
+  let logs = await source.logs(from, to);
+  // Keep one write within the pipeline's row limit: a header and a log per row.
+  if (logs.length > MAX_LOGS_PER_WINDOW) {
+    const last = logs[MAX_LOGS_PER_WINDOW]!.blockNumber - 1;
+    if (last < from) throw new Error(`block ${from} alone carries more than ${MAX_LOGS_PER_WINDOW} logs`);
+    to = last;
+    logs = logs.filter((log) => log.blockNumber <= to);
   }
-  const logs = await source.logs(from, to);
-  const hashes = new Map(headers.map((header) => [header.number, header.hash.toLowerCase()]));
-  for (const log of logs) {
-    if (hashes.get(log.blockNumber) !== log.blockHash.toLowerCase()) throw new Error("log block hash does not match scanned header");
-  }
+  // The ancestor is re-read in the same batch: the window must still sit on it.
+  const blockNumbers = [...new Set([...(ancestor ? [ancestor.number] : []), ...logs.map((log) => log.blockNumber), to, tip])].sort((a, b) => a - b);
+  const fetched = source.headers ? await source.headers(blockNumbers) : await Promise.all(blockNumbers.map((block) => source.header(block)));
+  if (fetched.length !== blockNumbers.length) throw new Error("RPC returned an incomplete block batch");
+  fetched.forEach((header, i) => { if (header.number !== blockNumbers[i]) throw new Error("RPC returned the wrong block number"); });
+  const byNumber = new Map(fetched.map((header) => [header.number, header]));
   // Detect a reorg while logs were fetched, before advancing the durable cursor.
-  if ((await source.header(to)).hash.toLowerCase() !== headers[headers.length - 1]!.hash.toLowerCase()) throw new Error("chain changed during scan");
+  if (byNumber.get(tip)!.hash.toLowerCase() !== before.hash.toLowerCase()) throw new Error("chain changed during scan");
+  if (ancestor && byNumber.get(ancestor.number)!.hash.toLowerCase() !== ancestor.hash.toLowerCase()) throw new Error("chain changed during scan");
+  for (const log of logs) {
+    if (byNumber.get(log.blockNumber)!.hash.toLowerCase() !== log.blockHash.toLowerCase()) throw new Error("log block hash does not match scanned header");
+  }
+  const headers = fetched.filter((header) => header.number <= to && header.number > (ancestor?.number ?? -1));
   await store.record(headers, logs);
   return to;
 }

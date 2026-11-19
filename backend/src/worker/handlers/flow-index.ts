@@ -4,13 +4,12 @@ import { config } from "../../config.ts";
 import { pipelineIngest, pipelineRead } from "../pipeline-client.ts";
 
 /**
- * Blocks one run may scan. A caught-up index scans only the ~30 blocks Base
- * adds a minute; a lagging one (a cold boot, a stalled worker) clears up to
- * this many per run, so it catches up in a few runs instead of gaining 10
- * blocks a minute (issue 1614). 300 headers plus their logs stay within the
- * pipeline's 1,000-row write.
+ * Blocks one run may scan. A window costs about five RPC calls whatever its
+ * length (chain/flow-indexer.ts), so a caught-up index scans only the ~30
+ * blocks Base adds a minute and a lagging one (a cold boot, a stalled worker)
+ * clears about an hour of chain per run (issue 1614).
  */
-export const FLOW_MAX_BLOCKS_PER_RUN = 300;
+export const FLOW_MAX_BLOCKS_PER_RUN = 2000;
 
 export async function refreshFlowIndex(): Promise<unknown> {
   const address = process.env.FLOW_QUEUE_ADDRESS ?? "";

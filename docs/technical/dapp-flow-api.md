@@ -2,7 +2,11 @@
 
 The flow indexer scans the configured Base fund and queue from the earliest
 contract deployment block. It uses confirmed blocks and records block hashes,
-transaction logs, and checkpoints through the existing pipeline API. A reorg
+transaction logs, and checkpoints through the existing pipeline API. A run reads a
+window of up to 2,000 confirmed blocks in about five RPC calls: the window's
+tip hash before and after its `eth_getLogs`, and one header batch for the
+blocks that carry logs. Only those blocks and each window's tip are stored as
+checkpoints. A reorg
 marks orphaned blocks and logs noncanonical before replay. The worker does not
 hold a database credential.
 

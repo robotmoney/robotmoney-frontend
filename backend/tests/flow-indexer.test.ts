@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { scanFlowWindow, type FlowHeader, type FlowIndexSource, type FlowIndexStore, type FlowLog } from "../src/chain/flow-indexer.ts";
+import { MAX_LOGS_PER_WINDOW, scanFlowWindow, type FlowHeader, type FlowIndexSource, type FlowIndexStore, type FlowLog } from "../src/chain/flow-indexer.ts";
 
 test("backfills confirmed blocks, resumes, and rewinds a reorg", async () => {
   let chain = new Map(Array.from({ length: 8 }, (_, i) => [i, { number: i, hash: `h${i}`, timestamp: i }]));
@@ -45,4 +45,30 @@ test("walks bounded checkpoint pages for a deep reorg", async () => {
   };
   expect(await scanFlowWindow(source, store, { deployBlock: 0, confirmations: 0, maxBlocks: 1 })).toBe(11);
   expect(rewound).toBe(10);
+});
+
+test("a window with more logs than one write may hold ends before the block that overflows it", async () => {
+  const recorded: { headers: FlowHeader[]; logs: FlowLog[] }[] = [];
+  const header = (number: number) => ({ number, hash: `h${number}`, timestamp: number });
+  const source: FlowIndexSource = {
+    head: async () => 100,
+    header: async (n) => header(n),
+    // 10 logs in every block from 1 to 100.
+    logs: async (from, to) => Array.from({ length: (to - from + 1) * 10 }, (_, i) => ({ blockNumber: from + Math.floor(i / 10), blockHash: `h${from + Math.floor(i / 10)}`, logIndex: i % 10, transactionHash: `t${i}`, address: "a", topics: [], data: "0x" })),
+  };
+  const store: FlowIndexStore = { checkpoints: async () => [], rewind: async () => {}, record: async (headers, logs) => { recorded.push({ headers, logs }); } };
+  expect(await scanFlowWindow(source, store, { deployBlock: 1, confirmations: 0, maxBlocks: 100 })).toBe(40);
+  expect(recorded[0]!.logs).toHaveLength(MAX_LOGS_PER_WINDOW);
+  expect(recorded[0]!.headers.map((h) => h.number)).toEqual(Array.from({ length: 40 }, (_, i) => i + 1));
+});
+
+test("a tip that changes while logs are read refuses the window", async () => {
+  let reads = 0;
+  const source: FlowIndexSource = {
+    head: async () => 10,
+    header: async (n) => ({ number: n, hash: n === 10 && reads++ > 0 ? "moved" : `h${n}`, timestamp: n }),
+    logs: async () => [],
+  };
+  const store: FlowIndexStore = { checkpoints: async () => [], rewind: async () => {}, record: async () => { throw new Error("must not record"); } };
+  await expect(scanFlowWindow(source, store, { deployBlock: 1, confirmations: 0, maxBlocks: 10 })).rejects.toThrow("chain changed during scan");
 });
