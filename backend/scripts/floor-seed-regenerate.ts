@@ -24,10 +24,21 @@
 // header for the preserve-list rationale. Removes the D6/D7 fabricated rows
 // (docs/code-review/20260814-review-data-integrity-macro-index-discrepancy.md)
 // the additive path above cannot reach (it only ever adds).
+//
+// `--fred-backfill <ID> --first-vintage <YYYY-MM-DD>` (issue 1653, D74
+// amendment): adds a FRED series' full history, each date at its ALFRED
+// first-release value where ALFRED holds a vintage of it, else FRED's current
+// value. Every other row of the floor stays byte-identical. `--first-vintage`
+// is the series' first ALFRED vintage (BAA10Y: 2014-01-27); `--last-vintage`
+// defaults to today. BAA10Y was added with:
+//   bun run scripts/floor-seed-regenerate.ts --fred-backfill BAA10Y --first-vintage 2014-01-27
 import { fetchCoinmetrics } from "../src/analytics/extract/coinmetrics.ts";
+import { fetchAlfredFirstRelease, fetchFred } from "../src/analytics/extract/fred.ts";
+import { collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
 import {
   generateFloorSeedArtifact,
+  generateFredBackfill,
   generateFullUniversePurge,
   replaceFloorSeedAtomically,
   UNRECOVERABLE_PRESERVE_IDS,
@@ -57,6 +68,29 @@ export async function main(): Promise<void> {
     }
     replaceFloorSeedAtomically(seedPath, { gz: purged.gz });
     console.log(`[floor-seed-regenerate] wrote ${seedPath} (full-universe purge, atomic replace, prior file untouched on any failure)`);
+    return;
+  }
+
+  const backfillId = arg("fred-backfill");
+  if (backfillId) {
+    const entry = collectionRegistry().find((s) => s.id === backfillId);
+    if (!entry || entry.source !== "fred") throw new Error(`--fred-backfill ${backfillId}: not a collected FRED series`);
+    const firstVintage = arg("first-vintage");
+    if (!firstVintage) throw new Error("--fred-backfill needs --first-vintage YYYY-MM-DD (the series' first ALFRED vintage)");
+    const lastVintage = arg("last-vintage") ?? new Date().toISOString().slice(0, 10);
+    const series = entry.series as string;
+    console.log(`[floor-seed-regenerate] FRED backfill ${backfillId}: FRED ${series} from its first observation, ALFRED vintages ${firstVintage}..${lastVintage}...`);
+    const generated = await generateFredBackfill({
+      indicatorId: backfillId,
+      fetchCurrent: () => fetchFred(series, 60_000, "1900-01-01"),
+      fetchFirstRelease: () => fetchAlfredFirstRelease(series, { firstVintage, lastVintage }),
+      maxDate: flag("no-cap") ? undefined : arg("max-date"),
+      seedPath,
+    });
+    const rows = generated.merged[backfillId]!;
+    console.log(`[floor-seed-regenerate] ${backfillId}: ${rows.length} row(s) ${rows[0]?.date}..${rows.at(-1)?.date} (capped at ${generated.cappedAt || "no cap"}), ${generated.firstRelease} ALFRED first-release date(s)`);
+    replaceFloorSeedAtomically(seedPath, generated);
+    console.log(`[floor-seed-regenerate] wrote ${seedPath} (atomic replace, every other row byte-identical)`);
     return;
   }
 

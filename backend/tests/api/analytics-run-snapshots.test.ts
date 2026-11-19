@@ -5,7 +5,7 @@
 // dual-write), injected rollback, failed-run diagnostics, exact report
 // retrieval, unchanged current-view reads, and telemetry/historical-artifact
 // separation.
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, describe } from "bun:test";
 import { createHash } from "node:crypto";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../../src/db/client.ts";
@@ -18,6 +18,12 @@ import {
 import { getRegimeSnapshots, getResearchSignal } from "../../src/api/routes/dashboards.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 import { provisionAnalyticsToken, provisionOperatorToken } from "../support/automation-auth.ts";
+import { runAnalytics } from "../../src/analytics/index.ts";
+import { directAnalyticsPersistence } from "../../src/analytics/store/direct.ts";
+import { loadRawIndicatorHistory } from "../../src/analytics/store/raw-history-store.ts";
+import { canonicalStringify, type TerminalRunPackageInput } from "../../src/analytics/output-snapshots.ts";
+import { noopTelemetrySink } from "../../src/analytics/telemetry.ts";
+import { ASOF, baseObservations, poisonedSource, type Observations } from "../support/committed-inputs.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -425,4 +431,66 @@ test("a package.asof that MATCHES the run's own recorded asof is accepted normal
   const { runId } = await beginRun({ runKey: crypto.randomUUID(), asof, toolId: "fix3-asof-match" });
   const res = await call(req("POST", A.runPackage, succeededPackage(runId, asof), TOKEN));
   expect(res!.status).toBe(200);
+});
+
+// ── Issue 1653: BAA10Y is collected and stored, never scored ──────────────────
+// Two regime runs through the production orchestrator and real persistence:
+// the first's BAA10Y fetch fails (the source returns nothing under BAA10Y, as
+// fetchAll does for a failed fetch), the second's succeeds. The second stores
+// the BAA10Y rows in raw_indicator_history; neither snapshot row carries a
+// BAA10Y indicator or percentile; outcome, report and figures are the same.
+describe("issue 1653: a collected series is stored and changes no run output", () => {
+  const BAA10Y = [
+    { date: "2026-08-12", value: 1.71 },
+    { date: "2026-08-13", value: 1.69 },
+    { date: "2026-08-14", value: 1.7 },
+  ];
+
+  async function regimeRun(obs: Observations) {
+    const source = poisonedSource(obs, 2);
+    const submitted: TerminalRunPackageInput[] = [];
+    // The orchestrator logs to the console: its warnings are read from there.
+    const warnings: string[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    let results: Record<string, unknown>;
+    try {
+      results = await runAnalytics(ASOF, "regime", source, {
+        ...directAnalyticsPersistence,
+        async submitTerminalRunPackage(input) {
+          submitted.push(input);
+          return directAnalyticsPersistence.submitTerminalRunPackage(input);
+        },
+      }, noopTelemetrySink);
+    } finally {
+      console.warn = warn;
+      source.restore();
+    }
+    return { results: results!, pkg: submitted[0]!, warnings, acquiredKeys: source.acquired.map((a) => a.evidence.values[0]?.sourceKey) };
+  }
+
+  test("the run stores fetched BAA10Y rows; snapshots carry no BAA10Y; a failed BAA10Y fetch changes no outcome, report or figure", async () => {
+    const base = await baseObservations();
+    await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
+
+    const failed = await regimeRun(base);
+    expect((await loadRawIndicatorHistory()).BAA10Y).toBeUndefined();
+    expect(failed.warnings.filter((w) => w.includes("BAA10Y"))).toHaveLength(1);
+    expect(failed.warnings.some((w) => /fell back|excluded/.test(w) && w.includes("BAA10Y"))).toBe(false);
+
+    const ok = await regimeRun({ ...base, registry: { ...base.registry, BAA10Y } });
+    expect(ok.acquiredKeys).toContain("raw_indicator_history:BAA10Y");
+    expect((await loadRawIndicatorHistory()).BAA10Y).toEqual(BAA10Y);
+    expect(ok.warnings.filter((w) => w.includes("BAA10Y"))).toEqual([]);
+
+    for (const run of [failed, ok]) {
+      expect(run.pkg.status).toBe("succeeded");
+      for (const row of run.pkg.regimeSnapshots!) {
+        expect(JSON.stringify(row)).not.toContain("BAA10Y");
+      }
+    }
+    // Same figures, byte for byte, and the same published report bytes.
+    expect(canonicalStringify(ok.pkg.regimeSnapshots)).toBe(canonicalStringify(failed.pkg.regimeSnapshots));
+    expect(Buffer.from(ok.pkg.reportBytes!).toString("utf8")).toBe(Buffer.from(failed.pkg.reportBytes!).toString("utf8"));
+  }, 300_000);
 });

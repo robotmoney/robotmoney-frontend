@@ -9,6 +9,9 @@ export {
   INDICATORS, PANELS, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
   type Indicator, type Panel, type FillPolicy, type DayRule,
 } from "./analyze/indicators.ts";
+export {
+  COLLECTED_SERIES, collectionRegistry, type CollectedSeries, type SourceSeries,
+} from "./extract/collected-series.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,

@@ -13,6 +13,8 @@ import {
   runRegime as runRegimeOutcome, requireComplete,
   prepareRegimeInputs,
   toHistory,
+  COLLECTED_SERIES,
+  type Indicator,
 } from "../src/index.ts";
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
@@ -538,4 +540,68 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
       expect(call({ rank: T1095, weight: { kind: "trailing", days }, percentile: T1095 })).toThrow(/weight/);
     }
   });
+});
+
+// Issue 1653: BAA10Y is collected, not scored. Its rows in a run's input change
+// nothing; an indicators list that holds it as a macro entry scores it.
+describe("collected series: BAA10Y is stored, not scored (issue 1653)", () => {
+  const raw = toHistory(parseRawHistory(csvText));
+  // Deterministic BAA10Y rows on the fixture's own business days (T10Y2Y's dates).
+  const baa10y = raw.T10Y2Y!.map((p, i) => ({ date: p.date, value: 2 + Math.sin(i / 40) + i / 2000 }));
+  const withBaa = { ...raw, BAA10Y: baa10y };
+  const entry = COLLECTED_SERIES.find((s) => s.id === "BAA10Y")!;
+  // A trial macro entry: the collected fields plus scoring fields, no registry edit.
+  const promoted: Indicator = {
+    ...entry, panel: "macro", sign: -1, transform: "level",
+    fill: { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }, fillReason: "test: a trial promotion",
+  };
+  const trial = [...INDICATORS, promoted];
+
+  test("INDICATORS has no BAA10Y entry", () => {
+    expect(INDICATORS.some((i) => i.id === "BAA10Y")).toBe(false);
+    expect(entry).toBeDefined();
+  }, TEST_TIMEOUT_MS);
+
+  test("a regime run gives identical output with and without BAA10Y rows in its raw input", () => {
+    const without = buildReport(runRegime(raw, { factor: true }), { full: true });
+    const withRows = buildReport(runRegime(withBaa, { factor: true }), { full: true });
+    expect(JSON.stringify(withRows)).toBe(JSON.stringify(without));
+    // The plain report is the golden bytes either way.
+    expect(JSON.stringify(buildReport(runRegime(withBaa)), null, 2) + "\n").toBe(goldenText);
+  }, TEST_TIMEOUT_MS);
+
+  test("prepareRegimeInputs given a BAA10Y macro entry returns its transformed series, built from its stored rows", () => {
+    const asof = baa10y[baa10y.length - 1]!.date;
+    const prepared = prepareRegimeInputs(withBaa, { start: "2018-01-01", asof, indicators: trial });
+    const series = prepared.transformed.BAA10Y!;
+    expect(series.length).toBe(prepared.dateAxis.length);
+    // transform "level": each day on which a row is stored is that row's value.
+    const byDate = new Map(baa10y.map((p) => [p.date, p.value]));
+    let matched = 0;
+    prepared.dateAxis.forEach((d, i) => {
+      if (!byDate.has(d)) return;
+      expect(series[i]).toBe(byDate.get(d)!);
+      matched++;
+    });
+    expect(matched).toBeGreaterThan(1000);
+    expect(prepared.lastRaw.BAA10Y).toEqual(baa10y[baa10y.length - 1]!);
+    // The shipped registry builds no BAA10Y series from the same input.
+    expect("BAA10Y" in prepareRegimeInputs(withBaa, { start: "2018-01-01", asof }).transformed).toBe(false);
+  }, TEST_TIMEOUT_MS);
+
+  test("non-vacuity: runRegime with BAA10Y as a macro entry (sign -1, level) changes the macro index and composite", () => {
+    const shipped = runRegime(withBaa);
+    const scored = runRegime(withBaa, { indicators: trial });
+    expect(scored.dateAxis).toEqual(shipped.dateAxis);
+    expect(Object.keys(scored.result.weightsByPanel.macro!)).toContain("BAA10Y");
+    const last = shipped.dateAxis.length - 1;
+    expect(scored.result.macroIndex![last]).not.toBe(shipped.result.macroIndex![last]);
+    expect(scored.result.composite[last]).not.toBe(shipped.result.composite[last]);
+    // The onchain panel does not read BAA10Y.
+    expect(JSON.stringify(scored.result.onchainIndex)).toBe(JSON.stringify(shipped.result.onchainIndex));
+  }, TEST_TIMEOUT_MS);
+
+  test("runRegime rejects an indicators option that is not an array", () => {
+    expect(() => runRegimeOutcome(raw, { indicators: "BAA10Y" as never })).toThrow(RangeError);
+  }, TEST_TIMEOUT_MS);
 });

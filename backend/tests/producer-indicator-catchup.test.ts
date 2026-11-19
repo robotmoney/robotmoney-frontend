@@ -11,6 +11,7 @@ import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { Point, RawIndicatorHistory } from "../src/analytics/types.ts";
 import { catchUpMissedIndicatorDays, startProducerSchedules } from "../src/producer/index.ts";
 import { writeTokenFile } from "./support/automation-auth.ts";
+import { collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
 
 const DAY_MS = 86_400_000;
 const NOW = new Date("2026-08-20T12:00:00Z");
@@ -112,6 +113,34 @@ test("issue 1644: the catch-up writes the registry ids and the stored ratios as 
   });
   await catchUpMissedIndicatorDays({ persistence, source: fakeSource(fetched), now: () => NOW });
   expect(seededCalls).toEqual([{ T10Y2Y: at(1.2), VIX: at(18.4), COPPER_GOLD: at(0.002) }]);
+});
+
+// Issue 1653: the catch-up fetches the collected series (BAA10Y) with the
+// registry, and gap-fills it like any registry indicator.
+test("catchUpMissedIndicatorDays: requests collectionRegistry() and gap-fills BAA10Y", async () => {
+  const missing = [iso(4)];
+  let requested: string[] = [];
+  const source = fakeSource({
+    T10Y2Y: [{ date: iso(4), value: 0.5 }],
+    BAA10Y: [{ date: iso(6), value: 1.4 }, { date: iso(4), value: 1.45 }],
+  });
+  const inner = source.fetchIndicators.bind(source);
+  source.fetchIndicators = async (indicators, logger) => {
+    requested = indicators.map((i) => i.id);
+    return inner(indicators, logger);
+  };
+  const seededCalls: RawIndicatorHistory[] = [];
+  const persistence = fakePersistence({
+    loadRawHistoryGapDates: async () => missing,
+    seedRawHistory: async (byIndicator) => {
+      seededCalls.push(byIndicator);
+      return { seededPoints: 2, existingPoints: 0, indicators: 2 };
+    },
+  });
+  await catchUpMissedIndicatorDays({ persistence, source, now: () => NOW });
+  expect(requested).toEqual(collectionRegistry().map((s) => s.id));
+  expect(requested).toContain("BAA10Y");
+  expect(seededCalls).toEqual([{ T10Y2Y: [{ date: iso(4), value: 0.5 }], BAA10Y: [{ date: iso(4), value: 1.45 }] }]);
 });
 
 test("catchUpMissedIndicatorDays: an empty gap list calls neither the fetcher nor seedRawHistory", async () => {

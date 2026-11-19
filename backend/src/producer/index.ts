@@ -8,7 +8,7 @@ import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig 
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
-import { INDICATORS } from "../analytics/analyze/indicators.ts";
+import { collectionRegistry } from "../../../packages/analyst-sdk/src/extract/collected-series.ts";
 import { RATIO_IDS, STORED_RATIO_IDS } from "../analytics/extras.ts";
 import type { RawIndicatorHistory } from "../analytics/types.ts";
 import { writeHeartbeat } from "../ops/heartbeat.ts";
@@ -223,7 +223,8 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
     // supposed to be impossible. The literal mirrors store/floor-seed.ts's tag;
     // producer code may not import that API-owned module
     // (tests/analytics-api-boundary.test.ts).
-    fetched = await source.fetchIndicators(INDICATORS, console, acquisitionSink, null, { provenance: CATCH_UP_PROVENANCE });
+    // Issue 1653: the registry and the collected series (BAA10Y) are gap-filled alike.
+    fetched = await source.fetchIndicators(collectionRegistry(), console, acquisitionSink, null, { provenance: CATCH_UP_PROVENANCE });
   } catch (err) {
     console.error(`[analytics-producer] indicator catch-up: registry fetch failed (will retry next pass): ${err instanceof Error ? err.message : err}`);
     return missing;
@@ -231,10 +232,10 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
 
   const onlyMissing: RawIndicatorHistory = {};
   let matched = 0;
-  // Issue 1644: only registry ids have raw_indicator_history rows, a ratio
-  // only while it is declared ratioInput "stored". A ratio leg is source data
-  // the fetch above already recorded in the ledger.
-  const rawIds = new Set(INDICATORS.map((i) => i.id).filter((id) => !RATIO_IDS.has(id) || STORED_RATIO_IDS.has(id)));
+  // Issue 1644: only registry ids (and, issue 1653, collected series) have
+  // raw_indicator_history rows, a ratio only while it is declared ratioInput
+  // "stored". A ratio leg is source data the fetch above already recorded in the ledger.
+  const rawIds = new Set(collectionRegistry().map((i) => i.id).filter((id) => !RATIO_IDS.has(id) || STORED_RATIO_IDS.has(id)));
   for (const [id, pts] of Object.entries(fetched)) {
     if (!rawIds.has(id)) continue;
     const hits = pts.filter((p) => missingSet.has(p.date));

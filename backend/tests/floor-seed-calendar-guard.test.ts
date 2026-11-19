@@ -74,3 +74,17 @@ test("every indicator's derivation prose agrees with its enforced source calenda
   }
   expect(contradictions).toEqual([]);
 });
+
+// Issue 1653: BAA10Y, a collected FRED series, is business-daily like every
+// FRED series other than ICSA, and its committed backfill is calendar-valid.
+test("BAA10Y's calendar is business_day and every committed BAA10Y row is calendar-valid", async () => {
+  expect(sourceCalendar("BAA10Y")).toBe("business_day");
+  const floor = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
+  const rows = floor.BAA10Y ?? [];
+  expect(rows.length).toBeGreaterThan(10_000);
+  expect(validateFloorCalendar({ BAA10Y: rows })).toEqual([]);
+  for (const { date } of rows) {
+    const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
+    expect(dow >= 1 && dow <= 5).toBe(true);
+  }
+});

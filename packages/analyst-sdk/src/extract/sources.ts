@@ -5,7 +5,8 @@
 // Every indicator id resolves to a raw {date,value}[] series matching the
 // original's raw-indicator-history layout (PRE-transform):
 //   - fred single series          → level (T10Y2Y, DFII10, T5YIE, HY_OAS/BAMLH0A0HYM2,
-//                                    DXY/DTWEXBGS, ICSA)
+//                                    DXY/DTWEXBGS, ICSA; and the collected, unscored
+//                                    BAA10Y, extract/collected-series.ts)
 //   - yahoo single symbol         → adj-close level (VIX/^VIX, SPX_TREND/^GSPC,
 //                                    ETH_TREND/ETH-USD)
 //   - yahoo [num, den]            → num/den ratio on shared dates (COPPER_GOLD=HG/GC,
@@ -33,6 +34,7 @@ import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
 import { mergeRatioSeries } from "../transform/grid.ts";
 import { ratioLegSourceId, STORED_UNDER, type LegClose } from "../series-ids.ts";
+import { COLLECTED_SERIES, collectionRegistry, type SourceSeries } from "./collected-series.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchYahoo, fetchYahooChart, fetchYahooClose, parseYahoo, parseYahooClose } from "./yahoo.ts";
 import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
@@ -182,7 +184,7 @@ async function fetchYahooRatio(series: readonly [string, string], memo?: FetchMe
 }
 
 /** Each ratio leg the registry fetch records (issue 1644): both closes of every ratio symbol, by source id. */
-export function registryRatioLegs(indicators: readonly Indicator[] = INDICATORS): { id: string; symbol: string; close: LegClose }[] {
+export function registryRatioLegs(indicators: readonly SourceSeries[] = INDICATORS): { id: string; symbol: string; close: LegClose }[] {
   const out = new Map<string, { id: string; symbol: string; close: LegClose }>();
   for (const ind of indicators) {
     if (ind.source !== "yahoo" || !Array.isArray(ind.series)) continue;
@@ -198,7 +200,7 @@ export function registryRatioLegs(indicators: readonly Indicator[] = INDICATORS)
 
 // Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
 // caller decides whether to fall back to persisted history.
-export async function fetchOne(ind: Indicator, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
+export async function fetchOne(ind: SourceSeries, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   switch (ind.source) {
     case "fred":
@@ -245,7 +247,7 @@ export async function fetchOne(ind: Indicator, logger: Logger = console, ext: So
 export async function fetchAll(
   opts: {
     logger?: Logger;
-    indicators?: Indicator[];
+    indicators?: readonly SourceSeries[];
     acquire?: AcquireFn;
     extensions?: SourceExtensions;
     requestedByRunId?: number | null;
@@ -257,7 +259,8 @@ export async function fetchAll(
   const logger = opts.logger ?? console;
   // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH read the
   // DEFI_TVL and STABLES series, so nothing is fetched or written for them.
-  const inds = (opts.indicators ?? INDICATORS).filter((ind) => !Object.hasOwn(STORED_UNDER, ind.id));
+  // Default: the registry and the collected series (collectionRegistry(), issue 1653).
+  const inds = (opts.indicators ?? collectionRegistry()).filter((ind) => !Object.hasOwn(STORED_UNDER, ind.id));
   const record = (meta: AcquisitionMeta, operation: () => Promise<Point[]>) => (opts.acquire ? opts.acquire(meta, operation) : operation());
   // Issue 1644: each ratio symbol's two closes are recorded once per run, from
   // full history, as source data. A ratio declared ratioInput "stored" is
@@ -296,7 +299,9 @@ export async function fetchAll(
         }, () => fetchOne(ind, logger, opts.extensions, opts.memo));
         return [ind.id, points];
       } catch (e: any) {
-        logger.error?.(`[extract] fetch ${ind.id} (${ind.source}) FAILED: ${e?.message ?? e}`);
+        // A collected series is scored by nothing: its failure is a warning on its own key (issue 1653).
+        const log = COLLECTED_SERIES.some((c) => c.id === ind.id) ? logger.warn : logger.error;
+        log?.(`[extract] fetch ${ind.id} (${ind.source}) FAILED: ${e?.message ?? e}`);
         return [ind.id, []];
       }
     }),
