@@ -1,8 +1,6 @@
-// v0.9.0's runbook and version checks Q38 to Q44 (C26 to C32) (scripts/release/version-checks/v0.9.0/,
-// tracking issue 1647): the runbook's shape, and each check's decision with a passing case and a red
-// control. The checks' reads (docker, the database, HTTP) are thin; the decisions are pure and tested here.
+// v0.9.0 version checks Q38 to Q44 (C26 to C32) (scripts/release/version-checks/v0.9.0/, tracking issue 1647): each check's
+// decision with a passing case and a red control. The checks' reads (docker, the database, HTTP) are thin; the decisions are pure and tested here.
 import { describe, expect, test } from "bun:test";
-import { loadReleaseRunbook, stepNameOf, type RunbookStep } from "../../release/runbook.ts";
 import { WEBSITE_HTML_CACHE, WEBSITE_ASSET_CACHE, WEBSITE_SECURITY_HEADERS, WEBSITE_IMAGE_LABELS } from "../../lib/website-image.ts";
 import { webImageProblems, type WebImageRead } from "../../release/version-checks/v0.9.0/web-image.ts";
 import type { WebsiteInspect } from "../../release/version-checks/v0.9.0/_web.ts";
@@ -19,68 +17,6 @@ import { servingVersionProblem } from "../../release/web-release-lib.ts";
 import { deployArgv, productionBundleProblems, type StageDeploy } from "../../release/platform-bundle.ts";
 import { identityProblems } from "../../release/identity-check.ts";
 import { readFileSync } from "node:fs";
-
-describe("the v0.9.0 runbook", () => {
-  const rb = loadReleaseRunbook("v0.9.0");
-  const added = rb.steps.filter((s) => (s as RunbookStep).added === "v0.9.0");
-
-  test("is kitchen-sink plus its own steps, every added step with a production twin of the same name", () => {
-    expect(rb.template).toBe("kitchen-sink");
-    expect(rb.breaking).toBeUndefined();
-    const qa = added.filter((s) => s.phase === "qa").map((s) => stepNameOf(s.id));
-    const prod = added.filter((s) => s.phase !== "qa").map((s) => stepNameOf(s.id));
-    const STAGE_ONLY = ["site-rollback-rehearsal", "web-bundle-edge"];
-    expect(qa.filter((n) => !STAGE_ONLY.includes(n))).toEqual(["site-bundle", "server-image-build", "site-bundle-deploy", "web-routes", "server-image", "web-image", "web-bundle", "api-cache", "regime-published", "regime-frozen"]);
-    expect(prod).toEqual(qa.filter((n) => !STAGE_ONLY.includes(n)));
-    for (const n of STAGE_ONLY) expect(qa).toContain(n);
-    for (const s of added) expect(s.irreversible).toBe(false);
-  });
-
-  test("every version check runs a v0.9.0 check file that exists, and reads only (no stageOnly write)", () => {
-    for (const s of added.filter((x) => !/-build$|^site-/.test(stepNameOf(x.id)))) {
-      const argv = s.cmds[0]!;
-      expect(argv.slice(0, 2)).toEqual(["bun", "scripts/release/version-check.ts"]);
-      const name = argv[argv.indexOf("--check") + 1]!;
-      expect(name).toBe(stepNameOf(s.id));
-      expect(Bun.file(`${import.meta.dir}/../../release/version-checks/v0.9.0/${name}.ts`).size).toBeGreaterThan(0);
-      // The one stage-only version check reads only too: it is stage-only because it reads through Cloudflare (owner, 2026-11-15).
-      if (stepNameOf(s.id) !== "web-bundle-edge") expect((s as RunbookStep & { stageOnly?: boolean }).stageOnly).toBeUndefined();
-    }
-  });
-
-  test("Q41/C29-web-bundle read upstream of Cloudflare; Q41a-web-bundle-edge reads through it, stage only (owner, 2026-11-15)", () => {
-    for (const id of ["Q41-web-bundle", "C29-web-bundle"]) {
-      const s = rb.steps.find((x) => x.id === id)!;
-      expect(s.host).toBe("control");
-      const argv = s.cmds[0]!;
-      expect(argv[argv.indexOf("--host") + 1]).toBe("{host}");
-      expect(s.description).toContain("upstream of Cloudflare");
-    }
-    const edge = rb.steps.find((x) => x.id === "Q41a-web-bundle-edge")! as RunbookStep & { stageOnly?: boolean };
-    expect(edge.stageOnly).toBe(true);
-    expect(edge.onlyFor).toBe("stage");
-    expect(edge.added).toBe("v0.9.0");
-    expect(edge.cmds[0]).not.toContain("--host");
-    expect(rb.steps.some((x) => x.phase !== "qa" && stepNameOf(x.id) === "web-bundle-edge")).toBe(false);
-    const ids = rb.steps.map((x) => x.id);
-    expect(ids.indexOf("Q41a-web-bundle-edge")).toBe(ids.indexOf("Q41-web-bundle") + 1);
-    expect(rb.notes).toContain("Owner decision (2026-11-15, issue 1647): the bundle byte check reads upstream of Cloudflare");
-  });
-
-  test("its scope lists exactly the 15 PRs of v0.8.0..af3ec970 and the cherry-picked 1648, each version check naming a step of this runbook", () => {
-    expect(rb.scope.map((e) => e.pr).sort((a, b) => a - b)).toEqual([1417, 1620, 1633, 1634, 1635, 1636, 1637, 1638, 1639, 1640, 1641, 1642, 1643, 1645, 1646, 1648]);
-    expect(rb.scope.find((e) => e.pr === 1648)?.check).toBe("Q41a-web-bundle-edge");
-    const ids = new Set(rb.steps.map((s) => s.id));
-    for (const e of rb.scope) if (e.check !== undefined) expect(ids.has(e.check)).toBe(true);
-    expect(rb.scope.find((e) => e.pr === 1646)?.check).toBe("Q43-regime-published");
-    expect(rb.scope.find((e) => e.pr === 1635)?.check).toBe("Q42-api-cache");
-  });
-
-  test("its recovery names the web rollback and the first-rollout fallback", () => {
-    expect(rb.recovery).toContain("--rollback");
-    expect(rb.recovery).toContain("first-rollout");
-  });
-});
 
 // ── Q40-web-image ────────────────────────────────────────────────────────────
 
@@ -345,23 +281,6 @@ describe("Q44-regime-frozen/C32-regime-frozen (1646, issue 1182 release evidence
 // ── The first rollout (owner decision 2026-11-15): platform-bundle.ts and identity-check ─────────────
 
 describe("the first rollout's steps: the bundle is built on stage and production deploys only the stage-passed bytes", () => {
-  const rb = loadReleaseRunbook("v0.9.0");
-  const ids = rb.steps.map((s) => s.id);
-  test("order: build before the backup, the server image before the site, the deploy after the template's site step and inside the probe", () => {
-    const at = (id: string) => ids.indexOf(id);
-    expect(at("Q13a-site-bundle")).toBeLessThan(at("Q14-backup"));
-    expect(at("Q16a-server-image-build")).toBeLessThan(at("Q17-probe-start"));
-    expect(at("C03a-server-image-build")).toBeLessThan(at("C04-probe-start"));
-    expect(at("Q24b-site-bundle-deploy")).toBeLessThan(at("Q24c-site-rollback-rehearsal"));
-    expect(rb.steps.find((s) => s.id === "Q24c-site-rollback-rehearsal")?.cmds[0]).toContain("--rollback");
-    expect(at("Q24-site")).toBeLessThan(at("Q24b-site-bundle-deploy"));
-    expect(at("Q24b-site-bundle-deploy")).toBeLessThan(at("Q25-probe-grade"));
-    expect(at("P08-log-baseline")).toBeLessThan(at("P08a-site-bundle"));
-    expect(at("C12-site")).toBeLessThan(at("C12b-site-bundle-deploy"));
-    expect(at("C12b-site-bundle-deploy")).toBeLessThan(at("C13-probe-grade"));
-    for (const id of ["Q13a-site-bundle", "P08a-site-bundle", "Q24b-site-bundle-deploy", "C12b-site-bundle-deploy"]) expect(rb.steps.find((s) => s.id === id)?.host).toBe("control");
-  });
-
   const deployed: StageDeploy = { release: "v0.9.0", runTs: "20261115T000000Z", commit: "a".repeat(40), sha256: SHA, file: "/x/robotmoney-web-0.1.0-aaaaaaa.tar.gz", at: "t" };
   const passed = { status: "passed" as const, tree: "T", commit: "b".repeat(40), commits: [{ commit: "a".repeat(40), tree: "T0", goSha256: "", fromStep: "", at: "" }, { commit: "b".repeat(40), tree: "T", goSha256: "", fromStep: "", at: "" }] };
   test("production may deploy the bundle a passed stage run of the same tree deployed, with its digest unchanged", () => {
