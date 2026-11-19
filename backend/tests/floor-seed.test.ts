@@ -23,6 +23,7 @@ import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
+import { COLLECTED_SERIES } from "../src/analytics/extract/collected-series.ts";
 
 // Issue 1644: the last tests below need a clean database each (the seed's
 // leg rows land in the source ledger, which no test may delete from).
@@ -208,12 +209,14 @@ test("append-only floor: an existing real BTC_MVRV DB value is never overwritten
 
 // ── Issue 1644: the committed floor carries both closes of every ratio symbol ─
 // Every other row is the seed on origin/main byte for byte: the sha256 of the
-// decompressed seed without its leg lines, in file order, is main's.
+// decompressed seed without its leg lines, in file order, is main's. The
+// collected series' backfilled rows (BAA10Y, issue 1653) are left out too.
 const MAIN_SEED_SHA256 = "c9c0b12fa3c3bcc8f016292de362ed186f72608f414cffb1c957b15fa4c21fd6";
 
 test("issue 1644: every stored ratio date of the committed floor has all four legs, and every non-leg row is main's byte for byte", async () => {
   const text = gunzipSync(readFileSync(DEFAULT_FLOOR_SEED_PATH)).toString("utf8");
-  const withoutLegs = text.split("\n").filter((l) => !RATIO_LEG_KEYS.has(l.split(",")[1] ?? "")).join("\n");
+  const collected = new Set(COLLECTED_SERIES.map((s) => s.id));
+  const withoutLegs = text.split("\n").filter((l) => !RATIO_LEG_KEYS.has(l.split(",")[1] ?? "") && !collected.has(l.split(",")[1] ?? "")).join("\n");
   expect(createHash("sha256").update(withoutLegs).digest("hex")).toBe(MAIN_SEED_SHA256);
   const seed = await loadRawFloorSeed(DEFAULT_FLOOR_SEED_PATH);
   expect(RATIO_LEG_KEYS.size).toBe(28);
